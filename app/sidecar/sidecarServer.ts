@@ -4,16 +4,16 @@
  * Responsibilities (TRANSPORT-DECISION.md §4, SECURITY-MINIMUM §2):
  *
  *  1. Accept a real `AppSessionController` (normal startup builds it through
- *     `createRuntimeBackedWebAppSession`; explicit P1-0 probes use the fixture
+ *     `createRuntimeBackedAppSession`; explicit P1-0 probes use the fixture
  *     adapter over the same controller seam).
  *  2. Listen on a Unix-domain socket (D6 pin 1 — a socket file, NOT stdio and
  *     NOT a child-IPC pipe, so the engine can outlive its control surface).
  *  3. Raw-forward every controller event to the client: ship the whole
- *     `AppSessionEvent` (incl. `event.message: SDKMessage`), NOT the flattening
- *     `appSessionEventMapper`. Clone-on-serialize (Landmine 2) + JSON-safe
+ *     `AppSessionEvent` (incl. `event.message: SDKMessage`) without a lossy
+ *     mapper. Clone-on-serialize (Landmine 2) + JSON-safe
  *     assert (Landmine 1) at the boundary.
- *  4. Validate every inbound frame with `appClientMessageSchema` (the same guard
- *     the WS server uses) and apply the T4/T6/T6b/T7 hardening before any effect.
+ *  4. Validate every inbound frame with `appClientMessageSchema` and apply the
+ *     T4/T6/T6b/T7 hardening before any effect.
  *
  * This module has ZERO `electron` imports — it runs under bare Bun. The
  * supervisor (also Electron-free) spawns it; Electron main is merely a client of
@@ -55,7 +55,7 @@ import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
 import { permissionRuleValueFromString } from '../../src/utils/permissions/permissionRuleParser.js'
-import { appClientMessageSchema } from '../../src/web/appSessionProtocol.js'
+import { appClientMessageSchema } from '../../src/app-runtime/appSessionProtocol.js'
 // C5 (P4-20) — the wire tool-name literal, imported from the ENGINE source the
 // runtime mints permission requests with (appRuntimeCanUseTool.ts sets
 // `tool_name: tool.name`), so the sidecar's tool gate can never drift from the
@@ -66,7 +66,7 @@ import type {
   AppSubmitMessage,
   AppSubmitPrompt,
   PermissionResponseMessage,
-} from '../../src/web/appSessionProtocol.js'
+} from '../../src/app-runtime/appSessionProtocol.js'
 import { parseThreadGoal } from '../../src/utils/threadGoal.js'
 import { encodeFrame, FrameDecoder } from '../shared/framing.js'
 import { mintDeliveryTrace, type DeliveryStage, type DeliveryTrace } from '../shared/deliveryTrace.js'
@@ -915,8 +915,7 @@ export class SidecarServer {
       loadEarlierComplete: false,
     }
     this.connections.add(connection)
-    // Re-home the `app.ready` handshake onto IPC (AppSessionWebSocketServer.ts
-    // :79-87 equivalent).
+    // Keep the `app.ready` handshake at the IPC attachment boundary.
     const readyPayload = {
       type: 'app.ready' as const,
       protocolVersion: PROTOCOL_VERSION,

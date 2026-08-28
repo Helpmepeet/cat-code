@@ -21,7 +21,6 @@ startKeychainPrefetch();
 import { feature } from 'bun:bundle';
 import { Command as CommanderCommand, InvalidArgumentError, Option } from '@commander-js/extra-typings';
 import chalk from 'chalk';
-import { randomUUID } from 'crypto';
 import { readFileSync } from 'fs';
 import mapValues from 'lodash-es/mapValues.js';
 import pickBy from 'lodash-es/pickBy.js';
@@ -185,7 +184,6 @@ import { createRemoteSessionConfig } from './remote/RemoteSessionManager.js';
 import { createDirectConnectSession, DirectConnectError } from './server/createDirectConnectSession.js';
 import { initializeLspServerManager } from './services/lsp/manager.js';
 import { shouldEnablePromptSuggestion } from './services/PromptSuggestion/promptSuggestion.js';
-import { createQueryEngineAppSessionConfigFromSetup } from './app-runtime/createQueryEngineAppSessionConfigFromSetup.js';
 import { type AppState, getDefaultAppState, IDLE_SPECULATION_STATE } from './state/AppStateStore.js';
 import { onChangeAppState } from './state/onChangeAppState.js';
 import { createStore } from './state/store.js';
@@ -198,11 +196,9 @@ import { clearPluginCache, loadAllPluginsCacheOnly } from './utils/plugins/plugi
 import { SandboxManager } from './utils/sandbox/sandbox-adapter.js';
 import { fetchSession, prepareApiRequest } from './utils/teleport/api.js';
 import { checkOutTeleportedSessionBranch, processMessagesForTeleportResume, teleportToRemoteWithErrorHandling, validateGitState, validateSessionRepository } from './utils/teleport.js';
-import { createFileStateCacheWithSizeLimit, READ_FILE_STATE_CACHE_SIZE } from './utils/fileStateCache.js';
 import { shouldEnableThinkingByDefault, type ThinkingConfig } from './utils/thinking.js';
 import { initUser, resetUserCache } from './utils/user.js';
 import { getTmuxInstallInstructions, isTmuxAvailable, parsePRReference } from './utils/worktree.js';
-import { startRuntimeBackedWebMode } from './web/startRuntimeBackedWebMode.js';
 
 // eslint-disable-next-line custom-rules/no-top-level-side-effects
 profileCheckpoint('main_tsx_imports_loaded');
@@ -996,7 +992,7 @@ async function run(): Promise<CommanderCommand> {
   // `mcp` and `add` as paths, then choked on --transport as an unknown
   // top-level option. Single-value + collect accumulator means each
   // --plugin-dir takes exactly one arg; repeat the flag for multiple dirs.
-  .option('--plugin-dir <path>', 'Load plugins from a directory for this session only (repeatable: --plugin-dir A --plugin-dir B)', (val: string, prev: string[]) => [...prev, val], [] as string[]).option('--disable-slash-commands', 'Disable all skills', () => true).option('--web', 'Start WebSocket server for browser UI on port 3456').option('--chrome', 'Enable Claude in Chrome integration').option('--no-chrome', 'Disable Claude in Chrome integration').option('--file <specs...>', 'File resources to download at startup. Format: file_id:relative_path (e.g., --file file_abc:doc.txt file_def:img.png)').action(async (prompt, options) => {
+  .option('--plugin-dir <path>', 'Load plugins from a directory for this session only (repeatable: --plugin-dir A --plugin-dir B)', (val: string, prev: string[]) => [...prev, val], [] as string[]).option('--disable-slash-commands', 'Disable all skills', () => true).option('--chrome', 'Enable Claude in Chrome integration').option('--no-chrome', 'Disable Claude in Chrome integration').option('--file <specs...>', 'File resources to download at startup. Format: file_id:relative_path (e.g., --file file_abc:doc.txt file_def:img.png)').action(async (prompt, options) => {
     profileCheckpoint('action_handler_start');
 
     const deferredWorker = (await import('./services/deferredContinuationRunner.js')).getPreparedBackgroundDeferredContinuation();
@@ -1178,8 +1174,6 @@ async function run(): Promise<CommanderCommand> {
         process.exit(1);
       }
     }
-
-    const webModeEnabled = (options as { web?: boolean }).web === true;
 
     // Extract teammate options (for tmux-spawned agents)
     // Declared outside the if block so it's accessible later for system prompt addendum
@@ -2248,7 +2242,7 @@ async function run(): Promise<CommanderCommand> {
     let stats!: StatsStore;
 
     // Show setup screens after commands are loaded
-    if (!isNonInteractiveSession && !webModeEnabled) {
+    if (!isNonInteractiveSession) {
       const ctx = getRenderContext(false);
       getFpsMetrics = ctx.getFpsMetrics;
       stats = ctx.stats;
@@ -3172,57 +3166,6 @@ async function run(): Promise<CommanderCommand> {
       cliAgents,
       initialState
     };
-    if (webModeEnabled) {
-      const appStateStore = createStore(initialState, onChangeAppState);
-      const readFileCache = createFileStateCacheWithSizeLimit(READ_FILE_STATE_CACHE_SIZE);
-      const mcpStartupState = await mcpPromise;
-      appStateStore.setState(prev => ({
-        ...prev,
-        mcp: {
-          ...prev.mcp,
-          clients: mcpStartupState.clients,
-          tools: mcpStartupState.tools,
-          commands: mcpStartupState.commands,
-          resources: mcpStartupState.resources
-        }
-      }));
-      const queryEngineAppSessionConfig = createQueryEngineAppSessionConfigFromSetup({
-        cwd: currentCwd,
-        tools,
-        commands,
-        mcpTools: mcpStartupState.tools,
-        mcpCommands: mcpStartupState.commands,
-        mcpClients: mcpStartupState.clients,
-        mcpResources: mcpStartupState.resources,
-        agents: agentDefinitions.activeAgents,
-        getAppState: appStateStore.getState,
-        setAppState: appStateStore.setState,
-        readFileCache,
-        customSystemPrompt: systemPrompt,
-        appendSystemPrompt,
-        userSpecifiedModel: effectiveModel,
-        fallbackModel: userSpecifiedFallbackModel,
-        thinkingConfig,
-        maxTurns: options.maxTurns,
-        maxBudgetUsd: options.maxBudgetUsd,
-        taskBudget: options.taskBudget ? {
-          total: options.taskBudget
-        } : undefined,
-        jsonSchema,
-        verbose,
-        replayUserMessages: effectiveReplayUserMessages
-      });
-      const webDir = resolve(currentCwd, 'web');
-      await startRuntimeBackedWebMode({
-        queryEngineConfig: queryEngineAppSessionConfig,
-        webDir,
-        token: randomUUID(),
-        wsPort: 3456,
-        webPort: 5173,
-        allowedOrigins: ['http://127.0.0.1:5173']
-      });
-      return;
-    }
     if (options.continue) {
       // Continue the most recent conversation directly
       let resumeSucceeded = false;

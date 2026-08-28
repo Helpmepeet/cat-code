@@ -1,8 +1,7 @@
 # Portable renderer theme
 
 This directory is the Phase 0 design-token handoff for the future desktop
-renderer. It is intentionally outside the deprecated `web/` scaffold because
-P1-0 owns the final renderer location.
+renderer. P1-0 owns the final renderer location.
 
 ## P1-0 adoption
 

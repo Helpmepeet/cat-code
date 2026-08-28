@@ -5,7 +5,7 @@
  * (incl. a `tool_use` block) intact sidecar→main→renderer, with no live model
  * turn (that is P1-2, the first credentialed turn). This adapter is the minimal
  * `AppSessionControllerAdapter` that the real `AppSessionController` — the exact
- * class `createRuntimeBackedWebAppSession` /
+ * class `createRuntimeBackedAppSession` /
  * `createQueryEngineSessionController` wrap — drives.
  *
  * On `runTurn` it yields a hand-built assistant `SDKMessage` carrying a `text`
@@ -14,7 +14,7 @@
  * the renderer is produced by the real controller plumbing, not a fake emitter.
  *
  * P1-1 keeps this adapter only behind `CATCODE_SIDECAR_PROBE=1`; normal startup
- * uses `createRuntimeBackedWebAppSession({ queryEngineConfig })` over the same
+ * uses `createRuntimeBackedAppSession({ queryEngineConfig })` over the same
  * controller seam.
  */
 

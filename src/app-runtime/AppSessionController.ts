@@ -256,7 +256,7 @@ export class AppSessionController {
    * point in the message stream, so there is nothing to yield it from.
    *
    * Same shape as the stream-json account-diagnostic hook already wired inside
-   * `submit`, lifted to a method because `createRuntimeBackedWebAppSession`
+   * `submit`, lifted to a method because `createRuntimeBackedAppSession`
    * builds its callback before the controller exists.
    */
   emitMessage(message: SDKMessage): void {

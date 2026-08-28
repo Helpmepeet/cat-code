@@ -44,8 +44,7 @@
   /* Without this, Chromium paints its LIGHT-mode form controls and scrollbars on
    * this near-black shell: a white scrollbar track down the side of every scroller
    * (visible whenever the OS is set to always-show scroll bars, or a mouse is
-   * attached), plus light-mode focus rings and text-field chrome. `web/src/index.css`
-   * has carried this since it shipped; the desktop renderer never got it.
+   * attached), plus light-mode focus rings and text-field chrome.
    *
    * It also decides every `light-dark()` in this file and in the ~90 arbitrary
    * `text-[light-dark(a,b)]` classes the transcript paints its status ink with, so

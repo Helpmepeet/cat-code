@@ -14,7 +14,7 @@ const REQUIRED_FOCUSED_SECTIONS = [
   'Traps And Stale Assumptions',
 ]
 
-const PATH_ROOTS = ['app/', 'docs/', 'scripts/', 'src/', 'web/']
+const PATH_ROOTS = ['app/', 'docs/', 'scripts/', 'src/']
 const ROOT_FILES = new Set(['AGENTS.md', 'CLAUDE.md', 'package.json', 'README.md'])
 
 function refreshedDate(markdown: string): string | null {

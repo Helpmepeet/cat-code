@@ -35,14 +35,13 @@ here relaxes concurrency discipline.
 
 ## 1. Repo layout — know which world you are in
 
-Three runtimes share this repo. **Which directory you touch decides which
+Two runtimes share this repo. **Which directory you touch decides which
 build/test/typecheck battery applies (§3). Never mix them.**
 
 | Area | What it is |
 |---|---|
 | `src/`, `scripts/` | The terminal agent engine (the Claude Code fork): CLI, REPL, tools, query pipeline, providers, Codex core, Agent Mode. Root package. |
 | `app/` | The Electron desktop app (active migration program). Own package `@cat-code/desktop` with own scripts. Sub-folders are trust boundaries: `renderer/` `preload/` `main/` `supervisor/` (Electron-free) `host/` (Electron-free host plane: durable registry + typed control-plane API) `sidecar/` (runs the real engine) `shared/` (wire protocol). |
-| `web/` | Browser chat frontend (Vite React). Own package. |
 | `renderer-theme/`, `scripts/typecheck/renderer-engine-types/` | Temporary migration harnesses. Do not extend. |
 | `docs/` | Plans, maps, reports. Dated filenames (`2026-05-12-…`) are historical records, NOT current truth. Two exceptions are kept current: `docs/maps/` (undated, each map stamped with its own `Last refreshed`) and `docs/migration/STATUS.md`. |
 
@@ -201,12 +200,6 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   caps in `app/shared/operationalLog.ts`, `app/main/deliveryTraceSink.ts`, and
   `app/main/diagnosticsBundle.ts` when changing this path.
 
-### Web (`web/`)
-
-```bash
-bun run --cwd web test && bun run --cwd web typecheck && bun run --cwd web build
-```
-
 ### Docs-only changes
 
 ```bash
@@ -215,7 +208,7 @@ bun run maps:lint             # validates map index, dates, links, and cited pat
 ```
 
 Lint caveat (all areas): `bun run lint` only lints files changed vs
-`main...HEAD`, excluding `web/`, and the config enables **zero rules** (all 19
+`main...HEAD`, and the config enables **zero rules** (all 19
 custom rules are `createNoopRule()` stubs; the only two entries turn rules
 off) — a lint pass is a parse check. Never cite "lint clean" as meaningful
 evidence; tests and typechecks are the evidence.

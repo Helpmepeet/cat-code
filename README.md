@@ -6,11 +6,11 @@ tools, permission controls, resumable sessions, delegated workers, MCP
 integrations, skills, hooks, plugins, and project-scoped memory in one local
 runtime.
 
-The terminal engine is the primary product today. An Electron desktop client
-and a localhost browser client are under active development, but neither is a
-publicly distributed application yet. The longer-term direction is an always-on
-personal agent system; the current repository should not be mistaken for a
-finished hosted service or packaged desktop release.
+The terminal engine is the primary product today. An Electron desktop client is
+under active development, but it is not a publicly distributed application yet.
+The longer-term direction is an always-on personal agent system; the current
+repository should not be mistaken for a finished hosted service or packaged
+desktop release.
 
 > **Repository status:** Cat Code is private source software. It is not published
 > to npm, has no supported Cat Code-owned installer or update channel, and does
@@ -258,28 +258,6 @@ Packaging work has not opened, graphical acceptance remains incomplete, and
 resource use scales with the one-engine-process-per-live-session design. Treat
 it as a developer preview, not an installable desktop release.
 
-### Local browser chat preview
-
-The browser client is a localhost, single-session chat surface backed by the real
-terminal runtime:
-
-```bash
-cd /path/to/cat-code && bun run dev -- --web
-```
-
-This starts the engine-backed WebSocket server and the Vite client. Running
-`bun run --cwd web dev` alone starts only the frontend and does not provide a
-working agent session.
-
-The server binds to `127.0.0.1`, requires an ephemeral WebSocket token, validates
-origin and host, caps inbound messages, and rejects stale permission responses.
-The browser supports streaming text, markdown, code, stop/abort, draft
-persistence, reconnect, and permission decisions.
-
-It is not a hosted service or a desktop-equivalent web application. It owns one
-session, does not expose the desktop session catalog or settings surfaces, and
-does not replay prior transcript rows after a browser reconnect.
-
 ## Architecture
 
 The terminal path is the authoritative engine:
@@ -303,7 +281,6 @@ Supporting systems surround that loop:
 | Provider routing | `src/utils/model/providers.ts`, `src/services/api/` |
 | Settings and persistence | `src/utils/settings/`, `src/utils/config.ts`, `src/utils/sessionStorage.ts` |
 | Memory | `src/memdir/`, `src/services/SessionMemory/` |
-| Browser runtime | `src/web/`, `web/` |
 | Desktop runtime | `app/` |
 | Build feature sets | `scripts/build.ts` |
 
@@ -336,14 +313,6 @@ cd /path/to/cat-code && bun run --cwd app test:hardening
 cd /path/to/cat-code && bun run --cwd app renderer:build
 ```
 
-### Browser client (`web/`)
-
-```bash
-cd /path/to/cat-code && bun run --cwd web test
-cd /path/to/cat-code && bun run --cwd web typecheck
-cd /path/to/cat-code && bun run --cwd web build
-```
-
 ## Important limitations
 
 - **No supported distribution:** do not use `install.sh`, `cat-code install`, or
@@ -355,8 +324,8 @@ cd /path/to/cat-code && bun run --cwd web build
   not every implementation present in the tree.
 - **Incomplete naming migration:** `.cat-code` is preferred, but compatible
   `.claude` paths and upstream-facing names remain in selected surfaces.
-- **Experimental secondary clients:** Electron and browser clients are useful
-  development surfaces, not supported public applications.
+- **Experimental desktop client:** Electron is a useful development surface, not
+  a supported public application.
 - **No generic OpenAI API-key route:** GPT models require the Codex OAuth account
   pool used by the ChatGPT/Codex subscription integration.
 - **Local-first, not hosted:** remote-control and always-on deployment work is

@@ -1,7 +1,7 @@
 import type {
   AppClientMessage as CanonicalAppClientMessage,
   AppReadyPayload as CanonicalAppReadyPayload,
-} from '../../src/web/appSessionProtocol.js'
+} from '../../src/app-runtime/appSessionProtocol.js'
 import type { SDKMessage as CanonicalSDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import type { AppSessionEvent as CanonicalAppSessionEvent } from '../../src/app-runtime/sessionEvents.js'
 import type {

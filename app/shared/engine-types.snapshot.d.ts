@@ -14,7 +14,7 @@
  * usage accounting, and revision fencing):
  *   SDKMessage:        src/entrypoints/agentSdkTypes.ts
  *   AppSessionEvent:   src/app-runtime/sessionEvents.ts
- *   AppClientMessage + AppReadyPayload: src/web/appSessionProtocol.ts
+ *   AppClientMessage + AppReadyPayload: src/app-runtime/appSessionProtocol.ts
  */
 import type {
   PermissionUpdate,
@@ -219,7 +219,7 @@ export type AppSessionEvent =
       activeTurn: boolean
     }
 
-/* --- src/web/appSessionProtocol.ts (the 4 allowlisted client message types) --- */
+/* --- src/app-runtime/appSessionProtocol.ts (the 4 allowlisted client message types) --- */
 
 export type AppSubmitPrompt =
   | string

@@ -1669,7 +1669,7 @@ test('captures the init frame slash_commands catalog per session (P3-7)', () => 
  * until `compact_boundary` lands at the end. The engine's own signal is a
  * pushed `system/subtype:'status'` (`src/services/compact/compact.ts`
  * `setSDKStatus`), wired onto this path by
- * `src/app-runtime/createRuntimeBackedWebAppSession.ts`. Without it the
+ * `src/app-runtime/createRuntimeBackedAppSession.ts`. Without it the
  * activity verb read "Working" for the whole compaction. */
 
 function statusFrame(status: string | null, uuid: string) {

@@ -11,7 +11,7 @@
  *   2. `createSidecarSessionController({ probe:false, cwd, initialMessages })` —
  *      the exact production construction `index.ts` performs with the seed.
  *   3. Capture the REAL `QueryEngine` through the same assembly
- *      `createRuntimeBackedWebAppSession` performs (its `createEngine` seam,
+ *      `createRuntimeBackedAppSession` performs (its `createEngine` seam,
  *      constructing the same `new QueryEngine(config)` the default expression
  *      does) and read the engine's LIVE `mutableMessages` — the exact state
  *      `submit` copies into the model context (`QueryEngine.ts:454`). Asserting
@@ -72,7 +72,7 @@ async function main(): Promise<void> {
     resumedInitialState: resumed.initialState,
   })
 
-  // (3) The same assembly createRuntimeBackedWebAppSession performs, with the
+  // (3) The same assembly createRuntimeBackedAppSession performs, with the
   // REAL QueryEngine captured via the createEngine seam so its live message
   // state is observable.
   const { queryEngineConfig } = await createNormalSidecarQueryEngineConfig(

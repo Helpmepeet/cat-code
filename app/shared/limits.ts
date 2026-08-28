@@ -4,8 +4,7 @@
  * Two DIRECTIONS with different trust and therefore different caps:
  *
  *  - INBOUND (renderer → sidecar) is hostile: a compromised renderer can flood
- *    or oversize frames. `MAX_FRAME_BYTES` bounds it (T7), matching the WS
- *    server's 128 KiB (AppSessionWebSocketServer.ts:29). The prompt cap is
+ *    or oversize frames. `MAX_FRAME_BYTES` bounds it (T7). The prompt cap is
  *    expressed in BYTES (not JS chars) so it is consistent with the frame cap —
  *    a multibyte prompt cannot advertise a size the frame cannot carry (F4).
  *

@@ -1,7 +1,6 @@
 import { c as _c } from "react/compiler-runtime";
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
 import { feature } from 'bun:bundle';
-import { webUIBus } from '../web/WebUIBus.js';
 import { spawnSync } from 'child_process';
 import { snapshotOutputTokensForTurn, getCurrentTurnTokenBudget, getTurnOutputTokens, getBudgetContinuationCount, getTotalInputTokens } from '../bootstrap/state.js';
 import { parseTokenBudget } from '../utils/tokenBudget.js';
@@ -178,7 +177,7 @@ import { resumeAgentBackground } from '../tools/AgentTool/resumeAgent.js';
 import { displayNameForAgent } from '../tools/AgentTool/resolveAgentTarget.js';
 import { useMainLoopModel } from '../hooks/useMainLoopModel.js';
 import { useAppState, useSetAppState, useAppStateStore } from '../state/AppState.js';
-import { getRuntimeMainLoopModel, renderModelName } from '../utils/model/model.js';
+import { getRuntimeMainLoopModel } from '../utils/model/model.js';
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js';
 import { doesMostRecentAssistantMessageExceed200k, tokenCountWithEstimation } from '../utils/tokens.js';
 import { buildThreadGoalDisplayState, calculateThreadGoalContextTokenDelta, deriveThreadGoalContinuationResetState, didThreadGoalTurnMakeProgress, pauseActiveThreadGoalOnAbort, shouldPromptToResumePausedGoal, type ThreadGoal } from '../utils/threadGoal.js';
@@ -190,9 +189,6 @@ import { detectThreadGoalRepetition } from '../utils/threadGoalRepetition.js';
 import { collectThreadGoalToolCalls } from '../utils/threadGoalToolCalls.js';
 import { deriveDelegatedTaskStatus, deriveFocusedInputDialog, deriveHasOperationalWork, deriveHasSuppressedDialog, deriveHasUnblockedDelegatedWork, deriveLocalWaitingReason, deriveTuiSessionStatus, deriveTuiWaitingDetail, type FocusedInputDialog, type FocusedInputDialogFacts } from '../utils/tuiSessionStatus.js';
 import { updateThreadGoalStatusAction } from '../utils/threadGoalActions.js';
-import { getDisplayedEffortLevel } from '../utils/effort.js';
-import { getCodexLeaseSnapshot } from '../services/api/codexAccountLeaseManager.js';
-import { getPoolStatus } from '../services/api/codexAccountPool.js';
 import type { ContentBlockParam, ImageBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs';
 import type { ProcessUserInputContext } from '../utils/processUserInput/processUserInput.js';
 import type { PastedContent } from '../utils/config.js';
@@ -1422,27 +1418,6 @@ export function REPL({
     }
     setUserInputOnProcessingRaw(input);
   }, []);
-  const emitWebStatus = useCallback(() => {
-    if (!webUIBus.enabled) return;
-
-    const pool = getPoolStatus();
-    const leaseSnapshot = getCodexLeaseSnapshot();
-    const mainLease = leaseSnapshot.mainLease;
-    const leasedAccount = mainLease
-      ? pool.accounts.find((account) => account.accountId === mainLease.accountId)
-      : undefined;
-    const activeAccount = leasedAccount ?? (pool.initialized && pool.activeIndex >= 0 ? pool.accounts[pool.activeIndex] : undefined);
-
-    webUIBus.emitToWeb({
-      type: 'status',
-      connected: true,
-      reconnecting: false,
-      model: renderModelName(mainLoopModel),
-      effort: getDisplayedEffortLevel(mainLoopModel, effortValue),
-      contextTokens: tokenCountWithEstimation(messagesRef.current),
-      activeProfile: activeAccount?.alias ?? activeAccount?.accountId?.slice(0, 12),
-    });
-  }, [effortValue, mainLoopModel]);
   // Fullscreen: track the unseen-divider position. dividerIndex changes
   // only ~twice/scroll-session (first scroll-away + repin). pillVisible
   // and stickyPrompt now live in FullscreenLayout — they subscribe to
@@ -1455,9 +1430,6 @@ export function REPL({
     jumpToNew,
     shiftDivider
   } = useUnseenDivider(messages.length);
-  useEffect(() => {
-    emitWebStatus();
-  }, [emitWebStatus, messages]);
   if (feature('AWAY_SUMMARY')) {
     // biome-ignore lint/correctness/useHookAtTopLevel: feature() is a compile-time constant
     useAwaySummary(messages, setMessages, isLoading);
@@ -2991,32 +2963,11 @@ export function REPL({
   const deferredTerminalMessagesRef = useRef<MessageType[]>([]);
   const deferredPermissionDeniedRef = useRef(new Set<string>());
   const onQueryEvent = useCallback((event: Parameters<typeof handleMessageFromStream>[0]) => {
-    // Relay streaming text deltas to the web UI bus
-    if (event.type === 'stream_event' && event.event.type === 'content_block_delta' && 'text' in event.event.delta) {
-      webUIBus.emitToWeb({ type: 'delta', delta: (event.event.delta as { text: string }).text });
-    }
     handleMessageFromStream(event, newMessage => {
-      // Relay complete messages to the web UI bus
       if (newMessage.type === 'assistant') {
         if (activeDeferredOriginRef.current?.kind === 'deferred-continuation') {
           deferredTerminalMessagesRef.current.push(newMessage);
         }
-        const textContent = newMessage.message.content
-          .filter((b: { type: string }) => b.type === 'text')
-          .map((b: { type: string; text?: string }) => b.text ?? '')
-          .join('');
-        if (textContent) {
-          webUIBus.emitToWeb({ type: 'message', message: { role: 'assistant', content: textContent, replaceLast: true } });
-        }
-      }
-      if (newMessage.type === 'system' && typeof newMessage.content === 'string' && (newMessage.subtype === 'api_error' || newMessage.level === 'warning' || newMessage.level === 'error')) {
-        webUIBus.emitToWeb({
-          type: 'message',
-          message: {
-            role: 'system',
-            content: newMessage.content,
-          },
-        });
       }
       if (isCompactBoundaryMessage(newMessage)) {
         // Fullscreen: keep pre-compact messages for scrollback. query.ts
@@ -4300,19 +4251,6 @@ export function REPL({
   // old REPL scopes can be GC'd — saves ~35MB over a 1000-turn session.
   const onSubmitRef = useRef(onSubmit);
   onSubmitRef.current = onSubmit;
-
-  // Web UI input listener: when the browser sends user input via WebSocket,
-  // feed it into onSubmit with stub helpers (proof-of-life plumbing).
-  useEffect(() => {
-    if (!webUIBus.enabled) return;
-    return webUIBus.onUserInput((input) => {
-      void onSubmitRef.current(input.text, {
-        setCursorOffset: () => {},
-        clearBuffer: () => {},
-        resetHistory: () => {},
-      });
-    });
-  }, []);
 
   const handleOpenRateLimitOptions = useCallback(() => {
     void onSubmitRef.current('/rate-limit-options', {

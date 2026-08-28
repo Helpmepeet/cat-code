@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { createRuntimeBackedWebAppSession } from './createRuntimeBackedWebAppSession.js'
+import { createRuntimeBackedAppSession } from './createRuntimeBackedAppSession.js'
 
-describe('createRuntimeBackedWebAppSession', () => {
+describe('createRuntimeBackedAppSession', () => {
   test('creates an AppSessionController from a complete QueryEngine config', async () => {
-    const controller = createRuntimeBackedWebAppSession({
+    const controller = createRuntimeBackedAppSession({
       queryEngineConfig: {
         cwd: '/tmp',
         tools: [],
@@ -39,7 +39,7 @@ describe('createRuntimeBackedWebAppSession', () => {
    * The terminal wires the identical message at `src/cli/print.ts`. */
   test('the engine status callback reaches subscribers as a status message', async () => {
     const seen: unknown[] = []
-    const controller = createRuntimeBackedWebAppSession({
+    const controller = createRuntimeBackedAppSession({
       queryEngineConfig: {
         cwd: '/tmp',
         tools: [],

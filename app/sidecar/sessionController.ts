@@ -1,7 +1,7 @@
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtime/createQueryEngineAppSessionConfigFromSetup.js'
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
-import { createRuntimeBackedWebAppSession } from '../../src/app-runtime/createRuntimeBackedWebAppSession.js'
+import { createRuntimeBackedAppSession } from '../../src/app-runtime/createRuntimeBackedAppSession.js'
 import { getDefaultAppState, type AppState } from '../../src/state/AppStateStore.js'
 import { getInitialEffortSetting } from '../../src/utils/effort.js'
 import {
@@ -627,7 +627,7 @@ export async function createSidecarSessionController({
     providerSwitchLocked: providerBoundHistory,
   })
 
-  const controller = createRuntimeBackedWebAppSession({ queryEngineConfig })
+  const controller = createRuntimeBackedAppSession({ queryEngineConfig })
   return {
     controller,
     permissions: createSidecarPermissionDomain(appStateStore),

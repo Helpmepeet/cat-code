@@ -25,7 +25,7 @@ git -C /Users/pt/cat-code status --short    # or git diff --name-only
 ```
 
 Map each changed path: `src/**` or `scripts/**` → ENGINE · `app/**` → DESKTOP ·
-`web/**` → WEB · only `docs/**`/`*.md` → DOCS. A change can hit several areas;
+only `docs/**`/`*.md` → DOCS. A change can hit several areas;
 run every matching battery from the repo root. Anything unmatched (root
 configs like `package.json`/`tsconfig.json`/`eslint.config.js`,
 `renderer-theme/`, `.claude/`, skills): treat as ENGINE if it can affect the
@@ -49,8 +49,8 @@ bun test <focused test paths near the changed files>
 - **Root `bun run typecheck` is KNOWN-RED** (~1,862 pre-existing errors,
   2026-07-07). Never cite it as a gate; if types matter to the change, diff the
   error output before vs after — zero NEW errors is the bar.
-- **Lint is not evidence**: it only covers files changed vs `main...HEAD`
-  (excluding `web/`), and the config enables zero rules (all custom rules are
+- **Lint is not evidence**: it only covers files changed vs `main...HEAD`, and
+  the config enables zero rules (all custom rules are
   no-op stubs) — a lint pass is a parse check. Tests and builds are the
   evidence, not lint.
 - Shared-type changes: also run the test suites of downstream consumers you
@@ -125,14 +125,6 @@ exists (the deterministic generator/validator); until then the artifact is
 operator-captured prototype-vs-actual screenshot pairs per state. Hover/focus-only
 states are operator-driven always (no-focus-steal rule, GUI-VERIFICATION.md) —
 mark them PENDING, never fabricate them.
-
-### WEB (`web/`)
-
-```bash
-bun run --cwd web test
-bun run --cwd web typecheck
-bun run --cwd web build
-```
 
 ### DOCS
 

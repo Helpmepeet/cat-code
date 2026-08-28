@@ -415,13 +415,13 @@ export const SDK_MESSAGE_FIXTURE: {
   ],
 
   /* ── assistant_error — SDKAssistantMessageError (top-level) ──────────────
-   * Never minted top-level in src/ (only appSessionEventMapper.ts:68 READS
-   * the case); the populated reality is the `error` FIELD on assistant /
-   * api_retry frames. Shape per coreTypes.generated.ts:105. */
+   * The thread-goal scheduler reads this top-level case; the populated reality
+   * is the `error` FIELD on assistant / api_retry frames. Shape per
+   * coreTypes.generated.ts:105. */
   assistant_error: [
     {
       name: 'assistant_error: top-level API error (type-only today)',
-      anchor: 'no mint site; read at src/web/appSessionEventMapper.ts:68',
+      anchor: 'handled by src/app-runtime/attachThreadGoalScheduler.ts:249',
       reach: 'type-only',
       expectRows: 0,
       message: {
