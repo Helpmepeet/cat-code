@@ -6,6 +6,7 @@ import {
   ComposerActionsBar,
   ContextUsagePanel,
 } from './ComposerActionsBar.js'
+import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown } from './composerPopover.js'
 import { toneClasses } from './tone.js'
 import type { ContextUsage } from './contextUsage.js'
@@ -453,6 +454,18 @@ test('with a switch handler, the account face becomes an interactive menu trigge
   // Same alias + title contract as the read-only face (real status on the title).
   expect(interactive).toContain('hiby')
   expect(interactive).toContain('Active account: hiby · Available')
+})
+
+test('opening the account chip requests one global pool refresh, not closing it', () => {
+  let refreshes = 0
+  const requestRefresh = () => {
+    refreshes++
+  }
+
+  expect(toggleAccountChip(false, requestRefresh)).toBe(true)
+  expect(refreshes).toBe(1)
+  expect(toggleAccountChip(true, requestRefresh)).toBe(false)
+  expect(refreshes).toBe(1)
 })
 
 function pool(): AccountStatus[] {

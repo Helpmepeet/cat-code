@@ -213,6 +213,7 @@ async function runProductionHardeningSmoke(
       'answerQuestions',
       'deleteAccount',
       'ping',
+      'refreshAccountsPool',
       // D1b — take back messages still waiting for the running response. Fixed
       // one-way sender; the renderer authors only a correlation id, so it names
       // no target and cannot reach a subagent's queued work.

@@ -9,6 +9,7 @@ import {
   statusDotTone,
   usageTone,
 } from './accountsPageModel.js'
+import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
@@ -605,12 +606,14 @@ function AccountChip({
   accounts,
   onSwitch,
   onManage,
+  onOpen,
   faceProps,
 }: {
   active: AccountStatus
   accounts: AccountStatus[]
   onSwitch: (accountId: string) => void
   onManage?: () => void
+  onOpen?: () => void
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
@@ -625,7 +628,7 @@ function AccountChip({
         aria-haspopup="menu"
         aria-expanded={open}
         title={`Active account: ${alias} · ${active.availabilityLabel}`}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => setOpen(toggleAccountChip(open, onOpen))}
         className={`${RAIL_FACE} gap-1.5 text-text-muted hover:text-text-primary`}
       >
         <span
@@ -1142,6 +1145,7 @@ export function ComposerActionsBar({
   accounts,
   onSwitchAccount,
   onManageAccounts,
+  onOpenAccountSwitcher,
   contextUsage,
   contextBreakdown = null,
   onRequestContextBreakdown,
@@ -1191,6 +1195,8 @@ export function ComposerActionsBar({
   onSwitchAccount?: (accountId: string) => void
   /** Open the full Accounts page (the popover's "Manage accounts →"). */
   onManageAccounts?: () => void
+  /** Re-read the global account pool when the switcher opens. */
+  onOpenAccountSwitcher?: () => void
   /** Real context-window fullness, or null before the first result frame. */
   contextUsage: ContextUsage | null
   /**
@@ -1447,6 +1453,7 @@ export function ComposerActionsBar({
               accounts={accounts ?? []}
               onSwitch={onSwitchAccount}
               onManage={onManageAccounts}
+              onOpen={onOpenAccountSwitcher}
               faceProps={faceProps('account')}
             />
           ) : showAccount ? (

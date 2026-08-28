@@ -111,7 +111,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     "setAppearance(scheme: 'system' | 'light' | 'dark'): void",
   )
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(40)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(41)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -120,6 +120,10 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
   expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')
   expect(source).toContain("const CH_OPEN_LOGS = 'catcode:open-logs'")
+  expect(source).toContain(
+    "const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
+  )
+  expect(source).toContain('refreshAccountsPool(): void')
   expect(source).toContain("const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'")
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
@@ -206,6 +210,21 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   // is main's `CH_HOST_SAVE_TEXT` handler and only main's.
   expect(code).not.toContain('writeFile')
   expect(code).not.toContain("'node:fs'")
+})
+
+test('the account-pool refresh sender is fixed and carries no renderer payload', () => {
+  const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('refreshAccountsPool(): void {')
+  const end = source.indexOf('\n  },', start)
+  if (start < 0 || end <= start) {
+    throw new Error('preload.ts no longer exposes refreshAccountsPool')
+  }
+  const sender = source.slice(start, end)
+
+  expect(sender).toContain('sendGuard.assertAllowed({ refreshAccountsPool: true })')
+  expect(sender).toContain('ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)')
+  expect(sender).not.toContain('payload')
+  expect(sender).not.toContain('ipcRenderer.invoke')
 })
 
 test('account deletion terminates in a one-shot worker, not a session forward', () => {

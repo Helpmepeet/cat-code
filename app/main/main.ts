@@ -21,6 +21,7 @@ import {
   nativeTheme,
   session,
   shell,
+  type IpcMainEvent,
   type WebContents,
 } from 'electron'
 import { fileURLToPath } from 'node:url'
@@ -223,6 +224,7 @@ const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
 const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
+const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
 
 // App session ids are supervisor-minted UUIDs. Validate at the single frame
 // forwarding choke point so malformed renderer payloads cannot mint an
@@ -982,6 +984,19 @@ function startAccountsPoolRefresh(): void {
     log: line => process.stderr.write(`${line}\n`),
   })
   accountsPoolDriver.start()
+}
+
+/**
+ * Re-read the pool now because a sign-in just wrote to the vault. No-op before
+ * the driver is armed (the first run is already pending) and after it stops.
+ */
+function refreshAccountsPoolNow(): void {
+  accountsPoolDriver?.refreshNow()
+}
+
+function isMainWindowSender(event: IpcMainEvent): boolean {
+  const contents = mainWindow?.webContents
+  return contents !== undefined && !contents.isDestroyed() && event.sender === contents
 }
 
 function sendAccountDeletionNotice(
@@ -2335,6 +2350,11 @@ function registerIpcHandlers(): void {
     }
   })
 
+  ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
+    if (!isMainWindowSender(event)) return
+    refreshAccountsPoolNow()
+  })
+
   ipcMain.on(CH_OPEN_LOGS, () => {
     void shell.openPath(operationalLog.getDirectory())
   })
@@ -3260,23 +3280,3 @@ process.on('unhandledRejection', reason => {
   })
   app.exit(1)
 })
-  type IpcMainEvent,
-const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
-/**
- * Re-read the pool now because a sign-in just wrote to the vault. No-op before
- * the driver is armed (the first run is already pending) and after it stops.
- */
-function refreshAccountsPoolNow(): void {
-  accountsPoolDriver?.refreshNow()
-}
-
-function isMainWindowSender(event: IpcMainEvent): boolean {
-  const contents = mainWindow?.webContents
-  return contents !== undefined && !contents.isDestroyed() && event.sender === contents
-}
-
-  ipcMain.on(CH_REFRESH_ACCOUNTS_POOL, event => {
-    if (!isMainWindowSender(event)) return
-    refreshAccountsPoolNow()
-  })
-

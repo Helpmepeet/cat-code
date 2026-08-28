@@ -3601,6 +3601,11 @@ export type CatCodeBridge = {
    * `nativeTheme.themeSource`.
    */
   setAppearance(scheme: 'system' | 'light' | 'dark'): void
+  /**
+   * Ask main's existing account-pool driver for one fresh global snapshot. This
+   * has no payload, starts no session, and never becomes sidecar vocabulary.
+   */
+  refreshAccountsPool(): void
   /** Main-owned local diagnostics retrieval; the renderer never supplies a path. */
   openLogsFolder(): void
   saveDiagnosticsBundle(): Promise<boolean>
@@ -3774,8 +3779,3 @@ export type PermissionResponseInput =
       applySuggestions?: number[]
     }
   | { behavior: 'deny'; message: string }
-  /**
-   * Ask main's existing account-pool driver for one fresh global snapshot. This
-   * has no payload, starts no session, and never becomes sidecar vocabulary.
-   */
-  refreshAccountsPool(): void

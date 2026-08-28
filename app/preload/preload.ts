@@ -84,6 +84,7 @@ const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
 const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
+const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
 
 // A document reload must never acknowledge work from its predecessor.
 const deliveryDocumentId = crypto.randomUUID()
@@ -461,6 +462,10 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ scheme })
     ipcRenderer.send(CH_SET_APPEARANCE, scheme)
   },
+  refreshAccountsPool(): void {
+    sendGuard.assertAllowed({ refreshAccountsPool: true })
+    ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)
+  },
   openLogsFolder(): void {
     sendGuard.assertAllowed({ openLogs: true })
     ipcRenderer.send(CH_OPEN_LOGS)
@@ -601,8 +606,3 @@ if (__CATCODE_DEV_HARNESS__) {
 }
 
 contextBridge.exposeInMainWorld('catcode', bridge)
-const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
-  refreshAccountsPool(): void {
-    sendGuard.assertAllowed({ refreshAccountsPool: true })
-    ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)
-  },

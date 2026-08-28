@@ -3290,6 +3290,7 @@ export function App() {
               }
             } : undefined}
             onManageAccounts={() => setActiveView('accounts')}
+            onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
@@ -4485,6 +4486,7 @@ export function SessionPane({
   activeAnthropicAccount,
   onSwitchAccount,
   onManageAccounts,
+  onOpenAccountSwitcher,
   accountsLastResult,
   activeConnection,
   turnStartedAt = null,
@@ -5835,6 +5837,7 @@ export function SessionPane({
           accounts={accountsSnapshot?.accounts ?? []}
           onSwitchAccount={handleSwitchAccount}
           onManageAccounts={onManageAccounts}
+          onOpenAccountSwitcher={onOpenAccountSwitcher}
           contextUsage={contextUsage}
           contextBreakdown={contextBreakdown}
           onRequestContextBreakdown={onRequestContextBreakdown}
@@ -6138,6 +6141,8 @@ type SessionPaneProps = {
   onSwitchAccount?: (verb: AccountSwitchMessage) => void
   /** Open the Accounts page (the profile popover's "Manage accounts →"). */
   onManageAccounts?: () => void
+  /** Request a fresh host-owned account pool when the composer switcher opens. */
+  onOpenAccountSwitcher?: () => void
   /** Global most-recent `account.result` (ACCT-5) — SessionPane correlates it by
    * requestId + sessionId against its own in-flight composer switch and toasts
    * the real outcome; no optimistic UI, mirrors AccountsPage's `pendingRef`. */
@@ -6323,8 +6328,3 @@ type SessionPaneProps = {
   transcript: TranscriptState
   transportError: string | null
 }
-            onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
-  onOpenAccountSwitcher,
-          onOpenAccountSwitcher={onOpenAccountSwitcher}
-  /** Request a fresh host-owned account pool when the composer switcher opens. */
-  onOpenAccountSwitcher?: () => void

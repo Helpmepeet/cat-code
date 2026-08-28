@@ -267,7 +267,7 @@ test('with no polled pool yet, the retained copy keeps the face from blanking', 
   expect(rail.accountsSnapshot?.poolCount).toBe(3)
 })
 
-test('a live pane still prefers its OWN session snapshot over the polled pool', () => {
+test('a ready composer rail uses the current global pool over its attachment snapshot', () => {
   let accounts = reduceAccountsState(
     createAccountsState(),
     frame({
@@ -279,7 +279,7 @@ test('a live pane still prefers its OWN session snapshot over the polled pool', 
   )
   accounts = reduceAccountsState(accounts, { type: 'pool', pool: GLOBAL_POOL })
   const rail = selectComposerRail(sources({ accounts, connectionStatus: 'ready' }))
-  expect(rail.accountsSnapshot?.readyCount).toBe(1)
+  expect(rail.accountsSnapshot?.readyCount).toBe(3)
 })
 
 test('a session that never reported anything claims nothing', () => {

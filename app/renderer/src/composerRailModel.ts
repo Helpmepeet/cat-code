@@ -31,7 +31,6 @@ import type {
   SessionId,
 } from '../../shared/protocol.js'
 import {
-  selectGlobalAccountsSnapshot,
   selectAccountsSnapshot,
   selectFirstAccountsSnapshot,
   selectLastAccountsSnapshot,
@@ -112,28 +111,19 @@ function engineReady(status: ConnectionSnapshot['status']): boolean {
 /**
  * Which accounts view a pane should show, freshest-first.
  *
- * With an engine: this session's own snapshot, then any live session's — the
- * pre-existing order.
+ * The host-owned global pool wins whenever its worker has published one. It is
+ * the current process-global usage view, while a session snapshot is refreshed
+ * only at attachment and after that session mutates the pool.
  *
- * Without one: the POLLED GLOBAL pool, not this session's retained copy. The
- * Codex pool is process-global and main refreshes it on a timer, so the global
- * feed describes the same accounts and is current. The retained copy is frozen
- * at the moment the engine died, and its fields keep MOVING after that:
- * `availabilityLabel` is a relative countdown computed at snapshot time, so a
- * parked pane would show `resets in 2h 14m` hours later, or `Ready` for an
- * account the pool has since capped. The reading is also predictive rather than
- * historical here, because the next submit restores the engine and re-picks
- * from the pool as it is NOW.
- *
- * The retained copy stays as the last resort so the face never blanks in the
- * one window nothing else covers: a single session that died before main's
- * first pool poll landed.
+ * Before the host's first worker result, retain the existing session-first
+ * fallback so the face does not blank during startup.
  */
 function railAccounts(
   accounts: AccountsState,
   sessionId: SessionId,
   ready: boolean,
 ): AccountsSnapshot | null {
+  if (accounts.pool) return accounts.pool
   if (ready) {
     return (
       selectAccountsSnapshot(accounts, sessionId) ??
@@ -141,8 +131,8 @@ function railAccounts(
     )
   }
   return (
-    selectGlobalAccountsSnapshot(accounts) ??
-    selectLastAccountsSnapshot(accounts, sessionId)
+    selectLastAccountsSnapshot(accounts, sessionId) ??
+    selectFirstAccountsSnapshot(accounts)
   )
 }
 

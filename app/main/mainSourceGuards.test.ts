@@ -98,6 +98,20 @@ test('the dev app name never depends on the userData path', () => {
   expect(source).not.toContain('app.getPath("userData")')
 })
 
+test('the account-pool refresh channel has no payload and reuses the existing driver', () => {
+  expect(source).toContain(
+    "const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
+  )
+  const refresh = region(
+    'ipcMain.on(CH_REFRESH_ACCOUNTS_POOL',
+    'ipcMain.on(CH_OPEN_LOGS',
+  )
+  expect(refresh).toContain('isMainWindowSender(event)')
+  expect(refresh).toContain('refreshAccountsPoolNow()')
+  expect(refresh).not.toContain('payload')
+  expect(refresh).not.toContain('forward(')
+})
+
 test('HC1: the picker hands back a token, never the path the user chose', () => {
   const pick = region(
     'ipcMain.handle(\n    CH_HOST_PICK_DIR',
