@@ -361,12 +361,8 @@ import { unassignTeammateTasks } from '../utils/tasks.js'
 import { getRunningTasks } from '../utils/task/framework.js'
 import { isBackgroundTask } from '../tasks/types.js'
 import { formatHeadlessTextResult } from './headlessTextResult.js'
-import {
-  createPendingTaskNotifications,
-  type NotificationSweep,
-  type ObservedTask,
-  toObservedTask,
-} from './pendingTaskNotifications.js'
+import { toObservedTask } from './pendingTaskNotifications.js'
+import { createHeadlessWaitLoop } from './headlessWaitLoop.js'
 import { stopTask } from '../tasks/stopTask.js'
 import { drainSdkEvents } from '../utils/sdkEventQueue.js'
 import { initializeGrowthBook } from '../services/analytics/growthbook.js'
@@ -1089,32 +1085,53 @@ function runHeadlessStreaming(
     | undefined
   let inputClosed = false
   let shutdownPromptInjected = false
-  let heldBackResult: StdoutMessage | null = null
-  // A background agent's status goes terminal long before its notification is
-  // enqueued — AgentTool.tsx:1714 flips it, then a full classifyHandoffIfNeeded
-  // API call and worktree cleanup run, and only :1756 enqueues. The wait loop
-  // below reads that window as idle (isBackgroundTask() is already false,
-  // queue still empty) and would flush heldBackResult as the run's answer.
-  // 120s comfortably exceeds a classifier round trip plus git cleanup; the
-  // window observed in the 2026-08-27 incident was one in-flight API call.
-  const UNDELIVERED_NOTIFICATION_DEADLINE_MS = 120_000
-  const pendingTaskNotifications = createPendingTaskNotifications(
-    UNDELIVERED_NOTIFICATION_DEADLINE_MS,
-  )
-  // Function-scoped, not per-turn: every `update()` can expire an entry, and
-  // an expiry dropped on the floor is unrecoverable (the id is deleted from
-  // the tracker, so no later poll can report it). Cleared when consumed.
-  const undeliveredTaskIds: string[] = []
-  const sweepTaskNotifications = (state: AppState): NotificationSweep => {
-    const sweep = pendingTaskNotifications.update(
-      observeTasks(state),
-      Date.now(),
-    )
-    undeliveredTaskIds.push(...sweep.expired)
-    return sweep
-  }
-  const observeTasks = (state: AppState): ObservedTask[] =>
-    Object.values(state.tasks ?? {}).map(toObservedTask)
+  // Holds the turn result back while background agents run, polls until the
+  // run is really idle, and fails the run closed when a background result was
+  // never handed to the model. See headlessWaitLoop.ts for why it is a module.
+  const waitLoop = createHeadlessWaitLoop({
+    readState: () => {
+      const state = getAppState()
+      const running = getRunningTasks(state)
+      return {
+        // Exclude in_process_teammate — teammates are long-lived by design
+        // (status: 'running' for their whole lifetime, cleaned up by the
+        // shutdown protocol, not by transitioning to 'completed'). Waiting
+        // on them here loops forever (gh-30008). Same exclusion already
+        // exists at useBackgroundTaskNavigation.ts:55 for the same reason;
+        // hasHoldbackAgents below is already narrower (type === 'local_agent')
+        // so it doesn't hit this.
+        hasRunningBackgroundWork: running.some(
+          t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
+        ),
+        hasHoldbackAgents: running.some(
+          t =>
+            (t.type === 'local_agent' || t.type === 'local_workflow') &&
+            isBackgroundTask(t),
+        ),
+        tasks: Object.values(state.tasks ?? {}).map(toObservedTask),
+      }
+    },
+    emit: message => output.enqueue(message),
+    getSessionId,
+    onHeldResultDiscarded: () => {
+      suggestionState.pendingSuggestion = null
+      suggestionState.pendingLastEmittedEntry = null
+    },
+    onHeldResultFlushed: () => {
+      if (suggestionState.pendingSuggestion) {
+        output.enqueue(suggestionState.pendingSuggestion)
+        // Now that the suggestion is actually delivered, record it for acceptance tracking
+        if (suggestionState.pendingLastEmittedEntry) {
+          suggestionState.lastEmitted = {
+            ...suggestionState.pendingLastEmittedEntry,
+            emittedAt: Date.now(),
+          }
+          suggestionState.pendingLastEmittedEntry = null
+        }
+        suggestionState.pendingSuggestion = null
+      }
+    },
+  })
   let abortController: AbortController | undefined
   // Set once the goal loop exists (below). Held in a mutable slot rather than
   // closed over directly because SIGINT can land before that line runs.
@@ -2043,7 +2060,6 @@ function runHeadlessStreaming(
 
     try {
       let command: QueuedCommand | undefined
-      let waitingForAgents = false
 
       // Extract command processing into a named function for the do-while pattern.
       // Drains the queue, batching consecutive prompt-mode commands into one
@@ -2358,24 +2374,7 @@ function runHeadlessStreaming(
                   output.enqueue(event)
                 }
 
-                // Hold-back: don't emit result while background agents are running
-                const currentState = getAppState()
-                if (
-                  getRunningTasks(currentState).some(
-                    t =>
-                      (t.type === 'local_agent' ||
-                        t.type === 'local_workflow') &&
-                      isBackgroundTask(t),
-                  )
-                ) {
-                  heldBackResult = message
-                  // Seed the tracker while those tasks are still running, so
-                  // their ids are known before any of them flips to terminal.
-                  sweepTaskNotifications(currentState)
-                } else {
-                  heldBackResult = null
-                  output.enqueue(message)
-                }
+                waitLoop.onTurnResult(message)
               } else {
                 // Flush SDK events (task_started, task_progress) so background
                 // agent progress is streamed in real-time, not batched until result.
@@ -2386,7 +2385,7 @@ function runHeadlessStreaming(
                 // an agent that both starts and goes terminal inside one turn
                 // is never seen running by the seed above, and its handover
                 // window would be invisible.
-                sweepTaskNotifications(getAppState())
+                waitLoop.observe()
                 output.enqueue(message)
               }
             }
@@ -2469,7 +2468,7 @@ function runHeadlessStreaming(
                   // Only set lastEmitted when the suggestion is actually delivered
                   // to the consumer; deferred suggestions may be discarded before
                   // delivery if a new command arrives first.
-                  if (heldBackResult) {
+                  if (waitLoop.isResultHeld()) {
                     suggestionState.pendingSuggestion = suggestionMsg
                     suggestionState.pendingLastEmittedEntry = {
                       text: lastEmittedEntry.text,
@@ -2512,141 +2511,34 @@ function runHeadlessStreaming(
         }
       }
 
-      // Use a do-while loop to drain commands and then wait for any
-      // background agents that are still running. When agents complete,
-      // their notifications are enqueued and the loop re-drains.
-      do {
-        // Drain SDK events (task_started, task_progress) before command queue
-        // so progress events precede task_notification on the stream.
-        for (const event of drainSdkEvents()) {
-          output.enqueue(event)
-        }
-
-        runPhase = 'draining_commands'
-        await drainCommandQueue()
-
-        // Check for running background tasks before exiting.
-        // Exclude in_process_teammate — teammates are long-lived by design
-        // (status: 'running' for their whole lifetime, cleaned up by the
-        // shutdown protocol, not by transitioning to 'completed'). Waiting
-        // on them here loops forever (gh-30008). Same exclusion already
-        // exists at useBackgroundTaskNavigation.ts:55 for the same reason;
-        // L1839 above is already narrower (type === 'local_agent') so it
-        // doesn't hit this.
-        waitingForAgents = false
-        {
-          const state = getAppState()
-          const hasRunningBg = getRunningTasks(state).some(
-            t => isBackgroundTask(t) && t.type !== 'in_process_teammate',
-          )
-          // Terminal-but-unnotified background work. Without this the handover
-          // window reads as idle: hasRunningBg is already false and the
-          // notification has not reached the queue yet.
-          const notificationSweep = sweepTaskNotifications(state)
-          if (undeliveredTaskIds.length > 0) {
-            // Stop here rather than at the bottom of the loop. Anything that
-            // runs after this decision (a goal continuation, or a turn on a
-            // late notification) spends quota producing an answer the
-            // fail-closed branch below is about to discard. Tested against the
-            // accumulator, not this sweep, so an expiry recorded mid-turn by
-            // the observation in the message handler also stops the loop.
-            waitingForAgents = false
-            break
+      await waitLoop.runWaitLoop({
+        drainCommandQueue,
+        flushSdkEvents: () => {
+          for (const event of drainSdkEvents()) {
+            output.enqueue(event)
           }
-          const hasPendingNotification = notificationSweep.pending.length > 0
-          let hasMainThreadQueued = peek(isMainThread) !== undefined
-
-          // Headless idle boundary: the queue has drained and nothing is
-          // outstanding, which is where the terminal would consider a goal
-          // continuation. Asked LAST so real queued input and running tasks
-          // always outrank automatic continuation.
-          // `isShuttingDown()` is load-bearing: SIGINT aborts the query and
-          // ask() returns normally, so without this the drain completes, a
-          // fresh continuation is enqueued, and Ctrl-C starts another model
-          // turn instead of stopping.
-          if (
-            !hasRunningBg &&
-            // A continuation enqueued during the handover window would race
-            // the task notification that is about to arrive.
-            !hasPendingNotification &&
-            !hasMainThreadQueued &&
-            headlessGoalLoop &&
-            !isShuttingDown()
-          ) {
-            const continuation =
-              await headlessGoalLoop.nextContinuation(mutableMessages)
-            if (continuation) {
+        },
+        hasMainThreadQueued: () => peek(isMainThread) !== undefined,
+        requestGoalContinuation: headlessGoalLoop
+          ? async () => {
+              const continuation =
+                await headlessGoalLoop.nextContinuation(mutableMessages)
+              if (!continuation) return false
               enqueue({
                 mode: 'prompt',
                 value: continuation,
                 uuid: randomUUID(),
                 isMeta: true,
               })
-              hasMainThreadQueued = true
+              return true
             }
-          }
-
-          if (
-            hasRunningBg ||
-            // Not while shutting down: gracefulShutdown arms a force-exit, so
-            // waiting here just eats the interrupted result.
-            (hasPendingNotification && !isShuttingDown()) ||
-            hasMainThreadQueued
-          ) {
-            waitingForAgents = true
-            if (!hasMainThreadQueued) {
-              runPhase = 'waiting_for_agents'
-              // No commands ready yet, wait for tasks to complete
-              await sleep(100)
-            }
-            // Loop back to drain any newly queued commands
-          }
-        }
-      } while (waitingForAgents)
-
-      if (undeliveredTaskIds.length > 0) {
-        // Fail closed. Resuming the normal flush here would emit the model's
-        // pre-wait holding message as the run's answer and exit 0 — the exact
-        // failure this patch exists to prevent. Drop it and report an error so
-        // the process exits non-zero.
-        heldBackResult = null
-        suggestionState.pendingSuggestion = null
-        suggestionState.pendingLastEmittedEntry = null
-        output.enqueue({
-          type: 'result',
-          subtype: 'error_during_execution',
-          duration_ms: 0,
-          duration_api_ms: 0,
-          is_error: true,
-          num_turns: 0,
-          stop_reason: null,
-          session_id: getSessionId(),
-          total_cost_usd: 0,
-          usage: EMPTY_USAGE,
-          modelUsage: {},
-          permission_denials: [],
-          uuid: randomUUID(),
-          errors: [
-            `Background task result was never delivered to the model: ${undeliveredTaskIds.join(', ')}`,
-          ],
-        })
-        undeliveredTaskIds.length = 0
-      } else if (heldBackResult) {
-        output.enqueue(heldBackResult)
-        heldBackResult = null
-        if (suggestionState.pendingSuggestion) {
-          output.enqueue(suggestionState.pendingSuggestion)
-          // Now that the suggestion is actually delivered, record it for acceptance tracking
-          if (suggestionState.pendingLastEmittedEntry) {
-            suggestionState.lastEmitted = {
-              ...suggestionState.pendingLastEmittedEntry,
-              emittedAt: Date.now(),
-            }
-            suggestionState.pendingLastEmittedEntry = null
-          }
-          suggestionState.pendingSuggestion = null
-        }
-      }
+          : null,
+        isShuttingDown,
+        sleep,
+        setRunPhase: phase => {
+          runPhase = phase
+        },
+      })
     } catch (error) {
       // Emit error result message before shutting down
       // Write directly to structuredIO to ensure immediate delivery
