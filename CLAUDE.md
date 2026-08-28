@@ -93,7 +93,7 @@ instead of assuming.
 
 ### Engine (`src/`, `scripts/`)
 
-When writing or changing Cat Code tests, use the global `writing-cat-code-tests` skill.
+When writing or changing Cat Code tests, use the repository `writing-cat-code-tests` skill.
 
 ```bash
 bun run build:dev:full        # THE build gate: maps:lint + branch-diff lint + ./cli-dev + version print

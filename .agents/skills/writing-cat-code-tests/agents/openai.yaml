@@ -1,0 +1,4 @@
+interface:
+  display_name: "Writing Cat Code Tests"
+  short_description: "Build regression tests that prove real Cat Code behavior."
+  default_prompt: "Use $writing-cat-code-tests to add evidence-backed regression coverage for this Cat Code change."
