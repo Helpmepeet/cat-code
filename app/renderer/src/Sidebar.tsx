@@ -396,8 +396,11 @@ export function Sidebar({
     {},
   )
   const orderStore = storage === undefined ? defaultOrderStorage() : storage
-  const [sidebarWidth, setSidebarWidth] = useState(
-    () => readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
+  const [sidebarWidth, setSidebarWidth] = useState(() =>
+    clampSidebarWidth(
+      readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
+      currentWindowWidth(),
+    ),
   )
   const [workspaceOrder, setWorkspaceOrder] = useState<WorkspaceOrder>(
     () => readWorkspaceOrderFromStorage(orderStore) ?? createWorkspaceOrder(),
