@@ -657,6 +657,31 @@ describe('browse selectors', () => {
     expect(buckets.map(b => b.label)).toEqual(['Today', 'Older'])
   })
 
+  test('day boundaries stay on local midnight across a DST transition', () => {
+    const priorTz = process.env.TZ
+    process.env.TZ = 'America/New_York'
+    try {
+      // US spring-forward is 2026-03-08, so 03-08 is a 23-hour local day.
+      const now = new Date('2026-03-09T12:00:00-04:00').getTime()
+      // Two days back: belongs in 'This week', never in 'Yesterday'.
+      const twoDaysBack = new Date('2026-03-07T23:30:00-05:00').getTime()
+      const yesterday = new Date('2026-03-08T12:00:00-04:00').getTime()
+      const buckets = bucketByDate(
+        [
+          row({ sessionId: 'y', modifiedAtMs: yesterday }),
+          row({ sessionId: 'd', modifiedAtMs: twoDaysBack }),
+        ],
+        now,
+      )
+      expect(buckets.map(b => b.label)).toEqual(['Yesterday', 'This week'])
+      expect(buckets[0]!.rows.map(r => r.sessionId)).toEqual(['y'])
+      expect(buckets[1]!.rows.map(r => r.sessionId)).toEqual(['d'])
+    } finally {
+      if (priorTz === undefined) delete process.env.TZ
+      else process.env.TZ = priorTz
+    }
+  })
+
   test('relative time formatting', () => {
     const now = 10_000_000
     expect(formatRelativeTime(now, now)).toBe('just now')

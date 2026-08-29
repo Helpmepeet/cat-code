@@ -770,8 +770,15 @@ export function bucketByDate(
   const startOfToday = new Date(nowMs)
   startOfToday.setHours(0, 0, 0, 0)
   const todayMs = startOfToday.getTime()
-  const yesterdayMs = todayMs - 24 * 60 * 60 * 1000
-  const weekMs = todayMs - 6 * 24 * 60 * 60 * 1000
+  // Calendar arithmetic, not fixed 24h blocks: a local day is 23 or 25 hours
+  // across a DST transition, which would slide these boundaries off midnight.
+  const startOfDayBefore = (days: number): number => {
+    const day = new Date(startOfToday)
+    day.setDate(day.getDate() - days)
+    return day.getTime()
+  }
+  const yesterdayMs = startOfDayBefore(1)
+  const weekMs = startOfDayBefore(6)
 
   const buckets: Record<string, MergedSessionRow[]> = {
     Today: [],
