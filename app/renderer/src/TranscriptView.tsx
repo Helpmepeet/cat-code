@@ -2823,6 +2823,29 @@ function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
 }
 
 /**
+ * What the activity line says a nested BASH call is doing: the model's own
+ * description, falling back to the command only when it wrote none.
+ *
+ * This is not the bash card header, which keeps the raw command by operator
+ * call (2026-08-23, `bashCommandLabel.ts`) because a column of cards is read as
+ * commands. The activity line is one truncated slot on someone ELSE's card, and
+ * a long command spends all of it on a prefix that says nothing about the work.
+ * The selection rule is shared, so a command with no description and no leading
+ * `# comment` still shows the command.
+ */
+function agentActivityTarget(child: ToolUseNestedRow): string {
+  if (child.toolFamily !== 'bash') return deriveTarget(child)
+  const str = (key: string): string | null => {
+    const value = child.input[key]
+    return typeof value === 'string' && value.length > 0 ? value : null
+  }
+  return (
+    selectBashCardText(str('command'), str('description')).hover ??
+    deriveTarget(child)
+  )
+}
+
+/**
  * The running card's live signal: the subagent's most recent nested tool call.
  * Only full frames arrive for subagents (§4/S1 — no nested streaming), so the
  * LAST tool-use child IS what the worker is doing right now. Null until the
@@ -2832,8 +2855,8 @@ function agentActivityOf(row: ToolUseNestedRow): string | null {
   for (let index = row.children.length - 1; index >= 0; index -= 1) {
     const child = row.children[index]
     if (child === undefined || child.kind !== 'tool-use') continue
-    const target = deriveTarget(child)
-    // `deriveTarget` falls back to the tool's OWN name for several families, and
+    const target = agentActivityTarget(child)
+    // `agentActivityTarget` falls back to the tool's OWN name for several families, and
     // already spells MCP as `server › tool`. Prefixing either prints the name
     // twice ("TodoWrite TodoWrite") and pushes the badge past its truncation.
     return target === child.toolName || child.toolFamily === 'mcp'

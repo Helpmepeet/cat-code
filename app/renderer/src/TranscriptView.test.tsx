@@ -1460,6 +1460,37 @@ test('the activity line never prints a tool name twice', () => {
   expect(html).not.toContain('TodoWrite TodoWrite')
 })
 
+test('the activity line says what a nested bash call DOES, not the command it ran', () => {
+  const command =
+    "rg -n --glob '!*.test.*' \"selectBashCardText\" app/renderer/src | head -40"
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending', [
+      toolRow({
+        toolName: 'Bash',
+        toolFamily: 'bash',
+        input: { command, description: 'Find the card label selection rule' },
+        status: 'pending',
+      }),
+    ]),
+  )
+  expect(html).toContain('Find the card label selection rule')
+  expect(html).not.toContain('head -40')
+})
+
+test('the activity line keeps the command when the model wrote no description', () => {
+  const html = render(
+    agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending', [
+      toolRow({
+        toolName: 'Bash',
+        toolFamily: 'bash',
+        input: { command: 'git status' },
+        status: 'pending',
+      }),
+    ]),
+  )
+  expect(html).toContain('git status')
+})
+
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [
