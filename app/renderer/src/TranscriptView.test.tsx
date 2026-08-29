@@ -1475,6 +1475,9 @@ test('the activity line says what a nested bash call DOES, not the command it ra
   )
   expect(html).toContain('Find the card label selection rule')
   expect(html).not.toContain('head -40')
+  // The sentence is the whole line: a family word in front of it says nothing
+  // the sentence does not already say.
+  expect(html).not.toContain('Bash Find')
 })
 
 test('the activity line keeps the command when the model wrote no description', () => {
@@ -1489,6 +1492,7 @@ test('the activity line keeps the command when the model wrote no description', 
     ]),
   )
   expect(html).toContain('git status')
+  expect(html).not.toContain('Bash git status')
 })
 
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {

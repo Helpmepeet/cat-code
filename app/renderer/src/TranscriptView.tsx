@@ -2859,7 +2859,15 @@ function agentActivityOf(row: ToolUseNestedRow): string | null {
     // `agentActivityTarget` falls back to the tool's OWN name for several families, and
     // already spells MCP as `server › tool`. Prefixing either prints the name
     // twice ("TodoWrite TodoWrite") and pushes the badge past its truncation.
-    return target === child.toolName || child.toolFamily === 'mcp'
+    //
+    // Bash is unprefixed for a different reason: its target is a sentence the
+    // worker wrote about its own work, or failing that a shell command. Both
+    // read as what is happening; "Bash" in front of either only spends the slot.
+    return (
+      target === child.toolName ||
+      child.toolFamily === 'mcp' ||
+      child.toolFamily === 'bash'
+    )
       ? target
       : `${child.toolName} ${target}`
   }
