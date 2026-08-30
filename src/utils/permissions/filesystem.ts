@@ -4,7 +4,11 @@ import ignore from 'ignore'
 import memoize from 'lodash-es/memoize.js'
 import { homedir, tmpdir } from 'os'
 import { join, normalize, posix, sep } from 'path'
-import { hasAutoMemPathOverride, isAutoMemPath } from 'src/memdir/paths.js'
+import {
+  getAutoMemPath,
+  hasAutoMemPathOverride,
+  isAutoMemPath,
+} from 'src/memdir/paths.js'
 import { isAgentMemoryPath } from 'src/tools/AgentTool/agentMemory.js'
 import {
   CLAUDE_FOLDER_PERMISSION_PATTERN,
@@ -1495,6 +1499,28 @@ export function generateSuggestions(
 }
 
 /**
+ * Symlink guard for the auto-memory carve-outs, mirroring the job-dir guard
+ * below: every resolved form of the target (lexical + symlink chain) must fall
+ * under some resolved form of the memory dir, so a symlink inside it pointing
+ * outside does not skip checkPathSafetyForAutoEdit. Resolving both sides
+ * handles the case where the memory dir itself sits under a symlinked root.
+ * A path that does not exist yet still resolves — getPathsForPermissionCheck
+ * falls back to the deepest existing ancestor — so new memory files keep the
+ * carve-out.
+ */
+function isAutoMemPathAfterSymlinks(absolutePath: string): boolean {
+  // getAutoMemPath() carries a trailing separator; strip it so the resolver
+  // sees a plain directory path.
+  const memDirForms = getPathsForPermissionCheck(
+    getAutoMemPath().slice(0, -1),
+  ).map(normalize)
+  return getPathsForPermissionCheck(absolutePath).every(p => {
+    const np = normalize(p)
+    return memDirForms.some(md => np === md || np.startsWith(md + sep))
+  })
+}
+
+/**
  * Check if a path is an internal path that can be edited without permission.
  * Returns a PermissionResult - either 'allow' if matched, or 'passthrough' to continue checking.
  */
@@ -1591,7 +1617,11 @@ export function checkEditableInternalPath(
   // so it gets NO special permission treatment here — writes go through normal
   // permission flow (step 5 → ask). SDK callers who want silent memory should
   // pass an allow rule for the override path.
-  if (!hasAutoMemPathOverride() && isAutoMemPath(normalizedPath)) {
+  if (
+    !hasAutoMemPathOverride() &&
+    isAutoMemPath(normalizedPath) &&
+    isAutoMemPathAfterSymlinks(absolutePath)
+  ) {
     return {
       behavior: 'allow',
       updatedInput: input,
@@ -1736,7 +1766,10 @@ export function checkReadableInternalPath(
   }
 
   // Memdir directory (persistent memory for cross-session learning)
-  if (isAutoMemPath(normalizedPath)) {
+  if (
+    isAutoMemPath(normalizedPath) &&
+    isAutoMemPathAfterSymlinks(absolutePath)
+  ) {
     return {
       behavior: 'allow',
       updatedInput: input,
