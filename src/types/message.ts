@@ -153,6 +153,19 @@ export type SystemAPIErrorMessage = SystemMessage & {
   subtype: 'api_error'
 }
 
+/**
+ * A transport failure the engine recovered from inside the same turn: the
+ * request was not replayed, the partial response was kept, and the turn
+ * continued over a different path. Surfaced through the SDK's existing retry
+ * vocabulary rather than a frame of its own.
+ */
+export type SystemTransportRecoveryMessage = SystemMessage & {
+  subtype: 'transport_recovery'
+  content: string
+  attempt: number
+  maxAttempts: number
+}
+
 export type SystemInformationalMessage = SystemMessage & {
   subtype: 'informational'
 }

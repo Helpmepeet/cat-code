@@ -63,8 +63,14 @@ import {
   getMessagesAfterCompactBoundary,
   createToolUseSummaryMessage,
   createMicrocompactBoundaryMessage,
+  createSystemTransportRecoveryMessage,
   stripSignatureBlocks,
 } from './utils/messages.js'
+import { sleep } from './utils/sleep.js'
+import {
+  parseCodexPartialStreamFailure,
+  type CodexPartialStreamFailureV1,
+} from './services/api/errorUtils.js'
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
 import {
@@ -234,6 +240,45 @@ function isWithheldMaxOutputTokens(
   return msg?.type === 'assistant' && msg.apiError === 'max_output_tokens'
 }
 
+/**
+ * A Codex turn can lose its transport twice and still be worth continuing. A
+ * third time is a failing connection rather than a blip, and the honest
+ * outcome is the error the user can act on.
+ *
+ * The budget is scoped to the whole top-level `query()` call. A tool round, a
+ * compaction retry, a stop-hook iteration and a token-budget continuation are
+ * all the same user turn, so none of them refills it: resetting per model call
+ * would let a flapping connection continue forever.
+ */
+const CODEX_PARTIAL_STREAM_CONTINUATION_LIMIT = 2
+
+const CODEX_PARTIAL_STREAM_RECOVERY_PROMPT =
+  'The previous response was interrupted after partial output. Continue from ' +
+  'the preserved response without repeating completed work. Reconcile the ' +
+  'transcript and current state before using tools.'
+
+/**
+ * The interruption marker the Codex adapter minted, but only when it authorizes
+ * a continuation. Withholding is what keeps an intermediate error row off the
+ * desktop while the loop decides; the same reasoning as
+ * `isWithheldMaxOutputTokens`.
+ *
+ * `provider` is checked here and not only at the adapter: the partial-message
+ * strategy is Codex-specific, and an Anthropic thinking block with a missing
+ * signature is exactly what the tombstoning below exists to keep out of a
+ * follow-up request.
+ */
+function getEligibleCodexPartialStreamFailure(
+  msg: Message | StreamEvent | undefined,
+): CodexPartialStreamFailureV1 | null {
+  if (msg?.type !== 'assistant') return null
+  const failure = parseCodexPartialStreamFailure(msg.apiError)
+  if (!failure) return null
+  return failure.provider === 'openai' && failure.automaticContinuationEligible
+    ? failure
+    : null
+}
+
 export type QueryParams = {
   messages: Message[]
   systemPrompt: SystemPrompt
@@ -263,6 +308,7 @@ type State = {
   toolUseContext: ToolUseContext
   autoCompactTracking: AutoCompactTrackingState | undefined
   maxOutputTokensRecoveryCount: number
+  codexPartialStreamContinuationCount: number
   hasAttemptedReactiveCompact: boolean
   maxOutputTokensOverride: number | undefined
   pendingToolUseSummary: Promise<ToolUseSummaryMessage | null> | undefined
@@ -330,6 +376,7 @@ async function* queryLoop(
     autoCompactTracking: getPersistedAutoCompactTracking(params.toolUseContext),
     stopHookActive: undefined,
     maxOutputTokensRecoveryCount: 0,
+    codexPartialStreamContinuationCount: 0,
     hasAttemptedReactiveCompact: false,
     turnCount: 1,
     pendingToolUseSummary: undefined,
@@ -389,12 +436,19 @@ async function* queryLoop(
       messages,
       autoCompactTracking,
       maxOutputTokensRecoveryCount,
+      codexPartialStreamContinuationCount,
       hasAttemptedReactiveCompact,
       maxOutputTokensOverride,
       pendingToolUseSummary,
       stopHookActive,
       turnCount,
     } = state
+
+    // Read once per iteration: the withhold above and the surface-once decision
+    // below must agree, or the same error is yielded twice or never.
+    const codexPartialStreamAffordsContinuation =
+      codexPartialStreamContinuationCount <
+      CODEX_PARTIAL_STREAM_CONTINUATION_LIMIT
 
     // Skill discovery prefetch — per-iteration (uses findWritePivot guard
     // that returns early on non-write iterations). Discovery runs while the
@@ -942,6 +996,15 @@ async function* queryLoop(
             if (isWithheldMaxOutputTokens(message)) {
               withheld = true
             }
+            // Withheld only while a continuation is still affordable. Once the
+            // budget is spent the error is the outcome, so it surfaces on the
+            // normal path instead of being held for a recovery that cannot run.
+            if (
+              codexPartialStreamAffordsContinuation &&
+              getEligibleCodexPartialStreamFailure(message)
+            ) {
+              withheld = true
+            }
             if (!withheld) {
               yield yieldMessage
             }
@@ -1259,6 +1322,7 @@ async function* queryLoop(
               toolUseContext,
               autoCompactTracking: tracking,
               maxOutputTokensRecoveryCount,
+              codexPartialStreamContinuationCount,
               hasAttemptedReactiveCompact,
               maxOutputTokensOverride: undefined,
               pendingToolUseSummary: undefined,
@@ -1324,6 +1388,7 @@ async function* queryLoop(
             toolUseContext,
             autoCompactTracking: undefined,
             maxOutputTokensRecoveryCount,
+            codexPartialStreamContinuationCount,
             hasAttemptedReactiveCompact: true,
             maxOutputTokensOverride: undefined,
             pendingToolUseSummary: undefined,
@@ -1380,6 +1445,7 @@ async function* queryLoop(
             toolUseContext,
             autoCompactTracking: tracking,
             maxOutputTokensRecoveryCount,
+            codexPartialStreamContinuationCount,
             hasAttemptedReactiveCompact,
             maxOutputTokensOverride: ESCALATED_MAX_TOKENS,
             pendingToolUseSummary: undefined,
@@ -1408,6 +1474,7 @@ async function* queryLoop(
             toolUseContext,
             autoCompactTracking: tracking,
             maxOutputTokensRecoveryCount: maxOutputTokensRecoveryCount + 1,
+            codexPartialStreamContinuationCount,
             hasAttemptedReactiveCompact,
             maxOutputTokensOverride: undefined,
             pendingToolUseSummary: undefined,
@@ -1424,6 +1491,102 @@ async function* queryLoop(
 
         // Recovery exhausted — surface the withheld error now.
         yield lastMessage
+      }
+
+      // A Codex stream that broke after partial output. The request is never
+      // replayed; what this decides is whether the same turn continues over
+      // the transport the adapter has already fallen back to, or ends as an
+      // honest failure. Stop hooks deliberately do not run in between: the
+      // turn has not finished.
+      const partialStreamFailure =
+        getEligibleCodexPartialStreamFailure(lastMessage)
+      if (partialStreamFailure && lastMessage) {
+        const abortSignal = toolUseContext.abortController.signal
+        // The marker reports what the provider stream showed. This reports
+        // what the engine actually materialized. They should agree, and a
+        // disagreement is precisely the ambiguity that has to stop recovery:
+        // a tool call can begin in the provider stream before a complete
+        // assistant block ever reaches here.
+        const materializedToolUse = assistantMessages.some(
+          assistantMessage =>
+            assistantMessage.message.content.some(
+              block => block.type === 'tool_use',
+            ),
+        )
+        const refusalReason = abortSignal.aborted
+          ? 'aborted'
+          : materializedToolUse
+            ? 'tool_use_materialized'
+            : partialStreamFailure.hadClientToolCall
+              ? 'client_tool_call'
+              : !codexPartialStreamAffordsContinuation
+                ? 'budget_exhausted'
+                : null
+
+        const attempt = codexPartialStreamContinuationCount + 1
+        // The second continuation waits a beat. A transport that has now
+        // failed twice inside one turn mostly re-fails on an immediate
+        // re-dial, and the wait is abort-responsive, so cancelling still wins
+        // and is re-checked below.
+        if (refusalReason === null && attempt > 1) {
+          await sleep(250 + Math.floor(Math.random() * 250), abortSignal)
+        }
+
+        if (refusalReason === null && !abortSignal.aborted) {
+          logEvent('tengu_codex_partial_stream_continuation_started', {
+            attempt,
+            sealed_partial_text: partialStreamFailure.sealedPartialText,
+            websocket: partialStreamFailure.transport === 'websocket',
+          })
+          yield createSystemTransportRecoveryMessage(
+            'Connection interrupted. Continuing automatically.',
+            attempt,
+            CODEX_PARTIAL_STREAM_CONTINUATION_LIMIT,
+          )
+          const next: State = {
+            messages: [
+              ...messagesForQuery,
+              // The synthetic transport error is bookkeeping, not something
+              // the model should read back as its own turn. Everything else
+              // the stream produced — the sealed partial text, any completed
+              // signed reasoning — is context the continuation needs.
+              ...assistantMessages.filter(
+                assistantMessage => assistantMessage !== lastMessage,
+              ),
+              createUserMessage({
+                content: CODEX_PARTIAL_STREAM_RECOVERY_PROMPT,
+                isMeta: true,
+              }),
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount,
+            codexPartialStreamContinuationCount: attempt,
+            hasAttemptedReactiveCompact,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount,
+            transition: {
+              reason: 'codex_partial_stream_continuation',
+              attempt,
+            },
+          }
+          state = next
+          continue
+        }
+
+        logEvent('tengu_codex_partial_stream_continuation_refused', {
+          aborted: abortSignal.aborted,
+          tool_use_materialized: materializedToolUse,
+          client_tool_call: partialStreamFailure.hadClientToolCall,
+          budget_exhausted: !codexPartialStreamAffordsContinuation,
+        })
+        // Surface it once. When the budget was already spent the stream loop
+        // did not withhold it, so it has been yielded and must not be again.
+        if (codexPartialStreamAffordsContinuation) {
+          yield lastMessage
+        }
       }
 
       // Skip stop hooks when the last message is an API error (rate limit,
@@ -1470,6 +1633,10 @@ async function* queryLoop(
           toolUseContext,
           autoCompactTracking: tracking,
           maxOutputTokensRecoveryCount: 0,
+          // The transport-continuation budget is NOT reset here, or by any
+          // other per-round reset in this loop: it is scoped to the user's
+          // turn, and a flapping connection would otherwise recover forever.
+          codexPartialStreamContinuationCount,
           // Preserve the reactive compact guard — if compact already ran and
           // couldn't recover from prompt-too-long, retrying after a stop-hook
           // blocking error will produce the same result. Resetting to false
@@ -1511,6 +1678,7 @@ async function* queryLoop(
             toolUseContext,
             autoCompactTracking: tracking,
             maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
             hasAttemptedReactiveCompact: false,
             maxOutputTokensOverride: undefined,
             pendingToolUseSummary: undefined,
@@ -1953,6 +2121,7 @@ async function* queryLoop(
       autoCompactTracking: tracking,
       turnCount: nextTurnCount,
       maxOutputTokensRecoveryCount: 0,
+      codexPartialStreamContinuationCount,
       hasAttemptedReactiveCompact: false,
       pendingToolUseSummary: nextPendingToolUseSummary,
       maxOutputTokensOverride: undefined,

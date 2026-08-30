@@ -20,7 +20,12 @@ import { createHash, randomUUID } from 'crypto'
 import { logForDebugging, RECOVERED_TERMINAL_TEXT_PREFIX } from '../../utils/debug.js'
 import { logEvent } from '../analytics/index.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
-import { extractConnectionErrorDetails } from './errorUtils.js'
+import {
+  CodexPartialStreamReplaySkippedError,
+  extractConnectionErrorDetails,
+  type CodexPartialStreamCause,
+  type CodexPartialStreamFailureV1,
+} from './errorUtils.js'
 import {
   clearWebSocketSession,
   closeSocketPreservingState,
@@ -1577,6 +1582,13 @@ function formatSSE(event: string, data: string): string {
 }
 
 /**
+ * The HTTP-path idle timeout is recognised downstream by message prefix: it is
+ * a plain Error, and classifying it as a transient transport interruption is
+ * what makes an HTTP-fallback stall recoverable rather than terminal.
+ */
+const CODEX_HTTP_IDLE_TIMEOUT_PREFIX = 'Codex stream idle timeout after '
+
+/**
  * Parses an HTTP SSE Response body into an async iterable of event objects.
  * Each yielded object is the parsed JSON from a `data: ...` SSE line.
  */
@@ -1606,7 +1618,7 @@ async function* httpSseToEvents(
   const resetIdleTimer = () => {
     if (idleTimer !== null) clearTimeout(idleTimer)
     idleTimer = setTimeout(() => {
-      const idleTimeoutError = new Error(`Codex stream idle timeout after ${IDLE_TIMEOUT_MS}ms`)
+      const idleTimeoutError = new Error(`${CODEX_HTTP_IDLE_TIMEOUT_PREFIX}${IDLE_TIMEOUT_MS}ms`)
       logForDebugging(
         `[codex-fetch] Streaming idle timeout: no chunks received for ${IDLE_TIMEOUT_MS / 1000}s, aborting`,
         { level: 'error' },
@@ -1691,6 +1703,7 @@ async function processCodexEvents(
   let rawEventCount = 0
   const rawEventTypes: Record<string, number> = {}
   let hadToolCalls = false
+  let hadHostedWebSearch = false
 
   const noteVisibleOutput = () => {
     if (firstVisibleAtMs === null) {
@@ -2281,6 +2294,7 @@ async function processCodexEvents(
                 }
 
                 noteVisibleOutput()
+                hadHostedWebSearch = true
                 contentBlockIndex = emitOpenAIWebSearchCall(
                   controller,
                   encoder,
@@ -2457,10 +2471,14 @@ async function processCodexEvents(
         !emittedVisibleOutput &&
         !!httpFallback &&
         isRecoverableCodexStreamError(normalizedError)
+      // Every post-visible failure blocks replay, whichever transport carried
+      // it and whatever ended it. The gate used to be websocket-only and
+      // transient-only, which left a post-visible HTTP disconnect and a
+      // post-visible `response.failed` falling through to the provider-neutral
+      // non-streaming fallback — a replay of a request whose output the user
+      // had already read, and whose surfaced tool call could run twice.
       const replaySkippedAfterVisibleOutput =
-        !usingHttpFallback &&
-        emittedVisibleOutput &&
-        isRecoverableCodexStreamError(normalizedError)
+        emittedVisibleOutput && !isCodexStreamAbortError(normalizedError)
 
       if (canFallbackToHttp) {
         logForDebugging(
@@ -2496,15 +2514,78 @@ async function processCodexEvents(
       }
 
       if (replaySkippedAfterVisibleOutput) {
+        const classification = classifyPostVisibleCodexFailure(
+          normalizedError,
+          usingHttpFallback,
+          transport,
+        )
+        // Seal the partial response before surfacing the failure. `claude.ts`
+        // only materializes a content block as an assistant message when it
+        // sees `content_block_stop`, so an open block dies with the stream and
+        // the text the user already watched arrive would be absent from the
+        // continuation's context — which is how a continuation ends up
+        // rewriting it. Tool-call blocks are deliberately left open: a
+        // half-streamed call must never be handed on looking complete.
+        const hadOpenReasoningBlock =
+          openSummaryBlock !== null || openRawBlock !== null
+        closeAllOpenReasoningBlocks()
+        let sealedPartialText = false
+        if (currentTextBlockStarted) {
+          controller.enqueue(
+            encoder.encode(
+              formatSSE('content_block_stop', JSON.stringify({
+                type: 'content_block_stop',
+                index: contentBlockIndex,
+              })),
+            ),
+          )
+          contentBlockIndex++
+          currentTextBlockStarted = false
+          sealedPartialText = true
+        }
+        const failure: CodexPartialStreamFailureV1 = {
+          version: 1,
+          code: 'partial_stream_replay_skipped',
+          provider: 'openai',
+          transport: classification.transport,
+          cause: classification.cause,
+          sealedPartialText,
+          hadClientToolCall: hadToolCalls,
+          openClientToolCalls: openToolCallBlocks.size,
+          hadHostedWebSearch,
+          automaticContinuationEligible:
+            classification.transient &&
+            !hadToolCalls &&
+            openToolCallBlocks.size === 0 &&
+            !hadHostedWebSearch,
+        }
         logForDebugging(
           `[codex-fetch] replay_skipped_visible_output=true conv=${requestCacheMetadata?.conversationId.slice(0, 8) ?? 'none'} ` +
-          `error_name=${normalizedError.name} had_tool_calls=${hadToolCalls} ` +
-          `open_tool_calls=${openToolCallBlocks.size} open_text_block=${currentTextBlockStarted}`,
+          `error_name=${normalizedError.name} transport=${failure.transport} cause=${failure.cause} ` +
+          `had_tool_calls=${hadToolCalls} open_tool_calls=${openToolCallBlocks.size} ` +
+          `sealed_partial_text=${sealedPartialText} hosted_web_search=${hadHostedWebSearch} ` +
+          `eligible=${failure.automaticContinuationEligible}`,
           { level: 'warn' },
         )
+        // Metadata is booleans and counts only (LogEventMetadata admits no
+        // strings); transport and cause stay in the debug line above.
+        logEvent('tengu_codex_partial_stream_detected', {
+          websocket: failure.transport === 'websocket',
+          idle_timeout: failure.cause === 'idle_timeout',
+          provider_failure: failure.cause === 'provider_failure',
+          sealed_partial_text: sealedPartialText,
+          had_client_tool_call: hadToolCalls,
+          open_client_tool_calls: openToolCallBlocks.size,
+          hosted_web_search: hadHostedWebSearch,
+          eligible: failure.automaticContinuationEligible,
+        })
+        if (sealedPartialText || hadOpenReasoningBlock) {
+          await drainControllerQueue(controller)
+        }
         controller.error(
           createPartialStreamReplaySkippedError(
             normalizedError,
+            failure,
             requestCacheMetadata,
           ),
         )
@@ -3231,19 +3312,83 @@ function isRecoverableCodexStreamError(error: Error): boolean {
   )
 }
 
+const CODEX_STREAM_ABORT_ERROR_NAMES = new Set(['AbortError', 'APIUserAbortError'])
+
+/**
+ * A cancelled turn is not an interrupted one. It must stay an abort so the
+ * user-abort branch in `claude.ts` fires and the engine records an
+ * interruption instead of attempting recovery.
+ */
+function isCodexStreamAbortError(error: Error): boolean {
+  return CODEX_STREAM_ABORT_ERROR_NAMES.has(error.name)
+}
+
+/**
+ * Classifies a failure that arrived AFTER visible output escaped. Every such
+ * failure blocks a same-request replay; only a transient transport
+ * interruption may additionally authorize a continuation. A structured
+ * `response.failed`, an auth or quota rejection, and anything unclassified all
+ * stay terminal — recovering from those is the provider's failover job, not
+ * this one's.
+ */
+function classifyPostVisibleCodexFailure(
+  error: Error,
+  usingHttpFallback: boolean,
+  streamTransport: CodexStreamTransport,
+): { transport: CodexStreamTransport; cause: CodexPartialStreamCause; transient: boolean } {
+  if (error instanceof CodexWebSocketIdleTimeoutError) {
+    return { transport: 'websocket', cause: 'idle_timeout', transient: true }
+  }
+  if (error instanceof CodexWebSocketClosedBeforeCompletedError) {
+    return { transport: 'websocket', cause: 'closed', transient: true }
+  }
+  if (error.message.startsWith('WebSocket error during stream')) {
+    return { transport: 'websocket', cause: 'stream_error', transient: true }
+  }
+  const transport = usingHttpFallback ? 'http' : streamTransport
+  if (error.message.startsWith(CODEX_HTTP_IDLE_TIMEOUT_PREFIX)) {
+    return { transport: 'http', cause: 'idle_timeout', transient: true }
+  }
+  if (error instanceof CodexResponseFailedError) {
+    return { transport, cause: 'provider_failure', transient: false }
+  }
+  return { transport, cause: 'stream_error', transient: false }
+}
+
 function createPartialStreamReplaySkippedError(
   error: Error,
+  failure: CodexPartialStreamFailureV1,
   requestCacheMetadata?: CodexRequestCacheMetadata,
 ): Error {
   const conversationSuffix = requestCacheMetadata
     ? ` Conversation ${requestCacheMetadata.conversationId.slice(0, 8)} will use HTTP fallback on the next turn.`
     : ''
-  const wrapped = new Error(
+  return new CodexPartialStreamReplaySkippedError(
     `Stream interrupted after visible output started; the turn was not replayed to avoid duplicate output or tool calls.${conversationSuffix} ` +
     `Original error: ${error.message}`,
+    failure,
   )
-  wrapped.name = 'CodexPartialStreamReplaySkippedError'
-  return wrapped
+}
+
+/**
+ * `ReadableStreamDefaultController.error()` resets the queue: anything the
+ * reader has not pulled yet is discarded, not delivered. Measured in Bun — a
+ * reader parked in `read()` receives the final chunk, a reader busy processing
+ * the previous one loses it. The sealed `content_block_stop` is exactly that
+ * final chunk, and losing it costs the partial response we sealed it to save,
+ * so wait for the reader to drain before erroring. Bounded: a reader that has
+ * stopped pulling entirely must not hold the failure open.
+ */
+async function drainControllerQueue(
+  controller: ReadableStreamDefaultController,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const desiredSize = controller.desiredSize
+    if (desiredSize === null || desiredSize > 0) {
+      return
+    }
+    await new Promise(resolve => setTimeout(resolve, 1))
+  }
 }
 
 async function primeCodexEvents(

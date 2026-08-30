@@ -26,6 +26,11 @@ import {
   CODEX_TOOL_OUTPUT_MAX_CHARS,
 } from './codex-fetch-adapter.js'
 import {
+  findCodexPartialStreamFailure,
+  isCodexPartialStreamReplaySkippedError,
+  type CodexPartialStreamFailureV1,
+} from './errorUtils.js'
+import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
@@ -2482,6 +2487,215 @@ describe('codex-fetch-adapter', () => {
     await expect(response.text()).rejects.toThrow(
       'the turn was not replayed to avoid duplicate output or tool calls',
     )
+  })
+
+  /**
+   * Reads the translated SSE until the stream errors, so a chunk written
+   * immediately before the error is still observable. `response.text()`
+   * discards everything on rejection, which is exactly the evidence these
+   * tests need.
+   */
+  async function readSseUntilError(
+    response: Response,
+  ): Promise<{ sse: string; error: unknown }> {
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let sse = ''
+    let error: unknown = null
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        sse += decoder.decode(value as Uint8Array, { stream: true })
+      }
+    } catch (caught) {
+      error = caught
+    }
+    return { sse, error }
+  }
+
+  function partialStreamFailureOf(error: unknown): CodexPartialStreamFailureV1 | null {
+    return findCodexPartialStreamFailure(error)
+  }
+
+  test('post-visible websocket close seals the open text block before the failure', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'half a sen' }
+        throw new CodexWebSocketClosedBeforeCompletedError(1006, 'abnormal')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_seal',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_seal:gpt-5.6-luna',
+        conversationId: 'conv_seal_text',
+      },
+    )
+
+    const { sse, error } = await readSseUntilError(response)
+    // The block the user watched arrive has to be closed, or claude.ts never
+    // materializes it and the continuation has nothing to continue from.
+    expect(sse).toContain('half a sen')
+    expect(sse).toContain('content_block_stop')
+
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.transport).toBe('websocket')
+    expect(failure!.cause).toBe('closed')
+    expect(failure!.sealedPartialText).toBe(true)
+    expect(failure!.hadClientToolCall).toBe(false)
+    expect(failure!.automaticContinuationEligible).toBe(true)
+  })
+
+  test('a started client tool call blocks continuation and is never sealed shut', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'about to call' }
+        yield {
+          type: 'response.output_item.added',
+          output_index: 0,
+          item: {
+            type: 'function_call',
+            call_id: 'call_1',
+            name: 'Read',
+            arguments: '',
+          },
+        }
+        yield {
+          type: 'response.function_call_arguments.delta',
+          output_index: 0,
+          delta: '{"file_path":',
+        }
+        throw new CodexWebSocketClosedBeforeCompletedError(1006, 'abnormal')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_tool',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_tool:gpt-5.6-luna',
+        conversationId: 'conv_seal_tool',
+      },
+    )
+
+    const { sse, error } = await readSseUntilError(response)
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.hadClientToolCall).toBe(true)
+    expect(failure!.openClientToolCalls).toBe(1)
+    expect(failure!.automaticContinuationEligible).toBe(false)
+    // A half-streamed call must not be handed on looking complete. Index 1 is
+    // the tool block; only the text block that preceded it may be closed.
+    expect(sse).toContain('"content_block_stop","index":0')
+    expect(sse).not.toContain('"content_block_stop","index":1')
+  })
+
+  test('a hosted web search fails closed even with no client tool call', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'searching' }
+        yield {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: { type: 'web_search_call', id: 'ws_1', status: 'completed' },
+        }
+        throw new CodexWebSocketClosedBeforeCompletedError(1006, 'abnormal')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_search',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_search:gpt-5.6-luna',
+        conversationId: 'conv_seal_search',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.hadHostedWebSearch).toBe(true)
+    expect(failure!.automaticContinuationEligible).toBe(false)
+  })
+
+  test('post-visible response.failed blocks replay without authorizing continuation', async () => {
+    const httpFallback = spyOn({ call: async () => ({ events: (async function* () {})(), transportContext: undefined }) }, 'call')
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'partial' }
+        yield {
+          type: 'response.failed',
+          response: {
+            error: { code: 'server_error', message: 'upstream blew up' },
+          },
+        }
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_failed',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_failed:gpt-5.6-luna',
+        conversationId: 'conv_post_visible_failed',
+      },
+      httpFallback as never,
+    )
+
+    const { error } = await readSseUntilError(response)
+    // Blocking replay is the point: this used to reach the provider-neutral
+    // non-streaming fallback and re-send a request whose output was on screen.
+    expect(isCodexPartialStreamReplaySkippedError(error)).toBe(true)
+    const failure = partialStreamFailureOf(error)
+    expect(failure!.cause).toBe('provider_failure')
+    expect(failure!.automaticContinuationEligible).toBe(false)
+    expect(httpFallback).not.toHaveBeenCalled()
+  })
+
+  test('post-visible HTTP-stream failure blocks replay', async () => {
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'partial over http' }
+        throw new Error('Codex stream idle timeout after 90000ms')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_http',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_http:gpt-5.6-luna',
+        conversationId: 'conv_post_visible_http',
+      },
+      undefined,
+      { transport: 'http', requestStartedAtMs: 0 },
+    )
+
+    const { error } = await readSseUntilError(response)
+    expect(isCodexPartialStreamReplaySkippedError(error)).toBe(true)
+    const failure = partialStreamFailureOf(error)
+    expect(failure!.transport).toBe('http')
+    expect(failure!.cause).toBe('idle_timeout')
+    expect(failure!.automaticContinuationEligible).toBe(true)
+  })
+
+  test('a user abort after visible output stays an abort', async () => {
+    const abortError = new Error('The operation was aborted.')
+    abortError.name = 'AbortError'
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'cancelled midway' }
+        throw abortError
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_abort',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_abort:gpt-5.6-luna',
+        conversationId: 'conv_post_visible_abort',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    // Wrapping this would hide the cancellation from claude.ts's abort branch
+    // and invite a recovery the user just asked not to happen.
+    expect((error as Error).name).toBe('AbortError')
+    expect(isCodexPartialStreamReplaySkippedError(error)).toBe(false)
   })
 
   test('createCodexFetch request abort closes an active websocket turn', async () => {

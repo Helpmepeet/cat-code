@@ -67,6 +67,7 @@ import type {
   SystemPermissionRetryMessage,
   SystemScheduledTaskFireMessage,
   SystemStopHookSummaryMessage,
+  SystemTransportRecoveryMessage,
   SystemTurnDurationMessage,
   TombstoneMessage,
   ToolUseSummaryMessage,
@@ -4773,6 +4774,23 @@ export function createMicrocompactBoundaryMessage(
       compactedToolIds,
       clearedAttachmentUUIDs,
     },
+  }
+}
+
+export function createSystemTransportRecoveryMessage(
+  content: string,
+  attempt: number,
+  maxAttempts: number,
+): SystemTransportRecoveryMessage {
+  return {
+    type: 'system',
+    subtype: 'transport_recovery',
+    level: 'warning',
+    content,
+    attempt,
+    maxAttempts,
+    timestamp: new Date().toISOString(),
+    uuid: randomUUID(),
   }
 }
 

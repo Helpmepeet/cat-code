@@ -2081,6 +2081,53 @@ test('projects user-visible system notices and emits boundary rows once', () => 
   ])
 })
 
+test('renders a retry notice whether the frame carries copy or a bare code', () => {
+  // The engine used to send `error` as a bare classification code, which this
+  // projector dropped: every retry notice a transcript recorded before the
+  // object form landed was invisible. Replaying one has to produce a notice,
+  // and it has to produce readable copy rather than the internal code.
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 1,
+      max_retries: 1,
+      retry_delay_ms: 0,
+      error: {
+        type: 'assistant_error',
+        message: 'Connection interrupted. Continuing automatically.',
+        error: 'connection_error',
+      },
+      uuid: '00000000-0000-4000-8000-0000000002d1',
+    } as unknown as SDKMessage),
+  )
+  state = projectServerFrame(
+    state,
+    messageFrame('session-1', {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 10,
+      retry_delay_ms: 8000,
+      error: 'rate_limit',
+      uuid: '00000000-0000-4000-8000-0000000002d2',
+    } as unknown as SDKMessage),
+  )
+
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows.map(row => row.kind)).toEqual(['system-notice', 'system-notice'])
+  expect(rows).toMatchObject([
+    {
+      noticeType: 'api_retry',
+      content: 'Connection interrupted. Continuing automatically.',
+    },
+    { noticeType: 'api_retry', content: 'Rate limited. Retrying.' },
+  ])
+})
+
 test('replays the full S1 turn grammar end-to-end into a correct transcript', () => {
   // S1 spec §3: system init → api_message (streamed: per-block assistant
   // frames arrive BEFORE their content_block_stop) → tool_result user frame →

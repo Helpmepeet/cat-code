@@ -54,7 +54,12 @@ import {
   type OverageDisabledReason,
 } from '../claudeAiLimits.js'
 import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mock-limits command
-import { extractConnectionErrorDetails, formatAPIError } from './errorUtils.js'
+import {
+  extractConnectionErrorDetails,
+  findCodexPartialStreamFailure,
+  formatAPIError,
+  isCodexPartialStreamReplaySkippedError,
+} from './errorUtils.js'
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
@@ -506,6 +511,23 @@ function getAssistantMessageFromErrorInternal(
     error.message.includes(LONG_CONTEXT_ENTITLEMENT_ERROR_MESSAGE)
   ) {
     noteLongContextEntitlementRefused()
+  }
+
+  // A Codex stream that broke after visible output. The raw transport message
+  // names conversation prefixes, socket close codes and fallback state, none of
+  // which belongs on screen; the structured marker rides `apiError` so the
+  // query loop can decide whether the turn is recoverable before anything is
+  // shown at all. A name-only marker still lands here and still refuses replay,
+  // it just carries no continuation authority.
+  if (isCodexPartialStreamReplaySkippedError(error)) {
+    const failure = findCodexPartialStreamFailure(error)
+    return createAssistantAPIErrorMessage({
+      content:
+        `${API_ERROR_MESSAGE_PREFIX}: Connection interrupted after partial output. ` +
+        `The request was not repeated because it may have already performed actions.`,
+      apiError: failure ?? { code: 'partial_stream_replay_skipped' },
+      error: 'unknown',
+    })
   }
 
   // Check for SDK timeout errors

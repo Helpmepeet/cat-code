@@ -6,6 +6,7 @@ import {
   LOCAL_COMMAND_STDOUT_TAG,
 } from 'src/constants/xml.js'
 import type {
+  SDKAssistantErrorCode,
   SDKAssistantMessage,
   SDKCompactBoundaryMessage,
   SDKMessage,
@@ -76,6 +77,39 @@ export function toInternalMessages(
         return []
     }
   })
+}
+
+/**
+ * Curated copy for a retry notice, keyed by the closed error classification.
+ *
+ * The retry frame's `error` field accepts either a bare code or an object
+ * carrying a message. Only the object form reaches a reader: the desktop
+ * projector requires `error.message`, so every code-only retry notice this
+ * engine has emitted was silently dropped on the way to the transcript.
+ * Emitting the object form is what makes a retry visible at all, and the copy
+ * has to be written for a person, since the code itself is an internal name
+ * nobody should be shown.
+ */
+const RETRY_NOTICE_COPY: Record<SDKAssistantErrorCode, string> = {
+  rate_limit: 'Rate limited. Retrying.',
+  authentication_failed: 'Sign-in problem. Retrying.',
+  billing_error: 'Billing problem. Retrying.',
+  invalid_request: 'The request was rejected. Retrying.',
+  server_error: 'The service returned an error. Retrying.',
+  max_output_tokens: 'The response was cut off. Retrying.',
+  unknown: 'The request failed. Retrying.',
+}
+
+export function toSDKRetryError(code: SDKAssistantErrorCode): {
+  type: 'assistant_error'
+  message: string
+  error: string
+} {
+  return {
+    type: 'assistant_error',
+    message: RETRY_NOTICE_COPY[code] ?? RETRY_NOTICE_COPY.unknown,
+    error: code,
+  }
 }
 
 type SDKCompactMetadata = SDKCompactBoundaryMessage['compact_metadata']

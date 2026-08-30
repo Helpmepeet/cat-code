@@ -1102,7 +1102,26 @@ export class QueryEngine {
               max_retries: message.maxRetries,
               retry_delay_ms: message.retryInMs,
               error_status: message.error.status ?? null,
-              error: categorizeRetryableAPIError(message.error),
+              error: toSDKRetryError(
+                categorizeRetryableAPIError(message.error),
+              ),
+              session_id: getSessionId(),
+              uuid: message.uuid,
+            }
+          }
+          if (message.subtype === 'transport_recovery') {
+            yield {
+              type: 'system',
+              subtype: 'api_retry' as const,
+              attempt: message.attempt,
+              max_retries: message.maxAttempts,
+              retry_delay_ms: 0,
+              error_status: null,
+              error: {
+                type: 'assistant_error' as const,
+                message: message.content,
+                error: 'connection_error',
+              },
               session_id: getSessionId(),
               uuid: message.uuid,
             }

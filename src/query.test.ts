@@ -528,3 +528,283 @@ describe('post-turn stall diagnostics', () => {
     expect(armed.every(entry => entry.cancelled)).toBe(true)
   })
 })
+
+describe('codex partial-stream continuation', () => {
+  const eligibleFailure = {
+    version: 1 as const,
+    code: 'partial_stream_replay_skipped' as const,
+    provider: 'openai' as const,
+    transport: 'websocket' as const,
+    cause: 'closed' as const,
+    sealedPartialText: true,
+    hadClientToolCall: false,
+    openClientToolCalls: 0,
+    hadHostedWebSearch: false,
+    automaticContinuationEligible: true,
+  }
+
+  /** What claude.ts + errors.ts hand the loop after the adapter sealed a block. */
+  function interruptedTurn(
+    uuidSuffix: string,
+    // No default: passing `undefined` explicitly is one of the cases under
+    // test, and a default parameter would silently turn it into the eligible
+    // marker.
+    apiError: unknown,
+  ): AssistantMessage[] {
+    const partial = createAssistantMessage(
+      'the half-written answer',
+      `assistant-partial-${uuidSuffix}`,
+    )
+    const error = createAssistantMessage(
+      'API Error: Connection interrupted after partial output. The request was not repeated because it may have already performed actions.',
+      `assistant-error-${uuidSuffix}`,
+    )
+    ;(error as AssistantMessage).isApiErrorMessage = true
+    ;(error as AssistantMessage).apiError = apiError
+    return [partial, error]
+  }
+
+  function textOf(messages: Message[]): string[] {
+    return messages.flatMap(message =>
+      message.type === 'assistant' || message.type === 'user'
+        ? typeof message.message.content === 'string'
+          ? [message.message.content]
+          : (message.message.content as { type: string; text?: string }[])
+              .filter(block => block.type === 'text')
+              .map(block => block.text ?? '')
+        : [],
+    )
+  }
+
+  async function runQuery(deps: QueryDeps, tools: unknown[] = []) {
+    const messages: Message[] = [createUserMessage({ content: 'do the thing' })]
+    const toolUseContext = createToolUseContext(messages)
+    ;(toolUseContext.options as { tools: unknown[] }).tools = tools
+    const yielded: Message[] = []
+    for await (const message of query({
+      messages,
+      systemPrompt: ['system prompt'],
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        decisionReason: { type: 'other', reason: 'test allows all tools' },
+      }),
+      toolUseContext,
+      querySource: 'repl_main_thread',
+      deps,
+    })) {
+      yielded.push(message as Message)
+    }
+    return { yielded, toolUseContext }
+  }
+
+  function countApiErrors(yielded: Message[]): number {
+    return yielded.filter(
+      message =>
+        message.type === 'assistant' &&
+        (message as AssistantMessage).isApiErrorMessage === true,
+    ).length
+  }
+
+  function recoveryNotices(yielded: Message[]): Message[] {
+    return yielded.filter(
+      message =>
+        message.type === 'system' &&
+        (message as { subtype?: string }).subtype === 'transport_recovery',
+    )
+  }
+
+  test('continues the turn over the next request and carries the partial text', async () => {
+    const seen: Message[][] = []
+    let call = 0
+    const deps: QueryDeps = {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* ({ messages }) {
+        seen.push(messages)
+        call++
+        if (call === 1) {
+          for (const message of interruptedTurn('one', eligibleFailure)) yield message
+          return
+        }
+        yield createAssistantMessage('and the rest of it', 'assistant-final')
+      },
+    }
+
+    const { yielded } = await runQuery(deps)
+
+    expect(call).toBe(2)
+    const secondCallText = textOf(seen[1]!)
+    // The partial response the user already read is context, not something to
+    // be regenerated; the instruction is what tells the model so.
+    expect(secondCallText).toContain('the half-written answer')
+    expect(secondCallText.join(' ')).toContain(
+      'Continue from the preserved response without repeating completed work',
+    )
+    // The synthetic transport error is bookkeeping and must not read back as
+    // the assistant's own turn.
+    expect(secondCallText.join(' ')).not.toContain('API Error')
+
+    // Nothing intermediate reaches a caller that treats an error field as fatal.
+    expect(countApiErrors(yielded)).toBe(0)
+    expect(recoveryNotices(yielded)).toHaveLength(1)
+    expect(textOf(yielded)).toContain('and the rest of it')
+  })
+
+  test('a marker that reports a client tool call is never continued', async () => {
+    let call = 0
+    const deps: QueryDeps = {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        for (const message of interruptedTurn('tool', {
+          ...eligibleFailure,
+          hadClientToolCall: true,
+          openClientToolCalls: 1,
+          automaticContinuationEligible: false,
+        })) {
+          yield message
+        }
+      },
+    }
+
+    const { yielded } = await runQuery(deps)
+
+    expect(call).toBe(1)
+    expect(recoveryNotices(yielded)).toHaveLength(0)
+    expect(countApiErrors(yielded)).toBe(1)
+  })
+
+  test('an absent or malformed marker fails closed', async () => {
+    for (const apiError of [
+      undefined,
+      'partial_stream_replay_skipped',
+      { code: 'partial_stream_replay_skipped' },
+      { ...eligibleFailure, provider: 'anthropic' },
+      { ...eligibleFailure, version: 2 },
+    ]) {
+      let call = 0
+      const deps: QueryDeps = {
+        uuid: () => 'test-query-chain-id',
+        microcompact: async messages => ({ messages }),
+        autocompact: async () => ({
+          wasCompacted: false,
+          consecutiveFailures: 0,
+        }),
+        callModel: async function* () {
+          call++
+          for (const message of interruptedTurn('malformed', apiError)) {
+            yield message
+          }
+        },
+      }
+
+      const { yielded } = await runQuery(deps)
+      const label = JSON.stringify(apiError ?? null)
+      expect([label, call]).toEqual([label, 1])
+      expect([label, countApiErrors(yielded)]).toEqual([label, 1])
+      expect([label, recoveryNotices(yielded).length]).toEqual([label, 0])
+
+    }
+  })
+
+  test('the budget stops a third interruption and surfaces one honest failure', async () => {
+    let call = 0
+    const deps: QueryDeps = {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        for (const message of interruptedTurn(`n${call}`, eligibleFailure)) yield message
+      },
+    }
+
+    const { yielded } = await runQuery(deps)
+
+    // One original request plus two continuations, then it stops.
+    expect(call).toBe(3)
+    expect(recoveryNotices(yielded)).toHaveLength(2)
+    expect(countApiErrors(yielded)).toBe(1)
+  })
+
+  test('a tool round does not refill the budget', async () => {
+    const toolCallTool = buildTool({
+      name: 'Ping',
+      description: 'test tool',
+      inputSchema: z.object({}),
+      async *call() {
+        yield { type: 'result' as const, data: 'pong' }
+      },
+    })
+    let call = 0
+    const deps: QueryDeps = {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        if (call === 2) {
+          const withTool = createAssistantMessage('calling', 'assistant-tool')
+          withTool.message.content = [
+            { type: 'tool_use', id: 'toolu_ping_1', name: 'Ping', input: {} },
+          ] as AssistantMessage['message']['content']
+          yield withTool
+          return
+        }
+        for (const message of interruptedTurn(`n${call}`, eligibleFailure)) yield message
+      },
+    }
+
+    const { yielded } = await runQuery(deps, [toolCallTool])
+
+    // 1 interrupted, 2 continuation (tool round), 3 interrupted after the tool
+    // round, 4 the second and last continuation, also interrupted. A budget
+    // reset on the tool round would let this run on.
+    expect(call).toBe(4)
+    expect(recoveryNotices(yielded)).toHaveLength(2)
+    expect(countApiErrors(yielded)).toBe(1)
+  })
+
+  test('a user abort wins over a pending recovery', async () => {
+    let call = 0
+    let context: ToolUseContext | undefined
+    const deps: QueryDeps = {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        for (const message of interruptedTurn('abort', eligibleFailure)) yield message
+        context?.abortController.abort()
+      },
+    }
+
+    const messages: Message[] = [createUserMessage({ content: 'do the thing' })]
+    const toolUseContext = createToolUseContext(messages)
+    context = toolUseContext
+    const yielded: Message[] = []
+    for await (const message of query({
+      messages,
+      systemPrompt: ['system prompt'],
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        decisionReason: { type: 'other', reason: 'test allows all tools' },
+      }),
+      toolUseContext,
+      querySource: 'repl_main_thread',
+      deps,
+    })) {
+      yielded.push(message as Message)
+    }
+
+    expect(call).toBe(1)
+    expect(recoveryNotices(yielded)).toHaveLength(0)
+  })
+})

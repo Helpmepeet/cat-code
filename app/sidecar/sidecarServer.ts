@@ -552,6 +552,7 @@ export class SidecarServer {
   private turnLastEventAtMs = 0
   private turnEventCount = 0
   private turnResultSeen = false
+  private turnResultFailed = false
   private turnStallReported = false
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null
   private readonly deliveryStreamEpoch = randomUUID()
@@ -660,6 +661,10 @@ export class SidecarServer {
   private inFlightDurableWrites = 0
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
+  /** Latest agent snapshot publication requested for each attached connection. */
+  private agentModeSnapshotGeneration = 0
+  private readonly agentModeSnapshotGenerationByConnection =
+    new WeakMap<Connection, number>()
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -974,8 +979,9 @@ export class SidecarServer {
     // after the other snapshots and before replay. Read-only + secretGuard-clean by
     // construction; re-broadcast after any pool-mutating account verb.
     this.sendAccountsSnapshot(connection)
-    // Usage analytics snapshot — real engine-backed stats aggregation for the Accounts page.
-    void this.sendUsageStatsSnapshot(connection)
+    // Usage analytics is main-owned. Ordinary attachment must not multiply a
+    // full transcript scan across every session process; explicit stats.query is
+    // retained for the versioned protocol's supported request path.
     // The pool loads observation-only in the sidecar (no engine startup path
     // runs `initAccountPool`), so the first snapshot's usage hints are 0/null.
     // Fire the same read-only wham/usage GET the engine runs at startup, ONCE,
@@ -1806,7 +1812,15 @@ export class SidecarServer {
       })
       .finally(() => {
         this.activeTurn = false
-        this.endTurnObservation(rejection ? 'failed' : 'ok')
+        // The submit promise resolving is not the turn succeeding. The engine
+        // returns most failures as a result frame rather than a rejection, so
+        // reading only the promise logged a turn that ended in an error as
+        // `ok`. A turn that recovered from an interruption emits one final
+        // successful result and stays `ok`; an exhausted recovery emits an
+        // error result and is recorded as what it was.
+        this.endTurnObservation(
+          rejection || this.turnResultFailed ? 'failed' : 'ok',
+        )
         onSettled?.(rejection)
         // D1b — the late-delivery window closes with the turn: no engine
         // consumption signal for these uuids can arrive after it. Holding them
@@ -1830,6 +1844,7 @@ export class SidecarServer {
     this.turnLastEventAtMs = startedAt
     this.turnEventCount = 0
     this.turnResultSeen = false
+    this.turnResultFailed = false
     this.turnStallReported = false
     this.onTurnLifecycle?.({ kind: 'started' })
     this.armTurnStallTimer(this.turnStallMs)
@@ -1852,7 +1867,10 @@ export class SidecarServer {
     if (event.type !== 'message') return
     this.turnEventCount++
     this.turnLastEventAtMs = Date.now()
-    if (event.message.type === 'result') this.turnResultSeen = true
+    if (event.message.type === 'result') {
+      this.turnResultSeen = true
+      this.turnResultFailed = event.message.is_error === true
+    }
   }
 
   private armTurnStallTimer(delayMs: number): void {
@@ -2655,6 +2673,7 @@ export class SidecarServer {
           // adding/removing Anthropic subscription access), even though no
           // model/effort/fast store field moved.
           this.broadcastRunControlsSnapshot()
+          void this.refreshSettingsSnapshot()
         }
       })
       .catch(error => {
@@ -2695,6 +2714,7 @@ export class SidecarServer {
         if (!changed) return
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
+        void this.refreshSettingsSnapshot()
       })
       .catch(error => {
         this.sendError(
@@ -3892,6 +3912,23 @@ export class SidecarServer {
     }
   }
 
+  /** Re-publish settings only after the domain has refreshed engine-owned options. */
+  private async refreshSettingsSnapshot(): Promise<void> {
+    if (!this.settings) return
+    try {
+      await this.settings.refreshAvailableOptions()
+      for (const connection of this.connections) {
+        this.sendSettingsSnapshot(connection)
+      }
+    } catch (error) {
+      this.log(
+        `[sidecar] settings options refresh skipped (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      )
+    }
+  }
+
   /**
    * P4-7 — build + send the agent config snapshot to a single connection (attach).
    * The domain withholds prompt bodies, hook payloads, and inline MCP config values,
@@ -4089,8 +4126,15 @@ export class SidecarServer {
     if (!this.agentMode) {
       return
     }
+    const generation = ++this.agentModeSnapshotGeneration
+    this.agentModeSnapshotGenerationByConnection.set(connection, generation)
     try {
       const raw = await this.agentMode.getSnapshot()
+      if (
+        this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
+      ) {
+        return
+      }
       this.sendAgentModeSnapshotPayload(connection, raw)
     } catch (error) {
       this.log(
@@ -4121,9 +4165,20 @@ export class SidecarServer {
     if (!this.agentMode || this.connections.size === 0) {
       return
     }
+    const generation = ++this.agentModeSnapshotGeneration
+    const connections = [...this.connections]
+    for (const connection of connections) {
+      this.agentModeSnapshotGenerationByConnection.set(connection, generation)
+    }
     try {
       const raw = await this.agentMode.getSnapshot()
-      for (const connection of this.connections) {
+      for (const connection of connections) {
+        if (
+          !this.connections.has(connection) ||
+          this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
+        ) {
+          continue
+        }
         this.sendAgentModeSnapshotPayload(connection, raw)
       }
     } catch (error) {
@@ -5025,7 +5080,7 @@ export class SidecarServer {
 
   private checkRate(connection: Connection): boolean {
     const now = Date.now()
-    if (now - connection.rateWindowStart >= RATE_WINDOW_MS) {
+    if (now < connection.rateWindowStart || now - connection.rateWindowStart >= RATE_WINDOW_MS) {
       connection.rateWindowStart = now
       connection.rateCount = 0
     }

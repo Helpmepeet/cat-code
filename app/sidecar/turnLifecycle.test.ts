@@ -147,6 +147,84 @@ test('a turn quiet after its result names the post-turn path', async () => {
   held.release?.()
 })
 
+/** A result frame as the engine emits one, success or failure. */
+function resultMessage(isError: boolean, uuidSuffix = '3') {
+  return {
+    type: 'result' as const,
+    subtype: isError ? ('error_during_execution' as const) : ('success' as const),
+    duration_ms: 1,
+    duration_api_ms: 1,
+    is_error: isError,
+    num_turns: 1,
+    result: isError ? '' : 'done',
+    session_id: ENGINE_SESSION,
+    total_cost_usd: 0,
+    usage: { input_tokens: 1, output_tokens: 1 },
+    uuid: `00000000-0000-4000-8000-00000000000${uuidSuffix}`,
+  }
+}
+
+async function outcomeOf(
+  adapter: AppSessionControllerAdapter,
+): Promise<string | undefined> {
+  const { server, events, connection } = makeServer(adapter)
+  submit(server, connection)
+  await sleep(STALL_MS * 4)
+  const completed = events.find(event => event.kind === 'completed')
+  return (completed as Extract<SidecarTurnLifecycleEvent, { kind: 'completed' }> | undefined)
+    ?.outcome
+}
+
+test('a successful result on a resolved turn is recorded as ok', async () => {
+  expect(
+    await outcomeOf({
+      async *runTurn() {
+        yield assistantMessage() as never
+        yield resultMessage(false) as never
+      },
+    }),
+  ).toBe('ok')
+})
+
+test('an error result on a resolved turn is recorded as failed', async () => {
+  // The engine returns most failures as a result frame, not a rejection, so
+  // reading only the submit promise logged a turn that ended in an error as
+  // `ok` and hid the failure from the record it was written to preserve.
+  expect(
+    await outcomeOf({
+      async *runTurn() {
+        yield assistantMessage() as never
+        yield resultMessage(true) as never
+      },
+    }),
+  ).toBe('failed')
+})
+
+test('a rejected turn is still recorded as failed', async () => {
+  expect(
+    await outcomeOf({
+      // eslint-disable-next-line require-yield
+      async *runTurn() {
+        throw new Error('adapter blew up')
+      },
+    }),
+  ).toBe('failed')
+})
+
+test('an interruption that recovers to a final successful result stays ok', async () => {
+  // The shape a recovered transport interruption produces: partial output, no
+  // intermediate error result, one successful result at the end.
+  expect(
+    await outcomeOf({
+      async *runTurn() {
+        yield assistantMessage() as never
+        yield assistantMessage() as never
+        yield resultMessage(false) as never
+      },
+    }),
+  ).toBe('ok')
+})
+
 test('a turn still producing events is not reported stalled', async () => {
   const held: { release: (() => void) | null } = { release: null }
   const { server, events, connection } = makeServer({

@@ -1230,7 +1230,7 @@ export const SDK_MESSAGE_FIXTURE: {
     },
     {
       name: 'system: api_retry',
-      anchor: 'src/QueryEngine.ts:1001-1013',
+      anchor: 'src/QueryEngine.ts:1097-1126',
       reach: 'app-seam',
       expectRows: 1,
       message: {

@@ -258,3 +258,170 @@ export function formatAPIError(error: APIError): string {
     ? sanitizedMessage
     : error.message
 }
+
+/**
+ * Codex partial-stream interruption marker.
+ *
+ * The Codex adapter raises this once visible output has already escaped: the
+ * request cannot be replayed without duplicating text the user has read or
+ * re-running a tool call that already surfaced. The NAME is load-bearing on its
+ * own — the provider-neutral non-streaming fallback in `claude.ts` matches on
+ * it to refuse a replay — while the structured payload is the only thing that
+ * may authorize the engine's bounded continuation.
+ *
+ * A name-only marker (an error re-thrown through a layer that dropped the
+ * field, a shape read back from an older transcript) still blocks replay and
+ * never authorizes continuation. Unknown state fails closed.
+ */
+export const CODEX_PARTIAL_STREAM_ERROR_NAME =
+  'CodexPartialStreamReplaySkippedError'
+
+export type CodexPartialStreamTransport = 'websocket' | 'http'
+
+export type CodexPartialStreamCause =
+  | 'closed'
+  | 'idle_timeout'
+  | 'stream_error'
+  | 'provider_failure'
+
+export type CodexPartialStreamFailureV1 = {
+  version: 1
+  code: 'partial_stream_replay_skipped'
+  /**
+   * Continuation is a Codex-path strategy only. Anthropic thinking blocks carry
+   * signature rules that make a partial assistant message unsafe to send back
+   * (see the tombstoning in `query.ts`), so the engine predicate requires this.
+   */
+  provider: 'openai'
+  transport: CodexPartialStreamTransport
+  cause: CodexPartialStreamCause
+  /** An open text block was closed before the failure, so it reached the transcript. */
+  sealedPartialText: boolean
+  hadClientToolCall: boolean
+  openClientToolCalls: number
+  /** Provider-side search whose completion and replay semantics are unproven. */
+  hadHostedWebSearch: boolean
+  automaticContinuationEligible: boolean
+}
+
+export class CodexPartialStreamReplaySkippedError extends Error {
+  readonly partialStreamFailure: CodexPartialStreamFailureV1
+
+  constructor(message: string, failure: CodexPartialStreamFailureV1) {
+    super(message)
+    this.name = CODEX_PARTIAL_STREAM_ERROR_NAME
+    this.partialStreamFailure = failure
+  }
+}
+
+const CAUSE_CHAIN_MAX_DEPTH = 5
+
+const PARTIAL_STREAM_TRANSPORTS = new Set<string>(['websocket', 'http'])
+const PARTIAL_STREAM_CAUSES = new Set<string>([
+  'closed',
+  'idle_timeout',
+  'stream_error',
+  'provider_failure',
+])
+
+/**
+ * Walks an error's `cause` chain, bounded and cycle-safe. The SDK wraps
+ * transport errors, so neither the name nor the payload is reliably on the
+ * error the caller catches.
+ */
+function walkCauseChain<T>(
+  error: unknown,
+  visit: (candidate: Error) => T | null,
+): T | null {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  let depth = 0
+
+  while (current instanceof Error && depth < CAUSE_CHAIN_MAX_DEPTH) {
+    if (seen.has(current)) {
+      return null
+    }
+    const hit = visit(current)
+    if (hit !== null) {
+      return hit
+    }
+    seen.add(current)
+    current = current.cause
+    depth++
+  }
+
+  return null
+}
+
+/**
+ * Name-only recognition. Enough to refuse a same-request replay, never enough
+ * to authorize a continuation — use `findCodexPartialStreamFailure` for that.
+ */
+export function isCodexPartialStreamReplaySkippedError(
+  error: unknown,
+): boolean {
+  return (
+    walkCauseChain(error, candidate =>
+      candidate.name === CODEX_PARTIAL_STREAM_ERROR_NAME ? true : null,
+    ) === true
+  )
+}
+
+/**
+ * Parses the structured marker, rejecting anything malformed or partial. Every
+ * field is required: a payload missing one is a payload whose provenance we
+ * cannot establish, and an unrecoverable turn is a better outcome than a
+ * continuation authorized by a guess.
+ */
+export function parseCodexPartialStreamFailure(
+  value: unknown,
+): CodexPartialStreamFailureV1 | null {
+  if (typeof value !== 'object' || value === null) {
+    return null
+  }
+  const candidate = value as Record<string, unknown>
+  if (
+    candidate.version !== 1 ||
+    candidate.code !== 'partial_stream_replay_skipped' ||
+    candidate.provider !== 'openai' ||
+    typeof candidate.transport !== 'string' ||
+    !PARTIAL_STREAM_TRANSPORTS.has(candidate.transport) ||
+    typeof candidate.cause !== 'string' ||
+    !PARTIAL_STREAM_CAUSES.has(candidate.cause) ||
+    typeof candidate.sealedPartialText !== 'boolean' ||
+    typeof candidate.hadClientToolCall !== 'boolean' ||
+    typeof candidate.openClientToolCalls !== 'number' ||
+    !Number.isInteger(candidate.openClientToolCalls) ||
+    candidate.openClientToolCalls < 0 ||
+    typeof candidate.hadHostedWebSearch !== 'boolean' ||
+    typeof candidate.automaticContinuationEligible !== 'boolean'
+  ) {
+    return null
+  }
+  return {
+    version: 1,
+    code: 'partial_stream_replay_skipped',
+    provider: 'openai',
+    transport: candidate.transport as CodexPartialStreamTransport,
+    cause: candidate.cause as CodexPartialStreamCause,
+    sealedPartialText: candidate.sealedPartialText,
+    hadClientToolCall: candidate.hadClientToolCall,
+    openClientToolCalls: candidate.openClientToolCalls,
+    hadHostedWebSearch: candidate.hadHostedWebSearch,
+    automaticContinuationEligible: candidate.automaticContinuationEligible,
+  }
+}
+
+/**
+ * Finds the structured marker anywhere in the cause chain. Returns null for a
+ * name-only marker.
+ */
+export function findCodexPartialStreamFailure(
+  error: unknown,
+): CodexPartialStreamFailureV1 | null {
+  return walkCauseChain(error, candidate =>
+    parseCodexPartialStreamFailure(
+      (candidate as { partialStreamFailure?: unknown }).partialStreamFailure,
+    ),
+  )
+}

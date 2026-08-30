@@ -2181,10 +2181,12 @@ function projectBatchSystem(
         preTokens: metadata.pre_tokens,
       }], recoveryInsertAt)
     }
-    case 'api_retry':
-      return isRecord(message.error) && typeof message.error.message === 'string'
-        ? appendBatchSystemNotice(draft, frameId, 'api_retry', message.error.message, recoveryInsertAt)
-        : false
+    case 'api_retry': {
+      const text = retryNoticeText(message.error)
+      return text === null
+        ? false
+        : appendBatchSystemNotice(draft, frameId, 'api_retry', text, recoveryInsertAt)
+    }
     case 'local_command_output':
       return typeof message.content === 'string'
         ? appendBatchSystemNotice(draft, frameId, 'local_command_output', message.content, recoveryInsertAt)
@@ -2687,15 +2689,9 @@ function projectSystemFrame(
     }
 
     case 'api_retry': {
-      const error = message.error
-      if (!isRecord(error) || typeof error.message !== 'string') return state
-      return appendSystemNotice(
-        state,
-        sessionId,
-        frameId,
-        'api_retry',
-        error.message,
-      )
+      const text = retryNoticeText(message.error)
+      if (text === null) return state
+      return appendSystemNotice(state, sessionId, frameId, 'api_retry', text)
     }
 
     case 'local_command_output':
@@ -3571,6 +3567,33 @@ function streamingThinkingBlockIndex(
       streamingBlock.reasoningKind === reasoningKind,
   )
   return matches.length === 1 ? matches[0]!.blockIndex : null
+}
+
+/**
+ * A retry frame carries `error` as either an object with display copy or a
+ * bare classification code. Only the object form was ever rendered, so a
+ * replayed transcript from before the engine emitted objects would silently
+ * lose its retry notices. Codes map to the same copy the engine writes rather
+ * than being printed: the code is an internal name, not something to show.
+ */
+const RETRY_NOTICE_COPY_BY_CODE: Record<string, string> = {
+  rate_limit: 'Rate limited. Retrying.',
+  authentication_failed: 'Sign-in problem. Retrying.',
+  billing_error: 'Billing problem. Retrying.',
+  invalid_request: 'The request was rejected. Retrying.',
+  server_error: 'The service returned an error. Retrying.',
+  max_output_tokens: 'The response was cut off. Retrying.',
+  unknown: 'The request failed. Retrying.',
+}
+
+function retryNoticeText(error: unknown): string | null {
+  if (isRecord(error) && typeof error.message === 'string') {
+    return error.message
+  }
+  if (typeof error === 'string') {
+    return RETRY_NOTICE_COPY_BY_CODE[error] ?? RETRY_NOTICE_COPY_BY_CODE.unknown!
+  }
+  return null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
