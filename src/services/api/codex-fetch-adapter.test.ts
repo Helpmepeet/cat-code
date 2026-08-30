@@ -4,6 +4,7 @@ import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
+  CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
   clearWebSocketSession,
 } from './codex-websocket-transport.js'
@@ -2616,6 +2617,42 @@ describe('codex-fetch-adapter', () => {
     expect(failure!.transport).toBe('websocket')
     expect(failure!.cause).toBe('idle_timeout')
     expect(failure!.automaticContinuationEligible).toBe(true)
+  })
+
+  test('a post-visible websocket overload authorizes continuation over sticky HTTP', async () => {
+    const metadata = {
+      accountId: 'acct_ws_overload',
+      model: 'gpt-5.6-luna',
+      cacheContextKey: 'acct_ws_overload:gpt-5.6-luna',
+      conversationId: 'conv_ws_overload',
+    }
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'partial result' }
+        throw new CodexWebSocketServerError(
+          'server_error',
+          'Our servers are currently overloaded. Please try again later.',
+        )
+      })(),
+      'gpt-5.6-luna',
+      metadata,
+    )
+
+    const { error } = await readSseUntilError(response)
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.transport).toBe('websocket')
+    expect(failure!.cause).toBe('stream_error')
+    expect(failure!.automaticContinuationEligible).toBe(true)
+    expect(
+      _hasStickyHttpFallbackForTest(
+        metadata.conversationId,
+        metadata.accountId,
+      ),
+    ).toBe(true)
+    expect((error as Error).message).toContain(
+      'will use HTTP fallback on the next turn',
+    )
   })
 
   test('a hosted web search fails closed even with no client tool call', async () => {

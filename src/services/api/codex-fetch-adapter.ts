@@ -35,6 +35,7 @@ import {
   registerOutputItemCanonicalizer,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
+  CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
 } from './codex-websocket-transport.js'
@@ -2616,6 +2617,8 @@ async function processCodexEvents(
             normalizedError,
             failure,
             requestCacheMetadata,
+            classification.transport === 'websocket' &&
+              classification.transient,
           ),
         )
         recordStreamSurface({
@@ -3304,6 +3307,23 @@ function normalizeCodexStreamError(
     return error
   }
 
+  if (error instanceof CodexWebSocketServerError) {
+    const transient = isTransientCodexWebSocketServerError(error)
+    if (requestCacheMetadata && transient) {
+      markStickyHttpFallback(
+        requestCacheMetadata.conversationId,
+        'server_error',
+        requestCacheMetadata.accountId,
+      )
+    }
+    logForDebugging(
+      `[codex-adapter] ws_error_classified class=server_error transient=${transient} ` +
+      `code=${error.code || 'unknown'} msg="${error.message}"`,
+      { level: 'warn' },
+    )
+    return error
+  }
+
   if (error instanceof Error) {
     if (
       requestCacheMetadata &&
@@ -3337,7 +3357,22 @@ function isRecoverableCodexStreamError(error: Error): boolean {
   return (
     error instanceof CodexWebSocketIdleTimeoutError ||
     error instanceof CodexWebSocketClosedBeforeCompletedError ||
+    (error instanceof CodexWebSocketServerError &&
+      isTransientCodexWebSocketServerError(error)) ||
     error.message.startsWith('WebSocket error during stream')
+  )
+}
+
+function isTransientCodexWebSocketServerError(
+  error: CodexWebSocketServerError,
+): boolean {
+  const code = error.code.toLowerCase()
+  return (
+    code === 'server_error' ||
+    code === 'internal_server_error' ||
+    code === 'overloaded_error' ||
+    code === 'service_unavailable' ||
+    error.message.toLowerCase().includes('servers are currently overloaded')
   )
 }
 
@@ -3371,6 +3406,13 @@ function classifyPostVisibleCodexFailure(
   if (error instanceof CodexWebSocketClosedBeforeCompletedError) {
     return { transport: 'websocket', cause: 'closed', transient: true }
   }
+  if (error instanceof CodexWebSocketServerError) {
+    return {
+      transport: 'websocket',
+      cause: 'stream_error',
+      transient: isTransientCodexWebSocketServerError(error),
+    }
+  }
   if (error.message.startsWith('WebSocket error during stream')) {
     return { transport: 'websocket', cause: 'stream_error', transient: true }
   }
@@ -3388,8 +3430,9 @@ function createPartialStreamReplaySkippedError(
   error: Error,
   failure: CodexPartialStreamFailureV1,
   requestCacheMetadata?: CodexRequestCacheMetadata,
+  willUseHttpFallback = false,
 ): Error {
-  const conversationSuffix = requestCacheMetadata
+  const conversationSuffix = requestCacheMetadata && willUseHttpFallback
     ? ` Conversation ${requestCacheMetadata.conversationId.slice(0, 8)} will use HTTP fallback on the next turn.`
     : ''
   const wrapped = new CodexPartialStreamReplaySkippedError(

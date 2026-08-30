@@ -910,6 +910,16 @@ export class CodexWebSocketAuthError extends Error {
   }
 }
 
+export class CodexWebSocketServerError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(`Codex WS error: ${message}`)
+    this.name = 'CodexWebSocketServerError'
+  }
+}
+
 export class CodexWebSocketIdleTimeoutError extends Error {
   constructor(
     public readonly timeoutMs: number,
@@ -1227,7 +1237,7 @@ async function* _streamTurnAttempt(
       // response-id correlation, so late events from the rejected turn must not
       // be allowed onto a socket reused by the next turn. The reset baseline
       // above remains reset across the reconnect, making that next turn full-send.
-      failStream(new Error(`Codex WS error: ${msg}`), { closeSocket: true })
+      failStream(new CodexWebSocketServerError(code, msg), { closeSocket: true })
       return
     }
 

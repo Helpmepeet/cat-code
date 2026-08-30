@@ -5,6 +5,7 @@ import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
   CodexWebSocketIdleTimeoutError,
+  CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
   clearWebSocketSession,
   closeSocketPreservingState,
@@ -1261,7 +1262,8 @@ describe('streamTurnViaWebSocket', () => {
         2,
       ),
     ).catch((e: unknown) => e)
-    expect(err).toBeInstanceOf(Error)
+    expect(err).toBeInstanceOf(CodexWebSocketServerError)
+    expect((err as CodexWebSocketServerError).code).toBe('server_error')
     expect((err as Error).message).toBe('Codex WS error: internal error')
     expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
 
