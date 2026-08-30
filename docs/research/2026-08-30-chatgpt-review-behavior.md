@@ -5,9 +5,9 @@ independently verified before any code changed, plus one controlled-ish
 comparison against the same model family running with tools through cat-code,
 plus a literature check on both.
 
-**Headline:** the mechanism-reading is trustworthy, the severity is not, and
-the surface you route through matters more than expected. 73 findings, 42 real,
-29 fixed and committed.
+**Headline:** the mechanism-reading is trustworthy, the severity is not, and the
+lane you route through matters for quota reasons more than quality ones.
+73 findings, 42 real, 30 fixed and on `migration`.
 
 ---
 
@@ -29,7 +29,7 @@ Fix commits run `a5c24667` through `deb5e9de`, plus merge `7a5e4e8b`.
 - **42 held up** (58%)
 - **29 refuted** (40%)
 - **2 unsettled from source alone**
-- **29 fixed and committed**, 1 merged from a worktree, 12 deliberately left alone
+- **30 fixed and on `migration`** (29 direct, 1 merged from a worktree), 12 deliberately left alone
 
 Of the 12 left alone: five touch live credentials (one would have to delete a
 real keychain entry), the rest are real defects nothing reachable exercises.
@@ -153,6 +153,12 @@ format including "reachable execution path". Neither was told to name callers.
 | Named a real reachable path | — | 9 of 10 |
 | Severity inflated | not measured | 6 of 10 |
 
+**Do not read 33% as the connector's rate.** It is round 6 alone, which was one
+of its weaker rounds against a 58% average and a 0 to 87% per-round range. Round
+6 is quoted because it is the only round with a matched control. An average
+round would have read 5 of 9 against 8 of 10, a far less dramatic gap than the
+table implies, and both samples are about ten findings.
+
 ### Two corrections to my own first read
 
 **A primed validator inflated the result.** My first verification agent was told
@@ -174,9 +180,10 @@ GPT-5.6 versions since August 2026, could not be verified (the OpenAI post
 returns 403 to automated fetching), so treat it as unconfirmed.
 
 **Therefore:** "tool access fixed the reachability failures" is one of three
-live explanations, not an established one. The observed 33% to 80% difference
-between the two workflows is real and actionable. The causal attribution is not
-supported by this design.
+live explanations, not an established one. A difference between the two
+workflows is real, though its size is uncertain: 33 to 80 on the matched round,
+nearer 58 to 80 against the connector's average. The causal attribution is not
+supported by this design, and the routing conclusion in §8 does not rest on it.
 
 ### And it may invert the central claim
 
@@ -244,9 +251,21 @@ Key sources: [SWE-PRBench](https://arxiv.org/abs/2603.26130) ·
 
 ## 8. What to actually do
 
-**Route repository review through cat-code, not the connector.** 33% versus 80%
-valid on identical briefs, whatever the cause. Keep the connector for web
-research and one-shot judgment where the ChatGPT product itself is the point.
+**Generate on the connector, verify on cat-code.** Not "route review to cat-code":
+that spends the scarce resource on the wrong stage. The two lanes draw on
+different quota pools and only one is rate-limited. The connector runs on the
+ChatGPT subscription, in parallel, competing with nothing, so it is the right
+place for high-volume discovery even at a 58% hit rate. `cat-code -p --model
+gpt-5.6-sol` runs on a five-hour rolling window, so quota-time is its scarce
+unit and a USD cap is meaningless there. Spend it on the survivors, where
+following a call graph and running tests is decisive.
+
+The corollary is that the cost of a low hit rate is not paid where it is
+generated. Verification labor lands on the Claude session, which has its own
+clock-based limit. This run spent roughly 1.4M subagent tokens verifying 73
+findings. A cheap filter inside the free call is therefore worth more than a
+marginally better generator, which is what the artifact-demanding response
+block below is for.
 
 **Keep an independent verifier either way.** Inflated severity appeared on both
 surfaces. Do not let the verifier see any prior score or baseline; that made
