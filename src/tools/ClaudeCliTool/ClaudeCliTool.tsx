@@ -209,10 +209,13 @@ function parseClaudeJson(stdout: string): {
 
 function isTrustedBypassParentMode(context: Pick<ToolUseContext, 'getAppState'>): boolean {
   const permissionContext = context.getAppState().toolPermissionContext
+  // prePlanMode is the record of the mode plan was entered from.
+  // isBypassPermissionsModeAvailable only says bypass is permitted, which is
+  // true for nearly every install and would trust every plan-mode session.
   return (
     permissionContext.mode === 'bypassPermissions' ||
     (permissionContext.mode === 'plan' &&
-      permissionContext.isBypassPermissionsModeAvailable)
+      permissionContext.prePlanMode === 'bypassPermissions')
   )
 }
 

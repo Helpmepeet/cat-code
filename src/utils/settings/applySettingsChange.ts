@@ -1,17 +1,36 @@
+import { resolve } from 'path'
 import type { AppState } from '../../state/AppState.js'
 import { logForDebugging } from '../debug.js'
 import { updateHooksConfigSnapshot } from '../hooks/hooksConfigSnapshot.js'
+import { expandPath } from '../path.js'
 import {
   createDisabledBypassPermissionsContext,
   findOverlyBroadBashPermissions,
   isBypassPermissionsModeDisabled,
   removeDangerousPermissions,
+  transitionAutoModeAfterSettingsChange,
   transitionPlanAutoMode,
 } from '../permissions/permissionSetup.js'
 import { syncPermissionRulesFromDisk } from '../permissions/permissions.js'
 import { loadAllPermissionRulesFromDisk } from '../permissions/permissionsLoader.js'
+import { applyPermissionUpdate } from '../permissions/PermissionUpdate.js'
 import type { SettingSource } from './constants.js'
 import { getInitialSettings } from './settings.js'
+
+/**
+ * The additionalDirectories of a settings snapshot, keyed the way
+ * validateDirectoryForWorkspace keys the context map (resolve(expandPath(dir)),
+ * src/commands/add-dir/validation.ts:43) so the two can be compared.
+ */
+function settingsDirectoryKeys(settings: {
+  permissions?: { additionalDirectories?: readonly string[] }
+}): Set<string> {
+  return new Set(
+    (settings?.permissions?.additionalDirectories ?? []).map(dir =>
+      resolve(expandPath(dir)),
+    ),
+  )
+}
 
 /**
  * Apply a settings change to app state. Re-reads settings from disk,
@@ -58,6 +77,23 @@ export function applySettingsChange(
       }
     }
 
+    // Drop working directories that settings granted and no longer grant.
+    // Only removals are reconciled: adding one has to pass the async fs
+    // validation initializePermissionContext runs (permissionSetup.ts:1026),
+    // which this synchronous reducer cannot do, and widening the workspace
+    // from another process's settings write is not a change to make silently.
+    const nextDirectories = settingsDirectoryKeys(newSettings)
+    const droppedDirectories = [...settingsDirectoryKeys(prev.settings)].filter(
+      dir => !nextDirectories.has(dir),
+    )
+    if (droppedDirectories.length > 0) {
+      newContext = applyPermissionUpdate(newContext, {
+        type: 'removeDirectories',
+        directories: droppedDirectories,
+        destination: 'session',
+      })
+    }
+
     if (
       newContext.isBypassPermissionsModeAvailable &&
       isBypassPermissionsModeDisabled()
@@ -66,6 +102,7 @@ export function applySettingsChange(
     }
 
     newContext = transitionPlanAutoMode(newContext)
+    newContext = transitionAutoModeAfterSettingsChange(newContext)
 
     // ponytail: do NOT sync effortLevel into AppState.effortValue here.
     // effortValue is session-scoped; another session's /effort write to the

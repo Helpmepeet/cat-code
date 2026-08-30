@@ -52,9 +52,11 @@ class FakeChildProcess extends EventEmitter {
 function buildContext({
   mode = 'default',
   isBypassPermissionsModeAvailable = false,
+  prePlanMode,
 }: {
   mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
   isBypassPermissionsModeAvailable?: boolean
+  prePlanMode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
 } = {}): ToolUseContext {
   return {
     abortController: new AbortController(),
@@ -63,6 +65,7 @@ function buildContext({
         toolPermissionContext: {
           mode,
           isBypassPermissionsModeAvailable,
+          prePlanMode,
         },
       }) as never,
   } as ToolUseContext
@@ -153,6 +156,39 @@ describe('ClaudeCliTool', () => {
         permission_mode: 'bypassPermissions',
       },
       buildContext({ mode: 'bypassPermissions' }),
+    )
+
+    expect(trusted.behavior).toBe('passthrough')
+  })
+
+  test('plan mode only delegates bypassPermissions when plan was entered from bypass', async () => {
+    // isBypassPermissionsModeAvailable is a capability answer (true on nearly
+    // every install), not a record that the parent session is running with
+    // bypass. Only prePlanMode records that.
+    const denied = await ClaudeCliTool.checkPermissions(
+      {
+        prompt: 'Do the work',
+        permission_mode: 'bypassPermissions',
+      },
+      buildContext({
+        mode: 'plan',
+        isBypassPermissionsModeAvailable: true,
+        prePlanMode: 'default',
+      }),
+    )
+
+    expect(denied.behavior).toBe('deny')
+
+    const trusted = await ClaudeCliTool.checkPermissions(
+      {
+        prompt: 'Do the work',
+        permission_mode: 'bypassPermissions',
+      },
+      buildContext({
+        mode: 'plan',
+        isBypassPermissionsModeAvailable: true,
+        prePlanMode: 'bypassPermissions',
+      }),
     )
 
     expect(trusted.behavior).toBe('passthrough')
