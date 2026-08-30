@@ -1981,6 +1981,71 @@ test('the boundary and the turn end both clear a compaction left running', () =>
   expect(selectIsCompacting(viaResult, 'session-1')).toBe(false)
 })
 
+/**
+ * A recovered `compact_boundary` is an OLDER boundary read back from history
+ * by `history.loadEarlier` (`recovered: true`), not the live compaction
+ * finishing. Clearing `compacting` on it means the live compaction's own
+ * boundary later only re-clears an already-false flag, so the activity verb
+ * drops "Compacting" while the summarization call is still in flight and
+ * never gets it back.
+ */
+function recoveredCompactBoundaryFrame(sessionId: string, label: string) {
+  return {
+    ...messageFrame(sessionId, {
+      type: 'system',
+      subtype: 'compact_boundary',
+      compact_metadata: { trigger: 'manual', pre_tokens: 147150 },
+      uuid: `00000000-0000-4000-8000-recovered-cb-${label}`,
+    } as unknown as SDKMessage),
+    replay: true as const,
+    recovered: true as const,
+  }
+}
+
+test('a recovered compact_boundary does not clear a live compaction (single-frame path)', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  state = projectServerFrame(state, assistantFrame('session-1', 1))
+  state = projectServerFrame(
+    state,
+    statusFrame('compacting', '00000000-0000-4000-8000-0000000002e1'),
+  )
+  expect(selectIsCompacting(state, 'session-1')).toBe(true)
+
+  state = projectServerFrame(
+    state,
+    recoveredCompactBoundaryFrame('session-1', 'a'),
+  )
+
+  // The live compaction is still running: an OLDER boundary loaded from
+  // history must not stop the indicator from saying "Compacting".
+  expect(selectIsCompacting(state, 'session-1')).toBe(true)
+  // The boundary row still lands at the head, above the conversation it
+  // precedes.
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    kind: 'compact-boundary',
+    trigger: 'manual',
+    preTokens: 147150,
+  })
+})
+
+test('a recovered compact_boundary does not clear a live compaction (batch path)', () => {
+  const frames = [
+    ready('session-1'),
+    assistantFrame('session-1', 1),
+    statusFrame('compacting', '00000000-0000-4000-8000-0000000002e2'),
+    recoveredCompactBoundaryFrame('session-1', 'b'),
+  ]
+  const state = projectServerFrames(createTranscriptState(), frames)
+
+  expect(selectIsCompacting(state, 'session-1')).toBe(true)
+  expect(selectTranscriptRows(state, 'session-1')[0]).toMatchObject({
+    kind: 'compact-boundary',
+    trigger: 'manual',
+    preTokens: 147150,
+  })
+})
+
 test('the compaction echo drops its terminal-only shortcut, keeps hook output', () => {
   // `buildDisplayText` (src/commands/compact/compact.ts) joins the TUI shortcut
   // line and any PreCompact/PostCompact `userDisplayMessage` into one string.
