@@ -301,7 +301,45 @@ export function buildPluginEntries({
     }
     return entry
   })
-  return entries.sort((a, b) => a.name.localeCompare(b.name))
+
+  // An error can fire before `pluginLoader.ts` ever builds a `LoadedPlugin`
+  // (e.g. `plugin-not-found`, `plugin-cache-miss` return `null` first), so it
+  // has no `loaded` row for `correlatePluginError` to attach to and would
+  // otherwise be dropped on the floor. Synthesize a disabled row for every
+  // error that doesn't match any loaded plugin, so the failure stays visible.
+  const errorOnlyEntries = errors
+    .filter(error => !loaded.some(({ plugin }) => errorMatchesPlugin(error, plugin)))
+    .map(buildErrorOnlyEntry)
+
+  return [...entries, ...errorOnlyEntries].sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function errorMatchesPlugin(error: PluginError, plugin: LoadedPlugin): boolean {
+  const source = 'source' in error ? error.source : undefined
+  const name = 'plugin' in error ? error.plugin : undefined
+  return source === plugin.source || name === plugin.name
+}
+
+/** Best available identity for an error with no `LoadedPlugin` to name it. */
+function pluginIdentityFromError(error: PluginError): { id: string; name: string } {
+  const name =
+    ('plugin' in error && typeof error.plugin === 'string' ? error.plugin : undefined) ??
+    ('pluginId' in error && typeof error.pluginId === 'string' ? error.pluginId : undefined) ??
+    error.source
+  return { id: error.source, name }
+}
+
+function buildErrorOnlyEntry(error: PluginError): PluginEntry {
+  const { id, name } = pluginIdentityFromError(error)
+  return {
+    id,
+    name,
+    source: id,
+    enabled: false,
+    builtin: false,
+    provides: { commands: 0, agents: 0, skills: 0, hooks: 0, mcpServers: 0, lsp: 0 },
+    error: redactPluginErrorMessage(getPluginErrorMessage(error)),
+  }
 }
 
 function derivePluginProvides(
@@ -359,12 +397,31 @@ function correlatePluginError(
   plugin: LoadedPlugin,
   errors: readonly PluginError[],
 ): string | undefined {
-  const match = errors.find(error => {
-    const source = 'source' in error ? error.source : undefined
-    const name = 'plugin' in error ? error.plugin : undefined
-    return source === plugin.source || name === plugin.name
-  })
+  const match = errors.find(error => errorMatchesPlugin(error, plugin))
   return match ? getPluginErrorMessage(match) : undefined
+}
+
+/**
+ * `getPluginErrorMessage` interpolates loader-caught strings (a fetch error, a
+ * raw path) straight into prose. For a row built from `buildErrorOnlyEntry`
+ * there is no vetted `LoadedPlugin` behind it, so this is the ONLY thing
+ * standing between a credential-bearing URL and the renderer: `secretGuard`
+ * matches key NAMES only and never inspects string values (`secretGuard.ts`).
+ * Reuses `redactRemoteUrl`'s per-URL redaction (origin + word-shaped path
+ * segments only) on every URL-shaped substring the message may embed, rather
+ * than assuming the whole message IS a URL the way `redactRemoteUrl` does.
+ *
+ * Also folds the one em-dash-bearing message shape this loader produces
+ * (`plugin-cache-miss`) into the no-em-dash rule (CLAUDE.md §7) — a comma
+ * reads fine in its place and needs no rewrite of the message structure.
+ */
+function redactPluginErrorMessage(message: string): string {
+  const urlsRedacted = message.replace(/https?:\/\/[^\s"'()<>[\]]+/g, raw => {
+    const trailingPunct = raw.match(/[.,;:!?]+$/)?.[0] ?? ''
+    const url = trailingPunct ? raw.slice(0, -trailingPunct.length) : raw
+    return redactRemoteUrl(url) + trailingPunct
+  })
+  return urlsRedacted.replace(/\s*—\s*/g, ', ')
 }
 
 /* ----------------------------- Hooks --------------------------- */

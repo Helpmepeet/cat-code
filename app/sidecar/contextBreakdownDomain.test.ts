@@ -1,9 +1,16 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, mock, test } from 'bun:test'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import type { Tools, ToolUseContext } from '../../src/Tool.js'
+import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
+import type { ContextData } from '../../src/utils/analyzeContext.js'
+import type { LogOption, SerializedMessage } from '../../src/types/logs.js'
 import {
+  createRealContextBreakdownExecutor,
   createSidecarContextBreakdownDomain,
   projectContextBreakdown,
   type ContextBreakdownInput,
 } from './contextBreakdownDomain.js'
+import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
 import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 
 /**
@@ -118,5 +125,79 @@ describe('context breakdown domain', () => {
     expect(await domain.snapshot()).toBeNull()
     expect(seen).toHaveLength(1)
     expect((seen[0] as Error).message).toBe('tokenizer unavailable')
+  })
+})
+
+function fixtureLog(): LogOption {
+  const message: SerializedMessage = {
+    type: 'user',
+    uuid: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    timestamp: '2026-08-30T00:00:00.000Z',
+    message: { role: 'user', content: 'fixture transcript line' },
+    cwd: '/tmp/fixture-not-a-real-session',
+    userType: 'external',
+    sessionId: '11111111-2222-4333-8444-555555555555',
+    version: '0.0.0',
+  }
+  return {
+    date: '2026-08-30',
+    messages: [message],
+    value: 0,
+    created: new Date('2026-08-30T00:00:00.000Z'),
+    modified: new Date('2026-08-30T00:00:00.000Z'),
+    firstPrompt: 'fixture transcript line',
+    messageCount: 1,
+    isSidechain: false,
+  }
+}
+
+const realSessionStorage = await import('../../src/utils/sessionStorage.js')
+mock.module('../../src/utils/sessionStorage.js', () => ({
+  ...realSessionStorage,
+  getLastSessionLog: async () => fixtureLog(),
+}))
+
+// Untyped on purpose: typing this as `Pick<ToolUseContext, 'options'>` makes
+// tsc narrow it to `never` at the assertion site below (the reassignment
+// happens inside the mocked-module closure, which the checker can't see is
+// what runs). Cast only at the point of use instead.
+let capturedToolUseContext: unknown
+const FAKE_ANALYSIS: ContextData = {
+  categories: [{ name: 'System prompt', tokens: 4_200, color: 'promptBorder' }],
+  totalTokens: 4_200,
+  maxTokens: 200_000,
+  model: 'gpt-5.6-luna',
+} as unknown as ContextData
+
+const realAnalyzeContext = await import('../../src/utils/analyzeContext.js')
+mock.module('../../src/utils/analyzeContext.js', () => ({
+  ...realAnalyzeContext,
+  analyzeContextUsage: async (
+    ..._args: unknown[]
+  ): Promise<ContextData> => {
+    capturedToolUseContext = _args[6]
+    return FAKE_ANALYSIS
+  },
+}))
+
+describe('createRealContextBreakdownExecutor — desktop system-prompt addendum', () => {
+  test('feeds the desktop appendSystemPrompt addendum into analyzeContextUsage, so countSystemTokens measures it', async () => {
+    capturedToolUseContext = undefined
+    const executor = createRealContextBreakdownExecutor({
+      tools: [] as unknown as Tools,
+      agentDefinitions: { activeAgents: [], allAgents: [] } as AgentDefinitionsResult,
+      getToolPermissionContext: () => getDefaultAppState().toolPermissionContext,
+      getMainLoopModel: () => 'gpt-5.6-luna',
+    })
+
+    const result = await executor.analyze()
+
+    expect(result).not.toBeNull()
+    const toolUseContext = capturedToolUseContext as
+      | Pick<ToolUseContext, 'options'>
+      | undefined
+    expect(toolUseContext?.options.appendSystemPrompt).toBe(
+      DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+    )
   })
 })
