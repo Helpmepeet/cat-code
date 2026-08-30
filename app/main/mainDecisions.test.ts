@@ -31,9 +31,11 @@ import {
   createRendererRecoveryPolicy,
   createStartupTimers,
   createWindowVisibilityTracker,
+  type DetachedCliHandle,
   frameMutatedAccountsPool,
   isTerminalLifecycleFrame,
   parseVisibleSessions,
+  runDetachedCliFallbackSpawn,
   selectRendererWorkingSetKiB,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
@@ -1196,6 +1198,111 @@ describe('createStartupTimers', () => {
     startup.cancelAll()
     timers.fire()
     expect(runs).toBe(1)
+  })
+})
+
+describe('runDetachedCliFallbackSpawn (editor CLI fallback settle policy)', () => {
+  /** A hand-driven child: `emit` fires a registered listener directly, no real process involved. */
+  function fakeChild() {
+    const listeners: { error: ((error: Error) => void)[]; exit: ((code: number | null) => void)[] } = {
+      error: [],
+      exit: [],
+    }
+    const handle: DetachedCliHandle = {
+      on: (event, listener) => {
+        if (event === 'error') listeners.error.push(listener as (error: Error) => void)
+        else listeners.exit.push(listener as (code: number | null) => void)
+      },
+      unref: () => {},
+    }
+    return {
+      handle,
+      emitError: (error: Error) => listeners.error.forEach(l => l(error)),
+      emitExit: (code: number | null) => listeners.exit.forEach(l => l(code)),
+    }
+  }
+
+  /** A hand-driven timer: `fire()` runs the one armed callback, like `createStartupTimers`'s fake. */
+  function fakeTimer() {
+    let armed: (() => void) | null = null
+    return {
+      setTimer: (run: () => void) => {
+        armed = run
+        return null
+      },
+      fire: () => {
+        const run = armed
+        armed = null
+        run?.()
+      },
+    }
+  }
+
+  test('resolves true once the settle delay elapses with no error or nonzero exit', async () => {
+    const child = fakeChild()
+    const timer = fakeTimer()
+    const result = runDetachedCliFallbackSpawn({
+      spawn: () => child.handle,
+      setTimer: timer.setTimer,
+      settleDelayMs: 150,
+    })
+    timer.fire()
+    expect(await result).toBe(true)
+  })
+
+  test('resolves true when the child exits 0 before the settle delay', async () => {
+    const child = fakeChild()
+    const timer = fakeTimer()
+    const result = runDetachedCliFallbackSpawn({
+      spawn: () => child.handle,
+      setTimer: timer.setTimer,
+      settleDelayMs: 150,
+    })
+    child.emitExit(0)
+    timer.fire()
+    expect(await result).toBe(true)
+  })
+
+  // The regression this policy exists for: a CLI that spawns and then exits
+  // nonzero is not a spawn `error` event, so without an `exit` listener the
+  // settle timer used to win and report success anyway.
+  test('resolves false when the child exits nonzero before the settle delay', async () => {
+    const child = fakeChild()
+    const timer = fakeTimer()
+    const result = runDetachedCliFallbackSpawn({
+      spawn: () => child.handle,
+      setTimer: timer.setTimer,
+      settleDelayMs: 150,
+    })
+    child.emitExit(1)
+    expect(await result).toBe(false)
+  })
+
+  test('resolves false on a spawn error event, and the later timer cannot overturn it', async () => {
+    const child = fakeChild()
+    const timer = fakeTimer()
+    const result = runDetachedCliFallbackSpawn({
+      spawn: () => child.handle,
+      setTimer: timer.setTimer,
+      settleDelayMs: 150,
+    })
+    child.emitError(new Error('spawn ENOENT'))
+    // A once-settled outcome must not flip: firing the timer afterwards is a
+    // no-op, proving `finish` is idempotent rather than racy.
+    timer.fire()
+    expect(await result).toBe(false)
+  })
+
+  test('resolves false when spawn throws synchronously', async () => {
+    const timer = fakeTimer()
+    const result = runDetachedCliFallbackSpawn({
+      spawn: () => {
+        throw new Error('spawn failed')
+      },
+      setTimer: timer.setTimer,
+      settleDelayMs: 150,
+    })
+    expect(await result).toBe(false)
   })
 })
 

@@ -852,3 +852,55 @@ export function createStartupTimers<Handle>(deps: {
     pending: () => armed.size,
   }
 }
+
+/* ------------------------------------------------------------------------- *
+ * Editor CLI fallback settle policy
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The subset of `child_process.ChildProcess` the settle policy reads. Kept
+ * narrow and local so this file never imports `node:child_process` (main.ts
+ * wires the real spawn; the decision lives here).
+ */
+export interface DetachedCliHandle {
+  on(event: 'error', listener: (error: Error) => void): void
+  on(event: 'exit', listener: (code: number | null) => void): void
+  unref(): void
+}
+
+/**
+ * Settle policy for `launchEditorApp`'s detached CLI fallback (main.ts
+ * `tryCliFallback`, used when `open -a <App>` fails or is unavailable).
+ * Resolves `false` on a spawn error or a nonzero exit, otherwise `false` if
+ * `deps.spawn` throws synchronously, otherwise `true` once `settleDelayMs`
+ * elapses with neither having happened (the common case: the CLI forks a
+ * detached editor process and is still alive, or already exited 0). A
+ * nonzero exit is not a spawn `error` event, so without the `exit` listener
+ * a CLI that spawns and then fails silently resolved `true`.
+ */
+export function runDetachedCliFallbackSpawn(deps: {
+  spawn: () => DetachedCliHandle
+  setTimer: (run: () => void, ms: number) => unknown
+  settleDelayMs: number
+}): Promise<boolean> {
+  return new Promise<boolean>(resolve => {
+    let resolved = false
+    const finish = (ok: boolean) => {
+      if (!resolved) {
+        resolved = true
+        resolve(ok)
+      }
+    }
+    try {
+      const child = deps.spawn()
+      child.unref()
+      child.on('error', () => finish(false))
+      child.on('exit', code => {
+        if (code !== 0) finish(false)
+      })
+      deps.setTimer(() => finish(true), deps.settleDelayMs)
+    } catch {
+      finish(false)
+    }
+  })
+}

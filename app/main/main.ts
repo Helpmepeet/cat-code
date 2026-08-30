@@ -73,6 +73,7 @@ import {
   type WindowVisibilityReason,
   resolveSidecarLaunch,
   type SidecarLaunchPlan,
+  runDetachedCliFallbackSpawn,
   selectTranscriptBackfillCandidates,
   frameMutatedAccountsPool,
   supervisorEventToServerFrame,
@@ -2993,17 +2994,15 @@ function launchEditorApp(
         finish(false)
         return
       }
-      try {
-        const child = spawn(cliBinaries[0], [filePath], {
-          detached: true,
-          stdio: 'ignore',
-        })
-        child.unref()
-        child.on('error', () => finish(false))
-        setTimeout(() => finish(true), 150)
-      } catch {
-        finish(false)
-      }
+      runDetachedCliFallbackSpawn({
+        spawn: () =>
+          spawn(cliBinaries[0], [filePath], {
+            detached: true,
+            stdio: 'ignore',
+          }),
+        setTimer: (run, ms) => setTimeout(run, ms),
+        settleDelayMs: 150,
+      }).then(finish)
     }
   })
 }

@@ -210,6 +210,9 @@ function collect(deadlineMs: number): Promise<void> {
       clearTimeout(timer)
       resolve()
     }
+    // A crash before the readiness marker is a third terminal condition,
+    // stronger evidence than waiting out the deadline against a dead process.
+    void app.exited.then(done)
     for (const stream of [app.stdout, app.stderr]) {
       void (async () => {
         for await (const chunk of stream as ReadableStream<Uint8Array>) {
@@ -257,7 +260,11 @@ function workerRecords(): Array<Record<string, unknown>> {
 
 const workerDeadline = Date.now() + 45_000
 let workers = workerRecords()
-while (Date.now() < workerDeadline && !workers.some(r => r.event === 'process.exited')) {
+while (
+  Date.now() < workerDeadline &&
+  !workers.some(r => r.event === 'process.exited') &&
+  app.exitCode === null
+) {
   await Bun.sleep(500)
   workers = workerRecords()
 }
@@ -265,7 +272,27 @@ while (Date.now() < workerDeadline && !workers.some(r => r.event === 'process.ex
 // Own the process by the exact pid recorded above; never sweep.
 app.kill()
 // Bounded: a main that ignores SIGTERM must not hang the battery forever.
-await Promise.race([app.exited, Bun.sleep(15_000)])
+// Escalate to SIGKILL on timeout so this script can never hang, and keep the
+// race's winner: every B1-B5 assertion below reads evidence collected before
+// this kill, so nothing else in the file notices a main that swallows SIGTERM.
+const exitedAfterTerm = await Promise.race([
+  app.exited.then(() => true),
+  Bun.sleep(15_000).then(() => false),
+])
+if (!exitedAfterTerm) {
+  app.kill('SIGKILL')
+  await app.exited
+}
+
+// B0 — the kill above actually worked. Without this, every assertion below
+// reads evidence collected before app.kill() and would pass identically
+// whether or not the process died, which is exactly the false-success shape
+// this smoke exists to catch.
+assert(
+  exitedAfterTerm,
+  'packaged app exited within 15s of SIGTERM',
+  `pid ${app.pid} did not exit from SIGTERM; escalated to SIGKILL`,
+)
 
 // B1 — the renderer actually loaded and attached its bridge. Main prints this
 // only after the window and the renderer bridge are up.
