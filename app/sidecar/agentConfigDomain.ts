@@ -46,15 +46,17 @@ export function buildAgentConfigSnapshot({
   result: AgentDefinitionsResult
   availableMcpServers: readonly string[]
 }): AgentConfigSnapshot {
-  const activeByType = new Map(result.activeAgents.map(agent => [agent.agentType, agent]))
+  const activeDefinitionIds = new Set(
+    result.activeAgents.map(agent => agentDefinitionId(agent)),
+  )
   const resolved = resolveAgentOverrides(result.allAgents, result.activeAgents)
 
   const definitions = resolved.map(agent => {
-    const active = activeByType.get(agent.agentType)
-    const isActive = active?.source === agent.source
+    const id = agentDefinitionId(agent)
+    const isActive = activeDefinitionIds.has(id)
     const missingMcpServers = missingRequiredMcpServers(agent, availableMcpServers)
     return {
-      id: agentDefinitionId(agent),
+      id,
       agentType: agent.agentType,
       source: agent.source as AgentConfigSourceId,
       ...(agent.baseDir ? { baseDir: agent.baseDir } : {}),

@@ -218,6 +218,50 @@ test('agent source taxonomy and active override precedence stay synced with the 
   })
 })
 
+test('a duplicate agent name inside one source never marks the losing definition active', () => {
+  // Every directory from cwd up to home is tagged projectSettings
+  // (src/utils/markdownConfigLoader.ts), so one agent name can collide inside one source.
+  // getActiveAgentsFromList keeps the LAST collision (loadAgentsDir.ts) while
+  // resolveAgentOverrides keeps the FIRST (agentDisplay.ts), so the engine's real winner
+  // is absent from the resolved list entirely.
+  const parentDir = customAgent({
+    agentType: 'reviewer',
+    source: 'projectSettings',
+    filename: 'reviewer',
+    baseDir: '/home/pt/work/.cat-code/agents',
+    tools: ['Read'],
+    model: 'inherit',
+  })
+  const repoDir = customAgent({
+    agentType: 'reviewer',
+    source: 'projectSettings',
+    filename: 'reviewer',
+    baseDir: '/home/pt/work/repo/.cat-code/agents',
+    tools: ['Read', 'Grep'],
+    model: 'opus',
+  })
+
+  const allAgents = [parentDir, repoDir]
+  const active = getActiveAgentsFromList(allAgents)
+  expect(active).toHaveLength(1)
+  expect(active[0]!.baseDir).toBe('/home/pt/work/repo/.cat-code/agents')
+
+  const snapshot = buildAgentConfigSnapshot({
+    result: { allAgents, activeAgents: active } satisfies AgentDefinitionsResult,
+    availableMcpServers: [],
+  })
+
+  const reviewers = snapshot.definitions.filter(
+    definition => definition.agentType === 'reviewer',
+  )
+  expect(reviewers).toHaveLength(1)
+  expect(reviewers[0]!.filePath).toBe('/home/pt/work/.cat-code/agents/reviewer.md')
+  expect(reviewers[0]!.tools).toEqual({ mode: 'list', names: ['Read'] })
+  // The engine will run the other file, so the surviving row must not claim to be active.
+  expect(reviewers[0]).toMatchObject({ active: false, available: false })
+  expect(snapshot.definitions.some(definition => definition.active)).toBe(false)
+})
+
 test('agent display state covers every engine task and durable worker status', () => {
   // TaskStatus: src/Task.ts:15-20.
   expect(ENGINE_TASK_STATUSES.map(status =>
