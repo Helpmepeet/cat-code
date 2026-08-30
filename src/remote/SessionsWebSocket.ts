@@ -128,6 +128,9 @@ export class SessionsWebSocket {
       this.ws = ws
 
       ws.addEventListener('open', () => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         logForDebugging(
           '[SessionsWebSocket] Connection opened, authenticated via headers',
         )
@@ -139,12 +142,18 @@ export class SessionsWebSocket {
       })
 
       ws.addEventListener('message', (event: MessageEvent) => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         const data =
           typeof event.data === 'string' ? event.data : String(event.data)
         this.handleMessage(data)
       })
 
       ws.addEventListener('error', () => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         const err = new Error('[SessionsWebSocket] WebSocket error')
         logError(err)
         this.callbacks.onError?.(err)
@@ -155,7 +164,7 @@ export class SessionsWebSocket {
         logForDebugging(
           `[SessionsWebSocket] Closed: code=${event.code} reason=${event.reason}`,
         )
-        this.handleClose(event.code)
+        this.handleClose(event.code, ws)
       })
 
       ws.addEventListener('pong', () => {
@@ -171,6 +180,9 @@ export class SessionsWebSocket {
       this.ws = ws
 
       ws.on('open', () => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         logForDebugging(
           '[SessionsWebSocket] Connection opened, authenticated via headers',
         )
@@ -183,10 +195,16 @@ export class SessionsWebSocket {
       })
 
       ws.on('message', (data: Buffer) => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         this.handleMessage(data.toString())
       })
 
       ws.on('error', (err: Error) => {
+        if (!this.isCurrentSocket(ws)) {
+          return
+        }
         logError(new Error(`[SessionsWebSocket] Error: ${err.message}`))
         this.callbacks.onError?.(err)
       })
@@ -195,7 +213,7 @@ export class SessionsWebSocket {
         logForDebugging(
           `[SessionsWebSocket] Closed: code=${code} reason=${reason.toString()}`,
         )
-        this.handleClose(code)
+        this.handleClose(code, ws)
       })
 
       ws.on('pong', () => {
@@ -229,9 +247,24 @@ export class SessionsWebSocket {
   }
 
   /**
+   * True when `socket` is the connection this instance currently owns.
+   * close()/reconnect() replace `this.ws` while the old peer's close handshake
+   * is still in flight (ws waits up to 30s for the peer's close frame, well
+   * past the 500ms reconnect delay), so a superseded socket's late events must
+   * not touch the replacement's state.
+   */
+  private isCurrentSocket(socket: WebSocketLike): boolean {
+    return this.ws === socket
+  }
+
+  /**
    * Handle WebSocket close
    */
-  private handleClose(closeCode: number): void {
+  private handleClose(closeCode: number, socket: WebSocketLike): void {
+    if (!this.isCurrentSocket(socket)) {
+      return
+    }
+
     this.stopPingInterval()
 
     if (this.state === 'closed') {
@@ -377,10 +410,10 @@ export class SessionsWebSocket {
     }
 
     if (this.ws) {
-      // Null out event handlers to prevent race conditions during reconnect.
-      // Under Bun (native WebSocket), onX handlers are the clean way to detach.
-      // Under Node (ws package), the listeners were attached with .on() in connect(),
-      // but since we're about to close and null out this.ws, no cleanup is needed.
+      // Listeners stay attached on both branches: nulling this.ws is what
+      // detaches the socket logically, because every handler goes through
+      // isCurrentSocket() before it touches state. A close frame that lands
+      // after reconnect() built the replacement is therefore inert.
       this.ws.close()
       this.ws = null
     }
