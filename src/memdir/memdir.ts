@@ -58,7 +58,7 @@ export function truncateEntrypointContent(raw: string): EntrypointTruncation {
   const trimmed = raw.trim()
   const contentLines = trimmed.split('\n')
   const lineCount = contentLines.length
-  const byteCount = trimmed.length
+  const byteCount = Buffer.byteLength(trimmed, 'utf-8')
 
   const wasLineTruncated = lineCount > MAX_ENTRYPOINT_LINES
   // Check original byte count — long lines are the failure mode the byte cap
@@ -79,9 +79,18 @@ export function truncateEntrypointContent(raw: string): EntrypointTruncation {
     ? contentLines.slice(0, MAX_ENTRYPOINT_LINES).join('\n')
     : trimmed
 
-  if (truncated.length > MAX_ENTRYPOINT_BYTES) {
-    const cutAt = truncated.lastIndexOf('\n', MAX_ENTRYPOINT_BYTES)
-    truncated = truncated.slice(0, cutAt > 0 ? cutAt : MAX_ENTRYPOINT_BYTES)
+  const truncatedBytes = Buffer.from(truncated, 'utf-8')
+  if (truncatedBytes.length > MAX_ENTRYPOINT_BYTES) {
+    // 0x0a can never appear as a UTF-8 continuation byte, so a newline byte is
+    // always a real line break and always a character boundary.
+    const cutAt = truncatedBytes.lastIndexOf(0x0a, MAX_ENTRYPOINT_BYTES)
+    let end = cutAt > 0 ? cutAt : MAX_ENTRYPOINT_BYTES
+    // A cap-length cut can land inside a multi-byte character; back off the
+    // continuation bytes (0b10xxxxxx) so the slice ends on a boundary.
+    while (end > 0 && (truncatedBytes[end] & 0xc0) === 0x80) {
+      end--
+    }
+    truncated = truncatedBytes.subarray(0, end).toString('utf-8')
   }
 
   const reason =
