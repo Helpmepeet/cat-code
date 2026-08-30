@@ -184,7 +184,7 @@ async function getWatchTargets(): Promise<{
 }> {
   // Map from directory to all potential settings files in that directory
   const dirToSettingsFiles = new Map<string, Set<string>>()
-  const dirsWithExistingFiles = new Set<string>()
+  const dirsToWatch = new Set<string>()
 
   for (const source of SETTING_SOURCES) {
     // Skip flagSettings - they're provided via CLI and won't change during the session.
@@ -207,21 +207,26 @@ async function getWatchTargets(): Promise<{
     }
     dirToSettingsFiles.get(dir)!.add(path)
 
-    // Check if file exists - only watch directories that have at least one existing file
+    // Watch every candidate directory that exists, even when it holds no
+    // settings file yet — a file created there mid-session (e.g. a project
+    // .cat-code/settings.json) must still be detected without a restart.
+    if (dirsToWatch.has(dir)) {
+      continue
+    }
     try {
-      const stats = await stat(path)
-      if (stats.isFile()) {
-        dirsWithExistingFiles.add(dir)
+      const stats = await stat(dir)
+      if (stats.isDirectory()) {
+        dirsToWatch.add(dir)
       }
     } catch {
-      // File doesn't exist, that's fine
+      // Directory doesn't exist, that's fine
     }
   }
 
   // For watched directories, include ALL potential settings file paths
   // This ensures files created after init are also detected
   const settingsFiles = new Set<string>()
-  for (const dir of dirsWithExistingFiles) {
+  for (const dir of dirsToWatch) {
     const filesInDir = dirToSettingsFiles.get(dir)
     if (filesInDir) {
       for (const file of filesInDir) {
@@ -239,14 +244,14 @@ async function getWatchTargets(): Promise<{
   try {
     const stats = await stat(managedDropIn)
     if (stats.isDirectory()) {
-      dirsWithExistingFiles.add(managedDropIn)
+      dirsToWatch.add(managedDropIn)
       dropInDir = managedDropIn
     }
   } catch {
     // Drop-in directory doesn't exist, that's fine
   }
 
-  return { dirs: [...dirsWithExistingFiles], settingsFiles, dropInDir }
+  return { dirs: [...dirsToWatch], settingsFiles, dropInDir }
 }
 
 function settingSourceToConfigChangeSource(
