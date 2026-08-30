@@ -198,11 +198,11 @@ export function saveMcpServerUserConfig(
 ): void {
   try {
     const nonSensitive: UserConfigValues = {}
-    const sensitive: Record<string, string> = {}
+    const sensitive: UserConfigValues = {}
 
     for (const [key, value] of Object.entries(config)) {
       if (schema[key]?.sensitive === true) {
-        sensitive[key] = String(value)
+        sensitive[key] = value
       } else {
         nonSensitive[key] = value
       }

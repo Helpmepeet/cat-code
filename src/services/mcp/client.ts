@@ -163,9 +163,17 @@ export class McpAuthError extends Error {
  * The caller should get a fresh client via ensureConnectedClient and retry.
  */
 class McpSessionExpiredError extends Error {
-  constructor(serverName: string) {
+  /**
+   * True only for a 404/-32001 "Session not found", which proves the server
+   * rejected the request without running it. A derived "Connection closed" is
+   * ambiguous: the tool may already have executed remotely.
+   */
+  readonly confirmedExpiry: boolean
+
+  constructor(serverName: string, confirmedExpiry: boolean) {
     super(`MCP server "${serverName}" session expired`)
     this.name = 'McpSessionExpiredError'
+    this.confirmedExpiry = confirmedExpiry
   }
 }
 
@@ -1727,6 +1735,10 @@ export function areMcpConfigsEqual(
 // reconnects), bounded to prevent unbounded growth with many MCP servers.
 const MCP_FETCH_CACHE_SIZE = 20
 
+// Bound on tools/list pagination so a server that always returns a cursor
+// cannot stall the connection.
+const MAX_TOOL_LIST_PAGES = 20
+
 /**
  * Encode MCP tool input for the auto-mode security classifier.
  * Exported so the auto-mode eval scripts can mirror production encoding
@@ -1751,13 +1763,26 @@ export const fetchToolsForClient = memoizeWithLRU(
         return []
       }
 
-      const result = (await client.client.request(
-        { method: 'tools/list' },
-        ListToolsResultSchema,
-      )) as ListToolsResult
+      const listedTools: ListToolsResult['tools'] = []
+      let cursor: string | undefined
+      for (let page = 0; page < MAX_TOOL_LIST_PAGES; page++) {
+        const result = (await client.client.request(
+          { method: 'tools/list', ...(cursor && { params: { cursor } }) },
+          ListToolsResultSchema,
+        )) as ListToolsResult
+        listedTools.push(...result.tools)
+        cursor = result.nextCursor
+        if (!cursor) break
+      }
+      if (cursor) {
+        logMCPError(
+          client.name,
+          `Stopped tools/list after ${MAX_TOOL_LIST_PAGES} pages; server kept returning a cursor`,
+        )
+      }
 
       // Sanitize tool data from MCP server
-      const toolsToProcess = recursivelySanitizeUnicode(result.tools)
+      const toolsToProcess = recursivelySanitizeUnicode(listedTools)
 
       // Check if we should skip the mcp__ prefix for SDK MCP servers
       const skipPrefix =
@@ -1911,10 +1936,15 @@ export const fetchToolsForClient = memoizeWithLRU(
                   }
                 } catch (error) {
                   // Session expired — the connection cache has been
-                  // cleared, so retry with a fresh client.
+                  // cleared, so retry with a fresh client. Only replay when
+                  // the server proved it never ran the request, or when the
+                  // tool is safe to repeat: a derived "Connection closed" can
+                  // also mean the response was lost after execution.
                   if (
                     error instanceof McpSessionExpiredError &&
-                    attempt < MAX_SESSION_RETRIES
+                    attempt < MAX_SESSION_RETRIES &&
+                    (error.confirmedExpiry ||
+                      tool.annotations?.readOnlyHint === true)
                   ) {
                     logMCPDebug(
                       client.name,
@@ -1992,6 +2022,10 @@ export const fetchToolsForClient = memoizeWithLRU(
         .filter(isIncludedMcpTool)
     } catch (error) {
       logMCPError(client.name, `Failed to fetch tools: ${errorMessage(error)}`)
+      // Discovery failures are transient. Evict the memoized empty result so
+      // the next caller retries, instead of the server staying silently
+      // toolless until a manual reconnect clears the cache.
+      fetchToolsForClient.cache.delete(client.name)
       return []
     }
   },
@@ -2774,9 +2808,12 @@ export async function processMCPResult(
     return await truncateMcpContentIfNeeded(content)
   }
 
-  // Generate a unique ID for the persisted file (server__tool-timestamp)
+  // Generate a unique ID for the persisted file (server__tool-timestamp).
+  // The random suffix is load-bearing: persistToolResult writes with 'wx' and
+  // returns the EXISTING file on EEXIST, so two same-millisecond results for
+  // one server/tool would otherwise be handed the same path.
   const timestamp = Date.now()
-  const persistId = `mcp-${normalizeNameForMCP(name)}-${normalizeNameForMCP(tool)}-${timestamp}`
+  const persistId = `mcp-${normalizeNameForMCP(name)}-${normalizeNameForMCP(tool)}-${timestamp}-${Math.random().toString(36).slice(2, 8)}`
   // Convert to string for persistence (persistToolResult expects string or specific block types)
   const contentStr =
     typeof content === 'string' ? content : jsonStringify(content, null, 2)
@@ -3237,7 +3274,7 @@ async function callMCPTool({
         )
         logEvent('tengu_mcp_session_expired', {})
         await clearServerCache(name, config)
-        throw new McpSessionExpiredError(name)
+        throw new McpSessionExpiredError(name, isSessionExpired)
       }
     }
 
