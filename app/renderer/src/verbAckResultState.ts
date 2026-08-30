@@ -264,7 +264,7 @@ export function selectLatestVerbAckResult(
 /**
  * The failure toast for a verb-ack result, or null when it succeeded. Pure so the
  * surfacing decision is unit-testable despite the SSR-only renderer harness (the
- * `resultToastTone` / `stoppableTaskIdAt` idiom). SUCCESS returns null: the verb's
+ * `resultToastTone` / `stoppableTaskId` idiom). SUCCESS returns null: the verb's
  * own snapshot re-broadcast already updated the UI (decision #5) — only a FAILURE,
  * which mutates nothing, needs surfacing. `message` is the sidecar's real, redacted
  * outcome (e.g. a validation error); never invented copy, never token material.
