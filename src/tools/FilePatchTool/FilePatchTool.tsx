@@ -10,6 +10,7 @@ import {
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
+import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import {
   assertFileUnchangedSinceRead,
   checkSingleFileWritePermissions,
@@ -406,6 +407,19 @@ export const FilePatchTool = buildTool({
             updateFileHistoryState,
             parentMessage.uuid,
           )
+        }
+
+        // Every await above yields, and `file.after` was computed from the
+        // read-only phase's buffer, so a write landing in between would be
+        // overwritten silently. Re-read and compare against that same buffer
+        // right before touching disk. Please avoid async operations between
+        // here and the mutation below to preserve atomicity.
+        const onDisk = readFileForEdit(file.path)
+        if (
+          onDisk.fileExists !== (originalState?.exists ?? false) ||
+          onDisk.content !== (originalState?.buffer.content ?? '')
+        ) {
+          throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
         }
 
         if (file.type === 'delete') {
