@@ -157,6 +157,19 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   and in AX discovery — NOT on screen, since 2026-08-28 the window has no title
   bar to print it in (`titleBarStyle: 'hiddenInset'`, CC-77) — and main logs a
   loud warning when `CATCODE_RENDERER_URL` is set but the packaged branch wins. Cost the first time this happened, undiagnosed: hours (2026-07-28).
+- **The sidecar is a third plane, and it reads the tree at every spawn.** In dev
+  `resolveSidecarLaunch` (`app/main/mainDecisions.ts:135`) resolves to
+  `bun run app/sidecar/<entry>.ts` — repository TypeScript, read off disk when
+  the process starts — and `app/sidecar` + `app/shared` import from `src/` in 216
+  places (`grep -rn '\.\./\.\./src/' app/sidecar/*.ts app/shared/*.ts | grep -v
+  test | wc -l`). So a `src/**` or `app/sidecar/**` edit reaches every NEW session
+  an open app starts, plus the catalog, transcript-backfill, accounts-pool and
+  debug-cleanup workers; sessions already running keep the code they loaded.
+  Symptom shape: a session started mid-edit dies on a module graph nobody wrote,
+  and the stack trace reads like a real bug. So while editing `src/**` or
+  `app/sidecar/**`, do not start new sessions in an open dev app. A packaged build
+  has no such coupling: its sidecar is one compiled binary under
+  `Resources/sidecar/` (`resolveSidecarLaunch` packaged branch).
 - Launching it is a **GUI action on the operator's machine** (§8): give them the
   command, don't run it yourself without authorization for that run. It steals
   focus and it is often already open with their live work.
