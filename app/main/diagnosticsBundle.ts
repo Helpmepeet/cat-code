@@ -190,11 +190,13 @@ export function buildDiagnosticsBundle({
       },
     },
     // Rollups included: when the per-frame files have rotated away, they may be
-    // the only remaining evidence that a process observed anything at all.
+    // the only remaining evidence that a process observed anything at all, and
+    // the same goes for the loss they carry. Excluding them from coverage let a
+    // bundle report no loss beside a retained rollup that asserted otherwise.
     processInstances: deriveProcessInstances(streams.operational, [...streams.deliveryTrace, ...streams.deliveryRollup]),
     recordingCoverage: deriveRecordingCoverage(
       streams.operational,
-      streams.deliveryTrace,
+      [...streams.deliveryTrace, ...streams.deliveryRollup],
       currentLaunchId,
       { sourceWindowTruncated, bundleLimitReached: bundleLimitReached || rollupLimitReached, sourceReadFailures, recordsRejected },
     ),
@@ -435,10 +437,37 @@ export function deriveRecordingCoverage(
     }
     launches.set(item.launchId, launch)
   }
+  // Both lanes describe the same losses from opposite ends, so they are combined
+  // per stream rather than summed: a rollup's `traceLossCount` is that stream's
+  // running total at the moment it was written, while each `trace.loss` record
+  // counts one batch of it. Taking the larger of the newest rollup's total and
+  // the sum of the stream's own loss records means neither lane can inflate the
+  // other, and the rollup still carries the whole count once its detailed
+  // records have rotated away, which is the lane's entire purpose. A loss no
+  // stream owns is added on its own, since no rollup ever counted it.
+  const lossByStream = new Map<string, { rollup: number; records: number }>()
   for (const record of traceRecords) {
+    const stream = typeof record.sessionId === 'string' && typeof record.streamEpoch === 'string'
+      ? `${record.sessionId}\u0000${record.streamEpoch}`
+      : null
     if (record.recordKind === 'trace.loss' && typeof record.droppedCount === 'number') {
-      deliveryTraceRecordsLost += record.droppedCount
+      if (stream === null) {
+        deliveryTraceRecordsLost += record.droppedCount
+        continue
+      }
+      const entry = lossByStream.get(stream) ?? { rollup: 0, records: 0 }
+      entry.records += record.droppedCount
+      lossByStream.set(stream, entry)
+    } else if (record.recordKind === 'trace.stream.rollup' && typeof record.traceLossCount === 'number' && stream !== null) {
+      const entry = lossByStream.get(stream) ?? { rollup: 0, records: 0 }
+      // Max, not last: the counter only ever grows, and the export's newest-first
+      // read order is not a guarantee across files.
+      entry.rollup = Math.max(entry.rollup, record.traceLossCount)
+      lossByStream.set(stream, entry)
     }
+  }
+  for (const entry of lossByStream.values()) {
+    deliveryTraceRecordsLost += Math.max(entry.rollup, entry.records)
   }
 
   const launchCoverage = [...launches.values()]
@@ -649,19 +678,34 @@ export function deriveProcessInstances(
       ? item.fields as Record<string, unknown>
       : {}
     const isExit = item.event === 'process.exited'
+    const timestamp = typeof item.timestamp === 'string' ? item.timestamp : null
+    // Records reach here newest-first, because the export reads each file's tail
+    // in reverse. Rebuilding the summary from the current record therefore let a
+    // process's own `process.started`, read second, overwrite the exit already
+    // seen: the row kept `status: 'exited'` but reported the start as its last
+    // observation and dropped the exit code that explained the death. Every
+    // field below is decided by comparison instead, so no arrival order fits it.
+    const isLatest = previous === undefined || previous.lastObservedAt === null ||
+      (timestamp !== null && timestamp > (previous.lastObservedAt as string))
+    const priorExit = previous && 'exitCode' in previous
+      ? { exitCode: previous.exitCode, signal: previous.signal, expected: previous.expected }
+      : null
+    const exit = isExit && (priorExit === null || isLatest)
+      ? {
+          exitCode: typeof fields.exitCode === 'number' ? fields.exitCode : null,
+          signal: typeof fields.signal === 'string' ? fields.signal : null,
+          expected: typeof fields.expected === 'boolean' ? fields.expected : null,
+        }
+      : priorExit
     processes.set(item.processInstanceId, {
       processInstanceId: item.processInstanceId,
       role: item.process,
-      pid: typeof item.pid === 'number' ? item.pid : 0,
+      pid: typeof item.pid === 'number' ? item.pid : previous?.pid ?? 0,
       startedAt: previous?.startedAt ?? (typeof item.processStartedAt === 'string' ? item.processStartedAt : null),
-      lastObservedAt: typeof item.timestamp === 'string' ? item.timestamp : null,
-      lastEvent: typeof item.event === 'string' ? item.event : 'unknown',
-      status: isExit ? 'exited' : previous?.status ?? 'observed',
-      ...(isExit ? {
-        exitCode: typeof fields.exitCode === 'number' ? fields.exitCode : null,
-        signal: typeof fields.signal === 'string' ? fields.signal : null,
-        expected: typeof fields.expected === 'boolean' ? fields.expected : null,
-      } : {}),
+      lastObservedAt: isLatest ? timestamp : previous?.lastObservedAt ?? null,
+      lastEvent: isLatest ? (typeof item.event === 'string' ? item.event : 'unknown') : previous?.lastEvent ?? 'unknown',
+      status: isExit || previous?.status === 'exited' ? 'exited' : previous?.status ?? 'observed',
+      ...(exit ?? {}),
     })
   }
   for (const record of traceRecords) {

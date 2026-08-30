@@ -808,7 +808,14 @@ async function backfillTranscriptCaches(): Promise<void> {
   transcriptBackfillStarted = true
   await registryLaunchSettled
   const h = host
-  if (!h) return
+  if (!h) {
+    // The last window closed while this awaited registry launch, before the
+    // abort controller below existed for `stopBackgroundDrivers()` to abort,
+    // and `window-all-closed` nulled `host`. Reset the latch so the next
+    // activate's window paint can retry, matching the abort-branch reset below.
+    transcriptBackfillStarted = false
+    return
+  }
 
   // Discovery must not synchronously parse + recursively secret-scan every
   // cache on Electron's main thread. One directory listing tells us which rows
@@ -1256,7 +1263,12 @@ const scheduleDebugStateExport = createDebouncedAction(
 
 const readinessLatch = createReadinessLatch(() => {
   process.stdout.write('[main] renderer ready\n')
-  logOperational('renderer.load.ready', 'info')
+  // F6 — `ready-to-show` already logs `renderer.load.ready` once per document
+  // before feeding this latch; logging it again here duplicated the event for
+  // every load (or was silently swallowed as `log.suppressed{rate_dedupe}` on
+  // a fast one). The stdout line above is this latch's real contract: every
+  // consumer (`packaged-launch-smoke.ts`, `harness-demo.ts`) reads that, not
+  // the operational record.
   scheduleDebugStateExport.schedule()
 })
 
@@ -1418,6 +1430,10 @@ function createWindow(): void {
   const startRendererHealthTimer = () => {
     stopRendererHealthTimer()
     rendererHealth.reset()
+    // F5 — the flight recorder is module-global across BrowserWindow
+    // generations; without this a closed window's evidence survives into the
+    // next one and can be flushed under a failure that isn't its own.
+    rendererHealthFlightRecorder.reset()
     rendererHealthTimer = setInterval(healthProbe, 5_000)
   }
   rendererGone = false

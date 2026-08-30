@@ -323,6 +323,35 @@ describe('renderer health flight recorder', () => {
     })
     expect(recorder.flush()).toEqual({ count: 1, samples: '0:7:-:-:7:h' })
   })
+
+  test('F5: reset drops readings from a closed BrowserWindow generation', () => {
+    // The recorder is module-global in main, but a BrowserWindow is not: a
+    // closed window's readings must not survive into the next one's flush,
+    // or a fresh renderer that fails before its first health response gets
+    // blamed for evidence it never produced.
+    let clock = 0
+    const recorder = createRendererHealthFlightRecorder({ now: () => clock })
+    recorder.record({
+      eventLoopLagMs: 4,
+      visible: true,
+      jsHeapUsedBytes: 200 * 1_048_576,
+      rendererWorkingSetKiB: 100 * 1_024,
+      rendersCommitted: 1,
+    })
+    clock = 5_000
+    recorder.record({
+      eventLoopLagMs: 5,
+      visible: true,
+      jsHeapUsedBytes: 201 * 1_048_576,
+      rendererWorkingSetKiB: 101 * 1_024,
+      rendersCommitted: 2,
+    })
+
+    recorder.reset()
+
+    clock = 10_000
+    expect(recorder.flush()).toBeNull()
+  })
 })
 
 test('selectRendererWorkingSetKiB returns only the responding renderer process measurement', () => {

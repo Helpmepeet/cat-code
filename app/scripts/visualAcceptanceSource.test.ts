@@ -31,6 +31,12 @@ test('the capture run never shows the window', () => {
   expect(main).toContain("if (process.env.CATCODE_HEADLESS_CAPTURE !== '1') {\n      window.show()\n    }")
   expect(main.match(/window\.show\(\)/g) ?? []).toHaveLength(1)
   expect(main).toContain("logOperational('renderer.load.ready', 'info')")
+  // F6 — the readiness latch used to log this same event a second time once
+  // the renderer's own `rendererReady()` call fired, giving one document two
+  // indistinguishable ready records (or a spurious rate_dedupe suppression).
+  // `ready-to-show` is the sole writer now.
+  expect(main.match(/logOperational\('renderer\.load\.ready', 'info'\)/g) ?? [])
+    .toHaveLength(1)
 
   const driver = code(new URL('./visual-acceptance-driver.ts', import.meta.url))
   // Fail rather than quietly photograph a raised window: a silent capture here

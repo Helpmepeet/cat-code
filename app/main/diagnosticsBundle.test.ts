@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildDiagnosticsBundle,
+  deriveProcessInstances,
   deriveRecordingCoverage,
   deriveStuckSessionSummaries,
   parseDeliveryTraceRecord,
@@ -330,6 +331,57 @@ test('a rollup reaches the bundle even when per-frame records fill the export bu
   expect(bundle.manifest.limits.deliveryRollup.totalBytes).toBeLessThan(bundle.manifest.limits.deliveryTrace.totalBytes)
 })
 
+const LOSS = {
+  schemaVersion: 1, recordKind: 'trace.loss', wallTimestamp: '2026-08-06T00:00:00.000Z',
+  monotonicTimestampMs: 1, launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
+  sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
+  sequenceStart: 1, sequenceEnd: 4, droppedCount: 4, reason: 'stream_evicted',
+}
+
+test('a surviving rollup is enough for the bundle to report observed loss', () => {
+  // Coverage saw only the detailed lane, so once the per-frame files rotated
+  // away the bundle reported no loss beside a rollup that asserted nine.
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-rollup-loss-'))
+  const logs = join(root, 'logs')
+  mkdirSync(logs)
+  writeFileSync(join(logs, 'delivery-rollup-launch-1.jsonl'), `${JSON.stringify({ ...ROLLUP, traceLossCount: 9 })}\n`)
+
+  const bundle = JSON.parse(buildDiagnosticsBundle({ logsDirectory: logs, appVersion: 'test', currentLaunchId: 'launch' }))
+  expect(bundle.streams.deliveryTrace).toEqual([])
+  expect(bundle.recordingCoverage).toMatchObject({
+    status: 'loss_observed',
+    lossObserved: true,
+    deliveryTraceRecordsLost: 9,
+  })
+})
+
+test('a rollup and the loss records it summarizes are not counted twice', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-rollup-loss-both-'))
+  const logs = join(root, 'logs')
+  mkdirSync(logs)
+  writeFileSync(join(logs, 'delivery-rollup-launch-1.jsonl'), `${JSON.stringify({ ...ROLLUP, traceLossCount: 9 })}\n`)
+  // The same nine, told from the other end: a rollup's count is cumulative for
+  // its stream, each loss record covers one batch of it.
+  writeFileSync(
+    join(logs, 'delivery-trace-launch-1.jsonl'),
+    `${JSON.stringify(LOSS)}\n${JSON.stringify({ ...LOSS, sequenceStart: 5, sequenceEnd: 9, droppedCount: 5 })}\n`,
+  )
+
+  const bundle = JSON.parse(buildDiagnosticsBundle({ logsDirectory: logs, appVersion: 'test', currentLaunchId: 'launch' }))
+  expect(bundle.streams.deliveryTrace).toHaveLength(2)
+  expect(bundle.recordingCoverage.deliveryTraceRecordsLost).toBe(9)
+
+  // A second stream is separate evidence and still adds, and so does a loss no
+  // stream owns: no rollup ever counted it.
+  const other = { ...ROLLUP, sessionId: 'other', traceLossCount: 2 }
+  const orphan = { recordKind: 'trace.loss', droppedCount: 4 }
+  expect(deriveRecordingCoverage(
+    [],
+    [{ ...ROLLUP, traceLossCount: 9 }, LOSS, other, orphan],
+    'launch',
+  ).deliveryTraceRecordsLost).toBe(15)
+})
+
 test('second-pass trace parser closes the quiescence record and its verdict', () => {
   const quiet = {
     schemaVersion: 1, recordKind: 'trace.stream.quiescent', wallTimestamp: '2026-08-06T00:00:00.000Z',
@@ -418,4 +470,30 @@ test('a host-only session title is not a downstream hole in an exported stuck su
       committed: 0,
     },
   })
+})
+
+test('an exited process keeps its exit whatever order its records arrive in', () => {
+  const started = {
+    version: 1, timestamp: '2026-08-06T00:00:00.000Z', level: 'info', event: 'process.started',
+    launchId: 'launch', process: 'worker', processInstanceId: 'worker', pid: 4242,
+    processStartedAt: '2026-08-06T00:00:00.000Z', fields: { role: 'catalog', pid: 4242 },
+  }
+  const exited = {
+    version: 1, timestamp: '2026-08-06T00:05:00.000Z', level: 'error', event: 'process.exited',
+    launchId: 'launch', process: 'worker', processInstanceId: 'worker', pid: 4242,
+    processStartedAt: '2026-08-06T00:00:00.000Z',
+    fields: { role: 'catalog', exitCode: 9, signal: 'SIGKILL', expected: false },
+  }
+  const timeline = {
+    processInstanceId: 'worker', role: 'worker', pid: 4242,
+    startedAt: '2026-08-06T00:00:00.000Z', lastObservedAt: '2026-08-06T00:05:00.000Z',
+    lastEvent: 'process.exited', status: 'exited', exitCode: 9, signal: 'SIGKILL', expected: false,
+  }
+  // Newest first is the order the export actually produces, since it reads each
+  // file's tail in reverse. Rebuilding the summary from the current record let
+  // the older start overwrite the exit that had already been seen, leaving a row
+  // that read 'exited' with no exit code and 'process.started' as its last event.
+  expect(deriveProcessInstances([exited, started], [])).toEqual([timeline])
+  // Oldest first proves the fix is order-independent rather than merely flipped.
+  expect(deriveProcessInstances([started, exited], [])).toEqual([timeline])
 })

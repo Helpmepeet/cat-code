@@ -286,6 +286,13 @@ export type RendererHealthFlightRecorder = {
    * twice, and what stops stale pre-recovery readings reaching a later record.
    */
   flush(): RendererHealthFlightRecorderFlush | null
+  /**
+   * Drop the ring without encoding it. The recorder is module-global in main
+   * but a BrowserWindow is not: without this, a closed window's readings
+   * survive into the next window generation and can be attributed to a
+   * renderer that never produced them.
+   */
+  reset(): void
 }
 
 /**
@@ -351,6 +358,9 @@ export function createRendererHealthFlightRecorder({
     record(reading: RendererHealthReading): void {
       ring.push({ at: now(), ...reading })
       if (ring.length > capacity) ring.shift()
+    },
+    reset(): void {
+      ring = []
     },
     flush(): RendererHealthFlightRecorderFlush | null {
       if (ring.length === 0) return null

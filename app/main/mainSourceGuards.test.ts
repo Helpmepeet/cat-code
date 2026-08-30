@@ -213,3 +213,25 @@ test('the control plane adds zero socket frame types (stays off the wire in v1)'
     ]).toContain(type)
   }
 })
+
+test('F2: a torn-down host after registry launch resets the transcript-backfill latch', () => {
+  // `backfillTranscriptCaches` latches `transcriptBackfillStarted = true`
+  // synchronously (needed so a second concurrent call cannot start a second
+  // pass) and only THEN awaits `registryLaunchSettled`. Its abort controller
+  // is not created/stored until after that await, so if the last window
+  // closes while it is still pending, `stopBackgroundDrivers()` has nothing
+  // to abort, and `window-all-closed` nulls `host`. Without a reset on this
+  // exact return path, the latch stays true for the life of the process and
+  // every later window paint's retry is turned away by the guard at the top
+  // of the function.
+  const backfill = region(
+    'const h = host',
+    '// Discovery must not synchronously parse',
+  )
+  const nullHostBranch = backfill.indexOf('if (!h)')
+  expect(nullHostBranch).toBeGreaterThanOrEqual(0)
+  const reset = backfill.indexOf('transcriptBackfillStarted = false')
+  const returnStatement = backfill.indexOf('return', nullHostBranch)
+  expect(reset).toBeGreaterThan(nullHostBranch)
+  expect(reset).toBeLessThan(returnStatement)
+})
