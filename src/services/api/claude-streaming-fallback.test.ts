@@ -197,6 +197,92 @@ describe('Codex partial-stream recovery', () => {
     expect(parseCodexPartialStreamFailure(errorMessage!.apiError)).toBeNull()
   })
 
+  test('the non-streaming fallback goes through the caller fetch, not around it', async () => {
+    // `executeNonStreamingRequest` takes a `fetchOverride` and forwards it, but
+    // neither fallback call site used to supply one, so a caller's fetch was
+    // honored for the streaming request and silently bypassed for the retry.
+    // The test above depends on this: its non-streaming branch is what proves
+    // no replay happened, and that branch was unreachable.
+    process.env.ANTHROPIC_API_KEY = 'test-api-key'
+    fixturesRoot = mkdtempSync(join(tmpdir(), 'cat-code-vcr-'))
+    process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT = fixturesRoot
+    macroState.MACRO = { VERSION: 'test-version' }
+    const dispatchedStreamFlags: boolean[] = []
+
+    const fetchOverride: typeof fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { stream?: boolean }
+      dispatchedStreamFlags.push(body.stream === true)
+      if (body.stream === true) {
+        // Fail BEFORE any visible output, which is the one shape that is still
+        // free to fall back.
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              controller.error(new Error('connection reset before any output'))
+            },
+          }),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'text/event-stream',
+              'request-id': 'req_stream',
+            },
+          },
+        )
+      }
+      return new Response(
+        JSON.stringify({
+          id: 'msg_fallback',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'answered by the fallback' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'request-id': 'req_fallback',
+          },
+        },
+      )
+    }
+
+    const events: unknown[] = []
+    for await (const event of queryModelWithStreaming({
+      messages: [createUserMessage({ content: 'hello' })],
+      systemPrompt: asSystemPrompt(['You are a test assistant.']),
+      thinkingConfig: { type: 'disabled' },
+      tools: [],
+      signal: new AbortController().signal,
+      options: {
+        getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+        model: 'claude-sonnet-4-6',
+        provider: 'firstParty',
+        isNonInteractiveSession: true,
+        querySource: 'compact',
+        agents: [],
+        hasAppendSystemPrompt: false,
+        fetchOverride,
+        mcpTools: [],
+      },
+    })) {
+      events.push(event)
+    }
+
+    // The retry reached the caller's fetch rather than the real endpoint.
+    expect(dispatchedStreamFlags).toEqual([true, false])
+    expect(JSON.stringify(events)).toContain('answered by the fallback')
+  })
+
   test('a typed interruption keeps its structured marker and its sealed text', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
     fixturesRoot = mkdtempSync(join(tmpdir(), 'cat-code-vcr-'))

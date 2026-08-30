@@ -2855,6 +2855,7 @@ async function* queryModel(
       const result = yield* executeNonStreamingRequest(
         {
           model: options.model,
+          fetchOverride: options.fetchOverride,
           source: options.querySource,
           codexLeaseOwnerId: options.agentId ?? getSessionId(),
           codexLeaseOwnerType: options.agentId ? 'subagent' : 'main',
@@ -2966,6 +2967,7 @@ async function* queryModel(
         const result = yield* executeNonStreamingRequest(
           {
             model: options.model,
+            fetchOverride: options.fetchOverride,
             source: options.querySource,
             codexLeaseOwnerId: options.agentId ?? getSessionId(),
             codexLeaseOwnerType: options.agentId ? 'subagent' : 'main',
