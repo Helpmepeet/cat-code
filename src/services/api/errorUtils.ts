@@ -360,11 +360,20 @@ function walkCauseChain<T>(
 export function isCodexPartialStreamReplaySkippedError(
   error: unknown,
 ): boolean {
-  return (
-    walkCauseChain(error, candidate =>
-      candidate.name === CODEX_PARTIAL_STREAM_ERROR_NAME ? true : null,
-    ) === true
-  )
+  // Deliberately NOT depth-capped. This is the gate that stops a replay of a
+  // request whose output the user already read; if a future SDK wraps deeper
+  // than the payload walk's limit, the gate must not silently stop firing.
+  // Cycle-safety comes from `seen`, not from the depth bound.
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  while (current instanceof Error && !seen.has(current)) {
+    if (current.name === CODEX_PARTIAL_STREAM_ERROR_NAME) {
+      return true
+    }
+    seen.add(current)
+    current = current.cause
+  }
+  return false
 }
 
 /**
@@ -410,6 +419,21 @@ export function parseCodexPartialStreamFailure(
     hadHostedWebSearch: candidate.hadHostedWebSearch,
     automaticContinuationEligible: candidate.automaticContinuationEligible,
   }
+}
+
+/**
+ * Finds the first error in the chain whose name is one of `names`. Used to
+ * recover a provider verdict (a quota cap, a revoked token) that a transport
+ * wrapper is carrying, so the wrapper decides replay while the verdict decides
+ * what the user is told.
+ */
+export function findErrorInChainByName(
+  error: unknown,
+  names: ReadonlySet<string>,
+): Error | null {
+  return walkCauseChain(error, candidate =>
+    names.has(candidate.name) ? candidate : null,
+  )
 }
 
 /**

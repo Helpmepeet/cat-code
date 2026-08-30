@@ -3575,6 +3575,10 @@ function streamingThinkingBlockIndex(
  * replayed transcript from before the engine emitted objects would silently
  * lose its retry notices. Codes map to the same copy the engine writes rather
  * than being printed: the code is an internal name, not something to show.
+ *
+ * TWIN: `RETRY_NOTICE_COPY` in `src/utils/messages/mappers.ts` is the engine's
+ * copy of this table, compile-enforced exhaustive over `SDKAssistantErrorCode`.
+ * This one cannot import it across the trust boundary; keep them in step.
  */
 const RETRY_NOTICE_COPY_BY_CODE: Record<string, string> = {
   rate_limit: 'Rate limited. Retrying.',

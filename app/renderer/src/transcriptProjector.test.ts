@@ -2126,6 +2126,25 @@ test('renders a retry notice whether the frame carries copy or a bare code', () 
     },
     { noticeType: 'api_retry', content: 'Rate limited. Retrying.' },
   ])
+
+  // The batch path is the one a replayed transcript actually takes, which is
+  // the case a bare code comes from. It shares the same helper, and nothing
+  // would notice if it stopped.
+  const batch = projectServerFrames(createTranscriptState(), [
+    ready('session-2'),
+    messageFrame('session-2', {
+      type: 'system',
+      subtype: 'api_retry',
+      attempt: 2,
+      max_retries: 10,
+      retry_delay_ms: 8000,
+      error: 'rate_limit',
+      uuid: '00000000-0000-4000-8000-0000000002d3',
+    } as unknown as SDKMessage),
+  ])
+  expect(selectTranscriptRows(batch, 'session-2')).toMatchObject([
+    { noticeType: 'api_retry', content: 'Rate limited. Retrying.' },
+  ])
 })
 
 test('replays the full S1 turn grammar end-to-end into a correct transcript', () => {

@@ -1687,6 +1687,7 @@ async function processCodexEvents(
   let inputTokens = 0
   let cachedInputTokens = 0
   let emittedVisibleOutput = false
+  let sawUserVisibleOutput = false
   let currentEvents = events
   let usingHttpFallback = false
   let transport: CodexStreamTransport = transportContext?.transport ?? 'http'
@@ -1705,11 +1706,20 @@ async function processCodexEvents(
   let hadToolCalls = false
   let hadHostedWebSearch = false
 
-  const noteVisibleOutput = () => {
+  const noteVisibleOutput = (options?: { userVisible?: boolean }) => {
     if (firstVisibleAtMs === null) {
       firstVisibleAtMs = Date.now()
     }
     emittedVisibleOutput = true
+    // `emittedVisibleOutput` means a frame left the adapter, which is what the
+    // cap/auth guards and the stream-surface record want. It is NOT the same
+    // question as "did the user see anything": the encrypted-reasoning carrier
+    // below emits an EMPTY thinking block purely to ferry a cache blob. Gating
+    // the replay refusal on that would strand a turn with a blank screen, so
+    // the refusal reads this flag instead.
+    if (options?.userVisible !== false) {
+      sawUserVisibleOutput = true
+    }
   }
 
   const relativeMs = (timestampMs: number | null | undefined): number | undefined => {
@@ -2053,6 +2063,9 @@ async function processCodexEvents(
                 // Close any open reasoning blocks so message text slots in
                 // at the correct ordinal position.
                 closeAllOpenReasoningBlocks()
+              } else if (item?.type === 'web_search_call') {
+                // Earliest structural sighting; see the in-flight arm below.
+                hadHostedWebSearch = true
               } else if (
                 item?.type === 'function_call' ||
                 item?.type === 'custom_tool_call'
@@ -2408,7 +2421,7 @@ async function processCodexEvents(
                     contentBlockIndex++
                     currentTextBlockStarted = false
                   }
-                  noteVisibleOutput()
+                  noteVisibleOutput({ userVisible: false })
                   controller.enqueue(
                     encoder.encode(
                       formatSSE('content_block_start', JSON.stringify({
@@ -2422,7 +2435,7 @@ async function processCodexEvents(
                       })),
                     ),
                   )
-                  noteVisibleOutput()
+                  noteVisibleOutput({ userVisible: false })
                   controller.enqueue(
                     encoder.encode(
                       formatSSE('content_block_stop', JSON.stringify({
@@ -2460,7 +2473,12 @@ async function processCodexEvents(
               eventType === 'response.web_search_call.searching' ||
               eventType === 'response.web_search_call.completed'
             ) {
-              // Handled via response.output_item.done.
+              // Block emission is handled via response.output_item.done, but the
+              // recovery flag has to be set at the EARLIEST sighting, the way
+              // `hadToolCalls` is. A stream that dies mid-search would otherwise
+              // report no hosted search at all and be judged continuable in
+              // exactly the state the flag exists to refuse.
+              hadHostedWebSearch = true
             }
       }
       break stream_loop
@@ -2478,7 +2496,7 @@ async function processCodexEvents(
       // non-streaming fallback — a replay of a request whose output the user
       // had already read, and whose surfaced tool call could run twice.
       const replaySkippedAfterVisibleOutput =
-        emittedVisibleOutput && !isCodexStreamAbortError(normalizedError)
+        sawUserVisibleOutput && !isCodexStreamAbortError(normalizedError)
 
       if (canFallbackToHttp) {
         logForDebugging(
@@ -2543,13 +2561,23 @@ async function processCodexEvents(
           currentTextBlockStarted = false
           sealedPartialText = true
         }
+        // Drain BEFORE the payload is built. `controller.error()` resets the
+        // queue, so until the reader has pulled it the seal is not delivered,
+        // and a payload claiming `sealedPartialText` for a chunk that never
+        // arrived would send the continuation an instruction to continue from
+        // a response that is not in its context. Unknown state fails closed.
+        const sealDelivered =
+          sealedPartialText || hadOpenReasoningBlock
+            ? await drainControllerQueue(controller)
+            : true
+        const sealedPartialTextDelivered = sealedPartialText && sealDelivered
         const failure: CodexPartialStreamFailureV1 = {
           version: 1,
           code: 'partial_stream_replay_skipped',
           provider: 'openai',
           transport: classification.transport,
           cause: classification.cause,
-          sealedPartialText,
+          sealedPartialText: sealedPartialTextDelivered,
           hadClientToolCall: hadToolCalls,
           openClientToolCalls: openToolCallBlocks.size,
           hadHostedWebSearch,
@@ -2557,13 +2585,17 @@ async function processCodexEvents(
             classification.transient &&
             !hadToolCalls &&
             openToolCallBlocks.size === 0 &&
-            !hadHostedWebSearch,
+            !hadHostedWebSearch &&
+            // A text block we could not confirm delivery of is lost text; a
+            // continuation would regenerate it, which is the duplication this
+            // whole path exists to prevent.
+            (!sealedPartialText || sealedPartialTextDelivered),
         }
         logForDebugging(
           `[codex-fetch] replay_skipped_visible_output=true conv=${requestCacheMetadata?.conversationId.slice(0, 8) ?? 'none'} ` +
           `error_name=${normalizedError.name} transport=${failure.transport} cause=${failure.cause} ` +
           `had_tool_calls=${hadToolCalls} open_tool_calls=${openToolCallBlocks.size} ` +
-          `sealed_partial_text=${sealedPartialText} hosted_web_search=${hadHostedWebSearch} ` +
+          `sealed_partial_text=${sealedPartialTextDelivered} hosted_web_search=${hadHostedWebSearch} ` +
           `eligible=${failure.automaticContinuationEligible}`,
           { level: 'warn' },
         )
@@ -2573,15 +2605,12 @@ async function processCodexEvents(
           websocket: failure.transport === 'websocket',
           idle_timeout: failure.cause === 'idle_timeout',
           provider_failure: failure.cause === 'provider_failure',
-          sealed_partial_text: sealedPartialText,
+          sealed_partial_text: sealedPartialTextDelivered,
           had_client_tool_call: hadToolCalls,
           open_client_tool_calls: openToolCallBlocks.size,
           hosted_web_search: hadHostedWebSearch,
           eligible: failure.automaticContinuationEligible,
         })
-        if (sealedPartialText || hadOpenReasoningBlock) {
-          await drainControllerQueue(controller)
-        }
         controller.error(
           createPartialStreamReplaySkippedError(
             normalizedError,
@@ -3363,11 +3392,16 @@ function createPartialStreamReplaySkippedError(
   const conversationSuffix = requestCacheMetadata
     ? ` Conversation ${requestCacheMetadata.conversationId.slice(0, 8)} will use HTTP fallback on the next turn.`
     : ''
-  return new CodexPartialStreamReplaySkippedError(
+  const wrapped = new CodexPartialStreamReplaySkippedError(
     `Stream interrupted after visible output started; the turn was not replayed to avoid duplicate output or tool calls.${conversationSuffix} ` +
     `Original error: ${error.message}`,
     failure,
   )
+  // The original stays reachable on the chain. A quota cap or a revoked token
+  // that lands after visible output is still a quota cap: it must not replay,
+  // but it must also not be described to the user as a dropped connection.
+  wrapped.cause = error
+  return wrapped
 }
 
 /**
@@ -3381,14 +3415,15 @@ function createPartialStreamReplaySkippedError(
  */
 async function drainControllerQueue(
   controller: ReadableStreamDefaultController,
-): Promise<void> {
+): Promise<boolean> {
   for (let attempt = 0; attempt < 50; attempt++) {
     const desiredSize = controller.desiredSize
     if (desiredSize === null || desiredSize > 0) {
-      return
+      return true
     }
     await new Promise(resolve => setTimeout(resolve, 1))
   }
+  return false
 }
 
 async function primeCodexEvents(

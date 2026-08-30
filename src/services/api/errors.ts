@@ -57,9 +57,20 @@ import { shouldProcessRateLimits } from '../rateLimitMocking.js' // Used for /mo
 import {
   extractConnectionErrorDetails,
   findCodexPartialStreamFailure,
+  findErrorInChainByName,
   formatAPIError,
   isCodexPartialStreamReplaySkippedError,
 } from './errorUtils.js'
+
+/**
+ * Account verdicts the Codex adapter may wrap in a transport interruption.
+ * Matched by name rather than by class so this stays free of an import cycle
+ * back into the adapter.
+ */
+const CODEX_ACCOUNT_VERDICT_ERROR_NAMES: ReadonlySet<string> = new Set([
+  'CodexAccountCapError',
+  'CodexAccountAuthError',
+])
 
 export const API_ERROR_MESSAGE_PREFIX = 'API Error'
 
@@ -520,14 +531,25 @@ function getAssistantMessageFromErrorInternal(
   // shown at all. A name-only marker still lands here and still refuses replay,
   // it just carries no continuation authority.
   if (isCodexPartialStreamReplaySkippedError(error)) {
+    // A provider verdict wrapped for replay safety is still that verdict. A
+    // usage cap or a revoked token that lands after visible output must not
+    // replay, but describing it as a dropped connection sends the user looking
+    // at their network instead of their account.
+    const accountVerdict = findErrorInChainByName(
+      error,
+      CODEX_ACCOUNT_VERDICT_ERROR_NAMES,
+    )
+    if (accountVerdict) {
+      return getAssistantMessageFromErrorInternal(accountVerdict, model, options)
+    }
     const failure = findCodexPartialStreamFailure(error)
-    return createAssistantAPIErrorMessage({
+    return createAssistantAPIErrorMessage(withTerminalFailure({
       content:
         `${API_ERROR_MESSAGE_PREFIX}: Connection interrupted after partial output. ` +
         `The request was not repeated because it may have already performed actions.`,
       apiError: failure ?? { code: 'partial_stream_replay_skipped' },
       error: 'unknown',
-    })
+    }))
   }
 
   // Check for SDK timeout errors

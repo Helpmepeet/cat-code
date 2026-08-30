@@ -263,10 +263,12 @@ const CODEX_PARTIAL_STREAM_RECOVERY_PROMPT =
  * desktop while the loop decides; the same reasoning as
  * `isWithheldMaxOutputTokens`.
  *
- * `provider` is checked here and not only at the adapter: the partial-message
- * strategy is Codex-specific, and an Anthropic thinking block with a missing
- * signature is exactly what the tombstoning below exists to keep out of a
- * follow-up request.
+ * The Codex-only rule is enforced by `parseCodexPartialStreamFailure`, which
+ * rejects any payload whose `provider` is not `openai`. The re-check below is
+ * a readability guard over an already-narrowed value, not the enforcement: the
+ * strategy is Codex-specific because an Anthropic thinking block with a missing
+ * signature is what the tombstoning above exists to keep out of a follow-up
+ * request.
  */
 function getEligibleCodexPartialStreamFailure(
   msg: Message | StreamEvent | undefined,

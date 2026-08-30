@@ -3,6 +3,7 @@ import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
+  CodexWebSocketUsageLimitError,
   clearWebSocketSession,
 } from './codex-websocket-transport.js'
 
@@ -2672,6 +2673,85 @@ describe('codex-fetch-adapter', () => {
     expect(failure!.transport).toBe('http')
     expect(failure!.cause).toBe('idle_timeout')
     expect(failure!.automaticContinuationEligible).toBe(true)
+  })
+
+  test('a search interrupted IN FLIGHT fails closed, not just a completed one', async () => {
+    // The flag used to be set only at `output_item.done`, so a stream that died
+    // mid-search reported no hosted search at all and was judged continuable in
+    // exactly the state the flag exists to refuse.
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'looking it up' }
+        yield { type: 'response.web_search_call.in_progress', output_index: 0 }
+        yield { type: 'response.web_search_call.searching', output_index: 0 }
+        throw new CodexWebSocketClosedBeforeCompletedError(1006, 'abnormal')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_search_inflight',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_search_inflight:gpt-5.6-luna',
+        conversationId: 'conv_seal_search_inflight',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.hadHostedWebSearch).toBe(true)
+    expect(failure!.automaticContinuationEligible).toBe(false)
+  })
+
+  test('an account verdict keeps its identity on the cause chain', async () => {
+    // Wrapping is what blocks the replay; the wrapped verdict is what the user
+    // needs to read. A usage cap described as a dropped connection sends them
+    // to their network instead of their account.
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'partial' }
+        throw new CodexWebSocketUsageLimitError('usage limit reached', 'usage_limit_reached')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_verdict',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_verdict:gpt-5.6-luna',
+        conversationId: 'conv_verdict',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    expect(isCodexPartialStreamReplaySkippedError(error)).toBe(true)
+    expect(partialStreamFailureOf(error)!.automaticContinuationEligible).toBe(false)
+    expect((error as Error).cause).toBeInstanceOf(CodexAccountCapError)
+  })
+
+  test('a signature-only reasoning carrier is not treated as something the user saw', async () => {
+    // The carrier emits an EMPTY thinking block to ferry a cache blob; the
+    // screen is still blank. Wrapping a break here would also block the
+    // provider-neutral non-streaming fallback in `claude.ts`, turning a turn
+    // that used to recover silently into a visible failure.
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield {
+          type: 'response.output_item.done',
+          output_index: 0,
+          item: { type: 'reasoning', encrypted_content: 'blob', summary: [] },
+        }
+        throw new CodexWebSocketClosedBeforeCompletedError(1006, 'abnormal')
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_carrier',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_carrier:gpt-5.6-luna',
+        conversationId: 'conv_carrier',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    expect(isCodexPartialStreamReplaySkippedError(error)).toBe(false)
+    expect((error as Error).name).toBe('CodexWebSocketClosedBeforeCompletedError')
   })
 
   test('a user abort after visible output stays an abort', async () => {

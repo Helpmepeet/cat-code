@@ -89,6 +89,11 @@ export function toInternalMessages(
  * Emitting the object form is what makes a retry visible at all, and the copy
  * has to be written for a person, since the code itself is an internal name
  * nobody should be shown.
+ *
+ * TWIN: `RETRY_NOTICE_COPY_BY_CODE` in `app/renderer/src/transcriptProjector.ts`
+ * maps the same codes for transcripts recorded before this form existed. The
+ * renderer cannot import engine modules, so the duplication is forced; keep the
+ * two in step or a replayed transcript reads differently from a live one.
  */
 const RETRY_NOTICE_COPY: Record<SDKAssistantErrorCode, string> = {
   rate_limit: 'Rate limited. Retrying.',
@@ -107,7 +112,7 @@ export function toSDKRetryError(code: SDKAssistantErrorCode): {
 } {
   return {
     type: 'assistant_error',
-    message: RETRY_NOTICE_COPY[code] ?? RETRY_NOTICE_COPY.unknown,
+    message: RETRY_NOTICE_COPY[code],
     error: code,
   }
 }
