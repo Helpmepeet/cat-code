@@ -75,7 +75,11 @@ afterEach(() => {
 function makeAccountsDomain(
   options: NonNullable<Parameters<typeof createSidecarAccountsDomain>[0]> = {},
 ) {
-  return createSidecarAccountsDomain({ reloadPool: async () => {}, ...options })
+  return createSidecarAccountsDomain({
+    reloadPool: async () => {},
+    reloadAnthropicPool: async () => {},
+    ...options,
+  })
 }
 
 describe('P4-5 read-seam — redaction (the security-critical core)', () => {
@@ -566,6 +570,66 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.result.ok).toBe(true)
     expect(out.poolChanged).toBe(true)
     expect(switched).toEqual(['claude-b'])
+  })
+
+  /*
+   * The Anthropic twin of the Codex re-read above. `getClaudePoolStatus()` is
+   * the same spawn-time process-local singleton, and the accounts page lists an
+   * account signed in from another window within the worker's 60 s re-read, so
+   * a switch aimed at that visible, clickable account was refused for this
+   * session's whole life.
+   */
+  test('an Anthropic switch against an account this process has not seen re-reads the vault once and then dispatches', async () => {
+    const known: ClaudePoolAccount = {
+      accountUuid: 'claude-a',
+      emailAddress: 'a@example.com',
+      accessToken: 'secret',
+      refreshToken: 'secret',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+    }
+    const signedInElsewhere: ClaudePoolAccount = {
+      accountUuid: 'claude-b',
+      emailAddress: 'b@example.com',
+      accessToken: 'secret',
+      refreshToken: 'secret',
+      expiresAt: 9_999_999_999,
+      status: 'healthy',
+    }
+    seedClaudeAccountPoolForTest({
+      accounts: [known],
+      activeAccountUuid: known.accountUuid,
+    })
+    let reloads = 0
+    const switched: string[] = []
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        switchAnthropic: async id => {
+          switched.push(id)
+          return { ok: true, message: 'ok' }
+        },
+      }),
+      // Stands in for another process having signed in `claude-b`.
+      reloadAnthropicPool: async () => {
+        reloads += 1
+        seedClaudeAccountPoolForTest({
+          accounts: [known, signedInElsewhere],
+          activeAccountUuid: known.accountUuid,
+        })
+      },
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'claude-cross-process',
+      accountId: 'claude-b',
+      provider: 'anthropic',
+    })
+
+    expect(out.result.ok).toBe(true)
+    expect(out.poolChanged).toBe(true)
+    expect(switched).toEqual(['claude-b'])
+    expect(reloads).toBe(1)
   })
 
   test('refreshUsage delegates to the executor and returns whether usage landed', async () => {

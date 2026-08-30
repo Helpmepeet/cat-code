@@ -60,6 +60,7 @@ import {
 } from '../../src/services/api/codexAccountPool.js'
 import {
   getClaudePoolStatus,
+  loadClaudePoolForObservation,
   switchToClaudeAccount,
   syncClaudeAccountToStorage,
   type ClaudePoolAccount,
@@ -618,6 +619,8 @@ export function createSidecarAccountsDomain(
      * for another process changing the vault.
      */
     reloadPool?: () => Promise<void>
+    /** The Anthropic twin of `reloadPool`; same disk-only observation load. */
+    reloadAnthropicPool?: () => Promise<void>
   } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
@@ -627,9 +630,17 @@ export function createSidecarAccountsDomain(
   const isFirstRunEligible =
     options.isFirstRunEligible ?? isSidecarFirstRunEligible
   const reloadPool = options.reloadPool ?? loadPoolForObservation
+  const reloadAnthropicPool =
+    options.reloadAnthropicPool ?? (async () => loadClaudePoolForObservation())
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
+  }
+
+  function resolveAnthropicAccount(
+    accountId: string,
+  ): ClaudePoolAccount | undefined {
+    return getClaudePoolStatus().accounts.find(a => a.accountUuid === accountId)
   }
 
   /**
@@ -657,6 +668,26 @@ export function createSidecarAccountsDomain(
       // Keep the last known pool; the caller reports the miss.
     }
     return resolveAccount(accountId)
+  }
+
+  /**
+   * The Anthropic twin of `resolveAccountForWrite`. The Claude pool singleton
+   * has the same spawn-time-only lifetime, and the accounts page lists an
+   * account signed in from another window within the accounts worker's 60 s
+   * re-read, so the same second look is needed to keep a visible account
+   * clickable. Disk-only observation load: no token refresh, no vault write.
+   */
+  async function resolveAnthropicAccountForWrite(
+    accountId: string,
+  ): Promise<ClaudePoolAccount | undefined> {
+    const known = resolveAnthropicAccount(accountId)
+    if (known) return known
+    try {
+      await reloadAnthropicPool()
+    } catch {
+      // Keep the last known pool; the caller reports the miss.
+    }
+    return resolveAnthropicAccount(accountId)
   }
 
   /* ── OAuth login controller (P4-15) ──────────────────────────────────────
@@ -863,9 +894,7 @@ export function createSidecarAccountsDomain(
       switch (verb.type) {
         case 'account.switch': {
           if (verb.provider === 'anthropic') {
-            const account = getClaudePoolStatus().accounts.find(
-              candidate => candidate.accountUuid === verb.accountId,
-            )
+            const account = await resolveAnthropicAccountForWrite(verb.accountId)
             if (!account) {
               return notFound('account.switch')
             }
