@@ -140,6 +140,13 @@ export const _forTest = {
       aggregate = previous
     }
   },
+  /** Drop cached snapshots so a test driving a fake clock cannot leak a
+   *  timestamp into whatever runs after it. */
+  clearCacheForTest(): void {
+    for (const range of Object.keys(statsMemoryCache) as UsageStatsRange[]) {
+      delete statsMemoryCache[range]
+    }
+  },
 }
 
 /**
@@ -169,7 +176,7 @@ export async function tryGetUsageStatsSnapshot(
     const statsRange: StatsDateRange = range === '30d' ? '30d' : '7d'
     const stats = await aggregate(statsRange)
     const snapshot = buildUsageStatsSnapshot(stats, range)
-    statsMemoryCache[range] = { snapshot, timestamp: now }
+    statsMemoryCache[range] = { snapshot, timestamp: Date.now() }
     return snapshot
   } catch {
     return null

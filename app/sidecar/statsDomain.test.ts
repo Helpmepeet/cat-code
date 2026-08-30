@@ -98,4 +98,53 @@ describe('statsDomain', () => {
       restore()
     }
   })
+
+  test('the cache TTL is stamped when the snapshot is stored, not when the call began', async () => {
+    // A transcript scan that outlasts the TTL used to expire the very entry it
+    // was still producing, so the cache went empty exactly on the large corpora
+    // it exists for.
+    const { _forTest } = await import('./statsDomain.js')
+    const emptyStats: ClaudeCodeStats = {
+      totalSessions: 0,
+      totalMessages: 0,
+      totalDays: 0,
+      activeDays: 0,
+      streaks: {
+        currentStreak: 0,
+        longestStreak: 0,
+        currentStreakStart: null,
+        longestStreakStart: null,
+        longestStreakEnd: null,
+      },
+      dailyActivity: [],
+      dailyModelTokens: [],
+      longestSession: null,
+      modelUsage: {},
+      firstSessionDate: null,
+      lastSessionDate: null,
+      peakActivityDay: null,
+      peakActivityHour: null,
+      totalSpeculationTimeSavedMs: 0,
+    }
+    const realNow = Date.now
+    let clock = 10_000_000_000_000
+    Date.now = () => clock
+    let aggregations = 0
+    const restore = _forTest.setAggregatorForTest(async () => {
+      aggregations += 1
+      clock += 6000 // the scan alone outlasts the 5s TTL
+      return emptyStats
+    })
+    try {
+      await tryGetUsageStatsSnapshot('30d', true)
+      expect(aggregations).toBe(1)
+      // Same instant the first call returned: still well inside the TTL.
+      await tryGetUsageStatsSnapshot('30d')
+      expect(aggregations).toBe(1)
+    } finally {
+      restore()
+      Date.now = realNow
+      _forTest.clearCacheForTest()
+    }
+  })
 })
