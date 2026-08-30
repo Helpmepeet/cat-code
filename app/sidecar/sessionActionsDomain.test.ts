@@ -5,8 +5,13 @@
  * createFork) is not re-proven here — the seam is the boundary these tests hold.
  */
 
-import { describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import type { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
+import type { LogOption, SerializedMessage } from '../../src/types/logs.js'
+import type { Message } from '../../src/types/message.js'
+import type { InterruptedTurnRecordV1 } from '../../src/utils/interruptedTurn.js'
 import {
+  createRealSessionActionsExecutor,
   createSidecarSessionActionsDomain,
   type SessionActionsExecutor,
 } from './sessionActionsDomain.js'
@@ -141,11 +146,11 @@ describe('sessionActionsDomain — export', () => {
     expect(result.message).toContain('no conversation')
   })
 
-  // A transcript that cannot be read is NOT an empty transcript. The loader
-  // (`src/utils/conversationRecovery.ts` `loadConversationForResume`) answers
-  // null when it resolves no conversation at all, and the export op forwards
-  // that null rather than rendering it as text. Reporting success with an empty
-  // pane is the failure this pins.
+  // A transcript that cannot be read is NOT an empty transcript. The read
+  // (`getLastSessionLog`, `src/utils/sessionStorage.ts:5219`) answers null when
+  // it resolves no conversation at all, and the export op forwards that null
+  // rather than rendering it as text. Reporting success with an empty pane is
+  // the failure this pins.
   test('an unloadable transcript fails instead of reporting an empty export', async () => {
     const { executor } = fakeExecutor({
       export: async () => null,
@@ -295,5 +300,191 @@ describe('sessionActionsDomain — tag (P4-29)', () => {
     expect(result.ok).toBe(true)
     expect(result.message).toBe('Tag removed.')
     expect(calls).toEqual(['tag:'])
+  })
+})
+
+/**
+ * Read-only session actions must not resume. `loadConversationForResume` is not
+ * a reader: it runs the user's own SessionStart hooks and appends their output
+ * to the messages, and it consumes the interrupted-turn record a later REAL
+ * resume needs (`src/utils/conversationRecovery.ts:705-726`). Export and
+ * targeted branch only need to READ, so they take the loader half of that
+ * function's own string-source branch and none of the tail.
+ *
+ * These tests exercise the REAL executor with the two side-effecting engine
+ * modules replaced by in-memory fakes — no session file, no vault, no user hook
+ * is ever reached. The assertions are the effects, not the call shape: the hook
+ * runner must never fire and the interrupted-turn record must still be there
+ * afterwards, while the export still renders the fixture transcript.
+ */
+
+const FIXTURE_SESSION_ID = '11111111-2222-4333-8444-555555555555'
+
+let sessionStartHookRuns = 0
+let storedInterruptedTurn: InterruptedTurnRecordV1 | null = null
+let storedLog: LogOption | null = null
+
+const realSessionStart = await import('../../src/utils/sessionStart.js')
+mock.module('../../src/utils/sessionStart.js', () => ({
+  ...realSessionStart,
+  processSessionStartHooks: async () => {
+    sessionStartHookRuns += 1
+    return []
+  },
+}))
+
+const realInterruptedTurn = await import('../../src/utils/interruptedTurn.js')
+mock.module('../../src/utils/interruptedTurn.js', () => ({
+  ...realInterruptedTurn,
+  readInterruptedTurnRecord: async () => storedInterruptedTurn,
+  takeInterruptedTurnRecord: async () => {
+    const record = storedInterruptedTurn
+    storedInterruptedTurn = null
+    return record
+  },
+  consumeInterruptedTurnRecord: async () => {
+    storedInterruptedTurn = null
+  },
+}))
+
+const realSessionStorage = await import('../../src/utils/sessionStorage.js')
+mock.module('../../src/utils/sessionStorage.js', () => ({
+  ...realSessionStorage,
+  getLastSessionLog: async () => storedLog,
+}))
+
+// The plain-text renderer mounts the terminal component tree, which never
+// settles without a TTY, so it is replaced by a recorder. What it RECEIVES is
+// the interesting half here anyway: those are the messages the read produced.
+let renderedMessages: Message[] | null = null
+const realExportRenderer = await import('../../src/utils/exportRenderer.js')
+mock.module('../../src/utils/exportRenderer.js', () => ({
+  ...realExportRenderer,
+  renderMessagesToPlainText: async (messages: Message[]) => {
+    renderedMessages = messages
+    return 'RENDERED'
+  },
+}))
+
+function fixtureLog(): LogOption {
+  const message: SerializedMessage = {
+    type: 'user',
+    uuid: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    timestamp: '2026-08-30T00:00:00.000Z',
+    message: { role: 'user', content: 'fixture transcript line' },
+    cwd: '/tmp/fixture-not-a-real-session',
+    userType: 'external',
+    sessionId: FIXTURE_SESSION_ID,
+    version: '0.0.0',
+  }
+  return {
+    date: '2026-08-30',
+    messages: [message],
+    value: 0,
+    created: new Date('2026-08-30T00:00:00.000Z'),
+    modified: new Date('2026-08-30T00:00:00.000Z'),
+    firstPrompt: 'fixture transcript line',
+    messageCount: 1,
+    isSidechain: false,
+    customTitle: '  Fixture conversation  ',
+  }
+}
+
+function fixtureInterruptedTurn(): InterruptedTurnRecordV1 {
+  return {
+    version: 1,
+    sessionId: FIXTURE_SESSION_ID,
+    leafUuid: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    partialOutput: 'half a sentence before the interruption',
+    partialOutputTruncated: false,
+    reason: 'user_abort',
+    capturedAt: 0,
+  }
+}
+
+/** A controller stub for the targeted-branch path only; export never touches it. */
+function forkOnlyController(
+  seen: { customTitle?: string },
+): AppSessionController {
+  return {
+    async forkBeforeUserMessage(targetUuid: string, customTitle?: string) {
+      seen.customTitle = customTitle
+      return {
+        sessionId: '99999999-8888-4777-8666-555555555555',
+        title: 'Fixture conversation',
+        forkPath: '/tmp/fixture-not-a-real-session/fork.jsonl',
+        serializedMessages: [],
+        contentReplacementRecords: [],
+        sourcePrompt: {
+          type: 'user',
+          uuid: targetUuid,
+          timestamp: '2026-08-30T00:00:00.000Z',
+          message: { role: 'user', content: 'fixture transcript line' },
+        },
+      }
+    },
+  } as unknown as AppSessionController
+}
+
+describe('sessionActionsDomain — read-only actions never resume', () => {
+  beforeEach(() => {
+    sessionStartHookRuns = 0
+    storedInterruptedTurn = fixtureInterruptedTurn()
+    storedLog = fixtureLog()
+    renderedMessages = null
+  })
+
+  test('export reads the transcript without running SessionStart hooks or consuming the interrupted turn', async () => {
+    const executor = createRealSessionActionsExecutor({
+      tools: [],
+      controller: forkOnlyController({}),
+    })
+
+    const exported = await executor.export()
+
+    // Not vacuous: the transcript really was read, and its content reached the
+    // renderer.
+    expect(exported).toBe('RENDERED')
+    expect(
+      (renderedMessages ?? []).some(
+        entry =>
+          entry.type === 'user' &&
+          entry.message.content === 'fixture transcript line',
+      ),
+    ).toBe(true)
+    // A later real resume still has its recovery record.
+    expect(storedInterruptedTurn).toEqual(fixtureInterruptedTurn())
+    // The user's own hooks are arbitrary shell, and their output used to be
+    // appended to the very messages this export renders.
+    expect(sessionStartHookRuns).toBe(0)
+  })
+
+  test('a transcript that cannot be resolved is still null, not an empty success', async () => {
+    storedLog = null
+    const executor = createRealSessionActionsExecutor({
+      tools: [],
+      controller: forkOnlyController({}),
+    })
+
+    expect(await executor.export()).toBeNull()
+    expect(sessionStartHookRuns).toBe(0)
+  })
+
+  test('targeted branch still carries the source custom title, with no hook run and the interrupted turn intact', async () => {
+    const seen: { customTitle?: string } = {}
+    const executor = createRealSessionActionsExecutor({
+      tools: [],
+      controller: forkOnlyController(seen),
+    })
+
+    const result = await executor.branchFromMessage(
+      'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+    )
+
+    expect(result.title).toBe('Fixture conversation')
+    // Trimmed, exactly as before — the title is the only thing this path read.
+    expect(seen.customTitle).toBe('Fixture conversation')
+    expect(storedInterruptedTurn).toEqual(fixtureInterruptedTurn())
+    expect(sessionStartHookRuns).toBe(0)
   })
 })

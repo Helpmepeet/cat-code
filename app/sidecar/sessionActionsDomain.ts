@@ -7,9 +7,10 @@
  *     custom-title write `/rename` (`src/commands/rename/rename.ts:53-57`) uses.
  *   - Export → `renderMessagesToPlainText` (`src/utils/exportRenderer.tsx:91`), the
  *     SAME plain-text renderer `/export` (`src/commands/export/export.tsx:49-55`)
- *     uses, over the transcript re-read from disk via `loadConversationForResume`
- *     (`src/utils/conversationRecovery.ts:469`, the loader the sidecar's resume
- *     uses) and the session's REAL `tools` (`getTools`, not `[]` — the P1-3 defect).
+ *     uses, over the transcript re-read from disk with the side-effect-free
+ *     `getLastSessionLog` → `loadFullLog` → `deserializeMessages` read (NOT
+ *     `loadConversationForResume`, which resumes — see `export` below) and the
+ *     session's REAL `tools` (`getTools`, not `[]` — the P1-3 defect).
  *   - Message-targeted Edit / Branch → the same live AppSessionController that
  *     owns turns, which delegates to QueryEngine's raw-message resolver.
  *   - Tag (P4-29) → `saveTag` (`src/utils/sessionStorage.ts:3257`), the SAME
@@ -41,11 +42,14 @@ import { createFork } from '../../src/commands/branch/branch.js'
 import type { ConversationForkResult } from '../../src/commands/branch/branch.js'
 import type { Tools } from '../../src/Tool.js'
 import type { Message, UserMessage } from '../../src/types/message.js'
-import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
+import { deserializeMessages } from '../../src/utils/conversationRecovery.js'
 import { renderMessagesToPlainText } from '../../src/utils/exportRenderer.js'
 import { recursivelySanitizeUnicode } from '../../src/utils/sanitization.js'
 import {
+  getLastSessionLog,
   getTranscriptPath,
+  isLiteLog,
+  loadFullLog,
   saveCustomTitle,
   saveTag,
 } from '../../src/utils/sessionStorage.js'
@@ -126,16 +130,30 @@ export function createRealSessionActionsExecutor(deps: {
       )
     },
     async export() {
-      // Re-read THIS session's persisted transcript → Message[] (the loader the
-      // sidecar resume uses), then render with the engine's OWN plain-text renderer
-      // and the session's REAL tools. Text-only: the engine has no md/json path.
-      // `loadConversationForResume` answers null when it resolved neither a log
-      // nor messages (`src/utils/conversationRecovery.ts` `if (!log && !messages)`).
-      // Coercing that to `[]` rendered a blank export as a success; forward the
-      // null so the domain can fail closed instead.
-      const loaded = await loadConversationForResume(getSessionId(), undefined)
-      if (!loaded) return null
-      return renderMessagesToPlainText(loaded.messages, deps.tools)
+      // Re-read THIS session's persisted transcript → Message[], then render with
+      // the engine's OWN plain-text renderer and the session's REAL tools.
+      // Text-only: the engine has no md/json path.
+      //
+      // Deliberately NOT `loadConversationForResume`, for the reason
+      // `contextBreakdownDomain` spells out: despite the name it is not a reader.
+      // It runs `processSessionStartHooks('resume')` — the user's own SessionStart
+      // hooks, arbitrary shell — and appends their output to the very messages
+      // this then renders, consumes the interrupted-turn record a later REAL
+      // resume needs, and copies plan + file history to disk
+      // (`src/utils/conversationRecovery.ts:692-726`). These three calls are the
+      // loader half of that function's own string-source branch (`:669-683`) with
+      // none of the tail.
+      //
+      // A session with nothing resolvable answers null, not `[]`: coercing that
+      // rendered a blank export as a success, so forward the null and let the
+      // domain fail closed.
+      const log = await getLastSessionLog(getSessionId() as UUID)
+      if (!log) return null
+      const full = isLiteLog(log) ? await loadFullLog(log) : log
+      return renderMessagesToPlainText(
+        deserializeMessages(full.messages),
+        deps.tools,
+      )
     },
     async branch() {
       return finalizeFork(await createFork())
@@ -147,7 +165,9 @@ export function createRealSessionActionsExecutor(deps: {
       return deps.controller.selectUserMessage(userMessageId)
     },
     async branchFromMessage(userMessageId) {
-      const source = await loadConversationForResume(getSessionId(), undefined)
+      // The custom title is the only thing this path reads, so it takes the same
+      // side-effect-free read as `export` above rather than the resume loader.
+      const source = await getLastSessionLog(getSessionId() as UUID)
       const sourceTitle = source?.customTitle?.trim() || undefined
       const fork = await deps.controller.forkBeforeUserMessage(
         userMessageId,
