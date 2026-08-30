@@ -297,10 +297,15 @@ function parseTranscriptFrame(
 }
 
 /**
- * The worker's `toSDKMessages` path emits only user, assistant, and compact
- * boundary history records. Validate the required shape of those variants on
+ * The worker's `toSDKMessages` path emits user, assistant, compact boundary and
+ * retry-notice history records. Validate the required shape of those variants on
  * main's side of the private boundary; a compromised or drifted worker cannot
  * persist a discriminant-only object that the renderer silently drops.
+ *
+ * Adding a variant here is not optional bookkeeping: `parseTranscriptBackfillResult`
+ * rejects the WHOLE session result on one unvalidatable frame, so a variant the
+ * worker emits and this does not admit costs that session its entire cached
+ * preview, not just the row.
  */
 function isBackfillSdkMessage(
   value: unknown,
@@ -341,6 +346,20 @@ function isBackfillSdkMessage(
     )
   }
 
+  if (value.type === 'system' && value.subtype === 'api_retry') {
+    const error = value.error
+    return (
+      isFiniteCount(value.attempt) &&
+      isFiniteCount(value.max_retries) &&
+      isFiniteCount(value.retry_delay_ms) &&
+      (value.error_status === null ||
+        (typeof value.error_status === 'number' &&
+          Number.isFinite(value.error_status))) &&
+      (typeof error === 'string' ||
+        (isRecord(error) && typeof error.message === 'string'))
+    )
+  }
+
   if (value.type === 'system' && value.subtype === 'compact_boundary') {
     if (!isRecord(value.compact_metadata)) return false
     const trigger = value.compact_metadata.trigger
@@ -369,6 +388,10 @@ function isBackfillSdkMessage(
   }
 
   return false
+}
+
+function isFiniteCount(value: unknown): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
 }
 
 const BACKFILL_CONTENT_BLOCK_TYPES = new Set([

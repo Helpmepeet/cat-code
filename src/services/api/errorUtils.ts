@@ -28,6 +28,40 @@ const SSL_ERROR_CODES = new Set([
   'ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC',
 ])
 
+const CAUSE_CHAIN_MAX_DEPTH = 5
+
+/**
+ * Walks an error's `cause` chain, bounded and cycle-safe. The SDK wraps
+ * transport errors, so neither the name nor the payload is reliably on the
+ * error the caller catches.
+ *
+ * The bound counts errors inspected, not links traversed: the error passed in
+ * is the first of `CAUSE_CHAIN_MAX_DEPTH`.
+ */
+function walkCauseChain<T>(
+  error: unknown,
+  visit: (candidate: Error) => T | null,
+): T | null {
+  let current: unknown = error
+  const seen = new Set<unknown>()
+  let depth = 0
+
+  while (current instanceof Error && depth < CAUSE_CHAIN_MAX_DEPTH) {
+    if (seen.has(current)) {
+      return null
+    }
+    const hit = visit(current)
+    if (hit !== null) {
+      return hit
+    }
+    seen.add(current)
+    current = current.cause
+    depth++
+  }
+
+  return null
+}
+
 export type ConnectionErrorDetails = {
   code: string
   message: string
@@ -38,48 +72,24 @@ export type ConnectionErrorDetails = {
  * Extracts connection error details from the error cause chain.
  * The Anthropic SDK wraps underlying errors in the `cause` property.
  * This function walks the cause chain to find the root error code/message.
+ *
+ * Anything that is not an `Error` ends the walk: a code is only trusted when
+ * it sits on a real error, so a plain object in the chain yields null rather
+ * than a code read off an arbitrary shape.
  */
 export function extractConnectionErrorDetails(
   error: unknown,
 ): ConnectionErrorDetails | null {
-  if (!error || typeof error !== 'object') {
-    return null
-  }
-
-  // Walk the cause chain to find the root error with a code
-  let current: unknown = error
-  const maxDepth = 5 // Prevent infinite loops
-  let depth = 0
-
-  while (current && depth < maxDepth) {
-    if (
-      current instanceof Error &&
-      'code' in current &&
-      typeof current.code === 'string'
-    ) {
-      const code = current.code
-      const isSSLError = SSL_ERROR_CODES.has(code)
-      return {
-        code,
-        message: current.message,
-        isSSLError,
-      }
+  return walkCauseChain(error, candidate => {
+    if (!('code' in candidate) || typeof candidate.code !== 'string') {
+      return null
     }
-
-    // Move to the next cause in the chain
-    if (
-      current instanceof Error &&
-      'cause' in current &&
-      current.cause !== current
-    ) {
-      current = current.cause
-      depth++
-    } else {
-      break
+    return {
+      code: candidate.code,
+      message: candidate.message,
+      isSSLError: SSL_ERROR_CODES.has(candidate.code),
     }
-  }
-
-  return null
+  })
 }
 
 /**
@@ -314,8 +324,6 @@ export class CodexPartialStreamReplaySkippedError extends Error {
   }
 }
 
-const CAUSE_CHAIN_MAX_DEPTH = 5
-
 const PARTIAL_STREAM_TRANSPORTS = new Set<string>(['websocket', 'http'])
 const PARTIAL_STREAM_CAUSES = new Set<string>([
   'closed',
@@ -323,35 +331,6 @@ const PARTIAL_STREAM_CAUSES = new Set<string>([
   'stream_error',
   'provider_failure',
 ])
-
-/**
- * Walks an error's `cause` chain, bounded and cycle-safe. The SDK wraps
- * transport errors, so neither the name nor the payload is reliably on the
- * error the caller catches.
- */
-function walkCauseChain<T>(
-  error: unknown,
-  visit: (candidate: Error) => T | null,
-): T | null {
-  let current: unknown = error
-  const seen = new Set<unknown>()
-  let depth = 0
-
-  while (current instanceof Error && depth < CAUSE_CHAIN_MAX_DEPTH) {
-    if (seen.has(current)) {
-      return null
-    }
-    const hit = visit(current)
-    if (hit !== null) {
-      return hit
-    }
-    seen.add(current)
-    current = current.cause
-    depth++
-  }
-
-  return null
-}
 
 /**
  * Name-only recognition. Enough to refuse a same-request replay, never enough

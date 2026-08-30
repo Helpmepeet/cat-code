@@ -1,3 +1,4 @@
+import type { APIError } from '@anthropic-ai/sdk'
 import type { BetaContentBlock } from '@anthropic-ai/sdk/resources/beta/messages/messages.mjs'
 import { randomUUID, type UUID } from 'crypto'
 import { getSessionId } from 'src/bootstrap/state.js'
@@ -5,6 +6,7 @@ import {
   LOCAL_COMMAND_STDERR_TAG,
   LOCAL_COMMAND_STDOUT_TAG,
 } from 'src/constants/xml.js'
+import { categorizeRetryableAPIError } from 'src/services/api/errors.js'
 import type {
   SDKAssistantErrorCode,
   SDKAssistantMessage,
@@ -20,6 +22,7 @@ import type {
   CompactMetadata,
   Message,
   MessageOrigin,
+  SystemMessage,
 } from 'src/types/message.js'
 import type { DeepImmutable } from 'src/types/utils.js'
 import stripAnsi from 'strip-ansi'
@@ -115,6 +118,30 @@ export function toSDKRetryError(code: SDKAssistantErrorCode): {
     message: RETRY_NOTICE_COPY[code],
     error: code,
   }
+}
+
+/**
+ * Fields the two retry-notice builders attach that `SystemMessage` does not
+ * declare (`createSystemAPIErrorMessage`,
+ * `createSystemTransportRecoveryMessage` in `../messages.ts`). A resumed
+ * transcript delivers them as replayed JSON, where `error` has already
+ * flattened to a plain object, so they are read by value rather than trusted.
+ */
+type RetryNoticeFields = {
+  retryAttempt?: unknown
+  maxRetries?: unknown
+  retryInMs?: unknown
+  error?: APIError
+  attempt?: unknown
+  maxAttempts?: unknown
+}
+
+function readRetryNoticeFields(message: SystemMessage): RetryNoticeFields {
+  return message as RetryNoticeFields
+}
+
+function retryNumber(value: unknown): number | undefined {
+  return typeof value === 'number' ? value : undefined
 }
 
 type SDKCompactMetadata = SDKCompactBoundaryMessage['compact_metadata']
@@ -279,6 +306,67 @@ export function toSDKMessages(messages: Message[]): SDKMessage[] {
               session_id: getSessionId(),
               uuid: message.uuid,
               compact_metadata: toSDKCompactMetadata(message.compactMetadata),
+            },
+          ]
+        }
+        // Both retry subtypes leave the engine as one `api_retry` frame
+        // (QueryEngine's live yields). Emitting them here too is what makes a
+        // resumed or backfilled transcript show the retries the live one
+        // showed; a frame that differs from the live one would read as a
+        // different event, so the field mapping is kept identical.
+        if (message.subtype === 'api_error') {
+          const fields = readRetryNoticeFields(message)
+          const attempt = retryNumber(fields.retryAttempt)
+          const maxRetries = retryNumber(fields.maxRetries)
+          const retryInMs = retryNumber(fields.retryInMs)
+          if (
+            attempt === undefined ||
+            maxRetries === undefined ||
+            retryInMs === undefined ||
+            fields.error === undefined
+          ) {
+            return []
+          }
+          return [
+            {
+              type: 'system',
+              subtype: 'api_retry' as const,
+              attempt,
+              max_retries: maxRetries,
+              retry_delay_ms: retryInMs,
+              error_status: fields.error.status ?? null,
+              error: toSDKRetryError(categorizeRetryableAPIError(fields.error)),
+              session_id: getSessionId(),
+              uuid: message.uuid,
+            },
+          ]
+        }
+        if (message.subtype === 'transport_recovery') {
+          const fields = readRetryNoticeFields(message)
+          const attempt = retryNumber(fields.attempt)
+          const maxAttempts = retryNumber(fields.maxAttempts)
+          if (
+            attempt === undefined ||
+            maxAttempts === undefined ||
+            message.content === undefined
+          ) {
+            return []
+          }
+          return [
+            {
+              type: 'system',
+              subtype: 'api_retry' as const,
+              attempt,
+              max_retries: maxAttempts,
+              retry_delay_ms: 0,
+              error_status: null,
+              error: {
+                type: 'assistant_error' as const,
+                message: message.content,
+                error: 'connection_error',
+              },
+              session_id: getSessionId(),
+              uuid: message.uuid,
             },
           ]
         }

@@ -1,3 +1,4 @@
+import { APIError } from '@anthropic-ai/sdk'
 import { describe, expect, test } from 'bun:test'
 import type {
   CompactMetadata,
@@ -12,6 +13,8 @@ import {
 import {
   createAssistantAPIErrorMessage,
   createAssistantMessage,
+  createSystemAPIErrorMessage,
+  createSystemTransportRecoveryMessage,
   NO_RESPONSE_REQUESTED,
 } from '../messages.js'
 
@@ -151,6 +154,124 @@ describe('toSDKMessages hides internal no-response sentinels', () => {
     expect(JSON.stringify(toSDKMessages([genuine]))).toContain(
       NO_RESPONSE_REQUESTED,
     )
+  })
+})
+
+/**
+ * A resumed or backfilled transcript reaches a reader through `toSDKMessages`,
+ * and both retry subtypes returned `[]` here while the live path
+ * (`src/QueryEngine.ts`) yielded them as `api_retry`. So every retry notice a
+ * session showed vanished the moment it was reopened.
+ */
+describe('toSDKMessages carries retry notices', () => {
+  test('a provider retry projects as the live api_retry frame', () => {
+    const message = createSystemAPIErrorMessage(
+      new APIError(429, undefined, 'Too Many Requests', new Headers()),
+      519,
+      1,
+      5,
+    )
+
+    expect(toSDKMessages([message])).toEqual([
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 5,
+        retry_delay_ms: 519,
+        error_status: 429,
+        error: {
+          type: 'assistant_error',
+          message: 'Rate limited. Retrying.',
+          error: 'rate_limit',
+        },
+        session_id: expect.any(String),
+        uuid: message.uuid,
+      },
+    ])
+  })
+
+  test('the same retry read back off disk projects the identical frame', () => {
+    const live = createSystemAPIErrorMessage(
+      new APIError(429, undefined, 'Too Many Requests', new Headers()),
+      519.39,
+      1,
+      5,
+    )
+    const stored = JSON.parse(JSON.stringify(live))
+
+    expect(toSDKMessages([live])).toHaveLength(1)
+    expect(toSDKMessages([stored])).toEqual(toSDKMessages([live]))
+  })
+
+  test('a retry whose error did not survive the write still shows a notice', () => {
+    // Transcripts on disk carry records whose `error` flattened to `{}`. The
+    // classification degrades to `unknown`, but the notice must still carry
+    // `error.message`: a bare code reaches a reader only through a legacy
+    // fallback table.
+    const stored = {
+      type: 'system' as const,
+      subtype: 'api_error',
+      level: 'error' as const,
+      error: {},
+      retryInMs: 519.3911658844377,
+      retryAttempt: 1,
+      maxRetries: 5,
+      timestamp: '2026-08-24T03:41:14.325Z',
+      uuid: '6a675399-c249-482e-bd38-50f3a9d29d73',
+    }
+
+    expect(toSDKMessages([stored])).toMatchObject([
+      {
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 5,
+        retry_delay_ms: 519.3911658844377,
+        error_status: null,
+        error: {
+          type: 'assistant_error',
+          message: 'The request failed. Retrying.',
+          error: 'unknown',
+        },
+      },
+    ])
+  })
+
+  test('a recovered transport interruption projects with its own words', () => {
+    const message = createSystemTransportRecoveryMessage(
+      'The connection dropped. Continuing.',
+      2,
+      3,
+    )
+
+    expect(toSDKMessages([message])).toEqual([
+      {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 2,
+        max_retries: 3,
+        retry_delay_ms: 0,
+        error_status: null,
+        error: {
+          type: 'assistant_error',
+          message: 'The connection dropped. Continuing.',
+          error: 'connection_error',
+        },
+        session_id: expect.any(String),
+        uuid: message.uuid,
+      },
+    ])
+  })
+
+  test('a retry record missing its counters is dropped, never half-emitted', () => {
+    const incomplete = {
+      type: 'system' as const,
+      subtype: 'api_error',
+      uuid: '00000000-0000-4000-8000-0000000000r1',
+      timestamp: '2026-08-24T03:41:14.325Z',
+    }
+
+    expect(toSDKMessages([incomplete])).toEqual([])
   })
 })
 

@@ -110,7 +110,10 @@ import {
   buildProviderInstructionAssembly,
   type OpenAIInstructionAssembly,
 } from './instructionAssembly.js'
-import { isCodexPartialStreamReplaySkippedError } from './errorUtils.js'
+import {
+  CodexPartialStreamReplaySkippedError,
+  isCodexPartialStreamReplaySkippedError,
+} from './errorUtils.js'
 
 // Non-streaming requests have a 10min max per the docs:
 // https://platform.claude.com/docs/en/api/errors#long-requests
@@ -2594,6 +2597,35 @@ async function* queryModel(
         // Prevent double-emit: this throw lands in the catch block below,
         // whose exit_path='error' probe guards on streamWatchdogFiredAt.
         streamWatchdogFiredAt = null
+        // The watchdog cancels by aborting the request controller, and the SDK
+        // SWALLOWS controller aborts (`fromSSEResponse` returns on an abort
+        // error), so the loop exits cleanly and whatever the provider was about
+        // to raise is lost. When the provider adapter was mid-failure that
+        // includes its replay-skip marker, and without it a turn whose output
+        // the user has already read falls through to the non-streaming
+        // fallback and is re-sent. Reproduced with the watchdog at 60ms against
+        // an adapter failure at 200ms. Racing to preserve the marker is not
+        // available here, so refuse the replay on what we can still see: output
+        // escaped, therefore this turn is not repeatable.
+        if (firstVisibleOutputLogged) {
+          throw new CodexPartialStreamReplaySkippedError(
+            'Stream idle timeout after visible output; the turn was not replayed to avoid duplicate output or tool calls.',
+            {
+              version: 1,
+              code: 'partial_stream_replay_skipped',
+              provider: 'openai',
+              transport: 'http',
+              cause: 'idle_timeout',
+              // The watchdog abort destroyed the adapter's own account of what
+              // escaped, so nothing here may authorize a continuation.
+              sealedPartialText: false,
+              hadClientToolCall: false,
+              openClientToolCalls: 0,
+              hadHostedWebSearch: false,
+              automaticContinuationEligible: false,
+            },
+          )
+        }
         throw new Error('Stream idle timeout - no chunks received')
       }
 

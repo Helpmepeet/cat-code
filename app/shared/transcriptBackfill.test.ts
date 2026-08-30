@@ -48,6 +48,58 @@ function eventFrame(
   }
 }
 
+function retryNoticeFrame(engineSessionId = ENGINE_ID): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: APP_ID,
+    replay: true,
+    event: {
+      type: 'message',
+      message: {
+        type: 'system',
+        subtype: 'api_retry',
+        attempt: 1,
+        max_retries: 2,
+        retry_delay_ms: 0,
+        error_status: null,
+        error: {
+          type: 'assistant_error',
+          message: 'Connection interrupted. Continuing automatically.',
+          error: 'connection_error',
+        },
+        session_id: engineSessionId,
+        uuid: '55555555-5555-4555-8555-555555555555',
+      },
+    } as never,
+  }
+}
+
+test('a retry notice validates, and a malformed one costs only itself the session', () => {
+  // The worker emits these now. This gate rejecting one would not drop the row,
+  // it would reject the whole session result and cost that session its cached
+  // preview, so the variant has to be admitted here and shaped strictly.
+  const valid: TranscriptBackfillSessionResult = {
+    type: 'session',
+    appSessionId: APP_ID,
+    engineSessionId: ENGINE_ID,
+    frames: [retryNoticeFrame(), eventFrame()],
+    runFacts: NO_RUN_FACTS,
+  }
+  expect(parseTranscriptBackfillResult(valid)).toEqual(valid)
+
+  const malformed = retryNoticeFrame() as unknown as {
+    event: { message: Record<string, unknown> }
+  }
+  malformed.event.message.attempt = -1
+  expect(
+    parseTranscriptBackfillResult({
+      ...valid,
+      frames: [malformed as unknown as ServerFrame],
+    }),
+  ).toBeNull()
+})
+
 test('backfill request accepts only a bounded strict manifest with matching transcript basename', () => {
   const request: TranscriptBackfillRequest = {
     version: TRANSCRIPT_BACKFILL_BOUNDARY_VERSION,

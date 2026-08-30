@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import {
   CODEX_PARTIAL_STREAM_ERROR_NAME,
   CodexPartialStreamReplaySkippedError,
+  extractConnectionErrorDetails,
   findCodexPartialStreamFailure,
   findErrorInChainByName,
   isCodexPartialStreamReplaySkippedError,
@@ -31,6 +32,18 @@ function wrap(depth: number, inner: Error): Error {
     current = outer
   }
   return current
+}
+
+function coded(message: string, code: string): Error {
+  const error = new Error(message)
+  ;(error as Error & { code?: string }).code = code
+  return error
+}
+
+function named(name: string): Error {
+  const error = new Error(name)
+  error.name = name
+  return error
 }
 
 describe('parseCodexPartialStreamFailure', () => {
@@ -81,6 +94,9 @@ describe('cause-chain recognition', () => {
     expect(isCodexPartialStreamReplaySkippedError(a)).toBe(false)
     expect(findCodexPartialStreamFailure(a)).toBeNull()
     expect(findErrorInChainByName(a, new Set(['nope']))).toBeNull()
+    // Same chain, the other walker: the uncapped name gate and the bounded
+    // payload walk both have to survive a cycle.
+    expect(extractConnectionErrorDetails(a)).toBeNull()
   })
 
   test('a name-only marker blocks replay but authorizes nothing', () => {
@@ -88,6 +104,22 @@ describe('cause-chain recognition', () => {
     nameOnly.name = CODEX_PARTIAL_STREAM_ERROR_NAME
     expect(isCodexPartialStreamReplaySkippedError(nameOnly)).toBe(true)
     expect(findCodexPartialStreamFailure(nameOnly)).toBeNull()
+  })
+
+  test('the bounded walk counts errors inspected, not links traversed', () => {
+    // Both walkers share one bound, so this pins where it falls: the error
+    // handed in is the first of five, leaving four wrappers of headroom.
+    const atLimit = wrap(4, coded('root', 'ECONNRESET'))
+    expect(extractConnectionErrorDetails(atLimit)?.code).toBe('ECONNRESET')
+    expect(
+      findErrorInChainByName(wrap(4, named('Verdict')), new Set(['Verdict'])),
+    ).not.toBeNull()
+
+    const pastLimit = wrap(5, coded('root', 'ECONNRESET'))
+    expect(extractConnectionErrorDetails(pastLimit)).toBeNull()
+    expect(
+      findErrorInChainByName(wrap(5, named('Verdict')), new Set(['Verdict'])),
+    ).toBeNull()
   })
 
   test('finds the payload and a wrapped verdict through the chain', () => {
@@ -100,5 +132,45 @@ describe('cause-chain recognition', () => {
     expect(
       findErrorInChainByName(marker, new Set(['CodexAccountCapError']))?.name,
     ).toBe('CodexAccountCapError')
+  })
+})
+
+describe('extractConnectionErrorDetails', () => {
+  test('reports the wrapped code and whether it is a TLS failure', () => {
+    expect(
+      extractConnectionErrorDetails(wrap(2, coded('handshake', 'CERT_HAS_EXPIRED'))),
+    ).toEqual({
+      code: 'CERT_HAS_EXPIRED',
+      message: 'handshake',
+      isSSLError: true,
+    })
+    expect(extractConnectionErrorDetails(coded('reset', 'ECONNRESET'))).toEqual({
+      code: 'ECONNRESET',
+      message: 'reset',
+      isSSLError: false,
+    })
+  })
+
+  test('a code on a non-Error object is not a connection error', () => {
+    // A code is only trusted on a real error: a deserialized transcript shape
+    // or an SDK response body can carry a `code` field that means something
+    // else entirely, and the walk must not read it as a transport failure.
+    expect(
+      extractConnectionErrorDetails({
+        code: 'CERT_HAS_EXPIRED',
+        message: 'not an error',
+      }),
+    ).toBeNull()
+
+    const wrapper = new Error('outer')
+    wrapper.cause = { code: 'ECONNRESET', message: 'not an error' }
+    expect(extractConnectionErrorDetails(wrapper)).toBeNull()
+  })
+
+  test('returns null for values with no chain to walk', () => {
+    expect(extractConnectionErrorDetails(null)).toBeNull()
+    expect(extractConnectionErrorDetails(undefined)).toBeNull()
+    expect(extractConnectionErrorDetails('ECONNRESET')).toBeNull()
+    expect(extractConnectionErrorDetails(new Error('no code'))).toBeNull()
   })
 })
