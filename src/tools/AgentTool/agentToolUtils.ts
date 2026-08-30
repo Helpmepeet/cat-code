@@ -624,6 +624,28 @@ function collectChangedFiles(messages: MessageType[]): {
   }
 }
 
+/**
+ * Returns the failure text for a run that exhausted its turn budget, or
+ * undefined if it did not. Narrows at runtime: AttachmentMessage.attachment is
+ * typed `unknown`, so the shape is checked rather than asserted.
+ */
+function findMaxTurnsReached(agentMessages: MessageType[]): string | undefined {
+  for (const message of agentMessages) {
+    if (message?.type !== 'attachment') continue
+    const attachment = message.attachment
+    if (
+      typeof attachment !== 'object' ||
+      attachment === null ||
+      (attachment as { type?: unknown }).type !== 'max_turns_reached'
+    ) {
+      continue
+    }
+    const maxTurns = (attachment as { maxTurns?: unknown }).maxTurns
+    return `Reached maximum number of turns (${typeof maxTurns === 'number' ? maxTurns : 'unknown'})`
+  }
+  return undefined
+}
+
 export function finalizeAgentTool(
   agentMessages: MessageType[],
   agentId: string,
@@ -673,6 +695,15 @@ export function finalizeAgentTool(
   const apiErrorText = isApiErrorTerminal
     ? extractTextContent(lastAssistantMessage.message.content, '\n')
     : undefined
+
+  // A run that burned its turn budget stopped short of its objective, so it is
+  // a failure even though the last assistant message looks ordinary. query.ts
+  // signals this with a max_turns_reached attachment; QueryEngine.ts turns the
+  // same signal into subtype:'error_max_turns'. Reported as `error` (the only
+  // failure discriminator callers have) while keeping the partial text as
+  // content, so the parent still sees how far the agent got.
+  const maxTurnsText = findMaxTurnsReached(agentMessages)
+  const terminalError = apiErrorText ?? maxTurnsText
 
   // Extract text content from the agent's response. If the final assistant
   // message is a pure tool_use block (loop exited mid-turn), fall back to
@@ -755,7 +786,7 @@ export function finalizeAgentTool(
     changedFiles,
     ...(changedFilesTruncated !== undefined ? { changedFilesTruncated } : {}),
     content,
-    ...(apiErrorText !== undefined ? { error: apiErrorText } : {}),
+    ...(terminalError !== undefined ? { error: terminalError } : {}),
     totalDurationMs: Date.now() - startTime,
     totalTokens,
     totalToolUseCount,

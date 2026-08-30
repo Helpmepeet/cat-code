@@ -109,6 +109,7 @@ import { type AgentDefinition, isBuiltInAgent } from './loadAgentsDir.js'
 async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
+  registerCleanup?: (cleanup: () => Promise<void>) => void,
 ): Promise<{
   clients: MCPServerConnection[]
   tools: Tools
@@ -145,6 +146,30 @@ async function initializeAgentMcpServers(
   // Only newly created clients should be cleaned up when the agent finishes
   const newlyCreatedClients: MCPServerConnection[] = []
   const agentTools: Tool[] = []
+
+  // Create cleanup function for agent-specific servers
+  // Only clean up newly created clients (inline definitions), not shared/referenced ones
+  // Shared clients (referenced by string name) are memoized and used by the parent context
+  const cleanup = async () => {
+    for (const client of newlyCreatedClients) {
+      if (client.type === 'connected') {
+        try {
+          await client.cleanup()
+        } catch (error) {
+          logForDebugging(
+            `[Agent: ${agentDefinition.agentType}] Error cleaning up MCP server '${client.name}': ${error}`,
+            { level: 'warn' },
+          )
+        }
+      }
+    }
+  }
+
+  // Hand the caller its cleanup handle before the first connect. A rejecting
+  // connectToServer part-way through the loop throws out of this function, so
+  // returning the handle at the end is too late to close the clients that did
+  // connect.
+  registerCleanup?.(cleanup)
 
   for (const spec of agentDefinition.mcpServers) {
     let config: ScopedMcpServerConfig | null = null
@@ -205,24 +230,6 @@ async function initializeAgentMcpServers(
     }
   }
 
-  // Create cleanup function for agent-specific servers
-  // Only clean up newly created clients (inline definitions), not shared/referenced ones
-  // Shared clients (referenced by string name) are memoized and used by the parent context
-  const cleanup = async () => {
-    for (const client of newlyCreatedClients) {
-      if (client.type === 'connected') {
-        try {
-          await client.cleanup()
-        } catch (error) {
-          logForDebugging(
-            `[Agent: ${agentDefinition.agentType}] Error cleaning up MCP server '${client.name}': ${error}`,
-            { level: 'warn' },
-          )
-        }
-      }
-    }
-  }
-
   // Return merged clients (parent + agent-specific) and agent tools
   return {
     clients: [...parentClients, ...agentClients],
@@ -259,7 +266,41 @@ function isRecordableMessage(
   )
 }
 
-export async function* runAgent({
+type SetupCleanup = () => void | Promise<void>
+
+/**
+ * Cleanup scope for the resources acquired before the query loop's own
+ * try/finally: the worker-name reservation, the Perfetto trace entry, the
+ * transcript subdir mapping, the agent's frontmatter hooks, and any MCP clients
+ * it connected. Setup between those acquisitions and the loop can throw (an
+ * unreadable frontmatter skill, a rejecting MCP connect), and that throw skips
+ * the loop's finally entirely — this one is what runs instead.
+ *
+ * Exactly-once is enforced by ownership, not by idempotent releases: the loop's
+ * finally empties this list before releasing anything, so whichever runs, only
+ * one of them releases.
+ */
+export async function* runAgent(
+  params: Parameters<typeof runAgentInCleanupScope>[0],
+): AsyncGenerator<Message, void> {
+  const setupCleanups: SetupCleanup[] = []
+  try {
+    yield* runAgentInCleanupScope(params, setupCleanups)
+  } finally {
+    for (const release of setupCleanups.splice(0)) {
+      try {
+        await release()
+      } catch (err) {
+        logForDebugging(
+          `Failed to release agent setup resource: ${errorMessage(err)}`,
+          { level: 'warn' },
+        )
+      }
+    }
+  }
+}
+
+async function* runAgentInCleanupScope({
   agentDefinition,
   promptMessages,
   toolUseContext,
@@ -371,7 +412,7 @@ export async function* runAgent({
    * during long single-block streams (e.g. thinking) where no assistant
    * message is yielded for >60s. */
   onQueryProgress?: () => void
-}): AsyncGenerator<Message, void> {
+}, setupCleanups: SetupCleanup[]): AsyncGenerator<Message, void> {
   // Track subagent usage for feature discovery
 
   const appState = toolUseContext.getAppState()
@@ -422,17 +463,22 @@ export async function* runAgent({
       allowGeneric: Boolean(sessionStateTracking),
     })
   const workerHandle = workerName ?? agentId
+  if (workerName) {
+    setupCleanups.push(() => releaseWorkerName(workerName))
+  }
 
   // Route this agent's transcript into a grouping subdirectory if requested
   // (e.g. workflow subagents write to subagents/workflows/<runId>/).
   if (transcriptSubdir) {
     setAgentTranscriptSubdir(agentId, transcriptSubdir)
+    setupCleanups.push(() => clearAgentTranscriptSubdir(agentId))
   }
 
   // Register agent in Perfetto trace for hierarchy visualization
   if (isPerfettoTracingEnabled()) {
     const parentId = toolUseContext.agentId ?? getSessionId()
     registerPerfettoAgent(agentId, agentDefinition.agentType, parentId)
+    setupCleanups.push(() => unregisterPerfettoAgent(agentId))
   }
 
   // Log API calls path for subagents (ant-only)
@@ -657,6 +703,7 @@ export async function* runAgent({
       `agent '${agentDefinition.agentType}'`,
       true, // isAgent - converts Stop to SubagentStop
     )
+    setupCleanups.push(() => clearSessionHooks(rootSetAppState, agentId))
   }
 
   // Preload skills from agent frontmatter
@@ -738,6 +785,7 @@ export async function* runAgent({
   } = await initializeAgentMcpServers(
     agentDefinition,
     toolUseContext.options.mcpClients,
+    cleanup => setupCleanups.push(cleanup),
   )
 
   // Merge agent MCP tools with resolved agent tools, deduplicating by name.
@@ -883,7 +931,9 @@ export async function* runAgent({
       // Yield attachment messages (e.g., structured_output) without recording them
       if (message.type === 'attachment') {
         // Handle max turns reached signal from query.ts
-        if (message.attachment.type === 'max_turns_reached') {
+        const reachedMaxTurns =
+          message.attachment.type === 'max_turns_reached'
+        if (reachedMaxTurns) {
           logForDebugging(
             `[Agent
 : $
@@ -896,9 +946,13 @@ export async function* runAgent({
 }
 )`,
           )
-          break
         }
+        // The max-turns attachment is yielded like any other rather than
+        // swallowed: it is the only record that the run was cut short, and
+        // finalizeAgentTool reads it to mark the result failed. Dropping it
+        // here made exhaustion look like a clean completion to every caller.
         yield message
+        if (reachedMaxTurns) break
         continue
       }
 
@@ -927,6 +981,9 @@ export async function* runAgent({
       agentDefinition.callback()
     }
   } finally {
+    // Reaching here means setup completed, so this block owns every pre-loop
+    // resource too. Disarm the setup scope first so the two never both release.
+    setupCleanups.length = 0
     // Clean up agent-specific MCP servers (runs on normal completion, abort, or error)
     await mcpCleanup()
     // Clean up agent's session hooks
@@ -974,7 +1031,8 @@ export async function* runAgent({
 }
 
 /**
- * Filters out assistant messages with incomplete tool calls (tool uses without results).
+ * Filters out assistant messages with incomplete tool calls (tool uses without
+ * results), along with the tool_result blocks that paired with them.
  * This prevents API errors when sending messages with orphaned tool calls.
  */
 export function filterIncompleteToolCalls(messages: Message[]): Message[] {
@@ -995,26 +1053,72 @@ export function filterIncompleteToolCalls(messages: Message[]): Message[] {
     }
   }
 
-  // Filter out assistant messages that contain tool calls without results
-  return messages.filter(message => {
-    if (message?.type === 'assistant') {
-      const assistantMessage = message as AssistantMessage
-      const content = assistantMessage.message.content
-      if (Array.isArray(content)) {
-        // Check if this assistant message has any tool uses without results
-        const hasIncompleteToolCall = content.some(
-          block =>
-            block.type === 'tool_use' &&
-            block.id &&
-            !toolUseIdsWithResults.has(block.id),
-        )
-        // Exclude messages with incomplete tool calls
-        return !hasIncompleteToolCall
+  // Find the assistant messages to exclude, and collect every tool_use ID they
+  // carry — not just the unpaired ones. An interrupted turn yields results for
+  // the calls that finished before the interrupt, so dropping the whole
+  // assistant message strands those results with nothing to pair against.
+  const droppedAssistants = new Set<Message>()
+  const strandedToolUseIds = new Set<string>()
+
+  for (const message of messages) {
+    if (message?.type !== 'assistant') continue
+    const content = (message as AssistantMessage).message.content
+    if (!Array.isArray(content)) continue
+    // Check if this assistant message has any tool uses without results
+    const hasIncompleteToolCall = content.some(
+      block =>
+        block.type === 'tool_use' &&
+        block.id &&
+        !toolUseIdsWithResults.has(block.id),
+    )
+    if (!hasIncompleteToolCall) continue
+    droppedAssistants.add(message)
+    for (const block of content) {
+      if (block.type === 'tool_use' && block.id) {
+        strandedToolUseIds.add(block.id)
       }
     }
-    // Keep all non-assistant messages and assistant messages without tool calls
-    return true
-  })
+  }
+
+  // Drop those assistant messages, and the results they stranded. Leaving the
+  // results behind only survives on the Anthropic path, which repairs pairing
+  // at request time (ensureToolResultPairing in claude.ts); the Codex path does
+  // not, and translateMessages turns each orphan into a function_call_output
+  // with no call to match it.
+  const filtered: Message[] = []
+  for (const message of messages) {
+    if (droppedAssistants.has(message)) continue
+
+    if (message?.type === 'user' && strandedToolUseIds.size > 0) {
+      const content = (message as UserMessage).message.content
+      if (Array.isArray(content)) {
+        const keptBlocks = content.filter(
+          block =>
+            !(
+              block.type === 'tool_result' &&
+              block.tool_use_id &&
+              strandedToolUseIds.has(block.tool_use_id)
+            ),
+        )
+        if (keptBlocks.length !== content.length) {
+          // A message stripped down to nothing is dropped rather than sent with
+          // an empty content array, which neither provider accepts.
+          if (keptBlocks.length > 0) {
+            filtered.push({
+              ...message,
+              message: { ...message.message, content: keptBlocks },
+            } as Message)
+          }
+          continue
+        }
+      }
+    }
+
+    // Keep all other messages, and assistant messages without incomplete calls
+    filtered.push(message)
+  }
+
+  return filtered
 }
 
 async function getAgentSystemPrompt(

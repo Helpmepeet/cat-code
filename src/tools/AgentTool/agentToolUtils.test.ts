@@ -21,8 +21,11 @@ import { getTools } from '../../tools.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
+import { createAttachmentMessage } from '../../utils/attachments.js'
+import { createAssistantMessage } from '../../utils/messages.js'
 import {
   filterToolsForAgent,
+  finalizeAgentTool,
   formatForkWorkerResultForNotification,
   getAgentContinuationCapabilities,
   resolveAgentTools,
@@ -470,5 +473,60 @@ describe('resolveAgentTools edit-alias resolution for explicit tool lists', () =
     )
 
     expect(resolved.invalidTools).toEqual(['NoSuchTool'])
+  })
+})
+
+describe('finalizeAgentTool max-turn exhaustion', () => {
+  const metadata = {
+    prompt: 'do the thing',
+    resolvedAgentModel: 'claude-sonnet-4-5',
+    isBuiltInAgent: true,
+    startTime: Date.now(),
+    agentType: 'general-purpose',
+    isAsync: false,
+  }
+
+  test('leaves error unset when the agent stopped on its own', () => {
+    const result = finalizeAgentTool(
+      [createAssistantMessage({ content: 'all done' })],
+      'agent-a',
+      metadata,
+    )
+
+    expect(result.error).toBeUndefined()
+  })
+
+  test('reports an error when the run ended on the max-turns signal', () => {
+    const result = finalizeAgentTool(
+      [
+        createAssistantMessage({ content: 'partial work' }),
+        createAttachmentMessage({
+          type: 'max_turns_reached',
+          maxTurns: 200,
+          turnCount: 201,
+        }),
+      ],
+      'agent-b',
+      metadata,
+    )
+
+    expect(result.error).toBe('Reached maximum number of turns (200)')
+  })
+
+  test('still reports the partial work alongside the max-turns error', () => {
+    const result = finalizeAgentTool(
+      [
+        createAssistantMessage({ content: 'partial work' }),
+        createAttachmentMessage({
+          type: 'max_turns_reached',
+          maxTurns: 4,
+          turnCount: 5,
+        }),
+      ],
+      'agent-c',
+      metadata,
+    )
+
+    expect(result.content).toEqual([{ type: 'text', text: 'partial work' }])
   })
 })
