@@ -421,13 +421,19 @@ export const NotebookEditTool = buildTool({
         // Find the specified cell
         const targetCell = notebook.cells[cellIndex]! // validateInput ensures cell_number is in bounds
         targetCell.source = new_source
+        if (cell_type && cell_type !== targetCell.cell_type) {
+          targetCell.cell_type = cell_type
+        }
+        // Normalize against the type the cell ENDS UP as: nbformat v4 requires
+        // both fields on a code cell and forbids them on a markdown one
+        // (markdown_cell is additionalProperties:false).
         if (targetCell.cell_type === 'code') {
           // Reset execution count and clear outputs since cell was modified
           targetCell.execution_count = null
           targetCell.outputs = []
-        }
-        if (cell_type && cell_type !== targetCell.cell_type) {
-          targetCell.cell_type = cell_type
+        } else {
+          delete targetCell.execution_count
+          delete targetCell.outputs
         }
       }
       // Write back to file

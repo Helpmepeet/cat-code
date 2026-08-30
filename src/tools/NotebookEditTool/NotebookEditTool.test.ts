@@ -98,6 +98,99 @@ describe('NotebookEditTool persisted result size', () => {
   })
 })
 
+function notebookWithCell(cell: Record<string, unknown>): string {
+  return JSON.stringify({
+    cells: [cell],
+    metadata: { language_info: { name: 'python' } },
+    nbformat: 4,
+    nbformat_minor: 5,
+  })
+}
+
+async function convertCell(
+  cellType: 'code' | 'markdown',
+  cell: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const tempDir = mkdtempSync(join(tmpdir(), 'notebook-edit-tool-'))
+  tempDirs.push(tempDir)
+
+  const notebookPath = join(tempDir, 'convert.ipynb')
+  const contents = notebookWithCell(cell)
+  writeFileSync(notebookPath, contents)
+
+  const readFileState = createFileStateCacheWithSizeLimit(10)
+  readFileState.set(notebookPath, {
+    content: contents,
+    timestamp: Date.now(),
+    offset: undefined,
+    limit: undefined,
+  })
+  const result = await NotebookEditTool.call(
+    {
+      notebook_path: notebookPath,
+      cell_id: 'cell-1',
+      new_source: 'converted',
+      cell_type: cellType,
+      edit_mode: 'replace',
+    },
+    { readFileState, updateFileHistoryState: () => undefined } as never,
+    undefined as never,
+    { uuid: 'test-parent' } as never,
+  )
+  expect(result.data.error).toBe('')
+
+  return JSON.parse(readFileSync(notebookPath, 'utf8')).cells[0]
+}
+
+describe('NotebookEditTool cell type conversion', () => {
+  test('markdown to code writes a cell carrying the fields nbformat requires', async () => {
+    const written = await convertCell('code', {
+      id: 'cell-1',
+      cell_type: 'markdown',
+      source: ['# heading'],
+      metadata: {},
+    })
+
+    expect(written.cell_type).toBe('code')
+    // Both are `required` in the nbformat v4 code_cell schema, so a code cell
+    // missing either one is rejected by nbformat.read.
+    expect(written).toHaveProperty('execution_count')
+    expect(written.execution_count).toBe(null)
+    expect(written.outputs).toEqual([])
+  })
+
+  test('code to markdown drops the fields a markdown cell may not carry', async () => {
+    const written = await convertCell('markdown', {
+      id: 'cell-1',
+      cell_type: 'code',
+      source: ['print(1)'],
+      metadata: {},
+      outputs: [{ output_type: 'stream', name: 'stdout', text: ['1\n'] }],
+      execution_count: 3,
+    })
+
+    expect(written.cell_type).toBe('markdown')
+    // markdown_cell is additionalProperties:false, so either leftover invalidates it.
+    expect(written).not.toHaveProperty('execution_count')
+    expect(written).not.toHaveProperty('outputs')
+  })
+
+  test('replacing a code cell with the same type still clears its outputs', async () => {
+    const written = await convertCell('code', {
+      id: 'cell-1',
+      cell_type: 'code',
+      source: ['print(1)'],
+      metadata: {},
+      outputs: [{ output_type: 'stream', name: 'stdout', text: ['1\n'] }],
+      execution_count: 3,
+    })
+
+    expect(written.cell_type).toBe('code')
+    expect(written.execution_count).toBe(null)
+    expect(written.outputs).toEqual([])
+  })
+})
+
 describe('NotebookEditTool.outputSchema back-compat', () => {
   test('accepts a pre-2026-08 result carrying both notebook copies', () => {
     const parsed = outputSchema().safeParse({
