@@ -77,7 +77,8 @@ export function createRealContextBreakdownExecutor(deps: {
 }): ContextBreakdownExecutor {
   return {
     async analyze() {
-      // Deliberately NOT `loadConversationForResume`, which the export verb uses.
+      // Deliberately NOT `loadConversationForResume`. The export and branch
+      // verbs used to, and were moved onto this same read for these reasons.
       // Despite the name it is not a reader: it runs `processSessionStartHooks`
       // ('resume') — the user's own SessionStart hooks, arbitrary shell — appends
       // their output to the messages, trips `restoreSkillStateFromMessages`'s
