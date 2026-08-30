@@ -131,9 +131,31 @@ export function buildMcpEntry(
 }
 
 /**
- * A remote server's host and path are useful display metadata. Query strings,
- * fragments, and user-info commonly carry credentials, so they never leave the
- * sidecar even when their key names would evade the outbound secret guard.
+ * A path segment shown as-is: starts with a lowercase letter, then lowercase
+ * letters, digits, or hyphens, 12 characters at most. Wide enough for the
+ * routing words real endpoints use, narrow enough to withhold the long
+ * mixed-case and base64-shaped segments credentials actually take.
+ */
+const WORD_PATH_SEGMENT = /^[a-z][a-z0-9-]{0,11}$/
+
+/**
+ * What this guarantees: only a remote server's origin, plus the path segments
+ * that are provably routing words, ever leave this process. User-info, query
+ * strings, and fragments are dropped whole. A path segment is kept ONLY if it
+ * matches `WORD_PATH_SEGMENT`; every other segment is replaced by `*`, so a
+ * provider that addresses a server by putting the credential IN the path
+ * (`/api/mcp/s/<token>/mcp` is a common shape) cannot leak it here.
+ *
+ * The rule is decided by segment shape, not by a list of known providers, so a
+ * provider nobody anticipated is withheld by default rather than leaking until
+ * someone adds it. It is a shape filter, not a proof: a token that happens to
+ * be 12 or fewer lowercase alphanumerics still passes, which is why this is
+ * the last line of defence and not the only one. Tighten the bound before
+ * widening it.
+ *
+ * Nothing downstream would catch a miss: the outbound secret guard matches
+ * known key NAMES and never inspects string values, and the settings row prints
+ * this URL as written.
  */
 function redactRemoteUrl(rawUrl: string): string {
   try {
@@ -142,6 +164,12 @@ function redactRemoteUrl(rawUrl: string): string {
     url.password = ''
     url.search = ''
     url.hash = ''
+    url.pathname = url.pathname
+      .split('/')
+      .map(segment =>
+        segment === '' || WORD_PATH_SEGMENT.test(segment) ? segment : '*',
+      )
+      .join('/')
     return url.toString()
   } catch {
     // Never fall back to the raw string: a malformed URL may still embed a

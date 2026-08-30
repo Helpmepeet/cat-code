@@ -125,6 +125,46 @@ test('buildMcpEntry maps remote config to a credential-free url + pluginSource',
   expect(JSON.stringify(entry)).not.toContain('token-fragment')
 })
 
+test('buildMcpEntry withholds a credential embedded in the url path', () => {
+  const config = {
+    type: 'http',
+    url: 'https://mcp.example.com/api/mcp/s/NjQ4YzExMmZha2V0b2tlbg/mcp',
+    scope: 'user',
+  } as unknown as ScopedMcpServerConfig
+  const entry = buildMcpEntry('path-secret', config)
+  expect(entry.url).toBe('https://mcp.example.com/api/mcp/s/*/mcp')
+  expect(JSON.stringify(entry)).not.toContain('NjQ4YzExMmZha2V0b2tlbg')
+})
+
+test('buildMcpEntry withholds opaque path segments whatever their shape', () => {
+  const shapes = [
+    ['uuid', '5f1c0b7a-4d2e-4a71-9b30-1c2d3e4f5a6b'],
+    ['hex', 'a3f9c2b1d4e6f7a8b9c0d1e2f3a4b5c6'],
+    ['mixed case', 'AbCdEfGhIjKl'],
+    ['percent encoded', 'sk%2Dlive%2Dfake'],
+  ] as const
+  for (const [, segment] of shapes) {
+    const config = {
+      type: 'sse',
+      url: `https://mcp.example.com/v1/${segment}/sse`,
+      scope: 'user',
+    } as unknown as ScopedMcpServerConfig
+    const entry = buildMcpEntry('opaque', config)
+    expect(entry.url).toBe('https://mcp.example.com/v1/*/sse')
+  }
+})
+
+test('buildMcpEntry keeps a word-shaped path so the server stays identifiable', () => {
+  const config = {
+    type: 'http',
+    url: 'https://mcp.example.com:8443/api/v1/messages',
+    scope: 'user',
+  } as unknown as ScopedMcpServerConfig
+  expect(buildMcpEntry('plain', config).url).toBe(
+    'https://mcp.example.com:8443/api/v1/messages',
+  )
+})
+
 test('buildMcpEntry defaults a missing transport to stdio', () => {
   const config = { command: 'x', args: [], scope: 'local' } as unknown as ScopedMcpServerConfig
   expect(buildMcpEntry('legacy', config).transport).toBe('stdio')
