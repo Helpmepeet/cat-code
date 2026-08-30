@@ -101,10 +101,11 @@ export type MergedSessionRow = {
   appSessionId: SessionId | null
   cwd: string
   /**
-   * Whether `cwd` is a currently-existing directory (bug-sweep #1). Registry rows
-   * are ALWAYS `true` — a live/restorable session is addressed by `appSessionId`,
-   * not its cwd, so it opens regardless. A history-only row carries the catalog's
-   * stat result; a dead-cwd history row is HIDDEN from the sidebar rail
+   * Whether `cwd` is a currently-existing directory (bug-sweep #1). A live
+   * registry row remains openable by appSessionId even when its old workspace
+   * disappeared. A non-live registry row reuses matching catalog evidence, so a
+   * known-dead cwd remains visible but is not offered a restore host will reject.
+   * A history-only row carries the catalog's stat result; a dead-cwd history row is HIDDEN from the sidebar rail
    * (`isSidebarVisibleRow`) and non-openable (`deriveMergedRowVisual`), rather than
    * failing `invalid_cwd` only at open time.
    */
@@ -164,6 +165,23 @@ export function resolveSessionLabel(title: string | null, cwd: string): string {
   return base.length > 0 ? base : 'New session'
 }
 
+export function filterInteractiveSessionDescriptors(
+  descriptors: readonly SessionDescriptor[],
+  catalog: SessionsCatalogSnapshot | null,
+): SessionDescriptor[] {
+  const unavailableEngineSessionIds = new Set(
+    (catalog?.entries ?? [])
+      .filter(entry => entry.isInteractive === false)
+      .map(entry => entry.sessionId),
+  )
+  if (unavailableEngineSessionIds.size === 0) return [...descriptors]
+  return descriptors.filter(
+    descriptor =>
+      descriptor.engineSessionId === null ||
+      !unavailableEngineSessionIds.has(descriptor.engineSessionId),
+  )
+}
+
 /**
  * Merge registry descriptors with the engine-history catalog into one keyed
  * list, newest-first by mtime. Registry rows win the key (they carry openable
@@ -183,7 +201,7 @@ export function selectMergedSessionRows(
   const claimed = new Set<string>()
 
   // Registry rows first — they own the merge key and carry openable status.
-  for (const descriptor of descriptors) {
+  for (const descriptor of filterInteractiveSessionDescriptors(descriptors, catalog)) {
     const key = descriptor.engineSessionId ?? descriptor.appSessionId
     const entry = descriptor.engineSessionId
       ? byId.get(descriptor.engineSessionId)
@@ -194,9 +212,9 @@ export function selectMergedSessionRows(
       sessionId: key,
       appSessionId: descriptor.appSessionId,
       cwd: descriptor.cwd,
-      // A registry row is addressed by appSessionId, not cwd — always openable/
-      // visible regardless of whether its recorded cwd still exists.
-      cwdExists: true,
+      // A matching catalog entry has a fresh cwd stat. Unknown registry-only rows
+      // remain unknown rather than being treated as known-dead.
+      cwdExists: entry?.cwdExists ?? true,
       title,
       displayLabel: resolveSessionLabel(title, descriptor.cwd),
       live: !descriptor.restorable && descriptor.status !== 'exited',
@@ -219,6 +237,7 @@ export function selectMergedSessionRows(
 
   // History-only sessions the registry never tracked (e.g. TUI sessions).
   for (const entry of catalog?.entries ?? []) {
+    if (entry.isInteractive === false) continue
     if (claimed.has(entry.sessionId)) continue
     rows.push({
       sessionId: entry.sessionId,
@@ -421,6 +440,7 @@ export function resolveSessionOpenRoute(
   >,
 ): SessionOpenRoute {
   if (row.appSessionId != null) {
+    if (!row.live && !row.cwdExists) return { kind: 'none' }
     return row.live
       ? { kind: 'focus', appSessionId: row.appSessionId }
       : { kind: 'restore', appSessionId: row.appSessionId }
@@ -745,9 +765,10 @@ export function resolveRecentOpenRoute(recent: RecentWorkspace): SessionOpenRout
     appSessionId: recent.appSessionId,
     live: recent.live,
     cwd: recent.cwd,
-    // `historySessionId` is produced only by `openableHistoryId`, which already
-    // excludes history rows whose workspace no longer exists.
-    cwdExists: recent.historySessionId != null,
+    // A recent does not retain catalog cwd evidence for its registry identity, so
+    // absence of a history id is unknown rather than known-dead. Page/sidebar
+    // rows retain the actual evidence and take the stricter route above.
+    cwdExists: recent.appSessionId != null || recent.historySessionId != null,
     sessionId: recent.historySessionId ?? '',
     // A recent carrying an app id was adopted from a registry row, and one
     // carrying only an engine id from a history row (the merge gives registry

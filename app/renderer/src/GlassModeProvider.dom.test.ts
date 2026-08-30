@@ -39,6 +39,7 @@ beforeAll(async () => {
 afterEach(async () => {
   await harness.unmountAll()
   harness.document.documentElement.removeAttribute(GLASS_ATTRIBUTE)
+  Reflect.deleteProperty(window, 'catcode')
 })
 
 afterAll(async () => {
@@ -52,6 +53,13 @@ function storage(seed: Record<string, string> = {}) {
     getItem: (key: string) => store.get(key) ?? null,
     setItem: (key: string, value: string) => void store.set(key, value),
   }
+}
+
+function installGlassBridge(setGlassMode: (enabled: boolean) => void): void {
+  Object.defineProperty(window, 'catcode', {
+    configurable: true,
+    value: { setGlassMode },
+  })
 }
 
 /** Captures the published setter so a test can flip the preference the way the
@@ -77,6 +85,39 @@ test('a stored preference reaches the real document element on mount', async () 
   )
 })
 
+test('an existing renderer-local glass preference synchronizes to main on mount', async () => {
+  const synced: boolean[] = []
+  installGlassBridge(enabled => synced.push(enabled))
+  await harness.mount(
+    createElement(GlassModeProvider, {
+      storage: storage({
+        [GLASS_STORAGE_KEY]: JSON.stringify({ version: 1, enabled: true }),
+      }),
+      children: createElement('div'),
+    }),
+  )
+
+  expect(synced).toEqual([true])
+})
+
+test('a failed main synchronization does not prevent the renderer stamp', async () => {
+  installGlassBridge(() => {
+    throw new Error('main channel unavailable')
+  })
+  await harness.mount(
+    createElement(GlassModeProvider, {
+      storage: storage({
+        [GLASS_STORAGE_KEY]: JSON.stringify({ version: 1, enabled: true }),
+      }),
+      children: createElement('div'),
+    }),
+  )
+
+  expect(harness.document.documentElement.getAttribute(GLASS_ATTRIBUTE)).toBe(
+    GLASS_ATTRIBUTE_ON,
+  )
+})
+
 test('no stored preference leaves the document unstamped', async () => {
   await harness.mount(
     createElement(GlassModeProvider, {
@@ -89,6 +130,8 @@ test('no stored preference leaves the document unstamped', async () => {
 
 test('flipping the preference stamps the document and persists it', async () => {
   const store = storage()
+  const synced: boolean[] = []
+  installGlassBridge(enabled => synced.push(enabled))
   let setGlass: ((next: boolean) => void) | null = null
   await harness.mount(
     createElement(GlassModeProvider, {
@@ -121,6 +164,7 @@ test('flipping the preference stamps the document and persists it', async () => 
   expect(store.store.get(GLASS_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, enabled: false }),
   )
+  expect(synced).toEqual([false, true, false])
 })
 
 /**

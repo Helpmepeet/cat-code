@@ -19,6 +19,7 @@ import {
   validateEditableSettingWrite,
 } from '../../shared/settingsEditable.js'
 import {
+  SETTINGS_APPLY_NOTE,
   SETTINGS_SCOPE_KINDS,
   selectPermissionDefaultModeRow,
   selectProjectEngine,
@@ -32,6 +33,7 @@ import {
   selectSettingsRow,
   selectSettingsWriteLayer,
   settingsIntCancelDraft,
+  settingsApplyNote,
   settingsRailItem,
   settingsRowCommitsUnchanged,
   settingsRowNote,
@@ -41,6 +43,16 @@ import {
   SETTINGS_UNREAD_WITH_SESSION_NOTE,
   settingsUnreadNote,
 } from './settingsReadState.js'
+
+test('retention timing copy separates immediate write suppression from deferred cleanup', () => {
+  expect(settingsApplyNote('privacy')).toContain(
+    'Stopping new session saves takes effect immediately',
+  )
+  expect(settingsApplyNote('privacy')).toContain(
+    'deleted later by background cleanup',
+  )
+  expect(settingsApplyNote('general')).toBe(SETTINGS_APPLY_NOTE)
+})
 
 const USER_FILE = '/Users/pt/.cat-code/settings.json'
 const PROJECT_FILE = '/repo/.cat-code/settings.json'
@@ -1671,22 +1683,16 @@ describe('what the destructive copy is allowed to say (CLAUDE.md §7)', () => {
       expect(line.toLowerCase()).not.toContain('transcript retention')
     }
     // The two halves of the engine behavior, both stated.
-    expect(choice.body.toLowerCase()).toContain('deletes every session')
+    expect(choice.body.toLowerCase()).toContain('deleted later')
     expect(choice.body.toLowerCase()).toContain('cannot be undone')
     // What to DO, not why we built it this way.
     expect(choice.remedy.toLowerCase()).toContain('set the number back')
   })
 
-  /**
-   * The audit's proposed sentence was "Past sessions will be deleted the next
-   * time the app starts". That trigger is wrong for THIS app: the sweep is
-   * reached only from `startBackgroundHousekeeping`
-   * (`src/utils/backgroundHousekeeping.ts:59`), called from the terminal engine
-   * (`src/main.tsx:2910`, `src/screens/REPL.tsx:4474`) and never from this app's
-   * engine processes. So the copy promises no trigger at all.
-   */
-  test('the copy does not promise a trigger this app does not own', () => {
+  test('the copy keeps deletion on deferred background cleanup', () => {
     if (!choice) return
+    expect(choice.body.toLowerCase()).toContain('background cleanup')
+    expect(choice.body.toLowerCase()).not.toContain('starts deleting')
     for (const line of [choice.body, choice.remedy, choice.rowWarning]) {
       expect(line.toLowerCase()).not.toContain('next time the app starts')
       expect(line.toLowerCase()).not.toContain('restart')

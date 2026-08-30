@@ -105,6 +105,8 @@ export type SessionActionsContext = {
    * callers that deliberately exercise the row-only contract.
    */
   hasEngine?: boolean
+  /** True while this session's persisted transcript is still being written. */
+  hasActiveTurn?: boolean
   /**
    * P4-36 — does this session's transcript hold hidden-tier rows
    * (`selectHasHiddenRows`)? The reveal row only exists when it does, matching
@@ -123,6 +125,8 @@ const DEFER = {
     'Open or restore this session first. Rename and Export run in its live engine, which a closed session has stopped.',
   notOpen:
     'Open this session first. Its transcript is only readable while it is the attached tab.',
+  exporting:
+    'Wait for this response to finish before exporting. The saved transcript is still being updated.',
 } as const
 
 /**
@@ -134,13 +138,14 @@ export function resolveSessionActions(
   row: MergedSessionRow,
   ctx: SessionActionsContext,
 ): SessionActionItem[] {
-  const openable = row.appSessionId != null
+  const openable = row.appSessionId != null && (row.live || row.cwdExists)
   // Rename / Export run inside the session's OWN live engine (the verb is
   // dispatched to its sidecar), so both the host row AND the frame plane must
   // confirm that an engine is reachable. A `disconnected` frame can arrive while
   // the host still describes the row as live; sending in that state only returns
   // an undeliverable result.
   const live = row.live === true && ctx.hasEngine !== false
+  const exportable = live && ctx.hasActiveTurn !== true
   // P4-36 — the reveal changes what the TRANSCRIPT PANE draws, so it is offered
   // only for the row that IS the attached tab (the same reason Copy and
   // Inspect-metadata are active-open gated), and only when that transcript
@@ -176,7 +181,9 @@ export function resolveSessionActions(
         ? {}
         : {
             reason:
-              'Not restorable from the desktop yet. This session came from terminal history.',
+              row.inRegistry
+                ? 'This workspace is no longer available, so this session cannot be restored.'
+                : 'Not restorable from the desktop yet. This session came from terminal history.',
           }),
     },
     {
@@ -244,8 +251,8 @@ export function resolveSessionActions(
       kind: 'export',
       label: 'Export…',
       section: 'transfer',
-      enabled: live,
-      ...(live ? {} : { reason: DEFER.notLive }),
+      enabled: exportable,
+      ...(exportable ? {} : { reason: live ? DEFER.exporting : DEFER.notLive }),
     },
   ]
 }

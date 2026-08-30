@@ -37,6 +37,7 @@ import {
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
   MAX_TEXT_FIELD_CHARS,
+  RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
   PROTOCOL_VERSION,
@@ -270,6 +271,7 @@ function fakeSettingsDomain(
       policyOrigin: null,
       editableValues: [],
     }),
+    async refreshAvailableOptions() {},
     runVerb,
   }
 }
@@ -589,6 +591,33 @@ test('rate-limit rejection echoes the rejected verb request id', () => {
   )
   expect(error?.kind).toBe('error')
   if (error?.kind === 'error') expect(error.requestId).toBe('rate-limited')
+})
+
+test('a backward wall-clock jump resets the sidecar rate window', () => {
+  const originalNow = Date.now
+  let now = 100_000
+  Date.now = () => now
+  try {
+    const server = makeServer(new AppSessionController(probeAdapter()))
+    const { socket, received } = makeSocket()
+    const conn = server.addConnection(socket)
+    for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index += 1) {
+      server.handleData(conn, clientFrame({ type: 'app.ping', nonce: `n-${index}` }))
+    }
+    server.handleData(
+      conn,
+      clientFrame({ type: 'app.submit', requestId: 'limited', prompt: 'x' }),
+    )
+    expect(received.some(frame => frame.kind === 'error' && frame.message === 'rate limit exceeded')).toBe(true)
+
+    now -= RATE_WINDOW_MS + 1
+    server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'after-rollback' }))
+    expect(
+      received.some(frame => frame.kind === 'pong' && frame.nonce === 'after-rollback'),
+    ).toBe(true)
+  } finally {
+    Date.now = originalNow
+  }
 })
 
 test('app.ping is answered with a pong', () => {
@@ -3367,6 +3396,136 @@ function makeAgentModeServer(
   )
   return { server, calls }
 }
+
+test('agent-mode snapshots cannot regress when an older persisted read finishes last', async () => {
+  type Snapshot = Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>
+  const reads: Array<{
+    resolve: (snapshot: Snapshot) => void
+  }> = []
+  let notify: (() => void) | undefined
+  const domain: SidecarAgentModeDomain = {
+    getSnapshot() {
+      return new Promise(resolve => {
+        reads.push({ resolve })
+      })
+    },
+    setActive() {
+      return { ok: true, message: 'unchanged', changed: false }
+    },
+    noteWorkerDismissed() {},
+    subscribe(listener) {
+      notify = listener
+      return () => {
+        notify = undefined
+      }
+    },
+  }
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  expect(reads).toHaveLength(1)
+  reads.shift()!.resolve({ active: false, objective: 'initial', phase: 'planning', workers: [] })
+  await Promise.resolve()
+  received.length = 0
+
+  notify?.()
+  notify?.()
+  expect(reads).toHaveLength(2)
+  reads[1]!.resolve({ active: true, objective: 'new', phase: 'executing', workers: [] })
+  await Promise.resolve()
+  reads[0]!.resolve({ active: false, objective: 'old', phase: 'planning', workers: [] })
+  await Promise.resolve()
+
+  const snapshots = received.filter(
+    (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
+      frame.kind === 'agent-mode.snapshot',
+  )
+  expect(snapshots).toHaveLength(1)
+  expect(snapshots[0]?.agentMode.objective).toBe('new')
+})
+
+test('agent-mode attach reads are connection-local and a newer broadcast supersedes stale attach data', async () => {
+  type Snapshot = Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>
+  const reads: Array<{ resolve: (snapshot: Snapshot) => void }> = []
+  let notify: (() => void) | undefined
+  const domain: SidecarAgentModeDomain = {
+    getSnapshot() {
+      return new Promise(resolve => {
+        reads.push({ resolve })
+      })
+    },
+    setActive() {
+      return { ok: true, message: 'unchanged', changed: false }
+    },
+    noteWorkerDismissed() {},
+    subscribe(listener) {
+      notify = listener
+      return () => {
+        notify = undefined
+      }
+    },
+  }
+  const server = makeServer(
+    new AppSessionController(probeAdapter()),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    domain,
+  )
+  const first = makeSocket()
+  const second = makeSocket()
+  server.addConnection(first.socket)
+  server.addConnection(second.socket)
+  expect(reads).toHaveLength(2)
+
+  // The second connection starting an attach read must not suppress the first.
+  reads[0]!.resolve({ active: false, objective: 'first attach', phase: 'planning', workers: [] })
+  await Promise.resolve()
+  expect(
+    first.received.some(
+      frame =>
+        frame.kind === 'agent-mode.snapshot' &&
+        frame.agentMode.objective === 'first attach',
+    ),
+  ).toBe(true)
+
+  // A broadcast requested after the second attach supersedes that older read for
+  // the second connection and publishes one current snapshot to both.
+  notify?.()
+  expect(reads).toHaveLength(3)
+  reads[2]!.resolve({ active: true, objective: 'current', phase: 'executing', workers: [] })
+  await Promise.resolve()
+  reads[1]!.resolve({ active: false, objective: 'stale attach', phase: 'planning', workers: [] })
+  await Promise.resolve()
+
+  for (const received of [first.received, second.received]) {
+    const snapshots = received.filter(
+      (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
+        frame.kind === 'agent-mode.snapshot',
+    )
+    expect(snapshots.at(-1)?.agentMode.objective).toBe('current')
+    expect(
+      snapshots.some(frame => frame.agentMode.objective === 'stale attach'),
+    ).toBe(false)
+  }
+})
 
 test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-broadcasts the snapshot', async () => {
   const { server, calls } = makeAgentModeServer()
@@ -6413,18 +6572,12 @@ test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-cle
   expect(serialized).not.toContain('/Users/secret')
 })
 
-test('stats — attach emits a stats.usage.snapshot that is secretGuard-clean', async () => {
+test('stats — ordinary attach does not start a per-sidecar usage scan', async () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   server.addConnection(socket)
-  await waitFor(() => received.some(f => f.kind === 'stats.usage.snapshot'), 4000)
-
-  const snap = received.find(f => f.kind === 'stats.usage.snapshot')
-  expect(snap?.kind).toBe('stats.usage.snapshot')
-  if (snap && snap.kind === 'stats.usage.snapshot') {
-    expect(snap.stats.range).toBe('7d')
-    expect(typeof snap.stats.totalTokens).toBe('number')
-  }
+  await Promise.resolve()
+  expect(received.some(f => f.kind === 'stats.usage.snapshot')).toBe(false)
 })
 
 test('stats — stats.query with range: 30d dispatches and responds with 30d stats.usage.snapshot', async () => {
@@ -6474,6 +6627,23 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
   const { domain: runControls } = fakeRunControlsDomain()
+  let modelOptions = [{ value: 'provider-a-model', label: 'Provider A' }]
+  const settings: SidecarSettingsDomain = {
+    getSnapshot: () => ({
+      layers: [],
+      resolved: [],
+      policyOrigin: null,
+      editableValues: [],
+      availableOptions: [{ key: 'model', options: modelOptions }],
+    }),
+    async refreshAvailableOptions() {
+      modelOptions = [
+        ...modelOptions,
+        { value: 'provider-b-model', label: 'Provider B' },
+      ]
+    },
+    runVerb: () => ({ ok: true, message: 'Updated.', changed: true }),
+  }
   const server = makeServer(
     new AppSessionController(probeAdapter()),
     undefined,
@@ -6485,7 +6655,7 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
     undefined,
     undefined,
     undefined,
-    undefined,
+    settings,
     runControls,
   )
   const { socket, received } = makeSocket()
@@ -6494,9 +6664,14 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   const beforeRunControls = received.filter(
     f => f.kind === 'run-controls.snapshot',
   ).length
+  const beforeSettings = received.filter(f => f.kind === 'settings.snapshot').length
 
   server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r1', accountId: 'b' }))
-  await flush()
+  await waitFor(
+    () =>
+      received.filter(frame => frame.kind === 'settings.snapshot').length >
+      beforeSettings,
+  )
 
   const result = received.find(f => f.kind === 'account.result')
   expect(result?.kind).toBe('account.result')
@@ -6507,6 +6682,17 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
   expect(
     received.filter(f => f.kind === 'run-controls.snapshot').length,
   ).toBeGreaterThan(beforeRunControls)
+  const latestSettings = received
+    .filter(
+      (frame): frame is Extract<ServerFrame, { kind: 'settings.snapshot' }> =>
+        frame.kind === 'settings.snapshot',
+    )
+    .at(-1)
+  expect(
+    latestSettings?.settings.availableOptions
+      ?.find(options => options.key === 'model')
+      ?.options.map(option => option.value),
+  ).toEqual(['provider-a-model', 'provider-b-model'])
 })
 
 test('P4-5 — account.result never carries token material', async () => {

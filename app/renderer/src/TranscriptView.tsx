@@ -83,6 +83,7 @@ import {
   type UserImageSource,
 } from './transcriptProjector.js'
 import { selectBashCardText } from './bashCommandLabel.js'
+import { withoutTodoRows } from './todoPlan.js'
 import {
   TOOL_CARD_BAND_CLASS,
   TOOL_CARD_BODY_CLASS,
@@ -329,7 +330,9 @@ export const TranscriptView = memo(function TranscriptView({
 }) {
   return (
     <TranscriptRowsView
-      rows={selectNestedTranscriptRows(state, activeSessionId, revealHidden)}
+      rows={withoutTodoRows(
+        selectNestedTranscriptRows(state, activeSessionId, revealHidden),
+      )}
       compacting={compacting ?? false}
       accounts={accounts ?? null}
       orchestratorActive={orchestratorActive ?? false}

@@ -79,6 +79,7 @@ export type RemoteSettingsCommandExecutor = {
   directConnect(
     serverUrl: string,
     cwd: string,
+    signal?: AbortSignal,
   ): Promise<{ sessionId: string; wsUrl: string }>
 }
 
@@ -148,29 +149,31 @@ export function buildBridgeStatusSnapshot(state: {
  * ------------------------------------------------------------------------- */
 
 /**
- * App-side bound on a direct-connect attempt (review fix 2026-07-09). A
- * black-hole host would otherwise leave `createDirectConnectSession`'s bare
- * `fetch` (no signal, `src/server/createDirectConnectSession.ts`) pending
- * forever, stranding the renderer form on "Connecting…". A true AbortSignal
- * that cancels the underlying request would require a `src/` signature change,
- * so this races the promise against a timeout to surface a real error instead
- * of hanging; the fetch itself is abandoned (accepted for this LOW fix).
+ * App-side bound on a direct-connect attempt. A black-hole host must not leave
+ * the renderer form on "Connecting…" or retain its network request after a
+ * timeout. The AbortSignal reaches `createDirectConnectSession` and its POST,
+ * so the timeout both reports the error and cancels the operation.
  */
-const DIRECT_CONNECT_TIMEOUT_MS = 15_000
+export const DIRECT_CONNECT_TIMEOUT_MS = 15_000
 
-async function withTimeout<T>(
-  promise: Promise<T>,
+export async function withAbortTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   message: string,
 ): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new DirectConnectError(message)), timeoutMs)
-  })
+  const controller = new AbortController()
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
   try {
-    return await Promise.race([promise, timeout])
+    return await operation(controller.signal)
+  } catch (error) {
+    if (timedOut) throw new DirectConnectError(message)
+    throw error
   } finally {
-    if (timer) clearTimeout(timer)
+    clearTimeout(timer)
   }
 }
 
@@ -202,9 +205,10 @@ export function createRealRemoteSettingsExecutor(): RemoteSettingsCommandExecuto
       }
       return null
     },
-    async directConnect(serverUrl, cwd) {
-      const { config } = await withTimeout(
-        createDirectConnectSession({ serverUrl, cwd }),
+    async directConnect(serverUrl, cwd, signal) {
+      const { config } = await withAbortTimeout(
+        requestSignal =>
+          createDirectConnectSession({ serverUrl, cwd, signal: requestSignal }),
         DIRECT_CONNECT_TIMEOUT_MS,
         `Timed out connecting to ${serverUrl} after ${DIRECT_CONNECT_TIMEOUT_MS / 1000}s.`,
       )
@@ -226,11 +230,9 @@ export function createSidecarRemoteSettingsDomain(options: {
   const { appStateStore, cwd, commands } = options
   const executor = options.executor ?? createRealRemoteSettingsExecutor()
 
-  // One direct connect at a time per session. `withTimeout` above rejects after
-  // 15 s but ABANDONS the underlying fetch (it has no signal), so without this
-  // latch a renderer looping at the inbound rate cap against a black-holing host
-  // accumulates thousands of sockets inside the privileged sidecar, held until
-  // the OS TCP timeout. The frame caps bound frames, not in-flight work per verb.
+  // One direct connect at a time per session. The abortable timeout clears this
+  // latch only after its request has settled, so retries do not overlap a
+  // black-holed POST. The frame caps bound frames, not in-flight work per verb.
   // Mirrors the `phase === 'persisting'` guard in `accountsDomain.ts`.
   let directConnectInFlight = false
 

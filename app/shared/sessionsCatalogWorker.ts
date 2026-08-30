@@ -118,6 +118,10 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (typeof value.sessionId !== 'string') return null
   if (value.forked !== undefined && typeof value.forked !== 'boolean') return null
   const forked = value.forked === true
+  if (value.isInteractive !== undefined && typeof value.isInteractive !== 'boolean') {
+    return null
+  }
+  const isInteractive = value.isInteractive
   if (typeof value.cwd !== 'string') return null
   // Additive field (bug-sweep #1): tolerate a record from a worker build predating
   // it (default `true` = assume-exists, never wrongly hide); a PRESENT non-boolean
@@ -152,6 +156,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   return {
     sessionId: value.sessionId,
     forked,
+    isInteractive,
     cwd: value.cwd,
     cwdExists,
     title: value.title,

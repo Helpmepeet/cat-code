@@ -10,6 +10,7 @@ import {
   countWorkspaces,
   createSessionsCatalogState,
   filterSessionRows,
+  filterInteractiveSessionDescriptors,
   formatRelativeTime,
   groupByWorkspace,
   reduceSessionsCatalogState,
@@ -182,6 +183,34 @@ describe('selectMergedSessionRows', () => {
       live: true,
       gitBranch: 'main',
     })
+  })
+
+  test('hides a noninteractive SDK transcript even when an earlier open created a registry row', () => {
+    const rows = selectMergedSessionRows(
+      [descriptor({ appSessionId: 'app-sdk', engineSessionId: 'sdk-run' })],
+      snapshot([entry({ sessionId: 'sdk-run', isInteractive: false })]),
+    )
+    expect(rows).toEqual([])
+  })
+
+  test('filters a noninteractive SDK registry row before raw-descriptor surfaces use it', () => {
+    const rows = filterInteractiveSessionDescriptors(
+      [descriptor({ appSessionId: 'app-sdk', engineSessionId: 'sdk-run' })],
+      snapshot([entry({ sessionId: 'sdk-run', isInteractive: false })]),
+    )
+    expect(rows).toEqual([])
+  })
+
+  test('keeps a legacy registry row when its catalog entry lacks eligibility provenance', () => {
+    const descriptorRow = descriptor({
+      appSessionId: 'app-legacy',
+      engineSessionId: 'legacy-run',
+    })
+    const rows = filterInteractiveSessionDescriptors(
+      [descriptorRow],
+      snapshot([entry({ sessionId: 'legacy-run' })]),
+    )
+    expect(rows).toEqual([descriptorRow])
   })
 
   // Regression: opening a session from history mints a registry row with a FRESH
@@ -438,10 +467,8 @@ describe('selectMergedSessionRows', () => {
     })
   })
 
-  test('bug-sweep #1 — a history row carries the catalog entry cwdExists; registry rows are always true', () => {
+  test('a matching catalog entry supplies cwd evidence for a registry row', () => {
     const rows = selectMergedSessionRows(
-      // A registry row whose recorded cwd is dead is STILL cwdExists:true (it is
-      // addressed by appSessionId, not cwd).
       [descriptor({ appSessionId: 'app-1', engineSessionId: 'eng-1', cwd: '/dead/reg' })],
       snapshot([
         entry({ sessionId: 'eng-1', cwdExists: false }),
@@ -450,7 +477,7 @@ describe('selectMergedSessionRows', () => {
       ]),
     )
     const byId = new Map(rows.map(r => [r.sessionId, r.cwdExists]))
-    expect(byId.get('eng-1')).toBe(true) // registry row → always true
+    expect(byId.get('eng-1')).toBe(false)
     expect(byId.get('hist-dead')).toBe(false) // history row → from the catalog
     expect(byId.get('hist-live')).toBe(true)
   })
@@ -780,6 +807,31 @@ describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller co
       }),
     )
     expect(route).toEqual({ kind: 'restore', appSessionId: 'app-a' })
+  })
+
+  test('a non-live registry row with known-dead cwd remains visible but has no restore route', () => {
+    expect(
+      resolveSessionOpenRoute(
+        row({
+          sessionId: 'a',
+          appSessionId: 'app-a',
+          inRegistry: true,
+          live: false,
+          cwdExists: false,
+        }),
+      ),
+    ).toEqual({ kind: 'none' })
+    expect(
+      resolveSessionOpenRoute(
+        row({
+          sessionId: 'a',
+          appSessionId: 'app-a',
+          inRegistry: true,
+          live: true,
+          cwdExists: false,
+        }),
+      ),
+    ).toEqual({ kind: 'focus', appSessionId: 'app-a' })
   })
 
   test('a terminal-history row with a workspace opens by its ENGINE id', () => {

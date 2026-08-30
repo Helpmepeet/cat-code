@@ -290,6 +290,9 @@ async function runProductionHardeningSmoke(
       // `preloadSource.test.ts` scrapes this array for quoted words, so a quoted
       // example in a comment reads as an allowlist entry.
       'setAppearance',
+      // Glass mode is a fixed main-only preference sender. Its bounded boolean
+      // preserves a solid native background during renderer paint gaps when off.
+      'setGlassMode',
       // Usage analytics — the renderer requests an engine-backed stats snapshot.
       // It authors no query: the `stats.query` frame carries a bounded range enum
       // and a request id, schema-validated AT THE SIDECAR (`statsQueryMessageSchema`)

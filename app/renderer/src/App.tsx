@@ -18,6 +18,9 @@ import { selectContextUsage } from './contextUsage.js'
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { focusFirstComposerFace } from './composerActionsBarModel.js'
 import { ComposerInput } from './ComposerInput.js'
+import { TodoStepReadout } from './TodoPlanPanel.js'
+import { selectTodoPlan, selectTodoReadout } from './todoPlan.js'
+import type { TodoPlan } from './todoPlan.js'
 import type { ComposerInputHandle } from './ComposerInput.js'
 import {
   buildAllowResponse,
@@ -428,7 +431,6 @@ import type {
   AccountVerbMessage,
   AgentModeWorkerItem,
   AskUserQuestionAnswer,
-  CatCodeBridge,
   LeaseSnapshot,
   PermissionResponseInput,
   PermissionSetModeMode,
@@ -444,7 +446,6 @@ import type {
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
 import type {
-  HostError,
   HostEvent,
   SessionDescriptor,
 } from '../../shared/hostApi.js'
@@ -454,9 +455,11 @@ import {
   deriveActivity,
   fmtElapsed,
   fmtTok,
+  hostErrorMessage,
   isTurnRunning,
   reducePromptDrafts,
   reduceTurnStarts,
+  restartConnection,
   selectLiveTokenEstimate,
   selectPromptDraft,
   sendPermissionResponse,
@@ -1765,25 +1768,6 @@ export function App() {
     dispatchAccounts({ type: 'set-stats-range', range })
   }, [])
 
-  // The Accounts page reads the polled global pool, which only refreshes on the
-  // accounts owner's timer — so a rename toasts success while the row keeps the
-  // old alias for up to a minute. The sidecar re-broadcasts its own snapshot with
-  // the change already applied straight after a pool-mutating verb, so adopt that
-  // as the pool view the moment it lands. It arrives AFTER the result frame
-  // (sidecarServer.ts sends the result, then re-broadcasts), which is why this
-  // tracks the promoted snapshot's identity rather than firing once on the result.
-  const promotedAccountsSnapshotRef = useRef<AccountsSnapshot | null>(null)
-  useEffect(() => {
-    const result = accounts.lastResult
-    if (!result || !result.ok) return
-    const snapshot = selectAccountsSnapshot(accounts, result.sessionId)
-    if (!snapshot || snapshot === promotedAccountsSnapshotRef.current) return
-    promotedAccountsSnapshotRef.current = snapshot
-    if (snapshot !== accounts.pool) {
-      dispatchAccounts({ type: 'pool', pool: snapshot })
-    }
-  }, [accounts])
-
   // P4-50 (O2a) — account health, pinned above the transcript instead of left to
   // scroll away inside it. Session-free by construction: it reads the global pool
   // view, so it is the same fact whichever tab is in front.
@@ -2465,10 +2449,12 @@ export function App() {
     }
   }, [releasePendingSubmit])
 
-  const restartTab = useCallback((sessionId: SessionId) => {
-    // The dead-tab affordance: re-spawn over the existing CH_RESTART channel.
+  const restartTab = useCallback(async (sessionId: SessionId) => {
+    // The fixed control-plane response carries a typed refusal instead of relying
+    // on a later lifecycle event that may never arrive.
     try {
-      getBridge().restart(sessionId)
+      const result = await getBridge().restart(sessionId)
+      if (!result.ok) setShellError(hostErrorMessage(result.error))
     } catch (error) {
       setShellError(errorMessage(error))
     }
@@ -3940,6 +3926,9 @@ export function App() {
                         hasEngine: connectionHasEngine(
                           selectConnection(connection, targetId).status,
                         ),
+                        hasActiveTurn:
+                          selectConnection(connection, targetId).status === 'ready' &&
+                          !selectConnection(connection, targetId).inputEnabled,
                         // P4-36 — read the tier straight off the transcript slice, so
                         // the row appears only for a session that really has hidden
                         // messages (and only while the menu is open, which is the
@@ -4866,6 +4855,9 @@ export function SessionPane({
   // turns of the loop and mints nothing until its boundary lands at the end.
   const compacting = selectIsCompacting(transcript, activeSessionId)
   const activity = deriveActivity(nestedRows, compacting)
+  // Same slice-cached projection `deriveActivity` reads, so the plan cannot
+  // disagree with the verb beside it (`todoPlan.ts`).
+  const todoPlan = selectTodoPlan(nestedRows)
   // The scroll memory anchors on row IDENTITY, so nothing here names the head
   // of the list any more: rows recovered above the reader renumber every row
   // below them, and an index-based anchor would have been discarded at exactly
@@ -5628,6 +5620,7 @@ export function SessionPane({
           paused={paused}
           compacting={compacting}
           stopError={stopError}
+          todoPlan={todoPlan}
         />
       ) : null}
 
@@ -5933,6 +5926,14 @@ const SHOW_TOKENS_AFTER_MS = 30_000
  * elapsed clock stranded itself against the far side of the 740px column with
  * a hole in the middle. `target` keeps `min-w-0 truncate` so a long tool name
  * shrinks instead of pushing the clock out of the row.
+ *
+ * ONE EXCEPTION, and it does reintroduce that hole: the todo readout carries its
+ * own `ml-auto` and sits at the right edge (operator choice, 2026-08-29, from
+ * `docs/design-html/2026-08-29-todo-surface-options.html`). It is a hover
+ * target, and the verb and clock either side of it re-measure every second, so
+ * anchoring it to the row's end is what stops it sliding under the cursor. The
+ * clock itself stays left-packed, which is the half the original ruling was
+ * about.
  */
 function ActivityIndicator({
   verb,
@@ -5942,6 +5943,7 @@ function ActivityIndicator({
   paused,
   compacting,
   stopError,
+  todoPlan,
 }: {
   verb: string
   target: string | null
@@ -5951,10 +5953,13 @@ function ActivityIndicator({
   /** Swaps the pulse dots for the compaction glyph (see `CompactingGlyph`). */
   compacting?: boolean
   stopError: string | null
+  /** The session's live plan, or null when it has none (`todoPlan.ts`). */
+  todoPlan: TodoPlan | null
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
   const showTokens = liveTokens > 0 && elapsedMs > SHOW_TOKENS_AFTER_MS
+  const todoReadout = selectTodoReadout(todoPlan)
   return (
     <div className="flex items-center gap-2.5 bg-transparent px-1 py-1.5 text-xs">
       {compacting && !paused ? (
@@ -5992,6 +5997,15 @@ function ActivityIndicator({
       {stopError ? (
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
       ) : null}
+      {/* The plan's readout owns the row's right edge (`ml-auto` on the
+       * readout itself), the one part of this byline that is not left-packed.
+       * A fixed anchor is what makes it a stable hover target while the verb
+       * and the clock either side of it change width every second. Absent
+       * whenever the session has no plan, or has one with nothing yet in
+       * progress — see `selectTodoReadout`. */}
+      {todoReadout === null || todoPlan === null ? null : (
+        <TodoStepReadout plan={todoPlan} readout={todoReadout} />
+      )}
     </div>
   )
 }
@@ -6046,12 +6060,7 @@ export function ConnectionRecovery({
       <button
         className="rounded border border-tone-danger px-3 py-1 text-xs"
         onClick={() => {
-          try {
-            getBridge().restart(sessionId)
-            setRestartError(null)
-          } catch (error) {
-            setRestartError(errorMessage(error))
-          }
+          void restartConnection(getBridge(), sessionId).then(setRestartError)
         }}
         type="button"
       >
@@ -6081,10 +6090,6 @@ function sessionDisplayName(
 ): string {
   const descriptor = descriptors.get(sessionId)
   return descriptor ? tabLabel(descriptor) : sessionId
-}
-
-function hostErrorMessage(error: HostError): string {
-  return `${error.code}: ${error.message}`
 }
 
 /**

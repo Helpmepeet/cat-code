@@ -126,6 +126,7 @@ import {
   selectSettingsRail,
   selectSettingsRailItem,
   selectSettingsWriteLayer,
+  settingsApplyNote,
   settingsNoEngineNote,
   settingsRailItem,
   settingsRowNote,
@@ -294,7 +295,7 @@ export function SettingsShell({
           <p className="mt-2 text-[11.5px] leading-relaxed text-text-subtle">
             {activeItem === 'memory'
               ? 'Auto memory edits are saved immediately. Features use the new value when they next check the setting.'
-              : SETTINGS_APPLY_NOTE}
+              : settingsApplyNote(activeItem)}
           </p>
         ) : null}
       </header>

@@ -879,6 +879,16 @@ test('the page states once, globally, that edits apply to later sessions', () =>
   expect(head).toContain('apply to sessions started afterwards')
 })
 
+test('Privacy states the retention exception to the general timing note', () => {
+  const head = headMarkup(
+    renderToStaticMarkup(
+      <SettingsShell initialCategory="privacy" snapshot={SNAPSHOT} />,
+    ),
+  )
+  expect(head).toContain('Stopping new session saves takes effect immediately')
+  expect(head).toContain('deleted later by background cleanup')
+})
+
 test('Memory separates the current saved setting from the opened-session observation', () => {
   const settings: SettingsSnapshot = {
     ...SNAPSHOT,

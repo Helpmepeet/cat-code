@@ -14,6 +14,7 @@ import {
   deriveActivity,
   fmtElapsed,
   fmtTok,
+  restartConnection,
   reducePromptDrafts,
   selectLiveTokenEstimate,
   selectPromptDraft,
@@ -1964,6 +1965,33 @@ test('renders a restart control only for a terminal session state', () => {
   expect(noSession).not.toContain('Restart')
 })
 
+test('the terminal failure-bar restart preserves typed refusals and Promise failures', async () => {
+  expect(
+    await restartConnection(
+      {
+        async restart() {
+          return {
+            ok: false,
+            error: { code: 'session_limit', message: 'restart rate exceeded' },
+          }
+        },
+      },
+      'session-1',
+    ),
+  ).toBe('session_limit: restart rate exceeded')
+
+  expect(
+    await restartConnection(
+      {
+        async restart() {
+          throw new Error('renderer IPC unavailable')
+        },
+      },
+      'session-1',
+    ),
+  ).toBe('renderer IPC unavailable')
+})
+
 test('permission bridge failures are returned to the caller for reducer recovery', () => {
   const error = sendPermissionResponse(
     {
@@ -2702,22 +2730,20 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
   const verbBody = source.slice(
     verbStart,
-    source.indexOf('\n  // The Accounts page reads', verbStart),
+    source.indexOf('\n  // Flipping 7d/30d', verbStart),
   )
   expect(verbBody.indexOf("verb.type === 'account.delete'")).toBeLessThan(
     verbBody.indexOf('if (!activeSessionId)'),
   )
   expect(verbBody).toContain('.deleteAccount(verb)')
-  expect(verbBody).not.toContain('if (!activeSessionId) return')
+  expect(verbBody).toContain('if (!activeSessionId) {')
   expect(verbBody).toContain("kind: 'account.result'")
   expect(verbBody).toContain('requestId: verb.requestId')
   expect(verbBody).toContain('ok: false')
 
-  // The Accounts page reads the polled pool, which refreshes on a timer; the
-  // post-verb snapshot landed in the per-session map the page no longer reads.
-  expect(source).toContain(
-    "dispatchAccounts({ type: 'pool', pool: snapshot })",
-  )
+  // Main owns the global pool refresh. A session snapshot stays session-scoped
+  // and must never be promoted over a fresher host snapshot.
+  expect(source).not.toContain('promotedAccountsSnapshotRef')
 
   // Rebuilding the field's nodes drops the selection, so an at-caret paste and
   // the atomic pill-delete both threw the caret away.

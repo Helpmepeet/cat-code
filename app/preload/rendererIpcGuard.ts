@@ -61,7 +61,7 @@ export function createRendererIpcGuard({
       }
 
       const currentTime = now()
-      if (currentTime - windowStart >= RATE_WINDOW_MS) {
+      if (currentTime < windowStart || currentTime - windowStart >= RATE_WINDOW_MS) {
         windowStart = currentTime
         frameCount = 0
         diagnosticFrameCount = 0

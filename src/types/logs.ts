@@ -54,6 +54,7 @@ export type LogOption = {
   contextCollapseSnapshot?: ContextCollapseSnapshotEntry // Last-wins — staged queue + spawn state
   gitBranch?: string // Git branch at the end of the session
   projectPath?: string // Original project directory path
+  entrypoint?: string // CLAUDE_CODE_ENTRYPOINT recorded on the transcript
   prNumber?: number // GitHub PR number linked to this session
   prUrl?: string // Full URL to the linked PR
   prRepository?: string // Repository in "owner/repo" format

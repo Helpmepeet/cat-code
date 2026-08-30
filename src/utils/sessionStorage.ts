@@ -5988,6 +5988,7 @@ export async function getSessionFilesWithMtime(
 type LiteMetadata = {
   firstPrompt: string
   gitBranch?: string
+  entrypoint?: string
   isSidechain: boolean
   projectPath?: string
   teamName?: string
@@ -6100,6 +6101,7 @@ export async function loadAllLogsFromSessionFile(
       prRepository: prRepositories.get(sessionId),
       gitBranch: leafMessage.gitBranch,
       projectPath: projectPathOverride ?? firstMessage.cwd,
+      entrypoint: firstMessage.entrypoint,
       fileHistorySnapshots: buildFileHistorySnapshotChain(
         fileHistorySnapshots,
         chain,
@@ -6171,6 +6173,7 @@ async function readLiteMetadata(
   const isSidechain =
     head.includes('"isSidechain":true') || head.includes('"isSidechain": true')
   const projectPath = extractJsonStringField(head, 'cwd')
+  const entrypoint = extractJsonStringField(head, 'entrypoint')
   const teamName = extractJsonStringField(head, 'teamName')
   const agentSetting = extractJsonStringField(head, 'agentSetting')
 
@@ -6252,6 +6255,7 @@ async function readLiteMetadata(
     hasConversation,
     forked,
     gitBranch,
+    entrypoint,
     isSidechain,
     projectPath,
     teamName,
@@ -6497,6 +6501,7 @@ async function enrichLog(
     modified,
     firstPrompt: meta.firstPrompt,
     gitBranch: meta.gitBranch,
+    entrypoint: meta.entrypoint,
     isSidechain: meta.isSidechain,
     teamName: meta.teamName,
     customTitle: meta.customTitle,

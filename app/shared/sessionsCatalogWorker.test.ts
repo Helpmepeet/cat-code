@@ -166,6 +166,24 @@ describe('cwdExists field (bug-sweep #1 — additive, fail-closed)', () => {
   })
 })
 
+describe('isInteractive field (SDK transcript eligibility — additive, fail-closed)', () => {
+  test('a present false value round-trips to main', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [{ ...entry({ sessionId: 'sdk-run' }), isInteractive: false }],
+      truncated: false,
+    })
+    expect(parsed?.entries[0]?.isInteractive).toBe(false)
+  })
+
+  test('a present non-boolean fails the whole snapshot', () => {
+    const parsed = parseSessionsCatalogSnapshot({
+      entries: [{ ...entry({ sessionId: 'sdk-run' }), isInteractive: 'no' }],
+      truncated: false,
+    })
+    expect(parsed).toBeNull()
+  })
+})
+
 describe('title-precedence fields (transcriptTitle + capturedAtMs — additive, fail-closed)', () => {
   test('both round-trip through the boundary', () => {
     const parsed = parseSessionsCatalogSnapshot({

@@ -6,6 +6,7 @@ import {
   buildBridgeStatusSnapshot,
   buildCommandFilterSnapshot,
   createSidecarRemoteSettingsDomain,
+  withAbortTimeout,
   type RemoteSettingsCommandExecutor,
 } from './remoteSettingsDomain.js'
 
@@ -276,12 +277,24 @@ test('directConnect failure degrades to an ok:false result, never a thrown error
   expect(flagChanged).toBe(false)
 })
 
-/*
- * `withTimeout` rejects after 15 s but ABANDONS the underlying fetch (it has no
- * signal), so without a latch a renderer looping at the inbound rate cap against
- * a black-holing host piles up sockets inside the privileged sidecar until the
- * OS TCP timeout. The frame caps bound frames, not in-flight work per verb.
- */
+test('directConnect timeout aborts the underlying operation before returning', async () => {
+  let aborted = false
+  await expect(
+    withAbortTimeout(
+      signal =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener('abort', () => {
+            aborted = true
+            reject(new Error('aborted'))
+          })
+        }),
+      1,
+      'Timed out',
+    ),
+  ).rejects.toThrow('Timed out')
+  expect(aborted).toBe(true)
+})
+
 test('directConnect refuses a second attempt while one is still in flight', async () => {
   const store = makeStore()
   let attempts = 0

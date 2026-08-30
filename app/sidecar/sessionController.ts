@@ -631,7 +631,9 @@ export async function createSidecarSessionController({
   return {
     controller,
     permissions: createSidecarPermissionDomain(appStateStore),
-    settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd)),
+    settings: createSidecarSettingsDomain(await loadAvailableSettingOptions(cwd), {
+      reloadAvailableOptions: () => loadAvailableSettingOptions(cwd),
+    }),
     agentConfig: createSidecarAgentConfigDomain({
       agentDefinitions,
       availableMcpServers,

@@ -468,6 +468,37 @@ test('a dynamic-enum write fails closed when no options were captured', () => {
   expect(result.changed).toBe(false)
 })
 
+test('refreshAvailableOptions replaces model choices without changing settings values or layers', async () => {
+  useTempConfigHome()
+  const initialOptions: AvailableSettingOptions = [
+    { key: 'model', options: [{ value: 'provider-a-model', label: 'Provider A' }] },
+  ]
+  const refreshedOptions: AvailableSettingOptions = [
+    {
+      key: 'model',
+      options: [
+        { value: 'provider-a-model', label: 'Provider A' },
+        { value: 'provider-b-model', label: 'Provider B' },
+      ],
+    },
+  ]
+  const domain = createSidecarSettingsDomain(initialOptions, {
+    reloadAvailableOptions: async () => refreshedOptions,
+  })
+  expect(
+    domain.runVerb(write('userSettings', 'model', 'provider-a-model')).ok,
+  ).toBe(true)
+  const before = domain.getSnapshot()
+
+  await domain.refreshAvailableOptions()
+  const after = domain.getSnapshot()
+
+  expect(after?.availableOptions).toEqual(refreshedOptions)
+  expect(after?.layers).toEqual(before?.layers)
+  expect(after?.resolved).toEqual(before?.resolved)
+  expect(after?.editableValues).toEqual(before?.editableValues)
+})
+
 test('runVerb persists an output-style write and the re-read reflects value + provenance', () => {
   const settingsFile = useTempConfigHome()
   const domain = createSidecarSettingsDomain(OUTPUT_STYLE_OPTIONS)

@@ -117,7 +117,7 @@ export function FilePathActionsMenu({
 
       case 'open-default': {
         void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.cleanPath, 'default')
+          ?.openWorkspaceFile(sessionId, parts.rawPath, 'default')
           .then(opened => {
             if (!opened) toast('Could not open this file', { tone: 'warn' })
           })
@@ -127,7 +127,7 @@ export function FilePathActionsMenu({
 
       case 'open-vscode': {
         void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.cleanPath, 'vscode')
+          ?.openWorkspaceFile(sessionId, parts.rawPath, 'vscode')
           .then(opened => {
             if (!opened) toast('Could not open this file in Visual Studio Code', { tone: 'warn' })
           })
@@ -137,7 +137,7 @@ export function FilePathActionsMenu({
 
       case 'open-zed': {
         void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.cleanPath, 'zed')
+          ?.openWorkspaceFile(sessionId, parts.rawPath, 'zed')
           .then(opened => {
             if (!opened) toast('Could not open this file in Zed', { tone: 'warn' })
           })
@@ -147,7 +147,7 @@ export function FilePathActionsMenu({
 
       case 'open-cursor': {
         void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.cleanPath, 'cursor')
+          ?.openWorkspaceFile(sessionId, parts.rawPath, 'cursor')
           .then(opened => {
             if (!opened) toast('Could not open this file in Cursor', { tone: 'warn' })
           })
@@ -157,7 +157,7 @@ export function FilePathActionsMenu({
 
       case 'open-finder': {
         void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.cleanPath, 'finder')
+          ?.openWorkspaceFile(sessionId, parts.rawPath, 'finder')
           .then(opened => {
             if (!opened) toast('Could not reveal this file', { tone: 'warn' })
           })

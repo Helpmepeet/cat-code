@@ -10,12 +10,37 @@ import {
   FILE_PATH_FLYOUT_WIDTH,
 } from './filePathActions.js'
 
-test('stripLineSuffix removes line/col and query suffixes', () => {
+test('stripLineSuffix removes only trailing line and column suffixes', () => {
   expect(stripLineSuffix('src/foo.ts')).toBe('src/foo.ts')
   expect(stripLineSuffix('src/foo.ts:42')).toBe('src/foo.ts')
   expect(stripLineSuffix('src/foo.ts:42:10')).toBe('src/foo.ts')
-  expect(stripLineSuffix('src/foo.ts?query=1')).toBe('src/foo.ts')
-  expect(stripLineSuffix('src/foo.ts#section')).toBe('src/foo.ts')
+  expect(stripLineSuffix('src/foo.ts?query=1')).toBe('src/foo.ts?query=1')
+  expect(stripLineSuffix('src/C#/Program.cs')).toBe('src/C#/Program.cs')
+})
+
+test('resolveFilePathParts preserves literal hash and question-mark characters', () => {
+  expect(
+    resolveFilePathParts({
+      rawPath: 'C#/Program.cs:42',
+      cwd: '/Users/test/project',
+    }),
+  ).toMatchObject({
+    cleanPath: 'C#/Program.cs',
+    absolutePath: '/Users/test/project/C#/Program.cs:42',
+    filename: 'Program.cs',
+    lineSuffix: ':42',
+  })
+  expect(
+    resolveFilePathParts({
+      rawPath: 'src/what?.ts',
+      cwd: '/Users/test/project',
+    }),
+  ).toMatchObject({
+    cleanPath: 'src/what?.ts',
+    absolutePath: '/Users/test/project/src/what?.ts',
+    filename: 'what?.ts',
+    lineSuffix: null,
+  })
 })
 
 test('extractLineSuffix finds trailing line numbers', () => {
@@ -52,6 +77,27 @@ test('resolveFilePathParts resolves clean, absolute, and filename with cwd', () 
   })
   expect(partsAlreadyAbs.absolutePath).toBe('/Users/test/project/src/foo.ts:10')
   expect(partsAlreadyAbs.filename).toBe('foo.ts')
+})
+
+test('resolveFilePathParts resolves dot and parent segments without changing display suffixes', () => {
+  expect(
+    resolveFilePathParts({
+      rawPath: '../shared/what?.ts:4:2',
+      cwd: '/repo/app',
+    }).absolutePath,
+  ).toBe('/repo/shared/what?.ts:4:2')
+  expect(
+    resolveFilePathParts({
+      rawPath: './C#/Program.cs:42',
+      cwd: '/repo/app',
+    }).absolutePath,
+  ).toBe('/repo/app/C#/Program.cs:42')
+  expect(
+    resolveFilePathParts({
+      rawPath: '..\\shared\\x.ts:9',
+      cwd: 'C:\\repo\\app',
+    }).absolutePath,
+  ).toBe('C:\\repo\\shared\\x.ts:9')
 })
 
 test('resolveFilePathActionItems creates Copy and Open in structure with flyouts', () => {

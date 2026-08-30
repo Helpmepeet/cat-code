@@ -5,6 +5,7 @@ import type { SDKMessage } from '@cat-code/engine/session-events'
 import {
   ToolInspectorOverlay,
   TranscriptRowsView,
+  TranscriptView,
 } from './TranscriptView.js'
 import {
   dequote,
@@ -53,7 +54,7 @@ import {
   FACE_FILL_COUNT,
 } from './agentFace.js'
 import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
-import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
+import type { AccountsSnapshot, AccountStatus, SessionId } from '../../shared/protocol.js'
 
 // P4-24 empty-state Welcome fixtures — a real `AccountsSnapshot` shape (mirrors
 // WelcomeScreen.test.ts) so the empty transcript is
@@ -1453,11 +1454,15 @@ test('the activity line never prints a tool name twice', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'pending', [
       // `deriveTarget` falls back to the tool's own name for this family.
-      toolRow({ toolName: 'TodoWrite', toolFamily: 'other', input: {}, status: 'pending' }),
+      // NOT `TodoWrite`: `withoutTodoRows` strips those at every depth, so a
+      // todo row can no longer reach an agent's activity line in production
+      // (`todoPlan.ts`). `ExitPlanMode` is a real `other`-family tool that can
+      // (`src/tools/ExitPlanModeTool/constants.ts:1`).
+      toolRow({ toolName: 'ExitPlanMode', toolFamily: 'other', input: {}, status: 'pending' }),
     ]),
   )
-  expect(html).toContain('TodoWrite')
-  expect(html).not.toContain('TodoWrite TodoWrite')
+  expect(html).toContain('ExitPlanMode')
+  expect(html).not.toContain('ExitPlanMode ExitPlanMode')
 })
 
 test('the activity line says what a nested bash call DOES, not the command it ran', () => {
@@ -5315,4 +5320,72 @@ test('the streaming caret is gone, replaced by the arrival fade', () => {
   )
   expect(html).not.toContain('animate-pulse bg-accent')
   expect(html).toContain('still')
+})
+
+// ── the todo row never reaches the transcript ──────────────────────────────
+// A live-path test, not a shape test: it drives a real `TodoWrite` assistant
+// frame through `projectServerFrame` and renders `TranscriptView` — the actual
+// consumer, which is where `withoutTodoRows` is applied. Rendering
+// `TranscriptRowsView` directly would bypass the filter and prove nothing.
+test('a TodoWrite call is projected but never drawn in the transcript', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, inspectorReady('todo-1'))
+  state = projectServerFrame(
+    state,
+    inspectorMessage('todo-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_todo_1',
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_todo_1',
+            name: 'TodoWrite',
+            input: {
+              todos: [
+                {
+                  content: 'Determine root cause and implementation scope',
+                  status: 'completed',
+                  activeForm: 'Determining root cause and implementation scope',
+                },
+                {
+                  content: 'Implement the minimal fix and regression test',
+                  status: 'in_progress',
+                  activeForm: 'Implementing the minimal fix and regression test',
+                },
+              ],
+            },
+          },
+        ],
+      },
+    } as unknown as SDKMessage),
+  )
+  state = projectServerFrame(
+    state,
+    inspectorMessage('todo-1', {
+      type: 'assistant',
+      message: {
+        id: 'msg_todo_2',
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'toolu_bash_1', name: 'Bash', input: { command: 'echo hi' } },
+        ],
+      },
+    } as unknown as SDKMessage),
+  )
+
+  // The projection still holds it — this is what `selectTodoPlan` reads.
+  const rows = selectNestedTranscriptRows(state, 'todo-1' as SessionId)
+  expect(rows.some(row => row.kind === 'tool-use' && row.toolName === 'TodoWrite')).toBe(true)
+
+  const html = renderToStaticMarkup(
+    <TranscriptView activeSessionId={'todo-1' as SessionId} state={state} />,
+  )
+
+  expect(html).not.toContain('TodoWrite')
+  expect(html).not.toContain('Determine root cause')
+  // The sibling tool call in the same transcript still renders, so this is a
+  // targeted drop and not an empty pane.
+  expect(html).toContain('echo hi')
 })

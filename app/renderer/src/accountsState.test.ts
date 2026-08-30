@@ -9,6 +9,7 @@ import {
   createAccountsState,
   reduceAccountsState,
   selectAccountRows,
+  selectAccountsSnapshot,
   selectActiveAccount,
   selectActiveAnthropicAccount,
   selectCapAccount,
@@ -231,6 +232,38 @@ describe('global accounts pool (session-independent feed)', () => {
     })
     state = reduceAccountsState(state, { type: 'pool', pool: globalSnap })
     expect(selectGlobalAccountsSnapshot(state)?.readyCount).toBe(0)
+  })
+
+  test('a successful session mutation cannot replace newer host-owned accounts', () => {
+    const hostPool = snapshot()
+    const staleSessionPool = snapshot({
+      accounts: [snapshot().accounts[0]!],
+      poolCount: 1,
+    })
+    let state = createAccountsState()
+    state = reduceAccountsState(state, { type: 'pool', pool: hostPool })
+    // Account-result feedback comes from a sidecar that began with an older pool.
+    // The reducer retains it for session-scoped feedback but must never promote it
+    // over the host's independently refreshed global owner snapshot.
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: snapFrame('s1', staleSessionPool),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: {
+        kind: 'account.result',
+        protocolVersion: 1,
+        sessionId: 's1',
+        requestId: 'mutation',
+        verb: 'account.rename',
+        ok: true,
+        message: 'updated',
+      },
+    })
+
+    expect(selectGlobalAccountsSnapshot(state)?.accounts.map(account => account.id)).toEqual(['a', 'b'])
+    expect(selectAccountsSnapshot(state, 's1')?.accounts.map(account => account.id)).toEqual(['a'])
   })
 
   test('before the first poll lands, an attached session covers the launch gap', () => {

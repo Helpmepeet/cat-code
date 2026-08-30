@@ -86,6 +86,12 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   if (typeof value.sessionId !== 'string') return null
   if (value.forked !== undefined && typeof value.forked !== 'boolean') return null
   const forked = value.forked === true
+  // Additive field: caches written before SDK-run filtering existed lack it, so
+  // retain their rows until a fresh engine catalog supplies the provenance.
+  if (value.isInteractive !== undefined && typeof value.isInteractive !== 'boolean') {
+    return null
+  }
+  const isInteractive = value.isInteractive
   if (typeof value.cwd !== 'string') return null
   // Additive field (bug-sweep #1): a cache file written before it existed lacks
   // it → default `true` (assume-exists, never wrongly hide an old row). A PRESENT
@@ -117,6 +123,7 @@ function parseEntry(value: unknown): SessionCatalogEntry | null {
   return {
     sessionId: value.sessionId,
     forked,
+    isInteractive,
     cwd: value.cwd,
     cwdExists,
     title: value.title,

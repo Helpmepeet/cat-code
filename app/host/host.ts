@@ -57,6 +57,11 @@ import {
  * ------------------------------------------------------------------------- */
 
 export type CwdValidation = { ok: true; realpath: string } | { ok: false }
+type SpawnReservation = {
+  ok: true
+  token: string
+  consumesLive: boolean
+}
 
 export type HostOptions = {
   supervisor: SidecarSupervisor
@@ -111,8 +116,16 @@ export class Host implements HostApi {
 
   private readonly listeners = new Set<(event: HostEvent) => void>()
 
-  /** Spawn-rate ring (HC4): timestamps of recent createSession spawns. */
-  private spawnTimes: number[] = []
+  /**
+   * Spawn-rate reservations. A token remains after a child is committed, but is
+   * removed when persistence or synchronous process creation fails so a refused
+   * attempt cannot consume the fork budget.
+   */
+  private spawnTimes: Array<{ token: string; timestamp: number }> = []
+  /** Live slots admitted before the supervisor has registered its child. */
+  private pendingLiveSlots = 0
+  /** One restore owns a registry id from validation through child registration. */
+  private readonly restoring = new Set<SessionId>()
 
   /**
    * appSessionIds currently gracefully closing (or having a crash tombstone
@@ -288,9 +301,8 @@ export class Host implements HostApi {
     }
     const cwd = validated.realpath
 
-    // HC4 — bound row count AND spawn rate; either breach → session_limit.
-    const limit = this.checkSpawnLimits()
-    if (limit) return limit
+    const reservation = this.reserveSpawn(true)
+    if (!reservation.ok) return reservation.result
 
     return this.spawn({
       appSessionId: randomUUID(),
@@ -298,7 +310,7 @@ export class Host implements HostApi {
       title: capTitle(req.title),
       resumeEngineSessionId: req.resumeEngineSessionId,
       forked: req.forked === true,
-    })
+    }, reservation)
   }
 
   /* --------------------------------------------------------------------- *
@@ -313,6 +325,23 @@ export class Host implements HostApi {
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
+    // A duplicate restore must be a harmless refusal. In particular it must not
+    // clear a just-created row or kill the winning child while the first restore
+    // is between the registry write and supervisor registration.
+    if (this.restoring.has(appSessionId)) {
+      return hostError('session_not_found', `session ${appSessionId} is already restoring`)
+    }
+    this.restoring.add(appSessionId)
+    try {
+      return await this.restoreSessionExclusive(appSessionId)
+    } finally {
+      this.restoring.delete(appSessionId)
+    }
+  }
+
+  private async restoreSessionExclusive(
+    appSessionId: SessionId,
+  ): Promise<HostResult<SessionDescriptor>> {
     const row = this.registry.findSession(appSessionId)
     // §9-A4: fails session_not_found if the row OR its transcript is gone. The
     // registry only offers restorable rows whose transcript exists (launch reap),
@@ -361,16 +390,22 @@ export class Host implements HostApi {
       return hostError('invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
     }
 
-    const limit = this.checkSpawnLimits()
-    if (limit) return limit
+    const reservation = this.reserveSpawn(true)
+    if (!reservation.ok) return reservation.result
 
     // Clear the crashed tombstone (guarded by `closing` so the fake/late exit
     // the kill fires is not re-reported as a fresh crash — same suppression as
     // closeSession; the child is already dead, so this only deregisters).
     if (record) {
       this.closing.add(appSessionId)
-      this.supervisor.killSession(appSessionId)
-      this.closing.delete(appSessionId)
+      try {
+        this.supervisor.killSession(appSessionId)
+      } catch (error) {
+        this.releaseSpawnReservation(reservation)
+        return hostError('spawn_failed', `could not replace session: ${errText(error)}`)
+      } finally {
+        this.closing.delete(appSessionId)
+      }
     }
 
     return this.spawn({
@@ -379,7 +414,7 @@ export class Host implements HostApi {
       title: row.title,
       resumeEngineSessionId: row.engineSessionId,
       forked: row.forked,
-    })
+    }, reservation)
   }
 
   /* --------------------------------------------------------------------- *
@@ -417,8 +452,8 @@ export class Host implements HostApi {
       return hostError('invalid_cwd', `workspace cwd no longer exists: ${row.cwd}`)
     }
 
-    const limit = this.checkSpawnLimits()
-    if (limit) return limit
+    const reservation = this.reserveSpawn(true)
+    if (!reservation.ok) return reservation.result
 
     // FRESH session in that workspace: a NEW appSessionId + NO
     // resumeEngineSessionId (this is a new session, not a restore of the named one).
@@ -428,7 +463,7 @@ export class Host implements HostApi {
       title: undefined,
       resumeEngineSessionId: undefined,
       forked: false,
-    })
+    }, reservation)
   }
 
   /* --------------------------------------------------------------------- *
@@ -442,10 +477,9 @@ export class Host implements HostApi {
     title: string | null | undefined
     resumeEngineSessionId: string | undefined
     forked: boolean
-  }): Promise<HostResult<SessionDescriptor>> {
+  }, reservation: SpawnReservation): Promise<HostResult<SessionDescriptor>> {
     const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
-    this.recordSpawnTime()
 
     // Persist the live row BEFORE spawning so a crash between spawn and the next
     // launch still finds a row to sweep (REGISTRY.md §4.5 write points). The
@@ -456,24 +490,28 @@ export class Host implements HostApi {
     // its own transcript, so an opened history session rendered as a SECOND,
     // brand-new row at the top of the sidebar for the whole spawn window before
     // collapsing back into its real place (the visible "jump then settle").
-    const reaped = await this.registry.upsertOnSpawn({
-      appSessionId,
-      cwd,
-      title,
-      ...(resumeEngineSessionId !== undefined
-        ? { engineSessionId: resumeEngineSessionId }
-        : {}),
-      forked,
-    })
-    for (const reapedId of reaped) {
-      this.emitRemoved(reapedId)
-    }
-
+    let rowPersisted = false
     try {
+      const reaped = await this.registry.upsertOnSpawn({
+        appSessionId,
+        cwd,
+        title,
+        ...(resumeEngineSessionId !== undefined
+          ? { engineSessionId: resumeEngineSessionId }
+          : {}),
+        forked,
+      })
+      rowPersisted = true
+      for (const reapedId of reaped) {
+        this.emitRemoved(reapedId)
+      }
       this.supervisor.spawnSession(appSessionId, {
         cwd,
         ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
       })
+      // The child is now supervisor-visible, so replace the in-flight slot with
+      // the real live record before any later persistence await can yield.
+      this.commitSpawnReservation(reservation)
     } catch (error) {
       // Spawn threw synchronously (e.g. socket-path overflow, duplicate id). The
       // row we just wrote is now dead — mark it clean so it does not masquerade
@@ -483,7 +521,8 @@ export class Host implements HostApi {
       // restore-offer — a session-removed would hide it until relaunch (the
       // renderer pins removed ids), so re-emit its (exited, restorable) status
       // instead (SF-2, P3-5 review). Same restorable test as `closeSession`.
-      await this.registry.markClean(appSessionId)
+      this.releaseSpawnReservation(reservation)
+      if (rowPersisted) await this.registry.markClean(appSessionId)
       const failedDescriptor = this.descriptorFor(appSessionId)
       if (failedDescriptor?.restorable) {
         this.emit({ type: 'session-status', session: failedDescriptor })
@@ -621,7 +660,10 @@ export class Host implements HostApi {
     if (!isUuid(appSessionId)) {
       return hostError('session_not_found', 'malformed session id')
     }
-    if (!this.isLive(appSessionId)) {
+    const supervisorRecord = this.supervisor
+      .listSessions()
+      .find(session => session.sessionId === appSessionId)
+    if (!supervisorRecord) {
       return hostError('session_not_found', `session ${appSessionId} is not live`)
     }
     const row = this.registry.findSession(appSessionId)
@@ -642,22 +684,25 @@ export class Host implements HostApi {
         `transcript for ${appSessionId} is gone`,
       )
     }
-    // HC4 applies to every renderer-reachable process creation. A restart
-    // replaces an existing sidecar, so it does not consume another live slot,
-    // but it still forks a child and must share the same burst-rate budget as
-    // create/restore/workspace spawn.
-    const limit = this.checkSpawnLimits()
-    if (limit) return limit
+    // A live restart replaces one process, but a terminal supervisor tombstone
+    // starts a new one and therefore consumes a live slot.
+    const reservation = this.reserveSpawn(isTerminalStatus(supervisorRecord.status))
+    if (!reservation.ok) return reservation.result
 
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
-    this.recordSpawnTime()
-    this.supervisor.restartSession(appSessionId, {
-      cwd: row.cwd,
-      ...(row.engineSessionId !== null
-        ? { resumeEngineSessionId: row.engineSessionId }
-        : {}),
-    })
+    try {
+      this.supervisor.restartSession(appSessionId, {
+        cwd: row.cwd,
+        ...(row.engineSessionId !== null
+          ? { resumeEngineSessionId: row.engineSessionId }
+          : {}),
+      })
+      this.commitSpawnReservation(reservation)
+    } catch (error) {
+      this.releaseSpawnReservation(reservation)
+      return hostError('spawn_failed', `could not restart session: ${errText(error)}`)
+    }
     // Refresh advisory fields from the fresh child (new pid + socketPath). The
     // row stays live; upsertOnSpawn bumps restartCount and rewrites the hints.
     await this.registry.upsertOnSpawn({
@@ -745,32 +790,45 @@ export class Host implements HostApi {
    * HC4 — spawn limits
    * --------------------------------------------------------------------- */
 
-  private checkSpawnLimits(): { ok: false; error: HostError } | null {
+  private reserveSpawn(consumesLive: boolean):
+    | { ok: true; token: string; consumesLive: boolean }
+    | { ok: false; result: HostResult<never> } {
     // Concurrency bound: live engine processes. Deliberately NOT the registry's
     // row bound (`MAX_REGISTRY_SESSIONS`) — that one covers live + terminal rows
     // and is a file-growth backstop, so tying process concurrency to it meant
     // raising the row bound would raise the fork-bomb cap too. The reap only
     // trims TERMINAL rows; live rows are never evicted to make room.
-    if (this.liveCount() >= MAX_LIVE_SESSIONS) {
-      return hostError('session_limit', `at most ${MAX_LIVE_SESSIONS} live sessions`)
+    if (consumesLive && this.liveCount() + this.pendingLiveSlots >= MAX_LIVE_SESSIONS) {
+      return { ok: false, result: hostError('session_limit', `at most ${MAX_LIVE_SESSIONS} live sessions`) }
     }
-    // Rate cap: fork-bomb defense (extends T7 to process creation).
-    const cutoff = this.now() - SPAWN_RATE_WINDOW_MS
-    const recent = this.spawnTimes.filter(t => t > cutoff)
-    if (recent.length >= MAX_SPAWNS_PER_WINDOW) {
-      this.spawnTimes = recent
-      return hostError(
+    const now = this.now()
+    // A wall-clock rollback must open a fresh bounded window rather than retain
+    // future timestamps indefinitely.
+    if (this.spawnTimes.some(entry => entry.timestamp > now)) {
+      this.spawnTimes = []
+    } else {
+      const cutoff = now - SPAWN_RATE_WINDOW_MS
+      this.spawnTimes = this.spawnTimes.filter(entry => entry.timestamp > cutoff)
+    }
+    if (this.spawnTimes.length >= MAX_SPAWNS_PER_WINDOW) {
+      return { ok: false, result: hostError(
         'session_limit',
         `spawn rate cap: ${MAX_SPAWNS_PER_WINDOW} per ${SPAWN_RATE_WINDOW_MS}ms`,
-      )
+      ) }
     }
-    return null
+    const reservation = { ok: true as const, token: randomUUID(), consumesLive }
+    this.spawnTimes.push({ token: reservation.token, timestamp: now })
+    if (consumesLive) this.pendingLiveSlots += 1
+    return reservation
   }
 
-  private recordSpawnTime(): void {
-    const cutoff = this.now() - SPAWN_RATE_WINDOW_MS
-    this.spawnTimes = this.spawnTimes.filter(t => t > cutoff)
-    this.spawnTimes.push(this.now())
+  private commitSpawnReservation(reservation: SpawnReservation): void {
+    if (reservation.consumesLive) this.pendingLiveSlots -= 1
+  }
+
+  private releaseSpawnReservation(reservation: SpawnReservation): void {
+    if (reservation.consumesLive) this.pendingLiveSlots -= 1
+    this.spawnTimes = this.spawnTimes.filter(entry => entry.token !== reservation.token)
   }
 
   private liveCount(): number {

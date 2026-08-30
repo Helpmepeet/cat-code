@@ -94,6 +94,11 @@ export type SidecarSettingsDomain = {
    */
   getSnapshot(): SettingsSnapshot | null
   /**
+   * Refresh credential-sensitive dynamic option lists after a pool mutation.
+   * Values and source layers stay owned by the existing settings read path.
+   */
+  refreshAvailableOptions(): Promise<void>
+  /**
    * Apply one editable-setting write through the engine's
    * `SettingsUpdater`-under-lock form and refresh the cached snapshot. This is
    * the LAST line before disk — it re-validates the (already sidecar-validated)
@@ -252,6 +257,9 @@ function describeOrigin(source: SettingSource): string {
 
 export function createSidecarSettingsDomain(
   availableOptions: AvailableSettingOptions = [],
+  options: {
+    reloadAvailableOptions?: () => Promise<AvailableSettingOptions>
+  } = {},
 ): SidecarSettingsDomain {
   // Read ONCE at spawn (see the module header for why: the attach path must do no
   // disk I/O and must not reset the engine's global settings cache). getSnapshot()
@@ -272,6 +280,11 @@ export function createSidecarSettingsDomain(
         snapshot = readSettingsSnapshotOnce(availableOptions)
       }
       return result
+    },
+    async refreshAvailableOptions(): Promise<void> {
+      if (!options.reloadAvailableOptions) return
+      availableOptions = await options.reloadAvailableOptions()
+      snapshot = readSettingsSnapshotOnce(availableOptions)
     },
   }
 }

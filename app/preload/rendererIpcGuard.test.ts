@@ -105,6 +105,19 @@ test('the diagnostics sub-cap resets with the window, not once per process', () 
   expect(() => guard.assertAllowed({ nextWindow: true }, 'diagnostics')).not.toThrow()
 })
 
+test('a backward wall-clock jump opens a fresh bounded rate window', () => {
+  let now = 100_000
+  const guard = createRendererIpcGuard({ now: () => now })
+  for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index++) {
+    guard.assertAllowed({ index })
+  }
+  expect(() => guard.assertAllowed({ overflow: true })).toThrow(RendererIpcRejection)
+
+  now = 10
+  now += RATE_WINDOW_MS * 2
+  expect(() => guard.assertAllowed({ afterRollback: true })).not.toThrow()
+})
+
 test('a rejection says whether it can clear on its own', () => {
   // The acknowledgement queue retries a rate rejection and drops anything else.
   // Without the distinction a size or serialization rejection would re-reject

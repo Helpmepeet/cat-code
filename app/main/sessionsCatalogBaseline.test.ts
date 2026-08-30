@@ -133,6 +133,18 @@ describe('readSessionsCatalogCache', () => {
     expect(readSessionsCatalogCache(dir)?.entries[0]?.cwdExists).toBe(false)
   })
 
+  test('a noninteractive transcript remains unavailable after a cold launch', () => {
+    const dir = tempDir()
+    writeRaw(
+      dir,
+      JSON.stringify({
+        ...validSnapshot,
+        entries: [{ ...validSnapshot.entries[0], isInteractive: false }],
+      }),
+    )
+    expect(readSessionsCatalogCache(dir)?.entries[0]?.isInteractive).toBe(false)
+  })
+
   test('a present non-boolean cwdExists fails closed to null (tamper/drift)', () => {
     const dir = tempDir()
     writeRaw(

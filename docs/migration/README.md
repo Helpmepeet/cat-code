@@ -20,7 +20,7 @@ on 2026-07-02 now that the production code lives in this repo.
 | [`decisions/`](decisions/) | Locked, load-bearing decision records — see the list below |
 | [`specs/`](specs/) | Focused design specs feeding specific sessions (streaming, permission-update, GUI harness, slash-catalog) |
 | [`reviews/`](reviews/) | Dated point-in-time reviews — archival, not edited after the fact |
-| [`backlog/`](backlog/) | Active per-phase session backlogs (`phase0-1.md`, `phase3.md`, `phase4.md`) |
+| [`backlog/`](backlog/) | Active per-phase session backlogs (`phase0-1.md`, `phase3.md`, `phase4.md`, `phase5.md`) |
 | [`process/`](process/) | Live how-to scaffolding: `GUI-VERIFICATION.md` (the only current process doc) |
 
 `MIGRATION-DOMAINS.md` and `MIGRATION-STRATEGY.md` are earlier strategy notes carried over

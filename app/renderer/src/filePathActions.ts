@@ -61,7 +61,7 @@ export type FilePathActionsPlacement = {
 }
 
 export function stripLineSuffix(path: string): string {
-  return path.replace(/[?#].*$/, '').replace(/:\d+(?::\d+)?$/, '')
+  return path.replace(/:\d+(?::\d+)?$/, '')
 }
 
 export function extractLineSuffix(path: string): string | null {
@@ -84,10 +84,7 @@ export function resolveFilePathParts({
   if (cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)) {
     absolutePath = rawPath
   } else if (cwd && cwd.trim().length > 0) {
-    const trimmedCwd = cwd.replace(/[/\\]+$/, '')
-    const separator = trimmedCwd.includes('\\') ? '\\' : '/'
-    const normalizedClean = cleanPath.replace(/^[./\\]+/, '')
-    const baseAbs = `${trimmedCwd}${separator}${normalizedClean}`
+    const baseAbs = resolvePathFromCwd(cwd, cleanPath)
     absolutePath = lineSuffix ? `${baseAbs}${lineSuffix}` : baseAbs
   }
 
@@ -98,6 +95,32 @@ export function resolveFilePathParts({
     filename,
     lineSuffix,
   }
+}
+
+function resolvePathFromCwd(cwd: string, relativePath: string): string {
+  const windows = /^[A-Za-z]:[\\/]/.test(cwd) || cwd.includes('\\')
+  const separator = windows ? '\\' : '/'
+  const normalizedCwd = cwd.replace(/[/\\]+$/, '')
+  const prefix = windows
+    ? normalizedCwd.slice(0, 2)
+    : normalizedCwd.startsWith('/') ? '/' : ''
+  const parts = normalizedCwd
+    .slice(prefix.length)
+    .split(/[/\\]+/)
+    .filter(Boolean)
+
+  for (const part of relativePath.split(/[/\\]+/)) {
+    if (part.length === 0 || part === '.') continue
+    if (part === '..') {
+      if (parts.length > 0) parts.pop()
+      continue
+    }
+    parts.push(part)
+  }
+
+  return windows
+    ? `${prefix}${separator}${parts.join(separator)}`
+    : `${prefix}${parts.join(separator)}`
 }
 
 export function resolveFilePathActionItems(

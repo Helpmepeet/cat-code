@@ -5,7 +5,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
 
   expect(source).toContain("const CH_RESTART = 'catcode:restart'")
-  expect(source).toContain('restart(sessionId: SessionId): void')
+  expect(source).toContain('restart(sessionId: SessionId): Promise<HostResult<void>>')
   expect(source).toContain("const CH_SET_MODE = 'catcode:set-mode'")
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
@@ -111,7 +111,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     "setAppearance(scheme: 'system' | 'light' | 'dark'): void",
   )
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(41)
+  // Glass mode is the other window-only, fixed sender. It carries a boolean
+  // preference and main persists it so renderer-free paint gaps retain an opaque
+  // background when glass is off.
+  expect(source).toContain("const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'")
+  expect(source).toContain('setGlassMode(enabled: boolean): void')
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(42)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -134,7 +139,8 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     "const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
   )
-  expect(source).toContain('openWorkspaceFile(appSessionId: SessionId, path: string)')
+  expect(source).toContain('openWorkspaceFile(')
+  expect(source).toContain('target?: OpenWorkspaceFileTarget')
 })
 
 test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
@@ -171,7 +177,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(13)
+  expect(invokeChannels.length).toBe(14)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -186,6 +192,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_OPEN_WORKSPACE_FILE',
     'CH_HOST_ACCOUNT_DELETE',
     'CH_SAVE_DIAGNOSTICS',
+    'CH_RESTART',
   ])
   for (const channel of invokeChannels) {
     expect(allowed.has(channel)).toBe(true)

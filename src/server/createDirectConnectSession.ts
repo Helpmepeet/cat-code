@@ -28,11 +28,13 @@ export async function createDirectConnectSession({
   authToken,
   cwd,
   dangerouslySkipPermissions,
+  signal,
 }: {
   serverUrl: string
   authToken?: string
   cwd: string
   dangerouslySkipPermissions?: boolean
+  signal?: AbortSignal
 }): Promise<{
   config: DirectConnectConfig
   workDir?: string
@@ -55,6 +57,7 @@ export async function createDirectConnectSession({
           dangerously_skip_permissions: true,
         }),
       }),
+      signal,
     })
   } catch (err) {
     throw new DirectConnectError(

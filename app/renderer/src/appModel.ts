@@ -6,6 +6,7 @@ import type {
   RunControlsSnapshot,
   SessionId,
 } from '../../shared/protocol.js'
+import type { HostError } from '../../shared/hostApi.js'
 import type {
   ConnectionSnapshot,
   ConnectionState,
@@ -15,6 +16,22 @@ import type {
   NestedTranscriptRow,
   TranscriptRow,
 } from './transcriptProjector.js'
+
+export function hostErrorMessage(error: HostError): string {
+  return `${error.code}: ${error.message}`
+}
+
+export async function restartConnection(
+  bridge: Pick<CatCodeBridge, 'restart'>,
+  sessionId: SessionId,
+): Promise<string | null> {
+  try {
+    const result = await bridge.restart(sessionId)
+    return result.ok ? null : hostErrorMessage(result.error)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
 
 export function shouldShowFirstRunOAuth(
   snapshot: AccountsSnapshot | null,

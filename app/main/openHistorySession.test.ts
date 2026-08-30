@@ -160,6 +160,18 @@ describe('resolveOpenHistorySession (open-from-history boundary)', () => {
     }
   })
 
+  test('rejects a noninteractive SDK transcript even when a stale registry row exists', () => {
+    const result = resolveOpenHistorySession(
+      ENGINE_ID,
+      [descriptor()],
+      catalog([entry({ isInteractive: false })]),
+    )
+    expect(result).toMatchObject({
+      kind: 'reject',
+      error: { code: 'session_not_found' },
+    })
+  })
+
   test('dedup: an id bound to a restorable app row returns it (switch/restore, not re-spawn)', () => {
     const restorable = descriptor({
       engineSessionId: ENGINE_ID,

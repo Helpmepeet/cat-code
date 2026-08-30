@@ -25,6 +25,7 @@ import {
   type GlassModeContextValue,
   type GlassRoot,
 } from './glassMode.js'
+import { getBridge } from './bridge.js'
 
 type GlassStorage = Pick<Storage, 'getItem' | 'setItem'>
 
@@ -73,6 +74,14 @@ export function GlassModeProvider({
   const useStampEffect = typeof document === 'undefined' ? useEffect : useLayoutEffect
   useStampEffect(() => {
     applyGlassMode(target, glass)
+    try {
+      // Sync on mount as well as changes. Existing renderer-local glass=true
+      // preferences predate main's fallback file and must migrate without
+      // requiring the operator to toggle the setting.
+      getBridge().setGlassMode(glass)
+    } catch {
+      // The renderer's stamp remains usable if the fixed preference channel fails.
+    }
   }, [target, glass])
   const value = useMemo<GlassModeContextValue>(
     () => ({ glass, setGlass }),

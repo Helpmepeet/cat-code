@@ -1,5 +1,5 @@
 /**
- * Frosted-glass window mode: a RENDERER-LOCAL view preference.
+ * Frosted-glass window mode: a renderer-owned view preference mirrored to main.
  *
  * Off by default, and off is the app exactly as it shipped. The only thing this
  * preference can do is take opacity away from the four window grounds in
@@ -10,15 +10,14 @@
  * finds nothing, because how this window paints itself is a property of the
  * window and not of the engine answering in it. So it persists where the accent,
  * the code theme and the tool-card style do, as versioned JSON in this
- * renderer's own storage, best-effort.
+ * renderer's own storage, best-effort. Electron main keeps a synchronized,
+ * bounded copy solely so it can choose the native background before the renderer
+ * paints.
  *
- * NO IPC, by construction. The window carries macOS vibrancy from the moment it
- * is created (`app/main/main.ts`), so the blurred backdrop sits behind the page
- * whether or not this is on, and the preference only decides whether the app's
- * own grounds are opaque enough to hide it. Nothing in the main process observes
- * the flip. That is deliberate twice over: it keeps a taste preference off the
- * preload surface entirely, and it avoids `setVibrancy(null)`, which does not
- * reliably clear on macOS.
+ * A fixed boolean preload channel synchronizes the current value to main on mount
+ * and change. Main updates only its persisted fallback and native background.
+ * The window carries macOS vibrancy from creation and never removes or re-mints
+ * it, avoiding `setVibrancy(null)`, which does not reliably clear on macOS.
  *
  * STAMP TARGET is `document.documentElement`, not the wrapper `<div>` the accent
  * stamps. The page ground is painted outside React's tree (`theme.css` base

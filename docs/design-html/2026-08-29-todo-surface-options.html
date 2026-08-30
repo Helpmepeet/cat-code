@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Todo surface</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:block;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --accent:#f472b6; --accent-soft:#f9a8d4;
+  --app-bg:#09090b; --shell-chrome:#070709; --surface-panel:#0a0a0c; --surface-raised:#111113;
+  --shell-seam:rgba(255,255,255,0.06); --shell-hover:rgba(255,255,255,0.045);
+  --text-primary:#f4f4f5; --text-muted:#a1a1aa; --text-subtle:#98989f;
+  --text-faint:#838389; --text-ghost:#75757b;
+  --tone-good:#4ade80; --tone-danger:#f87171; --tone-warn:#fbbf24;
+  --elev-popover:0 14px 38px rgba(0,0,0,0.5);
+  --transcript-width:900px;
+  --sans:'DM Sans',-apple-system,BlinkMacSystemFont,'Helvetica Neue',sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:#2a2a2e;color:#f4f4f5;font-family:var(--sans);-webkit-font-smoothing:antialiased}
+
+/* ---------- chrome (x-) : never inside a specimen ---------- */
+.x-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;padding:10px 28px;background:#232326;border-bottom:1px solid rgba(255,255,255,.08)}
+.x-name{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a92}
+.x-tabs{display:flex;gap:2px;margin-left:auto}
+.x-tab{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#6f6f77;background:none;border:none;border-bottom:1px solid transparent;padding:4px 9px;cursor:pointer}
+.x-tab[aria-pressed="true"]{color:#c8c8ce;border-bottom-color:#c8c8ce}
+.x-wrap{max-width:1300px;margin:0 auto;padding:0 28px 140px}
+.x-sec{padding-top:44px}
+.x-sechead{display:flex;align-items:baseline;gap:14px;border-top:1px solid rgba(255,255,255,.12);padding-top:9px;margin-bottom:22px}
+.x-id{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#c8c8ce}
+.x-note{font-family:var(--mono);font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#6f6f77}
+.x-lab{font-family:var(--mono);font-size:9px;letter-spacing:.2em;text-transform:uppercase;color:#8a8a92;margin:0 0 9px}
+.x-gap{height:30px}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-name">Cat Code &middot; todo surface</span>
+  <span class="x-tabs">
+    <button aria-pressed="true"  class="x-tab" data-s="rest" type="button">Rest</button>
+    <button aria-pressed="false" class="x-tab" data-s="open" type="button">Open</button>
+  </span>
+</div>
+
+<div class="x-wrap" id="wrap" data-s="rest">
+
+<style>
+/* ================= specimen ================================================ */
+
+.pane{position:relative;width:1240px;overflow:hidden;background:var(--app-bg);color:var(--text-primary);font-family:var(--sans)}
+.pane.full{height:452px}
+.main{display:flex;flex-direction:column;height:100%;min-height:0;gap:16px;padding:0 32px 32px}
+.tsec{position:relative;display:flex;min-height:0;flex:1;flex-direction:column}
+.scroll{min-height:0;flex:1;overflow-y:auto;scrollbar-width:none}
+.scroll::-webkit-scrollbar{display:none}
+.rows{display:flex;width:100%;max-width:var(--transcript-width);margin:0 auto;flex-direction:column;gap:10px;padding:24px 32px 0}
+.dockcol{display:flex;min-height:0;width:100%;max-width:var(--transcript-width);margin:0 auto;flex-direction:column}
+
+.ub{display:flex;justify-content:flex-end}
+.ub>div{max-width:82%;white-space:pre-wrap;overflow-wrap:break-word;border-radius:16px;border-bottom-right-radius:4px;border:1px solid rgba(244,114,182,.2);background:rgba(244,114,182,.1);padding:10px 16px;font-size:14px;line-height:1.625;color:var(--text-primary)}
+.prose{font-size:14px;font-weight:500;line-height:1.625;overflow-wrap:break-word;color:var(--text-primary)}
+.card{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);background:rgba(255,255,255,.025)}
+.card-h{display:flex;width:100%;align-items:center;gap:10px;padding:8px 12px;text-align:left}
+.card-mk{width:16px;flex-shrink:0;text-align:center;font-size:13px}
+.card-w{flex-shrink:0;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.card-t{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:12px;color:var(--text-primary)}
+.card-b{flex-shrink:0;font-family:var(--mono);font-size:10px;color:var(--text-subtle)}
+.card-d{height:6px;width:6px;flex-shrink:0;border-radius:9999px;background:var(--tone-good)}
+.card-d.run{background:var(--accent);animation:p 2s cubic-bezier(.4,0,.6,1) infinite}
+.card-body{border-top:1px solid var(--shell-seam);background:rgba(0,0,0,.28)}
+.card-body-in{padding:4px 12px 10px}
+.fam-read{color:#60a5fa}
+.fam-bash{color:#a3e635}
+.fam-grep{color:#fbbf24}
+.fam-edit{color:var(--accent)}
+.fam-todo{color:var(--text-subtle)}
+
+.tdlist{display:flex;flex-direction:column}
+.tdrow{display:flex;align-items:flex-start;gap:9px;padding:3px 0;font-size:12px;line-height:1.5}
+.tdrow i{flex-shrink:0;display:flex;align-items:center;justify-content:center;width:12px;height:18px;font-style:normal}
+.tdrow.done{color:var(--text-ghost)}
+.tdrow.done i{font-size:10px}
+.tdrow.now{color:var(--text-primary)}
+.tdrow.now i::before{content:'';width:6px;height:6px;border-radius:9999px;background:var(--accent);animation:p 2s cubic-bezier(.4,0,.6,1) infinite}
+.tdrow.next{color:var(--text-muted)}
+.tdrow.next i::before{content:'';width:6px;height:6px;border-radius:9999px;border:1px solid var(--text-ghost)}
+@keyframes p{50%{opacity:.5}}
+
+/* popover — 336px, the width of the app's own account panel */
+.pv{position:absolute;z-index:40;display:none;width:336px;border-radius:8px;border:1px solid var(--shell-seam);background:var(--surface-raised);padding:6px;box-shadow:var(--elev-popover);bottom:100%;right:0;margin-bottom:6px}
+.pv-h{padding:2px 8px 4px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--text-subtle)}
+.pv-l{padding:0 8px 2px}
+[data-s="open"] .pv{display:block}
+.host:hover .pv{display:block}
+
+/* ---- ActivityIndicator (App.tsx:5959 — gap-2.5 px-1 py-1.5 text-xs) ---- */
+.act{position:relative;display:flex;align-items:center;gap:10px;background:transparent;padding:6px 4px;font-size:12px}
+.act .dots{display:flex;width:30px;flex-shrink:0;align-items:center;gap:4px}
+.act .dots i{display:block;height:6px;width:6px;border-radius:9999px;background:var(--accent);animation:p 2s cubic-bezier(.4,0,.6,1) infinite}
+.act .dots i:nth-child(2){animation-delay:150ms}
+.act .dots i:nth-child(3){animation-delay:300ms}
+.act .verb{font-weight:600;color:var(--accent)}
+.act .target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);font-size:11.5px;color:var(--text-subtle)}
+.act .time{flex-shrink:0;font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+/* the readout: the byline's own treatment, at the row's right edge */
+.step{position:relative;margin-left:auto;flex-shrink:0;font-family:var(--mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+
+/* ---- composer ---- */
+.comp{display:flex;flex-shrink:0;flex-direction:column}
+.comp-in{position:relative;display:flex;align-items:flex-end;gap:14px;padding:0 4px}
+.comp-f{flex:1;min-width:0;padding:6px 0;font-size:15px;font-weight:500;color:var(--text-faint)}
+.comp-stop{display:flex;height:30px;width:30px;flex-shrink:0;align-self:flex-end;align-items:center;justify-content:center;border-radius:8px;color:var(--tone-danger)}
+.comp-rule{height:2px;border-radius:2px;background:rgba(255,255,255,.08)}
+.comp-a{display:flex;margin-top:12px;align-items:center;gap:16px;padding:0 4px}
+.comp-att{display:flex;height:22px;width:22px;flex-shrink:0;align-items:center;justify-content:center;border-radius:5px;color:var(--text-ghost)}
+.rail{display:flex;min-width:0;flex:1;align-items:center;gap:7px}
+.right{display:flex;align-items:center;gap:7px}
+.face{display:inline-flex;max-width:170px;flex-shrink:0;align-items:center;white-space:nowrap;border-radius:6px;padding:3px 5px;font-size:12.5px;font-weight:500}
+.face.model{color:#22d3ee}
+.face.effort{color:var(--tone-warn)}
+.face.mode{color:var(--accent)}
+.face.acct{gap:6px;color:var(--text-muted)}
+.face.acct>span{height:7px;width:7px;flex-shrink:0;border-radius:9999px;background:var(--tone-good)}
+.sep{flex-shrink:0;user-select:none;font-size:12px;color:rgba(255,255,255,.2)}
+.gauge{display:flex;flex-shrink:0;align-items:center;gap:6px;color:var(--text-muted)}
+.gauge b{font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums}
+</style>
+
+
+<section class="x-sec">
+  <div class="x-sechead"><span class="x-id">The activity row</span><span class="x-note">hover the readout</span></div>
+  <div class="pane full">
+    <div class="main">
+      <div class="tsec"><div class="scroll"><div class="rows">
+        <div class="ub"><div>the delivery diagnostic reports affected runs that were never touched. find out why and fix it.</div></div>
+        <div class="prose">Reading the trace sink first, then the code that decides which runs a diagnostic covers.</div>
+        <div class="card"><div class="card-h"><span class="card-mk fam-read">&equiv;</span><span class="card-w fam-read">Read</span><span class="card-t">app/main/deliveryTraceSink.ts</span><span class="card-d"></span></div></div>
+        <div class="card"><div class="card-h"><span class="card-mk fam-grep">&#8981;</span><span class="card-w fam-grep">Search</span><span class="card-t">affectedRuns</span><span class="card-d"></span></div></div>
+        <div class="card"><div class="card-h"><span class="card-mk fam-todo">&#10003;</span><span class="card-w fam-todo">Todo</span><span class="card-t">Implement the minimal fix and regression test</span><span class="card-b">3/5</span><span class="card-d"></span></div></div>
+        <div class="prose">The sink keys a run by its start timestamp, so two runs opened in the same millisecond share a key and the second inherits the first one&rsquo;s file list.</div>
+        <div class="card"><div class="card-h"><span class="card-mk fam-edit">&plusmn;</span><span class="card-w fam-edit">Edit</span><span class="card-t">app/main/deliveryTraceSink.ts</span><span class="card-d"></span></div></div>
+        <div class="card"><div class="card-h"><span class="card-mk fam-bash">$</span><span class="card-w fam-bash">Bash</span><span class="card-t">bun test app/main/deliveryTraceSink.test.ts</span><span class="card-d run"></span></div></div>
+      </div></div></div>
+      <div class="dockcol">
+        <div class="act">
+          <span class="dots"><i></i><i></i><i></i></span>
+          <span class="verb">Running</span>
+          <span class="target">Bash</span>
+          <span class="time">2m 58s &middot; &darr; 2.2k tokens</span>
+          <span class="step host">3/5
+            <span class="pv">
+              <div class="pv-h">Todo</div>
+              <div class="pv-l tdlist">
+                <div class="tdrow done"><i>&#10003;</i><span>Trace delivery diagnostic semantics and affected run evidence</span></div>
+                <div class="tdrow done"><i>&#10003;</i><span>Determine root cause and implementation scope</span></div>
+                <div class="tdrow now"><i></i><span>Implement the minimal fix and regression test</span></div>
+                <div class="tdrow next"><i></i><span>Run desktop verification and stale-reference sweep</span></div>
+                <div class="tdrow next"><i></i><span>Update migration status and commit owned files</span></div>
+              </div>
+            </span>
+          </span>
+        </div>
+        <form class="comp">
+          <div class="comp-in"><div class="comp-f">Ask Cat Code anything or describe a task&hellip;</div><span class="comp-stop"><svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></span></div>
+          <div class="comp-rule"></div>
+          <div class="comp-a">
+            <span class="comp-att"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></span>
+            <div class="rail"><span class="face model">gpt-5.6-sol</span><span class="sep">&middot;</span><span class="face effort">High</span><span class="sep">&middot;</span><span class="face mode">Auto</span></div>
+            <div class="right"><span class="face acct"><span></span>personal</span><span class="gauge"><svg width="16" height="16" viewBox="0 0 16 16" style="transform:rotate(-90deg)"><circle cx="8" cy="8" r="6.5" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="3"/><circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" stroke-width="3" stroke-dasharray="4.9 40.84"/></svg><b>12%</b></span></div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<section class="x-sec">
+  <div class="x-sechead"><span class="x-id">The row alone</span><span class="x-note">actual size</span></div>
+  <div class="pane" style="width:660px;padding:6px 12px">
+    <div class="act">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="verb">Running</span>
+      <span class="target">Bash</span>
+      <span class="time">2m 58s &middot; &darr; 2.2k tokens</span>
+      <span class="step">3/5</span>
+    </div>
+  </div>
+</section>
+
+
+<section class="x-sec">
+  <div class="x-sechead"><span class="x-id">Transcript card</span><span class="x-note">unchanged from earlier</span></div>
+
+  <p class="x-lab">Current</p>
+  <div class="pane" style="padding:18px 32px">
+    <div class="card">
+      <div class="card-h">
+        <span class="card-mk" style="color:var(--text-muted)">&bull;</span>
+        <span class="card-w" style="color:var(--text-muted)">Tool</span>
+        <span class="card-t">TodoWrite</span>
+        <span class="card-d"></span>
+      </div>
+      <div class="card-body"><div class="card-body-in">
+        <pre style="margin:0;white-space:pre-wrap;font-family:var(--mono);font-size:11.5px;line-height:1.625;color:var(--text-muted)">Todos have been modified successfully. Ensure that you continue to use the todo list to track your progress. Please proceed with the current tasks if applicable</pre>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="x-gap"></div>
+
+  <p class="x-lab">Proposed</p>
+  <div class="pane" style="padding:18px 32px">
+    <div class="card">
+      <div class="card-h">
+        <span class="card-mk fam-todo">&#10003;</span>
+        <span class="card-w fam-todo">Todo</span>
+        <span class="card-t">Implement the minimal fix and regression test</span>
+        <span class="card-b">3/5</span>
+        <span class="card-d"></span>
+      </div>
+      <div class="card-body"><div class="card-body-in">
+        <div class="tdlist">
+          <div class="tdrow done"><i>&#10003;</i><span>Trace delivery diagnostic semantics and affected run evidence</span></div>
+          <div class="tdrow done"><i>&#10003;</i><span>Determine root cause and implementation scope</span></div>
+          <div class="tdrow now"><i></i><span>Implement the minimal fix and regression test</span></div>
+          <div class="tdrow next"><i></i><span>Run desktop verification and stale-reference sweep</span></div>
+          <div class="tdrow next"><i></i><span>Update migration status and commit owned files</span></div>
+        </div>
+      </div></div>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<script>
+(function(){
+  var wrap = document.getElementById('wrap');
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.x-tab'));
+  tabs.forEach(function(tab){
+    tab.addEventListener('click', function(){
+      tabs.forEach(function(t){ t.setAttribute('aria-pressed', String(t === tab)); });
+      wrap.setAttribute('data-s', tab.getAttribute('data-s'));
+    });
+  });
+  document.querySelectorAll('.scroll').forEach(function(s){ s.scrollTop = s.scrollHeight; });
+})();
+</script>
+</body>
+</html>

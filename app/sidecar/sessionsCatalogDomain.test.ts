@@ -225,6 +225,12 @@ describe('mapLogOptionToCatalogEntry', () => {
     ).toBeNull()
   })
 
+  test('marks noninteractive SDK CLI transcripts unavailable to the desktop app', () => {
+    expect(
+      mapLogOptionToCatalogEntry(makeLog({ sessionId: 'sdk-run', entrypoint: 'sdk-cli' })),
+    ).toMatchObject({ isInteractive: false })
+  })
+
   // The title fallback is NOT the predicate: the engine stamps '(session)' on a
   // real session whose first prompt outgrew the read window, and that session is
   // resumable. Only the content flag may drop a row.

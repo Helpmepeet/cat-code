@@ -16,8 +16,7 @@
  *
  *  - **Outbound = raw SDKMessage (TRANSPORT-DECISION.md §2/§4).** The engine→UI
  *    direction ships the whole `AppSessionEvent` (incl. `event.message:
- *    SDKMessage`) — NOT the flattened `appSessionEventMapper` shape. The mapper
- *    drops `tool_use`; we route around it.
+ *    SDKMessage`) without a lossy event mapper. Tool-use blocks remain intact.
  *
  *  - **New outbound facts grow an existing snapshot; they never repurpose a
  *    field.** `PROTOCOL_VERSION` stays put for an addition because no reader's
@@ -35,10 +34,10 @@
  *  - **Inbound = the allowlisted client message types (SECURITY-MINIMUM §2).**
  *    `app.submit` / `app.abort` / `permission.response` / `app.ping` reuse the
  *    existing, transport-agnostic `appClientMessageSchema` vocabulary
- *    (appSessionProtocol.ts); `permission.setMode` (C2,
+ *    (`src/app-runtime/appSessionProtocol.ts`); `permission.setMode` (C2,
  *    decisions/PERMISSION-BOUNDARY.md §3) is app-owned and validated by a
  *    sidecar-LOCAL schema — the engine's shared schema is deliberately not
- *    extended (the WS server shares it and has no handler for the frame).
+ *    extended.
  *    Everything is validated at the sidecar (the trust boundary), never at the
  *    preload.
  */
@@ -576,8 +575,7 @@ export type ClientFrame = {
  * ------------------------------------------------------------------------- */
 
 /**
- * `app.ready` handshake, re-homed from the WS server (AppSessionWebSocketServer
- * .ts:79-87) onto IPC. Emitted once per attach so the renderer knows the
+ * `app.ready` handshake. Emitted once per attach so the renderer knows the
  * channel is open and can read the initial session state.
  */
 export type ReadyFrame = {
@@ -2795,6 +2793,13 @@ export type SessionCatalogEntry = {
   sessionId: string
   /** Engine-authored fork provenance derived from transcript `forkedFrom`. */
   forked: boolean
+  /**
+   * Whether this transcript came from a user-facing session. Noninteractive SDK
+   * command runs are retained in the engine transcript store for diagnostics but
+   * must not appear in, or be opened from, the desktop session catalog. Older
+   * cached entries that lack this additive outbound field remain visible.
+   */
+  isInteractive?: boolean
   /** Session root (the transcript's project path). */
   cwd: string
   /**
@@ -2973,7 +2978,9 @@ export type GeneratedImagePreviewFrame = {
  * reached the model, so it is not transcript history: the terminal renders it
  * above the composer and only lets it into the transcript on delivery
  * (`src/components/PromptInput/PromptInputQueuedCommands.tsx`). This snapshot is
- * how the desktop learns the same thing.
+ * how the desktop learns the same thing. Where the desktop DRAWS it is a
+ * renderer decision and has moved (`App.tsx`, D1a); what does not move is that
+ * nothing here is transcript state until the engine takes it.
  *
  * Outbound only, and deliberately so: displaying what is waiting needs no new
  * inbound vocabulary. Taking a message BACK does, which is why that is a
@@ -3389,9 +3396,16 @@ export type TranscriptCache = {
  *
  * This surface comprises:
  *  1. Direct Engine Commands (submit, abort, respondPermission, ping) - routed to the sidecar.
- *  2. Host-Level Operations (restart) - triggers sidecar process control in Electron main.
+ *  2. Host-Level Operations (restart) - invokes fixed sidecar process control in Electron main.
  *  3. Attachment Operations (rendererReady, subscribe) - initializes preload-to-renderer bridging.
  */
+export type OpenWorkspaceFileTarget =
+  | 'default'
+  | 'vscode'
+  | 'zed'
+  | 'cursor'
+  | 'finder'
+
 export type CatCodeBridge = {
   /** Send one prompt to the addressed session. */
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void
@@ -3543,8 +3557,11 @@ export type CatCodeBridge = {
   queryStats(sessionId: SessionId, range: UsageStatsRange): void
   /** Liveness ping; resolves as a `pong` server frame. */
   ping(sessionId: SessionId, nonce: string): void
-  /** Restart the addressed sidecar process while retaining renderer attachment. */
-  restart(sessionId: SessionId): void
+  /**
+   * Restart the addressed sidecar while retaining renderer attachment. This is a
+   * fixed control-plane request: typed host failures are returned as data.
+   */
+  restart(sessionId: SessionId): Promise<HostResult<void>>
   /**
    * Subscribe to server frames. Main delivers them in batches (one `ServerFrame[]`
    * per IPC message, perf F3); a single live frame arrives as a one-element array.
@@ -3601,6 +3618,8 @@ export type CatCodeBridge = {
    * `nativeTheme.themeSource`.
    */
   setAppearance(scheme: 'system' | 'light' | 'dark'): void
+  /** Persist the bounded glass preference so main can paint renderer-free gaps. */
+  setGlassMode(enabled: boolean): void
   /**
    * Ask main's existing account-pool driver for one fresh global snapshot. This
    * has no payload, starts no session, and never becomes sidecar vocabulary.
@@ -3611,10 +3630,15 @@ export type CatCodeBridge = {
   saveDiagnosticsBundle(): Promise<boolean>
   /**
    * Open a model-mentioned file from this session's workspace in the operating
-   * system's associated application. Main resolves the path against the
-   * host-owned session cwd and rejects missing, non-file, or escaping targets.
+   * system's associated application, or a specific chosen editor or file manager.
+   * Main resolves the path against the host-owned session cwd and rejects
+   * missing, non-file, or escaping targets.
    */
-  openWorkspaceFile(appSessionId: SessionId, path: string): Promise<boolean>
+  openWorkspaceFile(
+    appSessionId: SessionId,
+    path: string,
+    target?: OpenWorkspaceFileTarget,
+  ): Promise<boolean>
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out

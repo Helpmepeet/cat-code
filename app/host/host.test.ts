@@ -465,6 +465,28 @@ test('trusted fork provenance survives descriptor projection, close/restore, and
   ).toBe(true)
 })
 
+test('concurrent restores elect one owner without replacing its new sidecar', async () => {
+  const h = makeHost()
+  writeTranscript(h.storageDir, 'engine-restore-race')
+  const created = await h.host.createSession({
+    cwd: h.cwd,
+    resumeEngineSessionId: 'engine-restore-race',
+  })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  await h.host.closeSession(created.value.appSessionId)
+
+  const [winner, loser] = await Promise.all([
+    h.host.restoreSession(created.value.appSessionId),
+    h.host.restoreSession(created.value.appSessionId),
+  ])
+
+  expect([winner, loser].filter(result => result.ok)).toHaveLength(1)
+  expect([winner, loser].filter(result => !result.ok)).toHaveLength(1)
+  expect(h.supervisor.records.get(created.value.appSessionId)?.status).toBe('spawning')
+  expect(h.registry.findSession(created.value.appSessionId)?.shutdown).toBeNull()
+})
+
 test('ready frame bridges engineSessionId into the row and emits session-status', async () => {
   const h = makeHost()
   const result = await h.host.createSession({ cwd: h.cwd })
@@ -674,6 +696,17 @@ test('createSession enforces the spawn rate cap (HC4 → session_limit)', async 
   expect(next.ok).toBe(true)
 })
 
+test('a backward wall-clock jump resets the host spawn-rate window', async () => {
+  const h = makeHost()
+  for (let index = 0; index < MAX_SPAWNS_PER_WINDOW; index += 1) {
+    expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(true)
+  }
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(false)
+
+  h.setNow(h.now() - SPAWN_RATE_WINDOW_MS - 1)
+  expect((await h.host.createSession({ cwd: h.cwd })).ok).toBe(true)
+})
+
 test('restartSession shares the HC4 spawn-rate cap', async () => {
   const h = makeHost()
   const created = await h.host.createSession({ cwd: h.cwd })
@@ -695,6 +728,40 @@ test('restartSession shares the HC4 spawn-rate cap', async () => {
   expect(resumed.ok).toBe(true)
 })
 
+test('restarting a terminal tombstone cannot exceed the live-process cap', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+
+  const target = h.supervisor.records.get(created.value.appSessionId)
+  expect(target).toBeDefined()
+  if (!target) return
+  target.status = 'exited'
+
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  for (let i = 0; i < MAX_LIVE_SESSIONS; i++) {
+    h.supervisor.records.set(`live-restart-${i}`, {
+      sessionId: `live-restart-${i}`,
+      status: 'ready',
+      cwd: h.cwd,
+      pid: i + 1,
+      socketPath: `/tmp/live-restart-${i}.sock`,
+    })
+  }
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+
+  const result = await h.host.restartSession(created.value.appSessionId)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.error.code).toBe('session_limit')
+  expect(h.supervisor.records.get(created.value.appSessionId)?.status).toBe('exited')
+  expect(
+    h.supervisor
+      .listSessions()
+      .filter(record => record.status !== 'exited' && record.status !== 'failed'),
+  ).toHaveLength(MAX_LIVE_SESSIONS)
+})
+
 test('createSession enforces the live-process bound (HC4 → session_limit)', async () => {
   // A tiny fake registry that reports a saturated live set via the supervisor.
   const h = makeHost()
@@ -712,6 +779,33 @@ test('createSession enforces the live-process bound (HC4 → session_limit)', as
   const result = await h.host.createSession({ cwd: h.cwd })
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.error.code).toBe('session_limit')
+})
+
+test('HC4 admits only one concurrent create into the final live slot', async () => {
+  const h = makeHost()
+  const { MAX_LIVE_SESSIONS } = await import('../shared/hostApi.js')
+  for (let i = 0; i < MAX_LIVE_SESSIONS - 1; i++) {
+    h.supervisor.records.set(`live-${i}`, {
+      sessionId: `live-${i}`,
+      status: 'ready',
+      cwd: h.cwd,
+      pid: i + 1,
+      socketPath: `/tmp/live-${i}.sock`,
+    })
+  }
+
+  const results = await Promise.all([
+    h.host.createSession({ cwd: h.cwd }),
+    h.host.createSession({ cwd: h.cwd }),
+  ])
+
+  expect(results.filter(result => result.ok)).toHaveLength(1)
+  expect(results.filter(result => !result.ok)).toHaveLength(1)
+  expect(
+    h.supervisor
+      .listSessions()
+      .filter(record => record.status !== 'exited' && record.status !== 'failed'),
+  ).toHaveLength(MAX_LIVE_SESSIONS)
 })
 
 test('HC4: terminal tombstones do not consume the live-session cap', async () => {

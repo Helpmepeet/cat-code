@@ -101,6 +101,14 @@ export function resolveOpenHistorySession(
     return reject('session_not_found', 'malformed engine session id')
   }
 
+  const entry = catalog?.entries.find(e => e.sessionId === engineSessionId)
+  if (entry?.isInteractive === false) {
+    return reject(
+      'session_not_found',
+      'that session is not available in the desktop app.',
+    )
+  }
+
   // Dedup — the id is already a live/restorable desktop row: hand it back so the
   // renderer switches (live) or restores (restorable) rather than spawning a
   // second sidecar onto the same transcript.
@@ -111,7 +119,6 @@ export function resolveOpenHistorySession(
 
   // cwd resolution from the engine-written cache only (HC1). No cache entry →
   // fail closed; the renderer tells the user to open it from the terminal.
-  const entry = catalog?.entries.find(e => e.sessionId === engineSessionId)
   if (entry) {
     if (typeof entry.cwd !== 'string' || entry.cwd.trim().length === 0) {
       // MAJOR-1: a transcript whose workspace could not be reconciled. Never guess.

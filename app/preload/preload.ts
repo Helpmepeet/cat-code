@@ -29,6 +29,7 @@ import type {
   SessionActionVerbMessage,
   ContextBreakdownVerbMessage,
   HistoryLoadEarlierMessage,
+  OpenWorkspaceFileTarget,
   ServerFrame,
   SessionId,
   SessionsCatalogSnapshot,
@@ -80,6 +81,7 @@ const CH_RENDERER_READY = 'catcode:renderer-ready'
 const CH_DELIVERY_ACK = 'catcode:delivery-ack'
 const CH_RENDERER_FAULT = 'catcode:renderer-fault'
 const CH_SET_APPEARANCE = 'catcode:set-appearance'
+const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'
 const CH_OPEN_LOGS = 'catcode:open-logs'
 const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
 const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
@@ -392,10 +394,10 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_PING, payload)
   },
-  restart(sessionId: SessionId): void {
+  restart(sessionId: SessionId): Promise<HostResult<void>> {
     const payload = { sessionId }
     sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_RESTART, payload)
+    return ipcRenderer.invoke(CH_RESTART, payload) as Promise<HostResult<void>>
   },
   subscribe(listener: (frames: ServerFrame[]) => void): () => void {
     // Main batches a delivery as one `ServerFrame[]` message (perf F3); hand the
@@ -462,6 +464,11 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ scheme })
     ipcRenderer.send(CH_SET_APPEARANCE, scheme)
   },
+  setGlassMode(enabled: boolean): void {
+    if (typeof enabled !== 'boolean') return
+    sendGuard.assertAllowed({ enabled })
+    ipcRenderer.send(CH_SET_GLASS_MODE, enabled)
+  },
   refreshAccountsPool(): void {
     sendGuard.assertAllowed({ refreshAccountsPool: true })
     ipcRenderer.send(CH_REFRESH_ACCOUNTS_POOL)
@@ -474,8 +481,12 @@ const bridge: CatCodeBridge = {
     sendGuard.assertAllowed({ saveDiagnostics: true })
     return ipcRenderer.invoke(CH_SAVE_DIAGNOSTICS) as Promise<boolean>
   },
-  openWorkspaceFile(appSessionId: SessionId, path: string): Promise<boolean> {
-    const payload = { appSessionId, path }
+  openWorkspaceFile(
+    appSessionId: SessionId,
+    path: string,
+    target?: OpenWorkspaceFileTarget,
+  ): Promise<boolean> {
+    const payload = target ? { appSessionId, path, target } : { appSessionId, path }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_OPEN_WORKSPACE_FILE, payload) as Promise<boolean>
   },

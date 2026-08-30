@@ -22,6 +22,7 @@ import {
   session,
   shell,
   type IpcMainEvent,
+  type IpcMainInvokeEvent,
   type WebContents,
 } from 'electron'
 import { fileURLToPath } from 'node:url'
@@ -77,6 +78,7 @@ import {
   supervisorEventToServerFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
+import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import {
   buildClosedSessionCache,
   deleteCache,
@@ -213,6 +215,7 @@ const CH_RENDERER_READY = 'catcode:renderer-ready'
 const CH_DELIVERY_ACK = 'catcode:delivery-ack'
 const CH_RENDERER_FAULT = 'catcode:renderer-fault'
 const CH_SET_APPEARANCE = 'catcode:set-appearance'
+const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'
 
 /**
  * The macOS material `createWindow` mounts, and the ONLY place it is ever set.
@@ -578,6 +581,7 @@ let latestRendererSnapshot: DebugRendererSnapshot | null = null
  */
 const attachmentGate = new AttachmentGate()
 const replayFlushTimers = new Map<SessionId, ReturnType<typeof setTimeout>>()
+const restoringSessions = new Set<SessionId>()
 
 function scheduleReplayFlush(sessionId: SessionId): void {
   if (replayFlushTimers.has(sessionId)) return
@@ -994,7 +998,7 @@ function refreshAccountsPoolNow(): void {
   accountsPoolDriver?.refreshNow()
 }
 
-function isMainWindowSender(event: IpcMainEvent): boolean {
+function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
   const contents = mainWindow?.webContents
   return contents !== undefined && !contents.isDestroyed() && event.sender === contents
 }
@@ -1292,6 +1296,7 @@ function applySecurityBaseline(): void {
 }
 
 function createWindow(): void {
+  const glassEnabled = readGlassPreference(app.getPath('userData'))
   const window = new BrowserWindow({
     width: 1100,
     height: 720,
@@ -1321,31 +1326,27 @@ function createWindow(): void {
     // window, so outer and content height are the same measure again.
     minWidth: 852,
     minHeight: 467,
-    // Glass mode (`app/renderer/src/glassMode.ts`) is a RENDERER preference, and
-    // these lines are the reason it needs no channel to reach us: the OS material
-    // is mounted once, here, and the renderer decides whether its own ground is
-    // opaque enough to hide it. Nothing in main observes the flip.
+    // Glass mode remains a renderer-owned view preference, but main keeps a
+    // synchronized bounded copy so renderer-free paint gaps use the same native
+    // background. A missing or invalid copy fails solid. On first launch after
+    // this main-owned file was introduced, the renderer sends its existing
+    // local-storage value on mount and seeds future launches.
     //
-    // Mounted once and never touched again. `setVibrancy` is not symmetric: it
-    // can change the material of a window that is already vibrant, but it cannot
-    // make one vibrant that is not (measured 2026-08-28 on Electron 33.4.11), so
-    // a window that loses its `NSVisualEffectView` cannot be repaired from JS at
-    // all. Given the transparent ground below, that leaves a HOLE rather than a
-    // solid window. Nothing runs `setVibrancy` after this line, deliberately.
+    // Vibrancy is mounted once and never touched again. `setVibrancy` is not
+    // symmetric: it can change the material of a window that is already vibrant,
+    // but it cannot make one vibrant that is not (measured 2026-08-28 on Electron
+    // 33.4.11), so a window that loses its `NSVisualEffectView` cannot be repaired
+    // from JS at all. Given the transparent ground below, that leaves a HOLE
+    // rather than a solid window. Nothing runs `setVibrancy` after this line,
+    // deliberately.
     //
     // `visualEffectState: 'active'` because the default (`followWindow`) swaps to
     // the inactive material on blur, which would shift the whole app ground every
     // time the operator clicks another window.
     //
-    // WHAT THIS COSTS THE DEFAULT USER, who never turns glass on. The ground is
-    // transparent on darwin unconditionally, so the page is the only thing making
-    // the window opaque. Any frame the renderer is NOT painting shows the desktop
-    // instead of black: a reload, a `render-process-gone` recovery, an OOM
-    // restart. `ready-to-show` covers first launch and nothing after it. So "off
-    // is the app exactly as it shipped" is true of every pixel the renderer paints
-    // and false in the gaps between paints. Closing that needs main to learn the
-    // preference before this call, which means persisting it somewhere main can
-    // read; deferred deliberately, not overlooked.
+    // The native background follows that persisted choice: solid when glass is
+    // off, transparent when it is on. Renderer reload, crash, and OOM gaps
+    // therefore cannot expose the desktop for the default off state.
     //
     // `#00000000` is AARRGGBB, not RRGGBBAA (`electron.d.ts`). All-zeros is the
     // same either way; a later edit to a non-zero colour is not.
@@ -1375,7 +1376,7 @@ function createWindow(): void {
           trafficLightPosition: { x: 12, y: 14 },
           vibrancy: WINDOW_VIBRANCY,
           visualEffectState: 'active' as const,
-          backgroundColor: '#00000000',
+          backgroundColor: glassEnabled ? '#00000000' : '#09090b',
         }
       : { backgroundColor: '#09090b' }),
     show: false,
@@ -2129,14 +2130,27 @@ function registerIpcHandlers(): void {
     forward(arg.sessionId, { type: 'app.ping', nonce: arg.nonce })
   })
 
-  ipcMain.on(CH_RESTART, (_e, arg: { sessionId: SessionId }) => {
-    if (typeof arg?.sessionId !== 'string' || !host) return
+  ipcMain.handle(
+    CH_RESTART,
+    (event: IpcMainInvokeEvent, arg: unknown): Promise<HostResult<void>> => {
+      if (!isMainWindowSender(event) || typeof (arg as { sessionId?: unknown })?.sessionId !== 'string') {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'session_not_found', message: 'restart request refused' },
+        })
+      }
+      if (!host) {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'spawn_failed', message: 'host is not running' },
+        })
+      }
+      const sessionId = (arg as { sessionId: SessionId }).sessionId
     // SF5 — route through the host so the registry's advisory fields (pid /
     // socketPath) are refreshed from the fresh child; the host also evicts replay.
-    // A typed error is swallowed here (fire-and-forget IPC); the renderer already
-    // learns liveness from status events.
-    void host.restartSession(arg.sessionId)
-  })
+      return host.restartSession(sessionId)
+    },
+  )
 
   // F2 — the renderer signals it has mounted and subscribed. The gate replays the
   // buffered frames (including the one-shot `ready` handshake) once per document
@@ -2327,6 +2341,12 @@ function registerIpcHandlers(): void {
   ipcMain.on(CH_SET_APPEARANCE, (_event, scheme: unknown) => {
     if (scheme !== 'system' && scheme !== 'light' && scheme !== 'dark') return
     nativeTheme.themeSource = scheme
+  })
+
+  ipcMain.on(CH_SET_GLASS_MODE, (event, enabled: unknown) => {
+    if (!isMainWindowSender(event) || typeof enabled !== 'boolean') return
+    writeGlassPreference(app.getPath('userData'), enabled)
+    mainWindow?.setBackgroundColor(enabled ? '#00000000' : '#09090b')
   })
 
   /**
@@ -2550,6 +2570,19 @@ function registerHostControlPlane(): void {
           return Promise.resolve({ ok: false, error: eligibility.error })
         }
       }
+      // The host protects direct callers too, but claiming the replay gate here
+      // prevents a losing IPC call from flushing the winning restore's shared
+      // bootstrap batch.
+      if (restoringSessions.has(sessionId)) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'session_not_found',
+            message: `session ${sessionId} is already restoring`,
+          },
+        })
+      }
+      restoringSessions.add(sessionId)
       // IS-B/M4 — only a renderer-requested lazy restore enters bootstrap/replay
       // coalescing. Fresh create, restart, and ordinary live traffic keep their
       // existing delivery behavior.
@@ -2565,6 +2598,8 @@ function registerHostControlPlane(): void {
         cancelReplayFlush(sessionId)
         deliver(attachmentGate.cancelReplayCoalescing(sessionId))
         throw error
+      } finally {
+        restoringSessions.delete(sessionId)
       }
     },
   )

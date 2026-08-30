@@ -109,6 +109,17 @@ describe('resolveSessionActions', () => {
     expect(item.label).toBe('Restore')
   })
 
+  test('a known-dead registry workspace stays visible without a Restore affordance', () => {
+    const item = byKind(
+      resolveSessionActions(
+        row({ live: false, restorable: true, status: 'exited', cwdExists: false }),
+        { isActiveOpen: false },
+      ),
+    ).get('open')!
+    expect(item.enabled).toBe(false)
+    expect(item.reason).toContain('workspace is no longer available')
+  })
+
   test('Copy + Inspect-metadata are live ONLY for the active-open session', () => {
     const active = byKind(resolveSessionActions(row(), { isActiveOpen: true }))
     expect(active.get('copy')!.enabled).toBe(true)
@@ -169,6 +180,19 @@ describe('resolveSessionActions', () => {
     expect(items.get('export')!.reason).toBeUndefined()
     expect(items.has('branch' as SessionActionKind)).toBe(false)
     expect(items.has('rewind' as SessionActionKind)).toBe(false)
+  })
+
+  test('Export waits for the addressed session to finish its active turn', () => {
+    const active = byKind(
+      resolveSessionActions(row(), { isActiveOpen: false, hasActiveTurn: true }),
+    )
+    expect(active.get('export')!.enabled).toBe(false)
+    expect(active.get('export')!.reason).toContain('finish')
+
+    const stable = byKind(
+      resolveSessionActions(row(), { isActiveOpen: false, hasActiveTurn: false }),
+    )
+    expect(stable.get('export')!.enabled).toBe(true)
   })
 
   test('Rename and Export are disabled with a reason for a non-live row', () => {

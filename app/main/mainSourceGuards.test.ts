@@ -93,9 +93,34 @@ test('host startup leaves session creation to an explicit renderer action', () =
   expect(ensureHost).not.toContain('.createSession(')
 })
 
+test('a duplicate restore is refused before the winning replay gate can be touched', () => {
+  // Electron main is not importable in this unit graph. AttachmentGate's
+  // idempotence is covered behaviorally; this narrow wiring guard pins the
+  // remaining ordering at the IPC handler.
+  const restore = region(
+    'ipcMain.handle(\n    CH_HOST_RESTORE',
+    'ipcMain.handle(\n    CH_HOST_CLOSE',
+  )
+  const duplicateCheck = restore.indexOf('if (restoringSessions.has(sessionId))')
+  const claim = restore.indexOf('restoringSessions.add(sessionId)')
+  const replayStart = restore.indexOf(
+    'attachmentGate.startReplayCoalescing(sessionId)',
+  )
+  const hostRestore = restore.indexOf('await host.restoreSession(sessionId)')
+
+  expect(duplicateCheck).toBeGreaterThanOrEqual(0)
+  expect(duplicateCheck).toBeLessThan(claim)
+  expect(claim).toBeLessThan(replayStart)
+  expect(replayStart).toBeLessThan(hostRestore)
+})
+
 test('the dev app name never depends on the userData path', () => {
-  expect(source).not.toContain("app.getPath('userData')")
-  expect(source).not.toContain('app.getPath("userData")')
+  const appNaming = region(
+    "if (IS_DEV) app.setName('Cat Code Dev')",
+    'const APP_ICON_PATH',
+  )
+  expect(appNaming).not.toContain("app.getPath('userData')")
+  expect(appNaming).not.toContain('app.getPath("userData")')
 })
 
 test('the account-pool refresh channel has no payload and reuses the existing driver', () => {

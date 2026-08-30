@@ -169,6 +169,18 @@ test('after attach, frames are forwarded live (not re-buffered for a second repl
   expect(gate.onFrame(SID, pong('live')).map(f => f.kind)).toEqual(['pong'])
 })
 
+test('a duplicate restore claim cannot reset or cancel the winning replay batch', () => {
+  const gate = new AttachmentGate()
+  gate.onRendererReady()
+  gate.startReplayCoalescing(SID)
+  expect(gate.onFrame(SID, readyFrame())).toEqual([])
+
+  gate.startReplayCoalescing(SID)
+
+  expect(gate.isReplayCoalescing(SID)).toBe(true)
+  expect(gate.flushReplayCoalescing(SID)).toEqual([readyFrame()])
+})
+
 test('lazy restore bootstrap and replay flush as one batch on first post-replay frame', () => {
   const gate = new AttachmentGate()
   gate.onRendererReady()

@@ -898,14 +898,10 @@ export type SettingsDestructiveChoice = {
  * housekeeping sweep unlinks every stored transcript
  * (`cleanupOldSessionFiles`, `src/utils/cleanup.ts:151`).
  *
- * The copy deliberately names NO trigger for the deletion. The audit's proposed
- * sentence said "the next time the app starts", which is not true here: the
- * sweep is reached only through `startBackgroundHousekeeping`
- * (`src/utils/backgroundHousekeeping.ts:59`), which is called from the terminal
- * engine (`src/main.tsx:2910`, `src/screens/REPL.tsx:4474`) and never from this
- * app's engine processes, and even there it is scheduled ten minutes in and
- * re-deferred while the user is active. The write suppression, by contrast, is
- * immediate and does apply here — hence two clauses with different tenses.
+ * The settings write suppresses new transcript persistence immediately. Existing
+ * transcripts remain until the engine's existing background-housekeeping path
+ * runs its leased cleanup; the renderer-authorized settings verb does not start
+ * deletion itself.
  */
 const DESTRUCTIVE_SETTING_VALUES: Readonly<
   Record<string, SettingsDestructiveChoice>
@@ -914,12 +910,11 @@ const DESTRUCTIVE_SETTING_VALUES: Readonly<
     value: 0,
     title: 'Delete every saved session?',
     body:
-      'Keeping transcripts for 0 days stops this app saving new sessions, and ' +
-      'deletes every session already saved. The deletion is not immediate, but ' +
-      'once it runs it cannot be undone.',
+      'Keeping transcripts for 0 days immediately stops this app saving new ' +
+      'sessions. Existing saved sessions are deleted later by background cleanup, ' +
+      'and that deletion cannot be undone.',
     remedy:
-      'Nothing is deleted yet. Set the number back above 0 and your saved ' +
-      'sessions stay.',
+      'Set the number back above 0 before cleanup runs to keep sessions that are still saved.',
     confirmLabel: 'Delete saved sessions',
     cancelLabel: 'Cancel',
     rowWarning:
@@ -1119,6 +1114,12 @@ export function settingsWriteTargetNote(
 /** Said once, globally, instead of implied per row (spec §2's honesty rule). */
 export const SETTINGS_APPLY_NOTE =
   'Edits apply to sessions started afterwards, not to sessions already running.'
+
+export function settingsApplyNote(item: SettingsRailItemId): string {
+  return item === 'privacy'
+    ? 'Stopping new session saves takes effect immediately. Existing saved sessions are deleted later by background cleanup. Other edits apply to sessions started afterwards.'
+    : SETTINGS_APPLY_NOTE
+}
 
 /**
  * Where the categories that left this page belong.

@@ -195,6 +195,7 @@ export function mapLogOptionToCatalogEntry(
   return {
     sessionId: log.sessionId,
     forked: log.forked === true,
+    isInteractive: log.entrypoint !== 'sdk-cli',
     cwd,
     // Default assume-exists; `annotateCwdExistence` (the async worker pass)
     // downgrades a dead cwd to `false`. A direct/pure use of the builder without
