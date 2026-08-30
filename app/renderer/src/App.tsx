@@ -175,6 +175,7 @@ import {
   reduceRetainedSubmitHeld,
   reduceSubmitAnswers,
   reduceSessionImagesReplaced,
+  reduceSessionImagesRestored,
   reduceSessionPastesCleared,
   removePasteOccurrence,
   reduceTransportErrorCleared,
@@ -2322,7 +2323,7 @@ export function App() {
       ),
     )
     setImageAttachmentState(state =>
-      reduceSessionImagesReplaced(state, sessionId, pending.images ?? []),
+      reduceSessionImagesRestored(state, sessionId, pending.images ?? []),
     )
     setTransportErrors(prev =>
       reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
@@ -2338,7 +2339,9 @@ export function App() {
   // parked prompt does: only one image is ever held
   // (`reduceImageAttachmentAdded`), and the refused one is the one the user is
   // waiting on. Text is merged instead, so a draft typed during the round trip
-  // survives underneath it.
+  // survives underneath it. `reduceSessionImagesRestored` is the guarded form:
+  // an EMPTY `retained.images` means this submit never carried one, so it must
+  // leave an image attached to the CURRENT draft alone rather than clear it.
   // The copy is handed IN rather than looked up: `reduceSubmitAnswers` already
   // retired exactly the entry this answer named, so there is nothing left here to
   // find and no head to take by mistake.
@@ -2356,17 +2359,16 @@ export function App() {
         ),
       ),
     )
-    if (retained.images.length > 0) {
-      setImageAttachmentState(state =>
-        reduceSessionImagesReplaced(state, sessionId, retained.images),
-      )
-    }
+    setImageAttachmentState(state =>
+      reduceSessionImagesRestored(state, sessionId, retained.images),
+    )
   }, [])
 
   // D1b — the composer half of a recall, and deliberately the SAME shape as the
   // refused-submit restore above: text merges under whatever is being typed,
-  // attachments replace. A recalled message is one the user is taking back to
-  // edit, so it must not overwrite a draft they started while it waited.
+  // attachments replace (guarded the same way, via `reduceSessionImagesRestored`).
+  // A recalled message is one the user is taking back to edit, so it must not
+  // overwrite a draft they started while it waited.
   const restoreRecalledPrompts = useCallback(
     (sessionId: SessionId, prompts: readonly RecalledPrompt[]) => {
       const { text, images } = foldRecalledPrompts(prompts)
@@ -2378,11 +2380,9 @@ export function App() {
           restoreDraftWithPending(selectPromptDraft(drafts, sessionId), text),
         ),
       )
-      if (images.length > 0) {
-        setImageAttachmentState(state =>
-          reduceSessionImagesReplaced(state, sessionId, images),
-        )
-      }
+      setImageAttachmentState(state =>
+        reduceSessionImagesRestored(state, sessionId, images),
+      )
     },
     [],
   )

@@ -3080,9 +3080,11 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   const restoreBody = source.slice(restoreStart, restoreEnd)
 
   // Text merges under whatever was typed during the round trip; images replace,
-  // because only one is ever held.
+  // because only one is ever held. `reduceSessionImagesRestored` is the guarded
+  // form: an empty `retained.images` must not erase an image attached to the
+  // CURRENT draft (round8 finding 1).
   expect(restoreBody).toContain('restoreDraftWithPending(')
-  expect(restoreBody).toContain('reduceSessionImagesReplaced(state, sessionId, retained.images)')
+  expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, retained.images)')
   // The copy is handed IN rather than looked up, because the batch reducer has
   // already removed it by `submitId`. That is what stops a second frame in the
   // same batch restoring the same copy twice, and it is why this function takes
