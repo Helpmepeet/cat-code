@@ -28,7 +28,9 @@ import {
 } from '../shared/limits.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { getCwd } from '../../src/utils/cwd.js'
+import { getUserSpecifiedModelSetting } from '../../src/utils/model/model.js'
 import type { Message } from '../../src/types/message.js'
+import { processSessionStartHooks } from '../../src/utils/sessionStart.js'
 import {
   getTranscriptPath,
   loadDisplayTranscriptFromJsonlPath,
@@ -273,6 +275,37 @@ async function main(): Promise<void> {
     : getSessionId()
   activeEngineSessionId = engineSessionId
 
+  // The fresh half of the same seam. A resumed session already ran its
+  // SessionStart hooks — the engine's own loader fires the 'resume' source and
+  // appends the results to the restored transcript
+  // (`src/utils/conversationRecovery.ts:723-726`), so they arrive above inside
+  // `resumedMessages`. A fresh session ran nothing at all, which silently
+  // dropped every plugin- and settings-installed SessionStart hook the terminal
+  // injects. This is the CLI's own call for a non-resume launch
+  // (`src/main.tsx:2471-2474`), whose result the REPL takes as `initialMessages`
+  // (`src/main.tsx:3874`). Probe mode has no engine, and running the user's
+  // arbitrary shell there would be wrong besides.
+  //
+  // `agentType` is deliberately omitted rather than stubbed: nothing in the
+  // desktop selects a main-thread agent, so the fallback
+  // `processSessionStartHooks` already applies (`src/utils/sessionStart.ts:131`)
+  // reports the same "no agent" the CLI reports for a launch without `--agent`.
+  let startupHookMessages: Message[] | undefined
+  if (!args.probeOnAttach && resumed === undefined) {
+    // The exact value this session's model resolution selects moments from now:
+    // `initializeSidecarModelProvider` reads `getUserSpecifiedModelSetting()`
+    // for a non-resumed session (`app/sidecar/sessionController.ts:231`). It
+    // deliberately does not resolve a default, so when the user has chosen no
+    // model there is none to report and the field stays absent.
+    const specifiedModel = getUserSpecifiedModelSetting()
+    const hookMessages = await processSessionStartHooks('startup', {
+      ...(typeof specifiedModel === 'string' ? { model: specifiedModel } : {}),
+    })
+    if (hookMessages.length > 0) {
+      startupHookMessages = hookMessages
+    }
+  }
+
   const {
     controller,
     permissions,
@@ -297,7 +330,14 @@ async function main(): Promise<void> {
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
-    ...(resumedMessages !== undefined ? { initialMessages: resumedMessages } : {}),
+    // Mutually exclusive by construction: a resume seeds the restored
+    // transcript, whose tail already carries its own 'resume' hook messages; a
+    // fresh session seeds the 'startup' hook messages computed just above.
+    ...(resumedMessages !== undefined
+      ? { initialMessages: resumedMessages }
+      : startupHookMessages !== undefined
+        ? { initialMessages: startupHookMessages }
+        : {}),
     ...(agentDefinitions !== undefined ? { agentDefinitions } : {}),
     ...(resumed !== undefined ? { resumedInitialState: resumed.initialState } : {}),
   })
