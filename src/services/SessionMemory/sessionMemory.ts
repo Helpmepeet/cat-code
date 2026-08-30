@@ -93,6 +93,18 @@ function getSessionMemoryRemoteConfig(): Partial<SessionMemoryConfig> {
   )
 }
 
+/**
+ * Turn cap for both extraction forks.
+ *
+ * createMemoryFileCanUseTool denies everything except Edit on the notes file,
+ * and a denied tool call returns a tool_result and re-enters the query loop —
+ * query() caps turns ONLY when maxTurns is set, so an uncapped fork can loop
+ * on denials indefinitely. The prompt asks for the edits in one parallel
+ * message then a stop, so 5 leaves room to retry a failed edit without
+ * leaving the loop open.
+ */
+const SESSION_MEMORY_MAX_TURNS = 5
+
 // ============================================================================
 // Module State
 // ============================================================================
@@ -313,6 +325,7 @@ const extractSessionMemory = sequential(async function (
     querySource: 'session_memory',
     forkLabel: 'session_memory',
     overrides: { readFileState: setupContext.readFileState },
+    maxTurns: SESSION_MEMORY_MAX_TURNS,
   })
 
   // Log extraction event for tracking frequency
@@ -425,6 +438,7 @@ export async function manuallyExtractSessionMemory(
       querySource: 'session_memory',
       forkLabel: 'session_memory_manual',
       overrides: { readFileState: setupContext.readFileState },
+      maxTurns: SESSION_MEMORY_MAX_TURNS,
     })
 
     // Log manual extraction event

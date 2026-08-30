@@ -56,6 +56,14 @@ import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 // mtime doesn't advance, so the time-gate keeps passing every turn.
 const SESSION_SCAN_INTERVAL_MS = 10 * 60 * 1000
 
+// Turn cap for the consolidation fork. query() caps turns ONLY when maxTurns
+// is set, and createAutoMemCanUseTool denies out-of-scope calls by returning a
+// tool_result — which re-enters the loop rather than ending it, so an uncapped
+// run can spin on denials with no ceiling. Consolidation is genuinely
+// open-ended work (read many sessions, edit many memory files), so this sits
+// well above the DreamTask live-display window rather than near it.
+const CONSOLIDATION_MAX_TURNS = 40
+
 type AutoDreamConfig = {
   minHours: number
   minSessions: number
@@ -237,6 +245,7 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
         querySource: 'auto_dream',
         forkLabel: 'auto_dream',
         skipTranscript: true,
+        maxTurns: CONSOLIDATION_MAX_TURNS,
         overrides: { abortController },
         onMessage: makeDreamProgressWatcher(taskId, setAppState),
       })

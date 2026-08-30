@@ -330,6 +330,12 @@ export async function generateSuggestion(
     },
     skipTranscript: true,
     skipCacheWrite: true,
+    // Client-side loop guard, not an API param — safe alongside the cache-key
+    // rule above. A denied tool call returns a tool_result and re-enters the
+    // query loop, and query() caps turns ONLY when maxTurns is set, so without
+    // this the deny loop is unbounded on a turn-end path that runs every turn.
+    // 2 keeps the try-tool-then-text recovery the message scan below relies on.
+    maxTurns: 2,
   })
 
   // Check ALL messages - model may loop (try tool → denied → text in next message)

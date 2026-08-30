@@ -116,6 +116,12 @@ export function startAgentSummarization(
         forkLabel: 'agent_summary',
         overrides: { abortController: summaryAbortController },
         skipTranscript: true,
+        // Required, not optional: a denied tool call returns a tool_result and
+        // re-enters the query loop, and query() caps turns ONLY when maxTurns
+        // is set — without this a model that keeps reaching for tools loops
+        // unbounded. 2 preserves the recover-on-next-turn path (tool attempt,
+        // then text) that the result scan below depends on.
+        maxTurns: 2,
       })
 
       if (stopped) return
