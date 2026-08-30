@@ -140,6 +140,38 @@ describe('sessionActionsDomain — export', () => {
     expect(result.exportText).toBeUndefined()
     expect(result.message).toContain('no conversation')
   })
+
+  // A transcript that cannot be read is NOT an empty transcript. The loader
+  // (`src/utils/conversationRecovery.ts` `loadConversationForResume`) answers
+  // null when it resolves no conversation at all, and the export op forwards
+  // that null rather than rendering it as text. Reporting success with an empty
+  // pane is the failure this pins.
+  test('an unloadable transcript fails instead of reporting an empty export', async () => {
+    const { executor } = fakeExecutor({
+      export: async () => null,
+    })
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.export()
+
+    expect(result.ok).toBe(false)
+    expect(result.exportText).toBeUndefined()
+    expect(result.message).toBe('This session has nothing saved to export.')
+  })
+
+  // The other half of the same call: a transcript that DID load but rendered to
+  // nothing is a real, successful export of an empty conversation.
+  test('a transcript that loaded but rendered empty is still a successful export', async () => {
+    const { executor } = fakeExecutor({
+      export: async () => '',
+    })
+    const domain = createSidecarSessionActionsDomain({ executor })
+
+    const result = await domain.export()
+
+    expect(result.ok).toBe(true)
+    expect(result.exportText).toBe('')
+  })
 })
 
 describe('sessionActionsDomain — message-targeted mutations', () => {

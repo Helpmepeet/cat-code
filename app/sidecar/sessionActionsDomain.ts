@@ -76,8 +76,13 @@ export type SessionActionResult = {
 export type SessionActionsExecutor = {
   /** Persist a user custom title for THIS session (`saveCustomTitle`). */
   rename(title: string): Promise<void>
-  /** Render THIS session's transcript to plain text (`renderMessagesToPlainText`). */
-  export(): Promise<string>
+  /**
+   * Render THIS session's transcript to plain text (`renderMessagesToPlainText`),
+   * or null when no conversation could be loaded at all. Null and `''` are
+   * different answers: null is "nothing was there to read", `''` is a
+   * conversation that read fine and rendered to nothing.
+   */
+  export(): Promise<string | null>
   /** Fork the whole conversation at HEAD; return the new session id + title. */
   branch(): Promise<{ engineSessionId: string; title: string; forkPath: string }>
   /** Rewind before an engine-resolved user message. */
@@ -124,9 +129,13 @@ export function createRealSessionActionsExecutor(deps: {
       // Re-read THIS session's persisted transcript → Message[] (the loader the
       // sidecar resume uses), then render with the engine's OWN plain-text renderer
       // and the session's REAL tools. Text-only: the engine has no md/json path.
+      // `loadConversationForResume` answers null when it resolved neither a log
+      // nor messages (`src/utils/conversationRecovery.ts` `if (!log && !messages)`).
+      // Coercing that to `[]` rendered a blank export as a success; forward the
+      // null so the domain can fail closed instead.
       const loaded = await loadConversationForResume(getSessionId(), undefined)
-      const messages = loaded?.messages ?? []
-      return renderMessagesToPlainText(messages, deps.tools)
+      if (!loaded) return null
+      return renderMessagesToPlainText(loaded.messages, deps.tools)
     },
     async branch() {
       return finalizeFork(await createFork())
@@ -216,6 +225,9 @@ export function createSidecarSessionActionsDomain(
     async export() {
       try {
         const exportText = await executor.export()
+        if (exportText === null) {
+          return { ok: false, message: 'This session has nothing saved to export.' }
+        }
         return {
           ok: true,
           message: 'Transcript exported.',
