@@ -132,6 +132,12 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   'renderer.recovery.succeeded': ['pid'],
   'renderer.recovery.exhausted': ['count', 'reason'],
   'renderer.responsive': ['durationMs'],
+  // `source` is always `'renderer'`, `reason` always `'fault_reported'`: the
+  // fault's own message never travels here (`app/main/main.ts` CH_RENDERER_FAULT
+  // handler), only that one was reported and from where.
+  'renderer.javascript.error': ['source', 'reason'],
+  'renderer.promise.unhandled': ['source', 'reason'],
+  'renderer.component.failed': ['source', 'reason'],
   // Three narrowly-scoped numbers that are routinely read as one broad verdict.
   // `eventLoopLagMs` is timer-scheduling latency: it cannot show that anything
   // rendered, and it read 4.5 ms throughout the 2026-08-14 freeze. `rendersCommitted`
@@ -170,6 +176,10 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // and still written: this path exists because a restore once got its row set
   // wrong, so "nothing was dropped" has to be evidence rather than silence.
   'session.restore.completed': ['messageCount', 'count'],
+  // `reason` is the closed failure category (`resume_busy` | `resume_failure`)
+  // from `exitAfterFatal` (`app/sidecar/index.ts`), the fatal twin of
+  // `app.fatal` immediately above it in this table.
+  'session.restore.failed': ['reason'],
   // `count` is how many of a thing the mechanism in `reason` affected. It is a
   // number, so it can carry no payload, and a drop reported without its
   // magnitude reads the same whether one frame or a whole restore was lost.

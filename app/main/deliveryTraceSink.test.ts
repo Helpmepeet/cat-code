@@ -5,7 +5,10 @@ import { join } from 'node:path'
 import { mintDeliveryTrace } from '../shared/deliveryTrace.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
-import { createDeliveryTraceSink, deliveryMessageKindOfFrame } from './deliveryTraceSink.js'
+import {
+  createDeliveryTraceSink, deliveryMessageKindOfFrame,
+  MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM, MAX_DELIVERY_TRACE_STREAMS,
+} from './deliveryTraceSink.js'
 
 test('delivery trace persists metadata-only stages under private permissions', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-'))
@@ -601,4 +604,38 @@ test('delivery acknowledgement lookup cannot cross a recreated stream epoch', ()
   expect(sink.traceFor('session', 'new-stream', 1)?.traceId).toBe(second.traceId)
   expect(sink.accepts('session', 'unknown-stream', 1, 'doc', 1)).toBe(false)
   sink.close()
+})
+
+test('both losses a single mark attributes are persisted, not just the last', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-two-losses-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  // Fill one stream's sequence ring to the brim, so the next mark on it trims.
+  for (let sequence = 1; sequence <= MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM; sequence++) {
+    sink.mark({ sessionId: 'session', trace: mintDeliveryTrace(sequence, 'stream'), stage: 'engine.produced' })
+  }
+  // A rejected acknowledgement creates stream state without ever consulting the
+  // stream cap, so the map is already over it when that next mark runs.
+  for (let index = 0; index < MAX_DELIVERY_TRACE_STREAMS; index++) {
+    sink.recordAcknowledgementRejected({
+      sessionId: 'session', streamEpoch: `idle-${index}`, sequence: 1, reason: 'unknown_sequence',
+    })
+  }
+  // Eviction picks the least recently touched stream by wall-clock milliseconds,
+  // so it names an idle one only once they are strictly older than this mark.
+  const until = Date.now() + 3
+  while (Date.now() < until) {}
+  sink.mark({
+    sessionId: 'session',
+    trace: mintDeliveryTrace(MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM + 1, 'stream'),
+    stage: 'engine.produced',
+  })
+  sink.close()
+
+  // One mark, two evictions, two reasons. A single pending slot kept only the
+  // second, and the sequence range the first would have named is unrecoverable
+  // from the per-stream counter that survives it.
+  expect(kinds(root, 'trace.loss')).toMatchObject([
+    { reason: 'in_memory_eviction', sequenceStart: 1, sequenceEnd: 1, droppedCount: 1, streamEpoch: 'stream' },
+    { reason: 'stream_evicted', sequenceStart: 1, sequenceEnd: 1, droppedCount: 1, streamEpoch: 'idle-0' },
+  ])
 })

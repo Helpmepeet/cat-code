@@ -307,10 +307,21 @@ export function createDeliveryTraceSink({
   const directory = join(configDir, 'logs')
   const processInstanceId = randomUUID()
   const streams = new Map<string, StreamState>()
-  let pendingLoss: {
+  /**
+   * One pending loss per reason, not one in total. `mark()` reaches `noteLoss`
+   * from `trimState` and again from the stream eviction after the same `write()`,
+   * and a single slot silently discarded the first of the two: the per-stream
+   * counter survives, the sequence range and the reason do not. Keyed on the
+   * reason because that is the one field a merge cannot honestly widen, which
+   * bounds this map by the closed set of reasons `noteLoss` is called with and
+   * leaves no eviction policy to get wrong. A further loss of a reason already
+   * pending widens that entry's range and count instead of replacing it, and
+   * drops the stream attribution when the two streams disagree.
+   */
+  const pendingLosses = new Map<string, {
     first: number; last: number; count: number; reason: string
     sessionId?: string; streamEpoch?: string
-  } | null = null
+  }>()
 
   const traceLane = createLane({
     directory, prefix: DELIVERY_TRACE_FILE_PREFIX, latestName: 'latest-delivery', launchId,
@@ -329,31 +340,27 @@ export function createDeliveryTraceSink({
     attribution?: { state: StreamState; sessionId: string; streamEpoch: string },
   ): void => {
     if (attribution) attribution.state.losses++
-    if (
-      pendingLoss &&
-      pendingLoss.reason === reason &&
-      pendingLoss.sessionId === attribution?.sessionId &&
-      pendingLoss.streamEpoch === attribution?.streamEpoch &&
-      sequence === pendingLoss.last + 1
-    ) {
-      pendingLoss.last = sequence
-      pendingLoss.count++
+    const pending = pendingLosses.get(reason)
+    if (pending) {
+      pending.first = Math.min(pending.first, sequence)
+      pending.last = Math.max(pending.last, sequence)
+      pending.count++
+      if (pending.sessionId !== attribution?.sessionId || pending.streamEpoch !== attribution?.streamEpoch) {
+        delete pending.sessionId
+        delete pending.streamEpoch
+      }
       return
     }
-    pendingLoss = {
+    pendingLosses.set(reason, {
       first: sequence, last: sequence, count: 1, reason,
       ...(attribution ? { sessionId: attribution.sessionId, streamEpoch: attribution.streamEpoch } : {}),
-    }
+    })
   }
 
-  const write = (
-    record: Record<string, unknown>,
-    sequence: number,
-    attribution?: { state: StreamState; sessionId: string; streamEpoch: string },
-  ): void => {
-    if (pendingLoss) {
-      const loss = pendingLoss
-      if (appendLine({
+  /** Stops at the first failed append, so the queue drains in the order it was noted. */
+  const flushPendingLoss = (): void => {
+    for (const [reason, loss] of pendingLosses) {
+      if (!appendLine({
         schemaVersion: 1,
         recordKind: 'trace.loss',
         wallTimestamp: now().toISOString(),
@@ -367,29 +374,18 @@ export function createDeliveryTraceSink({
         reason: loss.reason,
         ...(loss.sessionId ? { sessionId: loss.sessionId } : {}),
         ...(loss.streamEpoch ? { streamEpoch: loss.streamEpoch } : {}),
-      })) pendingLoss = null
+      })) return
+      pendingLosses.delete(reason)
     }
-    if (!appendLine(record)) noteLoss(sequence, 'writer_unavailable_or_record_oversize', attribution)
   }
 
-  const flushPendingLoss = (): void => {
-    if (!pendingLoss) return
-    const loss = pendingLoss
-    if (appendLine({
-      schemaVersion: 1,
-      recordKind: 'trace.loss',
-      wallTimestamp: now().toISOString(),
-      monotonicTimestampMs: monotonicNow(),
-      launchId,
-      processName: 'electron-main',
-      processInstanceId,
-      sequenceStart: loss.first,
-      sequenceEnd: loss.last,
-      droppedCount: loss.count,
-      reason: loss.reason,
-      ...(loss.sessionId ? { sessionId: loss.sessionId } : {}),
-      ...(loss.streamEpoch ? { streamEpoch: loss.streamEpoch } : {}),
-    })) pendingLoss = null
+  const write = (
+    record: Record<string, unknown>,
+    sequence: number,
+    attribution?: { state: StreamState; sessionId: string; streamEpoch: string },
+  ): void => {
+    flushPendingLoss()
+    if (!appendLine(record)) noteLoss(sequence, 'writer_unavailable_or_record_oversize', attribution)
   }
 
   const stateFor = (sessionId: string, streamEpoch: string): StreamState => {
