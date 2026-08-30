@@ -19,6 +19,10 @@ const RECONNECT_MAX_DELAY_MS = 30_000
 const RECONNECT_GIVE_UP_MS = 600_000
 /** Server sends keepalives every 15s; treat connection as dead after 45s of silence. */
 const LIVENESS_TIMEOUT_MS = 45_000
+// Deadline for the SSE response headers. The liveness watchdog only arms once
+// the stream is open, so without this a black-holed endpoint leaves connect()
+// awaiting forever and the reconnect budget is never consulted.
+const CONNECT_TIMEOUT_MS = 15_000
 
 /**
  * HTTP status codes that indicate a permanent server-side rejection.
@@ -33,6 +37,14 @@ const POST_MAX_DELAY_MS = 8000
 
 /** Hoisted TextDecoder options to avoid per-chunk allocation in readStream. */
 const STREAM_DECODE_OPTS: TextDecodeOptions = { stream: true }
+
+/**
+ * Per the SSE spec a line ends with CRLF, CR, or LF, and a frame ends at the
+ * first blank line. Hoisted to avoid per-call allocation; `lastIndex` is set
+ * explicitly before every use.
+ */
+const SSE_FRAME_DELIMITER = /\r\n\r\n|\r\n\n|\n\r\n|\n\n|\r\r/g
+const SSE_LINE_DELIMITER = /\r\n|\r|\n/
 
 /** Hoisted axios validateStatus callback to avoid per-request closure allocation. */
 function alwaysValidStatus(): boolean {
@@ -62,11 +74,13 @@ export function parseSSEFrames(buffer: string): {
   const frames: SSEFrame[] = []
   let pos = 0
 
-  // SSE frames are delimited by double newlines
-  let idx: number
-  while ((idx = buffer.indexOf('\n\n', pos)) !== -1) {
-    const rawFrame = buffer.slice(pos, idx)
-    pos = idx + 2
+  // SSE frames are delimited by a blank line
+  let match: RegExpExecArray | null
+  SSE_FRAME_DELIMITER.lastIndex = pos
+  while ((match = SSE_FRAME_DELIMITER.exec(buffer)) !== null) {
+    const rawFrame = buffer.slice(pos, match.index)
+    pos = match.index + match[0].length
+    SSE_FRAME_DELIMITER.lastIndex = pos
 
     // Skip empty frames
     if (!rawFrame.trim()) continue
@@ -74,7 +88,7 @@ export function parseSSEFrames(buffer: string): {
     const frame: SSEFrame = {}
     let isComment = false
 
-    for (const line of rawFrame.split('\n')) {
+    for (const line of rawFrame.split(SSE_LINE_DELIMITER)) {
       if (line.startsWith(':')) {
         // SSE comment (e.g., `:keepalive`)
         isComment = true
@@ -269,6 +283,12 @@ export class SSETransport implements Transport {
     logForDiagnosticsNoPII('info', 'cli_sse_connect_opening')
 
     this.abortController = new AbortController()
+    const connectController = this.abortController
+    let connectTimedOut = false
+    const connectTimer = setTimeout(() => {
+      connectTimedOut = true
+      connectController.abort()
+    }, CONNECT_TIMEOUT_MS)
 
     try {
       // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins
@@ -276,6 +296,7 @@ export class SSETransport implements Transport {
         headers,
         signal: this.abortController.signal,
       })
+      clearTimeout(connectTimer)
 
       if (!response.ok) {
         const isPermanent = PERMANENT_HTTP_CODES.has(response.status)
@@ -318,6 +339,18 @@ export class SSETransport implements Transport {
       // Read the SSE stream
       await this.readStream(response.body)
     } catch (error) {
+      clearTimeout(connectTimer)
+
+      if (connectTimedOut) {
+        logForDebugging(
+          `SSETransport: Connect timed out after ${CONNECT_TIMEOUT_MS}ms`,
+          { level: 'error' },
+        )
+        logForDiagnosticsNoPII('error', 'cli_sse_connect_timeout')
+        this.handleConnectionError()
+        return
+      }
+
       if (this.abortController?.signal.aborted) {
         // Intentional close
         return
@@ -363,6 +396,11 @@ export class SSETransport implements Transport {
                   { level: 'warn' },
                 )
                 logForDiagnosticsNoPII('warn', 'cli_sse_duplicate_sequence')
+                // Skip delivery: control frames are not deduped downstream,
+                // and remoteIO writes onData straight into the SDK input
+                // stream. lastSequenceNum needs no update — a seen sequence
+                // number is by construction not above the high-water mark.
+                continue
               } else {
                 this.seenSequenceNums.add(seqNum)
                 // Prevent unbounded growth: once we have many entries, prune
