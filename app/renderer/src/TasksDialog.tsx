@@ -95,7 +95,9 @@ import {
 import {
   groupTaskItems,
   isTerminalTaskStatus,
-  stoppableTaskIdAt,
+  selectedTaskIndex,
+  stepTaskSelection,
+  stoppableTaskId,
   taskColorClass,
   taskDisplayState,
   taskKindMeta,
@@ -141,7 +143,7 @@ export function TasksDialog({
   /** Injected clock for held-duration display; defaults to now at render time. */
   now?: number
 }) {
-  const [selected, setSelected] = useState(0)
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const taskListRef = useRef<HTMLDivElement>(null)
   const [tab, setTab] = useState<DialogTab>('tasks')
@@ -156,10 +158,13 @@ export function TasksDialog({
   // A focused worker that vanished from the snapshot degrades back to the list
   // rather than rendering a stale row (`selectWorkerById`'s contract).
   const selectedWorker = selectWorkerById(agentMode, selectedWorkerId)
+  // Same contract for the task highlight: the selection is a task id, resolved
+  // against the list being rendered, and -1 (no highlight) once it is gone.
+  const selected = selectedTaskIndex(flat, selectedTaskId)
 
   useEffect(() => {
     if (!open) return
-    setSelected(0)
+    setSelectedTaskId(flat[0]?.id ?? null)
     setTab('tasks')
     setSelectedWorkerId(null)
   }, [open])
@@ -182,20 +187,22 @@ export function TasksDialog({
       if (tab !== 'tasks') return
       if (action === 'next') {
         event.preventDefault()
-        setSelected(index => Math.min(flat.length - 1, index + 1))
+        setSelectedTaskId(taskId => stepTaskSelection(flat, taskId, 1))
         return
       }
       if (action === 'previous') {
         event.preventDefault()
-        setSelected(index => Math.max(0, index - 1))
+        setSelectedTaskId(taskId => stepTaskSelection(flat, taskId, -1))
         return
       }
       // P4-8b — `K`/`k` stops the selected task, but ONLY a non-terminal one
       // (`TasksPage.jsx:109` gates on `!isTerminal(t)`); a terminal row / absent
       // handler is a no-op, never a dead action. The gate is the pure
-      // `stoppableTaskIdAt` selector (unit-tested — the SSR harness can't press K).
+      // `stoppableTaskId` selector (unit-tested — the SSR harness can't press K),
+      // and it resolves the selected task by ID so a task that starts while the
+      // dialog is open cannot take the highlight's slot and be killed instead.
       if (action === 'stop') {
-        const targetId = onStopTask ? stoppableTaskIdAt(flat, selected) : null
+        const targetId = onStopTask ? stoppableTaskId(flat, selectedTaskId) : null
         if (onStopTask && targetId) {
           event.preventDefault()
           onStopTask(targetId)
@@ -204,7 +211,7 @@ export function TasksDialog({
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [open, tab, flat, selected, onClose, onStopTask])
+  }, [open, tab, flat, selectedTaskId, onClose, onStopTask])
 
   // A keyboard-selected task can be stopped with K, so it must never move out
   // of view while the cursor advances through a long list.

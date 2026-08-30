@@ -67,18 +67,53 @@ export function isTerminalTaskStatus(status: TaskSnapshotItem['status']): boolea
 }
 
 /**
- * P4-8b — the `K → stop` target: the id of the task at `index` IF it is a
- * non-terminal (stoppable) row, else null. The prototype gates `K` on
+ * P4-8b — where the dialog's selected task sits in the list it is rendering now,
+ * or -1 when that task is gone. The selection is held as a task ID and resolved
+ * here at READ time because `groupTaskItems` re-sorts on every snapshot (running
+ * first, then newest): a task that starts while the dialog is open takes the
+ * first slot, so a STORED index silently addresses a different row than the one
+ * under the highlight. A vanished id degrades to no selection, the way
+ * `selectWorkerById` degrades a vanished worker back to the roster.
+ */
+export function selectedTaskIndex(
+  items: readonly TaskSnapshotItem[],
+  selectedTaskId: string | null,
+): number {
+  if (!selectedTaskId) return -1
+  return items.findIndex(item => item.id === selectedTaskId)
+}
+
+/**
+ * The `K → stop` target: the selected task's id IF it is still in the list and
+ * non-terminal (stoppable), else null. The prototype gates `K` on
  * `!isTerminal(t)` (`TasksPage.jsx:109`); this is that gate, pure so the keyboard
  * decision is unit-testable despite the SSR-only renderer harness.
  */
-export function stoppableTaskIdAt(
+export function stoppableTaskId(
   items: readonly TaskSnapshotItem[],
-  index: number,
+  selectedTaskId: string | null,
 ): string | null {
-  const target = items[index]
+  if (!selectedTaskId) return null
+  const target = items.find(item => item.id === selectedTaskId)
   if (!target || isTerminalTaskStatus(target.status)) return null
   return target.id
+}
+
+/**
+ * Arrow-key movement over the id-tracked selection, clamped at both ends exactly
+ * as the index arithmetic it replaces was. An unresolvable selection (never set,
+ * or vanished from the snapshot) recovers at the top of the list.
+ */
+export function stepTaskSelection(
+  items: readonly TaskSnapshotItem[],
+  selectedTaskId: string | null,
+  step: 1 | -1,
+): string | null {
+  if (items.length === 0) return null
+  const index = selectedTaskIndex(items, selectedTaskId)
+  const next =
+    step === 1 ? Math.min(items.length - 1, index + 1) : Math.max(0, index - 1)
+  return items[next]?.id ?? null
 }
 
 export type TasksDialogKeyAction = 'close' | 'next' | 'previous' | 'stop'
@@ -90,7 +125,7 @@ export type TasksDialogKeyAction = 'close' | 'next' | 'previous' | 'stop'
  * still `'k'` while Meta is held, so an unguarded `k` test destroys the first
  * running task on the way to the palette. Same shape and same modifier bail as
  * `permissionKeyIntent` (`permissionPromptModel.ts`), and pure for the same
- * reason as `stoppableTaskIdAt` above: the renderer suite is SSR-only and can
+ * reason as `stoppableTaskId` above: the renderer suite is SSR-only and can
  * never press a key.
  */
 export function tasksDialogKeyAction(event: {

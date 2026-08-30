@@ -4,9 +4,11 @@ import {
   createTasksState,
   groupTaskItems,
   reduceTasksState,
+  selectedTaskIndex,
   selectTasksSnapshot,
   sortTaskItems,
-  stoppableTaskIdAt,
+  stepTaskSelection,
+  stoppableTaskId,
   TASK_COLOR_CLASS,
   TASK_KIND_META,
   taskColorClass,
@@ -160,22 +162,71 @@ function taskItem(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
   return { id: 'x', type: 'local_agent', status: 'running', label: 'work', startTime: 1, ...over }
 }
 
-test('P4-8b stoppableTaskIdAt — a non-terminal selected row returns its id (the K→stop target)', () => {
+test('P4-8b stoppableTaskId — a non-terminal selected row returns its id (the K→stop target)', () => {
   const items = [taskItem({ id: 'a1', status: 'running' }), taskItem({ id: 'p1', status: 'pending' })]
-  expect(stoppableTaskIdAt(items, 0)).toBe('a1')
-  expect(stoppableTaskIdAt(items, 1)).toBe('p1')
+  expect(stoppableTaskId(items, 'a1')).toBe('a1')
+  expect(stoppableTaskId(items, 'p1')).toBe('p1')
 })
 
-test('P4-8b stoppableTaskIdAt — a terminal selected row returns null (K is a no-op)', () => {
+test('P4-8b stoppableTaskId — a terminal selected row returns null (K is a no-op)', () => {
   for (const status of ['completed', 'failed', 'killed'] as const) {
-    expect(stoppableTaskIdAt([taskItem({ id: 't', status })], 0)).toBeNull()
+    expect(stoppableTaskId([taskItem({ id: 't', status })], 't')).toBeNull()
   }
 })
 
-test('P4-8b stoppableTaskIdAt — an out-of-range / empty selection returns null', () => {
-  expect(stoppableTaskIdAt([], 0)).toBeNull()
-  expect(stoppableTaskIdAt([taskItem()], 5)).toBeNull()
-  expect(stoppableTaskIdAt([taskItem()], -1)).toBeNull()
+test('P4-8b stoppableTaskId — an unset / vanished selection returns null', () => {
+  expect(stoppableTaskId([], null)).toBeNull()
+  expect(stoppableTaskId([taskItem()], null)).toBeNull()
+  expect(stoppableTaskId([taskItem({ id: 'x' })], 'gone')).toBeNull()
+  expect(selectedTaskIndex([taskItem({ id: 'x' })], 'gone')).toBe(-1)
+})
+
+test('P4-8b K stops the task the user selected even after a new running task jumps the list', () => {
+  // The race the id-tracked selection exists for: `groupTaskItems` re-sorts on
+  // EVERY snapshot (running first, then newest), so a task arriving while the
+  // dialog is open takes the first slot and shifts the user's row down. A stored
+  // index would silently retarget; a stored id must not.
+  const before = groupTaskItems({
+    items: [
+      taskItem({ id: 'old-1', type: 'local_bash', status: 'running', startTime: 10 }),
+      taskItem({ id: 'old-2', type: 'local_bash', status: 'running', startTime: 5 }),
+    ],
+  })
+  const beforeFlat = [...before.active, ...before.completed]
+  expect(beforeFlat.map(i => i.id)).toEqual(['old-1', 'old-2'])
+
+  // The user is looking at the first row.
+  const selectedTaskId = beforeFlat[0]?.id ?? null
+  expect(selectedTaskId).toBe('old-1')
+
+  const after = groupTaskItems({
+    items: [
+      taskItem({ id: 'old-1', type: 'local_bash', status: 'running', startTime: 10 }),
+      taskItem({ id: 'old-2', type: 'local_bash', status: 'running', startTime: 5 }),
+      taskItem({ id: 'just-started', type: 'local_bash', status: 'running', startTime: 99 }),
+    ],
+  })
+  const afterFlat = [...after.active, ...after.completed]
+  expect(afterFlat.map(i => i.id)).toEqual(['just-started', 'old-1', 'old-2'])
+
+  // Same slot, different task: index 0 is now the newcomer.
+  expect(afterFlat[0]?.id).toBe('just-started')
+  // The keypress still resolves to the task the highlight is on.
+  expect(stoppableTaskId(afterFlat, selectedTaskId)).toBe('old-1')
+  expect(selectedTaskIndex(afterFlat, selectedTaskId)).toBe(1)
+})
+
+test('P4-8b arrow selection steps by id and clamps at both ends', () => {
+  const items = [taskItem({ id: 'a' }), taskItem({ id: 'b' }), taskItem({ id: 'c' })]
+  expect(stepTaskSelection(items, 'a', 1)).toBe('b')
+  expect(stepTaskSelection(items, 'c', 1)).toBe('c')
+  expect(stepTaskSelection(items, 'b', -1)).toBe('a')
+  expect(stepTaskSelection(items, 'a', -1)).toBe('a')
+  // No selection, or one that vanished, recovers at the top of the list.
+  expect(stepTaskSelection(items, null, 1)).toBe('a')
+  expect(stepTaskSelection(items, 'gone', 1)).toBe('a')
+  expect(stepTaskSelection(items, 'gone', -1)).toBe('a')
+  expect(stepTaskSelection([], null, 1)).toBeNull()
 })
 
 test('session removal drops a retained tasks key', () => {
