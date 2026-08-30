@@ -98,8 +98,8 @@ export async function runSessionsCatalogWorker(
   let timedOut = false
   let aborted = false
   let protocolError: string | null = null
-  let callbackError: unknown = null
   let stdinError: unknown = null
+  const accepted: { value: SessionsCatalogSnapshot | null } = { value: null }
 
   const terminate = () => {
     if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
@@ -164,14 +164,8 @@ export async function runSessionsCatalogWorker(
         outcome = 'failure'
         continue
       }
-      try {
-        options.onCatalog(result.catalog)
-        outcome = 'delivered'
-      } catch (error) {
-        callbackError = error
-        terminate()
-        return
-      }
+      accepted.value = result.catalog
+      outcome = 'delivered'
     }
     if (pending.byteLength > MAX_SESSIONS_CATALOG_WORKER_RECORD_BYTES) {
       protocolError = 'catalog worker record exceeds size limit'
@@ -203,9 +197,6 @@ export async function runSessionsCatalogWorker(
   if (diagnostics) options.log?.(diagnostics)
   if (aborted) throw new Error('catalog worker aborted')
   if (timedOut) throw new Error('catalog worker timed out')
-  if (callbackError !== null) {
-    throw new Error('catalog worker result callback failed', { cause: callbackError })
-  }
   if (stdinError !== null) {
     throw new Error('catalog worker stdin failed', { cause: stdinError })
   }
@@ -217,6 +208,14 @@ export async function runSessionsCatalogWorker(
   }
   if (pending.byteLength !== 0 || !recordSeen) {
     throw new Error('catalog worker ended without a valid result record')
+  }
+  const acceptedCatalog = accepted.value
+  if (acceptedCatalog !== null) {
+    try {
+      options.onCatalog(acceptedCatalog)
+    } catch (error) {
+      throw new Error('catalog worker result callback failed', { cause: error })
+    }
   }
   return outcome
 }

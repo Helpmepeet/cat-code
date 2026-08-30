@@ -181,21 +181,46 @@ describe('runSessionsCatalogWorker — fail closed', () => {
     ).rejects.toThrow()
   })
 
-  test('rejects when the worker emits more than one record', async () => {
+  test('rejects when the worker emits more than one record and publishes nothing', async () => {
     const one = {
       type: 'catalog',
       version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
       catalog: catalog(['a']),
     }
+    const delivered: SessionsCatalogSnapshot[] = []
     await expect(
       runSessionsCatalogWorker({
         command: 'bun',
         args: [],
         cwd: process.cwd(),
         spawnWorker: fakeSpawn({ stdout: ndjson(one) + ndjson(one) }),
-        onCatalog: () => {},
+        onCatalog: snapshot => delivered.push(snapshot),
       }),
     ).rejects.toThrow()
+    // The first record parsed cleanly, but the run was never accepted: a
+    // rejected run must keep the last good catalog.
+    expect(delivered).toHaveLength(0)
+  })
+
+  test('a valid record followed by a non-zero exit publishes nothing', async () => {
+    const delivered: SessionsCatalogSnapshot[] = []
+    await expect(
+      runSessionsCatalogWorker({
+        command: 'bun',
+        args: [],
+        cwd: process.cwd(),
+        spawnWorker: fakeSpawn({
+          stdout: ndjson({
+            type: 'catalog',
+            version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
+            catalog: catalog(['a']),
+          }),
+          exitCode: 1,
+        }),
+        onCatalog: snapshot => delivered.push(snapshot),
+      }),
+    ).rejects.toThrow()
+    expect(delivered).toHaveLength(0)
   })
 
   test('rejects on a non-zero exit with no record', async () => {
