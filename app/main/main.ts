@@ -3078,7 +3078,7 @@ function forward(
         ? { requestId: message.requestId }
         : {}),
       code: 'session_not_found',
-      message: `session ${sessionId} was not found`,
+      message: 'That session is no longer available.',
       retryable: false,
     }
     deliver(attachmentGate.onFrame(sessionId, frame))

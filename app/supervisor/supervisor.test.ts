@@ -174,7 +174,10 @@ test('rejects an oversized prompt before writing it and keeps the session usable
       requestId: 'oversized-request',
       prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1),
     }),
-  ).toThrow(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
+    // The copy is user-visible (main forwards it into an error frame the
+    // composer renders), so it names no byte count. The cap itself is asserted
+    // by the prompt being MAX_PROMPT_BYTES + 1.
+  ).toThrow('That message is too long to send. Shorten it and try again.')
 
   supervisor.send(sessionId, { type: 'app.ping', nonce: 'still-alive' })
   await waitFor(

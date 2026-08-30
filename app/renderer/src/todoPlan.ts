@@ -92,10 +92,11 @@ function narrowPlan(input: Record<string, unknown>): TodoPlan | null {
     const item = narrowItem(entry)
     if (item !== null) items.push(item)
   }
-  // An all-completed list is cleared by the engine (`TodoWriteTool.ts:70`
-  // `allDone ? [] : todos`), so the plan that closes a run arrives here with
-  // every item completed and nothing left to point at. Treated the same as an
-  // empty list: the surface goes away rather than resting on a finished plan.
+  // Only a literally empty list is null here. The engine's `allDone ? [] : todos`
+  // clears what it STORES in app state; we read the model-authored tool input,
+  // which on the call that closes a run still carries every completed item. So
+  // that call returns a plan with no current step, and the surface is hidden one
+  // layer down by `selectTodoReadout`, which requires a step to render.
   if (items.length === 0) return null
   const index = items.findIndex(item => item.status === 'in_progress')
   return {

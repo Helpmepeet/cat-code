@@ -478,12 +478,12 @@ export class SidecarSupervisor {
         'utf8',
       ) > MAX_PROMPT_BYTES
     ) {
-      throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
+      throw new Error('That message is too long to send. Shorten it and try again.')
     }
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
     if (payloadBytes > MAX_FRAME_BYTES) {
-      throw new Error(`frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      throw new Error('That message is too large to send. Shorten it and try again.')
     }
     record.socket.write(encoded)
   }
