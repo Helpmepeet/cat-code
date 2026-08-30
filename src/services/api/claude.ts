@@ -3161,9 +3161,10 @@ async function* queryModel(
 
   // Track the last requestId for the main conversation chain so shutdown
   // can send a cache eviction hint to inference. Exclude backgrounded
-  // sessions (Ctrl+B) which share the repl_main_thread querySource but
-  // run inside an agent context — they are independent conversation chains
-  // whose cache should not be evicted when the foreground session clears.
+  // sessions (Ctrl+B), which run inside an agent context and since c84a40b8
+  // also carry their own agent querySource: they are independent
+  // conversation chains whose cache should not be evicted when the
+  // foreground session clears.
   if (
     streamRequestId &&
     !getAgentContext() &&
