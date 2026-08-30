@@ -448,14 +448,21 @@ export class SidecarSupervisor {
   send(sessionId: SessionId, message: SidecarClientMessage): void {
     const record = this.registry.get(sessionId)
     if (!record) {
+      // §7: this message is forwarded verbatim into a user-facing toast, so it
+      // carries no session id. Main logs the id alongside it on stderr.
       throw new SidecarSendError(
         'session_not_found',
-        `session ${sessionId} was not found`,
+        'That session is no longer available.',
       )
     }
     if (!record.socket || record.status !== 'ready') {
       const code = sendFailureCodeForStatus(record.status)
-      throw new SidecarSendError(code, `session ${sessionId} is ${record.status}`)
+      throw new SidecarSendError(
+        code,
+        code === 'session_not_ready'
+          ? 'That session is still starting. Try again in a moment.'
+          : 'That session is not connected.',
+      )
     }
     const frame: ClientFrame = {
       protocolVersion: PROTOCOL_VERSION,
