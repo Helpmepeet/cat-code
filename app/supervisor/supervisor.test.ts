@@ -582,3 +582,92 @@ test('spawnSession after shutdown throws instead of starting an unowned sidecar'
   )
   expect(supervisor.listSessions()).toHaveLength(0)
 })
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    // Signal 0 probes for existence; it delivers nothing.
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * D6's die-with-window guarantee is that the child IS dead, not that a polite
+ * signal was sent. The real sidecar routes SIGTERM to an async `exitCleanly`
+ * (`app/sidecar/index.ts`), so a stalled lease release leaves a child that never
+ * exits — and `killSession` deregisters it in the same tick, so nothing owns its
+ * pid afterwards. Escalation is what closes that.
+ */
+test('a sidecar that ignores SIGTERM is force-killed after the grace period', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-force-kill-')
+  const lines: string[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    // The trap is installed before the socket is listened on, so waiting for
+    // 'ready' proves the child is already ignoring SIGTERM.
+    sidecarArgs: ['-e', `process.on('SIGTERM', () => {})\n${readyScript()}`],
+    socketDir,
+    killGraceMs: 100,
+    log: line => lines.push(line),
+  })
+  supervisors.push(supervisor)
+
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('sigterm-ignoring-session')
+  await waitFor(
+    () => events.some(e => e.type === 'status' && e.sessionId === sessionId && e.status === 'ready'),
+    'sigterm-ignoring session did not become ready',
+  )
+
+  const pid = supervisor.getSessionProcessId(sessionId)
+  expect(typeof pid).toBe('number')
+
+  try {
+    supervisor.killSession(sessionId)
+    await waitFor(
+      () => !isProcessAlive(pid as number),
+      'a sidecar that ignored SIGTERM was never force-killed',
+      3_000,
+    )
+    expect(lines.some(line => line.includes('SIGKILL'))).toBe(true)
+  } finally {
+    if (isProcessAlive(pid as number)) process.kill(pid as number, 'SIGKILL')
+  }
+})
+
+/**
+ * The escalation must stay invisible on the ordinary path: a sidecar that honors
+ * SIGTERM is never SIGKILLed, and its pending force-kill timer is cleared rather
+ * than left to fire at a recycled pid.
+ */
+test('a sidecar that exits on SIGTERM is never force-killed', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-graceful-kill-')
+  const lines: string[] = []
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', readyScript()],
+    socketDir,
+    killGraceMs: 100,
+    log: line => lines.push(line),
+  })
+  supervisors.push(supervisor)
+
+  const events: SupervisorEvent[] = []
+  supervisor.subscribe(event => events.push(event))
+  const sessionId = supervisor.spawnSession('sigterm-honoring-session')
+  await waitFor(
+    () => events.some(e => e.type === 'status' && e.sessionId === sessionId && e.status === 'ready'),
+    'sigterm-honoring session did not become ready',
+  )
+
+  const pid = supervisor.getSessionProcessId(sessionId) as number
+  supervisor.killSession(sessionId)
+  await waitFor(() => !isProcessAlive(pid), 'sidecar did not exit on SIGTERM')
+
+  // Well past the grace period: a live timer would have fired by now.
+  await Bun.sleep(400)
+  expect(lines.filter(line => line.includes('SIGKILL'))).toEqual([])
+})

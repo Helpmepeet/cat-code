@@ -58,6 +58,14 @@ export type SupervisorOptions = {
    */
   disconnectSettleMs?: number
   /**
+   * Grace period between the polite SIGTERM and the SIGKILL that guarantees the
+   * child is actually gone. The sidecar routes SIGTERM to an async `exitCleanly`
+   * (`app/sidecar/index.ts`), so a stalled transcript-lease release or a blocked
+   * event loop leaves a child that never exits. Defaults to 2 s; tests inject a
+   * small value.
+   */
+  killGraceMs?: number
+  /**
    * How to launch the sidecar. In dev this is `bun run <sidecar entry>`; in a
    * packaged app it is the `--compile`d standalone binary. Injected so the
    * supervisor stays runtime-agnostic and testable.
@@ -209,9 +217,13 @@ export class SidecarSupervisor {
    */
   private readonly disconnectSettleMs: number
 
+  /** Grace period before a SIGTERMed sidecar is force-killed (`terminateChild`). */
+  private readonly killGraceMs: number
+
   constructor(options: SupervisorOptions) {
     this.options = options
     this.disconnectSettleMs = options.disconnectSettleMs ?? 250
+    this.killGraceMs = options.killGraceMs ?? 2_000
     // A Unix-domain socket path is bounded by the platform's `sun_path` (104
     // bytes on Darwin, 108 on Linux). The macOS `$TMPDIR` (/var/folders/…) plus
     // a UUID filename overflows it, so use a short random `/tmp/cc-*` directory
@@ -474,7 +486,7 @@ export class SidecarSupervisor {
     const record = this.registry.get(sessionId)
     if (!record) return
     record.socket?.destroy()
-    record.child.kill('SIGTERM')
+    this.terminateChild(record)
     this.cleanupSocketFile(record)
     this.registry.delete(sessionId)
   }
@@ -548,7 +560,7 @@ export class SidecarSupervisor {
         this.log(
           `[supervisor] sidecar ${record.sessionId} never created its socket; marking failed and killing child`,
         )
-        record.child.kill('SIGTERM')
+        this.terminateChild(record)
         this.setStatus(record, 'failed')
         return
       }
@@ -688,6 +700,41 @@ export class SidecarSupervisor {
     }, this.disconnectSettleMs)
     timer.unref?.()
     this.disconnectTimers.add(timer)
+  }
+
+  /**
+   * Terminate a child for real. D6's die-with-window guarantee (SESSION-LIFETIME
+   * §2) is that the engine process is GONE, not that a signal was sent, and the
+   * sidecar's SIGTERM handler is asynchronous — so SIGTERM alone can leave a
+   * child that outlives the supervisor. `killSession` deregisters the row in the
+   * same tick and `Host.closeSession` then clears the registry's advisory pid,
+   * so the next launch's orphan sweep (REGISTRY.md §4) cannot find it either:
+   * the escalation below is the only thing that closes the window.
+   *
+   * The force-kill timer holds the child directly rather than the registry, so
+   * deregistration cannot strand it. It is unref'd so it never keeps the process
+   * alive at shutdown, and cleared as soon as the child exits on its own.
+   */
+  private terminateChild(record: SidecarRecord): void {
+    const child = record.child
+    // No pid means the spawn itself failed (F7, e.g. ENOENT); there is nothing
+    // to signal and no escalation to schedule.
+    if (child.pid === undefined) return
+    if (child.exitCode !== null || child.signalCode !== null) return
+    child.kill('SIGTERM')
+    let childExited = false
+    const forceKillTimer = setTimeout(() => {
+      if (childExited) return
+      this.log(
+        `[supervisor] sidecar ${record.sessionId} did not exit on SIGTERM; sending SIGKILL`,
+      )
+      child.kill('SIGKILL')
+    }, this.killGraceMs)
+    forceKillTimer.unref?.()
+    child.once('exit', () => {
+      childExited = true
+      clearTimeout(forceKillTimer)
+    })
   }
 
   private cleanupSocketFile(record: SidecarRecord): void {
