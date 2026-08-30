@@ -1,6 +1,6 @@
 # Bridge, Remote, And CLI Transport Map
 
-Last refreshed: 2026-07-19 against the current source tree and the current
+Last refreshed: 2026-08-28 against the current source tree and the current
 ChatGPT review-bridge validation record.
 
 ## Purpose
@@ -64,8 +64,7 @@ direct connect, upstream proxy).
 | Remote CCR TUI session | `src/remote/RemoteSessionManager.ts` | `src/remote/SessionsWebSocket.ts`, `src/hooks/useRemoteSession.ts` | Local TUI subscribes to CCR events over WebSocket and sends user events by HTTP API. |
 | Direct connect | `src/server/createDirectConnectSession.ts` | `src/server/directConnectManager.ts`, `src/hooks/useDirectConnect.ts` | Connects to a Cat Code server via `/sessions` plus direct WebSocket, without CCR session subscription. |
 | Upstream proxy | `src/upstreamproxy/upstreamproxy.ts` | `src/upstreamproxy/relay.ts` | Container-side HTTPS proxy setup; fails open and injects proxy env only after relay is ready. |
-| Web UI relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts` | Local web UI event bus/server. Present but separate from CCR Remote Control routing. |
-| ChatGPT review bridge | `docs/superpowers/reports/2026-07-16-bridge-live-validation.md` | `~/.agents/skills/chatgpt-review-pr/SKILL.md`, `bridgeSetup.ts`, `launchTask.ts`, `bridgeServer.ts` | A separately owned local MCP bridge for advisory ChatGPT PR reviews. It is not `src/bridge`: use the validation report for the current enablement/recovery evidence and the external skill for operational ownership. |
+| ChatGPT review bridge | `docs/superpowers/reports/2026-07-16-bridge-live-validation.md` | `~/.agents/skills/chatgpt-review-pr/SKILL.md`, `bridgeSetup.ts`, `launchTask.ts`, `bridgeServer.ts` | A separately owned local MCP bridge for advisory ChatGPT PR reviews. It is not `src/bridge/`: use the validation report for the current enablement/recovery evidence and the external skill for operational ownership. |
 
 ## Current Mental Model
 
@@ -359,7 +358,7 @@ Use focused checks first, then the documented build if behavior changed:
   read over WS/SSE and write over HTTP POST.
 - Do not make upstream proxy required for session startup. Its contract is
   best-effort and fail-open.
-- Do not route ChatGPT review-bridge incidents through `src/bridge` or assume
+- Do not route ChatGPT review-bridge incidents through `src/bridge/` or assume
   its bridge is disabled from older reports. Its current enablement and recovery
   evidence live in the dated validation report; its implementation is external
   to this repository.

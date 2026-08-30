@@ -1,6 +1,6 @@
 # Terminal UI And State Routing Map
 
-Last refreshed: 2026-08-21
+Last refreshed: 2026-08-26
 
 Purpose: route terminal UI work to the right owners. Keep this focused on
 where behavior lives, not on full call-by-call walkthroughs.
@@ -26,6 +26,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Shared terminal/app state | `src/state/AppStateStore.ts` | `src/state/AppState.tsx`, `src/state/store.ts`, `src/state/onChangeAppState.ts` | Shared state shape lives in `AppStateStore.ts`; selector subscriptions and store access live in `AppState.tsx`. |
 | Derived routing for viewed agents | `src/state/selectors.ts` | `src/state/teammateViewHelpers.ts`, `src/screens/REPL.tsx` | `getActiveAgentForInput()` decides whether input targets the leader, a viewed teammate, or a named local agent. |
 | Query and prompt submission | `src/screens/REPL.tsx` | `src/utils/handlePromptSubmit.ts`, `src/utils/immediateCommand.ts`, `src/query.ts`, `src/utils/processUserInput/` | `REPL.tsx` handles immediate command paths, queue handoff, history/paste preparation, runtime-model prompt selection, and main-thread query start. Immediate local-JSX commands have an owner-scoped slot, re-check availability at dispatch, and repin the transcript when their panel opens or closes. |
+| Durable goal continuation | `src/utils/threadGoalScheduler.ts` | `src/utils/{threadGoal,threadGoalAttempt,threadGoalEvidence,threadGoalWorkspace}.ts`, `src/screens/REPL.tsx`, `src/commands/goal/goal.tsx` | The scheduler is the sole continuation decision point: it charges completed attempts, requires criterion-linked evidence before completion, stops repetition, and starts the next turn. REPL provides the interactive runtime adapter; keep it aligned with the headless and app-runtime adapters rather than recreating goal-loop policy locally. |
 | Continue after a confirmed Codex limit | `src/commands/continue-after-limit/continue-after-limit.tsx` | `src/services/deferredContinuationPresentation.ts`, `src/hooks/useDeferredContinuation.ts`, `src/services/deferredContinuationRunner.ts`, `src/screens/REPL.tsx`, `src/utils/handlePromptSubmit.ts`, `src/utils/sessionRestore.ts` | The command owns schedule/status/cancel/background UX. The hook only wakes due work; the runner owns the fsync-backed queue, locks, and result policy. Only model-turn human input cancels a pending job; a resume probes the per-session lock without canceling it, while an owned attempt blocks the resume. Unreadable pending records fail closed but `cancel` can discard one under that session lock. |
 | Codex reasoning display | `src/utils/reasoningDisplay.ts` | `src/utils/messages.ts`, `src/components/Messages.tsx`, `src/components/Message.tsx` | Normalization preserves provider raw-reasoning availability across a turn. The display setting selects summary, raw, or neither; raw blocks without content remain hidden, and the message list selects the latest visible thinking block. |
 | Prompt input shell | `src/components/PromptInput/PromptInput.tsx` | `src/components/PromptInput/PromptInputFooter.tsx`, `src/components/PromptInput/`, `src/hooks/useCommandQueue.ts`, `src/state/selectors.ts` | Owns prompt composition, footer pills, stash/queued-command UX, history-search entry, and submit routing to leader or viewed agent. |
@@ -34,6 +35,7 @@ Use `docs/maps/tasks-workers.md` for task lifecycle details and
 | Plain text editing | `src/hooks/useTextInput.ts` | `src/components/TextInput.tsx`, `src/components/PromptInput/inputModes.ts` | Readline-like editing lives here: cursor movement, multiline submit behavior, kill/yank, double-Esc clear, Ctrl+C/D exit handling. |
 | Vim editing | `src/hooks/useVimInput.ts` | `src/vim/transitions.ts`, `src/vim/operators.ts`, `src/vim/motions.ts`, `src/vim/textObjects.ts` | `useVimInput.ts` wraps base text editing and owns INSERT/NORMAL transitions and replay; `src/vim/` owns the command engine. |
 | Message rendering | `src/components/Messages.tsx` | `src/components/MessageRow.tsx`, `src/components/Message.tsx`, `src/components/messages/` | `Messages.tsx` owns normalization, grouping, virtualization, brief-mode filtering, streaming adornments, and transcript search plumbing. |
+| Terminal Markdown and link rendering | `src/utils/markdown.ts` | `src/utils/hyperlink.ts`, `src/ink/supports-hyperlinks.ts`, `src/utils/markdown.test.ts` | Markdown formatting owns OSC 8 links in terminal output. Absolute filesystem targets are converted to `file:` URLs before emission; relative and web targets retain their supplied hrefs. |
 | Transcript/fullscreen layout | `src/components/FullscreenLayout.tsx` | `src/components/VirtualMessageList.tsx`, `src/components/ScrollKeybindingHandler.tsx`, `src/ink/components/ScrollBox.tsx` | Fullscreen layout owns sticky prompt state, unseen-message divider/pill, modal slot, prompt overlay portal, and scroll anchoring. |
 | Ink renderer and input dispatch | `src/ink/ink.tsx` | `src/ink/components/App.tsx`, `src/ink/hooks/use-input.ts` | Ink runtime owns rendering, selection, search highlight, alt-screen behavior, and stdin event dispatch. `use-input.ts` preserves handler order. |
 | Keybinding system | `src/keybindings/defaultBindings.ts` | `src/keybindings/resolver.ts`, `src/keybindings/parser.ts`, `src/keybindings/match.ts`, `src/keybindings/useKeybinding.ts` | Defaults, parsing, context resolution, and action dispatch live here; matched bindings stop propagation through Ink input listeners. |
@@ -114,8 +116,9 @@ Use focused checks first:
 | Map path sanity | `rg -n "\\[[^]]+\\]\\(([^)#]+)" docs/maps/terminal-ui-state.md` |
 | Ink rendering core | `bun test src/ink/output.test.ts` |
 | Query/message-adjacent behavior | `bun test src/query.test.ts src/utils/providerPromptRegressions.test.ts` |
+| Terminal Markdown link targets | `bun test src/utils/markdown.test.ts` |
 | Task/view switching adjacency | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
-| Goal/dialog local JSX adjacency | `bun test src/commands/goal/goal.test.ts src/utils/threadGoalScheduler.test.ts src/screens/REPL.goalScheduler.test.ts` |
+| Goal scheduler and runtime adapters | `bun test src/commands/goal/goal.test.ts src/utils/threadGoalScheduler.test.ts src/screens/REPL.goalScheduler.test.ts src/cli/headlessGoalLoop.test.ts src/app-runtime/attachThreadGoalScheduler.test.ts` |
 | Dialog priority and session status | `bun test src/utils/tuiSessionStatus.test.ts` |
 | Deferred continuation command, notices, runner, and foreground/background races | `bun test src/commands/continue-after-limit/continue-after-limit.test.ts src/services/deferredContinuationRunner.test.ts src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts` |
 | Full documented build | `bun run build:dev:full` |

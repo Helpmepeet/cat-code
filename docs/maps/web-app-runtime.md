@@ -1,44 +1,33 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-08-24 against `src/main.tsx`, `src/app-runtime/`,
-`src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/web/`,
-`src/services/mcp/client.ts`, `web/`, `app/`, and related tests.
+Last refreshed: 2026-08-28 against `src/app-runtime/`,
+`src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
-Use this map for the browser and Electron runtime-backed app-session paths.
-It covers the active local app stacks, not older dedicated-app design docs or
-the legacy REPL relay server.
+Use this map for the Electron runtime-backed app-session path. It covers the
+active desktop app stack, not older dedicated-app design docs.
 
 ## First Files To Inspect
 
-1. `src/main.tsx` and `src/web/startRuntimeBackedWebMode.ts` for browser startup.
-2. `app/main/main.ts` for Electron host, IPC, attachment, and cache wiring.
-3. `app/shared/protocol.ts` and `app/shared/hostApi.ts` for desktop wire/control contracts.
-4. `app/sidecar/sessionController.ts` and `app/sidecar/sidecarServer.ts` for the engine boundary.
-5. `app/renderer/src/{App,TranscriptView,AgentChrome}.tsx` for session chrome, transcript projection, and Agent Mode presentation.
-6. `app/main/{idleParkDriver,mainDecisions}.ts`, `app/scripts/{dev,devLauncher}.ts`, and `app/sidecar/contextBreakdownDomain.ts` for parking, development launch lifecycle, and on-demand context usage.
+1. `app/main/main.ts` for Electron host, IPC, attachment, and cache wiring.
+2. `app/shared/protocol.ts` and `app/shared/hostApi.ts` for desktop wire/control contracts.
+3. `app/sidecar/sessionController.ts` and `app/sidecar/sidecarServer.ts` for the engine boundary.
+4. `app/renderer/src/{App,TranscriptView,BoundedMarkdown,VirtualLineList}.tsx` for session chrome and bounded transcript rendering.
+5. `app/main/{idleParkDriver,mainDecisions}.ts`, `app/scripts/{dev,devLauncher}.ts`, and `app/sidecar/contextBreakdownDomain.ts` for parking, development launch lifecycle, and on-demand context usage.
 
 ## Routing Table
 
 | Area | Inspect first | Then inspect | Routing notes |
 |---|---|---|---|
-| Web-mode startup path | `src/main.tsx` | `src/web/startRuntimeBackedWebMode.ts`, `src/web/launchWebAppDevServer.ts`, `web/package.json` | `main.tsx --web` now builds a runtime-backed app-session config, starts `AppSessionWebSocketServer`, launches Vite on `127.0.0.1`, and skips the Ink REPL. |
-| Runtime-backed web-mode orchestrator | `src/web/startRuntimeBackedWebMode.ts` | `src/app-runtime/createRuntimeBackedWebAppSession.ts`, `src/web/AppSessionWebSocketServer.ts`, `src/web/launchWebAppDevServer.ts` | This helper owns runtime-backed `--web` startup order, token redaction in startup/cleanup errors, and coordinated shutdown of the browser server plus Vite child process. |
 | QueryEngine app-session setup | `src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts` | `src/services/mcp/client.ts`, `src/state/AppStateStore.ts`, `src/utils/fileStateCache.ts` | This config seam snapshots normal startup owners for runtime-backed app sessions, merges built-in plus MCP tools/commands, and clones prefetched MCP resources into app-state reads. |
-| Runtime-backed app session seam | `src/app-runtime/createRuntimeBackedWebAppSession.ts` | `src/app-runtime/createQueryEngineAppSession.ts`, `src/app-runtime/createQueryEngineSessionController.ts`, `src/app-runtime/index.ts` | Use this seam when startup wiring needs a controller/session pair for the browser app. The QueryEngine-backed session and controller adapter live underneath it. |
-| App session turn lifecycle | `src/app-runtime/AppSessionController.ts` | `src/app-runtime/sessionEvents.ts`, `app/renderer/src/{connectionState,rawMessageLog}.ts`, `src/services/api/accountDiagnostics.ts` | `AppSessionController` owns active-turn gating, abort state, goal snapshots, permission request handoff, and emission of session events/messages. Its sole active-turn writer emits `turn.status` on each transition; the desktop renderer reduces that live event into `inputEnabled` rather than relying on the attach-time `app.ready` snapshot. The browser mapper deliberately drops this desktop-only event. |
+| Runtime-backed app session seam | `src/app-runtime/createRuntimeBackedAppSession.ts` | `src/app-runtime/createQueryEngineAppSession.ts`, `src/app-runtime/createQueryEngineSessionController.ts`, `src/app-runtime/index.ts` | The desktop sidecar uses this seam to construct its controller/session pair. The QueryEngine-backed session and controller adapter live underneath it. |
+| App session turn lifecycle | `src/app-runtime/AppSessionController.ts` | `src/app-runtime/{sessionEvents,attachThreadGoalScheduler}.ts`, `src/utils/threadGoalScheduler.ts`, `app/renderer/src/{connectionState,rawMessageLog}.ts`, `src/services/api/accountDiagnostics.ts` | `AppSessionController` owns active-turn gating, abort state, goal snapshots, permission request handoff, and emission of session events/messages. `attachThreadGoalScheduler` adapts completed turns to the shared scheduler, so desktop, headless, and terminal runtimes use one continuation policy. Its sole active-turn writer emits `turn.status` on each transition; the desktop renderer reduces that live event into `inputEnabled` rather than relying on the attach-time `app.ready` snapshot. |
 | Multi-session process isolation | `src/app-runtime/multiSessionIsolation.probe.test.ts` | `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/utils/Shell.ts` | The probe demonstrates that controller-local permission state is isolated, but concurrent sessions in one engine process share process-global cwd and session ID. Route desktop multi-session topology through this evidence before choosing one-process versus per-session processes. |
-| Browser transport server | `src/web/AppSessionWebSocketServer.ts` | `src/web/appSessionProtocol.ts`, `src/web/appSessionEventMapper.ts` | This is the runtime-backed localhost WebSocket server: token/origin/host validation, `app.ready`, submit/abort/permission handling, and status broadcasts all start here. |
-| Browser/server message contract | `src/web/appSessionProtocol.ts` | `web/src/appProtocol.ts`, `src/web/appSessionProtocol.test.ts` | Keep server and browser schemas aligned when changing event names, permission payload shape, or persisted permission-update schemas. |
-| SDK-to-browser event mapping | `src/web/appSessionEventMapper.ts` | `src/app-runtime/sessionEvents.ts`, `src/web/appSessionEventMapper.test.ts` | Maps streamed SDK messages into append/replace/delta browser events and folds account diagnostics into system messages. |
-| Browser app state and reducer | `web/src/appState.ts` | `web/src/appState.test.ts`, `web/src/appProtocol.ts` | `reduceAppServerMessage()` is the owner for connection state, pending permissions, abort state, goal snapshots, and streamed message assembly in the browser. |
-| Browser chat surface | `web/src/App.tsx` | `web/src/components/MessageContent.tsx`, `web/src/hooks/useWebSocket.ts`, `web/src/appProtocol.ts` | `App.tsx` owns chat layout, submit gating, reconnect notices, and the browser permission panel, including edited JSON input plus selected persisted permission updates. `MessageContent.tsx` owns markdown/code rendering. |
-| Browser transport client | `web/src/hooks/useWebSocket.ts` | `web/src/appProtocol.ts`, `web/src/App.tsx` | The browser always connects back to `/ws` on the current host and uses `VITE_CAT_CODE_WS_TOKEN` to set the required subprotocol. |
 | Electron desktop startup, security, and observability | `app/main/main.ts` | `app/main/mainDecisions.ts`, `app/scripts/{dev,prepare-dev-electron}.ts`, `app/main/navigationPolicy.ts`, `app/main/{attachmentGate,replayBuffer,operationalLogSink,deliveryTraceSink,diagnosticsBundle}.ts` | Electron main applies the window/security baseline, owns fixed IPC handlers, starts with no engine session, gates/replays frames across renderer attachment and reload, and exposes host-level sidecar restart. A renderer action creates or restores each sidecar-backed session. It also owns private operational JSONL, delivery-trace persistence, and the allowlisted support-bundle export; raw sidecar stderr never enters those artifacts. `SIDECAR_RUNTIME_ARGS` enables the desktop engine's classifier and reactive-compaction features; the dev launcher starts Vite, but main chooses that origin only when Electron reports an unpackaged app. |
 | Desktop host registry and restart policy | `app/host/registry.ts` | `app/host/host.ts`, `app/supervisor/supervisor.ts`, `app/main/main.ts` | The Electron-free host persists restorable session rows and owns renderer-reachable spawn/restart limits. Registry writes take an advisory lock, merge the current document with local deltas, and atomically replace it; a failed read preserves the existing file and disables writes for that run, while a failed write degrades persistence without killing a live session. Route restart-in-place through `host.ts` so replay eviction, transcript viability, and row hints stay synchronized. |
 | Desktop sidecar lifecycle | `app/supervisor/supervisor.ts` | `app/shared/framing.ts`, `app/shared/limits.ts`, `app/shared/protocol.ts` | The Electron-free supervisor owns the session-to-child registry, bounded Unix-socket path allocation, framed transport, restart/kill behavior, and sidecar status events. |
 | Desktop engine boundary | `app/sidecar/index.ts`, `app/sidecar/sidecarServer.ts` | `app/sidecar/sessionController.ts`, `app/sidecar/initializeRuntime.ts`, `app/shared/limits.ts`, `src/app-runtime/` | The Bun sidecar initializes the real runtime, constructs a QueryEngine-backed controller, strictly validates inbound allowlisted frames, reattaches only engine-minted permission updates, and raw-forwards cloneable, JSON-safe, secret-screened session events. A mid-turn `app.submit` enters the engine command queue (with a bounded desktop depth) and has a sidecar boundary-drain fallback if that turn ends before consumption. |
 | Desktop Agent Mode controls | `app/sidecar/agentModeDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/main/main.ts`, `app/preload/preload.ts`, `app/renderer/src/AgentChrome.tsx` | The sidecar joins persisted Agent Mode state with live local-agent tasks for a redacted snapshot. Its allowlisted set verb switches only the sidecar process through `matchSessionMode()` and broadcasts a fresh snapshot. |
-| Desktop Agent Mode roster and lease read seam | `app/sidecar/{agentModeDomain,leaseDomain,panelTaskReaper}.ts` | `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `src/utils/task/framework.ts`, `app/renderer/src/{AgentChrome,OrchestratorRoster,workerInspection}.ts`, `app/renderer/src/{orchestratorState,leaseState}.ts` | The sidecar joins this session's persisted Agent Mode state with live local-agent tasks, including backgrounded status, and the renderer derives roster/worker display state from that redacted snapshot. `panelTaskReaper` is the desktop equivalent of the terminal panel tick: it schedules terminal local-agent eviction at the engine-stamped deadline through the engine’s guarded eviction entry point. The read-only Codex lease snapshot follows the same lifecycle; lease assignment, release, and failover remain engine-owned, with no renderer-to-sidecar lease verb. |
+| Desktop Agent Mode roster and lease read seam | `app/sidecar/{agentModeDomain,leaseDomain,panelTaskReaper}.ts` | `app/shared/protocol.ts`, `app/sidecar/sidecarServer.ts`, `src/utils/task/framework.ts`, `app/renderer/src/{AgentChrome,OrchestratorRoster}.tsx`, `app/renderer/src/workerInspection.ts`, `app/renderer/src/{orchestratorState,leaseState}.ts` | The sidecar joins this session's persisted Agent Mode state with live local-agent tasks, including backgrounded status, and the renderer derives roster/worker display state from that redacted snapshot. `panelTaskReaper` is the desktop equivalent of the terminal panel tick: it schedules terminal local-agent eviction at the engine-stamped deadline through the engine’s guarded eviction entry point. The read-only Codex lease snapshot follows the same lifecycle; lease assignment, release, and failover remain engine-owned, with no renderer-to-sidecar lease verb. |
 | Desktop context breakdown | `app/sidecar/contextBreakdownDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/renderer/src/{ContextGauge,contextBreakdownState,contextUsage}.ts*` | The sidecar computes the detailed context categories only on an explicit app-local request, coalesces concurrent demand, and returns no collapsed or unavailable row as a usable breakdown. The renderer opens the popover from the returned snapshot rather than estimating categories itself. |
 | Desktop permission mode | `app/sidecar/permissionDomain.ts` | `app/sidecar/sidecarServer.ts`, `app/shared/protocol.ts`, `app/renderer/src/{PermissionModeChip,PermissionPrompt}.tsx` | `permission.setMode` is sidecar-local, session-scoped vocabulary. The sidecar rejects unavailable Auto using live classifier facts; `bypassPermissions` is selectable in the app, while the engine's own bypass killswitch remains authoritative. Renderer-supplied destinations or engine-shared-protocol expansion are not valid substitutes. |
 | Desktop accounts and OAuth lifecycle | `app/sidecar/accountsDomain.ts`, `app/sidecar/accountsPoolWorker.ts` | `app/main/accountsPoolRunner.ts`, `app/shared/{accountsPoolWorker,protocol}.ts`, `app/sidecar/sidecarServer.ts`, `src/services/api/codexTokenRefresh.ts`, `app/renderer/src/AccountsPage.tsx`, `app/renderer/src/StartupSurfaces.tsx` | The renderer receives redacted Anthropic and Codex pool summaries, a non-secret `anthropicRouteAvailable` boolean (covers OAuth/API key/Bedrock/Vertex/Foundry), and non-secret OAuth progress. Global Codex profile deletion uses a fixed host command and one-shot engine worker, so it requires no chat session. Deletion shares the profile lock with token refresh, returns a correlated secret-screened result plus the fresh redacted pool, and main invalidates the deleted account's process-local state and leases in every live or starting sidecar. Session-local switching and the long-lived OAuth flow remain on the addressed sidecar. |
@@ -53,7 +42,8 @@ the legacy REPL relay server.
 | Desktop restore preview cache | `app/main/transcriptCache.ts` | `app/main/main.ts`, `app/shared/transcriptRunFacts.ts`, `app/shared/hostApi.ts`, `app/preload/preload.ts`, `app/renderer/src/previewTranscriptState.ts` | A dead restorable session may be previewed without spawning a sidecar. The main process reads only bounded, versioned, secret-screened cache frames after the host’s `canPreview()` gate; renderer state merges the later live replay. Both cache writers, startup backfill and the close/park/crash persist, read the newest `system`/`run_facts` snapshot as a unit for the model, permission mode, effort, and actual context window, falling back to legacy byproduct records for older transcripts. The close path is engine-free and so writes a header only when the derived facts are complete; otherwise it writes none and the renderer reads the frames instead. |
 | Desktop renderer shell and session routing | `app/renderer/src/App.tsx`, `app/renderer/src/shellState.ts` | `app/renderer/src/TabBar.tsx`, `app/renderer/src/Sidebar.tsx`, `app/renderer/src/tabStatus.ts`, `app/renderer/src/sidebarState.ts`, `app/host/registry.ts` | `App` seeds the host roster, folds live host events without polling, and owns active selection plus create/close/restart/restore calls. Tabs retain arrival order; the sidebar projects the merged roster by real message-send time (then transcript activity or creation), never by attach/open time. Its per-workspace plus uses the host-side registry row rather than a renderer-authored path. |
 | Desktop transcript, composer, restore affordance, and picker state | `app/renderer/src/{transcriptProjector,previewTranscriptState,composerState}.ts` | `app/sidecar/subagentHistory.ts`, `app/renderer/src/{TranscriptView,ComposerInput,ToolsExpandedProvider,toolRunLayout,MetadataInspector,messageMetadata,ToolInspector}.ts*`, `app/renderer/src/connectionState.ts`, `app/renderer/src/rawMessageLog.ts`, `app/renderer/src/SlashCommandPicker.tsx`, `app/main/openWorkspaceFile.ts` | Live and cached rows stay separate until replay takes over. Restore splices a subagent's sidechain frames immediately after its parent Agent tool use, stamps the engine-minted name, and drops unreachable branches so children remain nested rather than interleaved. `TranscriptView` projects task notifications, grouped/expanded tool runs, persisted local-command output, clickable model-authored workspace paths, and the hover/focus Copy/Edit/Branch row under eligible user text. `ComposerInput` owns collapsed-paste editing; a confirmed historical Edit/Branch replaces the target composer draft and accepted base64 images from trusted engine output. Metadata joins task snapshots to engine-minted subagent records, while the picker consumes the sidecar’s read-only rich slash-catalog snapshot with names-only fallback. |
-| Legacy REPL web relay | `src/web/WebSocketServer.ts` | `src/web/WebUIBus.ts`, `src/screens/REPL.tsx` | This older server relays REPL events and intentionally disables sending; do not confuse it with `AppSessionWebSocketServer.ts` when routing runtime-backed browser work. |
+| Bounded desktop transcript rendering | `app/renderer/src/BoundedMarkdown.tsx` | `app/renderer/src/markdownRenderPlan.ts`, `app/renderer/src/VirtualLineList.tsx`, `app/renderer/src/lineWindow.ts`, `app/renderer/src/TranscriptView.tsx` | Long assistant prose is planned into render leaves, measured, and windowed within its scroll parent; off-window content is represented by spacers. Inline tool output uses the same virtual line list and preserves reveal-band placement and real line numbers. Open fences stay in the same code-card frame, but their copy control remains disabled until the fence is complete. |
+| Streamed prose-arrival preference | `app/renderer/src/proseArrival.ts` | `app/renderer/src/ProseArrivalProvider.tsx`, `app/renderer/src/proseArrivalMark.ts`, `app/renderer/src/ProseArrivalPreview.tsx`, `app/renderer/src/SettingsShell.tsx`, `app/renderer/src/TranscriptView.tsx` | This is renderer-local, versioned local-storage state, not an engine setting. It marks only newly delivered prose for instant, smooth, or flowing presentation; content is never buffered or delayed before visibility. |
 
 ## Tests And Validation
 
@@ -61,14 +51,14 @@ the legacy REPL relay server.
 |---|---|
 | Docs-only map sanity | `git diff --check -- docs/maps/web-app-runtime.md docs/maps/WORKSPACE_MAP.md docs/maps/build-release-testing.md` |
 | App-runtime session seam | `bun test src/app-runtime/createQueryEngineAppSessionConfigFromSetup.test.ts src/app-runtime/createQueryEngineAppSession.test.ts src/app-runtime/createQueryEngineSessionController.test.ts src/app-runtime/AppSessionController.test.ts` |
+| App-runtime goal continuation | `bun test src/app-runtime/attachThreadGoalScheduler.test.ts src/utils/threadGoalScheduler.test.ts` |
 | Multi-session process isolation probe | `bun test src/app-runtime/multiSessionIsolation.probe.test.ts` |
-| Web-mode startup and transport | `bun test src/web/startRuntimeBackedWebMode.test.ts src/web/launchWebAppDevServer.test.ts src/web/AppSessionWebSocketServer.test.ts src/web/appSessionProtocol.test.ts src/web/appSessionEventMapper.test.ts` |
-| Browser frontend | `bun run --cwd web test && bun run --cwd web build` |
 | Desktop tests | `bun test app/` |
 | Desktop shell/preload/renderer typecheck | `bun run --cwd app typecheck` |
 | Desktop engine-sidecar typecheck | `bun run --cwd app typecheck:sidecar` |
 | Desktop renderer build | `bun run --cwd app renderer:build` |
 | Bounded transcript rendering | `bun test app/renderer/src/BoundedMarkdown.test.tsx app/renderer/src/markdownRenderPlan.test.ts app/renderer/src/lineWindow.test.ts` |
+| Prose-arrival storage, marking, and preview | `bun test app/renderer/src/ProseArrivalProvider.test.tsx app/renderer/src/proseArrivalMark.test.ts app/renderer/src/proseArrivalPreviewModel.test.ts app/renderer/src/proseArrivalPreview.dom.test.ts` |
 | Desktop hardening smoke | `bun run --cwd app test:hardening` |
 | Desktop AskUserQuestion flow | `bun test app/renderer/src/AskQuestionFlow.test.tsx app/renderer/src/askQuestionState.test.ts app/sidecar/sidecarServer.test.ts app/preload/preloadSource.test.ts` |
 | Desktop action/control seams | `bun test app/sidecar/sessionActionsDomain.test.ts app/sidecar/taskControlDomain.test.ts app/sidecar/settingsDomain.test.ts app/renderer/src/sessionActionRuntimeState.test.ts app/renderer/src/TasksDialog.test.tsx app/renderer/src/SettingsEditors.test.tsx` |
@@ -80,11 +70,6 @@ the legacy REPL relay server.
 
 ## Traps And Stale Assumptions
 
-- `src/main.tsx --web` no longer uses `src/web/WebSocketServer.ts` for the
-  browser chat path. Treat `WebSocketServer.ts` as the legacy REPL relay unless
-  you are intentionally working on that older transport.
-- The browser protocol exists in two places: `src/web/appSessionProtocol.ts`
-  for server validation and `web/src/appProtocol.ts` for client typing.
 - The desktop protocol snapshot in `app/shared/engine-types.snapshot.d.ts`
   isolates Electron/preload/renderer typechecking from the Bun engine graph.
   Keep it synchronized with the canonical source types it cites.
@@ -114,15 +99,13 @@ the legacy REPL relay server.
   cwd and session identity. Route lifecycle changes through the supervisor's
   session-addressed child registry.
 - `createQueryEngineAppSessionConfigFromSetup.ts` snapshots MCP tools,
-  commands, clients, and resources for browser sessions. If startup data is
-  missing only in web mode, inspect this seam before changing controller logic.
-- `AppSessionController` and `AppSessionWebSocketServer` both guard active
-  turns; concurrency fixes usually need both layers understood before changes.
+  commands, clients, and resources for the desktop sidecar. If startup data is
+  missing there, inspect this seam before changing controller logic.
+- `AppSessionController` guards active turns; understand its lifecycle before
+  changing desktop concurrency behavior.
 - Separate `AppSessionController` instances do not isolate the process-global
   cwd and session ID used by `QueryEngine`. Re-run the isolation probe before
   designing a multi-session desktop host around one engine process.
-- The root `bun run lint` script excludes `web/`. Use `bun run --cwd web
-  typecheck` or `bun run --cwd web build` when browser code changes.
 - The root lint configuration also does not cover `app/**`; use the desktop
   tests and both desktop typecheck boundaries for that tree.
 - `askUserQuestion.answer` is deliberately app-local vocabulary, not part of

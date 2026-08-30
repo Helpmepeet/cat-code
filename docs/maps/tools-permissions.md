@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-08-14 against the current source tree.
+Last refreshed: 2026-08-26 against the current source tree.
 
 ## Purpose
 
@@ -20,20 +20,11 @@ Read in this order for most tool, MCP, or permission work:
 |---|---|---|
 | 1 | [`WORKSPACE_MAP.md`](WORKSPACE_MAP.md) | Current map index and sub-map routing. |
 | 2 | [`../../src/tools.ts`](../../src/tools.ts) | Built-in tool registry, feature-gated exposure, deny-rule filtering, and merged tool-pool assembly. |
-| 3 | [`../../src/constants/tools.ts`](../../src/constants/tools.ts) | Base tool-name constants and shared allowlists (ex: async agent base tools). |
-| 4 | [`../../src/Tool.ts`](../../src/Tool.ts) | Core `Tool` contract, tool defaults, schema hooks, validation hooks, and name matching. |
-| 5 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) | Interactive approval flow and decision handoff into UI, classifier, and worker-specific handlers. |
-| 6 | [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Main allow / ask / deny engine, rule precedence, auto-mode classifier path, and permission updates. |
-| 7 | [`../../src/utils/permissions/permissionSetup.ts`](../../src/utils/permissions/permissionSetup.ts) | Permission-context construction, mode transitions, dangerous-rule stripping, and working-directory setup. |
-| 8 | [`../../src/utils/permissions/filesystem.ts`](../../src/utils/permissions/filesystem.ts) | Path matching, dangerous-file checks, internal path exceptions, and file permission suggestions. |
-| 9 | [`../../src/utils/permissions/pathValidation.ts`](../../src/utils/permissions/pathValidation.ts) | Shared path allow/deny logic used by file operations and shell path validation. |
-| 10 | [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Per-tool execution loop, input validation, hook integration, telemetry, and result shaping. |
-| 11 | [`../../src/services/tools/toolOrchestration.ts`](../../src/services/tools/toolOrchestration.ts) | Serial vs concurrent batching and context mutation ordering. |
-| 12 | [`../../src/services/tools/StreamingToolExecutor.ts`](../../src/services/tools/StreamingToolExecutor.ts) | Streaming-time execution, concurrency gates, and sibling cancellation behavior. |
-| 13 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) | MCP connection lifecycle, MCP tool wrapping, resource exposure, and result transformation. |
-| 14 | [`../../src/services/mcp/config.ts`](../../src/services/mcp/config.ts) | MCP config layering, deduplication, validation, and scope rules. |
-| 15 | [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | Deferred-tool policy, tool-search gating, and threshold logic. |
-| 16 | [`../../src/utils/teammateMailbox.ts`](../../src/utils/teammateMailbox.ts) | Separate authority boundary for Agent Teams mailbox controls — closed control union, runtime principals, request correlation. See "Agent Teams Mailbox Control Authority" below. |
+| 3 | [`../../src/Tool.ts`](../../src/Tool.ts) and [`../../src/services/tools/toolExecution.ts`](../../src/services/tools/toolExecution.ts) | Core contract plus validation, hooks, permission handoff, execution, and result shaping. |
+| 4 | [`../../src/hooks/useCanUseTool.tsx`](../../src/hooks/useCanUseTool.tsx) and [`../../src/utils/permissions/permissions.ts`](../../src/utils/permissions/permissions.ts) | Interactive approval and main allow / ask / deny policy. |
+| 5 | [`../../src/utils/permissions/{permissionSetup,filesystem,pathValidation}.ts`](../../src/utils/permissions/) | Permission-context setup plus filesystem path matching and validation. |
+| 6 | [`../../src/tools/{FileReadTool,FileWriteTool}/`](../../src/tools/) and [`../../src/utils/{file,fileStateCache}.ts`](../../src/utils/) | Read/write safety: bounded model output, complete-read authorization, stable file identity, and replacement-safe writes. |
+| 7 | [`../../src/services/mcp/client.ts`](../../src/services/mcp/client.ts) and [`../../src/utils/toolSearch.ts`](../../src/utils/toolSearch.ts) | MCP exposure/resource transformation and deferred-tool policy. |
 
 ## Current Mental Model
 
@@ -80,6 +71,7 @@ The live tool system is assembled in layers:
 | Tool input validation | `src/services/tools/toolExecution.ts` | `src/Tool.ts`, specific tool `inputSchema`, tool `validateInput()` implementation | The execution layer owns schema parsing and calls `validateInput()` before permission checks. Tool implementations own domain-specific validation details. |
 | Shell-specific validation | `src/tools/BashTool/bashPermissions.ts` | `src/tools/BashTool/pathValidation.ts`, `src/tools/BashTool/readOnlyValidation.ts`, `src/tools/BashTool/shouldUseSandbox.ts` | Bash has deeper subcommand classification, redirection checks, path validation, sandbox routing, and classifier integration than most tools. |
 | Tool examples and prompt-visible guidance | tool `prompt.ts` or tool implementation | `src/tools/ToolSearchTool/prompt.ts`, `src/utils/api.ts` | Tool descriptions and prompts are model-visible policy surfaces. For many tools they matter as much as code-level permission hooks. |
+| GPT image generation | `src/tools/GenerateImageTool/GenerateImageTool.ts` | `src/tools/GenerateImageTool/GenerateImageTool.test.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/permissions/filesystem.ts` | This tool validates generation/edit inputs, writes the image through the normal filesystem permission gate, and has separate OpenAI and ChatGPT-subscription backends. The subscription backend pins its own image model, reports the model echoed by the response, and fails transparently unsupported-background requests without pointless model retries. |
 | Web search behavior and Exa transport | `src/tools/WebSearchTool/WebSearchTool.ts` | `src/tools/WebSearchTool/exa.ts`, `src/tools/WebSearchTool/prompt.ts`, `src/tools/WebSearchTool/UI.tsx`, `src/utils/subprocessEnv.ts` | `WebSearchTool.ts` owns schema, permission, progress, and result rendering handoff. `exa.ts` owns the direct Exa request, freshness/domain filters, response validation, timeout/abort behavior, and `EXA_API_KEY`; subprocess env forwarding keeps the key available to child runtimes. |
 
 ## Tool Exposure Flow
@@ -297,7 +289,8 @@ Use focused checks first, then the documented build:
 | Permission suggestions and filesystem safety | `bun test src/utils/permissions/filesystemSuggestions.test.ts` and nearby permission tests |
 | Auto-mode classifier | `bun test src/utils/permissions/yoloClassifier.test.ts` and `bun --feature=AUTO_MODE_UPSTREAM_PORT test src/utils/permissions/yoloClassifier.test.ts` |
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
-| File-edit result bounds | `bun test src/tools/FileEditTool/FileEditTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/tools/FilePatchTool/applier.test.ts src/tools/NotebookEditTool/NotebookEditTool.test.ts` |
+| File read/write bounds and replacement safety | `bun test src/tools/FileReadTool/FileReadTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/utils/fileWriteSafety.test.ts` |
+| GPT image generation backend and model limits | `bun test src/tools/GenerateImageTool/GenerateImageTool.test.ts` |
 | Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |
 | Tool search behavior | `bun test` for `src/tools/ToolSearchTool/` and `src/utils/toolSearch.ts` if present in current snapshot |
 | MCP configuration and client behavior | MCP-related tests under `src/services/mcp/` and integration checks through connected server flows |

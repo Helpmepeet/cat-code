@@ -1,10 +1,10 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-08-27 against `CLAUDE.md`,
+Last refreshed: 2026-08-28 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
-`web/package.json`, `app/package.json`, `app/scripts/`, `src/migrations/`,
+`app/package.json`, `app/scripts/`, `src/migrations/`,
 update/release/upgrade command surfaces, and colocated tests.
 
 Use this as the daily-refreshable routing layer for build, development,
@@ -39,14 +39,13 @@ files, then verify current source before changing code.
 | Development build | `scripts/build.ts` | `package.json` | `bun run build:dev` emits `./cli-dev`, sets development macros, experimental-build env, dev semver suffix, and git-log changelog macro. |
 | Compile output | `scripts/build.ts` | `package.json` | `bun run compile` passes `--compile` and emits `./dist/cli`. The build script also supports `--compile --dev` internally, which would emit `./dist/cli-dev`, but no package script exposes that combo. |
 | Source dev entrypoint | `package.json` | `src/entrypoints/cli.tsx`, `src/main.tsx` | `bun run dev` runs the TSX entrypoint directly. Prefer it only when debugging source startup; build verification remains `build:dev:full`. |
-| Web frontend dev/build | `web/package.json` | `src/main.tsx`, `src/web/startRuntimeBackedWebMode.ts`, `src/web/launchWebAppDevServer.ts`, `web/src/App.tsx` | `cd web && bun run dev` starts Vite, `cd web && bun run build` produces the browser bundle, and `main.tsx --web` now routes through the runtime-backed web-mode launcher plus the app-session WebSocket server. |
 | Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | This is a temporary Tailwind v4 build harness for design-token handoff, not the final renderer scaffold. Run `bun run build` from `renderer-theme/`. |
 | Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | This portable type-only fixture currently uses cited snapshots because direct aliases pull in the engine runtime graph. Re-sync snapshots from their canonical source types before renderer adoption, then run the documented isolated `tsc` command. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/main/mainDecisions.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process; `SIDECAR_RUNTIME_ARGS` enables the classifier and reactive-compaction runtime features. |
 | Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
-| Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS `.app` into `app/dist-app/`, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID` as build-time constants, sets `com.catcode.desktop`, and ad-hoc signs the nested binary before the bundle. No packaging dependency is involved. |
+| Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS `.app` into its generated output directory, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID` as build-time constants, sets `com.catcode.desktop`, and ad-hoc signs the nested binary before the bundle. No packaging dependency is involved. |
 | Packaged bundle stowaway scan | `app/scripts/packagedBundleScan.ts` | `app/scripts/package-app.ts`, `app/scripts/packagedBundleScan.test.ts` | Path and content rules that fail the packaging build when a credential, key material, test source, source map, `node_modules` tree, or the development preload appears in the bundle. There is deliberately no artifact manifest; the local-use contract rules one out. |
-| Packaged launch verification | `app/scripts/packaged-launch-smoke.ts` | `app/dist-app/`, `app/main/main.ts` | `bun run --cwd app smoke:packaged` proves the artifact is self-contained: the compiled sidecar runs with no `bun` on `PATH` and a working directory outside the checkout, and the launched app takes the packaged branch while a development renderer URL is set. Electron ignores `--require` in a packaged app, so it asserts on production main's own stdout rather than an injected harness. |
+| Packaged launch verification | `app/scripts/packaged-launch-smoke.ts` | `app/scripts/package-app.ts`, `app/main/main.ts` | `bun run --cwd app smoke:packaged` proves the generated artifact is self-contained: the compiled sidecar runs with no `bun` on `PATH` and a working directory outside the checkout, and the launched app takes the packaged branch while a development renderer URL is set. Electron ignores `--require` in a packaged app, so it asserts on production main's own stdout rather than an injected harness. |
 | Shell update command | `src/main.tsx` | `src/entrypoints/cli.tsx`, `src/cli/update.ts` | `program.command('update').alias('upgrade')` delegates to `src/cli/update.ts`. Early CLI rewrites `--update` and `--upgrade` to the `update` subcommand. |
 | Slash subscription upgrade | `src/commands/upgrade/index.ts` | `src/commands/upgrade/upgrade.tsx`, `src/commands/rate-limit-options/` | `/upgrade` opens the Max upgrade URL and starts login refresh. This is not the binary updater. |
 | Release notes command | `src/commands/release-notes/index.ts` | `src/commands/release-notes/release-notes.ts`, `src/utils/releaseNotes.ts` | `/release-notes` fetches changelog with a short timeout, falls back to cached notes, and prints recent or latest notes. |
@@ -150,8 +149,6 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Full repo build gate requested by root docs | `bun run build:dev:full` | `CLAUDE.md`, `package.json`, `scripts/build.ts` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
-| Web frontend tests | `bun run --cwd web test` | `web/package.json` |
-| Web frontend type/build verification | `cd web && bun run typecheck && bun run build` | `web/package.json`, Vite |
 | Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
 | Renderer engine-type fixture | `bunx tsc --project scripts/typecheck/renderer-engine-types/tsconfig.json --noEmit` | Isolated renderer type-adoption config |
 | Electron desktop tests | `bun test app/` | Desktop unit, boundary, and round-trip tests |
@@ -182,7 +179,6 @@ paths.
 | Tasks and workers | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
-| Browser app/runtime | `bun test src/web/*.test.ts src/app-runtime/*.test.ts` plus `bun run --cwd web test` |
 | P5-5c cross-process contention probes | `src/utils/atomicFile.probe.test.ts`, `src/utils/transcriptLease.probe.test.ts`, `src/migrations/runEngineMigrations.probe.test.ts`, `src/codex-core/accountRefreshContention.probe.test.ts`, `src/utils/secureStorage/crossProcessStorage.probe.test.ts`, `src/services/autoDream/consolidationLock.probe.test.ts`, `src/services/teamMemorySync/teamMemorySync.probe.test.ts` | Run `bun test src/utils/atomicFile.probe.test.ts src/utils/transcriptLease.probe.test.ts src/migrations/runEngineMigrations.probe.test.ts src/codex-core/accountRefreshContention.probe.test.ts src/utils/secureStorage/crossProcessStorage.probe.test.ts src/services/autoDream/consolidationLock.probe.test.ts src/services/teamMemorySync/teamMemorySync.probe.test.ts` with synthetic isolated files and no live account/network access. |
 | Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
@@ -195,9 +191,8 @@ workarounds.
 ## Lint Behavior
 
 `bun run lint` runs ESLint only on changed TypeScript files from
-`git diff --name-only main...HEAD`, excluding `web/`, and only if those paths
-still exist. Browser-frontend changes therefore need their own `web/` checks.
-The root lint uses `eslint-suppressions.json` plus suppressions for:
+`git diff --name-only main...HEAD`, and only if those paths still exist. The
+root lint uses `eslint-suppressions.json` plus suppressions for:
 
 - `react-hooks/rules-of-hooks`
 - `react-hooks/exhaustive-deps`
@@ -239,8 +234,6 @@ actual command expansion before trusting a clean lint result.
   changelog file.
 - `bun run lint` can miss unchanged files affected by API changes. Run focused
   tests and, for shared type changes, broaden lint/test selection manually.
-- `bun run lint` does not cover `web/`. A clean root lint says nothing about
-  the Vite React app unless you also run the `web/package.json` checks.
 - Some checked-in TSX files include React compiler artifacts or source maps.
   Avoid formatting or rewriting unrelated generated-looking regions while doing
   scoped fixes.

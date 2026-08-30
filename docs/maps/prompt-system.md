@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-08-14
+Last refreshed: 2026-08-26
 
 ## Purpose
 
@@ -39,6 +39,7 @@ Read in this order for most prompt or instruction work:
 | Change subagent prompt behavior | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/loadAgentsDir.ts`, `src/agent-mode/rolePrompts.ts` | `runAgent.ts` builds the agent prompt, injects Agent Mode addenda, adds env details, and may trim inherited context. |
 | Change output styles | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts`, `src/utils/plugins/loadPluginOutputStyles.ts`, `.claude/output-styles/*.md`, `~/.cat-code/output-styles/*.md` | Output style text is injected by `src/constants/prompts.ts`. |
 | Change tool descriptions | `src/tools/*/prompt.ts` | `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. `src/tools/BashTool/prompt.ts` also owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
+| Change skill-loading guidance | `src/tools/SkillTool/prompt.ts` | `src/tools/SkillTool/SkillTool.ts`, `src/tools.ts`, `src/constants/prompts.ts` | The skill tool prompt requires matching skills to be loaded before a response, but avoids reinjecting instructions already visible in the same conversation; use the tool again only when those instructions are no longer available in context. |
 | Inspect emitted prompts | `src/services/api/dumpPrompts.ts` | `src/query.ts`, `src/services/api/claude.ts`, `/context` command paths | Ant-user dumps write under `~/.cat-code/dump-prompts/<session-or-agent-id>.jsonl` as init, system_update, message, and response entries. |
 | Render a prompt for a dev-full evaluation | `src/entrypoints/cli.tsx` | `scripts/build.ts`, `src/constants/prompts.ts`, `src/utils/model/model.ts`, `src/bootstrap/state.ts` | A `dev-full` build includes the gated `--dump-system-prompt` fast path. It renders and exits; use `--model` plus explicit `--provider` when the desired prompt family differs from persisted startup provider state. |
 
@@ -142,6 +143,7 @@ Use focused checks first, then the documented build:
 | Main query behavior | `bun test src/query.test.ts` |
 | Agent Mode context and prompt owners | `bun test src/agent-mode/agentMode.test.ts src/agent-mode/orchestratorPrompt.test.ts src/agent-mode/rolePrompts.test.ts` |
 | Agent tool prompt/resume behavior | `bun test src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/AgentTool.test.ts` |
+| Skill-loading prompt policy | `bun test src/tools/SkillTool/` |
 | Compaction prompt behavior | `bun test src/services/compact/prompt.test.ts src/services/compact/compact.test.ts` |
 | Full documented build | `bun run build:dev:full` |
 

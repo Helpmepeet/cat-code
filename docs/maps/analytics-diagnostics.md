@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-08-11
+Last refreshed: 2026-08-24
 
 ## Purpose
 
@@ -18,25 +18,13 @@ active local features.
 
 | Area | Inspect first | Then inspect | Notes |
 |---|---|---|---|
-| Analytics public API | `src/services/analytics/index.ts` | `src/services/analytics/sink.ts`, `src/services/analytics/config.ts` | `logEvent`, `logEventAsync`, and sink attachment are no-ops in this build. Keep call sites unchanged unless the task is to change the compatibility boundary. |
-| GrowthBook gates/config | `src/services/analytics/growthbook.ts` | `src/components/Settings/Settings.tsx`, `src/commands/config/`, `src/hooks/useMainLoopModel.ts`, `src/hooks/useSkillsChange.ts` | Feature reads, config overrides, cache fallback, refresh listeners, and security gate helpers live here. Initialization is gated by 1P event logging. |
-| Analytics sinks | `src/services/analytics/sink.ts` | `src/services/analytics/datadog.ts`, `src/services/analytics/firstPartyEventLogger.ts`, `src/services/analytics/firstPartyEventLoggingExporter.ts`, `src/services/analytics/sinkKillswitch.ts` | Sink startup and Datadog/1P logger are inert; exporter code remains as an implementation surface for tests or future re-enable work. |
-| Metadata and PII gates | `src/services/analytics/metadata.ts` | Analytics call sites with `logEvent(...)`, MCP/plugin/skill telemetry helpers | Owns metadata marker types, MCP tool-name redaction, official/built-in MCP detail gates, and helper field builders. |
-| OSS/OTEL telemetry stubs | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/events.ts` | `src/entrypoints/init.ts`, `src/utils/telemetry/sessionTracing.ts`, `src/utils/telemetry/betaSessionTracing.ts` | `initializeTelemetryAfterTrust`, `initializeTelemetry`, `flushTelemetry`, `logOTelEvent`, and tracing spans are inert unless a specific tracing file says otherwise. |
-| Perfetto tracing | `src/utils/telemetry/perfettoTracing.ts` | API/tool span call sites, cleanup registry, env var gates | Perfetto writes Chrome trace JSON when enabled by env; separate from disabled product telemetry. |
-| Plugin/skill telemetry helpers | `src/utils/telemetry/pluginTelemetry.ts`, `src/utils/telemetry/skillLoadedEvent.ts` | `src/main.tsx`, plugin load/command code | Helpers still call `logEvent`, so in this build they preserve routing without emitting product analytics. |
-| IDE diagnostics tracking | `src/services/diagnosticTracking.ts` | `src/tools/FileEditTool/shared.ts`, `src/tools/FileWriteTool/FileWriteTool.ts`, `src/utils/attachments.ts`, `src/components/DiagnosticsDisplay.tsx` | Captures baseline diagnostics before edits, fetches new IDE diagnostics after changes, and renders them as attachments. |
-| Doctor command | `src/commands/doctor/index.ts`, `src/commands/doctor/doctor.tsx` | `src/screens/Doctor.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/doctorContextWarnings.ts` | `/doctor` lazy-loads the Doctor screen; it is disabled only by `DISABLE_DOCTOR_COMMAND`. |
-| Status command/dialog | `src/commands/status/index.ts`, `src/commands/status/status.tsx` | `src/components/Settings/Settings.tsx`, `src/components/Settings/Status.tsx`, `src/utils/status.tsx` | `/status` opens Settings on the Status tab. Status aggregates account, provider, IDE, MCP, settings, install, memory, sandbox, and diagnostics. |
-| Codex pool status JSON | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | `src/main.tsx`, `src/services/api/codexAccountPool.ts`, `src/services/api/codexUsage.ts`, [`codex-core.md`](codex-core.md) | `cat-code codex status --json` is a read-only advisory observation for external delegation/scheduling. It emits opaque profile refs, pool counts, usage freshness, and a decision action without raw account identity or token material. |
-| Debug logging | `src/utils/debug.ts` | `src/utils/debugFilter.ts`, `/debug` command surfaces, call sites using `logForDebugging` | Controls debug mode, file path, stderr/file output, filters, level threshold, runtime enablement, and latest symlink. |
-| Desktop operational logs | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/main.ts`, `app/supervisor/supervisor.ts`, `app/sidecar/operationalLogger.ts` | Main owns the private, bounded JSONL sink. Producers may emit only the closed metadata schema; sidecar diagnostics cross a dedicated FD 3 descriptor and raw stderr is never persisted. |
-| Desktop delivery trace and support export | `app/main/deliveryTraceSink.ts`, `app/main/diagnosticsBundle.ts` | `app/shared/deliveryTrace.ts`, `app/main/main.ts`, `app/preload/{preload,deliveryAckQueue}.ts`, `app/renderer/src/App.tsx`, `app/renderer/src/RendererErrorBoundary.tsx`, `app/renderer/src/SettingsShell.tsx` | Per-frame metadata tracks the desktop handoff and validated renderer acknowledgements. Export reports coverage limits and known loss rather than treating missing records as proof of a missing frame. Settings exposes fixed actions to reveal private logs or save an allowlisted local support bundle; neither action gives the renderer a filesystem destination. |
-| Error logging | `src/utils/log.ts` | `src/utils/errorLogSink.ts`, `src/utils/sinks.ts`, MCP log call sites | Owns `logError`, in-memory recent errors, queued sink attachment, and persistent error/MCP logging boundary. |
-| API request logging | `src/services/api/logging.ts` | `src/services/api/claude.ts`, `src/utils/telemetry/sessionTracing.ts`, `src/utils/telemetry/perfettoTracing.ts`, `src/cost-tracker.ts` | Logs API query/success/error metadata, gateway detection, request IDs, OTEL event stubs, beta spans, duration state, and teleport first-message events. |
-| Cost tracking | `src/cost-tracker.ts` | `src/commands/cost/`, `src/costHook.ts`, `src/screens/REPL.tsx`, `src/bootstrap/state.ts` | Tracks session cost, token usage, API/tool duration, code-change counts, persistence on exit/session switch, and `/cost` display. |
-| Stats UI and aggregation | `src/commands/stats/stats.tsx`, `src/components/Stats.tsx` | `src/utils/stats.ts`, `src/context/stats.tsx`, `src/utils/statsCache.ts` | `/stats` renders transcript-derived usage/activity; `StatsProvider` persists in-session metrics to project config on exit. |
-| Validation display | `src/components/ValidationErrorsList.tsx` | `src/hooks/notifs/useSettingsErrors.tsx`, `src/utils/settings/allErrors.ts`, `src/utils/settings/validation.ts`, `src/utils/envValidation.ts` | Settings validation feeds Doctor and Status. Environment bounded-int validation is currently Doctor-specific. |
+| Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; inspect metadata redaction and gate/config fallbacks before changing a call site. |
+| Local telemetry and tracing | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/perfettoTracing.ts` | `src/utils/telemetry/{events,sessionTracing,betaSessionTracing}.ts`, `src/entrypoints/init.ts` | OTEL entrypoints are inert in this build; Perfetto remains the env-enabled local trace writer. |
+| Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. |
+| Desktop usage statistics | `app/sidecar/statsDomain.ts`, `app/shared/protocol.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/{App,AccountsPage,AccountsUsageSection}.tsx`, `app/renderer/src/statsState.ts`, `src/utils/stats.ts` | The sidecar projects real transcript-derived aggregates into a redacted `stats.usage.snapshot`; renderer range changes are a closed `stats.query` verb for 7d or 30d. |
+| Doctor, status, and validation | `src/commands/{doctor,status}/` | `src/screens/Doctor.tsx`, `src/components/Settings/Status.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/status.tsx`, `src/utils/envValidation.ts` | `/doctor` and `/status` overlap but have distinct owners; settings and environment validation feed their displays. |
+| IDE diagnostics and debug/error logs | `src/services/diagnosticTracking.ts`, `src/utils/debug.ts` | `src/utils/{attachments,log,errorLogSink}.ts`, `src/components/DiagnosticsDisplay.tsx` | IDE diagnostics are local edit feedback; debug/error output has separate enablement, filtering, and persistence paths. |
+| Cost and terminal stats | `src/cost-tracker.ts`, `src/commands/stats/stats.tsx` | `src/components/Stats.tsx`, `src/utils/{stats,statsCache}.ts`, `src/context/stats.tsx` | Terminal `/stats` and cost tracking remain separate from desktop usage-stat projection. |
 
 ## Current Build Decisions
 
@@ -114,6 +102,7 @@ active local features.
 | Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files, aggregates sessions/messages/model usage/activity/streaks/speculation time, and uses stats cache helpers. |
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
+| Desktop usage statistics | `app/sidecar/statsDomain.ts` | The sidecar reads `aggregateClaudeCodeStatsForRange()` and sends redacted totals, daily model/activity data, cache metrics, and model names to the Accounts surface; no transcript text or credentials cross the boundary. |
 
 ## Tests And Validation
 
@@ -125,6 +114,18 @@ active local features.
 | Edit-time settings validation | `src/utils/settings/validateEditTool.ts` | File edit/write tool validation call sites |
 | Environment bounded ints | `src/utils/envValidation.ts` | `src/screens/Doctor.tsx` for `BASH_MAX_OUTPUT_LENGTH`, `TASK_MAX_OUTPUT_LENGTH`, and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` |
 | Doctor context warnings | `src/utils/doctorContextWarnings.ts` | `src/utils/analyzeContext.ts`, `src/utils/statusNoticeHelpers.ts`, permission shadow detection |
+| Desktop usage stats | `bun test app/sidecar/statsDomain.test.ts app/renderer/src/statsState.test.ts app/renderer/src/AccountsPage.test.tsx app/sidecar/sidecarServer.test.ts` | `app/sidecar/statsDomain.ts`, `app/renderer/src/statsState.ts` |
+
+## Traps And Stale Assumptions
+
+- Desktop usage statistics are an app-local, sidecar-validated read seam, not a
+  shared engine protocol expansion. Do not accept renderer-authored file paths,
+  dates, or arbitrary ranges.
+- The desktop snapshot contains aggregates and model names only. It must not
+  grow into a route for transcript content, prompts, credentials, or account
+  tokens.
+- `renderer.health.sample` distinguishes JS heap from renderer working set and
+  committed renders. Do not restore the ambiguous `heapUsedBytes` field name.
 
 ## Refresh Checklist
 
