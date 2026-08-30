@@ -116,6 +116,61 @@ function usageBody(usedPercent: number, limitReached = false): Response {
   )
 }
 
+// Timers the test fires by hand. clearTimeout has to drop the callback here, or
+// a deadline the code cleared too early would still be fireable and a body-phase
+// timeout test would pass against code that cannot time a body read out at all.
+function installManualTimers(): {
+  restore: () => void
+  runPending: () => void
+  pendingCount: () => number
+} {
+  const originalSetTimeout = globalThis.setTimeout
+  const originalClearTimeout = globalThis.clearTimeout
+  const pending = new Map<number, () => void>()
+  let nextId = 1
+  globalThis.setTimeout = ((callback: TimerHandler) => {
+    const id = nextId++
+    if (typeof callback === 'function') pending.set(id, callback as () => void)
+    return id as unknown as ReturnType<typeof setTimeout>
+  }) as typeof setTimeout
+  globalThis.clearTimeout = ((id?: unknown) => {
+    pending.delete(id as number)
+  }) as typeof clearTimeout
+  return {
+    restore: () => {
+      globalThis.setTimeout = originalSetTimeout
+      globalThis.clearTimeout = originalClearTimeout
+    },
+    runPending: () => {
+      for (const [id, callback] of [...pending]) {
+        pending.delete(id)
+        callback()
+      }
+    },
+    pendingCount: () => pending.size,
+  }
+}
+
+// Headers have arrived, the body never completes. Only an abort ends it, which
+// is what a real stalled response does to fetch's body read.
+function stalledBodyResponse(signal: AbortSignal | null | undefined): Response {
+  let failBody: ((reason: unknown) => void) | null = null
+  const body = new ReadableStream({
+    start(controller) {
+      failBody = (reason: unknown) => controller.error(reason)
+    },
+  })
+  const abortBody = () => {
+    failBody?.(new DOMException('The operation was aborted.', 'AbortError'))
+  }
+  if (signal?.aborted) abortBody()
+  else signal?.addEventListener('abort', abortBody)
+  return new Response(body, {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 describe('codexUsage display helpers', () => {
   beforeEach(() => {
     resetCodexAccountPoolForTest()
@@ -1778,5 +1833,107 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain(
       'warning: saved plan metadata says expired (2026-04-12T03:30:01+00:00); live usage decides availability',
     )
+  })
+
+  test('consumeUsageLimitReset times out a response whose body never completes', async () => {
+    const originalFetch = globalThis.fetch
+    const realSetTimeout = globalThis.setTimeout
+    const realClearTimeout = globalThis.clearTimeout
+    const timers = installManualTimers()
+    globalThis.fetch = (async (_input, init) =>
+      stalledBodyResponse(init?.signal)) as unknown as typeof globalThis.fetch
+
+    try {
+      const pending = consumeUsageLimitReset(
+        { accountId: 'stall-account', accessToken: 'access-stall' },
+        'redeem-stall',
+      )
+      // Let the headers land so the body read is the phase in progress.
+      await new Promise(resolve => realSetTimeout(resolve, 0))
+      timers.runPending()
+
+      // Bounds the run when the deadline does not cover the body: without this
+      // the read never settles and the assertion below would hang the suite.
+      let guard: ReturnType<typeof setTimeout> | undefined
+      const outcome = await Promise.race([
+        pending,
+        new Promise<'never-settled'>(resolve => {
+          guard = realSetTimeout(() => resolve('never-settled'), 500)
+        }),
+      ])
+      realClearTimeout(guard)
+
+      expect(outcome).toEqual({
+        kind: 'network_error',
+        error: 'The operation was aborted.',
+      })
+    } finally {
+      globalThis.fetch = originalFetch
+      timers.restore()
+    }
+  })
+
+  test('fetchPoolUsage times out a usage response whose body never completes', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'stall-account',
+      accounts: [buildPoolAccount({ accountId: 'stall-account' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    const realSetTimeout = globalThis.setTimeout
+    const realClearTimeout = globalThis.clearTimeout
+    const timers = installManualTimers()
+    globalThis.fetch = (async (_input, init) =>
+      stalledBodyResponse(init?.signal)) as unknown as typeof globalThis.fetch
+
+    try {
+      const pending = fetchPoolUsage(true)
+      await new Promise(resolve => realSetTimeout(resolve, 0))
+      timers.runPending()
+
+      let guard: ReturnType<typeof setTimeout> | undefined
+      const outcome = await Promise.race([
+        pending,
+        new Promise<'never-settled'>(resolve => {
+          guard = realSetTimeout(() => resolve('never-settled'), 500)
+        }),
+      ])
+      realClearTimeout(guard)
+
+      expect(outcome).not.toBe('never-settled')
+      const snapshot = outcome as PoolUsageSnapshot
+      expect(snapshot.accounts).toEqual([])
+      expect(snapshot.errors).toEqual([
+        { accountId: 'stall-account', error: 'The operation was aborted.' },
+      ])
+    } finally {
+      globalThis.fetch = originalFetch
+      timers.restore()
+      invalidateUsageCache()
+    }
+  })
+
+  test('a completed usage response resolves and leaves no deadline armed', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'main-account',
+      accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+    })
+
+    const originalFetch = globalThis.fetch
+    const timers = installManualTimers()
+    globalThis.fetch = (async () =>
+      usageBody(12)) as unknown as typeof globalThis.fetch
+
+    try {
+      const snapshot = await fetchPoolUsage(true)
+      expect(snapshot.errors).toEqual([])
+      expect(snapshot.accounts).toHaveLength(1)
+      expect(snapshot.accounts[0].primaryWindow.usedPercent).toBe(12)
+      expect(timers.pendingCount()).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+      timers.restore()
+      invalidateUsageCache()
+    }
   })
 })

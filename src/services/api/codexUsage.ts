@@ -130,7 +130,11 @@ export async function consumeUsageLimitReset(
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
+    // The deadline has to outlive the fetch: it resolves on headers, so a
+    // response whose body never completes hangs forever if the timer is
+    // cleared before the body is read.
     let response: Response
+    let bodyText: string
     try {
       response = await globalThis.fetch(WHAM_RESET_CONSUME_URL, {
         method: 'POST',
@@ -143,11 +147,11 @@ export async function consumeUsageLimitReset(
         body: JSON.stringify({ redeem_request_id: redeemRequestId }),
         signal: controller.signal,
       })
+      bodyText = await response.text()
     } finally {
       clearTimeout(timeout)
     }
 
-    const bodyText = await response.text()
     const bodySnippet = snippetForDebugging(bodyText)
     if (!response.ok) {
       logForDebugging(
@@ -228,27 +232,36 @@ async function fetchAccountUsageOnce(
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
 
-    const response = await globalThis.fetch(WHAM_USAGE_URL, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        Accept: 'application/json',
-        'chatgpt-account-id': accountId,
-        originator: 'codex_cli_rs',
-      },
-      signal: controller.signal,
-    })
-    clearTimeout(timeout)
+    // The deadline has to outlive the fetch: it resolves on headers, so a
+    // response whose body never completes hangs forever if the timer is
+    // cleared before the body is read.
+    let response: Response
+    let data: Record<string, unknown>
+    try {
+      response = await globalThis.fetch(WHAM_USAGE_URL, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: 'application/json',
+          'chatgpt-account-id': accountId,
+          originator: 'codex_cli_rs',
+        },
+        signal: controller.signal,
+      })
 
-    if (!response.ok) {
-      const error = `HTTP ${response.status}`
-      logForDebugging(
-        `[codex-usage] HTTP ${response.status} for account ${accountId.slice(0, 12)}`,
-      )
-      return { status: response.status, result: { error, usage: null } }
+      if (!response.ok) {
+        const error = `HTTP ${response.status}`
+        logForDebugging(
+          `[codex-usage] HTTP ${response.status} for account ${accountId.slice(0, 12)}`,
+        )
+        return { status: response.status, result: { error, usage: null } }
+      }
+
+      data = (await response.json()) as Record<string, unknown>
+    } finally {
+      clearTimeout(timeout)
     }
 
-    const data = (await response.json()) as Record<string, unknown>
     const usage = parseUsageResponse(accountId, data)
     if (!usage) {
       return { status: response.status, result: { error: 'Unexpected usage response', usage: null } }
