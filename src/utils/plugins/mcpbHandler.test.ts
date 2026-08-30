@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, mock, test } from 'bun:test'
+import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { SettingsJson } from '../settings/types.js'
 
 /**
@@ -26,6 +26,10 @@ function clone<T>(value: T): T {
 
 let secureStore: Record<string, unknown> | null = null
 let settingsStore: SettingsJson = {}
+// bun's mock.module is process-global and is never torn down, so the settings
+// overrides below would follow every later test file in the same run. Gate them
+// on this flag and clear it when the suite ends.
+let intercept = false
 
 mock.module('../secureStorage/index.js', () => ({
   getSecureStorage: () => ({
@@ -43,10 +47,28 @@ mock.module('../secureStorage/index.js', () => ({
 }))
 
 const actualSettings = await import('../settings/settings.js')
+// Capture the real implementations now: mock.module patches the module registry
+// in place, so reading them off the namespace after the fact returns the
+// overrides below and the delegate would call itself.
+const realGetSettings = actualSettings.getSettings_DEPRECATED
+const realUpdateSettingsForSource = actualSettings.updateSettingsForSource
 mock.module('../settings/settings.js', () => ({
   ...actualSettings,
-  getSettings_DEPRECATED: () => clone(settingsStore),
-  updateSettingsForSource: (_source: string, patch: SettingsJson) => {
+  getSettings_DEPRECATED: (...args: unknown[]) =>
+    intercept
+      ? clone(settingsStore)
+      : (realGetSettings as (...a: unknown[]) => unknown)(
+          ...args,
+        ),
+  updateSettingsForSource: (source: string, patch: SettingsJson) => {
+    if (!intercept) {
+      return (
+        realUpdateSettingsForSource as (
+          s: string,
+          p: SettingsJson,
+        ) => unknown
+      )(source, patch)
+    }
     settingsStore = clone(patch)
     return { error: null }
   },
@@ -64,8 +86,13 @@ const SERVER_NAME = 'demo-server'
 
 describe('saveMcpServerUserConfig type round trip', () => {
   beforeEach(() => {
+    intercept = true
     secureStore = null
     settingsStore = {}
+  })
+
+  afterAll(() => {
+    intercept = false
   })
 
   test('keeps a sensitive number a number', () => {
