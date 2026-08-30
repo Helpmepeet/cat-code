@@ -4198,6 +4198,15 @@ export function App() {
               catalogLoaded={sessionCatalogSnapshot !== null}
               onOpenRow={openCatalogRow}
               onNewSession={() => void newSession()}
+              // The row `⋯` menu gates Rename/Export on this same frame-plane
+              // check (`App.tsx` `hasEngine:` above, `sessionActions.ts`
+              // `resolveSessionActions`); the page's own write boundary
+              // (`isWritableSessionRow`) needs it too, so a row the host still
+              // calls live but whose socket has gone `disconnected` is not
+              // offered a write the supervisor will refuse.
+              hasEngine={appSessionId =>
+                connectionHasEngine(selectConnection(connection, appSessionId).status)
+              }
               onOpenRowActions={(row, anchor) => {
                 if (row.appSessionId == null) return
                 setSessionActionsTarget({

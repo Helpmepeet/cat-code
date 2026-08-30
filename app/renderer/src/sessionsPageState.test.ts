@@ -104,6 +104,33 @@ describe('selection', () => {
     expect(selectWritableRows(rows).map(row => row.appSessionId)).toEqual(['app-live'])
     expect(selectWritableSelection(state, rows)).toEqual(['app-live'])
   })
+
+  // A supervisor record in `disconnected` is non-terminal, so the host descriptor
+  // keeps the row `live: true` (`sessionsCatalogState.ts`), but its socket is
+  // gone and `supervisor.send` will refuse the verb. `row.live` alone cannot see
+  // this; the frame plane's `connectionHasEngine` can, and the ⋯ menu already
+  // gates the identical verbs on it (`sessionActions.ts`).
+  test('a LIVE row whose frame plane reports no engine is NOT writable', () => {
+    const rows = [
+      row({ sessionId: 'live', appSessionId: 'app-live', live: true, inRegistry: true }),
+      row({
+        sessionId: 'disconnected',
+        appSessionId: 'app-disconnected',
+        live: true,
+        inRegistry: true,
+      }),
+    ]
+    const state = apply([
+      { type: 'toggle-selected', sessionId: 'live' },
+      { type: 'toggle-selected', sessionId: 'disconnected' },
+    ])
+    const hasEngine = (appSessionId: string) => appSessionId !== 'app-disconnected'
+
+    expect(selectWritableRows(rows, hasEngine).map(row => row.appSessionId)).toEqual([
+      'app-live',
+    ])
+    expect(selectWritableSelection(state, rows, hasEngine)).toEqual(['app-live'])
+  })
 })
 
 describe('rename', () => {

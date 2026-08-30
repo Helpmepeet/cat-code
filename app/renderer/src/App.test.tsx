@@ -542,6 +542,34 @@ test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the p
   expect(echoBody).not.toContain('setSessionsTagEcho({ sessionIds:')
 })
 
+test('P4-29 wiring tripwire: the Sessions-page write boundary gets the same hasEngine input as the ⋯ menu', () => {
+  // The defect this pins: `isWritableSessionRow` (`sessionsPageState.ts`) checked
+  // only `row.live`, which stays true for a host row whose supervisor record has
+  // gone `disconnected` (`sessionsCatalogState.ts`). The ⋯ menu already guards
+  // Rename/Export against exactly this race with `connectionHasEngine`
+  // (`sessionActions.ts` `resolveSessionActions`); the Sessions-page bulk/inline
+  // Tag and Export path dispatched into it unguarded. The fix threads the same
+  // `connectionHasEngine(selectConnection(connection, id).status)` expression
+  // into `<SessionsPage hasEngine=...>`, so both write surfaces agree.
+  //
+  // LAYER HONESTY: SSR-only suite, so this asserts the CALL SITE, which is
+  // exactly what regressed. The predicate itself is covered behaviourally in
+  // sessionsPageState.test.ts ("a LIVE row whose frame plane reports no engine
+  // is NOT writable").
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const pageStart = source.indexOf('<SessionsPage')
+  const pageEnd = source.indexOf('onOpenRowActions={(row, anchor) => {', pageStart)
+  expect(pageStart).toBeGreaterThan(-1)
+  expect(pageEnd).toBeGreaterThan(pageStart)
+  const pageBody = source.slice(pageStart, pageEnd)
+
+  expect(pageBody).toContain('hasEngine={appSessionId =>')
+  expect(pageBody).toContain(
+    'connectionHasEngine(selectConnection(connection, appSessionId).status)',
+  )
+})
+
 test('P4-24: the active session pane renders the multi-line composer + transcript spine', () => {
   const html = renderToStaticMarkup(
     <SessionPane
