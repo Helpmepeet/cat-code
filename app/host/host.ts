@@ -670,6 +670,15 @@ export class Host implements HostApi {
     if (!row) {
       return hostError('session_not_found', `session ${appSessionId} has no registry row`)
     }
+    // Re-validate the row's cwd BEFORE anything destructive (HC1 defense in
+    // depth, same as `restoreSession`). The supervisor restart KILLS the live
+    // child before it respawns, and a stale cwd only surfaces on the fresh
+    // child's async error as `failed` — so without this a moved/deleted
+    // directory turns a restart into the loss of a healthy sidecar.
+    const validated = this.validateCwd(row.cwd)
+    if (!validated.ok) {
+      return hostError('invalid_cwd', `session cwd no longer exists: ${row.cwd}`)
+    }
     // §9-A4 (SF6) — the SAME re-check `restoreSession` performs, because this is
     // the other path that hands `resumeEngineSessionId` to a spawn. Without it a
     // restart resumes an id whose transcript never existed (a session opened but
