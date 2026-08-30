@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID } from 'crypto'
-import { mkdir, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, readFile, rm, utimes, writeFile } from 'fs/promises'
 import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -535,6 +535,65 @@ describe('agent mode session state', () => {
       origin: 'prior',
       resumable: false,
       reuseBlockedReason: expect.stringContaining('transcript'),
+    })
+  })
+
+  test('spends the prior-session cap on agent sessions, not newer non-agent state files', async () => {
+    const projectDir = getSessionProjectDir()
+    if (!projectDir) throw new Error('expected session project dir')
+    const priorSessionId = randomUUID()
+
+    await writePriorState(priorSessionId, {
+      sessionId: priorSessionId,
+      mode: 'agent',
+      objective: 'Older agent objective',
+      activeWorkers: {},
+      knownWorkers: {
+        'agent-behind-cap': {
+          agentId: 'agent-behind-cap',
+          handle: 'explore-behind-cap',
+          role: 'explorer',
+          description: 'Reusable prior worker behind the cap',
+          status: 'completed',
+          resumable: true,
+          synthesisStatus: 'synthesized',
+          worktreePath: null,
+          spawnedAt: '2026-05-01T00:00:00.000Z',
+        },
+      },
+    })
+    await writePriorAgentTranscript(priorSessionId, 'agent-behind-cap')
+    await utimes(
+      join(projectDir, `${priorSessionId}.agent-mode-state.json`),
+      new Date(1_000_000),
+      new Date(1_000_000),
+    )
+
+    for (let index = 0; index < 12; index++) {
+      const coordinatorSessionId = randomUUID()
+      await writePriorState(coordinatorSessionId, {
+        sessionId: coordinatorSessionId,
+        mode: 'coordinator',
+        objective: 'Coordinator objective',
+        activeWorkers: {},
+        knownWorkers: {},
+      })
+      await utimes(
+        join(projectDir, `${coordinatorSessionId}.agent-mode-state.json`),
+        new Date(2_000_000 + index * 1000),
+        new Date(2_000_000 + index * 1000),
+      )
+    }
+
+    const state = await readSessionStateWithContinuity(sessionId)
+
+    expect(
+      state?.knownWorkers.find(worker => worker.agentId === 'agent-behind-cap'),
+    ).toMatchObject({
+      handle: 'explore-behind-cap',
+      origin: 'prior',
+      originSessionId: priorSessionId,
+      resumable: true,
     })
   })
 

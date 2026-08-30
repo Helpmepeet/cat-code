@@ -278,8 +278,11 @@ export async function resolveAgentTarget({
     }
   }
 
+  const targetKey = recipientNameKey(target)
   const metadataMatches = (await listAgentMetadataForSession(sessionId)).filter(
-    entry => entry.metadata.agentName === target,
+    entry =>
+      entry.metadata.agentName !== undefined &&
+      recipientNameKey(entry.metadata.agentName) === targetKey,
   )
   if (metadataMatches.length > 1) return null
   const metadataTarget = metadataMatches[0]

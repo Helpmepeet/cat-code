@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, stat, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { asAgentId } from '../types/ids.js'
 import { isFsInaccessible } from '../utils/errors.js'
+import { recipientNameKey } from '../utils/recipientIdentity.js'
 
 export type AgentModeRunPhase =
   | 'planning'
@@ -64,6 +65,10 @@ export type AgentSessionState = {
 const sessionStateWriteChains = new Map<string, Promise<void>>()
 const AGENT_MODE_STATE_SUFFIX = '.agent-mode-state.json'
 const MAX_PRIOR_AGENT_MODE_SESSIONS = 12
+// Coordinator sessions write state files too, so the newest files are not all
+// resume candidates. Qualifying is only knowable after a read, so bound the
+// reads separately from the qualifying-session cap.
+const MAX_PRIOR_AGENT_MODE_STATE_READS = 48
 
 export function getSessionStatePathFromTranscriptPath(
   transcriptPath: string,
@@ -339,14 +344,14 @@ function ensureUniquePriorHandle(
   usedHandles: Set<string>,
 ): string {
   const base = handle && handle.length > 0 ? handle : agentId
-  if (!usedHandles.has(base)) {
-    usedHandles.add(base)
+  if (!usedHandles.has(recipientNameKey(base))) {
+    usedHandles.add(recipientNameKey(base))
     return base
   }
 
   const shortSessionId = sessionId.slice(0, 8)
   const disambiguated = `${base}-${shortSessionId}`
-  usedHandles.add(disambiguated)
+  usedHandles.add(recipientNameKey(disambiguated))
   return disambiguated
 }
 
@@ -389,17 +394,22 @@ async function readPriorWorkerSessions(
   const usedHandles = new Set(
     currentWorkers
       .map(worker => worker.handle)
-      .filter((handle): handle is string => Boolean(handle)),
+      .filter((handle): handle is string => Boolean(handle))
+      .map(recipientNameKey),
   )
   const currentAgentIds = new Set(currentWorkers.map(worker => worker.agentId))
   const priorWorkers: AgentModeWorkerSession[] = []
 
+  let agentModeSessionsRead = 0
+
   for (const candidate of candidates
     .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
     .sort((left, right) => right.mtime - left.mtime)
-    .slice(0, MAX_PRIOR_AGENT_MODE_SESSIONS)) {
+    .slice(0, MAX_PRIOR_AGENT_MODE_STATE_READS)) {
+    if (agentModeSessionsRead >= MAX_PRIOR_AGENT_MODE_SESSIONS) break
     const priorState = await readPersistedSessionStateFromPath(candidate.path)
     if (!priorState || priorState.mode !== 'agent') continue
+    agentModeSessionsRead++
 
     for (const worker of sortWorkers(Object.values(priorState.knownWorkers))) {
       if (worker.status !== 'completed' || !worker.resumable) continue
@@ -530,6 +540,7 @@ export async function resolveWorkerAgentTarget(
   sessionId: string,
   worker: string,
 ): Promise<WorkerAgentTarget | null> {
+  const workerKey = recipientNameKey(worker)
   const state = await readPersistedSessionState(sessionId)
   const directMatch = state?.knownWorkers[worker]
   if (directMatch) {
@@ -538,7 +549,11 @@ export async function resolveWorkerAgentTarget(
 
   if (state) {
     for (const [agentId, knownWorker] of Object.entries(state.knownWorkers)) {
-      if (knownWorker.handle === worker) {
+      if (
+        recipientNameKey(agentId) === workerKey ||
+        (knownWorker.handle !== undefined &&
+          recipientNameKey(knownWorker.handle) === workerKey)
+      ) {
         return { agentId, originSessionId: sessionId }
       }
     }
@@ -549,7 +564,9 @@ export async function resolveWorkerAgentTarget(
     knownWorker =>
       knownWorker.origin === 'prior' &&
       knownWorker.resumable &&
-      (knownWorker.agentId === worker || knownWorker.handle === worker),
+      (recipientNameKey(knownWorker.agentId) === workerKey ||
+        (knownWorker.handle !== undefined &&
+          recipientNameKey(knownWorker.handle) === workerKey)),
   )
   if (priorWorker?.originSessionId) {
     return {

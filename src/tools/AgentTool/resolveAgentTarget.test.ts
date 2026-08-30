@@ -352,6 +352,109 @@ describe('resolveAgentTarget', () => {
     })
   })
 
+  test('resolves durable worker handles case-insensitively without a live registry', async () => {
+    writeSessionState(sessionId, {
+      sessionId,
+      mode: 'agent',
+      objective: 'Current target',
+      activeWorkers: {},
+      knownWorkers: {
+        'agent-current': {
+          agentId: 'agent-current',
+          role: 'explorer',
+          description: 'Current durable worker',
+          status: 'completed',
+          resumable: true,
+          worktreePath: null,
+          handle: 'Turing',
+        },
+      },
+    })
+
+    await expect(
+      resolveAgentTarget({
+        input: '@turing',
+        appState: appState(),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      agentId: 'agent-current',
+      sourceSessionId: sessionId,
+    })
+
+    await expect(
+      resolveAgentTarget({
+        input: 'AGENT-CURRENT',
+        appState: appState(),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      agentId: 'agent-current',
+      sourceSessionId: sessionId,
+    })
+  })
+
+  test('resolves prior-session durable worker handles case-insensitively', async () => {
+    const freshSessionId = randomUUID()
+    const priorSessionId = randomUUID()
+    switchSession(freshSessionId, tempDir)
+    sessionId = freshSessionId
+
+    writePriorSessionState(tempDir, priorSessionId, {
+      sessionId: priorSessionId,
+      mode: 'agent',
+      objective: 'Prior target',
+      activeWorkers: {},
+      knownWorkers: {
+        'agent-prior': {
+          agentId: 'agent-prior',
+          role: 'explorer',
+          description: 'Prior durable worker',
+          status: 'completed',
+          resumable: true,
+          worktreePath: null,
+          handle: 'Turing',
+        },
+      },
+    })
+    writePriorAgentTranscript(tempDir, priorSessionId, 'agent-prior')
+    writePriorAgentMetadata(
+      tempDir,
+      priorSessionId,
+      'agent-prior',
+      'Prior metadata worker',
+    )
+
+    await expect(
+      resolveAgentTarget({
+        input: '@turing',
+        appState: appState(),
+        sessionId,
+      }),
+    ).resolves.toMatchObject({
+      agentId: 'agent-prior',
+      sourceSessionId: priorSessionId,
+    })
+  })
+
+  test('resolves current-session metadata names case-insensitively', async () => {
+    const agentId = createAgentId()
+    writeCurrentAgentTranscript(agentId)
+    await writeAgentMetadata(asAgentId(agentId), {
+      agentType: 'general-purpose',
+      description: 'Metadata worker',
+      agentName: 'Ada',
+    })
+
+    await expect(
+      resolveAgentTarget({ input: '@ada', appState: appState(), sessionId }),
+    ).resolves.toMatchObject({
+      agentId,
+      sourceSessionId: sessionId,
+      displayName: '@Ada',
+    })
+  })
+
   test('resolves prior-session durable worker handles with origin session', async () => {
     const freshSessionId = randomUUID()
     const priorSessionId = randomUUID()
