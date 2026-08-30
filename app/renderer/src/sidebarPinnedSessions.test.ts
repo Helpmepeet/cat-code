@@ -6,6 +6,7 @@ import {
   isSessionPinned,
   readPinnedSessionsFromStorage,
   reducePinnedSessionsMoved,
+  reducePinnedSessionsReconciled,
   reducePinnedSessionsStepped,
   reducePinnedSessionsToggled,
   selectPinnedDropEdge,
@@ -142,6 +143,100 @@ test('⌥↑/⌥↓ steps one slot and no-ops at either end', () => {
   expect(reducePinnedSessionsStepped(pinned, ids, 'a', 'up')).toBe(pinned)
   expect(reducePinnedSessionsStepped(pinned, ids, 'c', 'down')).toBe(pinned)
   expect(reducePinnedSessionsStepped(pinned, ids, 'gone', 'up')).toBe(pinned)
+})
+
+// ── the app-id → engine-id handover ──────────────────────────────────────────
+
+function mergedRows(
+  ...pairs: [sessionId: string, appSessionId: string | null][]
+): { sessionId: string; appSessionId: string | null }[] {
+  return pairs.map(([sessionId, appSessionId]) => ({ sessionId, appSessionId }))
+}
+
+test('REGRESSION: a pin set before the engine id lands survives the handover', () => {
+  // The bug: the merge key is `engineSessionId ?? appSessionId`
+  // (`sessionsCatalogState.ts` `selectMergedSessionRows`), so a session pinned
+  // during the ~1-3s pre-ready window is stored under its APP id, and the pin
+  // stopped resolving the moment the ready frame supplied the engine id.
+  const pinned = reducePinnedSessionsToggled(createPinnedSessions(), 'app-1')
+  expect(selectPinnedRows(mergedRows(['app-1', 'app-1']), pinned)).toHaveLength(1)
+
+  // …the ready frame lands and the row re-keys to its engine id.
+  const afterReady = mergedRows(['engine-1', 'app-1'])
+  const next = reducePinnedSessionsReconciled(pinned, afterReady)
+  expect(next).toEqual(['engine-1'])
+  expect(isSessionPinned(next, 'engine-1')).toBe(true)
+  expect(idsOf(selectPinnedRows(afterReady, next))).toEqual(['engine-1'])
+  expect(selectUnpinnedRows(afterReady, next)).toEqual([])
+})
+
+test('the dead app id is gone from storage once reconciled', () => {
+  const store = storage()
+  writePinnedSessionsToStorage(store, ['keep', 'app-1'])
+  const next = reducePinnedSessionsReconciled(
+    readPinnedSessionsFromStorage(store) ?? [],
+    mergedRows(['engine-1', 'app-1']),
+  )
+  writePinnedSessionsToStorage(store, next)
+  const read = readPinnedSessionsFromStorage(store)
+  expect(read).toEqual(['keep', 'engine-1'])
+  expect(read).not.toContain('app-1')
+})
+
+test('reconciling keeps the pin slot rather than re-appending it at the tail', () => {
+  const next = reducePinnedSessionsReconciled(
+    ['app-1', 'b', 'c'],
+    mergedRows(['engine-1', 'app-1']),
+  )
+  expect(next).toEqual(['engine-1', 'b', 'c'])
+})
+
+test('a pre-ready row is left alone while its key is still the app id', () => {
+  const pinned: PinnedSessions = ['app-1']
+  expect(
+    reducePinnedSessionsReconciled(pinned, mergedRows(['app-1', 'app-1'])),
+  ).toBe(pinned)
+})
+
+test('history rows carry no app id and are never rewritten', () => {
+  const pinned: PinnedSessions = ['engine-history', 'engine-1']
+  expect(
+    reducePinnedSessionsReconciled(
+      pinned,
+      mergedRows(['engine-history', null], ['engine-1', 'app-1']),
+    ),
+  ).toBe(pinned)
+})
+
+test('reconciling both ids of one session collapses them to a single pin', () => {
+  expect(
+    reducePinnedSessionsReconciled(
+      ['engine-1', 'app-1'],
+      mergedRows(['engine-1', 'app-1']),
+    ),
+  ).toEqual(['engine-1'])
+})
+
+test('the cap still holds after a reconcile', () => {
+  const pinned: PinnedSessions = [
+    ...Array.from(
+      { length: MAX_SIDEBAR_PINNED_SESSIONS },
+      (_, index) => `s${index}`,
+    ),
+    'app-1',
+  ]
+  const next = reducePinnedSessionsReconciled(
+    pinned,
+    mergedRows(['engine-1', 'app-1']),
+  )
+  expect(next).toHaveLength(MAX_SIDEBAR_PINNED_SESSIONS + 1)
+
+  const store = storage()
+  writePinnedSessionsToStorage(store, next)
+  const read = readPinnedSessionsFromStorage(store)
+  expect(read).toHaveLength(MAX_SIDEBAR_PINNED_SESSIONS)
+  expect(read).toContain('engine-1')
+  expect(read).not.toContain('s0')
 })
 
 // ── persistence ──────────────────────────────────────────────────────────────

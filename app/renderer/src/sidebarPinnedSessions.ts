@@ -152,6 +152,53 @@ export function reducePinnedSessionsToggled(
 }
 
 /**
+ * Re-key pins that were created before the session had an engine id.
+ *
+ * `MergedSessionRow.sessionId` is `engineSessionId ?? appSessionId`
+ * (`sessionsCatalogState.ts` `selectMergedSessionRows`), so a session pinned
+ * during the pre-ready spawn window (~1-3s, `app/main/main.ts`) is stored under
+ * its APP id, and the pin stopped resolving the instant the ready frame
+ * supplied the engine id — the row silently fell back into its project group.
+ *
+ * This is a MIGRATION path only: the engine id stays the sole pin key (see the
+ * header note — a history row has no app id, so an app-id key would make
+ * terminal sessions unpinnable). A rewritten entry keeps its slot, and the dead
+ * app id is dropped in the same pass so it never reaches storage. Returns the
+ * SAME reference when nothing needs re-keying, so the caller skips the write.
+ */
+export function reducePinnedSessionsReconciled<
+  T extends { sessionId: string; appSessionId: string | null },
+>(pinned: PinnedSessions, rows: readonly T[]): PinnedSessions {
+  if (pinned.length === 0) return pinned
+  const engineIdByAppId = new Map<string, string>()
+  for (const row of rows) {
+    // `appSessionId === sessionId` is the row still waiting on its engine id;
+    // a null one is a history row, which never had an app id to migrate from.
+    if (row.appSessionId == null || row.appSessionId === row.sessionId) continue
+    engineIdByAppId.set(row.appSessionId, row.sessionId)
+  }
+  if (engineIdByAppId.size === 0) return pinned
+  const next: string[] = []
+  const seen = new Set<string>()
+  let changed = false
+  for (const id of pinned) {
+    const resolved = engineIdByAppId.get(id)
+    if (resolved === undefined) {
+      if (!seen.has(id)) {
+        seen.add(id)
+        next.push(id)
+      }
+      continue
+    }
+    changed = true
+    if (seen.has(resolved)) continue
+    seen.add(resolved)
+    next.push(resolved)
+  }
+  return changed ? next : pinned
+}
+
+/**
  * The pinned rows for one render, in PIN order (not activity order).
  *
  * Pin entries naming sessions that are not in `rows` are skipped — the normal

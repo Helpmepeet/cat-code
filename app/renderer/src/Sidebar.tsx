@@ -141,6 +141,7 @@ import {
   PINNED_SESSION_DRAG_MIME,
   readPinnedSessionsFromStorage,
   reducePinnedSessionsMoved,
+  reducePinnedSessionsReconciled,
   reducePinnedSessionsStepped,
   reducePinnedSessionsToggled,
   selectPinnedDropEdge,
@@ -750,6 +751,15 @@ export function Sidebar({
     refocusCwd.current = null
     headerRefs.current.get(cwd)?.focus()
   }, [workspaceOrder])
+
+  // A session pinned before its engine id landed is keyed on the app id the
+  // merge used in the meantime; re-key it the moment the ready frame supplies
+  // the real one, before paint, so the pin never blinks back off.
+  useLayoutEffect(() => {
+    commitPinnedSessions(
+      reducePinnedSessionsReconciled(pinnedSessions, railRows),
+    )
+  }, [pinnedSessions, railRows])
 
   // The Pinned list hands focus back to the row a keyboard step just moved.
   useLayoutEffect(() => {
