@@ -13,6 +13,9 @@ import type { UUID } from 'crypto'
 import { randomBytes } from 'crypto'
 import { formatTaskNotificationText, toTaskNotificationOrigin } from '../utils/taskNotification.js'
 import { type QueryParams, query } from '../query.js'
+import { getSessionId } from '../bootstrap/state.js'
+import { releaseCodexLease } from '../services/api/codexAccountLeaseManager.js'
+import { clearWebSocketSession } from '../services/api/codex-websocket-transport.js'
 import { roughTokenCountEstimation } from '../services/tokenEstimation.js'
 import type { SetAppState } from '../Task.js'
 import { createTaskStateBase } from '../Task.js'
@@ -31,6 +34,7 @@ import { registerCleanup } from '../utils/cleanupRegistry.js'
 import { logForDebugging } from '../utils/debug.js'
 import { logError } from '../utils/log.js'
 import { enqueuePendingNotification } from '../utils/messageQueueManager.js'
+import { getQuerySourceForAgent } from '../utils/promptCategory.js'
 import { emitTaskTerminatedSdk } from '../utils/sdkEventQueue.js'
 import {
   getAgentTranscriptPath,
@@ -366,6 +370,23 @@ export function startBackgroundSession({
     isBuiltIn: true,
   }
 
+  // The agent context above is AsyncLocalStorage only; query() reads identity
+  // off the params it is handed. Left as the caller's, this loop answers to
+  // BOTH main-thread gates and competes with the real foreground: the drain
+  // gate keys on querySource and takes (and removeFromQueue()s) commands with
+  // `agentId === undefined`, and the Codex lease keys on `!agentId` and
+  // registers the shared owner id 'main-thread', which the first loop to
+  // finish deletes. Give this loop the same identity the agent context
+  // already claims. Copied, never mutated: the caller reuses its own context.
+  const backgroundQueryParams: Omit<QueryParams, 'messages'> = {
+    ...queryParams,
+    toolUseContext: {
+      ...queryParams.toolUseContext,
+      agentId: asAgentId(taskId),
+    },
+    querySource: getQuerySourceForAgent(agentContext.subagentName, true),
+  }
+
   void runWithAgentContext(agentContext, async () => {
     try {
       const bgMessages: Message[] = [...messages]
@@ -376,7 +397,7 @@ export function startBackgroundSession({
 
       for await (const event of query({
         messages: bgMessages,
-        ...queryParams,
+        ...backgroundQueryParams,
       })) {
         if (abortSignal.aborted) {
           // Aborted mid-stream — completeMainSessionTask won't be reached.
@@ -466,6 +487,13 @@ export function startBackgroundSession({
     } catch (error) {
       logError(error)
       completeMainSessionTask(taskId, false, setAppState)
+    } finally {
+      // Own identity means own Codex resources: claude.ts registers a lease
+      // under this agentId and the transport opens a conversation keyed by it,
+      // and neither is reaped by the main thread's release. Same pair as
+      // releaseAgentCodexResources.
+      releaseCodexLease(taskId)
+      clearWebSocketSession(`${getSessionId()}/${taskId}`)
     }
   })
 
