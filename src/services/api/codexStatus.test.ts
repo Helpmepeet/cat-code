@@ -460,6 +460,83 @@ describe('buildCodexStatus', () => {
       status.decision.best_observed_candidate_profile_ref,
     )
   })
+
+  test('(9) freshly polled allowed:false outranks a healthy stored state', async () => {
+    // Stored state says healthy and the fetch runs with updateRoutingHints:false,
+    // so the account hints stay healthy. The decision must follow the polled
+    // usage it prints, not the stale hints.
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-stale-healthy',
+      accounts: [buildPoolAccount({ accountId: 'acct-stale-healthy' })],
+    })
+
+    const status = await buildCodexStatus({
+      now: NOW,
+      refresh: 'auto',
+      loadPool: false,
+      fetchUsage: liveSnapshot([
+        buildUsage({
+          accountId: 'acct-stale-healthy',
+          allowed: false,
+          limitReached: true,
+          primaryWindow: {
+            usedPercent: 100,
+            limitWindowSeconds: 18_000,
+            resetAfterSeconds: 3600,
+            resetAt: FUTURE_RESET_SEC,
+          },
+        }),
+      ]),
+    })
+
+    const expectedReset = new Date(FUTURE_RESET_SEC * 1000).toISOString()
+    expect(status.profiles[0]!.usage.allowed).toBe(false)
+    expect(status.profiles[0]!.usage.limit_reached).toBe(true)
+    expect(status.profiles[0]!.routing_state).toBe('quota_blocked')
+    expect(status.profiles[0]!.block_code).toBe('usage_cap')
+    expect(status.pool.candidate).toBe(0)
+    expect(status.pool.quota_blocked).toBe(1)
+    expect(status.decision.action).not.toBe('delegate')
+    expect(status.decision.action).toBe('wait')
+    expect(status.decision.reason_code).toBe('quota_blocked_reset_known')
+    expect(status.decision.not_before).toBe(expectedReset)
+    expect(status.decision.best_observed_candidate_profile_ref).toBeNull()
+    expect(status.decision.predicted_initial_profile_ref).toBeNull()
+  })
+
+  test('(10) a live-capped persisted-active profile is never the predicted profile', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'acct-active-live-capped',
+      accounts: [
+        buildPoolAccount({ accountId: 'acct-active-live-capped' }),
+        buildPoolAccount({ accountId: 'acct-live-ok' }),
+      ],
+    })
+
+    const status = await buildCodexStatus({
+      now: NOW,
+      refresh: 'auto',
+      loadPool: false,
+      fetchUsage: liveSnapshot([
+        buildUsage({
+          accountId: 'acct-active-live-capped',
+          allowed: false,
+          limitReached: true,
+        }),
+        buildUsage({ accountId: 'acct-live-ok' }),
+      ]),
+    })
+
+    const capped = status.profiles.find((p) => p.is_persisted_active)!
+    const ok = status.profiles.find((p) => !p.is_persisted_active)!
+
+    expect(capped.routing_state).toBe('quota_blocked')
+    expect(ok.routing_state).toBe('candidate')
+    expect(status.pool.candidate).toBe(1)
+    expect(status.decision.action).toBe('delegate')
+    expect(status.decision.predicted_initial_profile_ref).toBe(ok.profile_ref)
+    expect(status.decision.best_observed_candidate_profile_ref).toBe(ok.profile_ref)
+  })
 })
 
 afterEach(() => {

@@ -205,12 +205,31 @@ interface ProfileClassification {
 }
 
 /**
+ * True when the usage snapshot fetched for this call reports a cap. The fetch
+ * runs with `updateRoutingHints: false` (see the file header), so the account's
+ * stored hints can still say healthy while this snapshot says otherwise; the
+ * snapshot is the newer observation and is the one we print, so it wins.
+ * Undefined in 'never' mode and for accounts absent from the snapshot, which
+ * leaves classification on the stored state exactly as before.
+ */
+function isCappedByFetchedUsage(usage: AccountUsage | undefined): boolean {
+  return usage != null && (usage.allowed === false || usage.limitReached === true)
+}
+
+/**
  * Map a pool account to a coarse routing bucket + a specific block code, using
  * ONLY the closed status/statusReason enums (never lastError). `candidate` means
  * the account is currently switchable per `getCodexAccountAvailability`.
  */
-function classifyProfile(account: PoolAccount, now: number): ProfileClassification {
+function classifyProfile(
+  account: PoolAccount,
+  now: number,
+  usage: AccountUsage | undefined,
+): ProfileClassification {
   if (getCodexAccountAvailability(account, now).kind !== 'blocked') {
+    if (isCappedByFetchedUsage(usage)) {
+      return { routing_state: 'quota_blocked', block_code: 'usage_cap' }
+    }
     return { routing_state: 'candidate', block_code: null }
   }
 
@@ -245,8 +264,14 @@ function classifyProfile(account: PoolAccount, now: number): ProfileClassificati
  * prefer clean (`available`) switchable accounts, rank by usage score when fresh
  * usage exists, else fall back to LRU. Emits nothing and mutates nothing.
  */
-function findBestCandidate(accounts: readonly PoolAccount[], now: number): PoolAccount | null {
-  const candidates = accounts.filter((a) => isCodexAccountSwitchable(a, now))
+function findBestCandidate(
+  accounts: readonly PoolAccount[],
+  now: number,
+  usageByAccount: ReadonlyMap<string, AccountUsage>,
+): PoolAccount | null {
+  const candidates = accounts.filter(
+    (a) => isCodexAccountSwitchable(a, now) && !isCappedByFetchedUsage(usageByAccount.get(a.accountId)),
+  )
   if (candidates.length === 0) return null
 
   const clean = candidates.filter(
@@ -464,7 +489,7 @@ export async function buildCodexStatus(
 
   const profiles: CodexStatusProfile[] = accounts.map((account) => {
     const usage = usageByAccount.get(account.accountId)
-    const classification = classifyProfile(account, now)
+    const classification = classifyProfile(account, now, usage)
 
     switch (classification.routing_state) {
       case 'candidate':
@@ -505,10 +530,14 @@ export async function buildCodexStatus(
 
   const { action, reason_code } = decide(poolCounts)
 
-  const best = findBestCandidate(accounts, now)
+  const best = findBestCandidate(accounts, now, usageByAccount)
   const persistedActive = activeIndex >= 0 ? (accounts[activeIndex] ?? null) : null
   const predicted =
-    persistedActive && isCodexAccountSwitchable(persistedActive, now) ? persistedActive : best
+    persistedActive &&
+    isCodexAccountSwitchable(persistedActive, now) &&
+    !isCappedByFetchedUsage(usageByAccount.get(persistedActive.accountId))
+      ? persistedActive
+      : best
 
   return {
     ok: true,
