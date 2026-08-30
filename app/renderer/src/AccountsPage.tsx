@@ -59,15 +59,18 @@ import {
   selectTakenAliases,
 } from './accountsState.js'
 import {
+  capIncidentKey,
   deleteVerb,
   formatResetLabel,
   loginVerb,
   logoutVerb,
+  nextDismissedCapKey,
   renameError,
   renameVerb,
   resultToastTone,
   selectAccountMenuItems,
   selectAnthropicReadyLabel,
+  shouldShowCapBanner,
   statusDotTone,
   statusLabelTone,
   switchVerb,
@@ -767,7 +770,7 @@ export function AccountsPage({
 }): ReactElement {
   const toast = useToast()
   const [dialog, setDialog] = useState<DialogState>(null)
-  const [capDismissed, setCapDismissed] = useState(false)
+  const [dismissedCapKey, setDismissedCapKey] = useState<string | null>(null)
   const [localRange, setLocalRange] = useState<UsageStatsRange>(activeStatsRange)
   const currentRange = onRangeChange ? activeStatsRange : localRange
 
@@ -796,6 +799,11 @@ export function AccountsPage({
   const capSwitchTarget = capAccount
     ? rows.find(a => a.id !== capAccount.id && a.switchable) ?? null
     : null
+  const capKey = capIncidentKey(capAccount)
+
+  useEffect(() => {
+    setDismissedCapKey(prev => nextDismissedCapKey(prev, capKey))
+  }, [capKey])
 
   // Dispatch a toast-and-close verb; `tone` softens the SUCCESS tone only (a
   // started sign-in is an 'info', not a completion). A refusal keeps the failure
@@ -840,7 +848,7 @@ export function AccountsPage({
           ) : null}
         </header>
 
-        {capAccount && !capDismissed ? (
+        {capAccount && shouldShowCapBanner(capKey, dismissedCapKey) ? (
           <div className="mb-[18px] flex items-center gap-3 rounded-[10px] border border-tone-danger/[0.28] bg-tone-danger/[0.07] px-3.5 py-3">
             <span className="h-[7px] w-[7px] shrink-0 animate-pulse rounded-full bg-tone-danger" />
             <div className="min-w-0 flex-1">
@@ -875,7 +883,7 @@ export function AccountsPage({
               </button>
               <button
                 type="button"
-                onClick={() => setCapDismissed(true)}
+                onClick={() => setDismissedCapKey(capKey)}
                 className="rounded-[7px] border border-white/[0.08] px-2.5 py-1.5 text-[12px] text-text-subtle transition-colors hover:bg-shell-hover"
               >
                 Dismiss

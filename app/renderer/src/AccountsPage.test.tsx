@@ -11,12 +11,15 @@ import {
   AccountsPage,
 } from './AccountsPage.js'
 import {
+  capIncidentKey,
   deleteVerb,
   loginVerb,
+  nextDismissedCapKey,
   renameError,
   resultToastTone,
   selectAccountMenuItems,
   selectAnthropicReadyLabel,
+  shouldShowCapBanner,
   statusDotTone,
   statusLabelTone,
   switchVerb,
@@ -313,6 +316,61 @@ test('renders the usage-limit cap banner for a capped account', () => {
   )
   expect(html).toContain('usage limit reached')
   expect(html).toContain('Switch to another account or wait for the reset')
+})
+
+test('capIncidentKey identifies one cap, not the banner in general', () => {
+  const capped = account({ id: 'acc-2', status: 'capped', usageResetAt: 1000 })
+  expect(capIncidentKey(null)).toBeNull()
+  // Same account, same reset window → the same ongoing cap.
+  expect(capIncidentKey(capped)).toBe(capIncidentKey(account({ ...capped })))
+  // A different account is a different cap.
+  expect(capIncidentKey(account({ ...capped, id: 'acc-3' }))).not.toBe(
+    capIncidentKey(capped),
+  )
+  // The same account in a later reset window is a different cap.
+  expect(capIncidentKey(account({ ...capped, usageResetAt: 2000 }))).not.toBe(
+    capIncidentKey(capped),
+  )
+  // A missing reset window must not collide with a real one.
+  expect(capIncidentKey(account({ ...capped, usageResetAt: null }))).not.toBe(
+    capIncidentKey(capped),
+  )
+})
+
+test('dismissing one cap banner does not suppress the next cap', () => {
+  const a = capIncidentKey(
+    account({ id: 'acc-a', status: 'capped', usageResetAt: 1000 }),
+  )
+  const b = capIncidentKey(
+    account({ id: 'acc-b', status: 'capped', usageResetAt: 1000 }),
+  )
+  const aLater = capIncidentKey(
+    account({ id: 'acc-a', status: 'capped', usageResetAt: 5000 }),
+  )
+
+  // Nothing dismissed yet: a cap shows.
+  expect(shouldShowCapBanner(a, null)).toBe(true)
+  // Dismissed, and the same cap is still running: stays hidden.
+  expect(shouldShowCapBanner(a, a)).toBe(false)
+  // A cap on a different account shows.
+  expect(shouldShowCapBanner(b, a)).toBe(true)
+  // The same account capped again in a new reset window shows.
+  expect(shouldShowCapBanner(aLater, a)).toBe(true)
+  // No account is capped: nothing to show, dismissed or not.
+  expect(shouldShowCapBanner(null, null)).toBe(false)
+  expect(shouldShowCapBanner(null, a)).toBe(false)
+})
+
+test('a dismissal is dropped once no account is capped', () => {
+  const a = capIncidentKey(
+    account({ id: 'acc-a', status: 'capped', usageResetAt: null }),
+  )
+  // While the cap runs, the dismissal is kept.
+  expect(nextDismissedCapKey(a, a)).toBe(a)
+  // Once the cap clears, the dismissal goes with it...
+  expect(nextDismissedCapKey(a, null)).toBeNull()
+  // ...so an identical cap returning later shows again.
+  expect(shouldShowCapBanner(a, nextDismissedCapKey(a, null))).toBe(true)
 })
 
 test('statusDotTone mirrors the prototype POOL_STATUS colours (capped/dead not swapped)', () => {

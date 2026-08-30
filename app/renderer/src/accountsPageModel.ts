@@ -207,6 +207,38 @@ export function renameError(
   return null
 }
 
+/**
+ * Identity of ONE usage cap, so dismissing its banner cannot silence the next
+ * one. An account plus the reset window it is waiting on: a different account,
+ * or the same account in a later window, is a different cap the user has not
+ * seen yet. `selectCapAccount` re-reads the live snapshot every render, so the
+ * account behind the banner genuinely changes underneath it.
+ */
+export function capIncidentKey(account: AccountStatus | null): string | null {
+  if (!account) return null
+  return `${account.id}|${account.usageResetAt ?? 'none'}`
+}
+
+/** Show a cap banner unless this exact cap is the one the user dismissed. */
+export function shouldShowCapBanner(
+  capKey: string | null,
+  dismissedKey: string | null,
+): boolean {
+  return capKey !== null && capKey !== dismissedKey
+}
+
+/**
+ * Drop the dismissal as soon as nothing is capped. `usageResetAt` is null
+ * whenever the pool has no fresh usage hint, so a cleared cap that returns can
+ * carry the same key; without this the banner would stay hidden for it.
+ */
+export function nextDismissedCapKey(
+  dismissedKey: string | null,
+  capKey: string | null,
+): string | null {
+  return capKey === null ? null : dismissedKey
+}
+
 export function formatResetLabel(sec: number | null, now = Date.now()): string {
   if (!sec) return 'soon'
   const ms = sec * 1000 - now
