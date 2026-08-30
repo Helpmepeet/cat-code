@@ -1583,6 +1583,45 @@ test('restartSession rejects an unknown/non-live id (session_not_found)', async 
   if (!result.ok) expect(result.error.code).toBe('session_not_found')
 })
 
+test('restartSession refuses a row whose cwd no longer exists, leaving the live sidecar untouched (invalid_cwd)', async () => {
+  // The supervisor KILLS the child before it respawns (`supervisor.ts` restartSession),
+  // and a dead cwd only surfaces on the fresh child's async error handler as
+  // `failed`. So without the same HC1 re-check `restoreSession` performs, moving
+  // a live session's directory turns a Restart click into a destroyed sidecar.
+  let workspaceExists = true
+  const h = makeHost({
+    validateCwd: (c: string): CwdValidation =>
+      workspaceExists ? { ok: true, realpath: c } : { ok: false },
+  })
+  const created = await h.host.createSession({ cwd: h.cwd })
+  expect(created.ok).toBe(true)
+  if (!created.ok) return
+  const { appSessionId } = created.value
+  const pidBefore = h.supervisor.getSessionProcessId(appSessionId)
+  const sockBefore = h.supervisor.getSessionSocketPath(appSessionId)
+  const restartsBefore = h.registry.findSession(appSessionId)?.restartCount
+  h.evicted.length = 0
+
+  // The directory is moved/deleted while the session is live.
+  workspaceExists = false
+  const refused = await h.host.restartSession(appSessionId)
+  expect(refused.ok).toBe(false)
+  if (!refused.ok) expect(refused.error.code).toBe('invalid_cwd')
+
+  // The live child is untouched: no restart (same pid + socketPath), no replay
+  // eviction, no restartCount bump.
+  expect(h.supervisor.getSessionProcessId(appSessionId)).toBe(pidBefore)
+  expect(h.supervisor.getSessionSocketPath(appSessionId)).toBe(sockBefore)
+  expect(h.evicted).not.toContain(appSessionId)
+  expect(h.registry.findSession(appSessionId)?.restartCount).toBe(restartsBefore)
+
+  // With the directory back, the same restart succeeds.
+  workspaceExists = true
+  const accepted = await h.host.restartSession(appSessionId)
+  expect(accepted.ok).toBe(true)
+  expect(h.supervisor.getSessionProcessId(appSessionId)).not.toBe(pidBefore)
+})
+
 /* ------------------------------------------------------------------------- *
  * #15 — createSessionInWorkspace: the per-workspace "+" spawns a FRESH session
  * in an existing workspace named by a REGISTRY id. HC1 BOUNDARY: the renderer
