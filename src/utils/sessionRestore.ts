@@ -592,7 +592,9 @@ export function exitRestoredWorktree(): void {
  *
  * Never throws — a read failure just returns an empty array.
  */
-async function buildStallReminders(transcriptPath: string): Promise<Message[]> {
+export async function buildStallReminders(
+  transcriptPath: string,
+): Promise<Message[]> {
   let raw: string
   try {
     const { readFile } = await import('fs/promises')
@@ -602,7 +604,16 @@ async function buildStallReminders(transcriptPath: string): Promise<Message[]> {
   }
 
   const spawned = new Map<string, SubagentSpawnedMessage>()
-  const terminated = new Set<string>() // keyed by toolUseId
+  const terminal = new Map<string, SubagentTerminalMessage>() // keyed by toolUseId
+  // The gate is the tool_result, NOT the terminal record. A terminal record
+  // says the subagent stopped; only a tool_result says the conversation ever
+  // learned what it did. Gating on the terminal record silenced this reminder
+  // in exactly the case it exists for: the stall sweep
+  // (`cleanupRegistry.flushStallDetectedEntries`) writes a terminal record for
+  // a subagent killed with its parent, so the tombstone that documents the loss
+  // used to suppress the warning about it, and the resumed model then told the
+  // user it had never spawned the subagent (2026-08-29).
+  const resolved = new Set<string>()
 
   for (const line of raw.split('\n')) {
     if (!line.trim()) continue
@@ -617,7 +628,18 @@ async function buildStallReminders(transcriptPath: string): Promise<Message[]> {
       spawned.set(msg.toolUseId, msg)
     } else if (entry.type === 'subagent-terminal') {
       const msg = entry as unknown as SubagentTerminalMessage
-      terminated.add(msg.toolUseId)
+      terminal.set(msg.toolUseId, msg)
+    } else if (entry.type === 'user') {
+      const content = (entry.message as { content?: unknown } | undefined)
+        ?.content
+      if (!Array.isArray(content)) continue
+      for (const block of content) {
+        const { type, tool_use_id: id } = block as {
+          type?: unknown
+          tool_use_id?: unknown
+        }
+        if (type === 'tool_result' && typeof id === 'string') resolved.add(id)
+      }
     }
   }
 
@@ -625,14 +647,31 @@ async function buildStallReminders(transcriptPath: string): Promise<Message[]> {
   const now = Date.now()
 
   for (const [toolUseId, info] of spawned) {
-    if (terminated.has(toolUseId)) continue
+    if (resolved.has(toolUseId)) continue
 
+    const ended = terminal.get(toolUseId)
     const spawnedMs = new Date(info.spawnedAt).getTime()
     const ageHours = (now - spawnedMs) / (1000 * 60 * 60)
     const isRecent = ageHours < 24
 
-    const text = isRecent
-      ? `<system-reminder>
+    const text =
+      ended && isRecent
+        ? `<system-reminder>
+A subagent spawned earlier in this session ended without delivering its result, so the conversation above carries no trace of it: the unresolved tool call was dropped when this session was rebuilt.
+
+  agentId: ${ended.agentId}
+  agentType: ${info.agentType}
+  description: ${info.description}
+  status: ${ended.status}${ended.reason ? ` (${ended.reason})` : ''}
+  ranFor: ${Math.round(ended.durationMs / 1000)}s
+  endedAt: ${ended.endedAt}
+  transcript: ${info.transcriptPath}
+  toolUseId: ${info.toolUseId}
+
+It ran for real and its work may already be partly applied. Before responding to the user's next message, tell them this subagent ran and was lost, and ask which action to take: (1) Read the subagent transcript to recover what it finished, (2) re-dispatch a fresh Agent call for the remainder, or (3) abandon it. Do NOT tell the user the subagent was never spawned, and do NOT re-dispatch the same task without asking.
+</system-reminder>`
+        : isRecent
+          ? `<system-reminder>
 A subagent spawned earlier in this session has no terminal entry. It may have stalled, been killed, or is still running in the background.
 
   agentId: ${info.agentId}
@@ -644,8 +683,8 @@ A subagent spawned earlier in this session has no terminal entry. It may have st
 
 Before responding to the user's next message, surface this to them and ask which action to take: (1) re-dispatch a fresh Agent call with the same task, (2) Read the subagent transcript to recover partial results, or (3) abandon the prior subagent. Do NOT proceed with the user's current request until they choose. Do not silently ignore.
 </system-reminder>`
-      : `<system-reminder>
-An old subagent from this session is unterminated (spawned ${Math.round(ageHours / 24)} day(s) ago).
+          : `<system-reminder>
+An old subagent from this session never delivered a result (spawned ${Math.round(ageHours / 24)} day(s) ago).
 
   agentId: ${info.agentId}
   description: ${info.description}

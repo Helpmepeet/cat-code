@@ -2571,9 +2571,34 @@ function registerHostControlPlane(): void {
 
   ipcMain.handle(
     CH_HOST_CLOSE,
-    (_e, appSessionId: unknown): Promise<HostResult<void>> => {
+    (event, appSessionId: unknown): Promise<HostResult<void>> => {
+      const sessionId = String(appSessionId)
+      // Provenance, logged BEFORE the close runs and from main rather than the
+      // renderer, so it survives the teardown and any reload that follows. A
+      // close kills the engine and ends the turn: on 2026-08-29 one arrived
+      // that the operator did not make, and nothing recorded that it had been
+      // asked for at all, which is why that investigation could not name the
+      // caller. `close` is not `create`: it needs a record either way.
+      if (!isMainWindowSender(event)) {
+        logOperational(
+          'session.close.requested',
+          'warn',
+          { source: 'ipc', reason: 'sender_rejected' },
+          sessionId,
+        )
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'session_not_found', message: 'unknown sender' },
+        } satisfies HostResult<void>)
+      }
+      logOperational(
+        'session.close.requested',
+        'info',
+        { source: 'renderer' },
+        sessionId,
+      )
       if (!host) return Promise.resolve(noHost<void>())
-      return host.closeSession(String(appSessionId))
+      return host.closeSession(sessionId)
     },
   )
 

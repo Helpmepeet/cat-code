@@ -51,6 +51,11 @@ export const OPERATIONAL_EVENTS = [
   'registry.orphan.swept',
   'registry.rows.reaped',
   'session.create.requested',
+  // A close is the most destructive control-plane verb the renderer can
+  // request, and it used to leave no record at all: the 2026-08-29
+  // investigation could prove a session was closed but never who asked or
+  // why, because the handler logged nothing on receipt.
+  'session.close.requested',
   'sidecar.spawn.started',
   'sidecar.spawn.failed',
   'sidecar.socket.connected',
@@ -148,6 +153,9 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // kind that was lost. Neither carries payload: what the frame contained is
   // exactly what must not reach this descriptor.
   'frame.dropped': ['reason', 'frame'],
+  // `source` is the request's origin as main sees it, `reason` the refusal
+  // when a sender that is not the main window is turned away.
+  'session.close.requested': ['source', 'reason'],
   'session.turn.completed': ['durationMs', 'reason'],
   // `phase` is read off state the sidecar directly holds — whether the turn's
   // `result` message has already been broadcast — and is `unknown` otherwise.
