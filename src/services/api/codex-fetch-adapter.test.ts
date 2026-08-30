@@ -3,6 +3,7 @@ import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
   CodexWebSocketClosedBeforeCompletedError,
+  CodexWebSocketIdleTimeoutError,
   CodexWebSocketUsageLimitError,
   clearWebSocketSession,
 } from './codex-websocket-transport.js'
@@ -2589,6 +2590,32 @@ describe('codex-fetch-adapter', () => {
     // the tool block; only the text block that preceded it may be closed.
     expect(sse).toContain('"content_block_stop","index":0')
     expect(sse).not.toContain('"content_block_stop","index":1')
+  })
+
+  test('a websocket idle timeout produces the typed recoverable marker', async () => {
+    // The three idle timeouts in this system (websocket transport, HTTP reader,
+    // and the opt-in outer watchdog) all read the same env var. This pins the
+    // websocket one's classification without waiting on a real timer.
+    const response = translateCodexWsStreamToAnthropic(
+      (async function* () {
+        yield { type: 'response.output_text.delta', delta: 'went quiet after' }
+        throw new CodexWebSocketIdleTimeoutError(90_000)
+      })(),
+      'gpt-5.6-luna',
+      {
+        accountId: 'acct_ws_idle',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_ws_idle:gpt-5.6-luna',
+        conversationId: 'conv_ws_idle',
+      },
+    )
+
+    const { error } = await readSseUntilError(response)
+    const failure = partialStreamFailureOf(error)
+    expect(failure).not.toBeNull()
+    expect(failure!.transport).toBe('websocket')
+    expect(failure!.cause).toBe('idle_timeout')
+    expect(failure!.automaticContinuationEligible).toBe(true)
   })
 
   test('a hosted web search fails closed even with no client tool call', async () => {
