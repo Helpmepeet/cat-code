@@ -11,7 +11,12 @@ import {
   renderToolUseMessage,
   renderToolUseProgressMessage,
 } from './UI.js'
-import { searchExa, type WebSearchOutput, type WebSearchResult } from './exa.js'
+import {
+  hasExaApiKey,
+  searchExa,
+  type WebSearchOutput,
+  type WebSearchResult,
+} from './exa.js'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
@@ -89,8 +94,12 @@ export const WebSearchTool = buildTool({
     const summary = getToolUseSummary(input)
     return summary ? `Searching for ${summary}` : 'Searching the web'
   },
+  // The Exa key is the tool's only credential and it is read at call time
+  // (`exa.ts` `getExaApiKey`), which threw. Advertising a tool that cannot run
+  // spends a model turn to produce an error, so an absent key removes it from
+  // the schema instead — the same shape as the privacy gate beside it.
   isEnabled() {
-    return !isEssentialTrafficOnly()
+    return !isEssentialTrafficOnly() && hasExaApiKey()
   },
   get inputSchema(): InputSchema {
     return inputSchema()
