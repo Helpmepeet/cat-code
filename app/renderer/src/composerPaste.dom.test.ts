@@ -363,3 +363,118 @@ test('an image paste is prevented from entering the text draft', async () => {
     },
   ])
 })
+
+/**
+ * The DROP half of the same transfer boundary (CC-84). It shares every piece of
+ * scaffolding above — the controlled pane, the composer lookup, the draft
+ * observation — so it lives here rather than in a second file that would copy
+ * all of it.
+ *
+ * The bug: `handleDrop` read only `dataTransfer.getData('text')` and returned
+ * when it was empty. A Finder drag puts its payload on `dataTransfer.files` and
+ * leaves `text/plain` empty, so dropping an image on the composer did nothing at
+ * all, with no feedback.
+ */
+function fileDrop({
+  text,
+  files = [],
+}: {
+  text?: string
+  files?: File[]
+}): Event {
+  const dataTransfer = new DataTransfer()
+  if (text !== undefined) dataTransfer.setData('text/plain', text)
+  for (const file of files) dataTransfer.items.add(file)
+  const event = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'dataTransfer', {
+    configurable: true,
+    value: dataTransfer,
+  })
+  // The composer places a text drop at the pointer and falls back to the caret
+  // when the point resolves to nothing, which is the happy-dom case.
+  Object.defineProperty(event, 'clientX', { configurable: true, value: 0 })
+  Object.defineProperty(event, 'clientY', { configurable: true, value: 0 })
+  return event
+}
+
+test('an image dropped on the composer is attached, not ignored', async () => {
+  const observed = observation()
+  const initial = 'keep this text'
+  const tree = await harness.mount(
+    createElement(ControlledPane, {
+      initialPrompt: initial,
+      observation: observed,
+    }),
+  )
+  const composer = composerOf(tree)
+
+  await act(async () => {
+    composer.dispatchEvent(
+      fileDrop({
+        files: [new File(['png bytes'], 'dropped.png', { type: 'image/png' })],
+      }),
+    )
+  })
+  await act(async () => {
+    await observed.imageAttached
+  })
+  await harness.nextFrame()
+
+  expect(observed.images).toEqual([
+    {
+      mediaType: 'image/png',
+      data: 'cG5nIGJ5dGVz',
+      name: 'dropped.png',
+    },
+  ])
+  // The image never becomes text, and the draft is untouched.
+  expect(observed.drafts).toEqual([])
+  expect(readComposerText(composer)).toBe(initial)
+})
+
+test('a text drop still lands in the draft', async () => {
+  const observed = observation()
+  const initial = 'start'
+  const tree = await harness.mount(
+    createElement(ControlledPane, {
+      initialPrompt: initial,
+      observation: observed,
+    }),
+  )
+  const composer = composerOf(tree)
+
+  await act(async () => {
+    composer.dispatchEvent(fileDrop({ text: 'dropped words' }))
+  })
+  await harness.nextFrame()
+
+  expect(observed.drafts.at(-1)).toContain('dropped words')
+  expect(observed.images).toEqual([])
+})
+
+// Scope is strictly images: turning a dropped file into a path the engine reads
+// would make the renderer the author of a filesystem path (HC1).
+test('a dropped non-image file changes nothing', async () => {
+  const observed = observation()
+  const initial = 'keep this text'
+  const tree = await harness.mount(
+    createElement(ControlledPane, {
+      initialPrompt: initial,
+      observation: observed,
+    }),
+  )
+  const composer = composerOf(tree)
+
+  await act(async () => {
+    composer.dispatchEvent(
+      fileDrop({
+        files: [new File(['%PDF'], 'report.pdf', { type: 'application/pdf' })],
+      }),
+    )
+  })
+  await harness.nextFrame()
+
+  expect(observed.images).toEqual([])
+  expect(observed.drafts).toEqual([])
+  expect(readComposerText(composer)).toBe(initial)
+})
