@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -11,7 +11,98 @@ import type { AssistantMessage } from '../types/message.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+
+describe('session archive flag', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  let tempDir: string
+  let sessionId: UUID
+
+  beforeEach(async () => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    tempDir = mkdtempSync(join(tmpdir(), 'session-archive-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  afterEach(async () => {
+    clearSessionMessagesCache()
+    resetProjectForTesting()
+    await releaseActiveTranscriptLease()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  /**
+   * The whole point of archive is that it survives with no live engine for that
+   * session, so the round trip through the transcript file IS the feature.
+   *
+   * Scope of this test: a transcript with no compaction boundary, which is read
+   * whole. It does NOT exercise `scanPreBoundaryMetadata` — see the marker test
+   * below for that half.
+   */
+  test('an archived session reads back as archived', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+    await setSessionArchived(sessionId, true, path)
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBe(true)
+  })
+
+  /**
+   * Un-archiving writes `false`, which is a VALUE, not an absence — so it
+   * cannot use the empty-string-means-cleared convention `tag` and
+   * `custom-title` rely on. Last entry must win, or a session could never be
+   * brought back out of the archive.
+   */
+  test('un-archiving wins over an earlier archive', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+    await setSessionArchived(sessionId, true, path)
+    await setSessionArchived(sessionId, false, path)
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBe(false)
+  })
+
+  /**
+   * `archived` must be in METADATA_TYPE_MARKERS or it is invisible on any
+   * transcript with a compaction boundary. That scan (`scanPreBoundaryMetadata`)
+   * only runs when a boundary truncated pre-boundary bytes, and its fast path
+   * skips a whole chunk when it contains no marker — so a missing marker does
+   * not fail loudly, it silently drops the flag on exactly the long sessions
+   * most likely to be archived. Asserted structurally because the constant is
+   * module-private and building a boundary fixture would not make the
+   * invariant any clearer.
+   */
+  test('the archived entry is registered as a metadata marker', () => {
+    const source = readFileSync(
+      new URL('./sessionStorage.ts', import.meta.url),
+      'utf8',
+    )
+    const markers = source.slice(
+      source.indexOf('const METADATA_TYPE_MARKERS = ['),
+      source.indexOf('const METADATA_MARKER_BUFS'),
+    )
+    expect(markers).toContain('"type":"archived"')
+  })
+
+  /** A session nobody archived must not appear archived. */
+  test('an untouched session has no archive flag', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBeUndefined()
+  })
+})
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()

@@ -1108,6 +1108,8 @@ const REMOTE_FLUSH_INTERVAL_MS = 10
 class Project {
   // Minimal cache for current session only (not all sessions)
   currentSessionTag: string | undefined
+  /** Archive is a user-hidden flag, not a delete: the transcript is untouched. */
+  currentSessionArchived: boolean | undefined
   currentSessionTitle: string | undefined
   currentSessionAgentName: string | undefined
   currentSessionAgentColor: string | undefined
@@ -1380,6 +1382,15 @@ class Project {
         this.currentSessionTag = tailTag || undefined
       }
     }
+    // Archive is a boolean, so it cannot reuse extractLastJsonStringField's
+    // empty-string-means-cleared convention: un-archiving writes `false`, which
+    // is a value, not an absence. The last entry wins either way.
+    const archivedLine = tailLines.findLast(l =>
+      l.startsWith('{"type":"archived"'),
+    )
+    if (archivedLine) {
+      this.currentSessionArchived = /"archived":\s*true/.test(archivedLine)
+    }
 
     // lastPrompt is re-appended so readLiteMetadata can show what the
     // user was most recently doing. Written first so customTitle/tag/etc
@@ -1404,6 +1415,15 @@ class Project {
       appendEntryToFile(this.sessionFile, {
         type: 'tag',
         tag: this.currentSessionTag,
+        sessionId,
+      })
+    }
+    // Re-appended only when archived: the absence of the entry is the default,
+    // so an un-archived session writes nothing here and stays cheap.
+    if (this.currentSessionArchived) {
+      appendEntryToFile(this.sessionFile, {
+        type: 'archived',
+        archived: true,
         sessionId,
       })
     }
@@ -3709,6 +3729,26 @@ export function getCurrentThreadGoal(sessionId?: string): ThreadGoal | null {
   }
 }
 
+/**
+ * Archive or un-archive a session. Archive HIDES a session from the default
+ * catalog view; it never removes or rewrites the transcript, so it is fully
+ * reversible and safe to apply to a session another process is reading.
+ *
+ * Written as an appended metadata entry, the same mechanism `saveTag` uses, so
+ * it survives without a live engine for that session and the last entry wins.
+ */
+export async function setSessionArchived(
+  sessionId: UUID,
+  archived: boolean,
+  fullPath?: string,
+): Promise<void> {
+  const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
+  appendEntryToFile(resolvedPath, { type: 'archived', archived, sessionId })
+  if (sessionId === getSessionId()) {
+    getProject().currentSessionArchived = archived || undefined
+  }
+}
+
 export async function saveTag(sessionId: UUID, tag: string, fullPath?: string) {
   // Fall back to computed path if fullPath is not provided
   const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
@@ -4138,6 +4178,7 @@ const METADATA_TYPE_MARKERS = [
   '"type":"summary"',
   '"type":"custom-title"',
   '"type":"tag"',
+  '"type":"archived"',
   '"type":"agent-name"',
   '"type":"agent-color"',
   '"type":"agent-setting"',
@@ -4611,6 +4652,7 @@ export async function loadTranscriptFile(
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
+  archived: Map<UUID, boolean>
   agentNames: Map<UUID, string>
   agentColors: Map<UUID, string>
   agentSettings: Map<UUID, string>
@@ -4636,6 +4678,7 @@ export async function loadTranscriptFile(
   const summaries = new Map<UUID, string>()
   const customTitles = new Map<UUID, string>()
   const tags = new Map<UUID, string>()
+  const archived = new Map<UUID, boolean>()
   const agentNames = new Map<UUID, string>()
   const agentColors = new Map<UUID, string>()
   const agentSettings = new Map<UUID, string>()
@@ -4785,6 +4828,8 @@ export async function loadTranscriptFile(
           setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
         } else if (entry.type === 'tag' && entry.sessionId) {
           setLatestMapValue(tags, entry.sessionId, entry.tag)
+        } else if (entry.type === 'archived' && entry.sessionId) {
+          setLatestMapValue(archived, entry.sessionId, entry.archived === true)
         } else if (entry.type === 'agent-name' && entry.sessionId) {
           setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
         } else if (entry.type === 'agent-color' && entry.sessionId) {
@@ -4883,6 +4928,8 @@ export async function loadTranscriptFile(
         setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
       } else if (entry.type === 'tag' && entry.sessionId) {
         setLatestMapValue(tags, entry.sessionId, entry.tag)
+      } else if (entry.type === 'archived' && entry.sessionId) {
+        setLatestMapValue(archived, entry.sessionId, entry.archived === true)
       } else if (entry.type === 'agent-name' && entry.sessionId) {
         setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
       } else if (entry.type === 'agent-color' && entry.sessionId) {
@@ -5055,6 +5102,7 @@ export async function loadTranscriptFile(
     summaries,
     customTitles,
     tags,
+    archived,
     agentNames,
     agentColors,
     agentSettings,
