@@ -2814,6 +2814,44 @@ test('the model a session displays comes from the live run-controls seam', () =>
 })
 
 /**
+ * ⌘T opens a tab in the workspace you are already in, not a directory picker.
+ * The picker path (`newSession`) is still reachable and deliberate, through
+ * "Add project" and "Open folder"; what changed is that the new-tab gesture no
+ * longer asks. Pinned structurally because all three surfaces live in a keydown
+ * branch, a prop, and a handler map that no SSR render reaches — and because
+ * they must agree: the palette row advertises the literal string ⌘T, so a
+ * palette that ran a different function than the chord would be the same
+ * advertise-what-you-cannot-do defect the slash catalog had.
+ */
+test('the new-tab gesture inherits the current workspace on every surface', () => {
+  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // (1) The ⌘T branch itself.
+  const tBranch = app.slice(
+    app.indexOf("if (event.key === 't' || event.key === 'T') {"),
+  )
+  const tBody = tBranch.slice(0, tBranch.indexOf('return'))
+  expect(tBody).toContain('void newChat()')
+  expect(tBody).not.toContain('void newSession()')
+
+  // (2) The tab bar's "+" is the mouse equivalent of the same gesture.
+  expect(app).toContain('onNewTab={newChat}')
+
+  // (3) The palette row labelled ⌘T runs the same thing the chord does.
+  const palette = readFileSync(
+    new URL('./commandPaletteModel.ts', import.meta.url),
+    'utf8',
+  )
+  expect(palette).toContain("detail: '⌘T'")
+  expect(app).toContain('newSession: () => void newChat(),')
+
+  // (4) The picker has NOT been orphaned: the two deliberate
+  // choose-a-directory entry points still call it.
+  expect(app).toContain('onAddProject={() => void newSession()}')
+  expect(app).toContain('onOpenFolder={() => void newSession()}')
+})
+
+/**
  * Three composer behaviours a contentEditable does NOT inherit from the
  * textarea it replaced. None is reachable from an SSR render: they live in a
  * keydown branch, a DOM listener, and a drop handler. Pinned structurally so a

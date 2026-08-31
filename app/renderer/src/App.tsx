@@ -3081,8 +3081,13 @@ export function App() {
         return
       }
       if (event.key === 't' || event.key === 'T') {
+        // A new tab stays in the workspace you are already in: `newChat` reuses
+        // the active row's registry workspace (HC1 — the host re-derives the
+        // cwd, the renderer never names one) and only falls back to the native
+        // picker when there is no active row to inherit from. "Add project" and
+        // "Open folder" remain the deliberate pick-a-directory paths.
         event.preventDefault()
-        void newSession()
+        void newChat()
         return
       }
       if (event.key === 'w' || event.key === 'W') {
@@ -3100,7 +3105,7 @@ export function App() {
     }
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [shell, activeSessionId, newSession, closeTab, selectTab])
+  }, [shell, activeSessionId, newChat, closeTab, selectTab])
 
   function copyForLlm(sessionId: SessionId): void {
     const text = buildDebugExport(
@@ -3680,7 +3685,8 @@ export function App() {
         slashCatalog: selectSlashCatalog(slashCatalog, activeSessionId) ?? [],
         recentItemIds: recentPaletteItemIds,
         handlers: {
-          newSession: () => void newSession(),
+          // Labelled ⌘T in the palette, so it must match the chord exactly.
+          newSession: () => void newChat(),
           closeActiveSession: () => {
             if (activeSessionId) void closeTab(activeSessionId)
           },
@@ -3828,7 +3834,7 @@ export function App() {
           onSelect={selectTab}
           onClose={closeTab}
           onRestart={restartTab}
-          onNewTab={newSession}
+          onNewTab={newChat}
           onOpenActions={(sessionId, anchor) =>
             setSessionActionsTarget({ sessionId, anchor, origin: 'tab' })
           }
