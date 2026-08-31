@@ -2779,10 +2779,12 @@ export type DiagnosticsSnapshotFrame = {
  *
  * Catalog owner (decision #4, `docs/migration/decisions/CATALOG-OWNERSHIP.md`):
  * a single main-supervised disposable worker enumerates this off any sidecar and
- * delivers it to the renderer as a `sessions-catalog` host event on a ~30 s timer
+ * delivers it to the renderer as a `sessions-catalog` host event on a fixed timer
  * (`sessionsCatalogRunner.ts SESSIONS_CATALOG_REFRESH_INTERVAL_MS`), so a session
- * created after launch still appears (same freshness contract as the old
- * per-sidecar refresh). Read-only display metadata only — no message bodies, no
+ * created after launch still appears. The interval is a tuning knob, not a
+ * contract (CATALOG-OWNERSHIP §7 names lengthening it as an available lever);
+ * it was widened from the inherited per-sidecar 30 s once the per-run boot cost
+ * was measured. Read-only display metadata only — no message bodies, no
  * credentials — so it is `secretGuard`-clean by construction. It ALSO carries the
  * winning display title (custom-title > ai-title) so the catalog/sidebar can show
  * real session names instead of the cwd-basename fallback (the P4-6 title rider,

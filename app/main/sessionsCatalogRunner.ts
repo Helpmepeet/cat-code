@@ -34,12 +34,38 @@ import {
 } from '../shared/sessionsCatalogWorker.js'
 
 /**
- * Default cadence — preserve today's freshness contract (the per-sidecar refresh
- * ran every 30 s, `sidecarServer.ts` `SESSIONS_CATALOG_REFRESH_INTERVAL_MS`).
- * This is the cadence knob CATALOG-OWNERSHIP §4 names: lengthen it if the
- * per-run boot cost proves heavy — freshness is refresh-tolerant.
+ * Default cadence. Inherited as 30 s from the per-sidecar refresh this replaced
+ * (`sidecarServer.ts` `SESSIONS_CATALOG_REFRESH_INTERVAL_MS`); this is the
+ * cadence knob CATALOG-OWNERSHIP §4 names: lengthen it if the per-run boot cost
+ * proves heavy — freshness is refresh-tolerant.
+ *
+ * Lengthened to 120 s on 2026-08-31 because the boot cost did prove heavy, and
+ * the extra runs it bought were reproducing an unchanged file. Measured on the
+ * operator's machine against a live corpus:
+ *
+ * - One full worker run costs 0.70 s wall / ~1.0 s CPU (0.69/0.69/0.72 s real
+ *   over three `bun run app/sidecar/sessionsCatalogWorker.ts` runs).
+ * - 0.49 s of that is module-graph import ALONE (0.48/0.50 s for
+ *   `bun -e "await import('./src/utils/sessionStorage.ts')"`, against 0.00 s for
+ *   a bare `bun -e "1"`). The in-process enumeration of 251 transcripts, 248 of
+ *   them enriched, is only 0.15-0.17 s. So ~70% of every run is the per-spawn
+ *   engine-graph import CATALOG-OWNERSHIP §4 calls the repeated boot cost, and
+ *   at 30 s it was paid 120 times an hour.
+ * - The output is byte-identical run to run when nothing changes: `entries` +
+ *   `truncated` hashed equal across three consecutive rewrites, same
+ *   113,635-byte file, only `capturedAtMs` differing.
+ *
+ * That was a continuous ~3.3% of one core plus 320 MB/day of writes and 2,880
+ * fsync+rename pairs/day to republish an unchanged catalog; 120 s makes it
+ * ~0.8% of a core. The driver ticks for the entire life of the app regardless of
+ * window focus or idle (started at `ready-to-show`, `main.ts` — stopped only on
+ * the quit path), which is what makes the steady-state cadence, not the run
+ * cost, the thing worth cutting. The immediate first run at `start()` is
+ * untouched, so cold-launch freshness does not regress; only the steady-state
+ * staleness window widens, which §4 explicitly sanctions as this knob's
+ * trade-off.
  */
-export const SESSIONS_CATALOG_REFRESH_INTERVAL_MS = 30_000
+export const SESSIONS_CATALOG_REFRESH_INTERVAL_MS = 120_000
 export const SESSIONS_CATALOG_WORKER_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_CATALOG_STDERR_BYTES = 64 * 1024
 

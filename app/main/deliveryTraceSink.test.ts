@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintDeliveryTrace } from '../shared/deliveryTrace.js'
@@ -7,6 +7,7 @@ import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
 import {
   createDeliveryTraceSink, deliveryMessageKindOfFrame,
+  MAX_DELIVERY_TRACE_RECORD_BYTES,
   MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM, MAX_DELIVERY_TRACE_STREAMS,
 } from './deliveryTraceSink.js'
 
@@ -37,9 +38,11 @@ test('delivery trace persists metadata-only stages under private permissions', (
   expect(readdirSync(dir)).toContain('latest-delivery')
 })
 
-/** Every record the sink wrote, in order. */
+/** Every record the sink wrote, in order. Empty before the lane opens a file. */
 function recordsWritten(root: string): Array<Record<string, unknown>> {
-  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))!
+  if (!existsSync(join(root, 'logs'))) return []
+  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))
+  if (!file) return []
   return readFileSync(join(root, 'logs', file), 'utf8').trim().split('\n').map(line => JSON.parse(line))
 }
 
@@ -165,24 +168,100 @@ test('a repeated stage observation is still recorded as a duplicate', () => {
   }])
 })
 
-test('delivery stages say whether main observed an action or received an acknowledgement', () => {
-  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-observation-'))
-  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch' })
-  const trace = mintDeliveryTrace(1, 'stream')
-  sink.mark({ sessionId: 'session', trace, stage: 'main.ipc.sent' })
-  sink.mark({ sessionId: 'session', trace, stage: 'renderer.state.applied' })
-  sink.close()
+/** The twelve stages a delivered conversation frame is actually marked at. */
+const DELIVERED_STAGES = [
+  'engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent',
+  'supervisor.socket.received', 'host.received', 'main.ipc.queued', 'main.ipc.sent',
+  'preload.received', 'renderer.subscription.received', 'renderer.state.queued',
+  'renderer.state.applied',
+] as const
 
-  const file = readdirSync(join(root, 'logs')).find(name => name.startsWith('delivery-trace-'))!
-  const records = readFileSync(join(root, 'logs', file), 'utf8')
-    .trim()
-    .split('\n')
-    .map(line => JSON.parse(line))
-    .filter(record => record.recordKind === 'delivery.trace')
-  expect(records.map(record => [record.stage, record.observationKind])).toEqual([
-    ['main.ipc.sent', 'action'],
-    ['renderer.state.applied', 'acknowledgement'],
+test('a frame that completes costs ONE record carrying every stage it passed', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-consolidated-'))
+  const wall = { value: Date.parse('2026-08-31T00:00:00.000Z') }
+  const sink = createDeliveryTraceSink({
+    configDir: root, launchId: 'launch', sweepIntervalMs: 0, now: () => new Date(wall.value),
+  })
+  const trace = mintDeliveryTrace(1, 'stream', 'sidecar', () => new Date(wall.value))
+  DELIVERED_STAGES.forEach((stage, index) => {
+    wall.value += 1
+    sink.mark({
+      sessionId: 'session', trace, stage, frameKind: 'event', messageKind: 'assistant',
+      documentId: 'document', subscriptionEpoch: 1,
+      // The sidecar stamps its own stages on its own clock and ships them on
+      // FD 3, exactly as `onDeliveryTraceRecord` replays them into main.
+      ...(index < 4
+        ? { wallTimestamp: new Date(wall.value).toISOString(), monotonicTimestampMs: index, processInstanceId: 'sidecar-instance' }
+        : {}),
+    })
+  })
+  // Written when the frame finished, not at shutdown: a record per stage cost
+  // 8,852 B for one 771 B frame, and 31% of the lane was the same six
+  // identifiers serialized twelve times.
+  const [record, ...rest] = kinds(root, 'delivery.trace')
+  expect(rest).toEqual([])
+  sink.close()
+  expect(kinds(root, 'delivery.trace')).toHaveLength(1)
+
+  expect(record).toMatchObject({
+    schemaVersion: 2,
+    sequence: 1,
+    complete: true,
+    flushReason: 'terminal',
+    frameKind: 'event',
+    messageKind: 'assistant',
+    documentId: 'document',
+    sourceProcessInstanceId: 'sidecar-instance',
+  })
+  const stages = record!.stages as Record<string, number>
+  expect(Object.keys(stages)).toEqual([...DELIVERED_STAGES])
+  // Offsets in whole milliseconds from the record's own wallTimestamp, which is
+  // the first stage observed. The twelve wall timestamps are still there.
+  expect(Object.values(stages)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])
+  expect(record!.wallTimestamp).toBe('2026-08-31T00:00:00.001Z')
+  expect(Buffer.byteLength(`${JSON.stringify(record)}\n`)).toBeLessThan(MAX_DELIVERY_TRACE_RECORD_BYTES)
+})
+
+test('a frame whose stages stop partway is still written, and says so', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-incomplete-'))
+  const clock = { ms: 0 }
+  const sink = quiescenceSink(root, clock)
+  const trace = mintDeliveryTrace(1, 'stream')
+  const observed = ['engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received', 'main.ipc.sent'] as const
+  for (const stage of observed) {
+    sink.mark({ sessionId: 'session', trace, stage, frameKind: 'event', messageKind: 'assistant' })
+  }
+  expect(kinds(root, 'delivery.trace')).toEqual([])
+
+  clock.ms = 600_000
+  sink.sweepQuiescentStreams()
+  const [record, ...rest] = kinds(root, 'delivery.trace')
+  expect(rest).toEqual([])
+  // The frame this lane exists for. A design that wrote only completed frames
+  // would delete precisely the evidence a hang leaves behind.
+  expect(record).toMatchObject({ sequence: 1, complete: false, flushReason: 'quiescent' })
+  expect(Object.keys(record!.stages as Record<string, number>)).toEqual([...observed])
+
+  // Nothing is left to write twice: shutdown finds the accumulator empty.
+  sink.close()
+  expect(kinds(root, 'delivery.trace')).toHaveLength(1)
+})
+
+test('a frame evicted from the in-memory ring is written before its stages are dropped', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-evicted-'))
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  for (let sequence = 1; sequence <= MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM + 1; sequence++) {
+    sink.mark({
+      sessionId: 'session', trace: mintDeliveryTrace(sequence, 'stream'),
+      stage: 'engine.produced', frameKind: 'event', messageKind: 'assistant',
+    })
+  }
+  // Sequence 1 fell out of the ring while it was still waiting on eleven
+  // stages, which is the same silence a stall produces.
+  expect(kinds(root, 'delivery.trace')).toMatchObject([
+    { sequence: 1, complete: false, flushReason: 'evicted' },
   ])
+  sink.close()
 })
 
 test('contiguous acknowledgements expose an earlier missing frame despite a later complete frame', () => {
@@ -270,9 +349,10 @@ test('a traced run says which of its frames carried a result', () => {
   // discriminant alone could not answer this.
   const records = kinds(root, 'delivery.trace')
   expect(new Set(records.map(record => record.frameKind))).toEqual(new Set(['event']))
-  // The tag rides every stage record for its sequence, not only the first mark.
-  expect(records.filter(record => record.messageKind === 'result').map(record => record.stage)).toEqual([
-    'supervisor.socket.received', 'host.received', 'main.ipc.sent',
+  // The tag rides the frame's one record, and that record carries every stage.
+  expect(records.filter(record => record.messageKind === 'result')
+    .map(record => Object.keys(record.stages as Record<string, number>))).toEqual([
+    ['supervisor.socket.received', 'host.received', 'main.ipc.sent'],
   ])
   expect([...new Set(records.map(record => `${record.sequence}:${record.messageKind}`))]).toEqual([
     '1:assistant', '2:assistant', '3:result',
@@ -450,8 +530,9 @@ function laneRecords(root: string, prefix: string): Array<Record<string, unknown
 
 /**
  * A sink whose per-frame lane is squeezed to what one busy minute costs in the
- * real one. The measured 100 MB budget holds ~12,300 frames and burns
- * 9.85 MB/min under load, so the per-frame files are what rotation reaches.
+ * real one. At 1,179 B per frame the 100 MB budget holds ~85,000 frames, which
+ * is longer than the ~12,300 it held at a record per stage and still short of an
+ * overnight hang, so the per-frame files are what rotation reaches.
  */
 function rotatingSink(root: string, clock: { ms: number }, wall: { value: number }) {
   return createDeliveryTraceSink({

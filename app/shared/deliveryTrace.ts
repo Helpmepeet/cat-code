@@ -49,6 +49,32 @@ const _acknowledgementStagesAreDeliveryStages: Record<DeliveryAcknowledgementSta
 }
 void _acknowledgementStagesAreDeliveryStages
 
+/**
+ * The per-frame trace record's schema version. Version 1 was one record per
+ * stage transition, which cost 8,852 B for a 771 B frame: twelve copies of the
+ * same six identifiers, 31% of the lane, and a 100 MB budget that held about
+ * ten minutes of history. Version 2 is one record per frame sequence carrying
+ * the same stage timestamps as offsets. The anomaly and rollup records are
+ * unchanged and stay at 1, so only this record's shape moved.
+ */
+export const DELIVERY_TRACE_SCHEMA_VERSION = 2
+
+/**
+ * Why a frame's one record was written. `terminal` is the only value that means
+ * the frame was observed all the way through; every other value is a partial
+ * stage set flushed so a frame that STOPPED still leaves evidence, which is the
+ * whole reason this lane exists.
+ */
+export const DELIVERY_FRAME_FLUSH_REASONS = [
+  'terminal', 'buffered', 'quiescent', 'evicted', 'shutdown',
+] as const
+
+export type DeliveryFrameFlushReason = (typeof DELIVERY_FRAME_FLUSH_REASONS)[number]
+
+export function isDeliveryFrameFlushReason(value: unknown): value is DeliveryFrameFlushReason {
+  return typeof value === 'string' && (DELIVERY_FRAME_FLUSH_REASONS as readonly string[]).includes(value)
+}
+
 export type DeliveryObservationKind = 'action' | 'acknowledgement'
 
 export function deliveryObservationKind(stage: DeliveryStage): DeliveryObservationKind {
