@@ -42,15 +42,24 @@ export function exitWithError(message: string): never {
   process.exit(1)
 }
 
-// Whether -p mode should wait on stdin at all.
+// How long -p mode should wait for stdin before giving up.
 //
-// The peek below costs a full 3s wall-clock stall plus a stderr warning on any
-// non-TTY stdin that never writes — which is every `cat-code -p "<prompt>"`
-// spawned as a subprocess with an inherited idle pipe, the daily case here. A
-// positional prompt already IS the input, so there is nothing to wait for.
-// Without one, stdin is the only source of a prompt and must still be read.
-export function shouldPeekForStdinPrompt(positionalPrompt: string): boolean {
-  return positionalPrompt.length === 0
+// Two cases, and they are NOT the same:
+//
+//  - No positional prompt: stdin is the ONLY source of a prompt, so a slow
+//    producer (curl, jq on a large file, python with import overhead) must be
+//    waited out. Full budget, and a warning if nothing ever arrives.
+//  - With a positional prompt: stdin is SUPPLEMENTARY. `cat notes.txt |
+//    cat-code -p "summarize"` must still join the two, so this cannot skip the
+//    read — but a real producer's bytes are already buffered in the pipe by the
+//    time we look, so a short budget collects them. What it refuses to do is
+//    spend 3s on the inherited-but-idle pipe every `-p` subprocess carries,
+//    which is the daily cost here.
+//
+// Returning 0 would drop piped input entirely; that is the regression this
+// function exists to avoid.
+export function stdinPeekBudgetMs(positionalPrompt: string): number {
+  return positionalPrompt.length === 0 ? 3000 : 150
 }
 
 // Wait for a stdin-like stream to close, but give up after ms if no data ever

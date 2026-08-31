@@ -166,7 +166,7 @@ import { getFsImplementation, safeResolvePath } from 'src/utils/fsOperations.js'
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
 import { setAllHookEventsEnabled } from 'src/utils/hooks/hookEvents.js';
 import { refreshModelCapabilities } from 'src/utils/model/modelCapabilities.js';
-import { peekForStdinData, shouldPeekForStdinPrompt, writeToStderr } from 'src/utils/process.js';
+import { peekForStdinData, stdinPeekBudgetMs, writeToStderr } from 'src/utils/process.js';
 import { setCwd } from 'src/utils/Shell.js';
 import { DeferredContinuationBusyError, type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
 import { TranscriptInUseError } from './utils/transcriptLease.js';
@@ -835,12 +835,11 @@ async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json
     if (inputFormat === 'stream-json') {
       return process.stdin;
     }
-    // A positional prompt is already the input, so the peek below has nothing
-    // to wait for: it would only spend 3s and print a warning on the inherited
-    // idle stdin every `-p` subprocess launch carries.
-    if (!shouldPeekForStdinPrompt(prompt)) {
-      return prompt;
-    }
+    // Budget depends on whether a positional prompt was supplied: stdin is the
+    // only input source without one, and merely supplementary with one. Never
+    // skipped outright, or `cat notes.txt | cat-code -p "summarize"` would
+    // silently drop the file.
+    const stdinBudgetMs = stdinPeekBudgetMs(prompt);
     process.stdin.setEncoding('utf8');
     let data = '';
     const onData = (chunk: string) => {
@@ -852,9 +851,12 @@ async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json
     // without explicit stdin handling). 3s covers slow producers like curl,
     // jq on large files, python with import overhead. The warning makes
     // silent data loss visible for the rare producer that's slower still.
-    const timedOut = await peekForStdinData(process.stdin, 3000);
+    const timedOut = await peekForStdinData(process.stdin, stdinBudgetMs);
     process.stdin.off('data', onData);
-    if (timedOut) {
+    // Only worth saying when stdin was the only possible input. With a
+    // positional prompt in hand, proceeding without stdin is the normal case,
+    // not a degraded one, so warning on it is the noise this path removes.
+    if (timedOut && prompt.length === 0) {
       process.stderr.write('Warning: no stdin data received in 3s, proceeding without it. ' + 'If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\n');
     }
     return [prompt, data].filter(Boolean).join('\n');

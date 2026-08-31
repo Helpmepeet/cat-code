@@ -1,20 +1,27 @@
 import { describe, expect, test } from 'bun:test'
-import { peekForStdinData, shouldPeekForStdinPrompt } from './process.js'
+import { peekForStdinData, stdinPeekBudgetMs } from './process.js'
 import { EventEmitter } from 'node:events'
 
-describe('shouldPeekForStdinPrompt', () => {
-  // The regression: every `cat-code -p "<prompt>"` spawned as a subprocess
-  // inherits an idle stdin pipe, so `getInputPrompt` (src/main.tsx) burned the
-  // full `peekForStdinData` timeout and printed a warning before running a
-  // prompt it already had.
-  test('skips the stdin peek when a positional prompt was supplied', () => {
-    expect(shouldPeekForStdinPrompt('summarize this repo')).toBe(false)
+describe('stdinPeekBudgetMs', () => {
+  // The regression this fixes: every `cat-code -p "<prompt>"` spawned as a
+  // subprocess inherits an idle stdin pipe, so `getInputPrompt` (src/main.tsx)
+  // burned the full timeout and printed a warning before running a prompt it
+  // already had.
+  test('spends only a short budget when a positional prompt was supplied', () => {
+    expect(stdinPeekBudgetMs('summarize this repo')).toBe(150)
   })
 
-  // Without a positional prompt stdin is the only source of one, so
-  // `echo hi | cat-code -p` must still wait for it.
-  test('still peeks when no positional prompt was supplied', () => {
-    expect(shouldPeekForStdinPrompt('')).toBe(true)
+  // Without a positional prompt stdin is the ONLY source of one, so a slow
+  // producer must be waited out in full.
+  test('spends the full budget when stdin is the only input', () => {
+    expect(stdinPeekBudgetMs('')).toBe(3000)
+  })
+
+  // The load-bearing one. Returning 0 here would make `getInputPrompt` skip the
+  // read entirely, and `cat notes.txt | cat-code -p "summarize"` would silently
+  // drop the file — the two are joined, stdin is supplementary, not redundant.
+  test('never skips the read outright, even with a prompt in hand', () => {
+    expect(stdinPeekBudgetMs('summarize this repo')).toBeGreaterThan(0)
   })
 })
 
