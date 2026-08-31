@@ -469,6 +469,11 @@ import {
   type OAuthContext,
   type PromptDraftState,
 } from './appModel.js'
+import {
+  PROMPT_DRAFT_WRITE_DEBOUNCE_MS,
+  readPromptDraftsFromStorage,
+  writePromptDraftsToStorage,
+} from './promptDraftPersistence.js'
 
 // Perf F3 (2026-07-08): batch-folding reducer variants, defined at module scope
 // so their identity is stable across renders. A batched server-frame delivery is
@@ -528,6 +533,18 @@ const reduceVerbAckResultStateBatched = withBatch(reduceVerbAckResultState)
  * anchored on the page, not on the sidebar. */
 type SessionActionsOrigin = 'sidebar' | 'tab' | 'sessions-page'
 
+/** The renderer's own storage, or null where it does not exist or throws on
+ * access (SSR, a locked-down window). The `Sidebar.tsx` `defaultOrderStorage`
+ * idiom. */
+function defaultPromptDraftStorage(): Pick<Storage, 'getItem' | 'setItem'> | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
 export function App() {
   const pendingDeliveryStateAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const pendingDeliveryCommitAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
@@ -554,7 +571,36 @@ export function App() {
     createPermissionState,
   )
   const toast = useToast()
-  const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>({})
+  // CC-84 — unsent composer text survives a reload. The draft is the only state
+  // in the window the engine has never seen and cannot replay, and the app's own
+  // crash recovery reloads the document (`app/main/main.ts` `render-process-gone`),
+  // so the healing path used to destroy it. Renderer-local, best-effort
+  // (`promptDraftPersistence.ts`).
+  const [promptDrafts, setPromptDrafts] = useState<PromptDraftState>(
+    () => readPromptDraftsFromStorage(defaultPromptDraftStorage()) ?? {},
+  )
+  const promptDraftsRef = useRef(promptDrafts)
+  promptDraftsRef.current = promptDrafts
+  // Typing rewrites the draft on every keystroke and `setItem` is synchronous on
+  // this thread, so the write is debounced rather than run per character.
+  useEffect(() => {
+    const storage = defaultPromptDraftStorage()
+    if (!storage) return
+    const timer = setTimeout(() => {
+      writePromptDraftsToStorage(storage, promptDrafts)
+    }, PROMPT_DRAFT_WRITE_DEBOUNCE_MS)
+    return () => clearTimeout(timer)
+  }, [promptDrafts])
+  // A reload or a quit can land inside the debounce window, which is exactly the
+  // moment the draft matters most. `pagehide` fires on both and still allows a
+  // synchronous write, so the pending one is flushed there.
+  useEffect(() => {
+    const storage = defaultPromptDraftStorage()
+    if (!storage || typeof window === 'undefined') return
+    const flush = () => writePromptDraftsToStorage(storage, promptDraftsRef.current)
+    window.addEventListener('pagehide', flush)
+    return () => window.removeEventListener('pagehide', flush)
+  }, [])
   // P4-0 composer state, per-session-keyed exactly like `promptDrafts` so a
   // background session's collapsed pastes and input history survive a focus
   // switch (SessionPane unmounts for off-screen sessions). Renderer-local; never
