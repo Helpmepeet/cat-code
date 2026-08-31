@@ -166,7 +166,7 @@ import { getFsImplementation, safeResolvePath } from 'src/utils/fsOperations.js'
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
 import { setAllHookEventsEnabled } from 'src/utils/hooks/hookEvents.js';
 import { refreshModelCapabilities } from 'src/utils/model/modelCapabilities.js';
-import { peekForStdinData, writeToStderr } from 'src/utils/process.js';
+import { peekForStdinData, shouldPeekForStdinPrompt, writeToStderr } from 'src/utils/process.js';
 import { setCwd } from 'src/utils/Shell.js';
 import { DeferredContinuationBusyError, type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
 import { TranscriptInUseError } from './utils/transcriptLease.js';
@@ -834,6 +834,12 @@ async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json
   !process.argv.includes('mcp')) {
     if (inputFormat === 'stream-json') {
       return process.stdin;
+    }
+    // A positional prompt is already the input, so the peek below has nothing
+    // to wait for: it would only spend 3s and print a warning on the inherited
+    // idle stdin every `-p` subprocess launch carries.
+    if (!shouldPeekForStdinPrompt(prompt)) {
+      return prompt;
     }
     process.stdin.setEncoding('utf8');
     let data = '';

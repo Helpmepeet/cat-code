@@ -42,6 +42,17 @@ export function exitWithError(message: string): never {
   process.exit(1)
 }
 
+// Whether -p mode should wait on stdin at all.
+//
+// The peek below costs a full 3s wall-clock stall plus a stderr warning on any
+// non-TTY stdin that never writes — which is every `cat-code -p "<prompt>"`
+// spawned as a subprocess with an inherited idle pipe, the daily case here. A
+// positional prompt already IS the input, so there is nothing to wait for.
+// Without one, stdin is the only source of a prompt and must still be read.
+export function shouldPeekForStdinPrompt(positionalPrompt: string): boolean {
+  return positionalPrompt.length === 0
+}
+
 // Wait for a stdin-like stream to close, but give up after ms if no data ever
 // arrives. First data chunk cancels the timeout — after that, wait for end
 // unconditionally (caller's accumulator needs all chunks, not just the first).
