@@ -288,9 +288,17 @@ rules or paths).
 - **Live-refresh the knowledge snapshots** (M). Memory, instructions, skills,
   and the slash catalog are all read once at spawn and never again, so editing
   CLAUDE.md mid-session leaves every surface showing stale truth silently.
-- **A second directory per session** (S-M). `addDirs: []` is hardcoded. The
-  `pickDirectory` token mechanism already solves the "renderer must not author
-  a path" problem; this reuses it plus one inbound verb.
+- ~~**A second directory per session**~~ — **CORRECTED 2026-09-01, and dropped.**
+  The original entry said a desktop session is locked to one directory. It is
+  not. `addDirs: []` is hardcoded at spawn, but the renderer already renders
+  `addDirectories` permission updates
+  (`app/renderer/src/permissionPromptModel.ts:170`), so when a tool first
+  touches a path outside the cwd the engine mints an add-directory suggestion
+  and the user accepts it by index through the already-reviewed C1
+  selection-by-index path. The capability exists **reactively**; only the
+  proactive "grant it up front" version is missing. That is convenience, not a
+  missing capability, and it does not justify a new inbound frame kind plus
+  boundary tests plus a decision doc. Operator ruling 2026-09-01: skip.
 - **A diagnostics reader, and rebalance the log budget** (M). Can be a
   `scripts/` reader rather than app code. Pair it with cutting the churn that
   is crowding the budget out.
