@@ -703,6 +703,25 @@ export function isBridgeSafeCommand(cmd: Command): boolean {
 }
 
 /**
+ * Whether a slash command can run with no Ink terminal to render into.
+ *
+ * `local-jsx` commands return an interactive Ink component, so with no terminal
+ * `processSlashCommand` resolves them to `{messages: [], shouldQuery: false}` —
+ * silently nothing. Both headless `-p` runs and desktop sidecar sessions set
+ * `isNonInteractiveSession`, so both must filter their advertised catalog
+ * through this predicate or they offer commands that cannot do anything.
+ *
+ * Sibling of `isBridgeSafeCommand` above, which blocks the same `local-jsx`
+ * class for the same reason on the Remote Control path, but gates `local`
+ * commands on a curated allowlist rather than the declared flag.
+ */
+export function isHeadlessSafeCommand(cmd: Command): boolean {
+  if (cmd.type === 'prompt') return !cmd.disableNonInteractive
+  if (cmd.type === 'local') return cmd.supportsNonInteractive
+  return false
+}
+
+/**
  * Filter commands to only include those safe for remote mode.
  * Used to pre-filter commands when rendering the REPL in --remote mode,
  * preventing local-only commands from being briefly available before

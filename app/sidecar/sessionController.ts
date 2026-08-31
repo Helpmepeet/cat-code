@@ -28,7 +28,7 @@ import {
   createSidecarContextBreakdownDomain,
   type SidecarContextBreakdownDomain,
 } from './contextBreakdownDomain.js'
-import { getCommands, type Command } from '../../src/commands.js'
+import { getCommands, isHeadlessSafeCommand, type Command } from '../../src/commands.js'
 import type { SlashCatalogEntry } from '../shared/protocol.js'
 import {
   getAgentDefinitionsWithOverrides,
@@ -369,6 +369,14 @@ export async function createNormalSidecarQueryEngineConfig(
   // parses. Spawn-frozen; the sidecar never re-broadcasts it.
   const slashCatalog: SlashCatalogEntry[] = commands
     .filter(command => command.userInvocable !== false)
+    // A sidecar session is non-interactive, so `local-jsx` commands resolve to
+    // nothing at all (`processSlashCommand.tsx` bails on
+    // `isNonInteractiveSession`) — they render an Ink component and there is no
+    // terminal here to draw it into. Advertising them made the picker offer ~64
+    // commands that silently did nothing. Filtered through the SAME predicate
+    // the engine's own headless path uses (`src/main.tsx` `commandsHeadless`),
+    // not a re-derivation, so the two cannot drift.
+    .filter(isHeadlessSafeCommand)
     .map(command => ({
       name: command.name,
       description: command.description,

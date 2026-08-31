@@ -11,7 +11,7 @@ import {
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
-import { clearCommandMemoizationCaches } from '../../src/commands.js'
+import { clearCommandMemoizationCaches, isHeadlessSafeCommand } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
 import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
@@ -296,11 +296,35 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
       process.cwd(),
     )
     expect(slashCatalog.length).toBeGreaterThan(0)
-    const help = slashCatalog.find(entry => entry.name === 'help')
-    expect(help).toBeDefined()
+    // Pick a real headless-safe command out of the live catalog rather than
+    // naming one: `/help` used to serve here and is `local-jsx`, so it is now
+    // correctly absent (see the local-jsx exclusion assertion below).
+    const safeCommand = commands.find(
+      command =>
+        command.userInvocable !== false &&
+        isHeadlessSafeCommand(command) &&
+        typeof command.description === 'string' &&
+        command.description.length > 0,
+    )
+    expect(safeCommand).toBeDefined()
+    const projected = slashCatalog.find(
+      entry => entry.name === safeCommand?.name,
+    )
+    expect(projected).toBeDefined()
     // The picker's description column — a non-empty string, not just the name.
-    expect(typeof help?.description).toBe('string')
-    expect(help?.description.length).toBeGreaterThan(0)
+    expect(typeof projected?.description).toBe('string')
+    expect(projected?.description.length).toBeGreaterThan(0)
+
+    // A `local-jsx` command renders an Ink component and resolves to nothing in
+    // a non-interactive sidecar session, so it must never reach the picker.
+    // Live-path: taken from the real loaded catalog, not a hand-authored stub.
+    const inkCommand = commands.find(
+      command => command.userInvocable !== false && command.type === 'local-jsx',
+    )
+    expect(inkCommand).toBeDefined()
+    expect(
+      slashCatalog.some(entry => entry.name === inkCommand?.name),
+    ).toBe(false)
 
     // SLASH-9: pin a real argumentHint projection, not just help.description.
     // Find any loaded command that actually carries one and prove the
@@ -308,7 +332,13 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
     // `...(command.argumentHint ? { argumentHint } : {})` spread must fail
     // this, unlike the hand-authored stub in sidecarServer.test.ts).
     const commandWithHint = commands.find(
-      command => typeof command.argumentHint === 'string' && command.argumentHint.length > 0,
+      command =>
+        typeof command.argumentHint === 'string' &&
+        command.argumentHint.length > 0 &&
+        // Must also survive the catalog's headless-safety filter: the first
+        // hint-carrying command overall is `local-jsx` and no longer projects.
+        command.userInvocable !== false &&
+        isHeadlessSafeCommand(command),
     )
     expect(commandWithHint).toBeDefined()
     const projectedHintEntry = slashCatalog.find(
@@ -316,13 +346,15 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
     )
     expect(projectedHintEntry?.argumentHint).toBe(commandWithHint?.argumentHint)
 
-    // SLASH-9: exact userInvocable name-set parity with the engine's own
-    // filter (src/utils/messages/systemInit.ts:69-71) applied to the SAME
-    // `commands` array — not a re-derivation, a literal copy of that filter,
-    // so a drift between the two independent `userInvocable !== false`
-    // call sites is caught rather than assumed to stay in sync.
+    // SLASH-9: exact name-set parity with the engine's own filters applied to
+    // the SAME `commands` array — not a re-derivation, so a drift between the
+    // independent call sites is caught rather than assumed to stay in sync.
+    // Two filters now: `userInvocable !== false`
+    // (src/utils/messages/systemInit.ts:69-71) and headless-safety, the shared
+    // predicate the engine's own `commandsHeadless` path uses in src/main.tsx.
     const engineSlashCommandNames = commands
       .filter(c => c.userInvocable !== false)
+      .filter(isHeadlessSafeCommand)
       .map(c => c.name)
       .sort()
     expect(slashCatalog.map(entry => entry.name).sort()).toEqual(

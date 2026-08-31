@@ -215,10 +215,16 @@ test('a real sidecar process delivers the projected slash catalog (SLASH-2: inde
   if (snapshot.kind !== 'slash-catalog.snapshot') return
   expect(snapshot.sessionId).toBe(sessionId)
   expect(snapshot.commands.length).toBeGreaterThan(0)
-  const help = snapshot.commands.find(command => command.name === 'help')
-  expect(help).toBeDefined()
-  expect(typeof help?.description).toBe('string')
-  expect(help && help.description.length).toBeGreaterThan(0)
+  // `/compact` is `type: 'local'` with `supportsNonInteractive: true`, so it
+  // survives the catalog's headless-safety filter and carries a description.
+  const compact = snapshot.commands.find(command => command.name === 'compact')
+  expect(compact).toBeDefined()
+  expect(typeof compact?.description).toBe('string')
+  expect(compact && compact.description.length).toBeGreaterThan(0)
+  // `/help` is `local-jsx`: it renders an Ink component and resolves to nothing
+  // in a non-interactive sidecar session, so the delivered catalog must not
+  // offer it. Asserted through the real process join, not just the builder.
+  expect(snapshot.commands.some(command => command.name === 'help')).toBe(false)
 }, TEST_TIMEOUT_MS)
 
 test('turn.status crosses the real socket and brackets the turn', async () => {
