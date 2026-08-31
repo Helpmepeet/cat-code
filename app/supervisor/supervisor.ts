@@ -31,6 +31,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  PARKED_EXIT_CODE,
 } from '../shared/limits.js'
 import {
   isServerFrameKind,
@@ -407,19 +408,30 @@ export class SidecarSupervisor {
         return
       }
       this.emit({ type: 'exit', sessionId, code, signal })
-      this.operational('sidecar.exit', code === 0 ? 'info' : 'error', sessionId, {
+      // A host-initiated idle park is a DESIGNED exit that happens to be
+      // non-zero: the sidecar self-exits with `PARKED_EXIT_CODE` precisely so
+      // the host can classify it without a socket frame (`app/host/host.ts`
+      // `markParked`, IDLE-PARK.md §2). Judging expectedness on `code === 0`
+      // alone therefore filed every park as an unexplained failure, which is
+      // what made "did an engine ever actually crash" unanswerable from a log
+      // window in which all 11 abnormal exits were parks.
+      const parked = code === PARKED_EXIT_CODE
+      const cleanExit = code === 0 || parked
+      this.operational('sidecar.exit', cleanExit ? 'info' : 'error', sessionId, {
         ...(code === null ? {} : { exitCode: code }),
         ...(signal === null ? {} : { signal }),
-        expected: code === 0,
+        expected: cleanExit,
       })
       // Only claim lost coverage when there is evidence of it. A leftover buffer
-      // means a partial NDJSON record was cut off mid-write; a non-zero exit means
+      // means a partial NDJSON record was cut off mid-write; an abnormal exit means
       // the stream ended abnormally. A clean exit with an empty buffer lost
       // nothing, and reporting it anyway pinned the export's coverage verdict to
-      // "incomplete" for every ordinary session close.
+      // "incomplete" for every ordinary session close. A park closes its stream
+      // as deliberately as a zero exit does, so it belongs on the same side of
+      // this test: it was reporting one false `log.coverage.incomplete` per park.
       const truncatedRecord = record.operationalBuffer.length > 0
-      if (truncatedRecord || code !== 0) {
-        this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
+      if (truncatedRecord || !cleanExit) {
+        this.operational('log.coverage.incomplete', cleanExit ? 'warn' : 'error', sessionId, {
           source: 'sidecar',
           reason: truncatedRecord ? 'stream_closed_mid_record' : 'stream_closed_on_abnormal_exit',
           expected: false,

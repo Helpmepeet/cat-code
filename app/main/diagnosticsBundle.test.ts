@@ -9,6 +9,7 @@ import {
   deriveStuckSessionSummaries,
   parseDeliveryTraceRecord,
 } from './diagnosticsBundle.js'
+import { PARKED_EXIT_CODE } from '../shared/limits.js'
 
 test('diagnostics bundle exports only closed operational and trace schemas', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-bundle-'))
@@ -547,4 +548,60 @@ test('an exited process keeps its exit whatever order its records arrive in', ()
   expect(deriveProcessInstances([exited, started], [])).toEqual([timeline])
   // Oldest first proves the fix is order-independent rather than merely flipped.
   expect(deriveProcessInstances([started, exited], [])).toEqual([timeline])
+})
+
+test('a sidecar.exit survives the export with the code that separates a park from a crash', () => {
+  // The operational stream is re-validated on the way out against the shared
+  // per-event field allowlist, and a field the allowlist does not name is
+  // dropped from every bundle with no error. `exitCode`/`signal` are the only
+  // things that separate a deliberate idle-park from an engine crash, so a
+  // silent drop here would turn the whole question "did anything actually
+  // crash" into guesswork. This exports one of each and reads them back.
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-diagnostics-exit-'))
+  const logs = join(root, 'logs')
+  mkdirSync(logs)
+  const exitRecord = (
+    timestamp: string,
+    sessionId: string,
+    fields: Record<string, unknown>,
+  ) => JSON.stringify({
+    version: 1, timestamp, level: 'error', event: 'sidecar.exit',
+    launchId: 'launch', process: 'supervisor', processInstanceId: 'supervisor', pid: 99,
+    processStartedAt: '2026-08-06T00:00:00.000Z', appSessionId: sessionId, fields,
+  })
+  writeFileSync(
+    join(logs, 'operational-launch-1.jsonl'),
+    [
+      exitRecord('2026-08-06T00:01:00.000Z', 'parked-session', {
+        exitCode: PARKED_EXIT_CODE, expected: false,
+      }),
+      exitRecord('2026-08-06T00:02:00.000Z', 'crashed-session', {
+        exitCode: 139, expected: false,
+      }),
+      exitRecord('2026-08-06T00:03:00.000Z', 'killed-session', {
+        signal: 'SIGKILL', expected: false,
+      }),
+    ].join('\n') + '\n',
+  )
+
+  const bundle = JSON.parse(buildDiagnosticsBundle({
+    logsDirectory: logs,
+    appVersion: 'test',
+    packaged: true,
+    currentLaunchId: 'launch',
+    buildId: '2026.08.06',
+    commitId: 'abc1234',
+  }))
+  const exits = new Map<string, Record<string, unknown>>(
+    (bundle.streams.operational as Array<Record<string, unknown>>)
+      .filter(record => record.event === 'sidecar.exit')
+      .map(record => [record.appSessionId as string, record.fields as Record<string, unknown>]),
+  )
+  expect(exits.size).toBe(3)
+  expect(exits.get('parked-session')).toEqual({ exitCode: PARKED_EXIT_CODE, expected: false })
+  expect(exits.get('crashed-session')).toEqual({ exitCode: 139, expected: false })
+  expect(exits.get('killed-session')).toEqual({ signal: 'SIGKILL', expected: false })
+  // `expected` is false on all three, which is the point: only the code tells
+  // the park from the two deaths.
+  expect(exits.get('parked-session')!.exitCode).not.toBe(exits.get('crashed-session')!.exitCode)
 })
