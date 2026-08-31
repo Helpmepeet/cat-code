@@ -5130,7 +5130,14 @@ export function SessionPane({
   // dropping foreign markup in.
   const handlePaste = (event: ReactClipboardEvent<HTMLFormElement>): void => {
     const composer = composerRef.current
-    if (!composer || event.target !== composer.element) return
+    const target = event.target
+    if (
+      !composer?.element ||
+      !(target instanceof Node) ||
+      !composer.element.contains(target)
+    ) {
+      return
+    }
     event.preventDefault()
     const files = Array.from(event.clipboardData.files)
     const image = files.find(file =>
