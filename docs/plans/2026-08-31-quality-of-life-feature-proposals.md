@@ -234,25 +234,25 @@ rules or paths).
 |---|---|---|---|
 | 1 | **OS notification + dock badge** when a turn finishes or blocks | S | Main already sees every frame; derive there. Outbound only, no inbound vocabulary. Notification text is a §7 surface. |
 | 2 | **Persist composer drafts** | S | Six sibling modules already do keyed `localStorage` in the right idiom. Renderer-local, no protocol. |
-| 3 | **Surface the turn stall** | S | Renderer already holds `turnStartedAt` and a 1s tick; a purely renderer-side "quiet for N" derivation needs no protocol change at all. |
+| 3 | **Surface the turn stall** | M | *Re-sized after review.* The sidecar detector reads `turnLastEventAtMs`, exempts an unanswered permission, and classifies `phase` from held state (`sidecarServer.ts:1882`). A renderer measuring elapsed-since-start is a different, worse signal, and duplicating it creates two definitions of stalled. Needs a typed propagation path. |
 | 4 | **Read `turnInterrupted`** and offer to continue | S | Data already on the ready frame; one projector case. |
 | 5 | **Deny with a reason** in the permission card | S | The `message` param exists all the way up and is already used by PlanPanel. Today the row promises "tell Cat Code what to do differently" and sends `"Denied by user"`. |
 | 6 | **Stop advertising dead slash commands** | S | Filter `local-jsx` from the catalog using the classifier that already exists. |
-| 7 | **Fix fabricated USD** + refuse `--max-budget-usd` on subscription-routed models | S | Closes a documented footgun at its root. |
+| 7 | **Fix fabricated USD**; carry cost provenance | M | *Re-sized and re-scoped after review.* The fabricated-price half is right. Refusing the flag by "subscription-routed model" is the wrong abstraction: `resolveRequestProvider` falls back to the caller's provider, and fallback models and subagents can resolve differently mid-run, so one run can mix metered and subscription requests. Fix is provenance (`metered`/`subscription`/`unknown`) carried through accumulation and enforcement. Returning zero is also wrong: zero reads as a known-free request. |
 | 8 | **WebSearch `isEnabled()` should check `EXA_API_KEY`** | S | Today the model is offered a tool that always throws. Likely the mechanical reason web research is routed to ChatGPT by habit. |
 | 9 | **Persist window geometry** | S | Zero `getBounds`/`setBounds` in main; every launch is 1100×720 at the OS default. |
-| 10 | **An application menu** | S | There is no `Menu` import in main at all — so no About/version, no ⌘, Preferences, no shortcut discovery. Also the cheapest host for 11-13. |
-| 11 | **More keyboard chords + a cheatsheet** | S | Four chords exist total (⌘K/⌘T/⌘W/⌘1-9) and no way to discover them. |
+| 10 | **An application menu** | M | *Re-sized after review.* The markup is small; accelerator ownership is not. `App.tsx:3075` currently owns ⌘K/⌘T/⌘W/⌘1-9 as window-level behavior, so a native menu moves dispatch into main and changes precedence. Needs one command-routing policy, and Open question 1 must be settled first. |
+| 11 | **More keyboard chords + a cheatsheet** | S | Four *global* chords exist (⌘K/⌘T/⌘W/⌘1-9). *Corrected after review:* element-scoped bindings also exist, e.g. ⌥↑/⌥↓ workspace reorder, which is properly discoverable via `aria-keyshortcuts` and a tooltip (`Sidebar.tsx:1542,1558`). Any cheatsheet must inventory those too or it will collide with a live binding. |
 | 12 | **Zoom / text size, persisted** | S | No zoom control anywhere; transcript column caps at 740px. |
 | 13 | **Finder image drop into the composer** | S | Composer reads `dataTransfer.getData('text')` only, so a Finder drag is silently inert. Reuse the existing byte-based `attachImage` path. Images only — a dropped *file path* is a separate HC1 decision. |
-| 14 | **Persist scroll position** | S | The anchor is already a row identity, not a pixel offset, so it is directly serializable. |
+| 14 | **Persist scroll position** | M | *Re-sized after review.* Serializable encoding is the easy 10%. The module states it is deliberately not persisted, and falls back to bottom when a row key is gone (`transcriptScrollMemory.ts:1-9,144-151`); across a restart an anchor can outlive pruning, compaction, grouping changes, or not-yet-loaded history. Needs versioning, retention, restore ordering, and an invalid-anchor policy. |
 | 15 | **Session-scoped always-allow** | S | Engine mints *more* suggestions (same rule at `destination: 'session'`); the renderer keeps selecting by index. **Zero boundary change** — this is why it is cheap. |
-| 16 | **Cross-tab attention beyond permissions** | S | Derive from `tasks.snapshot`, already on the wire; extend `sessionStatusVisual.ts` rather than adding a parallel mapping. |
+| 16 | **Cross-tab attention beyond permissions** | M | *Re-sized after review.* A snapshot is current state, not an attention event: the reducer replaces wholesale with no seen/transition metadata (`tasksState.ts:40`) and it is `sticky` in the replay buffer (`replayBuffer.ts:127`), so reconnect replays it. "New for you" needs per-session watermarks and replay dedupe, or badges reappear on every reload. |
 | 17 | **Expose `autoDreamEnabled` + memory keys** in settings | S | `settingsEditable.ts` is a declarative array; this is one entry. |
 | 18 | **Roster click should open *that* worker** | S | `onOpenTasks?: (agentId?: string)` is typed and the id is discarded at the call site. |
 | 19 | **`-p` stdin stall** | S | Every delegation subprocess pays 3s + a stderr warning; skip the peek when a positional prompt was supplied. |
-| 20 | **Typed headless exit codes** | S | Seven result subtypes collapse to exit 1, so a wrapper cannot tell "rate-limited, retry" from "auth broken". |
-| 21 | **Strict settings validation on load** | S | The strict validator exists and is wired only to the Edit tool; a hand-edited typo is silently ignored forever. Warn, never reject. |
+| 20 | **Typed headless exit codes** | M | *Re-sized after review.* Seven result subtypes collapse to exit 1, but early failures (settings parse, invalid MCP config, auth/org validation) `process.exit(1)` in `src/main.tsx` before a result exists. Mapping only the result subtypes ships a contract that lies about the most common failures. |
+| 21 | **Strict settings validation on load** | S | The strict validator exists and is wired only to the Edit tool; a typo'd *key name* is silently ignored forever. Warn, never reject, and route through the existing invalid-settings surface rather than creating a second policy. (Challenged in review and held: see Review outcomes.) |
 | 22 | **A feature-gate lint** | S/M | See S1 and *Hazards*. Catches the recurring half-wired defect class at build time. |
 
 ### Tier 2 — medium, structural
@@ -352,6 +352,92 @@ search (`if (… || true) { return }` at `LogSelector.tsx:793`, `&& false &&` at
 `:1057,:1347`). These are the exact features Tier 2 wants. Re-enabling is
 cheap; the labels need §7 rewording first, and someone should establish whether
 each was a deliberate fork cut or upstream drift.
+
+---
+
+## Axes this survey did not cover
+
+Named by an external review of this document. None of the nine lanes covers
+these, and each cuts across the engine/desktop boundary. Listed as scope for a
+follow-up survey, not as proposals.
+
+**Accessibility as an interaction contract.** The report treats shortcuts and
+zoom as conveniences and never asks whether the app is operable and correctly
+announced under keyboard-only use or VoiceOver. This deserves its own lane
+precisely because the dangerous controls are the ones a focus bug changes the
+behavior of: permission cards, AskQuestion, plan review, task kill/dismiss,
+modals. Audit surface: `overlayFocus.ts`, `PermissionPrompt.tsx`,
+`AskQuestionFlow.tsx`, `TabBar.tsx`, and whether a windowed `TranscriptView`
+keeps a stable VoiceOver reading position. Worst case: a permission request is
+visibly actionable but unreachable or unannounced, so the session is blocked or
+the wrong decision is submitted.
+
+**Resource and energy budgets.** There is failure observability here and one
+idle-TTL note, but no envelope for RAM, CPU, renderer work, or battery, which
+matters unusually much when every live session can own an engine process
+(`app/main/main.ts:1537-1540` names the engine graph at ~189 MB). Unmeasured:
+marginal RSS per live sidecar, practical live-tab ceiling, CPU while an
+inactive tab streams, cost of the 1s ticks and health polling, and whether
+parking reduces resident memory or only process count. This is not another
+parking proposal; parking exists. Worst case: multi-session use gets nicer
+while each session still costs enough that the renderer is OOM-killed or the
+laptop is unusable on battery.
+
+**Upgrade, schema migration, and rollback.** No lane owns what happens to local
+state when Cat Code itself changes version, which is distinct from session
+restore: the app can restore perfectly within one build and fail across an
+upgrade. Several versioned boundaries already exist and disagree in strategy
+(`app/main/transcriptCache.ts:91-95` gates on protocol/guard versions rather
+than app version; `app/host/registry.ts:472-474` moves an unknown
+`registryVersion` aside and starts empty). Needs a map of every persisted
+schema, its compatibility rule, whether migration is atomic, what rollback
+does, and which state is derivable versus authoritative.
+
+**Backup, disaster recovery, and Mac-to-Mac portability.** Session lifecycle
+asks how to reopen a session, not how to recover the whole local product state
+after disk loss or a machine move. The registry is explicitly "an index, not a
+backup" with the transcript catalog as the recovery path
+(`app/host/registry.ts:472-474,509-512`) — good local design, but not a
+user-visible backup contract. Needs an inventory of transcripts, registry,
+tags, settings, memories, plugin/MCP config, window layout, and future
+drafts/anchors: where each lives, whether it holds secrets, and how absolute
+paths are repaired on a new machine. A shareable export is not a backup; it
+strips state on purpose.
+
+---
+
+## Review outcomes
+
+This document was reviewed by ChatGPT against the repo. Its findings were
+verified here rather than accepted, per standing practice.
+
+**Accepted.** Six Tier-1 items moved S → M (3, 7, 10, 14, 16, 20), each for the
+same underlying reason, which is the review's most useful observation: *the
+datum existing somewhere is not the same as the user-facing semantic being
+local*. Stall truth is sidecar-private; cost truth is per-request, not a model
+property; menu accelerators cross the main/renderer boundary; a scroll anchor
+is only same-window durable; attention needs unread history, not a sticky
+snapshot; exit codes span pre-query process exits. Proposal 7 was also
+re-scoped: refusing the budget flag by "subscription-routed model" is the wrong
+abstraction, since fallback models and subagents can resolve a different
+provider mid-run, so one run can mix metered and subscription requests.
+
+**Accepted with precision.** "Four chords exist total" was too absolute. Four
+*global* chords exist; element-scoped bindings also exist (⌥↑/⌥↓ workspace
+reorder, `Sidebar.tsx:1542`), and that one is properly discoverable via
+`aria-keyshortcuts` and a tooltip. A cheatsheet must inventory those or risk
+assigning a colliding chord.
+
+**Rejected, with evidence.** The review argued proposal 21 is wrong because
+invalid settings already raise a startup dialog (`src/main.tsx:2352-2362`).
+That dialog is real but catches a different error class. The load path is
+`SettingsSchema().safeParse(data)` with no `.strict()`
+(`src/utils/settings/settings.ts:226`) against a schema ending in
+`.passthrough()` (`src/utils/settings/types.ts:1125`), so an **unrecognized
+key** produces no error and the dialog never fires for it. The original claim
+was about a typo'd key name, and it stands. The review's constructive half was
+kept: route the warning through the existing invalid-settings surface instead
+of creating a second policy.
 
 ---
 
