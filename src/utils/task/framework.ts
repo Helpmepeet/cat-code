@@ -1,37 +1,14 @@
-import { formatTaskNotificationText, toTaskNotificationOrigin } from '../taskNotification.js'
 import type { AppState } from '../../state/AppState.js'
-import {
-  isTerminalTaskStatus,
-  type TaskStatus,
-  type TaskType,
-} from '../../Task.js'
+import { isTerminalTaskStatus } from '../../Task.js'
 import type { TaskState } from '../../tasks/types.js'
-import {
-  enqueuePendingNotification,
-  hasPendingTaskNotification,
-} from '../messageQueueManager.js'
+import { hasPendingTaskNotification } from '../messageQueueManager.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
-import { getTaskOutputDelta, getTaskOutputPath } from './diskOutput.js'
-
-// Standard polling interval for all tasks
-export const POLL_INTERVAL_MS = 1000
 
 // Duration to display killed tasks before eviction
 export const STOPPED_DISPLAY_MS = 3_000
 
 // Grace period for terminal local_agent tasks in the coordinator panel
 export const PANEL_GRACE_MS = 30_000
-
-// Attachment type for task status updates
-export type TaskAttachment = {
-  type: 'task_status'
-  taskId: string
-  toolUseId?: string
-  taskType: TaskType
-  status: TaskStatus
-  description: string
-  deltaSummary: string | null // New output since last attachment
-}
 
 type SetAppState = (updater: (prev: AppState) => AppState) => void
 
@@ -148,91 +125,50 @@ export function getRunningTasks(state: AppState): TaskState[] {
 }
 
 /**
- * Generate attachments for tasks with new output or status changes.
- * Called by the framework to create push notifications.
+ * Collect terminal tasks that have been consumed and can be GC'd.
+ *
+ * Deliberately generates no attachments: each task type delivers its own
+ * completion notification via enqueuePendingNotification(), so emitting one
+ * here would race those per-type callbacks into dual delivery (one inline
+ * attachment plus one separate API turn).
  */
-export async function generateTaskAttachments(state: AppState): Promise<{
-  attachments: TaskAttachment[]
-  // Only the offset patch — NOT the full task. The task may transition to
-  // completed during getTaskOutputDelta's async disk read, and spreading the
-  // full stale snapshot would clobber that transition (zombifying the task).
-  updatedTaskOffsets: Record<string, number>
+export function generateTaskAttachments(state: AppState): {
   evictedTaskIds: string[]
-}> {
-  const attachments: TaskAttachment[] = []
-  const updatedTaskOffsets: Record<string, number> = {}
+} {
   const evictedTaskIds: string[] = []
   const tasks = state.tasks ?? {}
 
   for (const taskState of Object.values(tasks)) {
-    if (taskState.notified) {
-      switch (taskState.status) {
-        case 'completed':
-        case 'failed':
-        case 'killed':
-          // Evict terminal tasks — they've been consumed and can be GC'd
-          if (!hasPendingTaskNotification(taskState.id)) {
-            evictedTaskIds.push(taskState.id)
-          }
-          continue
-        case 'pending':
-          // Keep in map — hasn't run yet, but parent already knows about it
-          continue
-        case 'running':
-          // Fall through to running logic below
-          break
-      }
+    // Not yet notified, or still pending/running — the parent still needs it.
+    if (!taskState.notified) continue
+    if (!isTerminalTaskStatus(taskState.status)) continue
+    if (!hasPendingTaskNotification(taskState.id)) {
+      evictedTaskIds.push(taskState.id)
     }
-
-    if (taskState.status === 'running') {
-      const delta = await getTaskOutputDelta(
-        taskState.id,
-        taskState.outputOffset,
-      )
-      if (delta.content) {
-        updatedTaskOffsets[taskState.id] = delta.newOffset
-      }
-    }
-
-    // Completed tasks are NOT notified here — each task type handles its own
-    // completion notification via enqueuePendingNotification(). Generating
-    // attachments here would race with those per-type callbacks, causing
-    // dual delivery (one inline attachment + one separate API turn).
   }
 
-  return { attachments, updatedTaskOffsets, evictedTaskIds }
+  return { evictedTaskIds }
 }
 
 /**
- * Apply the outputOffset patches and evictions from generateTaskAttachments.
- * Merges patches against FRESH prev.tasks (not the stale pre-await snapshot),
- * so concurrent status transitions aren't clobbered.
+ * Apply the evictions collected by generateTaskAttachments.
+ * Re-checks each id against FRESH prev.tasks rather than the caller's earlier
+ * snapshot, so a status transition queued in between isn't clobbered.
  */
-export function applyTaskOffsetsAndEvictions(
+export function applyTaskEvictions(
   setAppState: SetAppState,
-  updatedTaskOffsets: Record<string, number>,
   evictedTaskIds: string[],
 ): void {
-  const offsetIds = Object.keys(updatedTaskOffsets)
-  if (offsetIds.length === 0 && evictedTaskIds.length === 0) {
+  if (evictedTaskIds.length === 0) {
     return
   }
   setAppState(prev => {
     let changed = false
     const newTasks = { ...prev.tasks }
-    for (const id of offsetIds) {
-      const fresh = newTasks[id]
-      // Re-check status on fresh state — task may have completed during the
-      // await. If it's no longer running, the offset update is moot.
-      if (fresh?.status === 'running') {
-        newTasks[id] = { ...fresh, outputOffset: updatedTaskOffsets[id]! }
-        changed = true
-      }
-    }
     for (const id of evictedTaskIds) {
       const fresh = newTasks[id]
       // Re-check terminal+notified on fresh state (TOCTOU: resume may have
-      // replaced the task during the generateTaskAttachments await)
+      // replaced the task since it was collected)
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {
         continue
       }
@@ -245,65 +181,4 @@ export function applyTaskOffsetsAndEvictions(
     }
     return changed ? { ...prev, tasks: newTasks } : prev
   })
-}
-
-/**
- * Poll all running tasks and check for updates.
- * This is the main polling loop called by the framework.
- */
-export async function pollTasks(
-  getAppState: () => AppState,
-  setAppState: SetAppState,
-): Promise<void> {
-  const state = getAppState()
-  const { attachments, updatedTaskOffsets, evictedTaskIds } =
-    await generateTaskAttachments(state)
-
-  applyTaskOffsetsAndEvictions(setAppState, updatedTaskOffsets, evictedTaskIds)
-
-  // Send notifications for completed tasks
-  for (const attachment of attachments) {
-    enqueueTaskNotification(attachment)
-  }
-}
-
-/**
- * Enqueue a task notification to the message queue.
- */
-function enqueueTaskNotification(attachment: TaskAttachment): void {
-  const statusText = getStatusText(attachment.status)
-
-  const outputPath = getTaskOutputPath(attachment.taskId)
-  const details = {
-    taskId: attachment.taskId,
-    taskType: attachment.taskType,
-    outputFile: outputPath,
-    toolUseId: attachment.toolUseId,
-    status: attachment.status,
-    summary: `Task "${attachment.description}" ${statusText}`,
-  } as const
-
-  enqueuePendingNotification({
-    value: formatTaskNotificationText(details),
-    mode: 'task-notification',
-    origin: toTaskNotificationOrigin(details),
-  })
-}
-
-/**
- * Get human-readable status text.
- */
-function getStatusText(status: TaskStatus): string {
-  switch (status) {
-    case 'completed':
-      return 'completed successfully'
-    case 'failed':
-      return 'failed'
-    case 'killed':
-      return 'was stopped'
-    case 'running':
-      return 'is running'
-    case 'pending':
-      return 'is pending'
-  }
 }

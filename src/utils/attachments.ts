@@ -134,9 +134,8 @@ import {
 } from './permissions/filesystem.js'
 import {
   generateTaskAttachments,
-  applyTaskOffsetsAndEvictions,
+  applyTaskEvictions,
 } from './task/framework.js'
-import { getTaskOutputPath } from './task/diskOutput.js'
 import { drainPendingMessages } from '../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { TaskType, TaskStatus } from '../Task.js'
 import {
@@ -3451,33 +3450,22 @@ async function getTaskReminderAttachments(
 }
 
 /**
- * Get attachments for all unified tasks using the Task framework.
- * Replaces the old getBackgroundShellAttachments, getBackgroundRemoteSessionAttachments,
- * and getAsyncAgentAttachments functions.
+ * Evict consumed terminal tasks from AppState at the turn boundary.
+ *
+ * Contributes no attachments of its own: task_status attachments are produced
+ * by the compaction path, and each task type delivers its own completion
+ * notification. This runs here because the turn boundary is one of the two
+ * places that drives eviction (the other is evictTerminalTask).
  */
 async function getUnifiedTaskAttachments(
   toolUseContext: ToolUseContext,
 ): Promise<Attachment[]> {
   const appState = toolUseContext.getAppState()
-  const { attachments, updatedTaskOffsets, evictedTaskIds } =
-    await generateTaskAttachments(appState)
+  const { evictedTaskIds } = generateTaskAttachments(appState)
 
-  applyTaskOffsetsAndEvictions(
-    toolUseContext.setAppState,
-    updatedTaskOffsets,
-    evictedTaskIds,
-  )
+  applyTaskEvictions(toolUseContext.setAppState, evictedTaskIds)
 
-  // Convert TaskAttachment to Attachment format
-  return attachments.map(taskAttachment => ({
-    type: 'task_status' as const,
-    taskId: taskAttachment.taskId,
-    taskType: taskAttachment.taskType,
-    status: taskAttachment.status,
-    description: taskAttachment.description,
-    deltaSummary: taskAttachment.deltaSummary,
-    outputFilePath: getTaskOutputPath(taskAttachment.taskId),
-  }))
+  return []
 }
 
 async function getAsyncHookResponseAttachments(): Promise<Attachment[]> {

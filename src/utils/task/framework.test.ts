@@ -8,10 +8,58 @@ import {
   reserveTaskNotification,
   resetCommandQueue,
 } from '../messageQueueManager.js'
-import { evictTerminalTask } from './framework.js'
+import {
+  applyTaskEvictions,
+  evictTerminalTask,
+  generateTaskAttachments,
+} from './framework.js'
 
 afterEach(() => {
   resetCommandQueue()
+})
+
+// The scan used to decide eviction inside a switch over every status, with the
+// running arm falling through to a per-turn disk read whose bytes were thrown
+// away. Collapsing it to two guards must not widen or narrow the set it picks.
+test('the eviction scan collects consumed terminal tasks and nothing else', () => {
+  let state = {
+    tasks: {
+      completed: { id: 'completed', status: 'completed', notified: true },
+      failed: { id: 'failed', status: 'failed', notified: true },
+      killed: { id: 'killed', status: 'killed', notified: true },
+      // Terminal but the parent has not been told yet.
+      unnotified: { id: 'unnotified', status: 'completed', notified: false },
+      // Notified, but not finished — the parent still addresses these.
+      queued: { id: 'queued', status: 'pending', notified: true },
+      running: { id: 'running', status: 'running', notified: true },
+    },
+  } as unknown as AppState
+
+  const { evictedTaskIds } = generateTaskAttachments(state)
+  expect([...evictedTaskIds].sort()).toEqual(['completed', 'failed', 'killed'])
+
+  applyTaskEvictions(update => {
+    state = update(state)
+  }, evictedTaskIds)
+  expect(Object.keys(state.tasks).sort()).toEqual([
+    'queued',
+    'running',
+    'unnotified',
+  ])
+})
+
+test('a queued completion keeps its task out of the eviction set', () => {
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker\nSummary: Agent completed',
+  })
+  const state = {
+    tasks: {
+      worker: { id: 'worker', status: 'completed', notified: true },
+    },
+  } as unknown as AppState
+
+  expect(generateTaskAttachments(state).evictedTaskIds).toEqual([])
 })
 
 test('a queued or reserved task completion keeps its terminal task addressable', () => {
