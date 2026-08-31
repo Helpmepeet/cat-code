@@ -195,9 +195,9 @@ and Codex account pools persist token-bearing account JSON under
 `~/claude-vault` and `~/codex-vault`; those directories are not relocated by
 `CLAUDE_CONFIG_DIR`.
 
-`WebSearch` uses Exa and requires `EXA_API_KEY`. Without it, normal filesystem,
-shell, MCP, and `WebFetch` capabilities remain available, but Exa-backed search
-will fail when called.
+`WebSearch` uses Exa and requires `EXA_API_KEY`. Without it the tool is not
+offered to the model at all; normal filesystem, shell, MCP, and `WebFetch`
+capabilities remain available.
 
 ## Local state and configuration
 
