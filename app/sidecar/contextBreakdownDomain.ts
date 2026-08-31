@@ -30,7 +30,7 @@
 import type { UUID } from 'crypto'
 import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 import { getSessionId } from '../../src/bootstrap/state.js'
-import type { Tools, ToolPermissionContext } from '../../src/Tool.js'
+import type { Tools, ToolPermissionContext, ToolUseContext } from '../../src/Tool.js'
 import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { analyzeContextUsage } from '../../src/utils/analyzeContext.js'
 import { deserializeMessages } from '../../src/utils/conversationRecovery.js'
@@ -41,6 +41,7 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import { getMessagesAfterCompactBoundary } from '../../src/utils/messages.js'
 import { microcompactMessages } from '../../src/services/compact/microCompact.js'
+import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
 
 /**
  * Categories `analyzeContextUsage` appends that describe UNUSED window rather
@@ -110,13 +111,25 @@ export function createRealContextBreakdownExecutor(deps: {
         deps.tools,
         deps.agentDefinitions,
         undefined, // terminalWidth — grid layout only, unused here
-        // Omitted, not stubbed. `analyzeContextUsage` reads exactly three fields off
-        // this argument — `options.mcpClients`, `options.customSystemPrompt` and
-        // `options.appendSystemPrompt` — all through `?.`, and substitutes the same
-        // empty defaults when the argument is absent. The sidecar's engine config
-        // sets none of them (`sessionController.ts:373-393`, `mcpClients: []`), so
-        // `undefined` is exactly as faithful as an empty object and costs no cast.
-        undefined,
+        // `analyzeContextUsage` reads exactly three fields off this argument —
+        // `options.mcpClients`, `options.customSystemPrompt` and
+        // `options.appendSystemPrompt` — all through `?.`, but its signature
+        // declares the full `Pick<ToolUseContext, 'options'>`
+        // (`context-noninteractive.ts:73` stubs the same three for the same
+        // reason). `mcpClients` stays `[]` and there is still no
+        // `customSystemPrompt` in the sidecar's engine config
+        // (`sessionController.ts:346`), but `appendSystemPrompt` is no longer
+        // empty: `sessionController.ts:414` sets it to
+        // `DESKTOP_SYSTEM_PROMPT_ADDENDUM`, and `analyzeContext.ts:1071` feeds
+        // it into `buildEffectiveSystemPrompt`, whose output is what
+        // `countSystemTokens` measures. Passing `undefined` here would
+        // undercount system tokens by the addendum's length.
+        {
+          options: {
+            mcpClients: [],
+            appendSystemPrompt: DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+          },
+        } as unknown as Pick<ToolUseContext, 'options'>,
         undefined, // mainThreadAgentDefinition
         apiView, // originals, for API-usage extraction
       )

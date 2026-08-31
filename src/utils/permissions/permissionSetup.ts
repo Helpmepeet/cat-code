@@ -1569,3 +1569,19 @@ export function transitionPlanAutoMode(
   setNeedsAutoModeExitAttachment(true)
   return restoreDangerousPermissions(context)
 }
+
+/**
+ * Re-strips dangerous allow rules after a settings change while in direct auto
+ * mode. syncPermissionRulesFromDisk (called before us in applySettingsChange)
+ * re-adds dangerous rules from disk without touching strippedDangerousRules,
+ * so without this the classifier stays bypassed by prefix-rule allow matches
+ * until the user cycles modes. No-op outside auto mode; plan-with-auto is
+ * handled by transitionPlanAutoMode.
+ */
+export function transitionAutoModeAfterSettingsChange(
+  context: ToolPermissionContext,
+): ToolPermissionContext {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) return context
+  if (context.mode !== 'auto') return context
+  return stripDangerousPermissionsForAutoMode(context)
+}

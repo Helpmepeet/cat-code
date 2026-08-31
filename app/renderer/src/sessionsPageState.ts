@@ -251,28 +251,43 @@ export function selectAllVisibleSelected(
  * run inside a session's OWN live engine (`sessionActions.ts`), so a selection
  * that includes closed sessions writes only to the live part of it. Returning the
  * ids lets the bar say what will happen instead of silently doing less.
+ *
+ * `row.live` alone is the host row's view, not the transport's: a row can stay
+ * `live` after its supervisor record has gone `disconnected`
+ * (`sessionsCatalogState.ts` `live`), which sending into just returns an
+ * undeliverable result. `hasEngine` is the frame-plane check
+ * (`connectionHasEngine`, `connectionState.ts`) that the ⋯ menu already applies
+ * to these same verbs (`resolveSessionActions`, `sessionActions.ts`). Omitted
+ * only by static/test callers that deliberately exercise the row-only contract.
  */
 export function isWritableSessionRow(
   row: MergedSessionRow,
+  hasEngine?: (appSessionId: SessionId) => boolean,
 ): row is MergedSessionRow & { appSessionId: SessionId } {
-  return row.live && row.appSessionId != null
+  return (
+    row.live &&
+    row.appSessionId != null &&
+    (hasEngine === undefined || hasEngine(row.appSessionId))
+  )
 }
 
 /** The live catalog rows that can receive a session-action verb. */
 export function selectWritableRows(
   rows: readonly MergedSessionRow[],
+  hasEngine?: (appSessionId: SessionId) => boolean,
 ): Array<MergedSessionRow & { appSessionId: SessionId }> {
-  return rows.filter(isWritableSessionRow)
+  return rows.filter(row => isWritableSessionRow(row, hasEngine))
 }
 
 export function selectWritableSelection(
   state: SessionsPageState,
   rows: readonly MergedSessionRow[],
+  hasEngine?: (appSessionId: SessionId) => boolean,
 ): SessionId[] {
   const writable: SessionId[] = []
   for (const row of rows) {
     if (!state.selected.includes(row.sessionId)) continue
-    if (isWritableSessionRow(row)) writable.push(row.appSessionId)
+    if (isWritableSessionRow(row, hasEngine)) writable.push(row.appSessionId)
   }
   return writable
 }

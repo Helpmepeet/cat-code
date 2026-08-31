@@ -400,6 +400,28 @@ export function useManageMCPConnections(
                     )
                     const elapsed = Date.now() - reconnectStartTime
 
+                    // The server can be disabled while the attempt is in
+                    // flight, and the pre-attempt check above only covers the
+                    // backoff sleep. Publishing now would overwrite the
+                    // 'disabled' row, so drop the result and tear the late
+                    // connection down the way stale clients are handled in
+                    // initializeServersAsPending.
+                    if (isMcpServerDisabled(client.name)) {
+                      logMCPDebug(
+                        client.name,
+                        `Server disabled during reconnection, discarding result after ${elapsed}ms`,
+                      )
+                      reconnectTimersRef.current.delete(client.name)
+                      if (result.client.type === 'connected') {
+                        result.client.client.onclose = undefined
+                        void clearServerCache(
+                          result.client.name,
+                          result.client.config,
+                        ).catch(() => { })
+                      }
+                      return
+                    }
+
                     if (result.client.type === 'connected') {
                       logMCPDebug(
                         client.name,
@@ -439,7 +461,10 @@ export function useManageMCPConnections(
                         `Max reconnection attempts (${MAX_RECONNECT_ATTEMPTS}) reached, giving up`,
                       )
                       reconnectTimersRef.current.delete(client.name)
-                      updateServer({ ...client, type: 'failed' })
+                      // Same in-flight disable race as the success path above.
+                      if (!isMcpServerDisabled(client.name)) {
+                        updateServer({ ...client, type: 'failed' })
+                      }
                       return
                     }
                   }

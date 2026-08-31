@@ -448,14 +448,21 @@ export class SidecarSupervisor {
   send(sessionId: SessionId, message: SidecarClientMessage): void {
     const record = this.registry.get(sessionId)
     if (!record) {
+      // §7: this message is forwarded verbatim into a user-facing toast, so it
+      // carries no session id. Main logs the id alongside it on stderr.
       throw new SidecarSendError(
         'session_not_found',
-        `session ${sessionId} was not found`,
+        'That session is no longer available.',
       )
     }
     if (!record.socket || record.status !== 'ready') {
       const code = sendFailureCodeForStatus(record.status)
-      throw new SidecarSendError(code, `session ${sessionId} is ${record.status}`)
+      throw new SidecarSendError(
+        code,
+        code === 'session_not_ready'
+          ? 'That session is still starting. Try again in a moment.'
+          : 'That session is not connected.',
+      )
     }
     const frame: ClientFrame = {
       protocolVersion: PROTOCOL_VERSION,
@@ -471,12 +478,12 @@ export class SidecarSupervisor {
         'utf8',
       ) > MAX_PROMPT_BYTES
     ) {
-      throw new Error(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
+      throw new Error('That message is too long to send. Shorten it and try again.')
     }
     const encoded = encodeFrame(frame)
     const payloadBytes = encoded.byteLength - 4
     if (payloadBytes > MAX_FRAME_BYTES) {
-      throw new Error(`frame exceeds ${MAX_FRAME_BYTES} bytes`)
+      throw new Error('That message is too large to send. Shorten it and try again.')
     }
     record.socket.write(encoded)
   }

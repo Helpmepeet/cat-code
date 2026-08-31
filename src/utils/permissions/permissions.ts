@@ -1206,7 +1206,11 @@ async function hasPermissionsToUseToolInner(
     }
   }
 
-  // 1b. Check if the entire tool should always ask for permission
+  // 1b. Check if the entire tool should always ask for permission. The
+  // decision is held back until after step 1d: content-specific denies (e.g.
+  // Bash(curl:*)) only surface from tool.checkPermissions, and deny must
+  // outrank a tool-wide ask the same way step 1a outranks it.
+  let toolWideAskDecision: PermissionDecision | null = null
   const askRule = getAskRuleForTool(appState.toolPermissionContext, tool)
   if (askRule) {
     // When autoAllowBashIfSandboxed is on, sandboxed commands skip the ask rule and
@@ -1219,7 +1223,7 @@ async function hasPermissionsToUseToolInner(
       shouldUseSandbox(input)
 
     if (!canSandboxAutoAllow) {
-      return {
+      toolWideAskDecision = {
         behavior: 'ask',
         decisionReason: {
           type: 'rule',
@@ -1228,7 +1232,7 @@ async function hasPermissionsToUseToolInner(
         message: createPermissionRequestMessage(tool.name),
       }
     }
-    // Fall through to let Bash's checkPermissions handle command-specific rules
+    // Otherwise let Bash's checkPermissions handle command-specific rules
   }
 
   // 1c. Ask the tool implementation for a permission result
@@ -1251,6 +1255,11 @@ async function hasPermissionsToUseToolInner(
   // 1d. Tool implementation denied permission
   if (toolPermissionResult?.behavior === 'deny') {
     return toolPermissionResult
+  }
+
+  // Tool-wide ask rule from step 1b, now that content denies are ruled out
+  if (toolWideAskDecision) {
+    return toolWideAskDecision
   }
 
   // 1e. Tool requires user interaction even in bypass mode
@@ -1290,11 +1299,14 @@ async function hasPermissionsToUseToolInner(
   appState = context.getAppState()
   // Check if permissions should be bypassed:
   // - Direct bypassPermissions mode
-  // - Plan mode when the user originally started with bypass mode (isBypassPermissionsModeAvailable)
+  // - Plan mode when the user originally started with bypass mode. prePlanMode
+  //   is the origin record (prepareContextForPlanMode stashes it);
+  //   isBypassPermissionsModeAvailable only answers whether bypass is
+  //   permitted at all, which is true for nearly every install.
   const shouldBypassPermissions =
     appState.toolPermissionContext.mode === 'bypassPermissions' ||
     (appState.toolPermissionContext.mode === 'plan' &&
-      appState.toolPermissionContext.isBypassPermissionsModeAvailable)
+      appState.toolPermissionContext.prePlanMode === 'bypassPermissions')
   if (shouldBypassPermissions) {
     return {
       behavior: 'allow',

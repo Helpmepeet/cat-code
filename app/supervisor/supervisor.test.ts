@@ -174,7 +174,10 @@ test('rejects an oversized prompt before writing it and keeps the session usable
       requestId: 'oversized-request',
       prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1),
     }),
-  ).toThrow(`prompt exceeds ${MAX_PROMPT_BYTES} bytes`)
+    // The copy is user-visible (main forwards it into an error frame the
+    // composer renders), so it names no byte count. The cap itself is asserted
+    // by the prompt being MAX_PROMPT_BYTES + 1.
+  ).toThrow('That message is too long to send. Shorten it and try again.')
 
   supervisor.send(sessionId, { type: 'app.ping', nonce: 'still-alive' })
   await waitFor(
@@ -344,6 +347,39 @@ test('send to an unknown session throws terminal session_not_found', () => {
     expect(error).toBeInstanceOf(SidecarSendError)
     expect((error as SidecarSendError).code).toBe('session_not_found')
     expect((error as SidecarSendError).retryable).toBe(false)
+  }
+})
+
+// Main forwards SidecarSendError.message verbatim into an ErrorFrame, and the
+// renderer toasts that text, so §7 applies to it: no session ids on screen.
+test('send failure messages carry no session id', async () => {
+  const socketDir = makeTempDir('catcode-supervisor-no-id-')
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    socketDir,
+  })
+  supervisors.push(supervisor)
+
+  const sessionId = '11111111-2222-3333-4444-555555555555'
+  const messages: string[] = []
+
+  try {
+    supervisor.send(sessionId, { type: 'app.ping', nonce: 'n' })
+  } catch (error) {
+    messages.push((error as SidecarSendError).message)
+  }
+
+  await supervisor.spawnSession(sessionId, { cwd: socketDir })
+  try {
+    supervisor.send(sessionId, { type: 'app.ping', nonce: 'n' })
+  } catch (error) {
+    messages.push((error as SidecarSendError).message)
+  }
+
+  expect(messages).toHaveLength(2)
+  for (const message of messages) {
+    expect(message).not.toContain(sessionId)
+    expect(message).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}/i)
   }
 })
 

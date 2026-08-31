@@ -38,6 +38,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from 'react'
+import type { SessionId } from '../../shared/protocol.js'
 import { EmptyState } from './EmptyState.js'
 import { Chip } from './Chip.js'
 import {
@@ -98,6 +99,7 @@ export function SessionsPage({
   onExportRows,
   renameRequest,
   tagEcho,
+  hasEngine,
 }: {
   rows: readonly MergedSessionRow[]
   activeCwd: string | null
@@ -129,6 +131,16 @@ export function SessionsPage({
   tagEcho?: {
     entries: readonly { sessionIds: readonly string[]; tag: string | null }[]
   } | null
+  /**
+   * The frame-plane check (`connectionHasEngine`) for whether a row's OWN
+   * sidecar can currently receive a write verb, on top of `row.live` (the host
+   * row's view). A `disconnected` frame can arrive while the host still
+   * describes the row as live; the ⋯ menu already gates Rename and Export on
+   * this same signal (`resolveSessionActions`, `sessionActions.ts`). Omitted
+   * only by static/test callers that deliberately exercise the row-only
+   * contract.
+   */
+  hasEngine?: (appSessionId: SessionId) => boolean
 }) {
   const [search, setSearch] = useState('')
   const [sort, setSort] = useState<SessionSort>('recent')
@@ -208,8 +220,8 @@ export function SessionsPage({
     [page, rows],
   )
   const writableSelectedRows = useMemo(
-    () => selectWritableRows(selectedRows),
-    [selectedRows],
+    () => selectWritableRows(selectedRows, hasEngine),
+    [selectedRows, hasEngine],
   )
 
   const rowActions: RowActions = {
@@ -233,6 +245,7 @@ export function SessionsPage({
     },
     onRenameCancel: () => dispatchPage({ type: 'end-rename' }),
     canAct: onOpenRowActions != null,
+    hasEngine,
   }
 
   function applyTag(tag: string | null): void {
@@ -242,7 +255,7 @@ export function SessionsPage({
       target.kind === 'bulk'
         ? selectedRows
         : rows.filter(row => row.sessionId === target.sessionId)
-    const writable = selectWritableRows(targets)
+    const writable = selectWritableRows(targets, hasEngine)
     if (writable.length > 0) onTagRows?.(writable, tag)
     if (target.kind === 'bulk') dispatchPage({ type: 'clear-selection' })
     dispatchPage({ type: 'close-tag-popover' })
@@ -511,6 +524,8 @@ type RowActions = {
   onRenameCancel: () => void
   /** False when the host did not wire the actions menu (the read-only mount). */
   canAct: boolean
+  /** Threaded through to `isWritableSessionRow` (see `SessionsPage`'s own prop). */
+  hasEngine?: (appSessionId: SessionId) => boolean
 }
 
 function RowList({
@@ -607,8 +622,9 @@ function SessionRow({
   const renaming = page.renaming?.sessionId === row.sessionId
   const tag = selectRowTag(page, row)
   // Rename and Tag are writes into this row's OWN live engine (sessionActions.ts):
-  // a closed session has no sidecar to receive the verb.
-  const writable = isWritableSessionRow(row)
+  // a closed session has no sidecar to receive the verb, and neither does a row
+  // whose frame plane reports the engine unreachable (`actions.hasEngine`).
+  const writable = isWritableSessionRow(row, actions.hasEngine)
   // §0 adaptation: the ⋯ / right-click menu is offered for REGISTRY rows only. A
   // terminal-history row has no `appSessionId` for the menu to act on, and its one
   // reachable verb (Open) is the row click itself, so a menu there would be six

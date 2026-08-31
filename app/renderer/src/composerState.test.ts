@@ -39,6 +39,8 @@ import {
   reducePasteRemoved,
   reducePastesPruned,
   reducePasteStateForDraftWrite,
+  reduceSessionImagesReplaced,
+  reduceSessionImagesRestored,
   reduceSessionPastesCleared,
   removePasteOccurrence,
   selectAgentMentionItems,
@@ -1036,6 +1038,46 @@ describe('image attachment submit state', () => {
 
     state = reduceImageAttachmentRemoved(state, S1, attachments[0]!.id)
     expect(selectImageAttachments(state, S1)).toEqual([])
+  })
+})
+
+// Bug fix (round8 finding 1) — `releasePendingSubmit` used to call
+// `reduceSessionImagesReplaced` directly with `pending.images ?? []`, which
+// DELETES the session's image entry when the array is empty. A text-only
+// pending submit released after the user attached an image to the newer
+// draft therefore erased that image. `reduceSessionImagesRestored` is the
+// guarded helper now shared by every restore-to-composer path.
+describe('reduceSessionImagesRestored — restoring an empty submit must not erase a newer attachment', () => {
+  const imageB = {
+    mediaType: 'image/png' as const,
+    data: 'BBBB',
+    name: 'imageB.png',
+  }
+
+  test('releasing/restoring an empty image list leaves a currently-attached image in place', () => {
+    const held = reduceImageAttachmentAdded(createImageAttachmentState(), S1, imageB)
+    expect(selectImageAttachments(held, S1)).toEqual([{ ...imageB, id: 1 }])
+
+    // What the bug did: unconditional reduceSessionImagesReplaced wipes it.
+    const wiped = reduceSessionImagesReplaced(held, S1, [])
+    expect(selectImageAttachments(wiped, S1)).toEqual([])
+
+    // The fix: the guarded restore leaves it untouched.
+    const restored = reduceSessionImagesRestored(held, S1, [])
+    expect(selectImageAttachments(restored, S1)).toEqual([{ ...imageB, id: 1 }])
+  })
+
+  test('restoring a submit that DOES carry images still replaces the current ones', () => {
+    const held = reduceImageAttachmentAdded(createImageAttachmentState(), S1, imageB)
+    const older = [{ mediaType: 'image/jpeg' as const, data: 'OLDER', name: 'older.jpg', id: 7 }]
+
+    const restored = reduceSessionImagesRestored(held, S1, older)
+    expect(selectImageAttachments(restored, S1)).toEqual(older)
+  })
+
+  test('is a no-op on a session with nothing attached', () => {
+    const empty = createImageAttachmentState()
+    expect(reduceSessionImagesRestored(empty, S1, [])).toBe(empty)
   })
 })
 

@@ -67,7 +67,7 @@ export const loadPluginOptions = memoize(
     const storage = getSecureStorage()
     const sensitive =
       storage.read()?.pluginSecrets?.[pluginId] ??
-      ({} as Record<string, string>)
+      ({} as PluginOptionValues)
 
     // secureStorage wins on collision — schema determines destination so
     // collision shouldn't happen, but if a user hand-edits settings.json we
@@ -93,11 +93,11 @@ export function savePluginOptions(
   schema: PluginOptionSchema,
 ): void {
   const nonSensitive: PluginOptionValues = {}
-  const sensitive: Record<string, string> = {}
+  const sensitive: PluginOptionValues = {}
 
   for (const [key, value] of Object.entries(values)) {
     if (schema[key]?.sensitive === true) {
-      sensitive[key] = String(value)
+      sensitive[key] = value
     } else {
       nonSensitive[key] = value
     }

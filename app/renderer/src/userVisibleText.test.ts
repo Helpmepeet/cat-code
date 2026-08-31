@@ -20,7 +20,10 @@ import ts from 'typescript'
  * printed verbatim by the shell error line (`App.tsx` `${error.code}:
  * ${error.message}`) and an `ErrorFrame.message` becomes a danger toast
  * (`verbAckResultState.ts`), so a phrase written in `host.ts` lands on the same
- * screen as one written in a component. All four planes are swept.
+ * screen as one written in a component. Every plane that can author such a
+ * string is swept: renderer, main, host, sidecar, supervisor and preload. The
+ * supervisor was added after its send-failure copy reached the composer's error
+ * line verbatim through main's error frame.
  *
  * Precision matters more than reach. Code comments are explicitly exempt under
  * §7, and identifiers/frame kinds like `'accounts.snapshot'` are not user text,
@@ -55,6 +58,8 @@ const ROOTS = [
   join(appRoot, 'main'),
   join(appRoot, 'host'),
   join(appRoot, 'sidecar'),
+  join(appRoot, 'supervisor'),
+  join(appRoot, 'preload'),
 ]
 
 /**
@@ -302,7 +307,7 @@ test('the sweep reaches past the renderer', () => {
   for (const root of ROOTS) {
     expect(sourceFiles(root).length).toBeGreaterThan(0)
   }
-  expect(ROOTS.length).toBe(4)
+  expect(ROOTS.length).toBe(6)
 })
 
 test('the scan distinguishes prose from code (guards its own precision)', () => {

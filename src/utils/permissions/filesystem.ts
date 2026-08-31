@@ -50,7 +50,7 @@ import type {
 import type { PermissionRule, PermissionRuleSource } from './PermissionRule.js'
 import { createReadRuleSuggestion } from './PermissionUpdate.js'
 import type { PermissionUpdate } from './PermissionUpdateSchema.js'
-import { getRuleByContentsForToolName } from './permissions.js'
+import { getAllowRules, getAskRules, getDenyRules } from './permissions.js'
 
 declare const MACRO: { VERSION: string }
 
@@ -956,15 +956,36 @@ function getPatternsByRoot(
     }
   })()
 
-  const rules = getRuleByContentsForToolName(
-    toolPermissionContext,
-    toolName,
-    behavior,
-  )
-  // Resolve rules relative to path based on source
+  const allRules = (() => {
+    switch (behavior) {
+      case 'allow':
+        return getAllowRules(toolPermissionContext)
+      case 'deny':
+        return getDenyRules(toolPermissionContext)
+      case 'ask':
+        return getAskRules(toolPermissionContext)
+    }
+  })()
+
+  // Resolve rules relative to path based on source. Iterate the raw rules
+  // rather than getRuleByContentsForToolName's contents-keyed Map: that Map
+  // dedupes by ruleContent alone, so identical rule text from two sources
+  // (e.g. userSettings and projectSettings) would collapse to one rule and
+  // lose its source, but for a leading-`/` pattern the source determines the
+  // root (see patternWithRoot / rootPathForSource) so it must be preserved.
   const patternsByRoot = new Map<string | null, Map<string, PermissionRule>>()
-  for (const [pattern, rule] of rules.entries()) {
-    const { relativePattern, root } = patternWithRoot(pattern, rule.source)
+  for (const rule of allRules) {
+    if (
+      rule.ruleValue.toolName !== toolName ||
+      rule.ruleValue.ruleContent === undefined ||
+      rule.ruleBehavior !== behavior
+    ) {
+      continue
+    }
+    const { relativePattern, root } = patternWithRoot(
+      rule.ruleValue.ruleContent,
+      rule.source,
+    )
     let patternsForRoot = patternsByRoot.get(root)
     if (patternsForRoot === undefined) {
       patternsForRoot = new Map<string, PermissionRule>()

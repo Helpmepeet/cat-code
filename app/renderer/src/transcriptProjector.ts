@@ -2171,7 +2171,9 @@ function projectBatchSystem(
         (metadata.trigger !== 'manual' && metadata.trigger !== 'auto') ||
         typeof metadata.pre_tokens !== 'number'
       ) return false
-      draft.session.compacting = false
+      // Same rule as the single-frame path: a recovered boundary is history
+      // replay, not the live compaction finishing.
+      if (recoveryInsertAt === null) draft.session.compacting = false
       return appendBatchRows(draft, frameId, [{
         id: frameRowId(draft.sessionId, frameId, 'compact-boundary'),
         sessionId: draft.sessionId,
@@ -2676,7 +2678,12 @@ function projectSystemFrame(
       ) {
         return state
       }
-      return appendFrameRows(clearCompacting(state), frameId, [
+      // A recovered boundary is history replay, not the live compaction
+      // finishing: only clear `compacting` for a live frame (`recoveryInsertAt`
+      // non-null here means this frame is recovered, see `appendFrameRows`).
+      const nextState =
+        state.recoveryInsertAt === null ? clearCompacting(state) : state
+      return appendFrameRows(nextState, frameId, [
         {
           id: frameRowId(sessionId, frameId, 'compact-boundary'),
           sessionId,

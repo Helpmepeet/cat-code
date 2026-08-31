@@ -315,6 +315,66 @@ test('buildPluginEntries derives provides, correlates errors, and staged updates
   expect(broken?.error).toContain('broken')
 })
 
+test('buildPluginEntries surfaces an error that never produced a LoadedPlugin', () => {
+  // `pluginLoader.ts` returns `null` before building a `LoadedPlugin` for
+  // several error kinds (`plugin-not-found`, `plugin-cache-miss`, …), so
+  // there is no `loaded` row for `correlatePluginError` to attach to. Before
+  // the fix `buildPluginEntries` mapped `loaded` only and dropped these on
+  // the floor; the plugin should still show up, disabled, carrying the error.
+  const entries = buildPluginEntries({
+    loaded: [],
+    errors: [
+      { type: 'plugin-not-found', source: 'foo@mkt', pluginId: 'foo', marketplace: 'mkt' },
+    ],
+    pending: [],
+    commands: [],
+    agentDefinitions: [],
+  })
+
+  expect(entries).toHaveLength(1)
+  expect(entries[0]).toMatchObject({
+    id: 'foo@mkt',
+    name: 'foo',
+    source: 'foo@mkt',
+    enabled: false,
+    builtin: false,
+    provides: { commands: 0, agents: 0, skills: 0, hooks: 0, mcpServers: 0, lsp: 0 },
+  })
+  expect(entries[0]?.error).toContain('foo')
+  expect(entries[0]?.error).toContain('mkt')
+})
+
+test('buildPluginEntries redacts a credential-bearing URL in an error-only row', () => {
+  // `generic-error.error` is an arbitrary caught-error message that can embed
+  // the URL a fetch/download failed against (`pluginLoader.ts` "Failed to
+  // download/cache plugin …" sites), and — because this error kind returns
+  // `null` before building a `LoadedPlugin` — this error-only row is the ONLY
+  // place that message can end up. `secretGuard` only matches key names, so
+  // the sidecar's own redaction is what has to withhold the credential here.
+  const entries = buildPluginEntries({
+    loaded: [],
+    errors: [
+      {
+        type: 'generic-error',
+        source: 'creds@mkt',
+        plugin: 'creds',
+        error:
+          'Failed to download/cache plugin creds: fetch failed: https://user:sk-live-SECRET@dl.example.com/api/mcp/s/NjQ4YzExMmZha2V0b2tlbg/pkg.zip',
+      },
+    ],
+    pending: [],
+    commands: [],
+    agentDefinitions: [],
+  })
+
+  expect(entries).toHaveLength(1)
+  const message = entries[0]?.error ?? ''
+  expect(message).not.toContain('sk-live-SECRET')
+  expect(message).not.toContain('user:')
+  expect(message).not.toContain('NjQ4YzExMmZha2V0b2tlbg')
+  expect(message).toContain('https://dl.example.com')
+})
+
 /* --------------------------- secret posture --------------------------- */
 
 test('a full extensions frame carries no secret material', () => {

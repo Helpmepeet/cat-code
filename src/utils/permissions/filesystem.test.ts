@@ -3,10 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join, sep } from 'path'
 
+import { getOriginalCwd, setOriginalCwd } from '../../bootstrap/state.js'
 import { getAutoMemPath } from '../../memdir/paths.js'
+import type { ToolPermissionContext } from '../../Tool.js'
 import {
   checkEditableInternalPath,
   checkReadableInternalPath,
+  matchingRuleForInput,
 } from './filesystem.js'
 
 // LIVE-STATE SAFETY: this suite creates a symlink inside the auto-memory
@@ -122,5 +125,70 @@ describe('auto-memory carve-out', () => {
     expect(
       checkReadableInternalPath(linkPath, { file_path: linkPath }).behavior,
     ).toBe('passthrough')
+  })
+})
+
+describe('matchingRuleForInput: identical leading-/ rule text from two sources', () => {
+  // A leading-/ pattern resolves relative to its source's settings root
+  // (rootPathForSource), which differs between userSettings and
+  // projectSettings. If two rules share the same ruleContent text, a
+  // contents-only dedup collapses them to one rule and silently resolves the
+  // dropped rule's pattern against the wrong root.
+  function contextWithDenyRuleInBothScopes(): ToolPermissionContext {
+    return {
+      mode: 'default',
+      additionalWorkingDirectories: new Map(),
+      alwaysAllowRules: {},
+      alwaysDenyRules: {
+        userSettings: ['Read(/x/**)'],
+        projectSettings: ['Read(/x/**)'],
+      },
+      alwaysAskRules: {},
+      isBypassPermissionsModeAvailable: true,
+    }
+  }
+
+  test('denies a read under the user-settings root and keeps the project-settings root working', () => {
+    const userConfigRoot = mkdtempSync(
+      join(tmpdir(), 'catcode-fs-perm-user-'),
+    )
+    const projectRoot = mkdtempSync(join(tmpdir(), 'catcode-fs-perm-proj-'))
+    const savedConfigDirForTest = process.env.CLAUDE_CONFIG_DIR
+    const savedCwd = getOriginalCwd()
+    process.env.CLAUDE_CONFIG_DIR = userConfigRoot
+    setOriginalCwd(projectRoot)
+
+    try {
+      const context = contextWithDenyRuleInBothScopes()
+      const userScopedPath = join(userConfigRoot, 'x', 'secret.txt')
+      const projectScopedPath = join(projectRoot, 'x', 'secret.txt')
+
+      const userRule = matchingRuleForInput(
+        userScopedPath,
+        context,
+        'read',
+        'deny',
+      )
+      expect(userRule).not.toBeNull()
+      expect(userRule?.source).toBe('userSettings')
+
+      const projectRule = matchingRuleForInput(
+        projectScopedPath,
+        context,
+        'read',
+        'deny',
+      )
+      expect(projectRule).not.toBeNull()
+      expect(projectRule?.source).toBe('projectSettings')
+    } finally {
+      if (savedConfigDirForTest === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = savedConfigDirForTest
+      }
+      setOriginalCwd(savedCwd)
+      rmSync(userConfigRoot, { recursive: true, force: true })
+      rmSync(projectRoot, { recursive: true, force: true })
+    }
   })
 })

@@ -165,6 +165,25 @@ export function reduceSessionImagesReplaced(
   return { ...state, [sessionId]: [...attachments] }
 }
 
+/**
+ * Guarded sibling of `reduceSessionImagesReplaced`, shared by every path that
+ * hands a submit's attachments back to the composer (a released pending
+ * submit, a refused submit, a recalled prompt): an EMPTY `images` list means
+ * that submit never carried any, not "clear whatever is attached now".
+ * `reduceSessionImagesReplaced` alone deletes the session's entry on an empty
+ * array, which would erase an attachment the user added to the CURRENT draft
+ * while the submit was parked, in flight, or queued.
+ */
+export function reduceSessionImagesRestored(
+  state: ImageAttachmentState,
+  sessionId: SessionId,
+  images: readonly ImageAttachment[],
+): ImageAttachmentState {
+  return images.length > 0
+    ? reduceSessionImagesReplaced(state, sessionId, images)
+    : state
+}
+
 export function buildSubmitPrompt(
   text: string,
   attachments: readonly ImageAttachment[],

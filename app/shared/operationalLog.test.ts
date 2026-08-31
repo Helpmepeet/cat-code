@@ -268,3 +268,38 @@ test('operational text leaves a relative segment alone', () => {
   // Widening the path rule must not start eating ordinary prose and counters.
   expect(sanitizeOperationalText('and/or read 12/34 frames')).toBe('and/or read 12/34 frames')
 })
+
+// The real CH_RENDERER_FAULT handler (`app/main/main.ts`) always sends exactly
+// this payload for all three renderer fault kinds; a missing table row makes
+// every fault report throw and disappear silently.
+test.each([
+  'renderer.javascript.error',
+  'renderer.promise.unhandled',
+  'renderer.component.failed',
+] as const)('a %s record keeps the renderer fault report closed', event => {
+  const record = createOperationalRecord(
+    { level: 'error', event, process: 'main', fields: { source: 'renderer', reason: 'fault_reported' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(record.fields).toEqual({ source: 'renderer', reason: 'fault_reported' })
+  // A field not on this event's allowlist must still be rejected.
+  expect(() => createOperationalRecord(
+    { level: 'error', event, process: 'main', fields: { source: 'renderer', count: 1 } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field count')
+})
+
+// `exitAfterFatal` (`app/sidecar/index.ts`) writes this exact shape on a failed
+// resume, the fatal twin of `app.fatal` immediately above it in the table.
+test('a session.restore.failed record keeps its resume-failure reason', () => {
+  const record = createOperationalRecord(
+    { level: 'fatal', event: 'session.restore.failed', process: 'sidecar', fields: { reason: 'resume_failure' } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(record.fields.reason).toBe('resume_failure')
+  // A field not on this event's allowlist must still be rejected.
+  expect(() => createOperationalRecord(
+    { level: 'fatal', event: 'session.restore.failed', process: 'sidecar', fields: { reason: 'resume_busy', count: 1 } },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )).toThrow('unsafe field count')
+})
