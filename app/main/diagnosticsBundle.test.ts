@@ -25,10 +25,12 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
   writeFileSync(
     join(logs, 'delivery-trace-launch-1.jsonl'),
     `${JSON.stringify({
-      schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z',
-      monotonicTimestampMs: 1, launchId: 'launch', component: 'engine', processName: 'bun-sidecar',
+      schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z',
+      monotonicTimestampMs: 1, launchId: 'launch', processName: 'electron-main',
       processInstanceId: 'process', sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1,
-      traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+      traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1,
+      frameKind: 'lifecycle', complete: true, flushReason: 'terminal',
+      stages: { 'engine.produced': 0, 'renderer.state.applied': 4 },
     })}\n${JSON.stringify({ recordKind: 'delivery.trace', content: 'must not be exported' })}\n`,
   )
 
@@ -61,21 +63,26 @@ test('diagnostics bundle exports only closed operational and trace schemas', () 
 
 test('second-pass trace parser rejects path-bearing stages and unbounded identifiers', () => {
   const base = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'engine', processName: 'bun-sidecar', processInstanceId: 'process', sessionId: 'session',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
     streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
-    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle',
+    complete: true, flushReason: 'terminal', stages: { 'engine.produced': 0 },
+    sourceProcessInstanceId: 'sidecar',
   }
-  expect(parseDeliveryTraceRecord({ ...base, stage: '/Users/alice/secret' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...base, stages: { '/Users/alice/secret': 0 } })).toBeNull()
   expect(parseDeliveryTraceRecord({ ...base, sessionId: '/var/db/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...base, sourceProcessInstanceId: '/Users/alice/private' })).toBeNull()
 })
 
 test('second-pass trace parser admits only a real frame kind', () => {
   const base = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'engine', processName: 'bun-sidecar', processInstanceId: 'process', sessionId: 'session',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
     streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
-    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle', stage: 'engine.produced',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'lifecycle',
+    complete: true, flushReason: 'terminal', stages: { 'engine.produced': 0 },
+    sourceProcessInstanceId: 'sidecar',
   }
   expect(parseDeliveryTraceRecord(base)).not.toBeNull()
   // An identifier-shaped regex accepted any lowercase token here, so a project
@@ -85,10 +92,11 @@ test('second-pass trace parser admits only a real frame kind', () => {
 
 test('second-pass trace parser keeps a real message kind and admits no other', () => {
   const base = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
     streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
-    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'event', stage: 'host.received',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'event',
+    complete: false, flushReason: 'quiescent', stages: { 'host.received': 0 },
   }
   // An unlisted key is dropped by the whole record, so a field the producer
   // writes but the export schema never learned costs the record its export.
@@ -128,17 +136,39 @@ test('second-pass trace parser validates the sequence-anomaly expectation field'
   expect(parseDeliveryTraceRecord({ ...gap, expectedSequence: '/Users/alice/private' })).toBeNull()
 })
 
-test('second-pass trace parser validates observation kind and anomaly scope', () => {
-  const trace = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'renderer', processName: 'electron-renderer', processInstanceId: 'process', sessionId: 'session',
+test('second-pass trace parser closes the consolidated per-frame record', () => {
+  const frame = {
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
     streamEpoch: '018f0000-0000-4000-8000-000000000001', sequence: 1, traceId: '018f0000-0000-4000-8000-000000000002',
-    deliveryAttempt: 1, replay: false, connectionEpoch: 1, stage: 'renderer.state.applied',
-    observationKind: 'acknowledgement',
+    deliveryAttempt: 1, replay: false, connectionEpoch: 1, frameKind: 'event', messageKind: 'assistant',
+    complete: true, flushReason: 'terminal',
+    stages: { 'engine.produced': 0, 'host.received': 3, 'renderer.state.applied': 9 },
+    rendererProcessInstanceId: 'renderer', rendererProcessStartedAt: '2026-08-06T00:00:00.000Z',
   }
-  expect(parseDeliveryTraceRecord(trace)).not.toBeNull()
-  expect(parseDeliveryTraceRecord({ ...trace, observationKind: 'action' })).toBeNull()
+  expect(parseDeliveryTraceRecord(frame)).not.toBeNull()
+  // A stalled frame is the record this lane exists for, so its shape is closed
+  // as tightly as a finished one: incomplete pairs with a non-terminal reason,
+  // and neither half may stand alone.
+  expect(parseDeliveryTraceRecord({ ...frame, complete: false, flushReason: 'quiescent' })).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, complete: false })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, flushReason: 'quiescent' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, flushReason: 'looked-stuck-to-me' })).toBeNull()
+  // The version bump is what keeps a v1 per-stage record out of a v2 export.
+  expect(parseDeliveryTraceRecord({ ...frame, schemaVersion: 1 })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, stages: {} })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, stages: { 'engine.produced': 0.5 } })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, stages: { 'acme.holdings.migration': 1 } })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, stages: ['engine.produced'] })).toBeNull()
+  // Negative is legal: the sidecar's markers ride FD 3 and can be observed
+  // after a stage that main marked later.
+  expect(parseDeliveryTraceRecord({ ...frame, stages: { 'engine.produced': 0, 'sidecar.received': -2 } })).not.toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, rendererProcessInstanceId: '/Users/alice/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, rendererProcessStartedAt: '/Users/alice/private' })).toBeNull()
+  expect(parseDeliveryTraceRecord({ ...frame, stage: 'engine.produced' })).toBeNull()
+})
 
+test('second-pass trace parser validates anomaly scope', () => {
   const gap = {
     schemaVersion: 1, recordKind: 'trace.sequence.gap', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
     launchId: 'launch', processName: 'electron-main', processInstanceId: 'process', sessionId: 'session',
@@ -307,11 +337,13 @@ test('a rollup reaches the bundle even when per-frame records fill the export bu
   // all newer than the rollup so they are read first. This is the ordinary
   // state of the log directory under load, not a contrived one.
   const frame = (sequence: number) => JSON.stringify({
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:01.000Z',
-    monotonicTimestampMs: 1, launchId: 'launch', component: 'host', processName: 'electron-main',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:01.000Z',
+    monotonicTimestampMs: 1, launchId: 'launch', processName: 'electron-main',
     processInstanceId: 'process', sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
     sequence, traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false,
-    connectionEpoch: 1, frameKind: 'event', messageKind: 'assistant', stage: 'host.received',
+    connectionEpoch: 1, frameKind: 'event', messageKind: 'assistant',
+    complete: true, flushReason: 'terminal',
+    stages: { 'engine.produced': 0, 'host.received': 2, 'renderer.state.applied': 7 },
   })
   for (const index of [1, 2, 3]) {
     const lines: string[] = []
@@ -403,16 +435,20 @@ test('second-pass trace parser closes the quiescence record and its verdict', ()
 
 test('only an unresolved quiescent episode is exported as a stuck session', () => {
   const base = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
     sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
     traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1,
-    frameKind: 'event',
+    frameKind: 'event', complete: true, flushReason: 'terminal',
   }
-  const records = [
-    'engine.produced', 'host.received', 'main.ipc.sent', 'preload.received',
-    'renderer.state.applied',
-  ].map(stage => ({ ...base, sequence: 1, stage }))
+  const records = [{
+    ...base,
+    sequence: 1,
+    stages: {
+      'engine.produced': 0, 'host.received': 1, 'main.ipc.sent': 2, 'preload.received': 3,
+      'renderer.state.applied': 4,
+    },
+  }]
   expect(deriveStuckSessionSummaries(records)).toEqual([])
 
   const quiet = {
@@ -431,7 +467,7 @@ test('only an unresolved quiescent episode is exported as a stuck session', () =
     ...base,
     wallTimestamp: '2026-08-06T00:07:00.000Z',
     sequence: 2,
-    stage: 'renderer.state.applied',
+    stages: { 'renderer.state.applied': 0 },
     messageKind: 'result',
   }
   expect(deriveStuckSessionSummaries([...records, quiet, result])).toEqual([])
@@ -439,18 +475,33 @@ test('only an unresolved quiescent episode is exported as a stuck session', () =
 
 test('a host-only session title is not a downstream hole in an exported stuck summary', () => {
   const base = {
-    schemaVersion: 1, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
-    launchId: 'launch', component: 'host', processName: 'electron-main', processInstanceId: 'process',
+    schemaVersion: 2, recordKind: 'delivery.trace', wallTimestamp: '2026-08-06T00:00:00.000Z', monotonicTimestampMs: 1,
+    launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',
     sessionId: 'session', streamEpoch: '018f0000-0000-4000-8000-000000000001',
     traceId: '018f0000-0000-4000-8000-000000000002', deliveryAttempt: 1, replay: false, connectionEpoch: 1,
+    complete: true, flushReason: 'terminal',
   }
-  const title = [
-    'engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received',
-  ].map(stage => ({ ...base, sequence: 1, stage, frameKind: 'session-title' }))
-  const assistant = [
-    'engine.produced', 'sidecar.socket.sent', 'supervisor.socket.received', 'host.received',
-    'main.ipc.sent', 'preload.received', 'renderer.state.applied',
-  ].map(stage => ({ ...base, sequence: 2, stage, frameKind: 'event', messageKind: 'assistant' }))
+  // A title frame terminates in main by design, so its one record stops at
+  // `host.received` and the downstream watermarks must not read that as a hole.
+  const title = [{
+    ...base,
+    sequence: 1,
+    frameKind: 'session-title',
+    stages: {
+      'engine.produced': 0, 'sidecar.socket.sent': 1, 'supervisor.socket.received': 2,
+      'host.received': 3,
+    },
+  }]
+  const assistant = [{
+    ...base,
+    sequence: 2,
+    frameKind: 'event',
+    messageKind: 'assistant',
+    stages: {
+      'engine.produced': 0, 'sidecar.socket.sent': 1, 'supervisor.socket.received': 2,
+      'host.received': 3, 'main.ipc.sent': 4, 'preload.received': 5, 'renderer.state.applied': 6,
+    },
+  }]
   const quiet = {
     schemaVersion: 1, recordKind: 'trace.stream.quiescent', wallTimestamp: '2026-08-06T00:06:00.000Z',
     monotonicTimestampMs: 360_000, launchId: 'launch', processName: 'electron-main', processInstanceId: 'process',

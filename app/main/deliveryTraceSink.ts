@@ -10,6 +10,8 @@ import {
   deliveryAnomalyScope,
   deliveryObservationKind,
   isDeliveryMessageKind,
+  DELIVERY_TRACE_SCHEMA_VERSION,
+  type DeliveryFrameFlushReason,
   type DeliveryMessageKind,
   type DeliveryStage,
   type DeliveryTrace,
@@ -23,11 +25,13 @@ export const MAX_DELIVERY_TRACE_FILES = 6
 export const MAX_DELIVERY_TRACE_AGE_MS = 72 * 60 * 60 * 1000
 /**
  * The rollup lane's own files, and the whole reason it is a lane at all. Per-frame
- * detail costs ~8.1 KB per frame and burns 9.85 MB/min under load, so the 100 MB
- * per-frame budget holds about ten minutes of history exactly when the app is busy
+ * detail cost ~8.1 KB per frame and burned 9.85 MB/min under load, so the 100 MB
+ * per-frame budget held about ten minutes of history exactly when the app was busy
  * (measured 2026-08-10, `docs/reports/2026-08-10-delivery-trace-retention-measurement.md`).
- * A summary sharing those files would be destroyed by the same pressure it exists
- * to outlive. These caps are sized for the 72h age cap instead: 630 B per record
+ * Consolidating the twelve stage records into one measured 1,179 B per frame,
+ * which is about 75 minutes in the same budget: longer, still not an overnight
+ * hang. A summary sharing those files would be destroyed by the same pressure it
+ * exists to outlive. These caps are sized for the 72h age cap instead: 630 B per record
  * measured against real identifier lengths, one per stream per minute at most, so
  * the whole three days of one continuously active stream is 2.7 MB. Concurrent
  * active streams divide that, since the cap is a total across all of them.
@@ -158,6 +162,30 @@ export type DeliveryTraceSink = {
   close(): void
 }
 
+/**
+ * One frame's record while its stages are still arriving. The per-stage records
+ * this replaces re-serialized six identical 38-byte identifiers twelve times per
+ * frame, so the accumulator holds them once and the record carries the stage
+ * timestamps as offsets from the first stage observed.
+ */
+type PendingFrame = {
+  sequence: number
+  trace: DeliveryTrace
+  /** The first observed stage's wall clock, and the record's own timestamp. */
+  wallTimestamp: string
+  wallMs: number
+  monotonicTimestampMs: number
+  /** Stage to wall-clock offset in ms, in observation order. Negative is legal:
+   * the sidecar's markers ride FD 3 and can land after a later stage's mark. */
+  offsets: Map<string, number>
+  documentId?: string
+  subscriptionEpoch?: number
+  sourceProcessInstanceId?: string
+  sourceProcessStartedAt?: string
+  rendererProcessInstanceId?: string
+  rendererProcessStartedAt?: string
+}
+
 type StreamState = {
   sessionId: string
   streamEpoch: string
@@ -165,6 +193,8 @@ type StreamState = {
   frameKinds: Map<number, string>
   messageKinds: Map<number, DeliveryMessageKind>
   stages: Map<number, Set<string>>
+  /** Keyed `sequence:deliveryAttempt`, so a replay accumulates on its own. */
+  pending: Map<string, PendingFrame>
   highestByStage: Map<string, number>
   watermarks: DeliveryWatermarks
   losses: number
@@ -399,6 +429,7 @@ export function createDeliveryTraceSink({
         frameKinds: new Map(),
         messageKinds: new Map(),
         stages: new Map(),
+        pending: new Map(),
         highestByStage: new Map(),
         watermarks: {
           produced: 0, socketSent: 0, socketReceived: 0, hostReceived: 0, ipcSent: 0,
@@ -419,6 +450,64 @@ export function createDeliveryTraceSink({
       streams.set(key, state)
     }
     return state
+  }
+
+  /**
+   * Write one frame's single record and forget the accumulator. EVERY exit runs
+   * through here — terminal stage, quiescence, eviction, shutdown — because the
+   * shape this lane exists to record is a frame that STOPS, and a design that
+   * wrote only frames reaching their last stage would delete exactly the
+   * evidence a hang leaves behind.
+   */
+  const flushFrame = (
+    state: StreamState, key: string, pending: PendingFrame, reason: DeliveryFrameFlushReason,
+  ): void => {
+    state.pending.delete(key)
+    const { trace, sequence } = pending
+    const frameKind = state.frameKinds.get(sequence)
+    const messageKind = state.messageKinds.get(sequence)
+    write({
+      schemaVersion: DELIVERY_TRACE_SCHEMA_VERSION,
+      recordKind: 'delivery.trace',
+      wallTimestamp: pending.wallTimestamp,
+      monotonicTimestampMs: pending.monotonicTimestampMs,
+      launchId,
+      processName: 'electron-main',
+      processInstanceId,
+      sessionId: state.sessionId,
+      streamEpoch: trace.streamEpoch,
+      sequence,
+      traceId: trace.traceId,
+      deliveryAttempt: trace.deliveryAttempt,
+      replay: trace.replay,
+      connectionEpoch: trace.connectionEpoch,
+      ...(frameKind ? { frameKind } : {}),
+      ...(messageKind ? { messageKind } : {}),
+      ...(pending.documentId ? { documentId: pending.documentId } : {}),
+      ...(pending.subscriptionEpoch === undefined ? {} : { subscriptionEpoch: pending.subscriptionEpoch }),
+      // The field a reader checks first: false is a frame that stopped partway,
+      // and `flushReason` says which silence ended the wait for it.
+      complete: reason === 'terminal',
+      flushReason: reason,
+      stages: Object.fromEntries(pending.offsets),
+      // Kept because the per-stage records carried them and the bundle builds
+      // its process inventory from them: a renderer instance appears in no
+      // other lane.
+      ...(pending.sourceProcessInstanceId ? { sourceProcessInstanceId: pending.sourceProcessInstanceId } : {}),
+      ...(pending.sourceProcessStartedAt ? { sourceProcessStartedAt: pending.sourceProcessStartedAt } : {}),
+      ...(pending.rendererProcessInstanceId ? { rendererProcessInstanceId: pending.rendererProcessInstanceId } : {}),
+      ...(pending.rendererProcessStartedAt ? { rendererProcessStartedAt: pending.rendererProcessStartedAt } : {}),
+    }, sequence, { state, sessionId: state.sessionId, streamEpoch: trace.streamEpoch })
+  }
+
+  /** Deleting the current entry mid-iteration is defined; the rest still run. */
+  const flushPendingFrames = (
+    state: StreamState, reason: DeliveryFrameFlushReason, sequence?: number,
+  ): void => {
+    for (const [key, pending] of state.pending) {
+      if (sequence !== undefined && pending.sequence !== sequence) continue
+      flushFrame(state, key, pending, reason)
+    }
   }
 
   const appendAnomaly = (
@@ -452,9 +541,14 @@ export function createDeliveryTraceSink({
   const sweepQuiescentStreams = (): void => {
     const nowMs = monotonicNow()
     for (const [key, state] of streams) {
-      if (state.quiescenceReported) continue
       const quiet = nowMs - state.lastMarkedAtMs
       if (quiet < quietMs) continue
+      // A frame still waiting on a stage when its stream fell silent IS the
+      // stall. Flushed before the latch below, and unaffected by it: the next
+      // mark on this stream starts new accumulators, so a repeated sweep has
+      // nothing left to write.
+      flushPendingFrames(state, 'quiescent')
+      if (state.quiescenceReported) continue
       // Latch either way: a stream that is quiet by design costs one evaluation
       // per episode rather than one per sweep, and the next mark clears it.
       state.quiescenceReported = true
@@ -559,7 +653,8 @@ export function createDeliveryTraceSink({
       state.highestSequence = Math.max(state.highestSequence, trace.sequence)
       const seenStages = state.stages.get(trace.sequence) ?? new Set<string>()
       const stageKey = `${trace.deliveryAttempt}:${stage}`
-      if (seenStages.has(stageKey)) {
+      const duplicateStage = seenStages.has(stageKey)
+      if (duplicateStage) {
         appendAnomaly(state, sessionId, trace, stage, 'trace.sequence.duplicate')
       }
       seenStages.add(stageKey)
@@ -606,36 +701,57 @@ export function createDeliveryTraceSink({
 
       const component = componentFor(stage)
       const sourceStage = component === 'engine' || component === 'sidecar'
-      write({
-        schemaVersion: 1,
-        recordKind: 'delivery.trace',
-        wallTimestamp: stageWallTimestamp ?? (sourceStage ? trace.sourceWallTimestamp : now().toISOString()),
-        monotonicTimestampMs: stageMonotonicTimestampMs ?? (sourceStage ? trace.sourceMonotonicTimestampMs : monotonicNow()),
-        launchId,
-        component,
-        processName: sourceStage ? 'bun-sidecar' : component === 'preload' || component === 'renderer' ? 'electron-renderer' : 'electron-main',
-        processInstanceId: stageInstanceId ?? (sourceStage ? trace.sourceProcessInstanceId : processInstanceId),
-        ...(stageStartedAt ? { processStartedAt: stageStartedAt } : {}),
-        sessionId,
-        streamEpoch: trace.streamEpoch,
-        sequence: trace.sequence,
-        traceId: trace.traceId,
-        deliveryAttempt: trace.deliveryAttempt,
-        replay: trace.replay,
-        connectionEpoch: trace.connectionEpoch,
-        stage,
-        observationKind: deliveryObservationKind(stage),
-        ...(state.frameKinds.get(trace.sequence) ? { frameKind: state.frameKinds.get(trace.sequence) } : {}),
-        ...(state.messageKinds.get(trace.sequence) ? { messageKind: state.messageKinds.get(trace.sequence) } : {}),
-        ...(documentId ? { documentId } : {}),
-        ...(subscriptionEpoch === undefined ? {} : { subscriptionEpoch }),
-      }, trace.sequence, { state, sessionId, streamEpoch: trace.streamEpoch })
-      trimState(state, sessionId, trace.streamEpoch, trace.sequence, noteLoss)
+      const stageWall = stageWallTimestamp ?? (sourceStage ? trace.sourceWallTimestamp : now().toISOString())
+      const stageMonotonic = stageMonotonicTimestampMs ?? (sourceStage ? trace.sourceMonotonicTimestampMs : monotonicNow())
+      const stageWallMs = Date.parse(stageWall)
+      const pendingKey = `${trace.sequence}:${trace.deliveryAttempt}`
+      let pending = state.pending.get(pendingKey)
+      // A stage observed AFTER this frame's record was written reopens the
+      // accumulator, so late evidence is kept rather than dropped: in practice
+      // that is `renderer.ui.committed`, which follows `renderer.state.applied`
+      // for the active session alone and appeared zero times across 144k real
+      // records. A repeat of a stage already recorded reopens nothing, which is
+      // what bounds a frame at one record per distinct stage instead of one per
+      // acknowledgement the renderer resends.
+      if (pending || !duplicateStage) {
+        if (!pending) {
+          pending = {
+            sequence: trace.sequence,
+            trace,
+            wallTimestamp: stageWall,
+            wallMs: Number.isFinite(stageWallMs) ? stageWallMs : 0,
+            monotonicTimestampMs: stageMonotonic,
+            offsets: new Map(),
+          }
+          state.pending.set(pendingKey, pending)
+        }
+        pending.offsets.set(stage, Number.isFinite(stageWallMs) ? Math.round(stageWallMs - pending.wallMs) : 0)
+        if (documentId) pending.documentId = documentId
+        if (subscriptionEpoch !== undefined) pending.subscriptionEpoch = subscriptionEpoch
+        // Per-stage process identity, kept once per process rather than once per
+        // stage: the sidecar owns the source stages and the renderer document
+        // owns the acknowledgements, and main is the writer of the record.
+        if (sourceStage) {
+          if (stageInstanceId) pending.sourceProcessInstanceId = stageInstanceId
+          if (stageStartedAt) pending.sourceProcessStartedAt = stageStartedAt
+        } else if (component === 'preload' || component === 'renderer') {
+          if (stageInstanceId) pending.rendererProcessInstanceId = stageInstanceId
+          if (stageStartedAt) pending.rendererProcessStartedAt = stageStartedAt
+        }
+        if (isTerminalStage(stage, state.frameKinds.get(trace.sequence))) {
+          flushFrame(state, pendingKey, pending, stage === 'attachment.buffered' ? 'buffered' : 'terminal')
+        }
+      }
+      trimState(state, sessionId, trace.streamEpoch, trace.sequence, noteLoss, flushPendingFrames)
       if (streams.size > MAX_DELIVERY_TRACE_STREAMS) {
         const oldest = [...streams.entries()].sort((a, b) => a[1].lastTouched - b[1].lastTouched)[0]
         if (oldest && oldest[0] !== `${sessionId}\u0000${trace.streamEpoch}`) {
           const [oldSession, oldEpoch] = oldest[0].split('\u0000')
           const sequence = Math.max(...oldest[1].traces.keys(), 1)
+          // Before the eviction, not after: the frames this stream was still
+          // waiting on are the ones a stall investigation opens, and this is the
+          // last moment they can be written at all.
+          flushPendingFrames(oldest[1], 'evicted')
           noteLoss(sequence, 'stream_evicted', { state: oldest[1], sessionId: oldSession!, streamEpoch: oldEpoch! })
           streams.delete(oldest[0])
         }
@@ -693,6 +809,10 @@ export function createDeliveryTraceSink({
       // stream that had already gone quiet. The per-episode latch keeps this
       // from double-reporting one that the interval already named.
       sweepQuiescentStreams()
+      // Whatever the sweep did not reach: a frame mid-flight at quit is still a
+      // frame whose record has to exist, and this is its last chance to be
+      // written. The sweep already emptied the streams it found quiet.
+      for (const state of streams.values()) flushPendingFrames(state, 'shutdown')
       // After the sweep, so the last rollup carries the quiescence it just
       // counted; suppressed when the interval already reported this state.
       emitStreamRollups()
@@ -762,15 +882,36 @@ function trimState(
   streamEpoch: string,
   sequence: number,
   noteLoss: (sequence: number, reason: string, attribution?: { state: StreamState; sessionId: string; streamEpoch: string }) => void,
+  flushPendingFrames: (state: StreamState, reason: DeliveryFrameFlushReason, sequence?: number) => void,
 ): void {
   while (state.traces.size > MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM) {
     const oldest = Math.min(...state.traces.keys())
+    // The record for a frame that never reached a terminal stage is written
+    // here or nowhere: past this line its stages are gone from memory.
+    flushPendingFrames(state, 'evicted', oldest)
     state.traces.delete(oldest)
     state.frameKinds.delete(oldest)
     state.messageKinds.delete(oldest)
     state.stages.delete(oldest)
     noteLoss(oldest, 'in_memory_eviction', { state, sessionId, streamEpoch })
   }
+}
+
+/**
+ * The stage after which nothing more is expected for this frame, so its one
+ * record can be written. `renderer.ui.committed` is sent only for the active
+ * session once its projection is terminal, so waiting for it would leave every
+ * ordinary frame pending until a sweep; `renderer.state.applied` is the last hop
+ * every delivered frame reaches. A `session-title` frame terminates in main by
+ * design (host persists it and publishes a HostEvent instead of forwarding it),
+ * and a buffered frame is held by the attachment gate until a replay mints it a
+ * new delivery attempt, which accumulates on its own.
+ */
+function isTerminalStage(stage: DeliveryStage, frameKind: string | undefined): boolean {
+  if (frameKind === 'session-title') return stage === 'host.received'
+  return stage === 'renderer.state.applied' ||
+    stage === 'renderer.ui.committed' ||
+    stage === 'attachment.buffered'
 }
 
 function componentFor(stage: DeliveryStage): DeliveryComponent {

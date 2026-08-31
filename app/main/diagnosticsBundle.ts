@@ -20,9 +20,12 @@ import {
 import {
   deliveryAnomalyScope,
   deliveryObservationKind,
+  isDeliveryFrameFlushReason,
   isDeliveryMessageKind,
   isDeliveryStage,
   isSafeDeliveryIdentifier,
+  DELIVERY_STAGES,
+  DELIVERY_TRACE_SCHEMA_VERSION,
 } from '../shared/deliveryTrace.js'
 import { isServerFrameKind } from '../shared/protocol.js'
 import {
@@ -56,7 +59,11 @@ const MAX_FILE_BYTES = 512 * 1024
  */
 const MAX_BUNDLE_ROLLUP_BYTES = 256 * 1024
 
-type TraceRecord = Record<string, string | number | boolean>
+/**
+ * `stages` is the one non-scalar: a per-frame record carries its stage
+ * timestamps as an object of offsets, which is what replaced twelve records.
+ */
+type TraceRecord = Record<string, string | number | boolean | Record<string, number>>
 
 export function buildDiagnosticsBundle({
   logsDirectory,
@@ -177,7 +184,7 @@ export function buildDiagnosticsBundle({
       os: { platform: process.platform, arch: process.arch, release: bounded(osRelease()) },
       runtime: { node: bounded(process.versions.node), electron: bounded(process.versions.electron ?? 'unavailable') },
       configuration: { packaged },
-      schemas: { operational: 1, deliveryTrace: 1, deliveryRollup: 1 },
+      schemas: { operational: 1, deliveryTrace: DELIVERY_TRACE_SCHEMA_VERSION, deliveryRollup: 1 },
       limits: {
         operational: { recordBytes: MAX_OPERATIONAL_RECORD_BYTES, fileBytes: MAX_OPERATIONAL_LOG_BYTES, totalBytes: MAX_OPERATIONAL_LOG_TOTAL_BYTES, files: MAX_OPERATIONAL_LOG_FILES, ageMs: MAX_OPERATIONAL_LOG_AGE_MS },
         deliveryTrace: { recordBytes: MAX_DELIVERY_TRACE_RECORD_BYTES, fileBytes: MAX_DELIVERY_TRACE_FILE_BYTES, totalBytes: MAX_DELIVERY_TRACE_TOTAL_BYTES, files: MAX_DELIVERY_TRACE_FILES, ageMs: MAX_DELIVERY_TRACE_AGE_MS },
@@ -218,11 +225,17 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
   const item = value as Record<string, unknown>
   const kind = item.recordKind
   const allowedByKind: Record<string, readonly string[]> = {
+    // One record per frame sequence since schema 2, carrying the stage
+    // timestamps the twelve per-stage records used to carry one at a time.
+    // `component`, `stage` and `observationKind` are gone with them: a
+    // consolidated record spans every component the frame reached.
     'delivery.trace': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
-      'component', 'processName', 'processInstanceId', 'sessionId', 'streamEpoch',
-      'sequence', 'traceId', 'deliveryAttempt', 'replay', 'stage', 'documentId', 'subscriptionEpoch',
-      'connectionEpoch', 'frameKind', 'messageKind', 'processStartedAt', 'observationKind',
+      'processName', 'processInstanceId', 'sessionId', 'streamEpoch',
+      'sequence', 'traceId', 'deliveryAttempt', 'replay', 'documentId', 'subscriptionEpoch',
+      'connectionEpoch', 'frameKind', 'messageKind', 'complete', 'flushReason', 'stages',
+      'sourceProcessInstanceId', 'sourceProcessStartedAt',
+      'rendererProcessInstanceId', 'rendererProcessStartedAt',
     ],
     'trace.loss': [
       'schemaVersion', 'recordKind', 'wallTimestamp', 'monotonicTimestampMs', 'launchId',
@@ -281,31 +294,38 @@ export function parseDeliveryTraceRecord(value: unknown): TraceRecord | null {
   // record, so the identifier grammar belongs here rather than only on the
   // delivery.trace branch: an anomaly record carrying a path in its
   // processInstanceId would otherwise be exported unchanged.
+  // Only the per-frame record's shape moved to 2; the anomaly and rollup
+  // records are unchanged, so admitting them at 1 is the fact, not a fallback.
   if (
-    item.schemaVersion !== 1 || typeof item.wallTimestamp !== 'string' || Number.isNaN(Date.parse(item.wallTimestamp)) ||
+    item.schemaVersion !== (kind === 'delivery.trace' ? DELIVERY_TRACE_SCHEMA_VERSION : 1) ||
+    typeof item.wallTimestamp !== 'string' || Number.isNaN(Date.parse(item.wallTimestamp)) ||
     typeof item.monotonicTimestampMs !== 'number' || !Number.isFinite(item.monotonicTimestampMs) || item.monotonicTimestampMs < 0 ||
     !opaqueId(item.launchId) || !opaqueId(item.processInstanceId) ||
     !['bun-sidecar', 'electron-main', 'electron-renderer'].includes(item.processName as string)
   ) return null
   if (kind === 'delivery.trace') {
     if (
-      !['engine', 'sidecar', 'supervisor', 'host', 'attachment-gate', 'ipc-bridge', 'preload', 'renderer'].includes(item.component as string) ||
-      !['bun-sidecar', 'electron-main', 'electron-renderer'].includes(item.processName as string) ||
-      !opaqueId(item.launchId) || !opaqueId(item.processInstanceId) ||
+      // Main writes every consolidated record: the frame's own processes are
+      // named by the two optional identifier fields below.
+      item.processName !== 'electron-main' ||
       !opaqueId(item.sessionId) || !isSafeDeliveryIdentifier(item.streamEpoch) ||
       !positiveInteger(item.sequence) || !isSafeDeliveryIdentifier(item.traceId) ||
-      !positiveInteger(item.deliveryAttempt) || typeof item.replay !== 'boolean' || typeof item.stage !== 'string' ||
-      !isDeliveryStage(item.stage) ||
+      !positiveInteger(item.deliveryAttempt) || typeof item.replay !== 'boolean' ||
       !positiveInteger(item.connectionEpoch) ||
+      !isStageOffsets(item.stages) ||
+      typeof item.complete !== 'boolean' || !isDeliveryFrameFlushReason(item.flushReason) ||
+      // A record is complete exactly when it was written at the frame's terminal
+      // stage. Either without the other is a producer bug, and exporting it
+      // would call a frame that stopped a frame that finished.
+      item.complete !== (item.flushReason === 'terminal') ||
       (item.frameKind !== undefined && !isServerFrameKind(item.frameKind)) ||
       (item.messageKind !== undefined && !isDeliveryMessageKind(item.messageKind)) ||
-      (item.processStartedAt !== undefined && (typeof item.processStartedAt !== 'string' || Number.isNaN(Date.parse(item.processStartedAt)))) ||
       (item.documentId !== undefined && !opaqueId(item.documentId)) ||
       (item.subscriptionEpoch !== undefined && !positiveInteger(item.subscriptionEpoch)) ||
-      (
-        item.observationKind !== undefined &&
-        item.observationKind !== deliveryObservationKind(item.stage)
-      )
+      (item.sourceProcessInstanceId !== undefined && !opaqueId(item.sourceProcessInstanceId)) ||
+      (item.rendererProcessInstanceId !== undefined && !opaqueId(item.rendererProcessInstanceId)) ||
+      !isOptionalTimestamp(item.sourceProcessStartedAt) ||
+      !isOptionalTimestamp(item.rendererProcessStartedAt)
     ) return null
   } else if (kind === 'trace.loss') {
     if (
@@ -581,30 +601,40 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
       continue
     }
     const sequence = record.sequence as number
+    const offsets = record.stages && typeof record.stages === 'object' && !Array.isArray(record.stages)
+      ? record.stages as Record<string, number>
+      : {}
     const coverage = state.coverage.get(sequence) ?? new Set<string>()
-    coverage.add(record.stage as string)
+    for (const stage of Object.keys(offsets)) coverage.add(stage)
     state.coverage.set(sequence, coverage)
     if (typeof record.frameKind === 'string') state.frameKinds.set(sequence, record.frameKind)
+    // The record is stamped at the frame's FIRST stage, so the frame's last
+    // observation is that stamp plus its furthest offset. Comparing the stamp
+    // alone would date a frame by when it entered the pipeline, and the stuck
+    // filter below is a comparison against the quiescence record's own time.
+    const lastObservation = lastStageWallTimestamp(record.wallTimestamp, offsets)
     if (
-      typeof record.wallTimestamp === 'string' &&
-      (state.latestDeliveryAt === null || record.wallTimestamp > state.latestDeliveryAt)
+      lastObservation !== null &&
+      (state.latestDeliveryAt === null || lastObservation > state.latestDeliveryAt)
     ) {
-      state.latestDeliveryAt = record.wallTimestamp
+      state.latestDeliveryAt = lastObservation
     }
-    switch (record.stage) {
-      case 'engine.produced':
-        if (sequence >= state.produced) {
-          state.produced = sequence
-          state.lastProducedFrameKind = typeof record.frameKind === 'string' ? record.frameKind : null
-        }
-        break
-      case 'sidecar.socket.sent': state.socketSent = Math.max(state.socketSent, sequence); break
-      case 'host.received': state.hostReceived = Math.max(state.hostReceived, sequence); break
-      case 'main.ipc.sent': state.ipcSent = Math.max(state.ipcSent, sequence); break
-      case 'preload.received':
-      case 'renderer.subscription.received': state.preloadReceived = Math.max(state.preloadReceived, sequence); break
-      case 'renderer.state.applied': state.applied = Math.max(state.applied, sequence); break
-      case 'renderer.ui.committed': state.committed = Math.max(state.committed, sequence); break
+    for (const stage of Object.keys(offsets)) {
+      switch (stage) {
+        case 'engine.produced':
+          if (sequence >= state.produced) {
+            state.produced = sequence
+            state.lastProducedFrameKind = typeof record.frameKind === 'string' ? record.frameKind : null
+          }
+          break
+        case 'sidecar.socket.sent': state.socketSent = Math.max(state.socketSent, sequence); break
+        case 'host.received': state.hostReceived = Math.max(state.hostReceived, sequence); break
+        case 'main.ipc.sent': state.ipcSent = Math.max(state.ipcSent, sequence); break
+        case 'preload.received':
+        case 'renderer.subscription.received': state.preloadReceived = Math.max(state.preloadReceived, sequence); break
+        case 'renderer.state.applied': state.applied = Math.max(state.applied, sequence); break
+        case 'renderer.ui.committed': state.committed = Math.max(state.committed, sequence); break
+      }
     }
     sessions.set(key, state)
   }
@@ -626,6 +656,14 @@ export function deriveStuckSessionSummaries(records: readonly TraceRecord[]): Ar
           ? 'unknown'
           : state.latestQuiescence!.stage ?? 'unknown',
     }))
+}
+
+function lastStageWallTimestamp(wallTimestamp: unknown, offsets: Record<string, number>): string | null {
+  if (typeof wallTimestamp !== 'string') return null
+  const base = Date.parse(wallTimestamp)
+  if (Number.isNaN(base)) return null
+  const furthest = Object.values(offsets).filter(offset => Number.isFinite(offset))
+  return new Date(base + Math.max(0, ...furthest)).toISOString()
 }
 
 function withoutDerivedState<T extends {
@@ -709,17 +747,27 @@ export function deriveProcessInstances(
     })
   }
   for (const record of traceRecords) {
-    const id = record.processInstanceId
-    if (typeof id !== 'string' || processes.has(id)) continue
-    processes.set(id, {
-      processInstanceId: id,
-      role: typeof record.processName === 'string' ? record.processName : 'unknown',
-      pid: null,
-      startedAt: typeof record.processStartedAt === 'string' ? record.processStartedAt : null,
-      lastObservedAt: typeof record.wallTimestamp === 'string' ? record.wallTimestamp : null,
-      lastEvent: 'delivery.trace',
-      status: 'observed',
-    })
+    // Three identities per consolidated record, not one: the writer, plus the
+    // sidecar and renderer instances the frame passed through. Those two used to
+    // arrive as the `processInstanceId` of their own stage records, and a
+    // renderer instance is named in no other lane at all.
+    const observed: Array<[unknown, string, unknown]> = [
+      [record.processInstanceId, typeof record.processName === 'string' ? record.processName : 'unknown', undefined],
+      [record.sourceProcessInstanceId, 'bun-sidecar', record.sourceProcessStartedAt],
+      [record.rendererProcessInstanceId, 'electron-renderer', record.rendererProcessStartedAt],
+    ]
+    for (const [id, role, startedAt] of observed) {
+      if (typeof id !== 'string' || processes.has(id)) continue
+      processes.set(id, {
+        processInstanceId: id,
+        role,
+        pid: null,
+        startedAt: typeof startedAt === 'string' ? startedAt : null,
+        lastObservedAt: typeof record.wallTimestamp === 'string' ? record.wallTimestamp : null,
+        lastEvent: 'delivery.trace',
+        status: 'observed',
+      })
+    }
   }
   return [...processes.values()]
 }
@@ -729,6 +777,23 @@ const WATERMARK_FIELDS = [
   'produced', 'socketSent', 'socketReceived', 'hostReceived',
   'ipcSent', 'preloadReceived', 'applied', 'committed',
 ] as const
+
+/**
+ * The stage map a consolidated record carries: closed stage names, and offsets
+ * in whole milliseconds from the record's own `wallTimestamp`. Negative is
+ * legal, because the sidecar's markers ride a lossy descriptor and can be
+ * observed after a later stage's mark.
+ */
+function isStageOffsets(value: unknown): value is Record<string, number> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const entries = Object.entries(value as Record<string, unknown>)
+  if (entries.length < 1 || entries.length > DELIVERY_STAGES.length) return false
+  return entries.every(([stage, offset]) => isDeliveryStage(stage) && Number.isSafeInteger(offset))
+}
+
+function isOptionalTimestamp(value: unknown): boolean {
+  return value === undefined || (typeof value === 'string' && !Number.isNaN(Date.parse(value)))
+}
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0

@@ -33,3 +33,35 @@ describe('Bash prompt commit authority', () => {
     }
   })
 })
+
+describe('Bash prompt git section', () => {
+  test('ships the trimmed bullet form, not the long inline manual', () => {
+    for (const provider of ['anthropic', 'openai'] as const) {
+      const prompt = getBashPrompt(provider)
+
+      expect(prompt).toContain('# Git\n')
+      expect(prompt).toContain(
+        'NEVER skip hooks (--no-verify, --no-gpg-sign) unless explicitly asked',
+      )
+      expect(prompt).toContain(
+        'A failed pre-commit hook means the commit did NOT happen',
+      )
+      expect(prompt).toContain(
+        'NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D)',
+      )
+      expect(prompt).toContain(
+        'Prefer staging specific named paths over `git add -A`',
+      )
+      expect(prompt).toContain(
+        'Interactive git flags (-i, e.g. git rebase -i, git add -i) are not supported',
+      )
+      expect(prompt).toContain('Use the `gh` CLI for GitHub work')
+
+      expect(prompt).not.toContain('Git Safety Protocol')
+      expect(prompt).not.toContain('# Creating pull requests')
+      expect(prompt).not.toContain('# Committing changes with git')
+      expect(prompt).not.toContain('gh pr create')
+      expect(prompt).not.toContain('HEREDOC')
+    }
+  })
+})
