@@ -3253,3 +3253,16 @@ test('CC-84 wiring tripwire: the docked roster click carries its worker id into 
   // No entry point re-introduces the discarding form.
   expect(source).not.toContain('onOpenTasks={() => setTasksOpen(true)}')
 })
+
+test('CC-84 wiring tripwire: a dropped image reaches the existing attach path', () => {
+  // Same layer honesty as above: SSR cannot dispatch a drop. This only asserts
+  // the field is handed the pane's own `attachImage` — the byte-based path ⌘V
+  // and the picker already use — rather than a second, path-authoring one.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain('onAttachImageFile={file => void attachImage(file)}')
+  // `attachImage` reads BYTES (prepareImageAttachment). The renderer never turns
+  // a dropped file into a filesystem path for the engine to read (HC1), and the
+  // only other file source it has is the same picker.
+  expect(source).toContain('onAttachImage(await prepareImageAttachment(file))')
+})

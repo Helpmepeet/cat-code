@@ -5813,6 +5813,11 @@ export function SessionPane({
               disabled={!activeSessionId}
               readOnly={composerReadOnly}
               onFocus={engagePreviewPane}
+              // CC-84 — a Finder drag carries its payload on
+              // `dataTransfer.files`, so the field's text-only drop handler
+              // ignored it. A dropped image goes through the SAME `attachImage`
+              // the ⌘V and picker paths use; other file kinds stay ignored (HC1).
+              onAttachImageFile={file => void attachImage(file)}
               onPointerDown={engagePreviewPane}
               onValueChange={next => {
                 // A genuine keystroke abandons any active ↑/↓ recall cursor

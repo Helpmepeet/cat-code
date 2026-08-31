@@ -32,6 +32,7 @@ import {
   renderComposerDom,
 } from './composerDom.js'
 import { pasteIdAtCaret } from './composerState.js'
+import { selectAttachableImageFile } from './imageAttachment.js'
 import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
 
@@ -51,6 +52,9 @@ type ComposerInputProps = {
   onCompositionEnd: () => void
   onCompositionStart: () => void
   onFocus: () => void
+  /** Attach an image dropped onto the field, through the pane's existing
+   * `attachImage` path. Absent = drops carry text only. */
+  onAttachImageFile?: (file: File) => void
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
@@ -72,6 +76,7 @@ const PREVIEW_CLOSE_MS = 160
 export function ComposerInput({
   ariaLabel,
   disabled,
+  onAttachImageFile,
   onCompositionEnd,
   onCompositionStart,
   onFocus,
@@ -258,10 +263,25 @@ export function ComposerInput({
    * while serialized text matches the draft, so the foreign DOM would sit there
    * visible and unaccounted for. Same rule as paste: take the plain text, place
    * it ourselves, let nothing else in.
+   *
+   * The one exception is a dropped IMAGE. A Finder drag exposes its payload on
+   * `dataTransfer.files` and usually leaves `text/plain` empty, so the early
+   * return below made dragging a screenshot in a silent no-op. Files are checked
+   * first and an image is handed to the SAME byte-based attach path ⌘V uses
+   * (`onAttachImageFile` → `prepareImageAttachment`). Any other dropped file is
+   * still ignored: converting one into a path the engine reads would make the
+   * renderer the author of a filesystem path (HC1).
    */
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     if (!editable) return
+    const image = selectAttachableImageFile(
+      Array.from(event.dataTransfer.files),
+    )
+    if (image) {
+      onAttachImageFile?.(image)
+      return
+    }
     const root = rootRef.current
     if (!root) return
     const text = event.dataTransfer.getData('text')
