@@ -19,6 +19,7 @@ import {
   ipcMain,
   nativeImage,
   nativeTheme,
+  screen,
   session,
   shell,
   type IpcMainEvent,
@@ -80,6 +81,11 @@ import {
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
+import {
+  clampWindowBounds,
+  readWindowBounds,
+  writeWindowBounds,
+} from './windowBounds.js'
 import {
   buildClosedSessionCache,
   deleteCache,
@@ -1308,11 +1314,37 @@ function applySecurityBaseline(): void {
   })
 }
 
+/** The layout-derived floor, named because the restore clamp needs the same two
+ * numbers the `BrowserWindow` does. The derivation is documented at the
+ * `minWidth`/`minHeight` call site below (P4-46). */
+const MIN_WINDOW_WIDTH = 852
+const MIN_WINDOW_HEIGHT = 467
+
+/** CC-84 — how long after the last resize/move the saved bounds are written. A
+ * drag fires these continuously and the write is synchronous, so it is coalesced
+ * to the end of the gesture. A close flushes whatever is pending. */
+const WINDOW_BOUNDS_WRITE_DEBOUNCE_MS = 400
+
 function createWindow(): void {
   const glassEnabled = readGlassPreference(app.getPath('userData'))
+  // CC-84 — reopen where the operator left it. Absent, unreadable or corrupt
+  // saved bounds fall through to the defaults below rather than failing the
+  // launch, and a saved rectangle is fitted to the display it actually lands on
+  // (`clampWindowBounds`), so bounds saved on a display that is no longer
+  // attached still open somewhere reachable. `getDisplayMatching` returns the
+  // primary display when nothing overlaps, which is that case.
+  const savedBounds = readWindowBounds(app.getPath('userData'))
+  const restoredBounds = savedBounds
+    ? clampWindowBounds(
+        savedBounds,
+        screen.getDisplayMatching(savedBounds).workArea,
+        { width: MIN_WINDOW_WIDTH, height: MIN_WINDOW_HEIGHT },
+      )
+    : null
   const window = new BrowserWindow({
-    width: 1100,
-    height: 720,
+    width: restoredBounds?.width ?? 1100,
+    height: restoredBounds?.height ?? 720,
+    ...(restoredBounds ? { x: restoredBounds.x, y: restoredBounds.y } : {}),
     // P4-46 — a floor DERIVED from the layout, not chosen. The renderer has no
     // responsive layer (six `sm:grid-cols-*` uses, nothing else), so the window
     // must not shrink past the widest composition that cannot reflow.
@@ -1337,8 +1369,8 @@ function createWindow(): void {
     // term for the macOS title bar on top of the CSS px below it. `titleBarStyle:
     // 'hiddenInset'` removes that strip: the page now paints to the top of the
     // window, so outer and content height are the same measure again.
-    minWidth: 852,
-    minHeight: 467,
+    minWidth: MIN_WINDOW_WIDTH,
+    minHeight: MIN_WINDOW_HEIGHT,
     // Glass mode remains a renderer-owned view preference, but main keeps a
     // synchronized bounded copy so renderer-free paint gaps use the same native
     // background. A missing or invalid copy fails solid. On first launch after
@@ -1471,10 +1503,40 @@ function createWindow(): void {
   window.on('minimize', () => logWindowVisibility('minimize'))
   window.on('restore', () => logWindowVisibility('restore'))
 
+  // CC-84 — remember the geometry. `getNormalBounds` is the restored rectangle,
+  // so a maximized or full-screen window saves the size it will return to rather
+  // than the screen it currently fills; a minimized one has nothing worth saving.
+  let windowBoundsTimer: ReturnType<typeof setTimeout> | null = null
+  const persistWindowBounds = () => {
+    if (window.isDestroyed() || window.isMinimized()) return
+    writeWindowBounds(app.getPath('userData'), window.getNormalBounds())
+  }
+  const scheduleWindowBoundsSave = () => {
+    if (windowBoundsTimer) clearTimeout(windowBoundsTimer)
+    windowBoundsTimer = setTimeout(() => {
+      windowBoundsTimer = null
+      persistWindowBounds()
+    }, WINDOW_BOUNDS_WRITE_DEBOUNCE_MS)
+  }
+  const cancelWindowBoundsSave = () => {
+    if (!windowBoundsTimer) return
+    clearTimeout(windowBoundsTimer)
+    windowBoundsTimer = null
+  }
+  window.on('resize', scheduleWindowBoundsSave)
+  window.on('move', scheduleWindowBoundsSave)
+  // A quit almost always lands inside the debounce window, so the pending write
+  // is flushed here instead of being dropped with the timer.
+  window.on('close', () => {
+    cancelWindowBoundsSave()
+    persistWindowBounds()
+  })
+
   // Drop the reference the moment the window is gone. Without this, `deliver`
   // and `sendHostEvent` keep addressing a destroyed `webContents` for anything
   // still in flight during teardown.
   window.on('closed', () => {
+    cancelWindowBoundsSave()
     if (mainWindow === window) mainWindow = null
   })
 
