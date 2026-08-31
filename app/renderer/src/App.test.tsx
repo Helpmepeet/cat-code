@@ -3235,3 +3235,21 @@ test('load-earlier wiring tripwire: only an engaged pane can ask, and only its o
   // that reaches one is never going to answer.
   expect(subscribeBody).toContain("type: 'engine-gone',")
 })
+
+test('CC-84 wiring tripwire: the docked roster click carries its worker id into the tasks dialog', () => {
+  // LAYER HONESTY: this suite is SSR-only, so no click can be dispatched here
+  // and no effect runs. What it CAN decide is the shape the bug had: the roster
+  // callback is typed `(agentId?: string) => void`, so the broken
+  // `() => setTasksOpen(true)` typechecked perfectly and silently discarded the
+  // id. Only the source can tell the two apart.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // The roster passes the callback by reference, so the id it raises survives.
+  expect(source).toContain('onOpenTasks={openTasksDialog}')
+  // ...and the dialog is told which worker to open on.
+  expect(source).toContain('focusAgentId={tasksFocusAgentId}')
+  // Closing clears it, so the next ⌘K open is not stuck on a stale worker.
+  expect(source).toContain('onClose={closeTasksDialog}')
+  // No entry point re-introduces the discarding form.
+  expect(source).not.toContain('onOpenTasks={() => setTasksOpen(true)}')
+})

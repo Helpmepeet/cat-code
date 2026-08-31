@@ -839,3 +839,63 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
     expect(html).not.toContain('—')
   }
 })
+
+// CC-84 — the docked roster raised the clicked worker's agentId and App dropped
+// it, so a worker click opened the generic list. The dialog now takes the id and
+// opens on that worker's EXISTING detail panel.
+test('opens on the named worker when the roster click supplies one', () => {
+  const html = renderToStaticMarkup(
+    <TasksDialog
+      agentMode={agentModeSnapshotFixture({
+        workers: [
+          workerFixture(),
+          workerFixture({ agentId: 'agent_b', handle: '@probe', description: 'trace the drop' }),
+        ],
+      })}
+      focusAgentId="agent_b"
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={{ items: [item({ id: 'b1', label: 'bun test app/' })] }}
+    />,
+  )
+
+  // The detail panel for that worker, not the list: its back control is present
+  // and the OTHER worker's row is not rendered beside it.
+  expect(html).toContain('All workers')
+  expect(html).toContain('trace the drop')
+  expect(html).not.toContain('audit the auth path')
+  // The task list is not what opened.
+  expect(html).not.toContain('bun test app/')
+})
+
+test('falls back to the workers list when the named worker is gone', () => {
+  const html = renderToStaticMarkup(
+    <TasksDialog
+      agentMode={agentModeSnapshotFixture({ workers: [workerFixture()] })}
+      focusAgentId="agent_that_finished"
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={null}
+    />,
+  )
+
+  expect(html).not.toContain('All workers')
+  expect(html).toContain('audit the auth path')
+})
+
+test('keeps the task list for entry points that name no worker', () => {
+  const html = renderToStaticMarkup(
+    <TasksDialog
+      agentMode={agentModeSnapshotFixture({ workers: [workerFixture()] })}
+      hasActiveSession={true}
+      onClose={noop}
+      open={true}
+      snapshot={{ items: [item({ id: 'b1', label: 'bun test app/' })] }}
+    />,
+  )
+
+  expect(html).toContain('bun test app/')
+  expect(html).not.toContain('All workers')
+})

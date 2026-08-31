@@ -115,6 +115,7 @@ export function TasksDialog({
   onDismissTask,
   agentMode = null,
   leases = null,
+  focusAgentId = null,
   now,
 }: {
   open: boolean
@@ -140,14 +141,31 @@ export function TasksDialog({
   agentMode?: AgentModeSnapshot | null
   /** P4-32b — the active session's Codex lease snapshot, source of the Leases tab. */
   leases?: LeaseSnapshot | null
+  /**
+   * CC-84 — open ON this worker instead of the task list. Set only when the
+   * docked roster raised a specific `agentId` (`OrchestratorRoster.tsx`); every
+   * other entry point passes null and gets the Tasks tab as before.
+   *
+   * An id that is not in the current snapshot degrades to the Workers LIST, not
+   * to a stale row: `selectWorkerById` already returns null for it, and landing
+   * on the roster the click came from is the honest fallback.
+   */
+  focusAgentId?: string | null
   /** Injected clock for held-duration display; defaults to now at render time. */
   now?: number
 }) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
   const taskListRef = useRef<HTMLDivElement>(null)
-  const [tab, setTab] = useState<DialogTab>('tasks')
-  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null)
+  // CC-84 — the initializers cover the dialog being MOUNTED already open on a
+  // worker; the `open` effect below covers it being opened later, which is the
+  // live app's path (it mounts shut). Both read the same `focusAgentId`.
+  const [tab, setTab] = useState<DialogTab>(() =>
+    open && focusAgentId ? 'workers' : 'tasks',
+  )
+  const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(() =>
+    open ? focusAgentId : null,
+  )
 
   const { active, completed } = useMemo(
     () => groupTaskItems(snapshot),
@@ -165,9 +183,12 @@ export function TasksDialog({
   useEffect(() => {
     if (!open) return
     setSelectedTaskId(flat[0]?.id ?? null)
-    setTab('tasks')
-    setSelectedWorkerId(null)
-  }, [open])
+    // CC-84 — a roster click names the worker it was made on, so the dialog
+    // opens on that worker's detail; `back` from there lands on the Workers
+    // list rather than the Tasks tab, which is where the click came from.
+    setTab(focusAgentId ? 'workers' : 'tasks')
+    setSelectedWorkerId(focusAgentId)
+  }, [open, focusAgentId])
 
   useEffect(() => {
     if (!open) return

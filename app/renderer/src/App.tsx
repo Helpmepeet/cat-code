@@ -919,6 +919,20 @@ export function App() {
     createLeaseState,
   )
   const [tasksOpen, setTasksOpen] = useState(false)
+  // CC-84 — which worker the tasks dialog should open ON, or null for the plain
+  // list. The docked roster raises its `agentId` (`OrchestratorRoster.tsx`
+  // `WorkerRow`) and App used to drop it, so clicking a worker landed on the
+  // generic list. This carries it to the EXISTING P4-32b drilldown; no new
+  // surface, and it is cleared with the dialog.
+  const [tasksFocusAgentId, setTasksFocusAgentId] = useState<string | null>(null)
+  const openTasksDialog = useCallback((agentId?: string) => {
+    setTasksFocusAgentId(agentId ?? null)
+    setTasksOpen(true)
+  }, [])
+  const closeTasksDialog = useCallback(() => {
+    setTasksOpen(false)
+    setTasksFocusAgentId(null)
+  }, [])
   // P4-34 — cosmetic palette recents are derived from real invocations in this
   // renderer lifetime. No disk store: the prompt explicitly forbids inventing
   // persistence for this convenience list.
@@ -3465,7 +3479,7 @@ export function App() {
 	            }}
 	            orchestratorActive={panelOrchestratorActive}
 	            orchestratorWorkers={panelOrchestratorWorkers}
-	            onOpenTasks={() => setTasksOpen(true)}
+	            onOpenTasks={openTasksDialog}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
 		              // the globally-active one), mirroring setPermissionMode's
@@ -3746,7 +3760,7 @@ export function App() {
             closeWorkspacePanelAt(workspaceLayout.activeIndex),
           selectLiveSession: selectTab,
           restoreSession: sessionId => void performRestore(sessionId),
-          openTasks: () => setTasksOpen(true),
+          openTasks: () => openTasksDialog(),
           navigatePage: page => setActiveView(page),
         },
       })
@@ -4422,7 +4436,7 @@ export function App() {
             <TasksStrip
               snapshot={selectTasksSnapshot(tasks, activeSessionId)}
               workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
-              onOpen={() => setTasksOpen(true)}
+              onOpen={() => openTasksDialog()}
             />
           ) : null}
         </div>
@@ -4444,7 +4458,7 @@ export function App() {
         {/* Background tasks dialog (P4-9): ⌘K → "Background tasks" or the strip pill. */}
         <TasksDialog
           open={tasksOpen}
-          onClose={() => setTasksOpen(false)}
+          onClose={closeTasksDialog}
           snapshot={selectTasksSnapshot(tasks, activeSessionId)}
           hasActiveSession={activeSessionId !== null}
           onStopTask={activeSessionId ? sendStopTask : undefined}
@@ -4454,6 +4468,10 @@ export function App() {
            * lease roster (L1). Both are read seams; no verb rides them. */
           agentMode={selectAgentModeSnapshot(orchestrator, activeSessionId)}
           leases={selectLeaseSnapshot(leases, activeSessionId)}
+          /* CC-84 — the worker the docked roster was clicked on, so the dialog
+           * opens on that worker's detail instead of the generic list. Null for
+           * every other entry point (⌘K, the footer pill). */
+          focusAgentId={tasksFocusAgentId}
         />
       </div>
     </AgentFaceRegistryContext.Provider>
