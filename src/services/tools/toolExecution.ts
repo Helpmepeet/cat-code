@@ -1226,6 +1226,15 @@ async function checkPermissionsAndCallTool(
   } else if (processedInput !== backfilledClone) {
     callInput = processedInput
   }
+  // Everything accumulated so far is pre-call: PreToolUse hook output,
+  // hookSpecificOutput.additionalContext, and the PermissionRequest-hook
+  // decision attachment. The catch below returns a freshly built error result,
+  // so it must re-emit this prefix or the user's hook ran for nothing exactly
+  // when the model needs the injected context most. Only the prefix is
+  // carried: messages pushed inside the try may already include a tool_result
+  // for this toolUseID (addToolResult runs before the PostToolUse hooks, which
+  // can throw), and the error path emits its own.
+  const preCallMessageCount = resultingMessages.length
   try {
     const result = await tool.call(
       callInput,
@@ -1740,7 +1749,13 @@ async function checkPermissionsAndCallTool(
       hookMessages.push(hookResult)
     }
 
+    // Pre-call hook messages first, then the error tool_result, then the
+    // PostToolUseFailure output — the same relative order the success path
+    // produces. Aborts are included too: the hook already ran, its context is
+    // real, and the existing code already returns PostToolUseFailure messages
+    // on an interrupt.
     return [
+      ...resultingMessages.slice(0, preCallMessageCount),
       {
         message: createUserMessage({
           content: [
