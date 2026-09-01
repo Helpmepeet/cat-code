@@ -120,6 +120,55 @@ export function createImageAttachmentState(): ImageAttachmentState {
   return {}
 }
 
+/**
+ * A native-picker file selection is an opaque main-issued token, not a path.
+ * Main resolves it into the engine's normal `@` attachment syntax immediately
+ * before forwarding the submit, so the renderer cannot name filesystem targets.
+ */
+export type FileAttachment = {
+  name: string
+  token: string
+}
+
+export type FileAttachmentState = Partial<Record<SessionId, FileAttachment>>
+
+export function createFileAttachmentState(): FileAttachmentState {
+  return {}
+}
+
+export function selectFileAttachment(
+  state: FileAttachmentState,
+  sessionId: SessionId | null,
+): FileAttachment | null {
+  return sessionId ? (state[sessionId] ?? null) : null
+}
+
+export function reduceFileAttachmentSelected(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+  attachment: FileAttachment,
+): FileAttachmentState {
+  return { ...state, [sessionId]: attachment }
+}
+
+export function reduceFileAttachmentRemoved(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+): FileAttachmentState {
+  if (!(sessionId in state)) return state
+  const next = { ...state }
+  delete next[sessionId]
+  return next
+}
+
+export function reduceSessionFileAttachmentRestored(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+  attachment: FileAttachment | null | undefined,
+): FileAttachmentState {
+  return attachment ? reduceFileAttachmentSelected(state, sessionId, attachment) : state
+}
+
 export function selectImageAttachments(
   state: ImageAttachmentState,
   sessionId: SessionId | null,
@@ -779,6 +828,7 @@ export function planSessionSubmit(input: {
 export type PendingSubmit = {
   text: string
   images?: ImageAttachment[]
+  file?: FileAttachment | null
   showQueuedRow: boolean
 }
 export type PendingSubmitState = Record<SessionId, PendingSubmit>
@@ -932,6 +982,7 @@ export type RetainedSubmit = {
   submitId: string
   text: string
   images: ImageAttachment[]
+  file?: FileAttachment | null
 }
 
 /**

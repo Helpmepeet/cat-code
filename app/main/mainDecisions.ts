@@ -22,9 +22,10 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import {
+  type AttachmentFileSelection,
   MAX_LIVE_SESSIONS,
   type SaveTextErrorCode,
   type SessionDescriptor,
@@ -35,6 +36,7 @@ import {
   PROTOCOL_VERSION,
   type ServerFrame,
   type SessionId,
+  type SubmitPrompt,
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
@@ -625,6 +627,71 @@ export function createCwdTokenStore(
       return entry.realpath
     },
   }
+}
+
+export type AttachmentFileTokenStore = {
+  /** Issue a short-lived token for a file the user selected in main. */
+  mint(sessionId: SessionId, realpath: string): AttachmentFileSelection
+  /** Resolve only in the session that owns the selection. */
+  resolve(sessionId: SessionId, token: string): string | undefined
+}
+
+/**
+ * Keeps native-picker file paths out of the renderer. Unlike cwd tokens this is
+ * reusable during its short lifetime, so a rejected queued submit can return to
+ * the composer without requiring the user to choose the same file again.
+ */
+export function createAttachmentFileTokenStore(
+  options: {
+    now?: () => number
+    newToken?: () => string
+    ttlMs?: number
+  } = {},
+): AttachmentFileTokenStore {
+  const now = options.now ?? Date.now
+  const newToken = options.newToken ?? randomUUID
+  const ttlMs = options.ttlMs ?? CWD_TOKEN_TTL_MS
+  const tokens = new Map<
+    string,
+    { sessionId: SessionId; realpath: string; expiresAt: number }
+  >()
+
+  return {
+    mint(sessionId, realpath) {
+      const token = newToken()
+      tokens.set(token, { sessionId, realpath, expiresAt: now() + ttlMs })
+      return { token, name: basename(realpath) }
+    },
+    resolve(sessionId, token) {
+      const entry = tokens.get(token)
+      if (!entry) return undefined
+      if (entry.expiresAt < now()) {
+        tokens.delete(token)
+        return undefined
+      }
+      return entry.sessionId === sessionId ? entry.realpath : undefined
+    },
+  }
+}
+
+/**
+ * Main adds this trusted `@` mention after resolving the opaque native-picker
+ * token. The engine's existing attachment pipeline then performs the bounded
+ * read before the model turn begins.
+ */
+export function appendAttachmentFileMention(
+  prompt: SubmitPrompt,
+  realpath: string,
+): SubmitPrompt {
+  const mention = `@"${realpath}"`
+  if (typeof prompt === 'string') return `${prompt}\n${mention}`
+
+  const textIndex = prompt.findIndex(block => block.type === 'text')
+  if (textIndex < 0) return [...prompt, { type: 'text', text: mention }]
+  return prompt.map((block, index) => {
+    if (index !== textIndex || block.type !== 'text') return block
+    return { type: 'text' as const, text: `${block.text}\n${mention}` }
+  })
 }
 
 /* ------------------------------------------------------------------------- *

@@ -57,6 +57,7 @@ import type {
 // must never merge with `ErrorFrame['code']` (F3 §3). Re-surfaced on the bridge
 // here because the renderer reaches both planes through the one preload.
 import type {
+  AttachmentFileSelection,
   CreateSessionInput,
   HostEvent,
   HostResult,
@@ -3699,6 +3700,10 @@ export type CatCodeBridge = {
     path: string,
     target?: OpenWorkspaceFileTarget,
   ): Promise<boolean>
+  /** Main owns the native chooser and keeps the chosen path private. */
+  pickAttachmentFile(
+    appSessionId: SessionId,
+  ): Promise<AttachmentFileSelection | null>
   /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out
@@ -3825,6 +3830,11 @@ export type CatCodeBridge = {
 export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
+  /**
+   * An opaque main-issued file selection. Main resolves it to an internal
+   * `@` mention and strips this renderer-authored token before the sidecar.
+   */
+  fileAttachmentToken?: string
   /**
    * The renderer's own correlation id for THIS submit, answered exactly once by
    * a {@link SubmitResultFrame} carrying it back. See that frame for why the

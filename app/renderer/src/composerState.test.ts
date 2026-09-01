@@ -17,6 +17,7 @@ import {
   buildSubmitPrompt,
   caretAtHistoryEdge,
   countNewlines,
+  createFileAttachmentState,
   createHistoryState,
   createImageAttachmentState,
   createPasteState,
@@ -32,6 +33,8 @@ import {
   pasteTokenBeforeCaret,
   PASTE_MAX_LINES,
   PASTE_THRESHOLD,
+  reduceFileAttachmentRemoved,
+  reduceFileAttachmentSelected,
   reduceHistoryPushed,
   reduceImageAttachmentAdded,
   reduceImageAttachmentRemoved,
@@ -60,6 +63,7 @@ import {
   restoreSelectedPrompt,
   restoreDraftWithPending,
   selectComposerGate,
+  selectFileAttachment,
   selectPendingSubmit,
   selectTransportError,
   shouldReleasePendingSubmitOnStop,
@@ -1038,6 +1042,21 @@ describe('image attachment submit state', () => {
 
     state = reduceImageAttachmentRemoved(state, S1, attachments[0]!.id)
     expect(selectImageAttachments(state, S1)).toEqual([])
+  })
+})
+
+describe('native file attachment state', () => {
+  const file = { name: 'recommendation.md', token: 'picker-token' }
+
+  test('keeps an opaque selection scoped to its session', () => {
+    let state = createFileAttachmentState()
+    state = reduceFileAttachmentSelected(state, S1, file)
+
+    expect(selectFileAttachment(state, S1)).toEqual(file)
+    expect(selectFileAttachment(state, S2)).toBeNull()
+
+    state = reduceFileAttachmentRemoved(state, S1)
+    expect(selectFileAttachment(state, S1)).toBeNull()
   })
 })
 

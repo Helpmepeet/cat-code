@@ -215,6 +215,7 @@ const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
@@ -496,6 +497,11 @@ const bridge: CatCodeBridge = {
     const payload = target ? { appSessionId, path, target } : { appSessionId, path }
     sendGuard.assertAllowed(payload)
     return ipcRenderer.invoke(CH_HOST_OPEN_WORKSPACE_FILE, payload) as Promise<boolean>
+  },
+  pickAttachmentFile(appSessionId: SessionId) {
+    const payload = { appSessionId }
+    sendGuard.assertAllowed(payload)
+    return ipcRenderer.invoke(CH_HOST_PICK_ATTACHMENT_FILE, appSessionId) as Promise<import('../shared/hostApi.js').AttachmentFileSelection | null>
   },
   reportVisibleSessions(sessionIds: SessionId[]): void {
     // IDLE-PARK §4(b) — a one-way hint naming the panes on screen so main's park

@@ -116,7 +116,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // background when glass is off.
   expect(source).toContain("const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'")
   expect(source).toContain('setGlassMode(enabled: boolean): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(43)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(44)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -159,6 +159,9 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   expect(source).toContain("const CH_HOST_CLOSE = 'catcode:host:close'")
   expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
   expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
+  expect(source).toContain(
+    "const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'",
+  )
   expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
   // P4-35 — the file sink rides its own fixed channel (HC3). The renderer carries
   // text plus a name suggestion; main owns the destination (HC1).
@@ -181,7 +184,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
     m => m[1],
   )
-  expect(invokeChannels.length).toBe(14)
+  expect(invokeChannels.length).toBe(15)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -189,6 +192,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_CLOSE',
     'CH_HOST_LIST',
     'CH_HOST_PICK_DIR',
+    'CH_HOST_PICK_ATTACHMENT_FILE',
     'CH_HOST_PREVIEW',
     'CH_HOST_SESSIONS_CATALOG',
     'CH_HOST_OPEN_HISTORY',

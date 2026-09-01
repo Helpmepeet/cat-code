@@ -1415,7 +1415,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
   expect(submitBody).toContain(
-    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          images,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
+    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          images,\n          file,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
@@ -1451,10 +1451,10 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
   expect(source.replace(/\s+/g, ' ')).toContain(
-    'disabled={ !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0) || pendingSubmit !== null }',
+    'disabled={ !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
   expect(source).toContain(
-    'attachDisabled={!composerGate.editable || preparingImage}',
+    'attachDisabled={!composerGate.editable || preparingImage || pickingFile}',
   )
   expect(source.replace(/\s+/g, ' ')).toContain(
     "if (preparingImage) { event.preventDefault() toast('Wait for the image to finish attaching.', { tone: 'info' }) return }",
@@ -1947,17 +1947,15 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
   expect(html).toContain('aria-label="Add attachment"')
 })
 
-test('image attachment wiring reaches both clipboard paste and the file picker', () => {
+test('the picker returns opaque file selections while clipboard images keep byte attachment', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   expect(source).toContain('const files = Array.from(event.clipboardData.files)')
   expect(source).toContain('const image = files.find')
   expect(source).toContain("if (image) {\n      void attachImage(image)")
-  expect(source).toContain('ref={imageInputRef}')
-  expect(source).toContain('if (file) void attachImage(file)')
-  expect(source).toContain(
-    'onAttach={() => imageInputRef.current?.click()}',
-  )
+  expect(source).toContain('getBridge().pickAttachmentFile(activeSessionId)')
+  expect(source).toContain('fileAttachmentToken: file.token')
+  expect(source).not.toContain('imageInputRef')
   expect(source).toContain(
     'reduceImageAttachmentAdded(prev, sessionId, attachment)',
   )
@@ -3136,11 +3134,11 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // cannot carry. Retention must happen BEFORE the optimistic clear, or the
   // images it copies are already gone.
   expect(submitBody).toContain('retainedSubmitsRef.current = reduceRetainedSubmitHeld(')
-  expect(submitBody).toContain('{ submitId, text, images: [...images] }')
+  expect(submitBody).toContain('{ submitId, text, images: [...images], file }')
   // The id has to reach the sidecar, or the answer below can never name which
   // submit it belongs to and the pairing silently degrades to positional again.
   expect(submitBody).toContain(
-    'getBridge().submit(sessionId, submitPrompt, { submitId })',
+    'fileAttachmentToken: file.token',
   )
   expect(
     submitBody.indexOf('retainedSubmitsRef.current = reduceRetainedSubmitHeld('),

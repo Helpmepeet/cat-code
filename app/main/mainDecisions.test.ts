@@ -19,12 +19,14 @@ import {
 } from '../shared/operationalLog.js'
 import {
   CWD_TOKEN_TTL_MS,
+  appendAttachmentFileMention,
   RENDERER_HEALTH_RING_CAPACITY,
   RENDERER_RECOVERY_MAX_ATTEMPTS,
   RENDERER_RECOVERY_WINDOW_MS,
   PACKAGED_SIDECAR_BINARY,
   SIDECAR_MODE_ENTRIES,
   SIDECAR_RUNTIME_ARGS,
+  createAttachmentFileTokenStore,
   createCwdTokenStore,
   createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
@@ -816,6 +818,30 @@ describe('createCwdTokenStore (HC1)', () => {
     )
     expect(tokens.size).toBe(200)
     for (const token of tokens) expect(token.length).toBeGreaterThanOrEqual(32)
+  })
+})
+
+describe('native file attachment tokens', () => {
+  test('hide the path, bind the selection to one session, and expire it', () => {
+    let clock = 1_000
+    const store = createAttachmentFileTokenStore({
+      now: () => clock,
+      newToken: () => 'opaque-token',
+    })
+    const selection = store.mint(SID, '/private/report.md')
+
+    expect(selection).toEqual({ token: 'opaque-token', name: 'report.md' })
+    expect(store.resolve('other-session', selection.token)).toBeUndefined()
+    expect(store.resolve(SID, selection.token)).toBe('/private/report.md')
+
+    clock += CWD_TOKEN_TTL_MS + 1
+    expect(store.resolve(SID, selection.token)).toBeUndefined()
+  })
+
+  test('adds a trusted selection as an engine @ mention', () => {
+    expect(appendAttachmentFileMention('Review this.', '/tmp/report.md')).toBe(
+      'Review this.\n@"/tmp/report.md"',
+    )
   })
 })
 

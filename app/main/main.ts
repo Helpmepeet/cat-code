@@ -44,6 +44,7 @@ import {
 } from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
 import type {
+  AttachmentFileSelection,
   HostEvent,
   HostResult,
   SaveTextResult,
@@ -60,6 +61,8 @@ import {
   LAZY_REPLAY_FLUSH_MS,
 } from './attachmentGate.js'
 import {
+  appendAttachmentFileMention,
+  createAttachmentFileTokenStore,
   createCwdTokenStore,
   createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
@@ -187,6 +190,7 @@ import {
   type HistoryLoadEarlierMessage,
   type ErrorFrame,
   type SessionId,
+  type SubmitPrompt,
   type SessionsCatalogSnapshot,
   type SettingsVerbMessage,
   type SettingsVerbType,
@@ -309,6 +313,7 @@ const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
+const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'
 const CH_HOST_PREVIEW = 'catcode:host:preview'
 const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
 const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
@@ -1884,10 +1889,31 @@ function registerIpcHandlers(): void {
       return
     }
     const options = sanitizeSubmitOptions(arg.options)
+    const fileAttachmentToken = readFileAttachmentToken(arg.options)
+    const selectedFile = fileAttachmentToken
+      ? attachmentFileTokens.resolve(arg.sessionId, fileAttachmentToken)
+      : undefined
+    if (fileAttachmentToken && !selectedFile) {
+      deliver(
+        attachmentGate.onFrame(arg.sessionId, {
+          kind: 'error',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: arg.sessionId,
+          code: 'bad_request',
+          message: 'Selected file is no longer available. Choose it again.',
+          retryable: false,
+        }),
+      )
+      answerUnforwardedSubmit(arg.sessionId, options?.submitId, 'bad_request')
+      return
+    }
+    const prompt: SubmitPrompt = selectedFile
+      ? appendAttachmentFileMention(arg.prompt as SubmitPrompt, selectedFile)
+      : (arg.prompt as SubmitPrompt)
     const failure = forward(arg.sessionId, {
       type: 'app.submit',
       requestId: generateRequestId(),
-      prompt: arg.prompt,
+      prompt,
       options,
     })
     // The submit never left main, so no sidecar will ever answer it. Say so with
@@ -2578,6 +2604,7 @@ function registerIpcHandlers(): void {
  * so the renderer only ever holds an opaque handle to a path the USER chose.
  */
 const cwdTokens = createCwdTokenStore()
+const attachmentFileTokens = createAttachmentFileTokenStore()
 
 /**
  * Control-plane IPC (HC3 — fixed, per-method structured senders; no generic
@@ -2622,6 +2649,28 @@ function registerHostControlPlane(): void {
       const chosen = validateCwd(result.filePaths[0])
       if (!chosen.ok) return null
       return cwdTokens.mint(chosen.realpath)
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_PICK_ATTACHMENT_FILE,
+    async (
+      event,
+      appSessionId: unknown,
+    ): Promise<AttachmentFileSelection | null> => {
+      if (!isMainWindowSender(event) || typeof appSessionId !== 'string') return null
+      const parent = mainWindow ?? undefined
+      const result = parent
+        ? await dialog.showOpenDialog(parent, { properties: ['openFile'] })
+        : await dialog.showOpenDialog({ properties: ['openFile'] })
+      if (result.canceled || result.filePaths.length === 0) return null
+      try {
+        const realpath = realpathSync(result.filePaths[0]!)
+        if (!statSync(realpath).isFile() || realpath.includes('"')) return null
+        return attachmentFileTokens.mint(appSessionId, realpath)
+      } catch {
+        return null
+      }
     },
   )
 
@@ -3218,6 +3267,14 @@ function sanitizeSubmitOptions(options: unknown): {
     result.submitId = o.submitId
   }
   return result
+}
+
+function readFileAttachmentToken(options: unknown): string | undefined {
+  if (typeof options !== 'object' || options === null) return undefined
+  const token = (options as { fileAttachmentToken?: unknown }).fileAttachmentToken
+  return typeof token === 'string' && token.length > 0 && token.length <= MAX_TEXT_FIELD_CHARS
+    ? token
+    : undefined
 }
 
 /**

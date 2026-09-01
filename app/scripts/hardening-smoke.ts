@@ -248,6 +248,7 @@ async function runProductionHardeningSmoke(
       // SESSIONS-UNIFICATION (2026-07-20) — open a terminal-created session by its
       // engine id (HC3 fixed sender; renderer authors no cwd, HC1).
       'openHistorySession',
+      'pickAttachmentFile',
       'pickDirectory',
       'previewSession',
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).

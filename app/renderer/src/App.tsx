@@ -148,6 +148,7 @@ import { filterMentionItems } from './mentionPickerModel.js'
 import {
   applyMention,
   buildSubmitPrompt,
+  createFileAttachmentState,
   caretAtHistoryEdge,
   createHistoryState,
   createImageAttachmentState,
@@ -165,6 +166,8 @@ import {
   PENDING_SUBMIT_RELEASED_MESSAGE,
   planSessionSubmit,
   reduceHistoryPushed,
+  reduceFileAttachmentRemoved,
+  reduceFileAttachmentSelected,
   reduceImageAttachmentAdded,
   reduceImageAttachmentRemoved,
   reducePasteAdded,
@@ -176,6 +179,7 @@ import {
   reduceSubmitAnswers,
   reduceSessionImagesReplaced,
   reduceSessionImagesRestored,
+  reduceSessionFileAttachmentRestored,
   reduceSessionPastesCleared,
   removePasteOccurrence,
   reduceTransportErrorCleared,
@@ -185,6 +189,7 @@ import {
   restoreDraftWithPending,
   selectAgentMentionItems,
   selectComposerGate,
+  selectFileAttachment,
   selectHistory,
   selectImageAttachments,
   selectPendingSubmit,
@@ -195,6 +200,8 @@ import {
   shouldRecallWaitingMessages,
   shouldReleasePendingSubmitOnStop,
   type DraftWriteReason,
+  type FileAttachment,
+  type FileAttachmentState,
   type HistoryNav,
   type HistoryState,
   type ImageAttachment,
@@ -610,6 +617,8 @@ export function App() {
   const [pasteState, setPasteState] = useState<PasteState>(createPasteState)
   const [imageAttachmentState, setImageAttachmentState] =
     useState<ImageAttachmentState>(createImageAttachmentState)
+  const [fileAttachmentState, setFileAttachmentState] =
+    useState<FileAttachmentState>(createFileAttachmentState)
   const [composerFocusRequests, setComposerFocusRequests] = useState<
     Partial<Record<SessionId, number>>
   >({})
@@ -1999,6 +2008,9 @@ export function App() {
       setImageAttachmentState(current =>
         reduceSessionImagesReplaced(current, sessionId, restored.images),
       )
+      setFileAttachmentState(current =>
+        reduceFileAttachmentRemoved(current, sessionId),
+      )
       setComposerFocusRequests(current => ({
         ...current,
         [sessionId]: (current[sessionId] ?? 0) + 1,
@@ -2387,6 +2399,9 @@ export function App() {
     setImageAttachmentState(state =>
       reduceSessionImagesRestored(state, sessionId, pending.images ?? []),
     )
+    setFileAttachmentState(state =>
+      reduceSessionFileAttachmentRestored(state, sessionId, pending.file),
+    )
     setTransportErrors(prev =>
       reduceTransportErrorSet(prev, sessionId, PENDING_SUBMIT_RELEASED_MESSAGE),
     )
@@ -2423,6 +2438,9 @@ export function App() {
     )
     setImageAttachmentState(state =>
       reduceSessionImagesRestored(state, sessionId, retained.images),
+    )
+    setFileAttachmentState(state =>
+      reduceSessionFileAttachmentRestored(state, sessionId, retained.file),
     )
   }, [])
 
@@ -2809,6 +2827,7 @@ export function App() {
     const sessionLog = selectRawMessageLog(state, sessionId)
     const sessionConnection = selectConnection(connection, sessionId)
     const images = selectImageAttachments(imageAttachmentState, sessionId)
+    const file = selectFileAttachment(fileAttachmentState, sessionId)
     // Collapsed-paste tokens are expanded back to their full text before submit
     // — the engine receives plain prompt text, never a `[Pasted text #N]` ref
     // (parity `expandPastedTextRefs`, src/history.ts:81 / handlePromptSubmit.ts:216).
@@ -2819,7 +2838,7 @@ export function App() {
     const action = planSessionSubmit({
       draft: selectPromptDraft(promptDrafts, sessionId),
       pasteEntries: selectSessionPasteState(pasteState, sessionId).entries,
-      hasImages: images.length > 0,
+      hasImages: images.length > 0 || file !== null,
       preview: hasPreviewTranscript(previewTranscript, sessionId),
       connectionStatus: sessionConnection.status,
       connectionInputEnabled: sessionConnection.inputEnabled,
@@ -2851,6 +2870,7 @@ export function App() {
       setImageAttachmentState(prev =>
         reduceSessionImagesReplaced(prev, sessionId, []),
       )
+      setFileAttachmentState(prev => reduceFileAttachmentRemoved(prev, sessionId))
       setHistoryState(prev => reduceHistoryPushed(prev, sessionId, text))
     }
     if (action.type === 'hold') {
@@ -2858,6 +2878,7 @@ export function App() {
         reducePendingSubmitHeld(prev, sessionId, {
           text,
           images,
+          file,
           showQueuedRow: action.showQueuedRow,
         }),
       )
@@ -2874,7 +2895,10 @@ export function App() {
     // retained copy below be paired exactly rather than by position.
     const submitId = newRequestId()
     try {
-      getBridge().submit(sessionId, submitPrompt, { submitId })
+      getBridge().submit(sessionId, submitPrompt, {
+        submitId,
+        ...(file ? { fileAttachmentToken: file.token } : {}),
+      })
       // D5 — the clear below is OPTIMISTIC: the sidecar can still refuse this
       // (the mid-turn depth cap), and its answer arrives long after. Retain the
       // exact message, images included, until that answer says which way it went.
@@ -2883,7 +2907,7 @@ export function App() {
       retainedSubmitsRef.current = reduceRetainedSubmitHeld(
         retainedSubmitsRef.current,
         sessionId,
-        { submitId, text, images: [...images] },
+        { submitId, text, images: [...images], file },
       )
       retireDraft()
       setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
@@ -2924,7 +2948,12 @@ export function App() {
         getBridge().submit(
           sessionId,
           buildSubmitPrompt(pending.text, pending.images ?? []),
-          { submitId },
+          {
+            submitId,
+            ...(pending.file
+              ? { fileAttachmentToken: pending.file.token }
+              : {}),
+          },
         )
         // D5 — the drain hands over the SAME `app.submit`, so it can be refused
         // the same way; clearing the park below is as optimistic as the
@@ -2936,6 +2965,7 @@ export function App() {
             submitId,
             text: pending.text,
             images: [...(pending.images ?? [])],
+            file: pending.file ?? null,
           },
         )
         setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
@@ -3717,6 +3747,7 @@ export function App() {
 	            )}
 	            pastes={selectSessionPasteList(pasteState, sessionId)}
 	            images={selectImageAttachments(imageAttachmentState, sessionId)}
+            fileAttachment={selectFileAttachment(fileAttachmentState, sessionId)}
 	            pendingSubmit={selectPendingSubmit(pendingSubmits, sessionId)}
 	            queuedPrompts={selectQueuedPrompts(queuedPrompts, sessionId)}
 	            onRecallQueuedPrompts={() => recallQueuedPrompts(sessionId)}
@@ -3748,6 +3779,16 @@ export function App() {
 	                reduceImageAttachmentRemoved(prev, sessionId, id),
 	              )
 	            }
+            onAttachFile={attachment =>
+              setFileAttachmentState(prev =>
+                reduceFileAttachmentSelected(prev, sessionId, attachment),
+              )
+            }
+            onRemoveFile={() =>
+              setFileAttachmentState(prev =>
+                reduceFileAttachmentRemoved(prev, sessionId),
+              )
+            }
 		            transcript={panelTranscript.transcript}
 	            transportError={selectTransportError(transportErrors, sessionId)}
 	            releasePendingSubmit={() => releasePendingSubmit(sessionId)}
@@ -4633,6 +4674,9 @@ export function SessionPane({
   onApprovePlan,
   onAttachImage,
   onPaste,
+  onAttachFile,
+  fileAttachment = null,
+  onRemoveFile,
   onRemoveImage,
   onRemovePaste,
   onRevisePlan,
@@ -4841,9 +4885,9 @@ export function SessionPane({
     handledComposerFocusRequestRef.current = composerFocusRequest
     composerRef.current?.focus()
   }, [composerFocusRequest, isActivePane])
-  const imageInputRef = useRef<HTMLInputElement>(null)
   const imagePreparationInFlightRef = useRef(false)
   const [preparingImage, setPreparingImage] = useState(false)
+  const [pickingFile, setPickingFile] = useState(false)
   const attachImage = async (file: File): Promise<void> => {
     if (!onAttachImage || imagePreparationInFlightRef.current) {
       if (imagePreparationInFlightRef.current) {
@@ -4866,6 +4910,19 @@ export function SessionPane({
   const [transportErrorFromImage, setTransportErrorFromImage] = useState<
     string | null
   >(null)
+  const attachFile = async (): Promise<void> => {
+    if (!activeSessionId || !onAttachFile || pickingFile) return
+    setPickingFile(true)
+    try {
+      const selection = await getBridge().pickAttachmentFile(activeSessionId)
+      if (selection) onAttachFile(selection)
+      setTransportErrorFromImage(null)
+    } catch (error) {
+      setTransportErrorFromImage(errorMessage(error))
+    } finally {
+      setPickingFile(false)
+    }
+  }
   // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
   // paste, whole-token Backspace). A rewritten draft rebuilds the field's nodes,
   // so without this the next keystroke lands at the end of the draft instead of
@@ -5839,20 +5896,9 @@ export function SessionPane({
           submit(event)
         }}
       >
-        <input
-          ref={imageInputRef}
-          accept={ACCEPTED_IMAGE_TYPES.join(',')}
-          className="hidden"
-          onChange={event => {
-            const file = event.currentTarget.files?.[0]
-            event.currentTarget.value = ''
-            if (file) void attachImage(file)
-          }}
-          type="file"
-        />
-        {images.length > 0 ? (
+        {images.length > 0 || fileAttachment ? (
           <div
-            aria-label="Image attachments"
+            aria-label="Attachments"
             className="mb-2 flex items-center gap-2 px-1"
           >
             {images.map(image => (
@@ -5875,6 +5921,32 @@ export function SessionPane({
                 </button>
               </div>
             ))}
+            {fileAttachment ? (
+              <div className="group relative flex max-w-56 items-center gap-2 rounded-lg border border-accent/20 bg-accent/[0.06] px-2 py-1.5 text-sm text-text-primary">
+                <svg
+                  aria-hidden
+                  className="shrink-0 text-text-muted"
+                  fill="none"
+                  height="16"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  viewBox="0 0 24 24"
+                  width="16"
+                >
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <path d="M14 2v6h6" />
+                </svg>
+                <span className="truncate">{fileAttachment.name}</span>
+                <button
+                  aria-label={`Remove ${fileAttachment.name}`}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs text-text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  onClick={onRemoveFile}
+                  type="button"
+                >
+                  ×
+                </button>
+              </div>
+            ) : null}
           </div>
         ) : null}
         {/* No bottom padding, deliberately. The prototype has 11px here
@@ -5968,7 +6040,9 @@ export function SessionPane({
               disabled={
                 !composerGate.editable ||
                 preparingImage ||
-                (prompt.trim().length === 0 && images.length === 0) ||
+                (prompt.trim().length === 0 &&
+                  images.length === 0 &&
+                  fileAttachment === null) ||
                 pendingSubmit !== null
               }
               type="submit"
@@ -6001,8 +6075,8 @@ export function SessionPane({
          * model override · permission MODE · —— · active account · context donut.
          * Real data only — see `ComposerActionsBar` for the per-chip backing. */}
         <ComposerActionsBar
-          attachDisabled={!composerGate.editable || preparingImage}
-          onAttach={() => imageInputRef.current?.click()}
+          attachDisabled={!composerGate.editable || preparingImage || pickingFile}
+          onAttach={() => void attachFile()}
           model={railModel}
           modelLabel={railModelLabel}
           reasoningEffort={railEffort}
@@ -6516,6 +6590,10 @@ type SessionPaneProps = {
   images?: ImageAttachment[]
   onAttachImage?: (attachment: Omit<ImageAttachment, 'id'>) => void
   onRemoveImage?: (id: number) => void
+  /** One native-picker file, held as a main-issued opaque token. */
+  fileAttachment?: FileAttachment | null
+  onAttachFile?: (attachment: FileAttachment) => void
+  onRemoveFile?: () => void
   /** CC-16 — a prompt submitted before the engine could accept it. The cold-spawn
    * row is presentation metadata; every pending prompt still blocks a second hold. */
   pendingSubmit?: PendingSubmit | null

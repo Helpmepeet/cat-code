@@ -145,6 +145,16 @@ test('HC1: the picker hands back a token, never the path the user chose', () => 
   expect(pick).not.toContain('return chosen.realpath')
 })
 
+test('HC1: file attachments resolve opaque tokens without returning paths', () => {
+  const pick = region(
+    'ipcMain.handle(\n    CH_HOST_PICK_ATTACHMENT_FILE',
+    'ipcMain.handle(\n    CH_HOST_CREATE',
+  )
+
+  expect(pick).toContain('attachmentFileTokens.mint(appSessionId, realpath)')
+  expect(pick).not.toContain('return realpath')
+})
+
 test('HC1: the save-text handler never hands the chosen path back to the renderer', () => {
   // P4-35. The renderer learns whether a file was written, never where: the user
   // chose the destination in main's own dialog, so main has no reason to echo it

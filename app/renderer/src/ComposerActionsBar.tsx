@@ -1345,12 +1345,11 @@ export function ComposerActionsBar({
       className="mt-3 flex items-center gap-4 px-1"
     >
       {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
-       * #a1a1aa on hover. The owner opens the image picker; clipboard images
-       * use the same attachment path from the composer paste handler. */}
+       * #a1a1aa on hover. The owner opens main's native file picker. */}
       <button
         {...faceProps('attach')}
         aria-label="Add attachment"
-        title="Add image"
+        title="Add file or photo"
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-text-ghost transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}
