@@ -110,7 +110,10 @@ test('task.background runs the REAL terminal backgroundAll path and publishes th
 
   const result = await createSidecarTaskControlDomain(store).background()
 
-  expect(result.ok).toBe(true)
+  expect(result).toEqual({
+    ok: true,
+    message: 'Moved running work to the background.',
+  })
   expect(
     (store.getState().tasks['t-bg'] as { isBackgrounded?: boolean })
       .isBackgrounded,

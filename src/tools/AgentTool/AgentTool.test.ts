@@ -20,6 +20,7 @@ import { getBuiltInAgents } from './builtInAgents.js'
 import {
   AgentTool,
   buildAgentSessionStateTracking,
+  continueAgentIterator,
   deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
   inputSchema,
@@ -27,6 +28,7 @@ import {
   reportableAccount,
   resolveSystemSubagentName,
 } from './AgentTool.js'
+import type { Message } from '../../types/message.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -136,6 +138,30 @@ describe('AgentTool effort input', () => {
       inputSchema().safeParse({ ...baseInput, effort: 'turbo' }).success,
     ).toBe(false)
   })
+})
+
+test('background transfer continues the same live iterator from its in-flight next result', async () => {
+  const first = { type: 'progress', toolUseID: 'one' } as unknown as Message
+  const second = { type: 'progress', toolUseID: 'two' } as unknown as Message
+  let nextCalls = 0
+  const iterator: AsyncIterator<Message, void> = {
+    async next() {
+      nextCalls += 1
+      return nextCalls === 1
+        ? { done: false, value: second }
+        : { done: true, value: undefined }
+    },
+  }
+  const received: Message[] = []
+
+  await continueAgentIterator(
+    iterator,
+    Promise.resolve({ done: false, value: first }),
+    message => received.push(message),
+  )
+
+  expect(received).toEqual([first, second])
+  expect(nextCalls).toBe(2)
 })
 
 describe('AgentTool UI', () => {

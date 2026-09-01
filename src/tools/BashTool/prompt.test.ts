@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { shouldRegisterForegroundShellTask } from '../../tasks/LocalShellTask/guards.js'
 import { getBashPrompt } from './prompt.js'
 
 describe('Bash prompt working-directory guidance', () => {
@@ -16,6 +17,46 @@ describe('Bash prompt working-directory guidance', () => {
         "the next call starts in the agent's assigned working directory",
       )
     }
+  })
+})
+
+describe('foreground shell registration', () => {
+  test('does not depend on terminal JSX availability', () => {
+    expect(
+      shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: false,
+        backgroundShellId: undefined,
+        elapsedSeconds: 3,
+        progressThresholdMs: 2_000,
+      }),
+    ).toBe(true)
+  })
+
+  test('waits for the threshold and respects existing background state and disablement', () => {
+    expect(
+      shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: false,
+        backgroundShellId: undefined,
+        elapsedSeconds: 1,
+        progressThresholdMs: 2_000,
+      }),
+    ).toBe(false)
+    expect(
+      shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: false,
+        backgroundShellId: 'shell-1',
+        elapsedSeconds: 3,
+        progressThresholdMs: 2_000,
+      }),
+    ).toBe(false)
+    expect(
+      shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: true,
+        backgroundShellId: undefined,
+        elapsedSeconds: 3,
+        progressThresholdMs: 2_000,
+      }),
+    ).toBe(false)
   })
 })
 

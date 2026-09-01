@@ -39,3 +39,21 @@ export function isLocalShellTask(task: unknown): task is LocalShellTaskState {
     task.type === 'local_bash'
   )
 }
+
+export function shouldRegisterForegroundShellTask({
+  backgroundTasksDisabled,
+  backgroundShellId,
+  elapsedSeconds,
+  progressThresholdMs,
+}: {
+  backgroundTasksDisabled: boolean
+  backgroundShellId: string | undefined
+  elapsedSeconds: number
+  progressThresholdMs: number
+}): boolean {
+  return (
+    !backgroundTasksDisabled &&
+    backgroundShellId === undefined &&
+    elapsedSeconds >= progressThresholdMs / 1000
+  )
+}

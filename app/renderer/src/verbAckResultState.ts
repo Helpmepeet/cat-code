@@ -283,6 +283,13 @@ export function verbAckErrorToast(
   if (frame.kind === 'prompt-recall.result') {
     return frame.ok ? null : { message: frame.message, tone: 'warn' }
   }
+  if (
+    frame.kind === 'task-control.result' &&
+    frame.verb === 'task.background' &&
+    !frame.ok
+  ) {
+    return { message: frame.message, tone: 'warn' }
+  }
   if (frame.kind !== 'error' && frame.ok) return null
   return { message: frame.message, tone: 'danger' }
 }

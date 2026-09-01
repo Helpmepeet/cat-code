@@ -1381,10 +1381,9 @@ export class SidecarServer {
       return
     }
 
-    // P4-8b — task-control verbs are
-    // app-owned vocabulary (like the account/agent-mode/run-control verbs),
-    // validated by a sidecar-LOCAL schema and dispatched to the engine's OWN
-    // `stopTask` (a live per-session kill, no respawn). NOT in the shared schema.
+    // P4-8b — task-control verbs are app-owned vocabulary, validated by a
+    // sidecar-local schema and dispatched to the engine's own stop, dismiss, or
+    // background machinery. They are not part of the shared engine schema.
     if (
       typeof messageType === 'string' &&
       (TASK_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)

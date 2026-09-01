@@ -6191,7 +6191,7 @@ function ActivityIndicator({
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
       ) : null}
       {hasForegroundTask ? (
-        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
+        <span className="inline-flex shrink-0 items-center gap-1.5">
           <span className="rounded-full border border-accent/25 px-2 py-0.5 text-[10.5px] font-medium text-accent">
             Foreground
           </span>
@@ -6199,7 +6199,7 @@ function ActivityIndicator({
             <button
               className="rounded-full border border-white/[0.08] px-2 py-0.5 text-[10.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
               onClick={onBackgroundTask}
-              title="Keep this task running and return control to the conversation"
+              title="Keep running work in the background"
               type="button"
             >
               Background

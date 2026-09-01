@@ -237,7 +237,7 @@ describe('LocalAgentTask foreground cleanup', () => {
   })
 
   test('registerAgentForeground stores the resolved friendly agent name', () => {
-    registerAgentForeground({
+    const registration = registerAgentForeground({
       agentId: 'sync-agent-4',
       description: 'Sync foreground agent',
       prompt: 'test prompt',
@@ -255,6 +255,10 @@ describe('LocalAgentTask foreground cleanup', () => {
       agentName: 'Curie',
       agentType: 'implementor',
     })
+    expect(
+      (appState.tasks['sync-agent-4'] as { abortController?: AbortController })
+        .abortController,
+    ).toBe(registration.abortController)
   })
 
   test('completeAgentTask records blocked handoff metadata from the result', () => {

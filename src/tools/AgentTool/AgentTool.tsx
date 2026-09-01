@@ -91,6 +91,24 @@ export type AgentSessionStateTracking = {
   statePath: string
 }
 
+/**
+ * Transfer ownership of a live synchronous agent iterator to its detached
+ * background consumer. `firstResult` is the `next()` already in flight when the
+ * background signal won the race, so consuming it first preserves every message
+ * without starting a second agent conversation.
+ */
+export async function continueAgentIterator(
+  iterator: AsyncIterator<MessageType, void>,
+  firstResult: Promise<IteratorResult<MessageType, void>>,
+  onMessage: (message: MessageType) => void,
+): Promise<void> {
+  let result = await firstResult
+  while (!result.done) {
+    onMessage(result.value)
+    result = await iterator.next()
+  }
+}
+
 export function buildAgentSessionStateTracking({
   sessionMode,
   sessionId,
@@ -1473,6 +1491,8 @@ export const AgentTool = buildTool({
         // Register as foreground task immediately so it can be backgrounded at any time
         // Skip registration if background tasks are disabled
         let foregroundTaskId: string | undefined;
+        let foregroundAbortController: AbortController | undefined;
+        let detachParentAbort = () => {};
         // Seeded at spawn and refreshed at the terminal, because the two
         // moments can disagree (failover, repair, follow-main reassignment) and
         // only the terminal read is still true. Undefined for an Anthropic
@@ -1509,6 +1529,21 @@ export const AgentTool = buildTool({
             toolUseContext.options.mainLoopProvider,
           );
           foregroundTaskId = registration.taskId;
+          foregroundAbortController = registration.abortController;
+          const parentSignal = toolUseContext.abortController.signal;
+          const forwardParentAbort = () => {
+            registration.abortController.abort(parentSignal.reason);
+          };
+          if (parentSignal.aborted) {
+            forwardParentAbort();
+          } else {
+            parentSignal.addEventListener('abort', forwardParentAbort, {
+              once: true
+            });
+            detachParentAbort = () => {
+              parentSignal.removeEventListener('abort', forwardParentAbort);
+            };
+          }
           backgroundPromise = registration.backgroundSignal.then(() => ({
             type: 'background' as const
           }));
@@ -1530,7 +1565,10 @@ export const AgentTool = buildTool({
           ...runAgentParams,
           override: {
             ...runAgentParams.override,
-            agentId: syncAgentId
+            agentId: syncAgentId,
+            ...(foregroundAbortController
+              ? { abortController: foregroundAbortController }
+              : {})
           },
           onCacheSafeParams: summaryTaskId && getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
             const {
@@ -1584,49 +1622,24 @@ export const AgentTool = buildTool({
                 // Capture the taskId for use in the async callback
                 const backgroundedTaskId = foregroundTaskId;
                 wasBackgrounded = true;
-                // Stop foreground summarization; the backgrounded closure
-                // below owns its own independent stop function.
-                stopForegroundSummarization?.();
+                // The detached consumer keeps the same live agent and therefore
+                // the same summarizer. Transfer cleanup ownership so the outer
+                // foreground finally does not stop it prematurely.
+                const stopBackgroundedSummarization = stopForegroundSummarization;
+                stopForegroundSummarization = undefined;
 
                 // Workload: inherited via ALS at `void` invocation time,
                 // same as the async-from-start path above.
                 // Continue agent in background and return async result
                 void runWithAgentContext(syncAgentContext, async () => {
-                  let stopBackgroundedSummarization: (() => void) | undefined;
                   const tracker = createProgressTracker();
                   const resolveActivity2 = createActivityDescriptionResolver(toolUseContext.options.tools);
                   try {
-                    // Clean up the foreground iterator so its finally block runs
-                    // (releases MCP connections, session hooks, prompt cache tracking, etc.)
-                    // Timeout prevents blocking if MCP server cleanup hangs.
-                    // .catch() prevents unhandled rejection if timeout wins the race.
-                    await Promise.race([agentIterator.return(undefined).catch(() => { }), sleep(1000)]);
                     // Initialize progress tracking from existing messages
                     for (const existingMsg of agentMessages) {
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
-                    for await (const msg of runAgent({
-                      ...runAgentParams,
-                      isAsync: true,
-                      // Agent is now running in background
-                      override: {
-                        ...runAgentParams.override,
-                        agentId: asAgentId(backgroundedTaskId),
-                        abortController: task.abortController
-                      },
-                      sessionStateTracking: runAgentParams.sessionStateTracking
-                        ? {
-                            ...runAgentParams.sessionStateTracking,
-                            recordSpawn: false,
-                          }
-                        : undefined,
-                      onCacheSafeParams: getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
-                        const {
-                          stop
-                        } = startAgentSummarization(backgroundedTaskId, asAgentId(backgroundedTaskId), params, rootSetAppState);
-                        stopBackgroundedSummarization = stop;
-                      } : undefined
-                    })) {
+                    await continueAgentIterator(agentIterator, nextMessagePromise, msg => {
                       agentMessages.push(msg);
 
                       // Track progress for backgrounded agents
@@ -1636,7 +1649,7 @@ export const AgentTool = buildTool({
                       if (lastToolName) {
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
                       }
-                    }
+                    });
                     const terminalLeaseAccount = reportableLeaseAccount(
                       backgroundedTaskId,
                       resolvedAgentModel,
@@ -2010,6 +2023,10 @@ export const AgentTool = buildTool({
           // Store the error to handle after cleanup
           syncAgentError = toError(error);
         } finally {
+          // A backgrounded worker is independent from the parent turn from this
+          // point onward; task-stop owns the same controller the live iterator
+          // has used since spawn.
+          detachParentAbort();
           // Clear the background hint UI
           if (toolUseContext.setToolJSX) {
             toolUseContext.setToolJSX(null);
@@ -2054,8 +2071,11 @@ export const AgentTool = buildTool({
             }
           }
 
-          // Clean up scoped skills so they don't accumulate in the global map
-          clearInvokedSkillsForAgent(syncAgentId);
+          // The detached continuation still owns the same live agent scope.
+          // Its finally block releases skills and dump state when it terminates.
+          if (!wasBackgrounded) {
+            clearInvokedSkillsForAgent(syncAgentId);
+          }
 
           // Clean up dumpState entry for this agent to prevent unbounded growth
           // Skip if backgrounded — the backgrounded agent's finally handles cleanup

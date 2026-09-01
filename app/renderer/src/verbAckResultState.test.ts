@@ -255,6 +255,23 @@ for (const [kind, build] of BUILDERS) {
   })
 }
 
+test('a stale task.background refusal is a warning, not a danger error', () => {
+  const frame: VerbAckResultFrame = {
+    kind: 'task-control.result',
+    protocolVersion: 1,
+    sessionId: 's1',
+    requestId: 'background-stale',
+    verb: 'task.background',
+    ok: false,
+    message: 'No foreground task is running.',
+  }
+
+  expect(verbAckErrorToast(frame)).toEqual({
+    message: 'No foreground task is running.',
+    tone: 'warn',
+  })
+})
+
 /* ── D1b: a recall that lost the race is a report, not a fault ─────────────── */
 
 function promptRecallResult(

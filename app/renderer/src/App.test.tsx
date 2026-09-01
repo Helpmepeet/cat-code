@@ -2294,10 +2294,13 @@ test('a foreground task is named beside the activity row and offers terminal Ctr
   expect(html).toContain('Foreground')
   expect(html).toContain('>Background<')
   expect(html).toContain(
-    'title="Keep this task running and return control to the conversation"',
+    'title="Keep running work in the background"',
   )
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   expect(source).toContain('onClick={onBackgroundTask}')
+  expect(source).not.toContain(
+    'className="ml-auto inline-flex shrink-0 items-center gap-1.5"',
+  )
 })
 
 test('P4-32a — a blocked worker never turns the strip amber', () => {

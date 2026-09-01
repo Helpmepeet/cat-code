@@ -162,7 +162,7 @@ export function createSidecarTaskControlDomain(
           return { ok: false, message: 'Background tasks are disabled.' }
         }
         return executor.background()
-          ? { ok: true, message: 'Moved the current task to the background.' }
+          ? { ok: true, message: 'Moved running work to the background.' }
           : { ok: false, message: 'No foreground task is running.' }
       } catch (error) {
         return {
