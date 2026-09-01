@@ -3481,31 +3481,31 @@ export function App() {
 	              }
 	            }}
 	            orchestratorActive={panelOrchestratorActive}
-	            orchestratorWorkers={panelOrchestratorWorkers}
-                tasksSnapshot={panelTasks}
-                onBackgroundTask={
-                  panelTasks?.hasForegroundTask
-                    ? () => {
-                        try {
-                          getBridge().taskControlVerb(sessionId, {
-                            type: 'task.background',
-                            requestId: newRequestId(),
-                          })
-                          setTransportErrors(prev =>
-                            reduceTransportErrorCleared(prev, sessionId),
-                          )
-                        } catch (error) {
-                          setTransportErrors(prev =>
-                            reduceTransportErrorSet(
-                              prev,
-                              sessionId,
-                              errorMessage(error),
-                            ),
-                          )
-                        }
-                      }
-                    : undefined
-                }
+		            orchestratorWorkers={panelOrchestratorWorkers}
+		            tasksSnapshot={panelTasks}
+		            onBackgroundTask={
+		              panelTasks?.hasForegroundTask
+		                ? () => {
+		                    try {
+		                      getBridge().taskControlVerb(sessionId, {
+		                        type: 'task.background',
+		                        requestId: newRequestId(),
+		                      })
+		                      setTransportErrors(prev =>
+		                        reduceTransportErrorCleared(prev, sessionId),
+		                      )
+		                    } catch (error) {
+		                      setTransportErrors(prev =>
+		                        reduceTransportErrorSet(
+		                          prev,
+		                          sessionId,
+		                          errorMessage(error),
+		                        ),
+		                      )
+		                    }
+		                  }
+		                : undefined
+		            }
 	            onOpenTasks={openTasksDialog}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
@@ -5556,16 +5556,16 @@ export function SessionPane({
             * three times and truncate the text that actually distinguishes
             * them.
             *
-	            * D1b — and the way back out. Compact icon controls sit BELOW the
-	            * rows: force-send advances the oldest waiting message, while recall
-	            * takes back everything the way the terminal's `↑` does. They remain
-	            * real buttons with accessible labels, so both are keyboard reachable.
+            * D1b — and the way back out. Compact icon controls sit BELOW the
+            * rows: force-send advances the oldest waiting message, while recall
+            * takes back everything the way the terminal's `↑` does. They remain
+            * real buttons with accessible labels, so both are keyboard reachable.
             *
             * ONE live region around the ROWS, not one per row: three waiting
             * messages are one change to announce, and a region each made a
             * screen reader read three. The button sits OUTSIDE it, because a
-	            * live region re-announces everything inside it on every change, so
-	            * the controls remain outside it and are not re-announced as news.
+            * live region re-announces everything inside it on every change, so
+            * the controls remain outside it and are not re-announced as news.
             */}
           {queuedPrompts.length > 0 ? (
             <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col items-end gap-1.5 px-8 pt-2.5">
