@@ -99,7 +99,7 @@ import { getMcpToolsCommandsAndResources, prefetchAllMcpResources } from './serv
 import { VALID_INSTALLABLE_SCOPES, VALID_UPDATE_SCOPES } from './services/plugins/pluginCliCommands.js';
 import { initBundledSkills } from './skills/bundled/index.js';
 import type { AgentColorName } from './tools/AgentTool/agentColorManager.js';
-import { getActiveAgentsFromList, getAgentDefinitionsWithOverrides, isBuiltInAgent, isCustomAgent, parseAgentsFromJson } from './tools/AgentTool/loadAgentsDir.js';
+import { getActiveAgentsFromList, getAgentDefinitionsWithOverrides, isBuiltInAgent, isCustomAgent, parseAgentsFlag } from './tools/AgentTool/loadAgentsDir.js';
 import type { LogOption } from './types/logs.js';
 import type { Message as MessageType } from './types/message.js';
 import { assertMinVersion } from './utils/autoUpdater.js';
@@ -1997,14 +1997,18 @@ async function run(): Promise<CommanderCommand> {
     // Parse CLI agents if provided via --agents flag
     let cliAgents: typeof agentDefinitionsResult.activeAgents = [];
     if (agentsJson) {
-      try {
-        const parsedAgents = safeParseJSON(agentsJson);
-        if (parsedAgents) {
-          cliAgents = parseAgentsFromJson(parsedAgents, 'flagSettings');
-        }
-      } catch (error) {
-        logError(error);
+      // Fail closed like --mcp-config above: a rejected payload must not start
+      // a session that silently has none of the agents the user asked for.
+      const parseResult = parseAgentsFlag(agentsJson, 'flagSettings');
+      if (parseResult.errors.length > 0) {
+        const details = parseResult.errors.join('\n');
+        logForDebugging(`--agents validation failed: ${details}`, {
+          level: 'error'
+        });
+        process.stderr.write(`Error: Invalid agent configuration:\n${details}\n`);
+        process.exit(1);
       }
+      cliAgents = parseResult.agents;
     }
 
     // Merge CLI agents with existing ones

@@ -4475,7 +4475,9 @@ export function getCanUseToolFn(
   }
 }
 
-async function handleInitializeRequest(
+// Exported as a test seam only, so the invalid-agents refusal can be driven
+// without standing up a real stream-json session.
+export async function handleInitializeRequest(
   request: SDKControlInitializeRequest,
   requestId: string,
   initialized: boolean,
@@ -4521,8 +4523,25 @@ async function handleInitializeRequest(
 
   // Merge agents from stdin to avoid ARG_MAX limits
   if (request.agents) {
-    const stdinAgents = parseAgentsFromJson(request.agents, 'flagSettings')
-    agents.push(...stdinAgents)
+    const parseResult = parseAgentsFromJson(request.agents, 'flagSettings')
+    if (parseResult.errors.length > 0) {
+      // The --agents flag exits here; this path cannot, because the session is
+      // already streaming and the client owns the process. Report the same
+      // refusal as a control_response error and leave initialization undone,
+      // matching the 'Already initialized' path above.
+      output.enqueue({
+        type: 'control_response',
+        response: {
+          subtype: 'error',
+          error: `Invalid agent configuration:\n${parseResult.errors.join('\n')}`,
+          request_id: requestId,
+          pending_permission_requests:
+            structuredIO.getPendingPermissionRequests(),
+        },
+      })
+      return
+    }
+    agents.push(...parseResult.agents)
   }
 
   // Re-evaluate main thread agent after SDK agents are merged
