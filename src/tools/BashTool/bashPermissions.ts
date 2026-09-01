@@ -2335,6 +2335,27 @@ export async function bashToolHasPermission(
     return exactMatchResult
   }
 
+  // SECURITY: Decide the empty case explicitly, before either `.every()`
+  // below can decide it by accident. A command that is only variable
+  // assignments (`FOO=bar`) parses to zero commands, so both `.every(...)`
+  // checks are vacuously true AND the injection re-check maps over the same
+  // empty array and finds nothing — the command was reaching 'allow' because
+  // nothing was examined, not because anything passed. It is still an allow:
+  // an assignment stores a value, and every assignment in the command was
+  // validated by walkVariableAssignment (integer-attribute arithmetic
+  // evaluation, IFS, PS4, tilde, and command substitution all reject there).
+  // Deny and ask rules have already had their say above.
+  if (subcommands.length === 0) {
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: {
+        type: 'other',
+        reason: 'Command contains no executable commands, only assignments',
+      },
+    }
+  }
+
   // If all subcommands are allowed via exact or prefix match, allow the
   // command — but only if no command injection is possible. When the AST
   // parse succeeded, each subcommand is already known-safe (no hidden
@@ -2365,7 +2386,11 @@ export async function bashToolHasPermission(
       })
     }
   }
+  // The length guard is a tripwire, not the decision: the empty case returns
+  // above. `.every()` on an empty array is true, so without it any future
+  // path that reaches here with nothing to check would allow silently.
   if (
+    subcommandPermissionDecisions.length > 0 &&
     subcommandPermissionDecisions.every(_ => _.behavior === 'allow') &&
     !hasPossibleCommandInjection
   ) {
@@ -2452,7 +2477,9 @@ export async function bashToolHasPermission(
 
   // Allow if all subcommands are allowed
   // Note that this is different than 6b because we are checking the command injection results.
+  // Same empty-array tripwire as the check above.
   if (
+    subcommands.length > 0 &&
     subcommands.every(subcommand => {
       const permissionResult = subcommandResults.get(subcommand)
       return permissionResult?.behavior === 'allow'
