@@ -12,7 +12,9 @@ import {
 import { getModelStrings } from './modelStrings.js'
 import { getAPIProvider, resolveRequestProvider, type APIProvider } from './providers.js'
 
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
+// @[MODEL LAUNCH]: 'claude-opus-5' is a deliberate version pin, not an alias.
+// Re-point it (or add the successor beside it) when a newer Opus ships.
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
 
 export type AgentModelOption = {
@@ -159,6 +161,11 @@ export function getAgentModelOptions(): AgentModelOption[] {
       value: 'opus',
       label: 'Opus',
       description: 'Most capable for complex reasoning tasks',
+    },
+    {
+      value: 'claude-opus-5',
+      label: 'Opus 5',
+      description: 'Pinned to Opus 5, even when the parent runs something else',
     },
     {
       value: 'gpt-5.6-sol',

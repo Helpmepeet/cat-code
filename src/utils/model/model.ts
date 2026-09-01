@@ -28,6 +28,7 @@ import type { PermissionMode } from '../permissions/PermissionMode.js'
 import {
   getAPIProvider,
   getConfiguredAnthropicProvider,
+  isAnthropicCloudProvider,
   isFirstPartyAnthropicBaseUrl,
 } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
@@ -228,8 +229,10 @@ export function getDefaultOpusModel(): ModelName {
   }
   // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
   // even when values match, since 3P availability lags firstParty and
-  // these will diverge again at the next model launch.
-  if (getAPIProvider() !== 'firstParty') {
+  // these will diverge again at the next model launch. The Codex session
+  // provider ('openai') is NOT one of them and takes the current default;
+  // see isAnthropicCloudProvider().
+  if (isAnthropicCloudProvider()) {
     return getModelStrings().opus46
   }
   return getModelStrings().opus5
