@@ -79,6 +79,9 @@ test('P4-8b — stop() is throw-free even when the executor throws a non-StopTas
   const store = createStore(getDefaultAppState())
   const domain = createSidecarTaskControlDomain(store, {
     executor: {
+      background() {
+        throw new Error('boom')
+      },
       async stop() {
         throw new Error('boom')
       },
@@ -91,6 +94,78 @@ test('P4-8b — stop() is throw-free even when the executor throws a non-StopTas
   const result = await domain.stop('whatever')
   expect(result.ok).toBe(false)
   expect(result.message).toContain('boom')
+})
+
+test('task.background runs the REAL terminal backgroundAll path and publishes the new task mode', async () => {
+  const store = createStore(getDefaultAppState())
+  const worker = {
+    ...runningWorker('t-bg'),
+    isBackgrounded: false,
+  } as unknown as TaskState
+  store.setState(prev => ({ ...prev, tasks: { 't-bg': worker } }))
+  let notifications = 0
+  store.subscribe(() => {
+    notifications += 1
+  })
+
+  const result = await createSidecarTaskControlDomain(store).background()
+
+  expect(result.ok).toBe(true)
+  expect(
+    (store.getState().tasks['t-bg'] as { isBackgrounded?: boolean })
+      .isBackgrounded,
+  ).toBe(true)
+  expect(notifications).toBeGreaterThan(0)
+})
+
+test('task.background fails closed when no foreground task is running', async () => {
+  const store = createStore(getDefaultAppState())
+  const worker = {
+    ...runningWorker('t-bg'),
+    isBackgrounded: true,
+  } as unknown as TaskState
+  store.setState(prev => ({ ...prev, tasks: { 't-bg': worker } }))
+
+  const result = await createSidecarTaskControlDomain(store).background()
+
+  expect(result.ok).toBe(false)
+  expect(result.message).toBe('No foreground task is running.')
+})
+
+test('task.background honors the terminal background-disable setting', async () => {
+  const previous = process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+  process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1'
+  try {
+    const store = createStore(getDefaultAppState())
+    const worker = {
+      ...runningWorker('t-bg-disabled'),
+      isBackgrounded: false,
+    } as unknown as TaskState
+    store.setState(prev => ({
+      ...prev,
+      tasks: { 't-bg-disabled': worker },
+    }))
+
+    const result = await createSidecarTaskControlDomain(store).background()
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Background tasks are disabled.',
+    })
+    expect(
+      (
+        store.getState().tasks['t-bg-disabled'] as {
+          isBackgrounded?: boolean
+        }
+      ).isBackgrounded,
+    ).toBe(false)
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+    } else {
+      process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = previous
+    }
+  }
 })
 
 /* ------------------------------------------------------------------------- *
@@ -225,6 +300,9 @@ test('CC-32 — dismiss() is throw-free when the executor throws', async () => {
   const store = createStore(getDefaultAppState())
   const domain = createSidecarTaskControlDomain(store, {
     executor: {
+      background() {
+        return false
+      },
       async stop() {
         throw new Error('unused')
       },

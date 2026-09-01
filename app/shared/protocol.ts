@@ -555,6 +555,7 @@ export type SidecarClientMessage =
   | ContextBreakdownVerbMessage
   | StatsQueryMessage
   | PromptRecallMessage
+  | PromptForceMessage
   | AppParkMessage
   | HistoryLoadEarlierMessage
 
@@ -1298,6 +1299,8 @@ export type TasksSnapshot = {
   subagents?: TaskSubagentMetadata[]
   /** Task id currently foregrounded (viewed in the main pane); already excluded from `items`. */
   foregroundedTaskId?: string
+  /** The engine currently owns a foreground Bash or local-agent task that Ctrl+B could background. */
+  hasForegroundTask?: boolean
 }
 
 export type TasksSnapshotFrame = {
@@ -1574,7 +1577,7 @@ export type AgentModeSetResultFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * P4-8b — task/worker STOP verb (the deferred worker-control action)
+ * P4-8b — task/worker lifecycle verbs
  * ------------------------------------------------------------------------- *
  *
  * P4-8's orchestrator roster/detail/focus surfaces landed READ-ONLY; the
@@ -1605,6 +1608,12 @@ export type AgentModeSetResultFrame = {
  *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
  *
+ * `task.background` is the terminal Ctrl+B operation. It carries no task id:
+ * the sidecar re-reads the live store and calls the engine's own `backgroundAll`,
+ * so a compromised renderer cannot choose a hidden task or author task state.
+ * This follows `decisions/SECURITY-MINIMUM.md` §2's app-owned inbound posture:
+ * strict sidecar-local validation and the existing T7 frame/rate limits.
+ *
  * `task.dismiss` (2026-08-09) is the TERMINAL half of the same family, and it
  * exists because a finished worker does not always leave on its own. The engine
  * stamps NO `evictAfter` when a worker's report carries a `status: blocked`
@@ -1633,7 +1642,11 @@ export type AgentModeSetResultFrame = {
  *    notification). A worker whose completion notification is still in flight is
  *    marked and then evicted by the panel reaper on its next beat.
  */
-export const TASK_CONTROL_VERB_TYPES = ['task.stop', 'task.dismiss'] as const
+export const TASK_CONTROL_VERB_TYPES = [
+  'task.stop',
+  'task.dismiss',
+  'task.background',
+] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
 
@@ -1657,7 +1670,16 @@ export type TaskDismissMessage = {
   taskId: string
 }
 
-export type TaskControlVerbMessage = TaskStopMessage | TaskDismissMessage
+/** Background every foreground Bash or local-agent task in this session, matching terminal Ctrl+B. */
+export type TaskBackgroundMessage = {
+  type: 'task.background'
+  requestId: string
+}
+
+export type TaskControlVerbMessage =
+  | TaskStopMessage
+  | TaskDismissMessage
+  | TaskBackgroundMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
@@ -3060,6 +3082,23 @@ export type PromptRecallMessage = {
   requestId: string
 }
 
+/**
+ * Ask the sidecar to interrupt the current response only while this exact
+ * engine-minted queued prompt is still waiting at the head of the queue.
+ * App-owned inbound vocabulary under `decisions/SECURITY-MINIMUM.md` §2:
+ * sidecar-local validation, closed keys, T7 limits, and no renderer-authored
+ * prompt content or queue priority.
+ */
+export type PromptForceMessage = {
+  type: 'prompt.force'
+  requestId: string
+  promptId: string
+}
+
+export const PROMPT_FORCE_VERB_TYPES = ['prompt.force'] as const
+
+export type PromptForceVerbType = (typeof PROMPT_FORCE_VERB_TYPES)[number]
+
 export type RecalledPrompt = {
   /** The uuid its staged row carried, so a reader can match the two up. */
   id: string
@@ -3096,6 +3135,18 @@ export type PromptRecallResultFrame = {
   recalled: RecalledPrompt[]
   /** How many waiting messages the engine had already taken. */
   alreadyDelivered: number
+}
+
+/** Correlated answer to {@link PromptForceMessage}. */
+export type PromptForceResultFrame = {
+  kind: 'prompt-force.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  promptId: string
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries prompt content. */
+  message: string
 }
 
 /**
@@ -3232,6 +3283,7 @@ export type ServerFramePayload =
   | UsageStatsSnapshotFrame
   | QueuedPromptsSnapshotFrame
   | PromptRecallResultFrame
+  | PromptForceResultFrame
   | SubmitResultFrame
   | HistoryLoadEarlierResultFrame
 
@@ -3291,6 +3343,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'stats.usage.snapshot': true,
   'queued-prompts.snapshot': true,
   'prompt-recall.result': true,
+  'prompt-force.result': true,
   'submit.result': true,
   'history.loadEarlier.result': true,
 }
@@ -3485,10 +3538,9 @@ export type CatCodeBridge = {
    * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
    * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
    *
-   * The same channel carries `task.dismiss`, the terminal counterpart: it retires a
-   * FINISHED worker row the engine's grace deadline will never retire on its own
-   * (see TASK_CONTROL_VERB_TYPES above), through the engine's own
-   * `stopOrDismissAgent` + `evictTerminalTask`.
+   * The same channel carries `task.dismiss`, which retires a FINISHED worker row,
+   * and `task.background`, which invokes the engine's terminal Ctrl+B operation
+   * over the addressed session's live store.
    */
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**
@@ -3518,6 +3570,12 @@ export type CatCodeBridge = {
    * No engine object, no path, no token crosses.
    */
   recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void
+  /**
+   * Interrupt the running response only if `promptId` is still the oldest queued
+   * prompt. The sidecar validates that engine-minted identity before aborting, so
+   * a delayed or duplicate click cannot stop the queued turn after it starts.
+   */
+  forcePrompt(sessionId: SessionId, verb: PromptForceMessage): void
   /**
    * Read further back into the addressed session's transcript
    * (decisions/HISTORY-LOAD-EARLIER.md). The renderer authors ONLY a

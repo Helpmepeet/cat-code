@@ -1018,13 +1018,13 @@ test('D1a: a message waiting for the running response renders as waiting, not as
   expect(waiting).not.toContain('Sends when the session is ready.')
 })
 
-test('D1b: a waiting message offers a way to take it back', () => {
+test('waiting-message actions are compact icon buttons for send-now and take-back', () => {
   // The terminal has `↑` for this. A multi-line composer has no such key free,
   // so the affordance is a real control next to what it acts on.
   const base = idleSessionPaneProps()
 
   expect(renderToStaticMarkup(<SessionPane {...base} />)).not.toContain(
-    'Take back',
+    'Take back queued message',
   )
 
   const one = renderToStaticMarkup(
@@ -1036,9 +1036,11 @@ test('D1b: a waiting message offers a way to take it back', () => {
       onRecallQueuedPrompts={() => {}}
     />,
   )
-  expect(one).toContain('>Take back<')
-  // A button, so it is reachable from the keyboard on the way to the composer.
-  expect(one).toContain('type="button"')
+  expect(one).toContain('aria-label="Send next queued message now"')
+  expect(one).toContain('aria-label="Take back queued message"')
+  // Icon-only: neither action spends transcript space on visible button text.
+  expect(one).not.toContain('>Take back<')
+  expect(one).not.toContain('>Send now<')
 
   // Recall takes back everything waiting, the way `↑` does, so the label says so
   // rather than letting one row's control look like it speaks for itself.
@@ -1054,7 +1056,25 @@ test('D1b: a waiting message offers a way to take it back', () => {
       onRecallQueuedPrompts={() => {}}
     />,
   )
-  expect(several).toContain('>Take back all<')
+  expect(several).toContain('aria-label="Take back all queued messages"')
+})
+
+test('send-now binds the visible queue head to the sidecar-validated force verb', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const forceQueuedPrompt = (): void => {')
+  const end = source.indexOf('\n  }\n\n  // Instant placement', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const body = source.slice(start, end)
+
+  expect(body).toContain('const promptId = queuedPrompts[0]?.id')
+  expect(body).toContain('getBridge().forcePrompt(activeSessionId, {')
+  expect(body).toContain("type: 'prompt.force'")
+  expect(body).toContain('promptId,')
+  expect(body).not.toContain('getBridge().abort')
+  expect(body).not.toContain('onRecallQueuedPrompts')
+  expect(body).not.toContain('releasePendingSubmit')
+  expect(source).toContain('onClick={forceQueuedPrompt}')
 })
 
 test('D1a: several waiting messages are announced once, not once each', () => {
@@ -2233,7 +2253,7 @@ test('P4-32a — an idle session with no workers still renders no strip', () => 
   expect(renderStrip()).toBe('')
 })
 
-test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', () => {
+test('P4-32a — a foreground swarm reads as active without claiming Background', () => {
   // D2 C2: workers waiting on the assistant are the assistant's problem.
   const html = renderStrip({
     workers: [
@@ -2246,7 +2266,38 @@ test('P4-32a — a busy swarm reads as a neutral accent count, never an alert', 
     ],
   })
   expect(html).toContain('2 subagents active')
+  expect(html).not.toContain('Background')
   expect(html).not.toContain('tone-warn')
+})
+
+test('P4-32a — a backgrounded subagent makes the task strip say Background', () => {
+  const html = renderStrip({
+    workers: [agentWorkerForTest({ isBackgrounded: true })],
+  })
+
+  expect(html).toContain('Background')
+  expect(html).toContain('1 subagent active')
+})
+
+test('a foreground task is named beside the activity row and offers terminal Ctrl+B parity', () => {
+  const base = idleSessionPaneProps()
+  const html = renderToStaticMarkup(
+    <SessionPane
+      {...base}
+      activeConnection={{ status: 'ready', inputEnabled: false }}
+      activeLog={{ ...base.activeLog, inputEnabled: false }}
+      tasksSnapshot={{ items: [], hasForegroundTask: true }}
+      onBackgroundTask={() => {}}
+    />,
+  )
+
+  expect(html).toContain('Foreground')
+  expect(html).toContain('>Background<')
+  expect(html).toContain(
+    'title="Keep this task running and return control to the conversation"',
+  )
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  expect(source).toContain('onClick={onBackgroundTask}')
 })
 
 test('P4-32a — a blocked worker never turns the strip amber', () => {

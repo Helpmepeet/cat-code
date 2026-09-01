@@ -154,6 +154,7 @@ import { mintDeliveryTrace, replayDeliveryTrace, type DeliveryAcknowledgement, t
 import {
   ACCOUNT_VERB_TYPES,
   PERMISSION_SET_MODE_MODES,
+  PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
   REMOTE_VERB_TYPES,
@@ -171,6 +172,8 @@ import {
   type PermissionSetModeMode,
   type RemoteVerbMessage,
   type RemoteVerbType,
+  type PromptForceMessage,
+  type PromptForceVerbType,
   type PromptRecallMessage,
   type PromptRecallVerbType,
   type RunControlVerbMessage,
@@ -208,6 +211,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_PROMPT_FORCE = 'catcode:prompt-force'
 const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'
@@ -2040,6 +2044,21 @@ function registerIpcHandlers(): void {
         return
       }
       forward(arg.sessionId, arg.verb as RunControlVerbMessage)
+    },
+  )
+
+  ipcMain.on(
+    CH_PROMPT_FORCE,
+    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+      if (typeof arg?.sessionId !== 'string') return
+      const verb = arg.verb as { type?: unknown } | null | undefined
+      if (
+        typeof verb?.type !== 'string' ||
+        !PROMPT_FORCE_VERB_TYPES.includes(verb.type as PromptForceVerbType)
+      ) {
+        return
+      }
+      forward(arg.sessionId, arg.verb as PromptForceMessage)
     },
   )
 

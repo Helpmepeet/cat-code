@@ -107,6 +107,22 @@ function settingsResult(
   }
 }
 
+function promptForceResult(
+  sessionId: string,
+  ok: boolean,
+  message: string,
+): VerbAckResultFrame {
+  return {
+    kind: 'prompt-force.result',
+    protocolVersion: 1,
+    sessionId,
+    requestId: `force-${sessionId}-${ok}`,
+    promptId: 'queued-1',
+    ok,
+    message,
+  }
+}
+
 function correlatedBadRequest(
   sessionId: string,
   message: string,
@@ -127,6 +143,7 @@ const BUILDERS = [
   ['task-control.result', taskControlResult],
   ['run-control.result', runControlResult],
   ['settings.result', settingsResult],
+  ['prompt-force.result', promptForceResult],
 ] as const
 
 /* ── reducer: each verb's result is stored per session ─────────────────────── */

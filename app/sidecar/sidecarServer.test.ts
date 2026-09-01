@@ -2008,6 +2008,12 @@ function recallResults(received: ServerFrame[]) {
   )
 }
 
+function forceResults(received: ServerFrame[]) {
+  return received.flatMap(frame =>
+    frame.kind === 'prompt-force.result' ? [frame] : [],
+  )
+}
+
 type SubmitPromptValue = Extract<
   ClientFrame['message'],
   { type: 'app.submit' }
@@ -2084,6 +2090,101 @@ async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
   )
   return { server, conn, received, end: () => release?.() }
 }
+
+test('prompt.force aborts only while the displayed queue head is still waiting', async () => {
+  const prompts: string[] = []
+  let aborts = 0
+  let releaseCurrent: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ prompt, options }) {
+      prompts.push(typeof prompt === 'string' ? prompt : 'image')
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        releaseCurrent = resolve
+      })
+    },
+    abort() {
+      aborts += 1
+      releaseCurrent?.()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.submit',
+      requestId: 'mid',
+      prompt: 'and the logs',
+    }),
+  )
+  const promptId = queuedPromptSnapshots(received).at(-1)?.[0]?.id
+  expect(promptId).toBeString()
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'prompt.force',
+      requestId: 'force-1',
+      promptId: promptId!,
+    }),
+  )
+  for (let i = 0; i < 50 && prompts.length < 2; i += 1) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+
+  expect(forceResults(received).at(-1)?.ok).toBe(true)
+  expect(aborts).toBe(1)
+  expect(prompts).toEqual(['start', 'and the logs'])
+
+  // A delayed duplicate sees that the engine-minted id has left the queue and
+  // must not abort the queued turn it was meant to start.
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'prompt.force',
+      requestId: 'force-stale',
+      promptId: promptId!,
+    }),
+  )
+  expect(forceResults(received).at(-1)).toMatchObject({
+    requestId: 'force-stale',
+    ok: false,
+  })
+  expect(aborts).toBe(1)
+
+  releaseCurrent?.()
+  server.close()
+})
+
+test('prompt.force rejects renderer-authored queue state before aborting', async () => {
+  const { server, conn, received, end } =
+    await serverWithStagedPrompt('and the logs')
+  const promptId = queuedPromptSnapshots(received).at(-1)?.[0]?.id
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'prompt.force',
+      requestId: 'force-forged',
+      promptId: promptId!,
+      priority: 'now',
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(forceResults(received)).toHaveLength(0)
+  end()
+})
 
 test('D1a — the staged preview is the folded prompt, truncated at the cap', async () => {
   // Perf pin for the preview builder, which stops folding once it is past the
@@ -3735,10 +3836,16 @@ function fakeTaskControlDomain(
   domain: SidecarTaskControlDomain
   calls: string[]
   dismissCalls: string[]
+  backgroundCalls: string[]
 } {
   const calls: string[] = []
   const dismissCalls: string[] = []
+  const backgroundCalls: string[] = []
   const domain: SidecarTaskControlDomain = {
+    async background() {
+      backgroundCalls.push('background')
+      return { ok: true, message: 'Moved the current task to the background.' }
+    },
     async stop(taskId: string) {
       calls.push(taskId)
       return override ? override(taskId) : { ok: true, message: 'Stopped worker.' }
@@ -3748,13 +3855,19 @@ function fakeTaskControlDomain(
       return override ? override(taskId) : { ok: true, message: 'Dismissed worker.' }
     },
   }
-  return { domain, calls, dismissCalls }
+  return { domain, calls, dismissCalls, backgroundCalls }
 }
 
 function makeTaskControlServer(
   override?: (taskId: string) => TaskDismissResult,
-): { server: SidecarServer; calls: string[]; dismissCalls: string[] } {
-  const { domain, calls, dismissCalls } = fakeTaskControlDomain(override)
+): {
+  server: SidecarServer
+  calls: string[]
+  dismissCalls: string[]
+  backgroundCalls: string[]
+} {
+  const { domain, calls, dismissCalls, backgroundCalls } =
+    fakeTaskControlDomain(override)
   const server = makeServer(
     new AppSessionController(probeAdapter()),
     undefined, // permissions
@@ -3771,7 +3884,7 @@ function makeTaskControlServer(
     undefined, // sessionActions
     domain, // taskControl
   )
-  return { server, calls, dismissCalls }
+  return { server, calls, dismissCalls, backgroundCalls }
 }
 
 test('P4-8b — a valid task.stop dispatches the domain + acks task-control.result (echoes requestId)', async () => {
@@ -3801,6 +3914,51 @@ test('P4-8b — a valid task.stop dispatches the domain + acks task-control.resu
   expect(result && result.kind === 'task-control.result' && result.verb).toBe('task.stop')
   expect(result && result.kind === 'task-control.result' && result.requestId).toBe('ts1')
   expect(calls).toEqual(['agent-1'])
+})
+
+test('task.background dispatches without a renderer-authored task id and echoes the result', async () => {
+  const { server, backgroundCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'task.background', requestId: 'tb1' }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 && !received.some(f => f.kind === 'task-control.result');
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'task-control.result' && result.verb).toBe(
+    'task.background',
+  )
+  expect(backgroundCalls).toEqual(['background'])
+})
+
+test('task.background rejects a forged task id before the domain runs', () => {
+  const { server, backgroundCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'task.background',
+      requestId: 'tb-forged',
+      taskId: 'hidden-task',
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(backgroundCalls).toEqual([])
 })
 
 test('P4-8b — an unknown/terminal task acks ok:false (fail-closed), no crash', async () => {

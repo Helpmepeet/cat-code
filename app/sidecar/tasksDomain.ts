@@ -7,7 +7,9 @@
  * `src/commands/tasks/tasks.tsx`); no new inbound vocabulary is added here.
  */
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
+import { hasForegroundTasks } from '../../src/tasks/LocalShellTask/LocalShellTask.js'
 import { isBackgroundTask, type TaskState } from '../../src/tasks/types.js'
+import { isEnvTruthy } from '../../src/utils/envUtils.js'
 import type {
   TaskSnapshotItem,
   TasksSnapshot,
@@ -36,7 +38,12 @@ export function createSidecarTasksDomain(
   return {
     getSnapshot() {
       const state = appStateStore.getState()
-      return tasksSnapshot(state.tasks, state.foregroundedTaskId)
+      return {
+        ...tasksSnapshot(state.tasks, state.foregroundedTaskId),
+        hasForegroundTask:
+          !isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS) &&
+          hasForegroundTasks(state),
+      }
     },
     hasLiveWork() {
       // Explicit type (the same `tasksSnapshot` accepts) so `Object.values`

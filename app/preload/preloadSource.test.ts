@@ -116,11 +116,15 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // background when glass is off.
   expect(source).toContain("const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'")
   expect(source).toContain('setGlassMode(enabled: boolean): void')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(42)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(43)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
     'recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void',
+  )
+  expect(source).toContain("const CH_PROMPT_FORCE = 'catcode:prompt-force'")
+  expect(source).toContain(
+    'forcePrompt(sessionId: SessionId, verb: PromptForceMessage): void',
   )
   expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
   expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')

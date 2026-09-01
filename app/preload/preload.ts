@@ -24,6 +24,7 @@ import type {
   PermissionResponseInput,
   PermissionSetModeMode,
   RemoteVerbMessage,
+  PromptForceMessage,
   PromptRecallMessage,
   RunControlVerbMessage,
   SessionActionVerbMessage,
@@ -67,6 +68,7 @@ const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
 const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
 const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
 const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
+const CH_PROMPT_FORCE = 'catcode:prompt-force'
 const CH_PROMPT_RECALL = 'catcode:prompt-recall'
 const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
 const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'
@@ -321,6 +323,11 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_PROMPT_RECALL, payload)
+  },
+  forcePrompt(sessionId: SessionId, verb: PromptForceMessage): void {
+    const payload = { sessionId, verb }
+    sendGuard.assertAllowed(payload)
+    ipcRenderer.send(CH_PROMPT_FORCE, payload)
   },
   loadEarlierHistory(
     sessionId: SessionId,

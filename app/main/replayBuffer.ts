@@ -181,6 +181,9 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // it did not mint the requestId for, so an evicting ring is the only thing
   // this classification has to get right.
   'prompt-recall.result': 'ring',
+  // Ring for the same reason: this answers one send-now request, while the queue
+  // state it acted on is already represented by the sticky queued snapshot.
+  'prompt-force.result': 'ring',
   // Ring, same request-scoped reasoning: it closes ONE load-earlier the user
   // asked for, addressed to a requestId that reader minted. The messages it
   // completes ride `event` frames and are retained as transcript traffic like

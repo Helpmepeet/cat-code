@@ -214,6 +214,9 @@ async function runProductionHardeningSmoke(
       'deleteAccount',
       'ping',
       'refreshAccountsPool',
+      // Send-now is bound to an engine-minted queued prompt id and revalidated
+      // by the sidecar before it can interrupt a turn.
+      'forcePrompt',
       // D1b — take back messages still waiting for the running response. Fixed
       // one-way sender; the renderer authors only a correlation id, so it names
       // no target and cannot reach a subagent's queued work.

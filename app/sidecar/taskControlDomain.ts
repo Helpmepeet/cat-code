@@ -36,9 +36,14 @@
  */
 import { StopTaskError, stopTask } from '../../src/tasks/stopTask.js'
 import { isPanelAgentTask } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  backgroundAll,
+  hasForegroundTasks,
+} from '../../src/tasks/LocalShellTask/LocalShellTask.js'
 import { isTerminalTaskStatus } from '../../src/Task.js'
 import { stopOrDismissAgent } from '../../src/state/teammateViewHelpers.js'
 import { evictTerminalTask } from '../../src/utils/task/framework.js'
+import { isEnvTruthy } from '../../src/utils/envUtils.js'
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 
 /** The redacted outcome of a stop write (no transport, no secret). */
@@ -54,6 +59,8 @@ export type TaskStopResult = {
  * proves the SERVER wiring without mutating a real task graph.
  */
 export type TaskControlExecutor = {
+  /** Mirror terminal Ctrl+B against this session's live app-state store. */
+  background(): boolean
   /**
    * Stop the task by id via the engine's own `stopTask`. Resolves to the stopped
    * task's type + display on success; throws `StopTaskError` (not_found /
@@ -82,6 +89,11 @@ export function createRealTaskControlExecutor(
   appStateStore: AppStateStore,
 ): TaskControlExecutor {
   return {
+    background() {
+      if (!hasForegroundTasks(appStateStore.getState())) return false
+      backgroundAll(appStateStore.getState, appStateStore.setState)
+      return true
+    },
     async stop(taskId) {
       const result = await stopTask(taskId, {
         getAppState: appStateStore.getState,
@@ -111,6 +123,8 @@ export function createRealTaskControlExecutor(
 }
 
 export type SidecarTaskControlDomain = {
+  /** Background every currently foregroundable task in this session. */
+  background(): Promise<TaskStopResult>
   /**
    * Stop/kill the task with `taskId` in this session's store. Throw-free: an
    * unknown / already-terminal / unsupported target degrades to `ok:false` with no
@@ -142,6 +156,23 @@ export function createSidecarTaskControlDomain(
 ): SidecarTaskControlDomain {
   const executor = options.executor ?? createRealTaskControlExecutor(appStateStore)
   return {
+    async background() {
+      try {
+        if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)) {
+          return { ok: false, message: 'Background tasks are disabled.' }
+        }
+        return executor.background()
+          ? { ok: true, message: 'Moved the current task to the background.' }
+          : { ok: false, message: 'No foreground task is running.' }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not background the task: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
     async stop(taskId) {
       try {
         const { taskType, display } = await executor.stop(taskId)

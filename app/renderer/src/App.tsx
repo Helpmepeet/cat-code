@@ -345,6 +345,7 @@ import {
   reduceOrchestratorState,
   selectAgentModeSnapshot,
   selectDockedOrchestratorWorkers,
+  summarizeOrchestratorWorkers,
 } from './orchestratorState.js'
 import {
   AgentFaceRegistryContext,
@@ -443,6 +444,7 @@ import type {
   SessionActionVerbMessage,
   SessionId,
   SlashCatalogEntry,
+  TasksSnapshot,
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
@@ -3268,6 +3270,7 @@ export function App() {
 	      // P4-32a — this panel's OWN workers (never the globally-active session's),
 	      // mirroring how the mode toggle dispatches per panel.
 	      const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS
+          const panelTasks = selectTasksSnapshot(tasks, sessionId)
 	      // Read-only git branch for the empty-state meta strip. The SESSION's own
 	      // snapshot leads: the catalog's `gitBranch` is only written when a
 	      // message is persisted (`src/utils/sessionStorage.ts:1464`), so it is
@@ -3479,6 +3482,30 @@ export function App() {
 	            }}
 	            orchestratorActive={panelOrchestratorActive}
 	            orchestratorWorkers={panelOrchestratorWorkers}
+                tasksSnapshot={panelTasks}
+                onBackgroundTask={
+                  panelTasks?.hasForegroundTask
+                    ? () => {
+                        try {
+                          getBridge().taskControlVerb(sessionId, {
+                            type: 'task.background',
+                            requestId: newRequestId(),
+                          })
+                          setTransportErrors(prev =>
+                            reduceTransportErrorCleared(prev, sessionId),
+                          )
+                        } catch (error) {
+                          setTransportErrors(prev =>
+                            reduceTransportErrorSet(
+                              prev,
+                              sessionId,
+                              errorMessage(error),
+                            ),
+                          )
+                        }
+                      }
+                    : undefined
+                }
 	            onOpenTasks={openTasksDialog}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
@@ -4512,6 +4539,8 @@ export function TasksStrip({
   onOpen: () => void
 }) {
   const pill = orchestratorPill(workers)
+  const hasBackgroundWorker =
+    summarizeOrchestratorWorkers(workers).background > 0
   const backgroundTasks = groupTaskItems(snapshot).active.filter(
     item => item.type !== 'local_agent',
   )
@@ -4526,7 +4555,19 @@ export function TasksStrip({
         className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
         aria-hidden="true"
       />
-      {pill ? <span className="text-accent">{pill.label}</span> : null}
+      {pill ? (
+        <>
+          {hasBackgroundWorker ? (
+            <>
+              <span className="text-accent">Background</span>
+              <span aria-hidden="true" className="text-text-ghost">
+                ·
+              </span>
+            </>
+          ) : null}
+          <span>{pill.label}</span>
+        </>
+      ) : null}
       {pill && backgroundTasks.length > 0 ? (
         <span aria-hidden="true" className="text-text-ghost">
           ·
@@ -4603,6 +4644,8 @@ export function SessionPane({
   onToggleOrchestrator,
   orchestratorWorkers = EMPTY_WORKERS,
   onOpenTasks,
+  onBackgroundTask,
+  tasksSnapshot = null,
   partialCount,
   pastes,
   pendingSubmit = null,
@@ -5020,6 +5063,20 @@ export function SessionPane({
     }
     try {
       getBridge().abort(activeSessionId, `abort-${Date.now()}`, 'user-stop')
+      setStopError(null)
+    } catch (error) {
+      setStopError(errorMessage(error))
+    }
+  }
+  const forceQueuedPrompt = (): void => {
+    const promptId = queuedPrompts[0]?.id
+    if (!activeSessionId || !promptId) return
+    try {
+      getBridge().forcePrompt(activeSessionId, {
+        type: 'prompt.force',
+        requestId: newRequestId(),
+        promptId,
+      })
       setStopError(null)
     } catch (error) {
       setStopError(errorMessage(error))
@@ -5499,22 +5556,16 @@ export function SessionPane({
             * three times and truncate the text that actually distinguishes
             * them.
             *
-            * D1b — and the way back out. The control sits BELOW the rows rather
-            * than on one of them because it takes back everything waiting, the
-            * way the terminal's `↑` pops every queued command at once; a per-row
-            * control would promise a choice the verb deliberately does not
-            * offer. It is a real button, so it is reachable by tab; it is no
-            * longer the last stop before the composer, which is the price of
-            * leaving the dock, and `↑` on an empty draft is the fast path
-            * either way (`shouldRecallWaitingMessages`).
+	            * D1b — and the way back out. Compact icon controls sit BELOW the
+	            * rows: force-send advances the oldest waiting message, while recall
+	            * takes back everything the way the terminal's `↑` does. They remain
+	            * real buttons with accessible labels, so both are keyboard reachable.
             *
             * ONE live region around the ROWS, not one per row: three waiting
             * messages are one change to announce, and a region each made a
             * screen reader read three. The button sits OUTSIDE it, because a
-            * live region re-announces everything inside it on every change, so
-            * wrapping the control made "Take back all" part of the announcement
-            * each time a message arrived or left; it does not need announcing as
-            * news.
+	            * live region re-announces everything inside it on every change, so
+	            * the controls remain outside it and are not re-announced as news.
             */}
           {queuedPrompts.length > 0 ? (
             <div className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col items-end gap-1.5 px-8 pt-2.5">
@@ -5524,15 +5575,60 @@ export function SessionPane({
                   <QueuedRow key={queued.id} text={queued.text} />
                 ))}
               </div>
-              {onRecallQueuedPrompts ? (
+              <div className="flex items-center gap-1.5">
                 <button
-                  className="rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
-                  onClick={onRecallQueuedPrompts}
+                  aria-label="Send next queued message now"
+                  className="flex h-7 w-7 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-white/[0.05] hover:text-text-primary"
+                  onClick={forceQueuedPrompt}
+                  title="Stop the current response and send the next queued message"
                   type="button"
                 >
-                  {queuedPrompts.length === 1 ? 'Take back' : 'Take back all'}
+                  <svg
+                    aria-hidden="true"
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="1.8"
+                    viewBox="0 0 24 24"
+                  >
+                    <path d="m7 11 5-5 5 5" />
+                    <path d="m7 17 5-5 5 5" />
+                  </svg>
                 </button>
-              ) : null}
+                {onRecallQueuedPrompts ? (
+                  <button
+                    aria-label={
+                      queuedPrompts.length === 1
+                        ? 'Take back queued message'
+                        : 'Take back all queued messages'
+                    }
+                    className="flex h-7 w-7 items-center justify-center rounded-md text-text-subtle transition-colors hover:bg-white/[0.05] hover:text-text-primary"
+                    onClick={onRecallQueuedPrompts}
+                    title={
+                      queuedPrompts.length === 1
+                        ? 'Take back queued message'
+                        : 'Take back all queued messages'
+                    }
+                    type="button"
+                  >
+                    <svg
+                      aria-hidden="true"
+                      className="h-3.5 w-3.5"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="1.8"
+                      viewBox="0 0 24 24"
+                    >
+                      <path d="M12 5v14" />
+                      <path d="m6 13 6 6 6-6" />
+                    </svg>
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </div>
@@ -5707,6 +5803,8 @@ export function SessionPane({
           compacting={compacting}
           stopError={stopError}
           todoPlan={todoPlan}
+          hasForegroundTask={tasksSnapshot?.hasForegroundTask === true}
+          onBackgroundTask={onBackgroundTask}
         />
       ) : null}
 
@@ -6035,6 +6133,8 @@ function ActivityIndicator({
   compacting,
   stopError,
   todoPlan,
+  hasForegroundTask,
+  onBackgroundTask,
 }: {
   verb: string
   target: string | null
@@ -6046,6 +6146,8 @@ function ActivityIndicator({
   stopError: string | null
   /** The session's live plan, or null when it has none (`todoPlan.ts`). */
   todoPlan: TodoPlan | null
+  hasForegroundTask: boolean
+  onBackgroundTask?: () => void
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
@@ -6087,6 +6189,23 @@ function ActivityIndicator({
       </span>
       {stopError ? (
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
+      ) : null}
+      {hasForegroundTask ? (
+        <span className="ml-auto inline-flex shrink-0 items-center gap-1.5">
+          <span className="rounded-full border border-accent/25 px-2 py-0.5 text-[10.5px] font-medium text-accent">
+            Foreground
+          </span>
+          {onBackgroundTask ? (
+            <button
+              className="rounded-full border border-white/[0.08] px-2 py-0.5 text-[10.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
+              onClick={onBackgroundTask}
+              title="Keep this task running and return control to the conversation"
+              type="button"
+            >
+              Background
+            </button>
+          ) : null}
+        </span>
       ) : null}
       {/* The plan's readout owns the row's right edge (`ml-auto` on the
        * readout itself), the one part of this byline that is not left-packed.
@@ -6326,6 +6445,10 @@ type SessionPaneProps = {
   orchestratorWorkers?: readonly AgentModeWorkerItem[]
   /** P4-32a — open the workers/tasks list (the roster's click-through). */
   onOpenTasks?: (agentId?: string) => void
+  /** Live engine task mode. Kept outside transcript cards so task state never mutates transcript history. */
+  tasksSnapshot?: TasksSnapshot | null
+  /** Terminal Ctrl+B parity over this session's live foreground tasks. */
+  onBackgroundTask?: () => void
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split

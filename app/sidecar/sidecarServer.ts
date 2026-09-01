@@ -94,6 +94,7 @@ import {
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
+  PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
   RUN_CONTROL_VERB_TYPES,
@@ -1380,7 +1381,7 @@ export class SidecarServer {
       return
     }
 
-    // P4-8b — the task-control STOP verb (the deferred worker Stop/kill action) is
+    // P4-8b — task-control verbs are
     // app-owned vocabulary (like the account/agent-mode/run-control verbs),
     // validated by a sidecar-LOCAL schema and dispatched to the engine's OWN
     // `stopTask` (a live per-session kill, no respawn). NOT in the shared schema.
@@ -1406,11 +1407,17 @@ export class SidecarServer {
       return
     }
 
-    // D1b — taking a waiting message back is app-owned vocabulary (like C2 and
-    // the account/settings/workspace/agent-mode/run-control verbs), validated by
-    // a sidecar-LOCAL schema and served from the engine's OWN command queue.
-    // NOT part of the engine's shared schema. It carries no target, so the only
-    // renderer-authored byte is the correlation id.
+    // Queue controls are app-owned vocabulary, validated by sidecar-local schemas
+    // and served from the engine's own command queue. Force-send carries an
+    // engine-minted queued-prompt id; recall carries no target.
+    if (
+      typeof messageType === 'string' &&
+      (PROMPT_FORCE_VERB_TYPES as readonly string[]).includes(messageType)
+    ) {
+      this.handlePromptForce(connection, frame.message)
+      return
+    }
+
     if (
       typeof messageType === 'string' &&
       (PROMPT_RECALL_VERB_TYPES as readonly string[]).includes(messageType)
@@ -2228,6 +2235,71 @@ export class SidecarServer {
   }
 
   /**
+   * Interrupt only while the renderer-named engine prompt is still the live queue
+   * head. This identity check is what makes delayed and duplicate clicks safe:
+   * once the boundary drain starts that prompt, it leaves `queuedPromptItems`
+   * before another force frame can reach the new turn.
+   */
+  private handlePromptForce(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+    const parsed = promptForceMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid prompt-force verb',
+        false,
+      )
+      return
+    }
+
+    const { promptId } = parsed.data
+    if (this.parking) {
+      this.send(connection, {
+        kind: 'prompt-force.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: parsed.data.requestId,
+        promptId,
+        ok: false,
+        message: 'The session is parking.',
+      })
+      return
+    }
+    const head = this.queuedPromptItems()[0]
+    if (head?.id !== promptId) {
+      this.send(connection, {
+        kind: 'prompt-force.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: parsed.data.requestId,
+        promptId,
+        ok: false,
+        message: 'That message is no longer waiting.',
+      })
+      return
+    }
+
+    if (this.activeTurn) {
+      this.controller.abort('force-send')
+    } else {
+      this.scheduleBoundaryDrain()
+    }
+    this.send(connection, {
+      kind: 'prompt-force.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: parsed.data.requestId,
+      promptId,
+      ok: true,
+      message: 'Sending the queued message now.',
+    })
+  }
+
+  /**
    * ONE SUBMIT, ONE ANSWER. Every exit from this method either accepts the
    * prompt or refuses it, and each one answers `submitId` exactly once
    * (`refuseSubmit` / `answerSubmit`), from the same synchronous dispatch that
@@ -2884,9 +2956,11 @@ export class SidecarServer {
 
     const verb = parsed.data as TaskControlVerbMessage
     const result =
-      verb.type === 'task.dismiss'
-        ? await this.dismissWorker(verb.taskId)
-        : await this.taskControl.stop(verb.taskId)
+      verb.type === 'task.background'
+        ? await this.taskControl.background()
+        : verb.type === 'task.dismiss'
+          ? await this.dismissWorker(verb.taskId)
+          : await this.taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -5382,11 +5456,17 @@ function checkStrictKeys(message: unknown): string | null {
     // The terminal counterpart (CC-32 follow-up): same single renderer-authored
     // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
     ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
+    // Terminal Ctrl+B parity. The sidecar chooses from its own live store, so
+    // the renderer supplies no task id or task-state fields.
+    ['task.background', new Set(['type', 'requestId'])],
     // D1b prompt recall (app-owned; see PROMPT_RECALL_VERB_TYPES). It takes back
     // everything of the user's that is still waiting, so it has no target and
     // the renderer authors NOTHING but the correlation id. A forged `id`,
     // `agentId`, or `all` key is rejected here before the Zod parse.
     ['prompt.recall', new Set(['type', 'requestId'])],
+    // Force-send is bound to an engine-minted queued prompt id. Any attempt to
+    // name a task, inject prompt content, or author queue priority is rejected.
+    ['prompt.force', new Set(['type', 'requestId', 'promptId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -5691,6 +5771,10 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
     taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   }),
+  z.object({
+    type: z.literal('task.background'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
 ])
 
 /**
@@ -5703,6 +5787,12 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
 const promptRecallMessageSchema = z.object({
   type: z.literal('prompt.recall'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+const promptForceMessageSchema = z.object({
+  type: z.literal('prompt.force'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  promptId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 
 /**

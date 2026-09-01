@@ -17,6 +17,7 @@
 import type {
   AgentModeSetResultFrame,
   ErrorFrame,
+  PromptForceResultFrame,
   PromptRecallResultFrame,
   RunControlResultFrame,
   ServerFrame,
@@ -35,6 +36,7 @@ export type VerbAckResultFrame =
   | TaskControlResultFrame
   | RunControlResultFrame
   | SettingsResultFrame
+  | PromptForceResultFrame
   /**
    * D1b. Its `ok:false` is not a failed verb: the recall ran, and the engine
    * simply had already taken one of the messages. It joins this union because
@@ -230,6 +232,7 @@ export function reduceVerbAckResultState(
     frame.kind === 'task-control.result' ||
     frame.kind === 'run-control.result' ||
     frame.kind === 'settings.result' ||
+    frame.kind === 'prompt-force.result' ||
     frame.kind === 'prompt-recall.result' ||
     isCorrelatedBadRequest(frame)
   ) {
