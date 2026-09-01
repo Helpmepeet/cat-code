@@ -1,9 +1,11 @@
 /**
  * Periodic background summarization for coordinator mode sub-agents.
  *
- * Forks the sub-agent's conversation every ~30s using runForkedAgent()
- * to generate a 1-2 sentence progress summary. The summary is stored
- * on AgentProgress for UI display.
+ * Wakes every ~30s and forks the sub-agent's conversation using
+ * runForkedAgent() to generate a 1-2 sentence progress summary, but only
+ * when the transcript actually grew since the last request — an idle
+ * sub-agent costs nothing. The summary is stored on AgentProgress for UI
+ * display.
  *
  * Cache sharing: uses the same CacheSafeParams as the parent agent
  * to share the prompt cache. Tools are kept in the request for cache
@@ -48,7 +50,9 @@ export function startAgentSummarization(
   agentId: AgentId,
   cacheSafeParams: CacheSafeParams,
   setAppState: TaskContext['setAppState'],
+  options: { intervalMs?: number } = {},
 ): { stop: () => void } {
+  const intervalMs = options.intervalMs ?? SUMMARY_INTERVAL_MS
   // Drop forkContextMessages from the closure — runSummary rebuilds it each
   // tick from getAgentTranscript(). Without this, the original fork messages
   // (passed from AgentTool.tsx) are pinned for the lifetime of the timer.
@@ -57,6 +61,11 @@ export function startAgentSummarization(
   let timeoutId: ReturnType<typeof setTimeout> | null = null
   let stopped = false
   let previousSummary: string | null = null
+  // Fingerprint of the context the last request was built from. The fork
+  // carries the sub-agent's ENTIRE transcript, so re-sending an unchanged one
+  // every tick is pure waste — an idle sub-agent used to re-summarize forever.
+  // Scoped to this summarizer: a new sub-agent gets a fresh (null) signature.
+  let lastRequestSignature: string | null = null
 
   async function runSummary(): Promise<void> {
     if (stopped) return
@@ -76,6 +85,20 @@ export function startAgentSummarization(
 
       // Filter to clean message state
       const cleanMessages = filterIncompleteToolCalls(transcript.messages)
+
+      // Nothing appended since the last request built its context: the model
+      // would see byte-identical input and answer the same thing. Skip.
+      const signature = `${cleanMessages.length}:${cleanMessages.at(-1)?.uuid ?? ''}`
+      if (signature === lastRequestSignature) {
+        logForDebugging(
+          `[AgentSummary] Skipping summary for ${taskId}: transcript unchanged (${cleanMessages.length} messages)`,
+        )
+        return
+      }
+      // Recorded BEFORE the request so a slow tick cannot re-send the same
+      // context; cleared in catch so a failed attempt retries on the next tick
+      // instead of wedging this transcript state out of ever being summarized.
+      lastRequestSignature = signature
 
       // Build fork params with current messages
       const forkParams: CacheSafeParams = {
@@ -148,6 +171,8 @@ export function startAgentSummarization(
         }
       }
     } catch (e) {
+      // This context never produced a summary — let the next tick retry it.
+      lastRequestSignature = null
       if (!stopped && e instanceof Error) {
         logError(e)
       }
@@ -162,7 +187,7 @@ export function startAgentSummarization(
 
   function scheduleNext(): void {
     if (stopped) return
-    timeoutId = setTimeout(runSummary, SUMMARY_INTERVAL_MS)
+    timeoutId = setTimeout(runSummary, intervalMs)
   }
 
   function stop(): void {
