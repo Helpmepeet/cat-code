@@ -320,7 +320,8 @@ export type CompactMetadata = {
    *
    * `durableUuids` names preserved messages that reach the transcript, in chain
    * order, and is what resume relinks against. `liveUuids` is the in-process
-   * superset including messages `isLoggableMessage` drops (attachments, meta);
+   * superset including messages `isLoggableMessage` drops (progress, silent
+   * hook successes);
    * it is NOT crash durable and must never be treated as recoverable state.
    */
   preservedMessages?: {

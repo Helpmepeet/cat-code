@@ -8,6 +8,7 @@ import { getAPISessionId, getSessionId, getSessionProjectDir, switchSession } fr
 import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccountPool.js'
 import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
+import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { releaseActiveTranscriptLease } from './transcriptLease.js'
@@ -1681,6 +1682,103 @@ describe('session storage', () => {
       const text = await Bun.file(agentTranscriptPath).text()
       expect(text).toContain('"subtype":"prompt_cache_break"')
       expect(text).toContain('CACHE-BREAK-MARKER')
+    })
+  })
+})
+
+/**
+ * Anything the operator types mid-turn is drained into a `queued_command`
+ * attachment and IS sent to the model (attachments.ts
+ * getQueuedCommandAttachments, drained in query.ts). The transcript used to
+ * drop every attachment for non-ant users, and `scripts/build.ts` hard-defines
+ * USER_TYPE='external', so the drop was total: a corpus sweep of 2,060
+ * transcripts / 354,456 entries in ~/.cat-code/projects found zero attachment
+ * entries. That means the transcript did not record what the model was
+ * actually told, and a resumed prefix could not match what was cached.
+ *
+ * The round trip through the file is the test: the write path (isLoggableMessage
+ * inside recordTranscript) and the read path (isTranscriptMessage, which already
+ * admits 'attachment' into the parentUuid chain) have to agree.
+ */
+describe('attachment persistence', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  let tempDir: string
+  let sessionId: UUID
+
+  beforeEach(async () => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    tempDir = mkdtempSync(join(tmpdir(), 'attachment-persist-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  afterEach(async () => {
+    clearSessionMessagesCache()
+    resetProjectForTesting()
+    await releaseActiveTranscriptLease()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('a queued command typed mid-turn survives to the transcript', async () => {
+    // Built by the real producer, not a hand-written shape — the defect is
+    // about what this exact path emits.
+    const attachments = await getQueuedCommandAttachments([
+      { value: 'also check the sidecar', mode: 'prompt', uuid: randomUUID() },
+    ])
+    expect(attachments).toHaveLength(1)
+
+    await recordTranscript([
+      createUserMessage({ content: 'first prompt' }),
+      createAttachmentMessage(attachments[0]!),
+    ])
+    await flushCurrentTranscriptDurably()
+
+    const { messages } = await loadTranscriptFile(
+      getTranscriptPathForSession(sessionId),
+    )
+    const loaded = [...messages.values()]
+    const attachment = loaded.find(m => m.type === 'attachment')
+    expect(attachment).toBeDefined()
+    expect(attachment).toMatchObject({
+      attachment: { type: 'queued_command', prompt: 'also check the sidecar' },
+    })
+  })
+
+  /**
+   * hooks.ts:721 writes `content: ''` for the ordinary silent hook success on
+   * purpose, so persisting those would add a row per hook per turn carrying no
+   * information. Upstream drops exactly this one shape and nothing else (its
+   * attachment denylist has been `new Set([])` since at least 2.1.214).
+   */
+  test('a silent hook_success is dropped, one with output is kept', async () => {
+    const base = {
+      type: 'hook_success' as const,
+      hookName: 'PreToolUse:Bash',
+      toolUseID: 'toolu_test',
+      hookEvent: 'PreToolUse' as const,
+      exitCode: 0,
+    }
+
+    await recordTranscript([
+      createUserMessage({ content: 'first prompt' }),
+      createAttachmentMessage({ ...base, content: '', stdout: '', stderr: '' }),
+      createAttachmentMessage({ ...base, content: '', stdout: 'noisy hook\n', stderr: '' }),
+    ])
+    await flushCurrentTranscriptDurably()
+
+    const { messages } = await loadTranscriptFile(
+      getTranscriptPathForSession(sessionId),
+    )
+    const attachments = [...messages.values()].filter(
+      m => m.type === 'attachment',
+    )
+    expect(attachments).toHaveLength(1)
+    expect(attachments[0]).toMatchObject({
+      attachment: { stdout: 'noisy hook\n' },
     })
   })
 })

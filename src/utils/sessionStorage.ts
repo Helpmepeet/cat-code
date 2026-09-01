@@ -274,6 +274,32 @@ export function getTranscriptPath(): string {
   return join(projectDir, `${getSessionId()}.jsonl`)
 }
 
+/**
+ * Latch the current session's transcript to the project dir it resolves to
+ * right now, so a later `setOriginalCwd` can't move it.
+ *
+ * Callers that chdir the session mid-flight (EnterWorktreeTool) leave
+ * `Project.sessionFile` pointing at the file materialized under the ORIGINAL
+ * project dir while `getTranscriptPath()` — and everything derived from it:
+ * `getAgentTranscriptPath`, `getAgentTranscriptPathForSession`,
+ * `listAgentMetadataForSession`, the remote-agents dir, and the hook payload's
+ * `transcript_path` — would start resolving under the new cwd's project dir,
+ * a file nobody writes.
+ *
+ * This is the same fix resume/branch already has (see the comment on
+ * `getTranscriptPathForSession`): pin `sessionProjectDir` rather than let the
+ * path derive from a cwd that moved. `switchSession` is the only setter, by
+ * design (CC-34); re-passing the current session id makes its subscribers
+ * no-ops (`setCodexPromptCacheKey` skips on unchanged key, the PID file
+ * rewrites the same id).
+ */
+export function pinSessionProjectDir(): void {
+  switchSession(
+    getSessionId(),
+    getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
+  )
+}
+
 export function getTranscriptPathForSession(sessionId: string): string {
   // When asking for the CURRENT session's transcript, honor sessionProjectDir
   // the same way getTranscriptPath() does. Without this, hooks get a
@@ -5815,18 +5841,38 @@ export async function loadAllSubagentTranscriptsFromDisk(): Promise<{
 // without awaiting recordTranscript's return value (race-free hint tracking).
 export function isLoggableMessage(m: Message): boolean {
   if (m.type === 'progress') return false
-  // IMPORTANT: We deliberately filter out most attachments for non-ants because
-  // they have sensitive info for training that we don't want exposed to the public.
-  // When enabled, we allow hook_additional_context through since it contains
-  // user-configured hook output that is useful for session context on resume.
-  if (m.type === 'attachment' && getUserType() !== 'ant') {
+  // Attachments ARE persisted. The old non-ant drop existed to keep attachment
+  // content out of public training data; this fork has one user and ships
+  // USER_TYPE='external' (scripts/build.ts), so the drop was total and cost
+  // real fidelity: mid-turn typing becomes a queued_command attachment that IS
+  // sent to the model (attachments.ts getQueuedCommandAttachments, drained in
+  // query.ts), so a transcript without attachments does not record what the
+  // model was told, and a resumed prefix cannot match what was cached.
+  // isTranscriptMessage already admits 'attachment' into the parentUuid chain
+  // on the read side. Upstream reached the same place: its equivalent denylist
+  // has been `new Set([])` since at least 2.1.214.
+  //
+  // A hook_success with no content and no output is the one exception, also
+  // upstream's: hooks.ts deliberately writes content:'' for the ordinary
+  // silent success, so persisting it would add a row per hook per turn that
+  // says nothing.
+  if (m.type === 'attachment') {
+    // AttachmentMessage.attachment is typed `unknown` (types/message.ts), so
+    // the shape has to be named here to read it.
+    const attachment = m.attachment as {
+      type?: string
+      content?: string
+      stdout?: string
+      stderr?: string
+    } | null
     if (
-      m.attachment.type === 'hook_additional_context' &&
-      isEnvTruthy(process.env.CLAUDE_CODE_SAVE_HOOK_ADDITIONAL_CONTEXT)
+      attachment?.type === 'hook_success' &&
+      !attachment.content &&
+      !attachment.stdout?.trim() &&
+      !attachment.stderr?.trim()
     ) {
-      return true
+      return false
     }
-    return false
   }
   return true
 }

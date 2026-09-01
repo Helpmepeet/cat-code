@@ -10,7 +10,10 @@ import { findCanonicalGitRoot } from '../../utils/git.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { getPlanSlug, getPlansDirectory } from '../../utils/plans.js'
 import { setCwd } from '../../utils/Shell.js'
-import { saveWorktreeState } from '../../utils/sessionStorage.js'
+import {
+  pinSessionProjectDir,
+  saveWorktreeState,
+} from '../../utils/sessionStorage.js'
 import {
   createWorktreeForSession,
   getCurrentWorktreeSession,
@@ -90,6 +93,12 @@ export const EnterWorktreeTool: Tool<InputSchema, Output> = buildTool({
     const slug = input.name ?? getPlanSlug()
 
     const worktreeSession = await createWorktreeForSession(getSessionId(), slug)
+
+    // Must run BEFORE setOriginalCwd: the transcript file was materialized
+    // under the pre-worktree project dir and the writer keeps that path, so
+    // letting originalCwd move would repoint getTranscriptPath() (and every
+    // hook's transcript_path) at a file nobody writes.
+    pinSessionProjectDir()
 
     process.chdir(worktreeSession.worktreePath)
     setCwd(worktreeSession.worktreePath)

@@ -1854,7 +1854,7 @@ export function REPL({
       swarmBudgetInfoRef.current = undefined;
       setMessages(prev => [...prev, createTurnDurationMessage(totalMs, deferredBudget,
       // Count only what recordTranscript will persist — ephemeral
-      // progress ticks and non-ant attachments are filtered by
+      // progress ticks and silent hook successes are filtered by
       // isLoggableMessage and never reach disk. Using raw prev.length
       // would make checkResumeConsistency report false delta<0 for
       // every turn that ran a progress-emitting tool.
