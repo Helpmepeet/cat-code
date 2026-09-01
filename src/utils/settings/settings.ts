@@ -53,6 +53,7 @@ import {
 } from './settingsCache.js'
 import { type SettingsJson, SettingsSchema } from './types.js'
 import {
+  dropInvalidSettingsSections,
   filterInvalidPermissionRules,
   formatZodError,
   type SettingsWithErrors,
@@ -226,6 +227,23 @@ function parseSettingsFileUncached(path: string): {
     const result = SettingsSchema().safeParse(data)
 
     if (!result.success) {
+      // Same idea one level up: drop only the top-level sections that failed
+      // so a bad `hooks` block doesn't discard a valid `model` alongside it.
+      // Bails to whole-file rejection when nothing narrower can be dropped.
+      const sectionWarnings = dropInvalidSettingsSections(
+        data,
+        path,
+        result.error,
+      )
+      if (sectionWarnings) {
+        const retry = SettingsSchema().safeParse(data)
+        if (retry.success) {
+          return {
+            settings: retry.data,
+            errors: [...ruleWarnings, ...sectionWarnings],
+          }
+        }
+      }
       const errors = formatZodError(result.error, path)
       return { settings: null, errors: [...ruleWarnings, ...errors] }
     }
@@ -573,7 +591,13 @@ export function updateSettingsForSource(
     // cache — mergeWith below mutates its target (including nested refs),
     // and mutating the cached object would leak unpersisted state if the
     // write fails before resetSettingsCache().
-    let existingSettings = getSettingsForSourceUncached(source)
+    // Every source that reaches here is editable (policySettings and
+    // flagSettings returned above), so this is exactly what
+    // getSettingsForSourceUncached would read — taken directly so the
+    // parse errors come with it.
+    const { settings: parsedSettings, errors: parseErrors } =
+      parseSettingsFile(filePath)
+    let existingSettings = parsedSettings
 
     // If validation failed, check if file exists with a JSON syntax error
     if (!existingSettings) {
@@ -603,6 +627,29 @@ export function updateSettingsForSource(
             `Using raw settings from ${filePath} due to validation failure`,
           )
         }
+      }
+    }
+
+    // Widen the merge base with the sections dropInvalidSettingsSections
+    // removed. They are still the user's own text: without this the write
+    // erases a section it was never asked to touch, leaving nothing to fix.
+    // The value is carried on the warning rather than re-read from disk
+    // because safeParseJSON memoizes by content, so a second parse of the
+    // same file returns the object the drop already mutated. Rules that
+    // filterInvalidPermissionRules removed carry no marker and are left
+    // exactly as writes already treated them.
+    if (existingSettings) {
+      const target = existingSettings as Record<string, unknown>
+      const restored: string[] = []
+      for (const parseError of parseErrors) {
+        if (parseError.droppedSection === undefined) continue
+        target[parseError.droppedSection] = clone(parseError.invalidValue)
+        restored.push(parseError.droppedSection)
+      }
+      if (restored.length > 0) {
+        logForDebugging(
+          `Keeping unparsed settings sections from ${filePath}: ${restored.join(', ')}`,
+        )
       }
     }
 

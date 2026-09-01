@@ -48,7 +48,7 @@ export function InvalidSettingsDialog(t0) {
   }
   let t3;
   if ($[5] === Symbol.for("react.memo_cache_sentinel")) {
-    t3 = <Text dimColor={true}>Files with errors are skipped entirely, not just the invalid settings.</Text>;
+    t3 = <Text dimColor={true}>Only the settings that failed are skipped. The rest of each file still applies.</Text>;
     $[5] = t3;
   } else {
     t3 = $[5];

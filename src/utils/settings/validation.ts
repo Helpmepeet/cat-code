@@ -56,6 +56,13 @@ export type ValidationError = {
   expected?: string
   /** The actual invalid value that was provided */
   invalidValue?: unknown
+  /**
+   * Name of the top-level section this error removed wholesale, set only by
+   * dropInvalidSettingsSections. Writers use it, with the section's original
+   * value in `invalidValue`, to keep the user's text for that section in the
+   * file (updateSettingsForSource).
+   */
+  droppedSection?: string
   /** Suggestion for fixing the error */
   suggestion?: string
   /** Link to relevant documentation */
@@ -259,6 +266,62 @@ export function filterInvalidPermissionRules(
         return false
       }
       return true
+    })
+  }
+  return warnings
+}
+
+/** Cap on how many underlying reasons a dropped-section warning quotes. */
+const MAX_SECTION_REASONS = 3
+
+/**
+ * Removes the top-level settings sections that failed schema validation from
+ * the raw parsed JSON data, so one bad section doesn't poison the whole file.
+ * Same contract as filterInvalidPermissionRules: mutates `data` in place and
+ * returns one warning per removal, for the caller to re-parse and surface.
+ *
+ * Returns null when the failure can't be pinned on a top-level section (a
+ * non-object file, a root-level issue). The caller then keeps rejecting the
+ * file as a whole, because there is nothing narrower to drop.
+ */
+export function dropInvalidSettingsSections(
+  data: unknown,
+  filePath: string,
+  error: ZodError,
+): ValidationError[] | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  const obj = data as Record<string, unknown>
+
+  // Reuse the same human phrasing whole-file rejection would have shown.
+  const formatted = formatZodError(error, filePath)
+  const reasonsBySection = new Map<string, string[]>()
+  for (const [index, issue] of error.issues.entries()) {
+    const section = issue.path[0]
+    if (typeof section !== 'string' || !(section in obj)) return null
+    const relativePath = issue.path.slice(1).map(String).join('.')
+    const message = formatted[index]?.message ?? issue.message
+    const reasons = reasonsBySection.get(section) ?? []
+    reasons.push(relativePath ? `${relativePath}: ${message}` : message)
+    reasonsBySection.set(section, reasons)
+  }
+  if (reasonsBySection.size === 0) return null
+
+  const warnings: ValidationError[] = []
+  for (const [section, reasons] of reasonsBySection) {
+    // Captured before the delete: writers restore the section from here
+    // rather than re-reading the file, because safeParseJSON memoizes by
+    // content and would hand back this same, already-mutated object.
+    const invalidValue = obj[section]
+    delete obj[section]
+    warnings.push({
+      file: filePath,
+      path: section,
+      message:
+        `Ignored the "${section}" settings because ` +
+        `${reasons.slice(0, MAX_SECTION_REASONS).join('; ')}. ` +
+        `Fix it to turn them back on.`,
+      invalidValue,
+      droppedSection: section,
     })
   }
   return warnings
