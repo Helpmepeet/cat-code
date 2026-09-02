@@ -12,6 +12,16 @@ own summary. Order is fixed: **conformance first, correctness second** — a
 beautiful implementation of the wrong thing is a failing review. This is the
 house methodology (P2-0 → P4 tranche-A reviews); follow it, don't improvise.
 
+## Execution ownership
+
+"Cold" and "adversarial" describe how YOU review, not who reviews. A review the
+user asks for is your task: do it in this thread, from your own reads and
+commands. Handing the whole audit to one subagent is not a cold review, it is a
+relay, and it does not transfer responsibility for the findings. Spawn a review
+agent only when the user explicitly asks for a subagent, another model, or a
+second reviewer. A bounded supporting lane (one parallel dimension, one large
+corpus sweep) is fine; the verdict stays yours.
+
 ## Step 1 — Establish the contract
 
 Collect what the work was SUPPOSED to do: the plan or backlog prompt, the

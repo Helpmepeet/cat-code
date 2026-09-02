@@ -383,13 +383,15 @@ WHEN NOT TO USE THE ${AGENT_TOOL_NAME} TOOL:
 - If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead.
 - If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead.
 - If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead.
-- Do not use ${AGENT_TOOL_NAME} for tasks unrelated to the available agent roles.`
+- Do not use ${AGENT_TOOL_NAME} for tasks unrelated to the available agent roles.
+- Do not delegate the user's own request in full. "Adversarial review", "cold review", "audit" and "verify" name the method to apply, not a request for another agent; perform such a review yourself unless the user explicitly asks for a subagent, another model, or a second reviewer.`
       : `
 When NOT to use the ${AGENT_TOOL_NAME} tool:
 - If you want to read a specific file path, use the ${FILE_READ_TOOL_NAME} tool or ${fileSearchHint} instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
 - If you are searching for a specific class definition like "class Foo", use ${contentSearchHint} instead, to find the match more quickly
 - If you are searching for code within a specific file or set of 2-3 files, use the ${FILE_READ_TOOL_NAME} tool instead of the ${AGENT_TOOL_NAME} tool, to find the match more quickly
 - Other tasks that are not related to the agent descriptions above
+- The user's own request, delegated in full. "Adversarial review", "cold review", "audit" and "verify" name the method to apply, not a request for another agent; perform such a review yourself unless the user explicitly asks for a subagent, another model, or a second reviewer
 `
 
   // Removed: this note pushed aggressive concurrent/background spawning
