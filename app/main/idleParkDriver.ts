@@ -45,8 +45,20 @@ export const MAX_LIVE_ENGINES = 4
  * is parked even under the cap, to reclaim genuinely-abandoned tabs. Generous so
  * a merely-quiet session is never reaped out from under a reader (restore is one
  * click away regardless).
+ *
+ * 20 min → 120 min on 2026-09-02. At 20 the TTL was shorter than the operator's
+ * gap between visits to a session they multiplex, so it reclaimed sessions that
+ * were merely quiet, which is the case this knob is meant to avoid: three days
+ * of operational log hold 11 parks, ALL TTL-driven and none cap-driven, 6 of
+ * them restored within the hour and 3 within 15 minutes, with the primary
+ * session parked four times and restored after 4, 13, 35 and 38 minutes
+ * (2026-09-02 assessment §5 item 3, §10.1). At 120 min every one of those
+ * restores finds a live engine. The cost is bounded and small: an engine holds
+ * about 223 MB, the cap holds live engines at MAX_LIVE_ENGINES, so the policy's
+ * whole footprint is about 0.9 GB, and the five parks that were never restored
+ * would hold their share up to two hours longer.
  */
-export const PARK_IDLE_TTL_MS = 20 * 60 * 1000
+export const PARK_IDLE_TTL_MS = 120 * 60 * 1000
 
 /** How often the driver re-evaluates for the idle-TTL sweep. */
 const DEFAULT_SWEEP_INTERVAL_MS = 60 * 1000

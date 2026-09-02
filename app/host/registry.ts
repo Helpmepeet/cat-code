@@ -80,7 +80,9 @@ export const MAX_REGISTRY_SESSIONS = 256
  * so the tab is kept and unpark = the existing restore-on-click), but it is
  * EXCLUDED from the `enforceBound` reap (a parked row is an open tab, not a
  * terminal row) and normalises to `'crashed'` on disk read — so it never
- * survives a relaunch as a distinct state.
+ * survives a relaunch as a distinct state. That read-time rule is for the
+ * app-crashed-while-parked case only: an ordinary quit marks parked rows
+ * `'clean'` first (`markLiveCleanSync`), so a normal relaunch never sees one.
  */
 export type ShutdownState = 'clean' | 'crashed' | 'parked' | null
 
@@ -887,12 +889,25 @@ export class SessionRegistry {
    * where the process may exit before an async persist could settle. A write
    * failure is swallowed (the row state is re-derivable; a launch sweep would
    * just mark them crashed instead).
+   *
+   * IDLE-PARK: `'parked'` rows are marked clean TOO, and that is not a widening
+   * of "live". A park is a reclaim the host chose, so an ordinary quit that finds
+   * one is an ordinary quit — not the app-crashed-while-parked case that
+   * `normalizeShutdown`'s `'parked'` → `'crashed'` rule (§8) exists for. That
+   * rule stays correct precisely because a real crash never runs this method.
+   * Without this, every quit left parked rows `'parked'` on disk and the next
+   * launch read them as `crashed`: under a TTL shorter than the gap between
+   * visits, most background sessions are parked at any moment, so most of the
+   * sidebar, the Sessions page and the palette came back dead-toned after an
+   * ordinary relaunch (2026-09-02 assessment §3; three days of log hold 11
+   * sidecar exits, all parks, and 0 crashes, against 53 `crashed` rows).
+   * `'crashed'` is still never relabelled — a genuine crash keeps its state.
    * Returns the ids it marked.
    */
   markLiveCleanSync(): string[] {
     const marked: string[] = []
     for (const row of this.doc.sessions) {
-      if (row.shutdown !== null) continue
+      if (row.shutdown !== null && row.shutdown !== 'parked') continue
       row.shutdown = 'clean'
       marked.push(row.appSessionId)
     }

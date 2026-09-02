@@ -1972,6 +1972,43 @@ test('F3: a mid-run sidecar crash marks the row crashed, and a later quit does N
   expect(h.registry.findSession(id)?.engineSessionId).toBe('engine-crash-test')
 })
 
+test('IDLE-PARK — an ordinary quit marks PARKED rows clean, so the next launch does not read them as crashed', async () => {
+  const h = makeHost()
+
+  // Session P parks (the host reclaimed its engine); session C genuinely crashes.
+  const parked = await h.host.createSession({ cwd: h.cwd })
+  const crashed = await h.host.createSession({ cwd: h.cwd })
+  if (!parked.ok || !crashed.ok) throw new Error('create failed')
+  const parkedId = parked.value.appSessionId
+  const crashedId = crashed.value.appSessionId
+  h.supervisor.emitReady(parkedId, 'engine-parked-quit')
+  h.supervisor.emitReady(crashedId, 'engine-crashed-quit')
+  await settle(() => h.registry.findSession(crashedId)?.engineSessionId === 'engine-crashed-quit')
+  writeTranscript(h.storageDir, 'engine-parked-quit')
+  writeTranscript(h.storageDir, 'engine-crashed-quit')
+
+  h.supervisor.emitPark(parkedId)
+  h.supervisor.emitCrash(crashedId)
+  await settle(() => h.registry.findSession(parkedId)?.shutdown === 'parked')
+  await settle(() => h.registry.findSession(crashedId)?.shutdown === 'crashed')
+
+  // The quit. A park is a reclaim the host chose, so an ordinary quit that finds
+  // one is an ordinary quit — the parked row ends clean. A real crash is still
+  // never relabelled.
+  h.host.shutdownAll()
+  expect(h.registry.findSession(parkedId)?.shutdown).toBe('clean')
+  expect(h.registry.findSession(crashedId)?.shutdown).toBe('crashed')
+
+  // The half the user sees: a fresh launch reading that file. Before this fix
+  // the parked row was still `'parked'` on disk and `normalizeShutdown` turned
+  // it into `'crashed'`, so a session nothing had happened to came back
+  // dead-toned in the sidebar, the Sessions page and the palette.
+  const next = new SessionRegistry({ storageDir: h.storageDir, log: () => {} })
+  await next.launch()
+  expect(next.findSession(parkedId)?.shutdown).toBe('clean')
+  expect(next.findSession(crashedId)?.shutdown).toBe('crashed')
+})
+
 test('F3: a failed spawn (no exit event behind it) also marks the row crashed', async () => {
   const h = makeHost()
   const created = await h.host.createSession({ cwd: h.cwd })

@@ -9,6 +9,7 @@ import type { SessionDescriptor } from '../shared/hostApi.js'
 import {
   createIdleParkDriver as createIdleParkDriverWithDeps,
   MAX_LIVE_ENGINES,
+  PARK_IDLE_TTL_MS,
   type IdleParkDriverDeps,
 } from './idleParkDriver.js'
 
@@ -251,9 +252,13 @@ test('a just-restored session is NOT parked, however old its last turn', () => {
 })
 
 test('a restored session still parks once genuinely idle past the TTL', () => {
-  // The same row, swept 21 minutes after the restore rather than 1: the attach
-  // stamp is now itself beyond the TTL, so the fix must not make a restored
-  // session permanently unparkable.
+  // The same row, swept one sweep past the TTL after the restore rather than 1
+  // minute: the attach stamp is now itself beyond the TTL, so the fix must not
+  // make a restored session permanently unparkable. Derived from the real
+  // constant, not a literal — this test runs on the DEFAULT TTL (that is the
+  // point: it exercises the shipped policy), and a hardcoded 21 minutes silently
+  // became "inside the TTL" when the knob was retuned 20 → 120 min on
+  // 2026-09-02, failing a regression test that had nothing to do with the knob.
   const restored = desc({
     appSessionId: '9d74a6cc',
     createdAt: 1785667012145,
@@ -265,7 +270,7 @@ test('a restored session still parks once genuinely idle past the TTL', () => {
     listSessions: () => [restored],
     park: id => parked.push(id),
     maxLiveEngines: 100,
-    now: () => 1785734279860 + 21 * 60_000,
+    now: () => 1785734279860 + PARK_IDLE_TTL_MS + 60_000,
   })
 
   driver.evaluate()
