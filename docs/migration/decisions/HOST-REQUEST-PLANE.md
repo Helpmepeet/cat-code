@@ -67,10 +67,16 @@ main → sidecar   host.result   { protocolVersion, sessionId, requestId, ok, va
 
 | verb | what main does | returns |
 |---|---|---|
-| `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, status (live/parked/closed), createdBy, lastActivity, title |
-| `peer.create` | `createSessionInWorkspace(requesterId)` (`host.ts:430`) then stamp `createdBy` + deliver the creation prompt | the new row's name + appSessionId |
-| `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar; parked/closed: restore via the existing restore path, then forward | outcome enum (§4) |
-| `peer.notifyWhenIdle` | one-shot: when the named row next leaves `busy`, deliver a notice to the requester | ack |
+| `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), busy, createdBy (resolved to a name, or `gone`), lastActivity, title |
+| `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`/`createdBy` in the child's spawn env → persist the row → await that row's `ready` → deliver the creation prompt as a `request` | the new row's name + appSessionId |
+| `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar; parked/closed: main's own restore-then-deliver (§4 step 5) | outcome enum (§4) |
+| `peer.notifyWhenIdle` | one-shot: when the named row next goes from busy to idle (per the sidecar's `activity` frame, §4a), deliver a `notify` to the requester | ack |
+
+`engineSessionId` is on the list result because `ReadPeer` opens
+`<engineSessionId>.jsonl` (`src/utils/sessionStorage.ts:320`) and the sidecar
+has no other way to map a name to a transcript key: the mapping lives only in
+main's registry (`app/host/registry.ts:94-100`), which R2 forbids the sidecar
+to read. A null value means "nothing to read yet", not "no such peer".
 
 Not in v1: `session.close` (closing a tab is the operator's act), any verb that
 takes a filesystem path, any verb that returns file contents.
@@ -82,9 +88,19 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 - **HR1 — main validates fail-closed.** `host.request` is decoded by the
   supervisor and handled in main under a sidecar-local-style schema: closed
   verb allowlist, strict top-level keys (the `checkStrictKeys` idiom,
-  `sidecarServer.ts:5448`), per-verb Zod args, `MAX_OUTBOUND_FRAME_BYTES`
-  already bounding the frame. Unknown verb or bad args → `host.result` with a
-  typed error, never a throw into main, never a silent drop (E-2 precedent).
+  `sidecarServer.ts:5448`), per-verb Zod args. Unknown verb or bad args →
+  `host.result` with a typed error, never a throw into main, never a silent
+  drop (E-2 precedent). **Size and rate are NOT inherited from the channel.**
+  `host.request` rides the sidecar→main direction, whose decoder bound is
+  `MAX_OUTBOUND_FRAME_BYTES` (32 MiB, "a sanity bound, not a policy gate",
+  `app/shared/limits.ts:22-25`; `supervisor.ts:376`) and which has no
+  per-window rate cap at all (`MAX_FRAMES_PER_WINDOW` is enforced only at the
+  sidecar for renderer traffic, `limits.ts:32`). Under §8 A1's threat model
+  the request payload is model-authored, so main applies its own
+  `MAX_HOST_REQUEST_BYTES` (= `MAX_FRAME_BYTES`, 128 KiB) to the serialized
+  request and a per-session `MAX_HOST_REQUESTS_PER_WINDOW`; breach → typed
+  refusal, logged. The directional limits themselves are not swapped or
+  unified; this is a third bound at the consumer.
 - **HR2 — identity is the connection, never the frame.** The requester is
   `record.sessionId` from the supervisor map (PROTOCOL-ENVELOPE E-1), and main
   stamps `from` on every delivered message from that. A `from` field inside
@@ -130,33 +146,70 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    recipient (`hop_loop`) or exceeds `MAX_PEER_HOPS` (`hop_runaway`). With one
    trusted router there is no need for the upstream blinded-token variant.
 3. Main applies the channel guards: per `(from, to)` token bucket, duplicate
-   body within a short window, queue depth at the recipient. Breach → typed
-   refusal; nothing is dropped silently.
-4. Recipient live: forward the frame; the recipient sidecar enqueues it into
-   the engine command queue (`app/sidecar/sidecarServer.ts` already calls
-   `enqueue` / `enqueuePendingNotification` from
-   `src/utils/messageQueueManager.ts`). A `request` uses the `next` priority,
-   so a busy recipient reads it between tool calls at the existing drain
-   (`src/query.ts:1942`), and an idle recipient starts a turn. A `notify` uses
-   the `later` priority: it lands in the transcript and the model sees it on
-   its next turn; it starts none.
-5. Recipient parked or closed: a `request` restores through the same path a
-   user submit takes (IDLE-PARK §3a, REGISTRY R3), then forwards. A `notify`
-   to a parked or closed row is persisted for delivery on the next restore and
-   does NOT wake it.
-6. The `host.result` reports what happened: `queued_live`, `queued_wake`,
-   `stored_for_restore`, `refused:<reason>`. The sending model sees this in its
-   tool result, so it never reasons from a false belief that a peer heard it.
+   body within a short window, and `MAX_PENDING_PEER_MESSAGES` per recipient
+   (a NEW main-side count of undelivered peer messages; the sidecar's
+   `MAX_QUEUED_PROMPTS` bounds only renderer `app.submit` prompts arriving
+   mid-turn, `sidecarServer.ts:2431-2436`, and never sees this plane). Breach →
+   typed refusal; nothing is dropped silently.
+4. Recipient live, `kind: 'request'`: forward the frame; the recipient sidecar
+   enqueues it into the engine command queue at `next` priority **on the
+   task-notification path** (`enqueuePendingNotification`, mode
+   `task-notification`, with a `MessageOrigin` of kind `peer`), never on the
+   prompt path: `enqueueMidTurnPrompt` stages a `mode:'prompt'` command into
+   the renderer's waiting-messages strip (`sidecarServer.ts:1969-1978`), which
+   would show a peer message as something the user typed and subject it to the
+   user's recall controls. A busy recipient reads it between tool calls at the
+   existing drain (`src/query.ts:1942`); an idle recipient starts a turn from
+   the sidecar's boundary drain (`drainOneTaskNotification` → `startTurn`,
+   `sidecarServer.ts:1676`).
+4a. Recipient live, `kind: 'notify'`: **the engine queue cannot carry a
+   turn-free message.** The sidecar's boundary drains ignore priority and start
+   a turn for anything they dequeue (`isDeliverableParentPrompt` /
+   `isDeliverableParentTaskNotification`, `sidecarServer.ts:5285-5296`; the
+   only modes that become attachments are `prompt` and `task-notification`,
+   `src/utils/attachments.ts:1054`), so a `later` command would simply be read
+   at the next boundary and billed. A notify therefore does NOT enter the
+   engine queue on arrival. The sidecar (a) holds it in an app-owned
+   `pendingNotices` list, (b) emits an outbound app-owned `peer.notice` event so
+   the renderer shows the row now, and (c) at the next `startTurn` from ANY
+   cause (user prompt, a `request`, a task notification) enqueues the held
+   notices at `next` priority ahead of that turn's input so the drain attaches
+   them. Main keeps the durable copy until the sidecar acks consumption, so a
+   park or crash between (b) and (c) loses nothing. This is the mechanism that
+   makes `notify` cost the recipient no turn; without it the two kinds differ
+   only in mid-turn timing.
+   The sidecar also emits an outbound app-owned `activity` frame
+   `{ busy: boolean }` on turn start and end. Main today knows only recency
+   (`idleParkDriver.ts:151-157` `recencyOf`) and never reads the engine's
+   `turn.status` events (zero non-test `activeTurn` reads outside
+   `app/sidecar`); this frame is how main learns busy/idle for `peers.list`
+   and `peer.notifyWhenIdle` without interpreting engine event vocabulary, the
+   same app-owned-field pattern as `ReadyFrame.engineSessionId`.
+5. Recipient parked or closed: IDLE-PARK §3a's wake is a RENDERER path
+   (`resolvePendingSubmit` → `bridge.restoreSession` → hold → forward); main's
+   share of it is only `host.restoreSession`. So for a `request` main runs its
+   own deliver-after-ready: call `restoreSession`; on `already restoring` /
+   `already live` (both currently answered as `session_not_found`,
+   `host.ts:331-333,365-384`) treat the row as pending rather than missing;
+   wait for that row's `ready` frame (main already observes it, `main.ts:1818`)
+   under a timeout; then forward. Failure → `refused:wake_failed`, never
+   `session_not_found`, which HR3 reserves for a row the caller may not name. A
+   `notify` to a parked or closed row is stored in main and delivered at the
+   next restore; it does NOT wake.
+6. The `host.result` reports what happened: `queued_live`, `held_notice`,
+   `queued_wake`, `stored_for_restore`, `refused:<reason>`. The sending model
+   sees this in its tool result, so it never reasons from a false belief that a
+   peer heard it.
 
 ## 5. Per-plane change list (for the dispatch that builds it)
 
 | plane | change |
 |---|---|
-| `app/shared/protocol.ts` | `HostRequestFrame` in `ServerFramePayload`; `HostResultFrame` + `PeerDeliverFrame` in the inbound union; doc comments cite this file. No version bump (additive). |
-| `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`). |
-| `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + HR3 scoping + guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`. |
-| `app/host/host.ts`, `app/host/registry.ts` | additive row fields `name`, `createdBy`; `createSessionInWorkspace` gains an internal caller that stamps them; per-creator count. |
-| `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; enqueue with priority by kind. |
+| `app/shared/protocol.ts` | outbound: `HostRequestFrame`, `ActivityFrame`, `PeerNoticeFrame` in `ServerFramePayload`; inbound: `HostResultFrame` + `PeerDeliverFrame`; doc comments cite this file. No version bump (additive). |
+| `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`); two additive spawn-env keys `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY` beside `CATCODE_SIDECAR_CWD` (`:355-359`), threaded through the per-spawn `SpawnConfig` (`:138`). |
+| `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row busy state from `activity`; the deliver-after-ready state machine (§4 step 5); the durable pending-notice and notify-when-idle stores (in-memory: they die with the window like everything else, SESSION-LIFETIME L1, and a pending subscription also expires when either row is reaped or after 12 h, the upstream precedent). |
+| `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`); the spawn path accepts them; per-creator count; the name picker (PEER-SESSIONS §2). |
+| `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; `request` → task-notification enqueue with origin `peer`; `notify` → held notices + `peer.notice` event + enqueue-at-next-turn + ack; `activity` on turn start/end; doctrine block from env. |
 | `app/main/idleParkDriver.ts` | none. A wake through restore is already a spawn the driver sees. |
 
 ## 6. Tests owed before ratification of the build
@@ -170,8 +223,16 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
   refused; two sessions replying to each other stop within the cap without
   prompt help (run against the real queue, not a stub: CLAUDE.md §8 rule 1).
 - Delivery: `request` to a busy live recipient is read between tool calls;
-  `notify` to an idle recipient starts no turn; `request` to a parked row
-  restores it and the prompt arrives (the IDLE-PARK §9 path).
+  `notify` to an idle recipient starts NO turn (assert against the real
+  boundary drain, which is exactly where the naive design started one) and is
+  attached at the next turn from another cause; `request` to a parked row
+  restores it and the prompt arrives after `ready`; a `request` racing a
+  user-initiated restore is delivered, not answered `session_not_found`.
+- Size/rate: an oversized `host.request` and a request flood are refused with
+  typed errors at main.
+- Rendering: a `peer` origin row renders as an injected-turn row with the
+  sender label, never as a user bubble, and never appears in the staged-prompt
+  strip (extend `transcriptProjector.test.ts:1271`).
 - `bun run --cwd app test:hardening` green.
 
 ## 7. Rejected
@@ -203,6 +264,9 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 - **A5 — a `request` wakes a parked session the operator wanted parked.** It
   is the same wake the operator's own next message performs (IDLE-PARK §3a),
   bounded by the caps; the park driver re-parks on its next sweep.
+- **A6 — a compromised sidecar floods main with requests or a 30 MiB one.**
+  HR1's own size and rate bounds at the consumer; the channel's 32 MiB sanity
+  bound was never a policy gate and is not relied on.
 
 ## 9. Ruling requested
 

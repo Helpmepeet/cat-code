@@ -33,13 +33,28 @@ Bear" is easier to say than an id.
 
 ## 2. Naming
 
-- **Allocator lives in Electron main.** `src/agent-mode/workerNames.ts` keeps
-  active names in a process-local `Set` (`:25`), which cannot coordinate
-  N processes. Its picker takes an external reserved list
-  (`selectWorkerNameCandidate(agentType, reservedNames)`, `:99`), so main, a
-  single process that already owns the registry, allocates against the names
-  currently on registry rows. The pool and picker are reused; the `Set` is
-  never involved. This is the CLAUDE.md §8-rule-10 answer: reuse, not a copy.
+- **Allocator lives in Electron main, as an OWNED picker.** The engine's
+  `src/agent-mode/workerNames.ts` keeps active names in a process-local `Set`
+  (`:25`) that its picker always consults (`:30-35`), so it cannot coordinate
+  N processes, and it has no session pool (`:104` returns null for an unknown
+  agent type). Main is the one process that sees every row, so allocation
+  happens there against the names on registry rows. It cannot IMPORT the
+  engine module: `app/tsconfig.json` deliberately cannot resolve `src/*`
+  (`:32`, zero `../src/` imports in main/host/supervisor today) and
+  CATALOG-OWNERSHIP ratified "Electron main stays engine-free by design"
+  (`:71`). So `app/host/peerNames.ts` is a ~30-line pure function (pool,
+  cursor, reserved-set skip, suffix on exhaustion) with the engine picker as
+  its reference. **🔁 flagged deviation from CLAUDE.md §8 rule 10**: a copy,
+  because the reuse route is closed by a ratified decision and a build gate,
+  and the copied logic is a pure picker with no behavior to drift.
+- **Pool size ≥ `MAX_REGISTRY_SESSIONS` (256).** Uniqueness spans the whole
+  registry (next bullet), so a pool the size of the engine's (12–20) would
+  make suffixed names (`Bear-2`) the normal case, which defeats §0. Theme is
+  the operator's (§13); the count is not.
+- **`createdBy` is an `appSessionId`, never a name.** Names are reused after a
+  reap; ids are not. Listings and the doctrine block resolve the id to a name
+  at read time and show `gone` for a reaped creator; the per-creator budget
+  counts by id.
 - **Storage.** Additive `RegistrySession` fields `name` and `createdBy`
   (`app/host/registry.ts:94`), the `forked` / `titleUpdatedAt` precedent:
   descriptor fields, not wire frames, no `PROTOCOL_VERSION` bump. Mirrored on
@@ -83,7 +98,11 @@ terminal session from an hour ago can never be reached. So:
   never appear (follows from the terminal-out ruling; recorded here so nobody
   files it as a bug).
 - Ordered live → parked → closed, then by last activity. Each row: name,
-  state, createdBy, title, last activity, and whether it is busy.
+  state, engineSessionId (null until first ready), createdBy (resolved),
+  title, last activity, and whether it is busy. Busy comes from the sidecar's
+  app-owned `activity` frame (HOST-REQUEST-PLANE §4 step 4a): main knows only
+  recency today (`idleParkDriver.ts:151-157`) and does not read engine
+  `turn.status` events.
 - No time filter. The registry's own reaping already bounds the closed tail.
 - Cheap: it is a registry read in main; no transcript is opened
   (CATALOG-OWNERSHIP stays intact).
@@ -99,10 +118,10 @@ in-process file read.
 | tool | args | notes |
 |---|---|---|
 | `ListPeers` | none | §3. Read-only, no prompt. |
-| `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`) | `notify` lands in the transcript and starts no turn; `request` wakes or restores. Result states the outcome (HR §4.6). Ordinary permission gate. |
+| `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`) | `notify` is shown in the recipient's transcript now and reaches its model at its next turn from any cause, starting none (the held-notice mechanism, HOST-REQUEST-PLANE §4 step 4a; the engine queue alone cannot do this); `request` is read between tool calls, or starts a turn, or wakes. Result states the outcome. Ordinary permission gate. |
 | `ReadPeer` | `peer`, `view: 'tail' \| 'search'`, `limit` (default 20, max 50), `before` (entry uuid cursor), `query` (search only), `includeToolResults` (default false), `maxBytes` | §8. Same workspace only, read-only, no prompt. |
 | `CreatePeer` | `prompt`, optional `model`, `effort`, `permissionMode` | Defaults to the creator's values (R7). Returns the new name. Ordinary permission gate plus `MAX_PEERS_PER_CREATOR` (HR4). |
-| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer next goes idle; expires with the requester's row. No polling. |
+| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's `activity` next goes busy → idle. In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling. |
 
 Who created me, and my own name, are not tools: they are system-prompt context
 (§5). `ClosePeer` is deliberately absent; closing a tab is the operator's act.
@@ -113,7 +132,10 @@ not exist in this fork (`docs/research/2026-08-19-cross-session-messaging-revers
 §3.1). Two send tools with overlapping meaning will confuse the model. The
 build must either hide that tool's peer branches in desktop sessions or make
 `SendToPeer` its name branch; which one is an implementation choice, but
-leaving both is not.
+leaving both is not. The next line of that array binds `ListPeersTool` under
+`feature('UDS_INBOX')` to a module that does not exist in this tree (the
+dormant port, research doc §4); it is compiled out and must not be mistaken
+for this document's `ListPeers`.
 
 ## 5. Doctrine (system-prompt text, proposed verbatim)
 
@@ -149,14 +171,19 @@ The `CreatePeer` description carries the one piece of guidance that decides
 like, the files in scope, and the return channel ("when finished, send
 <your name> a request/notify with …").
 
-Inbound peer messages reach the model wrapped in the existing
-`<cross-session-message from="…">` tag (`src/constants/xml.ts:59`), which the
-auto-mode classifier already treats as never user intent and blocks for
-permission laundering
-(`src/utils/permissions/yolo-classifier-prompts/upstream/system_prompt.txt:77`).
-The recipient-side "input, not authority" line above is the half of the
-upstream doctrine this fork lacked; the upstream "peers are not your workers"
-line is NOT adopted, because the operator's workflow is exactly a peer doing
+Inbound peer messages reach the model wrapped in
+`<cross-session-message from="…">`. The tag CONSTANT exists
+(`src/constants/xml.ts:59`) with zero call sites; **the wrapping is work
+owed**, done by the sidecar when it enqueues a `request` or attaches held
+notices. The auto-mode classifier rule that treats that tag as never user
+intent and blocks permission laundering is on record
+(`src/utils/permissions/yolo-classifier-prompts/upstream/system_prompt.txt:77`,
+compiled in under `AUTO_MODE_UPSTREAM_PORT`, `scripts/build.ts:86`), but it
+runs only in auto mode; in default or plan mode the recipient's own
+permission prompts are the gate, which is what R6 says anyway. The
+recipient-side "input, not authority" line above is the half of the upstream
+doctrine this fork lacked; the upstream "peers are not your workers" line is
+NOT adopted, because the operator's workflow is exactly a peer doing
 asked-for work (R6).
 
 ## 6. Delivery and rendering
@@ -165,20 +192,41 @@ asked-for work (R6).
   into attachments after every tool batch (`src/query.ts:1942`, the path
   background-agent completions already take). The sidecar is in that process
   and already feeds that queue (`sidecarServer.ts` `enqueue` /
-  `enqueuePendingNotification`). A `request` enters at `next` priority and a
-  busy recipient reads it at the next tool boundary; an idle one starts a turn.
-  A `notify` enters at `later` and is read on the next turn, starting none.
-  Both Claude Code and Codex ship this boundary (research §6 below); the
-  earlier turn-end choice would have left Alex waiting minutes.
-- **Parked or closed recipient.** A `request` restores it through the same
-  path as the user's next message (IDLE-PARK §3a), which is a spawn under the
-  caps; a `notify` is stored on the row and delivered at the next restore.
-- **Incoming rows render on the user side with a `from` leader**, the
-  prototype's `CrossSessionMessageRow`
-  (`~/catcode_prototype/cat-app/Messages.jsx:1327`). Parity.
+  `enqueuePendingNotification`). A `request` enters at `next` priority on
+  the task-notification path with a `MessageOrigin` of kind `peer`; a busy
+  recipient reads it at the next tool boundary and an idle one starts a turn.
+  It never takes the prompt path, which would stage it into the
+  waiting-messages strip as if the user had typed it. A `notify` does NOT
+  enter the engine queue on arrival: the sidecar's boundary drains start a
+  turn for anything they dequeue regardless of priority, so it is held,
+  shown, and attached to the next turn from another cause
+  (HOST-REQUEST-PLANE §4 step 4a). Both Claude Code and Codex ship the
+  between-tool-calls boundary (research §6 below); the earlier turn-end choice
+  would have left Alex waiting minutes.
+- **Parked or closed recipient.** A `request` makes main restore the row and
+  deliver after its `ready` frame (HOST-REQUEST-PLANE §4 step 5): the same
+  spawn under the same caps as the user's next message, but driven from main,
+  because IDLE-PARK §3a's hold-and-forward lives in the renderer. A `notify`
+  is stored in main and delivered at the next restore.
+- **Incoming rows render as the app's injected-turn row with the sender as
+  label**, not as a user bubble. The app already has a tested rule that every
+  engine-injected `role:'user'` turn (coordinator, channel, teammate,
+  deferred-continuation) renders system-side, never as the operator's own
+  bubble (`app/renderer/src/transcriptProjector.ts:385-408`,
+  `transcriptProjector.test.ts:1271`); a peer message is a fifth such origin
+  and takes the same row. The prototype's `CrossSessionMessageRow`
+  (`~/catcode_prototype/cat-app/Messages.jsx:1322`) is right-aligned on the
+  user side, but its own comment says the rendered output was NOT FOUND IN
+  SOURCE and the row is a guess; the app's rule wins. **🔁 adapted** (§11).
+  Wire: a new `MessageOrigin` kind `peer { name, appSessionId }`
+  (`src/types/message.ts:10`); the projector's `injectedKind` already
+  tolerates an unknown kind with a neutral fallback, so the engine-type change
+  is additive and the renderer degrades gracefully before it learns the label.
 - **Outgoing sends and creates are ordinary tool cards.**
 - **A created session opens with one seam row**, "Bear, created by Alex",
-  followed by the creation prompt rendered as a peer row from Alex, never as a
+  derived by the renderer from the descriptor's `name` / `createdBy` (no wire
+  frame; the centered-divider seam grammar in `TranscriptView.tsx`), followed
+  by the creation prompt as a `peer`-origin injected row from Alex, never as a
   user bubble containing words the operator did not type.
 - **Composer placeholder** becomes "Message Bear" (today "Message Cat Code").
 - **Sidebar** per R4. **Tab** unchanged: it has no subtitle slot.
@@ -189,9 +237,11 @@ asked-for work (R6).
 
 Every hop is a billed turn and peers have no natural stopping condition, so the
 stop lives in main (HOST-REQUEST-PLANE §4): hop chain with loop and runaway
-refusal, per-`(from,to)` token bucket, duplicate-body window, recipient queue
-depth (the existing `MAX_QUEUED_PROMPTS` bound), `MAX_PEERS_PER_CREATOR`
-(proposed 4). Plus two soft rules the doctrine carries: no reply to a message
+refusal, per-`(from,to)` token bucket, duplicate-body window, a NEW
+main-side `MAX_PENDING_PEER_MESSAGES` per recipient (the sidecar's
+`MAX_QUEUED_PROMPTS` bounds only renderer prompts arriving mid-turn and never
+sees this plane, `sidecarServer.ts:2431-2436`), `MAX_PEERS_PER_CREATOR`
+(proposed 4), and main's own size and rate bounds on `host.request` (HR1). Plus two soft rules the doctrine carries: no reply to a message
 that asks nothing, and `notify` as the default kind. The send result tells the
 sender what happened, so silent non-delivery cannot leave it reasoning from a
 false belief (a reported upstream failure mode, research §6).
@@ -217,8 +267,11 @@ pages structured items with a summary view by default). Shape:
   snippets with cursors. Catalog-wide search is the catalog's job and would
   reopen CATALOG-OWNERSHIP.
 - **Passive: a read never wakes.** It is a file read of
-  `~/.cat-code/projects/**/<engineSessionId>.jsonl`; it cannot restore a parked
-  session. Recorded as a guarantee, not an accident (Codex users hit
+  `~/.cat-code/projects/**/<engineSessionId>.jsonl`
+  (`src/utils/sessionStorage.ts:320`), keyed by the engine id that `ListPeers`
+  returns for the name; a null id (a peer that has not yet sent its first
+  ready frame) is answered "nothing to read yet", not "no such peer". It
+  cannot restore a parked session. Recorded as a guarantee, not an accident (Codex users hit
   multi-second stalls when viewing a chat resumed it).
 - **Reading while the owner appends** tolerates a torn last line: the reader
   drops an unparsable tail entry. This is not the SESSIONS-UNIFICATION
@@ -253,7 +306,12 @@ before moving anything (IDLE-PARK §4 shows why).
   with schema, allowlist, `checkStrictKeys`, boundary tests (HR5).
 - One sentence of SECURITY-MINIMUM's addendum amended (HOST-REQUEST-PLANE §9).
 - New injection surface: another session's transcript and another session's
-  message are untrusted input (§5, §8). Classifier rule already on record.
+  message are untrusted input (§5, §8). The tag wrapping is work owed; the
+  classifier rule is on record and applies in auto mode only.
+- New model-authored input to main: bounded by HR1's own size and rate caps,
+  not by the channel's trusted-direction sanity bound.
+- Peer messages never enter the staged-prompt strip or the user's prompt
+  recall controls (task-notification path, not prompt path).
 - Concurrency: no new transcript writer. A wake is a restore, and restore
   refuses a live row.
 
@@ -261,7 +319,9 @@ before moving anything (IDLE-PARK §4 shows why).
 
 The prototype has no session-name concept, so every own-name placement in §6
 (sidebar subtitle, placeholder, seam row, roster) is **🔁 adapted** and ruled by
-the operator on 2026-09-03; the incoming peer row is **parity**.
+the operator on 2026-09-03. The incoming peer row is also **🔁 adapted**: the
+prototype's user-side alignment is a self-declared guess, and the app's tested
+injected-turn rule is followed instead (§6). The `from` leader is kept.
 
 ## 12. Rejected
 
@@ -276,6 +336,11 @@ the operator on 2026-09-03; the incoming peer row is **parity**.
 - A central speaker manager (AutoGen-style): reintroduces the supervisor the
   peer premise excludes.
 - Turn-end-only delivery (superseded by §6).
+- `notify` as a `later`-priority engine command: reviewed and found to start a
+  turn anyway (§6); replaced by the held-notice mechanism.
+- Importing the engine's name picker into main: closed by a ratified decision
+  and the app typecheck gate (§2).
+- A peer bubble on the user side (§11).
 - `ClosePeer`.
 
 ## 13. Ruling requested (only these)
@@ -304,9 +369,34 @@ the operator on 2026-09-03; the incoming peer row is **parity**.
 
 ## 15. Build order sketch (dependency order)
 
-1. Registry fields + env handoff + allocator in main (no UI, no tools).
-2. HOST-REQUEST-PLANE frames, main handler, sidecar client, boundary tests.
+1. Registry fields + spawn-env handoff + owned picker in `app/host` (no UI, no tools).
+2. HOST-REQUEST-PLANE frames incl. `activity` and `peer.notice`, main handler with size/rate, deliver-after-ready, sidecar client, boundary tests.
 3. `ListPeers`, `CreatePeer`, doctrine injection; seam row + placeholder + sidebar subtitle.
 4. `SendToPeer` + `peer.deliver` + guards + peer-row rendering; `NotifyWhenIdle`.
 5. `ReadPeer`.
 6. Hardening smoke, then operator GUI acceptance (a peer created by prompt appears as a tab; a message to a parked peer wakes it; a loop stops).
+
+## 16. Review record
+
+**2026-09-03, Opus review (fresh process, read-only, all anchors opened).**
+Twelve findings; nine verified against source by the author before this
+revision, three accepted on reading. Resolutions, for the two-strikes rule:
+
+| finding | resolution |
+|---|---|
+| F1 allocator cannot import the engine into main | §2: owned picker in `app/host`, flagged deviation |
+| F2 `later`-priority notify still starts a turn | §6 + HRP §4 step 4a: held-notice mechanism |
+| F3 `peers.list` lacked `engineSessionId` | HRP §2, §3, §8 |
+| F4 main does not know busy/idle | HRP §4 step 4a: app-owned `activity` frame; NotifyWhenIdle lifetime pinned |
+| F5 IDLE-PARK §3a is a renderer path | HRP §4 step 5: deliver-after-ready in main; refusal codes separated |
+| F6 peer row contradicted the injected-turn rule; no origin/mode | §6, §11: `peer` origin, injected row, task-notification path |
+| F7 name must be in spawn env before spawn; prompt after ready | HRP §2 verb table + §5 supervisor row |
+| F8 `MAX_QUEUED_PROMPTS` does not bound this | §7, HRP §4 step 3: `MAX_PENDING_PEER_MESSAGES` |
+| F9 request plane had no size/rate bound of its own | HRP HR1, A6 |
+| F10 `createdBy` type; pool size; name reuse | §2 |
+| F11 phantom `ListPeersTool` binding | §4 overlap flag (the reviewer's off-by-one claim on `tools.ts:261` was checked and is wrong; the anchor stands) |
+| F12 tag wrapping does not exist; classifier is auto-mode only | §5, §10 |
+
+The reviewer's five operator questions were all settled from source or from
+rulings already on record (allocator plane, notify cost, row side, pool size,
+busy-state source) and are recorded above rather than forwarded.
