@@ -484,7 +484,7 @@ function pool(): AccountStatus[] {
   ]
 }
 
-test('AccountSwitcherPanel lists the real pool with a healthy count', () => {
+test('AccountSwitcherPanel lists the real pool under the column headers, with no title row', () => {
   const rows = pool()
   const html = renderToStaticMarkup(
     <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
@@ -492,9 +492,13 @@ test('AccountSwitcherPanel lists the real pool with a healthy count', () => {
   expect(html).toContain('hiby')
   expect(html).toContain('yoxrent')
   expect(html).toContain('oldcap')
-  // 2 of 3 healthy (hiby + yoxrent; oldcap is capped).
-  expect(html).toContain('/3 healthy')
-  expect(html).toContain('>2</span>/3 healthy')
+  // The panel opens straight on the column headers; the old title row (an
+  // "Accounts" label plus an "N/M healthy" tally) is gone, and "Account" as a
+  // column header carries the naming on its own.
+  expect(html).not.toContain('healthy')
+  expect(html).toContain('Account<')
+  expect(html).toContain('5h<')
+  expect(html).toContain('Weekly<')
 })
 
 test('AccountSwitcherPanel: only a switchable non-active row is an enabled switch target', () => {
@@ -555,19 +559,6 @@ test('AccountSwitcherPanel: dead and quarantined rows show their real label, nev
   expect(html).not.toContain('>Capped<')
   // Neither dead nor quarantined implies a reset timer.
   expect(html).not.toContain('↺')
-})
-
-test('AccountSwitcherPanel: the header count excludes a healthy account that hit its usage limit (ACCT-4)', () => {
-  const rows = [
-    account({ id: 'a-1', alias: 'one', status: 'healthy', usageLimitReached: false }),
-    account({ id: 'a-2', alias: 'two', status: 'healthy', usageLimitReached: true }),
-  ]
-  const html = renderToStaticMarkup(
-    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
-  )
-  // Only 1 of 2 is truly ready, even though both report status 'healthy' —
-  // matches the sidecar's readyCount predicate, not a bare status check.
-  expect(html).toContain('>1</span>/2 healthy')
 })
 
 test('AccountSwitcherPanel: clicking a switchable row invokes onSwitch with its real id (ACCT-9)', () => {

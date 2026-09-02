@@ -488,11 +488,6 @@ export function AccountSwitcherPanel({
   onSwitch: (accountId: string) => void
   onManage?: () => void
 }) {
-  // ACCT-4: the authoritative readiness predicate (matches the sidecar's
-  // readyCount, `app/sidecar/accountsDomain.ts:179-181`) — a healthy account
-  // that has already hit its usage limit is not ready, even though its own
-  // status is still 'healthy'.
-  const ready = pool.filter(a => a.status === 'healthy' && !a.usageLimitReached).length
   return (
     <div
       role="menu"
@@ -500,15 +495,7 @@ export function AccountSwitcherPanel({
       onKeyDown={handleMenuRovingKeyDown}
       className={`${POPOVER_PANEL_RIGHT} w-[336px]`}
     >
-      <div className="flex items-center justify-between px-3.5 pb-2 pt-2.5">
-        <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-text-subtle">
-          Accounts
-        </span>
-        <span className="text-[11px] tabular-nums text-text-subtle">
-          <span className="text-tone-good">{ready}</span>/{pool.length} healthy
-        </span>
-      </div>
-      <div className="flex items-center gap-3 px-3.5 pb-1.5">
+      <div className="flex items-center gap-3 px-3.5 pb-1.5 pt-2.5">
         <span className="flex-1 text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
           Account
         </span>
