@@ -102,6 +102,7 @@ import {
   localCommandOutputToSDKAssistantMessage,
   toSDKCompactMetadata,
   toSDKMessageOriginProp,
+  toSDKRetryError,
 } from './utils/messages/mappers.js'
 import { queuedCommandOrigin } from './utils/taskNotification.js'
 import {

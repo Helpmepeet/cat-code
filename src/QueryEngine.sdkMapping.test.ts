@@ -4,11 +4,16 @@
  * yielded, and the desktop projector test proves a well-formed frame renders.
  * Neither would notice the engine emitting the wrong shape in between.
  */
+import { APIError } from '@anthropic-ai/sdk'
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 
 import { getDefaultAppState, type AppState } from './state/AppStateStore.js'
 import { createFileStateCacheWithSizeLimit } from './utils/fileStateCache.js'
-import { createSystemTransportRecoveryMessage, createUserMessage } from './utils/messages.js'
+import {
+  createSystemAPIErrorMessage,
+  createSystemTransportRecoveryMessage,
+  createUserMessage,
+} from './utils/messages.js'
 import type { Message } from './types/message.js'
 
 let stubsActive = false
@@ -154,6 +159,36 @@ test('a transport recovery message becomes an api_retry frame the desktop can re
     error: {
       type: 'assistant_error',
       message: 'Connection interrupted. Continuing automatically.',
+    },
+  })
+})
+
+test('an api error message becomes an api_retry frame the desktop can read', async () => {
+  queryMessages = [
+    createSystemAPIErrorMessage(
+      new APIError(429, undefined, 'Too Many Requests', new Headers()),
+      1500,
+      1,
+      3,
+    ),
+  ]
+
+  const frames = await collectFrames()
+  const retry = frames.find(
+    frame => frame.type === 'system' && frame.subtype === 'api_retry',
+  )
+
+  expect(retry).toBeDefined()
+  expect(retry).toMatchObject({
+    type: 'system',
+    subtype: 'api_retry',
+    attempt: 1,
+    max_retries: 3,
+    retry_delay_ms: 1500,
+    error_status: 429,
+    error: {
+      type: 'assistant_error',
+      error: 'rate_limit',
     },
   })
 })
