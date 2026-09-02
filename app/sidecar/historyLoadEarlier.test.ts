@@ -337,6 +337,162 @@ test('a second request while one is in flight is refused, never queued', async (
 })
 
 /* ------------------------------------------------------------------------- *
+ * The main-authored view anchor (HISTORY-LOAD-EARLIER.md §The view anchor)
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The anchor is inbound vocabulary like any other, so it gets both halves of
+ * the boundary treatment: a well-formed one is ACCEPTED and used, and a
+ * malformed one is REJECTED before the reader runs. Main authors it and
+ * overwrites the renderer's key at `forward`, but a main-side check is never
+ * sufficient on its own (SECURITY-MINIMUM §2 R2) — this side validates too.
+ */
+test('a main-authored view anchor is accepted and used as the diff anchor', async () => {
+  const oldest = randomUUID()
+  const middle = randomUUID()
+  const held = randomUUID()
+  const server = makeServer({
+    // What THIS SOCKET was sent reaches back to `middle` ...
+    history: [historyMessage(middle, 'evicted'), historyMessage(held, 'on screen')],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => ({
+      messages: [
+        historyMessage(oldest, 'oldest'),
+        historyMessage(middle, 'evicted'),
+        historyMessage(held, 'on screen'),
+      ],
+      truncated: false,
+    }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const attached = received.length
+
+  // ... but main's ring evicted that frame, so the pane a reload rebuilt starts
+  // at `held`. Diffing from the connection's own anchor would recover only
+  // `oldest` and leave `evicted` in a hole nobody can reach.
+  server.handleData(
+    connection,
+    frame({
+      type: 'history.loadEarlier',
+      requestId: 'anchored',
+      viewAnchorUuid: held,
+    }),
+  )
+  await Bun.sleep(0)
+
+  expect(errors(received.slice(attached))).toHaveLength(0)
+  expect(replayedText(received.slice(attached))).toEqual(['oldest', 'evicted'])
+  expect(results(received).at(-1)).toMatchObject({
+    requestId: 'anchored',
+    ok: true,
+    added: 2,
+    complete: true,
+  })
+})
+
+test('a view anchor that is not uuid-shaped is REJECTED before any read', async () => {
+  let read = 0
+  const anchor = historyMessage(randomUUID(), 'on screen')
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      read += 1
+      return { messages: [anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const attached = received.length
+
+  server.handleData(
+    connection,
+    frame({
+      type: 'history.loadEarlier',
+      requestId: 'req-1',
+      viewAnchorUuid: '../../etc/passwd',
+    }),
+  )
+  await Bun.sleep(0)
+
+  expect(read).toBe(0)
+  expect(results(received)).toHaveLength(0)
+  expect(errors(received.slice(attached))[0]).toMatchObject({
+    code: 'bad_request',
+  })
+})
+
+test('a wrong-typed view anchor is REJECTED before any read', async () => {
+  let read = 0
+  const anchor = historyMessage(randomUUID(), 'on screen')
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      read += 1
+      return { messages: [anchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const attached = received.length
+
+  server.handleData(
+    connection,
+    frame({
+      type: 'history.loadEarlier',
+      requestId: 'req-1',
+      viewAnchorUuid: 12,
+    }),
+  )
+  await Bun.sleep(0)
+
+  expect(read).toBe(0)
+  expect(results(received)).toHaveLength(0)
+  expect(errors(received.slice(attached))[0]).toMatchObject({
+    code: 'bad_request',
+  })
+})
+
+/**
+ * An anchor the deeper read cannot find means there is no prefix that is
+ * provably missing rather than duplicated, so the read fails closed and the
+ * boundary row stays standing — the recoverable direction.
+ */
+test('a view anchor absent from the deeper read refuses rather than guesses', async () => {
+  const server = makeServer({
+    history: [historyMessage(randomUUID(), 'on screen')],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => ({
+      messages: [historyMessage(randomUUID(), 'oldest')],
+      truncated: false,
+    }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  const attached = received.length
+
+  server.handleData(
+    connection,
+    frame({
+      type: 'history.loadEarlier',
+      requestId: 'unfindable',
+      viewAnchorUuid: randomUUID(),
+    }),
+  )
+  await Bun.sleep(0)
+
+  expect(replayedText(received.slice(attached))).toEqual([])
+  expect(results(received).at(-1)).toMatchObject({
+    requestId: 'unfindable',
+    ok: false,
+    added: 0,
+    complete: false,
+  })
+})
+
+/* ------------------------------------------------------------------------- *
  * Live path — a real transcript file, read by the real engine loader
  * ------------------------------------------------------------------------- */
 
@@ -708,4 +864,105 @@ test('recovered frames are marked, and the attach replay is not', async () => {
     .filter(f => f.kind === 'event')
   expect(emitted).toHaveLength(1)
   expect(emitted[0]).toMatchObject({ replay: true, recovered: true })
+})
+
+/* ------------------------------------------------------------------------- *
+ * Path 1 — a session STARTED IN THE APP, after a renderer reload
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The regression this fix exists for (2026-09-02 idle-park assessment §6).
+ *
+ * A session started in the app resumes nothing from disk, so this sidecar's
+ * `history` is empty and `historySourceTruncated` is false. That used to be
+ * answered as `complete: true, added: 0` — "your transcript is whole" — from
+ * the sidecar's own emptiness. But the view the reader is holding did not come
+ * from here: after a renderer reload the pane is rebuilt from main's replay
+ * ring, and that ring evicts. So the reader was told it had everything while
+ * its first row sat above a hole, and the renderer then cleared the boundary
+ * row that was its only route back.
+ *
+ * Main's anchor is what closes it, and the transcript here is REAL: the
+ * recovered text exists only in the JSONL on disk and is never handed to the
+ * server, so it can only have come through `loadDisplayTranscriptFromJsonlPath`
+ * (CLAUDE.md §8 rule 1). Remove the `viewAnchorUuid` condition from the
+ * empty-history branch in `handleHistoryLoadEarlier` and this fails exactly as
+ * the defect did: zero recovered frames, `added: 0`, `complete: true`.
+ */
+test('an empty sidecar history is NOT reported complete over a truncated view', async () => {
+  const texts = mintTranscript(6)
+  const onDisk = await replayedTail(6)
+  expect(onDisk).toHaveLength(6)
+  const heldOldest = onDisk[4]!.uuid as string
+
+  // A session started in the app: nothing restored, nothing truncated here.
+  const server = makeServer({})
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  expect(received.filter(f => f.kind === 'event')).toHaveLength(0)
+  const beforeRequest = received.length
+
+  // Main's ring kept only the last two messages, so that is where the reloaded
+  // pane starts.
+  server.handleData(
+    connection,
+    frame({
+      type: 'history.loadEarlier',
+      requestId: 'reloaded',
+      viewAnchorUuid: heldOldest,
+    }),
+  )
+  await waitForResult(received, 'reloaded')
+
+  const recovered = received.slice(beforeRequest)
+  expect(replayedText(recovered)).toEqual(texts.slice(0, 4))
+  expect(results(recovered)).toEqual([
+    {
+      kind: 'history.loadEarlier.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      requestId: 'reloaded',
+      ok: true,
+      message: 'Earlier messages loaded.',
+      added: 4,
+      complete: true,
+    },
+  ])
+})
+
+/**
+ * The other half, so the branch above is narrowed rather than removed: with no
+ * anchor from main the ring is whole, the reader holds everything, and the
+ * cheap answer stands — no 16 MiB read, no subagent files.
+ */
+test('an empty sidecar history with no anchor still answers without reading disk', async () => {
+  let reads = 0
+  const server = makeServer({
+    loadEarlierHistory: async () => {
+      reads += 1
+      return { messages: [], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'fresh' }),
+  )
+  await Bun.sleep(0)
+
+  expect(reads).toBe(0)
+  expect(results(received)).toEqual([
+    {
+      kind: 'history.loadEarlier.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      requestId: 'fresh',
+      ok: true,
+      message: 'No earlier messages to load.',
+      added: 0,
+      complete: true,
+    },
+  ])
 })

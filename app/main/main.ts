@@ -80,6 +80,7 @@ import {
   runDetachedCliFallbackSpawn,
   selectTranscriptBackfillCandidates,
   frameMutatedAccountsPool,
+  stampHistoryViewAnchor,
   supervisorEventToServerFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
@@ -2116,9 +2117,12 @@ function registerIpcHandlers(): void {
       // coercion only; the SIDECAR is the trust boundary and fully re-validates
       // (Zod schema + closed key allowlist), then decides for itself which file
       // it reads and how much of it. Drop any frame whose `type` is not the
-      // load-earlier verb fail-closed. There is no other field to coerce: the
-      // verb carries no target and no extent, only the renderer's `requestId`
-      // for result correlation (a UX field, not a security one).
+      // load-earlier verb fail-closed. There is no other field to coerce here:
+      // the verb carries no target and no extent, only the renderer's
+      // `requestId` for result correlation (a UX field, not a security one).
+      // The frame's one main-authored field, `viewAnchorUuid`, is stamped in
+      // `forward` rather than here, so it cannot be missed by a second route
+      // into the verb — see the comment there.
       const verb = arg.verb as { type?: unknown } | null | undefined
       if (
         typeof verb?.type !== 'string' ||
@@ -3191,12 +3195,24 @@ function readString(payload: unknown, key: string): string | undefined {
  * The return value exists for one caller: a submit that never reached the
  * supervisor is a certain loss, and only main knows it happened
  * (`answerUnforwardedSubmit`). Every other caller ignores it, exactly as before.
+ *
+ * This is also where main AUTHORS the load-earlier view anchor
+ * (decisions/HISTORY-LOAD-EARLIER.md §The view anchor). It is stamped here, not
+ * in the IPC handler, because this is the one point every renderer frame passes
+ * through on its way to a sidecar: a second route into the verb would inherit
+ * the property instead of needing to remember it. The renderer's own value is
+ * dropped rather than merged (`stampHistoryViewAnchor`), so nothing
+ * renderer-authored widens the inbound surface.
  */
 function forward(
   sessionId: SessionId,
   message: SidecarClientMessage,
 ): ErrorFrame['code'] | null {
   if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
+  message = stampHistoryViewAnchor(
+    message,
+    attachmentGate.viewAnchorUuid(sessionId),
+  )
 
   if (!supervisor) {
     const frame: ServerFrame = {

@@ -1,6 +1,6 @@
 # Load earlier messages — the one inbound verb that reaches back to disk
 
-**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`). RENDERER HALF IMPLEMENTED 2026-08-20: the control ships on the boundary row and the reading position now anchors on row identity. B1/B2/B4/B5 all CLOSED — see §Blockers. What remains is operator acceptance of a live press, which no headless suite can give.**
+**Status: DECIDED (operator-approved 2026-08-19). WIRE HALF IMPLEMENTED 2026-08-20 (`a14d94bc`). RENDERER HALF IMPLEMENTED 2026-08-20: the control ships on the boundary row and the reading position now anchors on row identity. B1/B2/B4/B5 all CLOSED — see §Blockers. AMENDED 2026-09-02: a main-authored `viewAnchorUuid` was added to the inbound frame to stop a truncated transcript being reported complete — see §The view anchor. What remains is operator acceptance of a live press, which no headless suite can give.**
 Owns the single inbound vocabulary addition needed to make a truncated
 transcript recoverable from inside the app. Origin: the message-visibility UX
 review (`reviews/2026-08-19-transcript-message-visibility-ux-review.md`,
@@ -19,6 +19,11 @@ one completion frame stating whether anything still remains beyond the ceiling.
 
 No cursor. No offset. No count. No path. The renderer names a session and a
 verb; it cannot influence how much is read or from where.
+
+**AMENDED 2026-09-02.** The frame carries one more field, `viewAnchorUuid`, and
+it is authored by ELECTRON MAIN, not by the renderer. The sentence above still
+holds for the renderer, which is what it was written to constrain. See §The view
+anchor.
 
 ## Why parameterless, and why not paging
 
@@ -63,7 +68,10 @@ information in the repo's real envelope:
     { protocolVersion, sessionId, message: { type: 'history.loadEarlier', requestId } }
 
 `requestId` is the only renderer-authored byte. No cursor, offset, count or
-path exists on the frame.
+path exists on the frame. Since 2026-09-02 the message also carries an optional
+main-authored `viewAnchorUuid` (§The view anchor); it is stamped by Electron
+main at `forward`, never sent by the renderer, and the strict-key set below
+admits it as a third allowlisted key.
 
 `requestId` is the standard request-scoped correlation id, engine-minted rules
 unchanged. There are no other fields, and the sidecar's local schema must
@@ -82,6 +90,114 @@ slices the tail of the display chain. Its `truncated` is
 change is required, which is what keeps this inside the reuse rule. They are followed by
 `history.loadEarlier.result` carrying whether the transcript is now complete,
 and the honest count of what was added.
+
+## The view anchor (amendment, 2026-09-02)
+
+**Status: DECIDED and IMPLEMENTED 2026-09-02.** The decision above says the
+renderer names a session and a verb and nothing else. The frame now carries a
+third piece of information, `viewAnchorUuid`. This section records what it is,
+why the original shape could not stay, and why adding it does not reopen the
+renderer-parameterless ruling.
+
+### The defect
+
+`handleHistoryLoadEarlier` diffed the deeper read against a PER-CONNECTION
+anchor set from what `sendHistoryReplay` put on that socket. That answers "what
+did I send this reader", which is not the same question as "what is this reader
+holding", and the two come apart in two ways that both end in the same lie:
+
+1. **A renderer reload of a session STARTED IN THE APP.** Nothing was resumed
+   from disk, so the sidecar's `history` is empty and the request was answered
+   `complete: true, added: 0` from that emptiness. But the view the reader holds
+   after a reload came from main's replay ring, which may have evicted its head.
+   The renderer then cleared the truncation-boundary row over a transcript with
+   a hole in it, and the row was the only route back.
+2. **A resumed session whose live traffic evicted the attach replay.** The
+   per-connection anchor still pointed at the attach-time oldest message, so the
+   recovered prefix ended ABOVE a gap the renderer never received, and was again
+   reported complete.
+
+Both were reachable before `4ed2709f` (stream compaction plus a 16 MiB ring) and
+remain reachable after it. That commit makes eviction much rarer; rarer is not a
+fix, and the failure mode is silent.
+
+### The fix
+
+Main stamps the uuid of the oldest transcript message its replay ring still
+retains for the session onto the outbound `history.loadEarlier`, and the sidecar
+diffs from that instead of from its own send-oldest.
+
+Main is the right author, and the only possible one. The ring IS what a reloaded
+pane is rebuilt from (`AttachmentGate.onNavigationStart` →`onRendererReady` →
+`FrameReplayBuffer.snapshot`; the sidecar connection is untouched by a reload,
+so the sidecar cannot even observe that one happened). Main owns the ring, so
+main is the only party that knows where the reader's first row is.
+
+Minted at `forward` (`app/main/main.ts`), the single point every renderer frame
+passes through on its way to a sidecar, rather than in the load-earlier IPC
+handler: a second route into the verb inherits the property instead of having to
+remember it. The renderer-supplied key is destructured away unconditionally and
+re-added only from main's own value (`stampHistoryViewAnchor`,
+`app/main/mainDecisions.ts`), so there is no branch in which a forged one
+survives the hop.
+
+Stamped only when the ring is LOSSY. A whole ring tells the sidecar nothing it
+does not already know — the reader holds everything main was ever handed, which
+is exactly what the per-connection anchor describes — so the absent case keeps
+the previous behaviour, including the cheap "a fresh session's whole
+conversation is already on screen" answer that costs no disk read.
+
+The anchor is a `user`/`assistant` message uuid, the two types the engine's
+display projection emits. Streamed partials and `result`/`system` frames are
+excluded, because an anchor the deeper read cannot find is answered by refusing.
+
+### Why this does not reopen the ruling
+
+- It is not renderer-authored, and cannot be made so from the renderer side.
+- It authorizes nothing. It is compared for equality against uuids from the
+  sidecar's OWN disk read and steers no file, no budget, and no amount. WHICH
+  file, HOW MUCH of it, and WHETHER a read may start are still decided entirely
+  on the sidecar side.
+- It is still validated AT THE SIDECAR — on the closed `checkStrictKeys`
+  allowlist and uuid-shape-checked in the local Zod schema — because the sidecar
+  is the trust boundary and a main-side check is never sufficient on its own
+  (SECURITY-MINIMUM §2 R2). A malformed one is rejected before any read runs.
+- Additive under v1: optional field, no `PROTOCOL_VERSION` bump.
+
+A renderer-stated uuid was proposed first and rejected in review: it put a
+validated identity the renderer controls on the inbound boundary for a fact the
+renderer is not the source of.
+
+### Resolution rule, and its one accepted cost
+
+When main stamps an anchor it WINS OUTRIGHT over the connection's own. It is
+never older than the connection anchor for a live view — every frame this socket
+sent passed through that ring — so preferring it can only ever re-send messages
+the renderer already has, which its uuid dedupe (`seenFrameIds`) absorbs. The
+connection anchor alone can leave a gap, which is the defect.
+
+Accepted cost of that asymmetry: press "load earlier" a SECOND time after a
+first recovery that did not complete (only possible on a transcript above the
+16 MiB ceiling — p99 is 4.32 MiB, the measured maximum 18.1 MiB), and the
+already-recovered prefix is re-sent and re-counted. Every row dedupes to a
+no-op, so nothing renders wrongly, but the result line says "Earlier messages
+loaded" where it used to say "No earlier messages could be loaded". Not fixed,
+because the fix requires main to track what it has DELIVERED to the current
+renderer document rather than what it RETAINS — new per-session main state on
+the delivery path, to correct a cosmetic string in a case where nothing new can
+appear either way.
+
+### Verification
+
+`app/sidecar/historyLoadEarlier.test.ts` — path 1 against a REAL transcript on
+disk (an empty sidecar history plus a main anchor recovers the real missing
+prefix, and fails as the defect did with the condition removed), path 2 (main's
+anchor supersedes an older connection anchor), plus boundary tests accepting a
+well-formed anchor and rejecting a non-uuid one, a wrong-typed one, and one the
+deeper read cannot find. `app/main/replayBuffer.test.ts` — the anchor is
+published only by a lossy ring, is its oldest retained message, and skips
+partials. `app/main/mainDecisions.test.ts` — a renderer-authored value is
+overwritten when main has one and REMOVED when it does not.
 
 ## Bounds (T7, SECURITY-MINIMUM)
 

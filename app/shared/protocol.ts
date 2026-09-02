@@ -495,14 +495,18 @@ export type AppParkMessage = {
  * TAIL and the rest of it — which exists, whole, in the engine's own JSONL —
  * had no route back into the app at all. This verb is that route.
  *
- * PARAMETERLESS BY DECISION, and that is the entire security story. The frame
- * names a session and a verb; it carries no cursor, no offset, no count, no
- * path, so there is nothing on it for the sidecar to trust and nothing for a
- * compromised renderer to aim. The sidecar owns every number: the read ceiling
- * (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much is already on screen, and where
- * the file is — the transcript path is resolved from the sidecar's OWN session
- * identity via the engine's `getTranscriptPath()`, never from frame content
- * (SECURITY-MINIMUM HC1's posture, applied to a read).
+ * RENDERER-PARAMETERLESS BY DECISION, and that is the entire security story.
+ * The renderer names a session and a verb; it authors no cursor, no offset, no
+ * count, no path, so there is nothing renderer-supplied on it for the sidecar
+ * to trust and nothing for a compromised renderer to aim. The one non-verb
+ * field, `viewAnchorUuid`, is authored by ELECTRON MAIN and overwritten there
+ * on every forward (`stampHistoryViewAnchor`, `app/main/mainDecisions.ts`), so
+ * a renderer-supplied value never survives the hop. The sidecar still owns
+ * every number: the read ceiling (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much
+ * is already on screen, and where the file is — the transcript path is
+ * resolved from the sidecar's OWN session identity via the engine's
+ * `getTranscriptPath()`, never from frame content (SECURITY-MINIMUM HC1's
+ * posture, applied to a read).
  *
  * Paging was rejected: the measured corpus has a 2,988-record maximum, so a
  * whole real transcript fits one bounded read, and a cursor would buy nothing
@@ -524,13 +528,42 @@ export type HistoryLoadEarlierVerbType =
   (typeof HISTORY_LOAD_EARLIER_VERB_TYPES)[number]
 
 /**
- * Read further back into THIS session's transcript. Carries nothing but the
- * T5a-analog `requestId`; the envelope supplies the protocol version and the
- * session address.
+ * Read further back into THIS session's transcript. The renderer authors
+ * nothing but the T5a-analog `requestId`; the envelope supplies the protocol
+ * version and the session address.
  */
 export type HistoryLoadEarlierMessage = {
   type: 'history.loadEarlier'
   requestId: string
+  /**
+   * MAIN-AUTHORED (decisions/HISTORY-LOAD-EARLIER.md §The view anchor). The uuid
+   * of the oldest transcript message Electron main's replay ring still retains
+   * for this session, present ONLY when that ring is lossy — i.e. only when the
+   * view the reader is holding is known to start below where the sidecar
+   * believes it does.
+   *
+   * It exists because the sidecar's own per-connection anchor answers "what did
+   * I send this socket", and that stops being what the reader HOLDS the moment
+   * main's ring evicts a head or a renderer reload rebuilds the pane from that
+   * ring alone. Without it the sidecar can answer `complete: true` over a
+   * transcript with a hole in it, and the renderer clears the boundary row that
+   * was the reader's only route back.
+   *
+   * NEVER renderer-authored: `stampHistoryViewAnchor`
+   * (`app/main/mainDecisions.ts`) drops whatever key arrived from the renderer
+   * and re-stamps it from main's own ring at `forward`, the single point every
+   * renderer frame passes through on its way to the sidecar. It is still
+   * validated at the sidecar as inbound vocabulary (uuid-shaped, on the closed
+   * `checkStrictKeys` allowlist), because the sidecar is the trust boundary and
+   * a preload-side or main-side check is never sufficient on its own
+   * (SECURITY-MINIMUM §2 R2). Nothing is authorized by it: it is compared for
+   * equality against uuids from the sidecar's OWN disk read and steers no file,
+   * no budget, and no amount.
+   *
+   * Additive under v1 — no `PROTOCOL_VERSION` bump. Absent means "main has
+   * nothing to add", which is the pre-existing behaviour.
+   */
+  viewAnchorUuid?: string
 }
 
 /**

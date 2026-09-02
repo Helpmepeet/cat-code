@@ -335,14 +335,16 @@ const bridge: CatCodeBridge = {
     verb: HistoryLoadEarlierMessage,
   ): void {
     // HC3 fixed sender for the load-earlier read
-    // (decisions/HISTORY-LOAD-EARLIER.md). As thin as `recallPrompts`: the
-    // payload is a requestId and nothing else, because the verb has no target
-    // and no extent. The renderer cannot name a file, an offset or a count, so
-    // the only thing crossing is the intent to read further back. main
-    // light-coerces the type and the sidecar is the trust boundary (Zod schema
-    // + closed key allowlist + its own in-flight guard). What comes back is the
-    // existing `replay: true` event vocabulary, closed by one
-    // `history.loadEarlier.result`.
+    // (decisions/HISTORY-LOAD-EARLIER.md). As thin as `recallPrompts`: what the
+    // renderer sends is a requestId and nothing else, because the verb has no
+    // target and no extent. The renderer cannot name a file, an offset or a
+    // count, so the only thing crossing is the intent to read further back. The
+    // frame's one other field, `viewAnchorUuid`, is not sent from here: main
+    // authors it at `forward` and overwrites whatever arrived, so a renderer
+    // that set it anyway gains nothing. main light-coerces the type and the
+    // sidecar is the trust boundary (Zod schema + closed key allowlist + its own
+    // in-flight guard). What comes back is the existing `replay: true` event
+    // vocabulary, closed by one `history.loadEarlier.result`.
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_HISTORY_LOAD_EARLIER, payload)

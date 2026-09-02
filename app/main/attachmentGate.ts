@@ -215,6 +215,17 @@ export class AttachmentGate {
     return this.buffer.snapshotSession(sessionId)
   }
 
+  /**
+   * The oldest retained transcript message for one session, when the retained
+   * view is lossy (HISTORY-LOAD-EARLIER.md §The view anchor). Thin pass-through
+   * to the buffer, mirroring `snapshotSession`: main stamps it onto an outbound
+   * `history.loadEarlier` so the sidecar diffs against what the reader actually
+   * holds rather than what it once sent.
+   */
+  viewAnchorUuid(sessionId: SessionId): string | undefined {
+    return this.buffer.viewAnchorUuid(sessionId)
+  }
+
   /** Drop stale replay for one restarting session without detaching the renderer. */
   clearSession(sessionId: SessionId): void {
     this.replayCoalescing.delete(sessionId)

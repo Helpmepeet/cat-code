@@ -14,8 +14,10 @@
  * WHAT IT DELIBERATELY DOES NOT TAKE: a path, an offset, a count, a session.
  * The transcript is resolved from the engine's OWN live session identity
  * (`getTranscriptPath()` / `getSessionId()`), so no byte of an inbound frame can
- * steer which file is read or how much of it. The verb that reaches here carries
- * only a correlation id, and that is the whole point of it being parameterless.
+ * steer which file is read or how much of it. The verb that reaches the server
+ * carries only a correlation id plus main's `viewAnchorUuid`, and neither
+ * reaches this function: the anchor is used AFTER the read, to diff it, and
+ * that separation is the whole point of the read being parameterless.
  *
  * The seed merge that restore performs (`mergeDisplayHistoryWithSeed`) is
  * deliberately absent: that alignment exists to keep the VISIBLE TAIL identical

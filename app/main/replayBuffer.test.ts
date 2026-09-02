@@ -912,3 +912,62 @@ test('a transcript reset forgets open stream partials', () => {
   ])
   expect(streamEventTypesOf(snapshot)).toEqual([])
 })
+
+/* ── the load-earlier view anchor (decisions/HISTORY-LOAD-EARLIER.md) ── */
+
+/**
+ * The anchor main stamps onto an outbound `history.loadEarlier`. Its whole
+ * value is that main, not the sidecar, knows where a reloaded pane starts: the
+ * pane is rebuilt from this ring and nothing else, so this ring's oldest
+ * retained message is the reader's first row.
+ */
+test('a whole ring publishes no view anchor', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, assistantEventFrame(1))
+  buffer.record(SID, assistantEventFrame(2))
+
+  // Nothing was lost, so the sidecar's own per-connection anchor already
+  // describes what this reader holds and an anchor here would say nothing new.
+  expect(buffer.viewAnchorUuid(SID)).toBeUndefined()
+})
+
+test('a lossy ring publishes its OLDEST retained message', () => {
+  const buffer = new FrameReplayBuffer(3)
+  buffer.record(SID, readyFrame())
+  for (let index = 1; index <= 6; index++) {
+    buffer.record(SID, assistantEventFrame(index))
+  }
+
+  // Frames 1-3 were evicted; a reloaded pane opens on frame 4.
+  expect(buffer.viewAnchorUuid(SID)).toBe(
+    '00000000-0000-4000-8000-000000000004',
+  )
+})
+
+/**
+ * A partial is a piece of a message, not one, and it never appears in the
+ * display transcript the sidecar diffs against — so anchoring on one would be
+ * an anchor the deeper read can never find, which the sidecar answers by
+ * refusing. Same exclusion `retainedMessageCount` makes, for the same reason.
+ */
+test('the view anchor skips streamed partials and non-transcript frames', () => {
+  const buffer = new FrameReplayBuffer(3)
+  buffer.record(SID, readyFrame())
+  for (let index = 1; index <= 4; index++) {
+    buffer.record(SID, assistantEventFrame(index))
+  }
+  // Evicts down to a tail whose oldest frames are a pong and a partial.
+  buffer.record(SID, pongFrame('p1'))
+  buffer.record(SID, streamDeltaFrame(9))
+  buffer.record(SID, assistantEventFrame(7))
+
+  expect(buffer.viewAnchorUuid(SID)).toBe(
+    '00000000-0000-4000-8000-000000000007',
+  )
+})
+
+test('an unbuffered session has no view anchor', () => {
+  const buffer = new FrameReplayBuffer()
+  expect(buffer.viewAnchorUuid('never-seen')).toBeUndefined()
+})

@@ -475,6 +475,36 @@ export class FrameReplayBuffer {
     return frames
   }
 
+  /**
+   * The uuid of the oldest transcript message this session's ring still holds —
+   * the anchor main stamps onto an outbound `history.loadEarlier`
+   * (decisions/HISTORY-LOAD-EARLIER.md §The view anchor).
+   *
+   * Returned ONLY when the ring is lossy. A whole ring tells the sidecar
+   * nothing it does not already know: the reader holds everything main was ever
+   * handed for the session, which is exactly what the sidecar's own
+   * per-connection anchor already describes. A lossy one is the case the
+   * sidecar cannot see — its idea of what this reader holds is now older than
+   * what a reloaded pane would rebuild from this ring — so that, and only that,
+   * is worth a byte on the wire and a disk read at the far end.
+   *
+   * "Message" here means what the display transcript on disk means by it: a
+   * `user` or `assistant` frame carrying a uuid. Streamed partials are excluded
+   * for the same reason `retainedMessageCount` excludes them (they are pieces
+   * of a message, not one), and `result`/`system` frames because the engine's
+   * display projection does not emit them — an anchor the deeper read cannot
+   * find is a refusal, so it must be a uuid that read is certain to contain.
+   */
+  viewAnchorUuid(sessionId: SessionId): string | undefined {
+    const entry = this.sessions.get(sessionId)
+    if (!entry || !entry.truncated) return undefined
+    for (const frame of entry.recent) {
+      const uuid = displayMessageUuid(frame)
+      if (uuid !== undefined) return uuid
+    }
+    return undefined
+  }
+
   /** Forget a session's buffer (e.g. its sidecar was torn down). */
   clearSession(sessionId: SessionId): void {
     this.sessions.delete(sessionId)
@@ -629,6 +659,21 @@ function retainedMessageCount(frames: readonly ServerFrame[]): number {
     retained += 1
   }
   return retained
+}
+
+/**
+ * The uuid a frame contributes to the display transcript, or `undefined` when it
+ * contributes none. Deliberately narrow: only the two message types the engine's
+ * display projection emits (`toSDKMessages`, via `projectResumedHistory`), so an
+ * anchor built from this is a uuid the sidecar's deeper read can actually find.
+ */
+function displayMessageUuid(frame: ServerFrame): string | undefined {
+  if (frame.kind !== 'event') return undefined
+  if (frame.event.type !== 'message') return undefined
+  const message = frame.event.message
+  if (message.type !== 'user' && message.type !== 'assistant') return undefined
+  const uuid: unknown = message.uuid
+  return typeof uuid === 'string' && uuid.length > 0 ? uuid : undefined
 }
 
 function replayTruncationFrame(

@@ -501,6 +501,39 @@ export function createRendererRecoveryPolicy({
  * frame after being classified correctly. Dropping it also stops main running the
  * terminal persist + replay-evict twice per death.
  */
+/**
+ * Stamp main's view anchor onto an outbound `history.loadEarlier`
+ * (decisions/HISTORY-LOAD-EARLIER.md §The view anchor).
+ *
+ * WHY MAIN AND NOT THE RENDERER. The anchor answers "which message does the
+ * reader's transcript currently START at", and after a renderer reload the
+ * answer is main's replay ring, because the pane is rebuilt from that ring and
+ * nothing else. Main owns the ring, so main is the only party that knows. A
+ * renderer-stated uuid would put a validated identity the renderer controls on
+ * the inbound boundary for a fact the renderer is not the source of, which is
+ * the wrong side of it (SECURITY-MINIMUM §2 R2, CLAUDE.md §8 mistake 5).
+ *
+ * WHY IT CANNOT BE FORGED. The renderer-supplied key is DESTRUCTURED AWAY
+ * first, unconditionally, and re-added only from `anchor`. A frame arriving
+ * with a forged `viewAnchorUuid` therefore leaves here carrying main's value or
+ * carrying none — there is no branch in which the inbound one survives. This
+ * runs at `forward`, the single point every renderer frame passes through on
+ * its way to a sidecar, so the property holds for every route into the verb
+ * rather than for the one IPC channel that has a handler today.
+ *
+ * Non-load-earlier messages are returned by identity, so the common path
+ * allocates nothing.
+ */
+export function stampHistoryViewAnchor<T extends { type: string }>(
+  message: T,
+  anchor: string | undefined,
+): T {
+  if (message.type !== 'history.loadEarlier') return message
+  const { viewAnchorUuid: _rendererAuthored, ...rest } =
+    message as T & { viewAnchorUuid?: unknown }
+  return (anchor === undefined ? rest : { ...rest, viewAnchorUuid: anchor }) as T
+}
+
 export function supervisorEventToServerFrame(
   event: SupervisorEvent,
 ): ServerFrame | null {

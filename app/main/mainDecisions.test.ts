@@ -1,7 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
-import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
+import {
+  PROTOCOL_VERSION,
+  type HistoryLoadEarlierMessage,
+  type ServerFrame,
+} from '../shared/protocol.js'
 import type { SupervisorEvent } from '../supervisor/supervisor.js'
 import {
   MAX_FRAME_BYTES,
@@ -41,6 +45,7 @@ import {
   selectRendererWorkingSetKiB,
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
+  stampHistoryViewAnchor,
   supervisorEventToServerFrame,
   resolveSidecarLaunch,
   validateSaveTextRequest,
@@ -1352,4 +1357,70 @@ test('renderer health sampling cadence resets with the monitor', () => {
   health.reset()
   clock = 42_000
   expect(health.response().shouldSample).toBe(true)
+})
+
+/* ── the load-earlier view anchor (decisions/HISTORY-LOAD-EARLIER.md) ── */
+
+/**
+ * The trust property, stated as a test: the anchor is MAIN's, and a renderer
+ * that forges the key cannot get its value past `forward`. The first edition of
+ * this fix had the renderer state the uuid; that put a validated identity the
+ * renderer controls on the inbound boundary for a fact the renderer is not the
+ * source of, and was rejected in review.
+ */
+test('a renderer-authored view anchor is overwritten, never merged', () => {
+  const forged: HistoryLoadEarlierMessage = {
+    type: 'history.loadEarlier',
+    requestId: 'req-1',
+    viewAnchorUuid: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  }
+
+  expect(
+    stampHistoryViewAnchor(forged, '00000000-0000-4000-8000-000000000001'),
+  ).toEqual({
+    type: 'history.loadEarlier',
+    requestId: 'req-1',
+    viewAnchorUuid: '00000000-0000-4000-8000-000000000001',
+  })
+})
+
+/**
+ * And the direction that matters more: when main has nothing to add, the key is
+ * REMOVED rather than left standing. Without this the forged value would be the
+ * one that reached the sidecar in exactly the case main could not correct it.
+ */
+test('a renderer-authored view anchor is dropped when main has none', () => {
+  const forged: HistoryLoadEarlierMessage = {
+    type: 'history.loadEarlier',
+    requestId: 'req-1',
+    viewAnchorUuid: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+  }
+
+  expect(stampHistoryViewAnchor(forged, undefined)).toEqual({
+    type: 'history.loadEarlier',
+    requestId: 'req-1',
+  })
+})
+
+test('main stamps its anchor onto a frame that carried none', () => {
+  const sent: HistoryLoadEarlierMessage = {
+    type: 'history.loadEarlier',
+    requestId: 'req-2',
+  }
+
+  expect(
+    stampHistoryViewAnchor(sent, '00000000-0000-4000-8000-000000000009'),
+  ).toEqual({
+    type: 'history.loadEarlier',
+    requestId: 'req-2',
+    viewAnchorUuid: '00000000-0000-4000-8000-000000000009',
+  })
+})
+
+/** Every other verb passes through untouched, and by identity. */
+test('a non-load-earlier message is returned unchanged', () => {
+  const submit = { type: 'app.submit' as const, requestId: 'req-3' }
+  expect(stampHistoryViewAnchor(submit, 'ffffffff-ffff-4fff-8fff-ffffffffffff')).toBe(
+    submit,
+  )
 })

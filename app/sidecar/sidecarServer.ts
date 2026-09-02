@@ -197,6 +197,11 @@ type Connection = {
    * leave the next one asking for a prefix it was never sent, and recovering
    * nothing. Null means this reader was sent no identifiable restored history,
    * so there is no anchor to diff a deeper read against.
+   *
+   * SUPERSEDED, when present, by the main-authored `viewAnchorUuid` on the
+   * request frame: this field is what the socket SENT, which stops being what
+   * the pane HOLDS once main's replay ring evicts or a renderer reload rebuilds
+   * from it (HISTORY-LOAD-EARLIER.md §The view anchor).
    */
   loadEarlierAnchorUuid: string | null
   /** True once `sendHistoryReplay` put at least one frame on this socket. */
@@ -4402,6 +4407,13 @@ export class SidecarServer {
    * one re-reads the whole transcript and two interleaved prefixes on one socket
    * would be indistinguishable from a gap).
    *
+   * WHERE the diff starts is the one thing this side cannot decide alone, and
+   * the frame's main-authored `viewAnchorUuid` is why (protocol.ts, and
+   * HISTORY-LOAD-EARLIER.md §The view anchor). This connection knows what it
+   * SENT; only Electron main knows what the pane currently HOLDS, because a
+   * reloaded renderer is rebuilt from main's replay ring and that ring evicts.
+   * When the two disagree, main's wins — see the anchor selection below.
+   *
    * The answer is unicast to the asking connection: it settles a click that
    * reader made, and a second reader's own view is already whole or has its own
    * control to press.
@@ -4439,7 +4451,7 @@ export class SidecarServer {
       )
       return
     }
-    const { requestId } = parsed.data
+    const { requestId, viewAnchorUuid } = parsed.data
 
     if (this.loadEarlierInFlight) {
       this.sendLoadEarlierResult(connection, requestId, {
@@ -4464,9 +4476,23 @@ export class SidecarServer {
       return
     }
 
-    // Nothing was restored from disk for this session, so there is no earlier
-    // to reach for: a fresh session's whole conversation is already on screen.
-    if (this.history.length === 0 && !this.historySourceTruncated) {
+    // Nothing was restored from disk for this session, so THIS SIDECAR has no
+    // earlier to reach for: a fresh session's whole conversation was emitted
+    // live, not replayed.
+    //
+    // Conditional on main having stamped no view anchor, and that condition is
+    // the whole of the fix. "The sidecar replayed nothing" is not the same fact
+    // as "the reader is holding everything": a session started in the app is
+    // rebuilt after a renderer reload from main's ring alone, and that ring can
+    // have evicted its head. Answering `complete: true` from this side's empty
+    // `history` then cleared the boundary row over a truncated transcript and
+    // left no route back to the missing prefix, which is the defect this branch
+    // used to cause (2026-09-02 idle-park assessment §6).
+    if (
+      viewAnchorUuid === undefined &&
+      this.history.length === 0 &&
+      !this.historySourceTruncated
+    ) {
       connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
@@ -4477,7 +4503,16 @@ export class SidecarServer {
       return
     }
 
-    const anchorUuid = connection.loadEarlierAnchorUuid
+    // What the READER is holding, which is not always what this CONNECTION was
+    // sent. Main's anchor wins outright whenever it exists, because it is the
+    // only one of the two derived from the pane's actual contents: main hands a
+    // reloaded renderer its ring and nothing else, and it stamps the anchor only
+    // when that ring is lossy. It is also never OLDER than this connection's own
+    // anchor for the reader's live view, since every frame this socket sent went
+    // through that ring — so preferring it can at worst re-send messages the
+    // renderer already has (which its uuid dedupe absorbs), and can never leave
+    // a gap, which the connection anchor alone can and did.
+    const anchorUuid = viewAnchorUuid ?? connection.loadEarlierAnchorUuid
     // History WAS restored, yet none of what reached this reader carries an
     // identity to diff a deeper read against. Everything read would look
     // missing and the reader would see the conversation twice, so refuse rather
@@ -5497,11 +5532,18 @@ function checkStrictKeys(message: unknown): string | null {
     // The renderer authors NOTHING but a correlation id: the analysis reads
     // engine-side session state only. Any other key is rejected fail-closed.
     ['context-breakdown.request', new Set(['type', 'requestId'])],
-    // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md). Parameterless
-    // by decision: the renderer authors NOTHING but a correlation id, so there
-    // is no cursor, offset, count or path to forge. A frame carrying any other
-    // key is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
-    ['history.loadEarlier', new Set(['type', 'requestId'])],
+    // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md).
+    // Renderer-parameterless by decision: the renderer authors NOTHING but a
+    // correlation id, so there is no cursor, offset, count or path to forge.
+    // `viewAnchorUuid` is the one exception and is not renderer-authored: main
+    // stamps it at `forward` from its OWN replay ring, dropping whatever the
+    // renderer sent, so a forged one cannot reach here. It is allowlisted and
+    // uuid-shape-checked all the same, because the sidecar is the trust
+    // boundary and a main-side check is never sufficient on its own
+    // (SECURITY-MINIMUM §2 R2). It authorizes nothing: it is compared for
+    // equality against uuids from this sidecar's own disk read. Any OTHER key
+    // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
+    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid'])],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   // `submitId` is admitted (SubmitOptions.submitId): the renderer's own
@@ -5600,13 +5642,25 @@ const appParkMessageSchema = z.object({
  * engine's shared `appClientMessageSchema`. The frame carries no
  * renderer-authored state beyond a length-bounded `requestId`, and
  * `checkStrictKeys` has already REJECTED (not stripped) any key beyond
- * `{type, requestId}`, so this parse only enforces the value types. Everything
- * the read is bounded by — which file, how many bytes, whether one is already
- * running — is decided on this side of the boundary and appears nowhere here.
+ * `{type, requestId, viewAnchorUuid}`, so this parse only enforces the value
+ * types. Everything the read is bounded by — which file, how many bytes,
+ * whether one is already running — is decided on this side of the boundary and
+ * appears nowhere here.
+ *
+ * `viewAnchorUuid` is main-authored (see the allowlist comment above) and
+ * optional: absent means main had nothing to add, which is the pre-existing
+ * behaviour. Shape-checked with the same uuid regex the edit-from-message verbs
+ * use, because it is only ever equality-compared against `randomUUID()` values
+ * this sidecar read off its own transcript — anything else could never match,
+ * so admitting it would buy nothing.
  */
 const historyLoadEarlierMessageSchema = z.object({
   type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  viewAnchorUuid: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i)
+    .optional(),
 })
 
 /**
