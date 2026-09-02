@@ -195,12 +195,12 @@ describe('GPT copyable text guidance', () => {
   })
 })
 
-describe('authorized default URL roots', () => {
-  test('allows only exact roots authorized in loaded instructions', async () => {
+describe('well-known URL homepages', () => {
+  test('allows only a directly relevant public service root homepage', async () => {
     const claudePrompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
     const gptIntro = getGPTIntroSection(null)
     const rule =
-      'You may navigate to an exact root domain explicitly authorized by the user in loaded instructions when it directly fits their request.'
+      "You may navigate to a well-known public service's exact root homepage when it directly fits the user's request."
     const boundary =
       'Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain.'
 
