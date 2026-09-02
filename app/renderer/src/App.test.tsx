@@ -2294,7 +2294,7 @@ test('the activity byline carries no task control, even with foreground work run
   )
 
   expect(html).not.toContain('Foreground')
-  expect(html).not.toContain('>Background<')
+  expect(html).not.toContain('Send to background')
   expect(html).not.toContain('title="Keep running work in the background"')
 })
 

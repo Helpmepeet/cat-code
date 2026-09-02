@@ -1065,7 +1065,7 @@ test('an Agent card offers Background only while its worker is foreground', () =
       }}
     />,
   )
-  expect(offered).toContain('>Background<')
+  expect(offered).toContain('>Send to background<')
   expect(offered).toContain('title="Keep this worker running in the background"')
   // The state slot steps aside on hover so the two never overlap; both are
   // right-anchored, so neither of them moves when it does.
@@ -1081,10 +1081,10 @@ test('an Agent card offers Background only while its worker is foreground', () =
       agentBackground={{ backgroundable: new Set(), onBackground: () => {} }}
     />,
   )
-  expect(withheld).not.toContain('>Background<')
+  expect(withheld).not.toContain('>Send to background<')
 
   // And a pane that cannot issue the verb at all renders the card it renders today.
-  expect(render(row)).not.toContain('>Background<')
+  expect(render(row)).not.toContain('>Send to background<')
 })
 
 test('in a co-spawned group of three, only the named worker offers Background', () => {
@@ -1108,7 +1108,7 @@ test('in a co-spawned group of three, only the named worker offers Background', 
   // Grouped, not three separate cards.
   expect(html).toContain('3 explore workers')
   // Exactly one control, and the slot that yields is the one beside it.
-  expect(html.split('>Background<').length - 1).toBe(1)
+  expect(html.split('>Send to background<').length - 1).toBe(1)
   expect(html.split('group-hover/agentcard:invisible').length - 1).toBe(1)
   // Each member carries its OWN hover group, so hovering one cannot reveal
   // another's control.
@@ -1136,7 +1136,7 @@ test('the Agent card keeps its Background control OUTSIDE the collapse button', 
     />,
   )
   const collapse = html.indexOf('aria-expanded')
-  const action = html.indexOf('>Background<')
+  const action = html.indexOf('>Send to background<')
   expect(collapse).toBeGreaterThan(-1)
   expect(action).toBeGreaterThan(-1)
   // The action is emitted BEFORE the collapse button opens, so it cannot be

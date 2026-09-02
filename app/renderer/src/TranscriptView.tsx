@@ -3447,7 +3447,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
           title="Keep this worker running in the background"
           type="button"
         >
-          Background
+          Send to background
         </button>
       )}
       {body === null ? (
