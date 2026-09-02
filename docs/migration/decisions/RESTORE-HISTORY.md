@@ -58,7 +58,7 @@ This is that idiom on our socket.
   (`HISTORY_REPLAY_TRUNCATION_REQUEST_ID`, protocol.ts) BEFORE the tail — the exact
   `replayBuffer.ts` truncation idiom, so a capped replay is visibly lossy, never silent.
 - **Reload alignment (operator-held seam):** both caps sit STRICTLY below main's per-session
-  replay-buffer budgets (8,000 frames / 8 MiB, `app/main/replayBuffer.ts`), with headroom for
+  replay-buffer budgets (8,000 frames / 16 MiB, `app/main/replayBuffer.ts`), with headroom for
   early live frames, so a renderer reload replays the SAME history from main's
   buffer. Enforced by `app/main/historyReplayReload.test.ts` (invariant + an at-cap
   functional pass through the real `AttachmentGate` + `FrameReplayBuffer`); byte accounting

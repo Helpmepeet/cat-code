@@ -202,7 +202,7 @@ expected is not measured, and the §Known cost note above still governs.
 **CLOSED 2026-08-20.**
 
 Recovered `event` frames flow through the normal outbound path into main's
-per-session ring (8,000 frames / 8 MiB, `app/main/replayBuffer.ts`). The ring
+per-session ring (8,000 frames / 16 MiB, `app/main/replayBuffer.ts`). The ring
 evicts oldest-by-ARRIVAL, so a large recovery evicts the OLDEST LIVE frames
 while retaining the ancient ones that just arrived. A renderer reload after a
 big recovery could then replay a transcript with a hole in the middle, which

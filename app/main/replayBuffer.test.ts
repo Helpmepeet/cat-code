@@ -446,7 +446,7 @@ test('a single frame larger than the byte budget is not retained and still marks
 })
 
 // `MAX_OUTBOUND_FRAME_BYTES` is 32 MiB precisely so a base64 image or a big tool
-// result is delivered rather than dropped, while this ring's budget is 8 MiB —
+// result is delivered rather than dropped, while this ring's budget is 16 MiB —
 // so a single frame over the ring budget is reachable in an ordinary session.
 // It must cost that one frame, not the whole conversation: clearing the ring
 // here made a renderer reload replay `ready` plus a lone truncation banner, and
@@ -499,7 +499,7 @@ test('clearSession() drops only the restarted session replay state', () => {
 
 test('default cap is the documented value', () => {
   expect(DEFAULT_MAX_BUFFERED_FRAMES).toBe(8_000)
-  expect(DEFAULT_MAX_BUFFERED_BYTES).toBe(8 * 1024 * 1024)
+  expect(DEFAULT_MAX_BUFFERED_BYTES).toBe(16 * 1024 * 1024)
 })
 
 /**
@@ -678,4 +678,237 @@ test('a restore-replay frame IS retained', () => {
   const snapshot = buffer.snapshot()
   expect(snapshot.map(frame => frame.kind)).toEqual(['ready', 'event'])
   expect(snapshot[1]).toMatchObject({ replay: true })
+})
+
+/* ── stream compaction: a stopped stream's partials leave the ring ── */
+
+/**
+ * The wire a streaming turn actually produces, in engine order. One `assistant`
+ * frame per `content_block_stop` (`src/services/api/claude.ts` yields it there),
+ * and `message_stop` only after the last of them — which is what makes
+ * `message_stop`, not the first `assistant`, the only safe compaction boundary.
+ */
+function streamPartialFrame(
+  event: Record<string, unknown>,
+  seq: number,
+  parentToolUseId: string | null = null,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'stream_event',
+        uuid: `00000000-0000-4000-8000-2${String(seq).padStart(11, '0')}`,
+        parent_tool_use_id: parentToolUseId,
+        event,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function assistantBlockFrame(
+  messageId: string,
+  text: string,
+  seq: number,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'assistant',
+        message: { id: messageId, role: 'assistant', content: [{ type: 'text', text }] },
+        parent_tool_use_id: null,
+        uuid: `00000000-0000-4000-8000-3${String(seq).padStart(11, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function resultFrame(
+  seq: number,
+  parentToolUseId: string | null = null,
+  sessionId: SessionId = SID,
+): ServerFrame {
+  return {
+    kind: 'event',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId,
+    event: {
+      type: 'message',
+      message: {
+        type: 'result',
+        subtype: 'success',
+        parent_tool_use_id: parentToolUseId,
+        uuid: `00000000-0000-4000-8000-4${String(seq).padStart(11, '0')}`,
+      } as unknown as SDKMessage,
+    },
+  }
+}
+
+function streamEventTypesOf(frames: readonly ServerFrame[]): string[] {
+  const types: string[] = []
+  for (const frame of frames) {
+    if (frame.kind !== 'event') continue
+    if (frame.event.type !== 'message') continue
+    const message = frame.event.message
+    if (message.type !== 'stream_event') continue
+    const streamed: unknown = message.event
+    types.push(
+      typeof streamed === 'object' &&
+        streamed !== null &&
+        'type' in streamed &&
+        typeof streamed.type === 'string'
+        ? streamed.type
+        : '?',
+    )
+  }
+  return types
+}
+
+/**
+ * The case the boundary rule exists for (2026-09-02 assessment §5 item 2): a
+ * turn with TWO content blocks, reloaded between the two block completions.
+ *
+ * At the reload the stream has not stopped, so its `message_start` is still in
+ * the ring — without it the projector has no stream id to hang block 1's deltas
+ * on and the second block streams into nothing. Compacting at the first
+ * `assistant` frame (which has already arrived by then) would do exactly that.
+ * Once `message_stop` lands, every partial of the turn goes and both finished
+ * `assistant` frames stay.
+ */
+test('a two-block turn keeps its partials across a mid-turn reload, then compacts at message_stop', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: 'msg-two-block' } }, 1))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 2))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } }, 3))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_stop', index: 0 }, 4))
+  buffer.record(SID, assistantBlockFrame('msg-two-block', 'first', 1))
+
+  // The reload: block 0 is finished, block 1 has not started.
+  const midTurn = buffer.snapshot()
+  expect(streamEventTypesOf(midTurn)).toEqual([
+    'message_start',
+    'content_block_start',
+    'content_block_delta',
+    'content_block_stop',
+  ])
+
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, 5))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'second' } }, 6))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_stop', index: 1 }, 7))
+  buffer.record(SID, assistantBlockFrame('msg-two-block', 'second', 2))
+  buffer.record(SID, streamPartialFrame({ type: 'message_delta', delta: { stop_reason: 'end_turn' } }, 8))
+  buffer.record(SID, streamPartialFrame({ type: 'message_stop' }, 9))
+
+  const stopped = buffer.snapshot()
+  expect(streamEventTypesOf(stopped)).toEqual([])
+  expect(stopped.map(frame => frame.kind)).toEqual(['ready', 'event', 'event'])
+  // Compaction is not truncation: nothing a reader can see was lost, so no
+  // boundary row is minted.
+  expect(stopped.find(isReplayTruncationFrame)).toBeUndefined()
+})
+
+/** The turn's `result` is the fallback boundary for a stream nobody stopped. */
+test('an interrupted stream keeps its partials until the turn result', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: 'msg-interrupted' } }, 1))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'half' } }, 2))
+
+  expect(streamEventTypesOf(buffer.snapshot())).toEqual([
+    'message_start',
+    'content_block_delta',
+  ])
+
+  buffer.record(SID, resultFrame(1))
+  expect(streamEventTypesOf(buffer.snapshot())).toEqual([])
+  // The result itself is a finished message and stays.
+  expect(buffer.snapshot().map(frame => frame.kind)).toEqual(['ready', 'event'])
+})
+
+/**
+ * Partials are keyed by `parent_tool_use_id` so a subagent's stop closes only
+ * its own stream. Every partial measured on this wire carries `null`
+ * (assessment §10.2), so this pins the guard rather than an observed case.
+ */
+test('a subagent stream_stop compacts only its own partials', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: 'msg-main' } }, 1))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'main' } }, 2))
+  buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: 'msg-sub' } }, 3, 'toolu_sub'))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'sub' } }, 4, 'toolu_sub'))
+  buffer.record(SID, streamPartialFrame({ type: 'message_stop' }, 5, 'toolu_sub'))
+
+  expect(streamEventTypesOf(buffer.snapshot())).toEqual([
+    'message_start',
+    'content_block_delta',
+  ])
+
+  buffer.record(SID, streamPartialFrame({ type: 'message_stop' }, 6))
+  expect(streamEventTypesOf(buffer.snapshot())).toEqual([])
+})
+
+/**
+ * The point of the whole change: the ring's budget stops being spent on
+ * partials, so finished messages that the deltas used to evict now survive.
+ */
+test('compaction frees ring budget that partials would otherwise have evicted', () => {
+  // Sized so the live traffic of ONE turn (10 partials) plus the finished
+  // messages behind it stays under the cap, which is the state compaction is
+  // meant to leave the ring in. The same six turns uncompacted are 66 frames.
+  const cap = 20
+  const buffer = new FrameReplayBuffer(cap)
+  buffer.record(SID, readyFrame())
+  for (let turn = 0; turn < 6; turn++) {
+    buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: `msg-${turn}` } }, turn * 10 + 1))
+    for (let delta = 0; delta < 8; delta++) {
+      buffer.record(
+        SID,
+        streamPartialFrame(
+          { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 't' } },
+          turn * 10 + 2 + delta,
+        ),
+      )
+    }
+    buffer.record(SID, assistantBlockFrame(`msg-${turn}`, `turn ${turn}`, turn))
+    buffer.record(SID, streamPartialFrame({ type: 'message_stop' }, turn * 10 + 9))
+  }
+
+  const snapshot = buffer.snapshot()
+  expect(streamEventTypesOf(snapshot)).toEqual([])
+  // All six finished messages survive a 20-frame cap that the 60 partials
+  // would have overrun three times over.
+  expect(snapshot.filter(frame => frame.kind === 'event')).toHaveLength(6)
+  expect(snapshot.find(isReplayTruncationFrame)).toBeUndefined()
+})
+
+/** `transcript.reset` clears the ring, so it must clear open-stream tracking too. */
+test('a transcript reset forgets open stream partials', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, streamPartialFrame({ type: 'message_start', message: { id: 'msg-reset' } }, 1))
+  buffer.record(SID, streamPartialFrame({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'gone' } }, 2))
+  buffer.record(SID, transcriptResetFrame())
+  buffer.record(SID, assistantBlockFrame('msg-after-reset', 'kept', 1))
+  buffer.record(SID, streamPartialFrame({ type: 'message_stop' }, 3))
+
+  const snapshot = buffer.snapshot()
+  // The reset barrier itself rides the ring; what must be gone is the cleared
+  // stream's partials, which a stop arriving after the reset must not resurrect.
+  expect(snapshot.map(frame => frame.kind)).toEqual([
+    'ready',
+    'transcript.reset',
+    'event',
+  ])
+  expect(streamEventTypesOf(snapshot)).toEqual([])
 })

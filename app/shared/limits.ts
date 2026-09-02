@@ -138,7 +138,7 @@ export const MAX_QUESTION_ANSWER_CHARS = 4_096
  *
  * ALIGNMENT INVARIANT: both caps are deliberately BELOW main's per-session
  * replay-buffer budgets (`DEFAULT_MAX_BUFFERED_FRAMES` 8,000 /
- * `DEFAULT_MAX_BUFFERED_BYTES` 8 MiB, app/main/replayBuffer.ts) — with headroom
+ * `DEFAULT_MAX_BUFFERED_BYTES` 16 MiB, app/main/replayBuffer.ts) — with headroom
  * for early live frames — so a renderer RELOAD right after a restore replays
  * the SAME history from main's buffer instead of silently losing its head.
  * Enforced by test (historyReplay.test.ts); byte accounting matches the
@@ -173,10 +173,11 @@ export const MAX_HISTORY_REPLAY_BYTES = 4 * 1024 * 1024
  * session. This one is what a single user-initiated "load earlier messages"
  * request is allowed to re-read from the transcript file, so it is sized for the
  * whole conversation rather than for a per-attach budget. Nothing else uses it,
- * and no cap above moves: the measurement that produced this number
- * (`docs/reports/2026-08-19-transcript-retention-cap-measurement.md`) concluded
- * the retention values are correctly sized and the defect is reporting, not
- * retention.
+ * and no cap above moves for its sake. Its sizing corpus is
+ * `docs/reports/2026-08-19-transcript-retention-cap-measurement.md`; that
+ * report's §3 verdict on the RING caps has since been voided (2026-09-02 — the
+ * ring now compacts streamed partials out and `DEFAULT_MAX_BUFFERED_BYTES` is
+ * 16 MiB), but the §2 transcript distribution this number comes from stands.
  *
  * SIZING, from that report's 1,849-transcript corpus. Bytes per session: p50
  * 326 KiB, p90 1.34 MiB, p99 4.32 MiB, max 18.1 MiB. 16 MiB clears p99 by

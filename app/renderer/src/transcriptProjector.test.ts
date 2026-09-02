@@ -16,6 +16,7 @@ import {
   type NestedTranscriptRow,
 } from './transcriptProjector.js'
 import { reduceLiveTranscriptState } from './previewTranscriptState.js'
+import { FrameReplayBuffer } from '../../main/replayBuffer.js'
 import {
   AGENT_WITH_NESTED_SUBAGENT_TURN,
   allSdkMessageSamples,
@@ -5363,4 +5364,103 @@ test('batch projection retains a recovered typed assistant error without a frame
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(
     projectSequential(frames),
   )
+})
+
+/**
+ * The compaction boundary in main's replay ring, seen from the renderer
+ * (2026-09-02 assessment §5 item 2). Main drops a stream's `stream_event`
+ * partials at its `message_stop`, never at a finished `assistant` frame — the
+ * provider yields one `assistant` per content block and only reaches
+ * `message_stop` after the last of them, so an earlier boundary would strip the
+ * `message_start` that a SECOND block's deltas need to find their stream after a
+ * reload. This drives the real `FrameReplayBuffer` so the two sides cannot drift.
+ */
+test('a mid-turn reload replays the open stream, so the turn’s second block still streams', () => {
+  const sessionId = 'session-two-block'
+  const buffer = new FrameReplayBuffer()
+  const record = (frame: ServerFrame) => {
+    buffer.record(sessionId, frame)
+    return frame
+  }
+  const partial = (event: Record<string, unknown>, seq: number) =>
+    record(
+      messageFrame(sessionId, {
+        type: 'stream_event',
+        event,
+        parent_tool_use_id: null,
+        session_id: `engine-${sessionId}`,
+        uuid: `00000000-0000-4000-8000-9${String(seq).padStart(11, '0')}`,
+      } as SDKMessage),
+    )
+  const assistantBlock = (text: string, seq: number) =>
+    record(
+      messageFrame(sessionId, {
+        type: 'assistant',
+        message: {
+          id: 'msg-two-block',
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          stop_reason: null,
+        },
+        parent_tool_use_id: null,
+        session_id: `engine-${sessionId}`,
+        uuid: `00000000-0000-4000-8000-8${String(seq).padStart(11, '0')}`,
+      } as SDKMessage),
+    )
+
+  record(ready(sessionId) as ServerFrame)
+  partial({ type: 'message_start', message: { id: 'msg-two-block' } }, 1)
+  partial({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 2)
+  partial({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } }, 3)
+  partial({ type: 'content_block_stop', index: 0 }, 4)
+  assistantBlock('first block.', 1)
+
+  // The reload: a fresh renderer state catches up from main's ring alone.
+  let state = projectServerFrames(createTranscriptState(), buffer.snapshot())
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject([
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+  ])
+
+  // Block 1 arrives live into the reloaded pane. Its delta can only find a
+  // stream because the replay carried the `message_start`.
+  state = projectServerFrame(
+    state,
+    partial({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, 5),
+  )
+  state = projectServerFrame(
+    state,
+    partial({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'second' } }, 6),
+  )
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject([
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+    { blockIndex: 1, kind: 'assistant-text', content: 'second', isStreaming: true },
+  ])
+
+  state = projectServerFrame(state, partial({ type: 'content_block_stop', index: 1 }, 7))
+  state = projectServerFrame(state, assistantBlock('second block.', 2))
+  state = projectServerFrame(state, partial({ type: 'message_stop' }, 8))
+
+  const finished = [
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+    { blockIndex: 1, kind: 'assistant-text', content: 'second block.' },
+  ]
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject(finished)
+
+  // A reload AFTER the stream stopped replays a ring with no partials left in
+  // it, and projects the identical finished rows.
+  const compacted = buffer.snapshot()
+  expect(
+    compacted.filter(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'stream_event',
+    ),
+  ).toEqual([])
+  expect(
+    selectTranscriptRows(
+      projectServerFrames(createTranscriptState(), compacted),
+      sessionId,
+    ),
+  ).toMatchObject(finished)
 })
