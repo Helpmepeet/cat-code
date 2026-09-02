@@ -3777,7 +3777,10 @@ export type CatCodeBridge = {
     path: string,
     target?: OpenWorkspaceFileTarget,
   ): Promise<boolean>
-  /** Main owns the native chooser and keeps the chosen path private. */
+  /**
+   * Main owns the native chooser and keeps the chosen path private. Image
+   * selections return bounded bytes; other files return opaque tokens.
+   */
   pickAttachmentFile(
     appSessionId: SessionId,
   ): Promise<AttachmentFileSelection | null>
@@ -3908,8 +3911,9 @@ export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
   /**
-   * An opaque main-issued file selection. Main resolves it to an internal
-   * `@` mention and strips this renderer-authored token before the sidecar.
+   * An opaque main-issued non-image file selection. Main resolves it to an
+   * internal `@` mention and strips this renderer-authored token before the
+   * sidecar.
    */
   fileAttachmentToken?: string
   /**

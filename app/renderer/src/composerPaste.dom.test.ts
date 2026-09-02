@@ -364,6 +364,55 @@ test('an image paste is prevented from entering the text draft', async () => {
   ])
 })
 
+test('a picker image uses the same byte-attachment path as paste', async () => {
+  const observed = observation()
+  const originalBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
+  Object.defineProperty(window, 'catcode', {
+    configurable: true,
+    value: {
+      pickAttachmentFile: async () => ({
+        kind: 'image',
+        name: 'picked.png',
+        mediaType: 'image/png',
+        bytes: new TextEncoder().encode('png bytes'),
+      }),
+    } as unknown as typeof window.catcode,
+  })
+
+  try {
+    const tree = await harness.mount(
+      createElement(ControlledPane, {
+        initialPrompt: '',
+        observation: observed,
+      }),
+    )
+    const button = tree.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Add attachment"]',
+    )
+    if (!button) throw new Error('no attachment button in the mounted pane')
+
+    await act(async () => {
+      button.click()
+      await observed.imageAttached
+    })
+    await harness.nextFrame()
+
+    expect(observed.images).toEqual([
+      {
+        mediaType: 'image/png',
+        data: 'cG5nIGJ5dGVz',
+        name: 'picked.png',
+      },
+    ])
+  } finally {
+    if (originalBridge) {
+      Object.defineProperty(window, 'catcode', originalBridge)
+    } else {
+      Reflect.deleteProperty(window, 'catcode')
+    }
+  }
+})
+
 /**
  * The DROP half of the same transfer boundary (CC-84). It shares every piece of
  * scaffolding above — the controlled pane, the composer lookup, the draft

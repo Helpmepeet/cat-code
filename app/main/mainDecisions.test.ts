@@ -32,6 +32,7 @@ import {
   SIDECAR_RUNTIME_ARGS,
   createAttachmentFileTokenStore,
   createCwdTokenStore,
+  detectAttachmentImageMediaType,
   createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
@@ -835,7 +836,11 @@ describe('native file attachment tokens', () => {
     })
     const selection = store.mint(SID, '/private/report.md')
 
-    expect(selection).toEqual({ token: 'opaque-token', name: 'report.md' })
+    expect(selection).toEqual({
+      kind: 'file',
+      token: 'opaque-token',
+      name: 'report.md',
+    })
     expect(store.resolve('other-session', selection.token)).toBeUndefined()
     expect(store.resolve(SID, selection.token)).toBe('/private/report.md')
 
@@ -847,6 +852,33 @@ describe('native file attachment tokens', () => {
     expect(appendAttachmentFileMention('Review this.', '/tmp/report.md')).toBe(
       'Review this.\n@"/tmp/report.md"',
     )
+  })
+
+  test('recognizes picker images by content rather than filename', () => {
+    expect(
+      detectAttachmentImageMediaType(
+        Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      ),
+    ).toBe('image/png')
+    expect(
+      detectAttachmentImageMediaType(Uint8Array.from([0xff, 0xd8, 0xff])),
+    ).toBe('image/jpeg')
+    expect(
+      detectAttachmentImageMediaType(
+        new TextEncoder().encode('GIF89a image payload'),
+      ),
+    ).toBe('image/gif')
+    expect(
+      detectAttachmentImageMediaType(
+        Uint8Array.from([
+          0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42,
+          0x50,
+        ]),
+      ),
+    ).toBe('image/webp')
+    expect(
+      detectAttachmentImageMediaType(new TextEncoder().encode('not an image')),
+    ).toBeNull()
   })
 })
 

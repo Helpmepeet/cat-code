@@ -4905,11 +4905,26 @@ export function SessionPane({
     string | null
   >(null)
   const attachFile = async (): Promise<void> => {
-    if (!activeSessionId || !onAttachFile || pickingFile) return
+    if (!activeSessionId || pickingFile) return
     setPickingFile(true)
     try {
       const selection = await getBridge().pickAttachmentFile(activeSessionId)
-      if (selection) onAttachFile(selection)
+      if (!selection) return
+      if (selection.kind === 'error') {
+        setTransportErrorFromImage(selection.message)
+        return
+      }
+      if (selection.kind === 'image') {
+        const bytes = new ArrayBuffer(selection.bytes.byteLength)
+        new Uint8Array(bytes).set(selection.bytes)
+        await attachImage(
+          new File([bytes], selection.name, {
+            type: selection.mediaType,
+          }),
+        )
+        return
+      }
+      onAttachFile?.({ name: selection.name, token: selection.token })
       setTransportErrorFromImage(null)
     } catch (error) {
       setTransportErrorFromImage(errorMessage(error))
@@ -5995,7 +6010,9 @@ export function SessionPane({
               // CC-84 — a Finder drag carries its payload on
               // `dataTransfer.files`, so the field's text-only drop handler
               // ignored it. A dropped image goes through the SAME `attachImage`
-              // the ⌘V and picker paths use; other file kinds stay ignored (HC1).
+              // the ⌘V and native-picker paths use; other dropped file kinds stay
+              // ignored because only main may turn a chosen path into an opaque
+              // file token (HC1).
               onAttachImageFile={file => void attachImage(file)}
               onPointerDown={engagePreviewPane}
               onValueChange={next => {

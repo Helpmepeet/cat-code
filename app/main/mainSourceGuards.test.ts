@@ -145,7 +145,7 @@ test('HC1: the picker hands back a token, never the path the user chose', () => 
   expect(pick).not.toContain('return chosen.realpath')
 })
 
-test('HC1: file attachments resolve opaque tokens without returning paths', () => {
+test('HC1: non-image file attachments resolve opaque tokens without returning paths', () => {
   const pick = region(
     'ipcMain.handle(\n    CH_HOST_PICK_ATTACHMENT_FILE',
     'ipcMain.handle(\n    CH_HOST_CREATE',

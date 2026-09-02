@@ -27,10 +27,18 @@ import {
   type WebContents,
 } from 'electron'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { existsSync, realpathSync, statSync } from 'node:fs'
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 
 import {
@@ -43,12 +51,13 @@ import {
   SessionRegistry,
 } from '../host/registry.js'
 import { Host, type CwdValidation } from '../host/host.js'
-import type {
-  AttachmentFileSelection,
-  HostEvent,
-  HostResult,
-  SaveTextResult,
-  SessionDescriptor,
+import {
+  MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
+  type AttachmentFileSelection,
+  type HostEvent,
+  type HostResult,
+  type SaveTextResult,
+  type SessionDescriptor,
 } from '../shared/hostApi.js'
 import {
   DEBUG_SHELL_STATE_CHANNEL,
@@ -64,6 +73,7 @@ import {
   appendAttachmentFileMention,
   createAttachmentFileTokenStore,
   createCwdTokenStore,
+  detectAttachmentImageMediaType,
   createRendererHealthFlightRecorder,
   createRendererHealthMonitor,
   createRendererRecoveryPolicy,
@@ -2670,7 +2680,40 @@ function registerHostControlPlane(): void {
       if (result.canceled || result.filePaths.length === 0) return null
       try {
         const realpath = realpathSync(result.filePaths[0]!)
-        if (!statSync(realpath).isFile() || realpath.includes('"')) return null
+        const stats = statSync(realpath)
+        if (!stats.isFile() || realpath.includes('"')) return null
+        const handle = openSync(realpath, 'r')
+        const header = new Uint8Array(12)
+        let headerBytes = 0
+        try {
+          headerBytes = readSync(handle, header, 0, header.length, 0)
+        } finally {
+          closeSync(handle)
+        }
+        const mediaType = detectAttachmentImageMediaType(
+          header.subarray(0, headerBytes),
+        )
+        if (mediaType) {
+          if (stats.size > MAX_ATTACHMENT_SOURCE_IMAGE_BYTES) {
+            return {
+              kind: 'error',
+              message: 'This image is too large to attach.',
+            }
+          }
+          const bytes = readFileSync(realpath)
+          if (bytes.byteLength > MAX_ATTACHMENT_SOURCE_IMAGE_BYTES) {
+            return {
+              kind: 'error',
+              message: 'This image is too large to attach.',
+            }
+          }
+          return {
+            kind: 'image',
+            name: basename(realpath),
+            mediaType,
+            bytes: new Uint8Array(bytes),
+          }
+        }
         return attachmentFileTokens.mint(appSessionId, realpath)
       } catch {
         return null

@@ -1947,13 +1947,15 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
   expect(html).toContain('aria-label="Add attachment"')
 })
 
-test('the picker returns opaque file selections while clipboard images keep byte attachment', () => {
+test('the picker routes images through byte attachment while other files stay opaque', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
   expect(source).toContain('const files = Array.from(event.clipboardData.files)')
   expect(source).toContain('const image = files.find')
   expect(source).toContain("if (image) {\n      void attachImage(image)")
   expect(source).toContain('getBridge().pickAttachmentFile(activeSessionId)')
+  expect(source).toContain("if (selection.kind === 'image')")
+  expect(source).toContain('new File([bytes], selection.name')
   expect(source).toContain('fileAttachmentToken: file.token')
   expect(source).not.toContain('imageInputRef')
   expect(source).toContain(

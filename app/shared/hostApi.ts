@@ -171,14 +171,37 @@ export type HostError = {
  */
 export type HostResult<T> = { ok: true; value: T } | { ok: false; error: HostError }
 
-/**
- * A file chosen in main's native dialog. `token` is an opaque, session-bound
- * capability; its resolved path remains in main until submit forwarding.
- */
-export type AttachmentFileSelection = {
+export const MAX_ATTACHMENT_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024
+
+export type AttachmentImageMediaType =
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/gif'
+  | 'image/webp'
+
+export type AttachmentFileTokenSelection = {
+  kind: 'file'
   name: string
   token: string
 }
+
+/**
+ * A file chosen in main's native dialog. Images cross as bounded bytes so the
+ * renderer can use its normal image-paste pipeline. Every other file stays an
+ * opaque, session-bound token whose resolved path remains in main until submit.
+ */
+export type AttachmentFileSelection =
+  | AttachmentFileTokenSelection
+  | {
+      kind: 'image'
+      name: string
+      mediaType: AttachmentImageMediaType
+      bytes: Uint8Array
+    }
+  | {
+      kind: 'error'
+      message: string
+    }
 
 /* ------------------------------------------------------------------------- *
  * P4-35 — the file sink (operator ruling 2026-07-30)
