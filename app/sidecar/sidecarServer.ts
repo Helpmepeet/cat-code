@@ -2962,9 +2962,11 @@ export class SidecarServer {
     const result =
       verb.type === 'task.background'
         ? await this.taskControl.background()
-        : verb.type === 'task.dismiss'
-          ? await this.dismissWorker(verb.taskId)
-          : await this.taskControl.stop(verb.taskId)
+        : verb.type === 'task.background.one'
+          ? await this.taskControl.backgroundOne(verb.toolUseId)
+          : verb.type === 'task.dismiss'
+            ? await this.dismissWorker(verb.taskId)
+            : await this.taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -5493,6 +5495,11 @@ function checkStrictKeys(message: unknown): string | null {
     // Terminal Ctrl+B parity. The sidecar chooses from its own live store, so
     // the renderer supplies no task id or task-state fields.
     ['task.background', new Set(['type', 'requestId'])],
+    // The per-worker counterpart. One renderer-authored key, and it is a
+    // `toolUseId` rather than a task id — see `TaskBackgroundOneMessage`. A
+    // forged `taskId`/`isBackgrounded` key is rejected here before the Zod parse,
+    // so the renderer can never name engine task state.
+    ['task.background.one', new Set(['type', 'requestId', 'toolUseId'])],
     // D1b prompt recall (app-owned; see PROMPT_RECALL_VERB_TYPES). It takes back
     // everything of the user's that is still waiting, so it has no target and
     // the renderer authors NOTHING but the correlation id. A forged `id`,
@@ -5827,6 +5834,11 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('task.background'),
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('task.background.one'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    toolUseId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   }),
 ])
 

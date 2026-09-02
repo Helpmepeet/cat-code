@@ -110,6 +110,7 @@ describe('selectMessageMetadata', () => {
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      isBackgrounded: false,
     }])
     expect(meta!.subagent).toEqual({
       toolUseId: 'toolu_parent',
@@ -118,6 +119,7 @@ describe('selectMessageMetadata', () => {
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      isBackgrounded: false,
     })
   })
 

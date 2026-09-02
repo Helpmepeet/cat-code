@@ -35,7 +35,11 @@
  * never had a deadline to sweep on.
  */
 import { StopTaskError, stopTask } from '../../src/tasks/stopTask.js'
-import { isPanelAgentTask } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  backgroundAgentTask,
+  isLocalAgentTask,
+  isPanelAgentTask,
+} from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'
 import {
   backgroundAll,
   hasForegroundTasks,
@@ -62,6 +66,12 @@ export type TaskControlExecutor = {
   /** Mirror terminal Ctrl+B against this session's live app-state store. */
   background(): boolean
   /**
+   * Background the ONE foreground worker whose task carries `toolUseId`. Returns
+   * why it declined rather than a bare boolean, because the card needs to tell
+   * "already backgrounded" (a no-op the user cannot see) apart from "gone".
+   */
+  backgroundOne(toolUseId: string): TaskBackgroundOneRefusal | null
+  /**
    * Stop the task by id via the engine's own `stopTask`. Resolves to the stopped
    * task's type + display on success; throws `StopTaskError` (not_found /
    * not_running / unsupported_type) when the live store refuses the target.
@@ -85,6 +95,17 @@ export type TaskControlExecutor = {
 /** Why a dismiss was refused at the live store (fail-closed, no side effect). */
 export type TaskDismissRefusal = 'not_found' | 'still_running' | 'unsupported_type'
 
+/**
+ * Why a single-worker background was refused. Decided HERE against the live
+ * store rather than thrown by the engine: `backgroundAgentTask` answers only
+ * true/false, and a `false` conflates "no such worker" with "already in the
+ * background" — two outcomes the card must word differently.
+ */
+export type TaskBackgroundOneRefusal =
+  | 'not_found'
+  | 'already_backgrounded'
+  | 'not_running'
+
 export function createRealTaskControlExecutor(
   appStateStore: AppStateStore,
 ): TaskControlExecutor {
@@ -93,6 +114,31 @@ export function createRealTaskControlExecutor(
       if (!hasForegroundTasks(appStateStore.getState())) return false
       backgroundAll(appStateStore.getState, appStateStore.setState)
       return true
+    },
+    backgroundOne(toolUseId) {
+      // Re-resolve against the LIVE store — the renderer's `toolUseId` is a
+      // claim, not a handle (T6-analog). Scanning by `toolUseId` rather than
+      // indexing by task id is deliberate: a FOREGROUND worker's task key never
+      // reaches the renderer (`tasksSnapshot` filters it out), so the tool-use id
+      // is the only id both sides legitimately share.
+      const tasks = appStateStore.getState().tasks ?? {}
+      const found = Object.entries(tasks).find(
+        ([, task]) => isLocalAgentTask(task) && task.toolUseId === toolUseId,
+      )
+      if (!found) return 'not_found'
+      const [taskId, task] = found
+      if (!isLocalAgentTask(task)) return 'not_found'
+      if (task.isBackgrounded) return 'already_backgrounded'
+      // The engine's own write: flips `isBackgrounded` and resolves the background
+      // signal the agent loop is racing, which is what hands the live iterator
+      // over instead of restarting the worker.
+      return backgroundAgentTask(
+        taskId,
+        appStateStore.getState,
+        appStateStore.setState,
+      )
+        ? null
+        : 'not_running'
     },
     async stop(taskId) {
       const result = await stopTask(taskId, {
@@ -125,6 +171,12 @@ export function createRealTaskControlExecutor(
 export type SidecarTaskControlDomain = {
   /** Background every currently foregroundable task in this session. */
   background(): Promise<TaskStopResult>
+  /**
+   * Background the single foreground worker carrying `toolUseId`. Throw-free and
+   * fail-closed the same way `stop` is: an unknown / already-backgrounded /
+   * finished target degrades to `ok:false` with no side effect.
+   */
+  backgroundOne(toolUseId: string): Promise<TaskStopResult>
   /**
    * Stop/kill the task with `taskId` in this session's store. Throw-free: an
    * unknown / already-terminal / unsupported target degrades to `ok:false` with no
@@ -168,6 +220,26 @@ export function createSidecarTaskControlDomain(
         return {
           ok: false,
           message: `Could not background the task: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        }
+      }
+    },
+    async backgroundOne(toolUseId) {
+      try {
+        // Same gate the session-wide verb honours: the setting turns backgrounding
+        // off wholesale, so a per-worker route must not be a way around it.
+        if (isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS)) {
+          return { ok: false, message: 'Background tasks are disabled.' }
+        }
+        const refusal = executor.backgroundOne(toolUseId)
+        return refusal === null
+          ? { ok: true, message: 'Moved that worker to the background.' }
+          : { ok: false, message: backgroundOneRefusalMessage(refusal) }
+      } catch (error) {
+        return {
+          ok: false,
+          message: `Could not background the worker: ${
             error instanceof Error ? error.message : String(error)
           }`,
         }
@@ -220,6 +292,22 @@ export function createSidecarTaskControlDomain(
         }
       }
     },
+  }
+}
+
+function backgroundOneRefusalMessage(refusal: TaskBackgroundOneRefusal): string {
+  switch (refusal) {
+    case 'not_found':
+      return 'That worker is no longer running.'
+    case 'already_backgrounded':
+      return 'That worker is already in the background.'
+    case 'not_running':
+      return 'That worker has already finished.'
+    default: {
+      // Closed union tripwire — a new refusal code must get its own message.
+      const exhaustive: never = refusal
+      return exhaustive
+    }
   }
 }
 

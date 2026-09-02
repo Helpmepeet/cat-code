@@ -3846,6 +3846,10 @@ function fakeTaskControlDomain(
       backgroundCalls.push('background')
       return { ok: true, message: 'Moved the current task to the background.' }
     },
+    async backgroundOne(toolUseId: string) {
+      backgroundCalls.push(`one:${toolUseId}`)
+      return { ok: true, message: 'Moved that worker to the background.' }
+    },
     async stop(taskId: string) {
       calls.push(taskId)
       return override ? override(taskId) : { ok: true, message: 'Stopped worker.' }
@@ -3952,6 +3956,82 @@ test('task.background rejects a forged task id before the domain runs', () => {
       type: 'task.background',
       requestId: 'tb-forged',
       taskId: 'hidden-task',
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(backgroundCalls).toEqual([])
+})
+
+test('task.background.one carries the tool-use id through to the domain and echoes the result', async () => {
+  const { server, backgroundCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'task.background.one',
+      requestId: 'tb1a',
+      toolUseId: 'toolu_target',
+    }),
+  )
+
+  for (
+    let i = 0;
+    i < 50 && !received.some(f => f.kind === 'task-control.result');
+    i += 1
+  ) {
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+  const result = received.find(f => f.kind === 'task-control.result')
+  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
+  expect(result && result.kind === 'task-control.result' && result.verb).toBe(
+    'task.background.one',
+  )
+  expect(
+    result && result.kind === 'task-control.result' && result.requestId,
+  ).toBe('tb1a')
+  expect(backgroundCalls).toEqual(['one:toolu_target'])
+})
+
+test('task.background.one rejects a forged task id before the domain runs', () => {
+  // The renderer authors a tool-use id and NOTHING else. A `taskId` alongside it
+  // would let a compromised renderer name engine task state directly, which is
+  // exactly what the closed key set exists to stop.
+  const { server, backgroundCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'task.background.one',
+      requestId: 'tb-one-forged',
+      toolUseId: 'toolu_target',
+      taskId: 'hidden-task',
+    } as unknown as ClientFrame['message']),
+  )
+
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(
+    true,
+  )
+  expect(backgroundCalls).toEqual([])
+})
+
+test('task.background.one without a tool-use id is refused, not defaulted to all workers', () => {
+  // Dropping the id must NOT degrade into the session-wide verb's behaviour.
+  const { server, backgroundCalls } = makeTaskControlServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'task.background.one',
+      requestId: 'tb-one-empty',
     } as unknown as ClientFrame['message']),
   )
 

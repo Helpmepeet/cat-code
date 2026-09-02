@@ -2277,7 +2277,12 @@ test('P4-32a — a backgrounded subagent makes the task strip say Background', (
   expect(html).toContain('1 subagent active')
 })
 
-test('a foreground task is named beside the activity row and offers terminal Ctrl+B parity', () => {
+test('the activity byline carries no task control, even with foreground work running', () => {
+  // CC-85 put a `Foreground` pill and a `Background` button here. Both facts
+  // about this row defeated them: it is left-packed, so they slid as the verb and
+  // clock re-measured, and it unmounts whenever `askQuestion` is non-null while
+  // the work they acted on keeps running. Backgrounding moved onto the worker's
+  // own card. This test is the guard against it drifting back.
   const base = idleSessionPaneProps()
   const html = renderToStaticMarkup(
     <SessionPane
@@ -2285,20 +2290,26 @@ test('a foreground task is named beside the activity row and offers terminal Ctr
       activeConnection={{ status: 'ready', inputEnabled: false }}
       activeLog={{ ...base.activeLog, inputEnabled: false }}
       tasksSnapshot={{ items: [], hasForegroundTask: true }}
-      onBackgroundTask={() => {}}
     />,
   )
 
-  expect(html).toContain('Foreground')
-  expect(html).toContain('>Background<')
-  expect(html).toContain(
-    'title="Keep running work in the background"',
-  )
+  expect(html).not.toContain('Foreground')
+  expect(html).not.toContain('>Background<')
+  expect(html).not.toContain('title="Keep running work in the background"')
+})
+
+test('a foreground subagent is handed to the transcript, and a backgrounded one is not', () => {
+  // The pane's job is only to decide WHICH workers may be offered the control:
+  // the live snapshot's subagents that are not already backgrounded. Rendering it
+  // is the card's, and is covered in `TranscriptView.test.tsx`.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('onClick={onBackgroundTask}')
-  expect(source).not.toContain(
-    'className="ml-auto inline-flex shrink-0 items-center gap-1.5"',
-  )
+  // The gate is `!isBackgrounded`, over `subagents` — NOT over `items`, which
+  // excludes a foreground worker by construction (`tasksDomain.ts`).
+  expect(source).toContain('subagents.filter(item => !item.isBackgrounded)')
+  expect(source).toContain('agentBackground={agentBackground}')
+  // The verb names a tool-use id; a renderer-authored task id would be the defect.
+  expect(source).toContain("type: 'task.background.one',")
+  expect(source).toContain('toolUseId,')
 })
 
 test('P4-32a — a blocked worker never turns the strip amber', () => {

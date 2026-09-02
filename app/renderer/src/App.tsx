@@ -108,6 +108,7 @@ import {
 } from './sessionPreload.js'
 import {
   TranscriptView,
+  type AgentBackgroundControl,
   type MessageActionHandler,
   type RestorePhase,
 } from './TranscriptView.js'
@@ -3513,29 +3514,22 @@ export function App() {
 	            orchestratorActive={panelOrchestratorActive}
 		            orchestratorWorkers={panelOrchestratorWorkers}
 		            tasksSnapshot={panelTasks}
-		            onBackgroundTask={
-		              panelTasks?.hasForegroundTask
-		                ? () => {
-		                    try {
-		                      getBridge().taskControlVerb(sessionId, {
-		                        type: 'task.background',
-		                        requestId: newRequestId(),
-		                      })
-		                      setTransportErrors(prev =>
-		                        reduceTransportErrorCleared(prev, sessionId),
-		                      )
-		                    } catch (error) {
-		                      setTransportErrors(prev =>
-		                        reduceTransportErrorSet(
-		                          prev,
-		                          sessionId,
-		                          errorMessage(error),
-		                        ),
-		                      )
-		                    }
-		                  }
-		                : undefined
-		            }
+		            onBackgroundSubagent={toolUseId => {
+		              try {
+		                getBridge().taskControlVerb(sessionId, {
+		                  type: 'task.background.one',
+		                  requestId: newRequestId(),
+		                  toolUseId,
+		                })
+		                setTransportErrors(prev =>
+		                  reduceTransportErrorCleared(prev, sessionId),
+		                )
+		              } catch (error) {
+		                setTransportErrors(prev =>
+		                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
+		                )
+		              }
+		            }}
 	            onOpenTasks={openTasksDialog}
 		            onToggleOrchestrator={next => {
 		              // P4-8b — toggle THIS panel's session (its own sessionId, not
@@ -4688,7 +4682,7 @@ export function SessionPane({
   onToggleOrchestrator,
   orchestratorWorkers = EMPTY_WORKERS,
   onOpenTasks,
-  onBackgroundTask,
+  onBackgroundSubagent,
   tasksSnapshot = null,
   partialCount,
   pastes,
@@ -5037,6 +5031,22 @@ export function SessionPane({
   // Same slice-cached projection `deriveActivity` reads, so the plan cannot
   // disagree with the verb beside it (`todoPlan.ts`).
   const todoPlan = selectTodoPlan(nestedRows)
+  // Which worker cards may offer Background: the live snapshot's subagents that
+  // are NOT already backgrounded. `subagents` is the only list carrying a
+  // foreground worker at all — `items` filters it out — which is why the verb is
+  // keyed by `toolUseId` (`TaskBackgroundOneMessage`). Null when there is nothing
+  // to offer, so a settled transcript re-renders no control and every card keeps
+  // the geometry it has today.
+  const subagents = tasksSnapshot?.subagents
+  const agentBackground = useMemo<AgentBackgroundControl | null>(() => {
+    if (!onBackgroundSubagent || !subagents) return null
+    const backgroundable = new Set(
+      subagents.filter(item => !item.isBackgrounded).map(item => item.toolUseId),
+    )
+    return backgroundable.size === 0
+      ? null
+      : { backgroundable, onBackground: onBackgroundSubagent }
+  }, [onBackgroundSubagent, subagents])
   // The scroll memory anchors on row IDENTITY, so nothing here names the head
   // of the list any more: rows recovered above the reader renumber every row
   // below them, and an index-based anchor would have been discarded at exactly
@@ -5571,6 +5581,7 @@ export function SessionPane({
             state={transcript}
             compacting={compacting}
             leases={leases}
+            agentBackground={agentBackground}
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={onLoadEarlierHistory}
@@ -5860,8 +5871,6 @@ export function SessionPane({
           compacting={compacting}
           stopError={stopError}
           todoPlan={todoPlan}
-          hasForegroundTask={tasksSnapshot?.hasForegroundTask === true}
-          onBackgroundTask={onBackgroundTask}
         />
       ) : null}
 
@@ -6186,17 +6195,28 @@ const SHOW_TOKENS_AFTER_MS = 30_000
  *
  * Everything sits left-packed with no `flex-1` spacer. The spacer only earned
  * its keep while the Stop button anchored the right edge; without it the
- * elapsed clock stranded itself against the far side of the 740px column with
- * a hole in the middle. `target` keeps `min-w-0 truncate` so a long tool name
- * shrinks instead of pushing the clock out of the row.
+ * elapsed clock stranded itself against the far side of the transcript column
+ * (`--transcript-width`, `theme.css`) with a hole in the middle. `target` keeps
+ * `min-w-0 truncate` so a long tool name shrinks instead of pushing the clock
+ * out of the row.
  *
  * ONE EXCEPTION, and it does reintroduce that hole: the todo readout carries its
  * own `ml-auto` and sits at the right edge (operator choice, 2026-08-29, from
- * `docs/design-html/2026-08-29-todo-surface-options.html`). It is a hover
- * target, and the verb and clock either side of it re-measure every second, so
- * anchoring it to the row's end is what stops it sliding under the cursor. The
- * clock itself stays left-packed, which is the half the original ruling was
- * about.
+ * `docs/design-html/2026-08-29-todo-surface-options.html`). It is a hover target,
+ * and the verb and target either side of it re-measure as the turn moves from one
+ * tool to the next, so anchoring it to the row's end is what stops it sliding
+ * under the cursor. (The clock re-ticks every second but is `tabular-nums`, so it
+ * only changes width at a digit-count boundary.) The clock itself stays
+ * left-packed, which is the half the original ruling was about.
+ *
+ * NO INTERACTIVE CONTROL LIVES HERE. A `Foreground` pill and a `Background`
+ * button briefly did (CC-85), and both facts about this row defeated them: they
+ * were left-packed, so they slid as the verb and clock re-measured, and the row
+ * unmounts whenever `askQuestion` is non-null while the work they acted on keeps
+ * running. Backgrounding is a per-worker action now and belongs on the worker's
+ * own card (`TranscriptView.tsx`, `AgentBackgroundContext`), which is where the
+ * terminal has always put it (`BackgroundHint`, `src/tools/BashTool/UI.tsx:78`,
+ * mounted per tool call by `AgentTool.tsx:1597`).
  */
 function ActivityIndicator({
   verb,
@@ -6207,8 +6227,6 @@ function ActivityIndicator({
   compacting,
   stopError,
   todoPlan,
-  hasForegroundTask,
-  onBackgroundTask,
 }: {
   verb: string
   target: string | null
@@ -6220,8 +6238,6 @@ function ActivityIndicator({
   stopError: string | null
   /** The session's live plan, or null when it has none (`todoPlan.ts`). */
   todoPlan: TodoPlan | null
-  hasForegroundTask: boolean
-  onBackgroundTask?: () => void
 }) {
   const tone = paused ? 'text-tone-warn' : 'text-accent'
   const dot = paused ? 'bg-tone-warn' : 'bg-accent'
@@ -6263,23 +6279,6 @@ function ActivityIndicator({
       </span>
       {stopError ? (
         <span className="shrink-0 text-[11px] text-tone-danger">{stopError}</span>
-      ) : null}
-      {hasForegroundTask ? (
-        <span className="inline-flex shrink-0 items-center gap-1.5">
-          <span className="rounded-full border border-accent/25 px-2 py-0.5 text-[10.5px] font-medium text-accent">
-            Foreground
-          </span>
-          {onBackgroundTask ? (
-            <button
-              className="rounded-full border border-white/[0.08] px-2 py-0.5 text-[10.5px] text-text-subtle transition-colors hover:border-white/[0.14] hover:text-text-primary"
-              onClick={onBackgroundTask}
-              title="Keep running work in the background"
-              type="button"
-            >
-              Background
-            </button>
-          ) : null}
-        </span>
       ) : null}
       {/* The plan's readout owns the row's right edge (`ml-auto` on the
        * readout itself), the one part of this byline that is not left-packed.
@@ -6521,8 +6520,12 @@ type SessionPaneProps = {
   onOpenTasks?: (agentId?: string) => void
   /** Live engine task mode. Kept outside transcript cards so task state never mutates transcript history. */
   tasksSnapshot?: TasksSnapshot | null
-  /** Terminal Ctrl+B parity over this session's live foreground tasks. */
-  onBackgroundTask?: () => void
+  /**
+   * Move ONE running subagent to the background, named by the `tool_use` id its
+   * transcript card carries. The card owns this affordance, not the activity
+   * byline — see `ActivityIndicator`'s header for why the byline cannot hold it.
+   */
+  onBackgroundSubagent?: (toolUseId: string) => void
   partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split

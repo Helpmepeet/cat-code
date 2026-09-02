@@ -283,9 +283,13 @@ export function verbAckErrorToast(
   if (frame.kind === 'prompt-recall.result') {
     return frame.ok ? null : { message: frame.message, tone: 'warn' }
   }
+  // Both background verbs race the work they act on: a worker can finish, or go
+  // to the background by another route, between the card rendering and the click
+  // landing. That refusal is a report about the world, not a fault the user
+  // caused, so it takes the softer tone for the same reason a beaten recall does.
   if (
     frame.kind === 'task-control.result' &&
-    frame.verb === 'task.background' &&
+    (frame.verb === 'task.background' || frame.verb === 'task.background.one') &&
     !frame.ok
   ) {
     return { message: frame.message, tone: 'warn' }

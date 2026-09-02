@@ -179,6 +179,9 @@ test('excludes the foregrounded local_agent — its messages already render in t
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      // The FOREGROUNDED worker is excluded from `items` but still listed here,
+      // which is what lets a card offer `task.background.one` at all.
+      isBackgrounded: false,
     },
   ])
   expect(snapshot.foregroundedTaskId).toBe('a1')

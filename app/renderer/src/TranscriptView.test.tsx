@@ -1054,6 +1054,68 @@ function agentRow(
   }
 }
 
+test('an Agent card offers Background only while its worker is foreground', () => {
+  const row = agentRow('fg', { subagent_type: 'Explore', description: 'map the seam' }, 'pending')
+  const offered = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      agentBackground={{
+        backgroundable: new Set([row.toolUseId]),
+        onBackground: () => {},
+      }}
+    />,
+  )
+  expect(offered).toContain('>Background<')
+  expect(offered).toContain('title="Keep this worker running in the background"')
+  // The state slot steps aside on hover so the two never overlap; both are
+  // right-anchored, so neither of them moves when it does.
+  expect(offered).toContain('group/agentcard')
+  expect(offered).toContain('group-hover/agentcard:invisible')
+
+  // A worker the snapshot no longer reports as foreground gets nothing: the same
+  // card, same row, empty set. This is the half that regresses if the gate is
+  // ever loosened to "any agent card".
+  const withheld = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      agentBackground={{ backgroundable: new Set(), onBackground: () => {} }}
+    />,
+  )
+  expect(withheld).not.toContain('>Background<')
+
+  // And a pane that cannot issue the verb at all renders the card it renders today.
+  expect(render(row)).not.toContain('>Background<')
+})
+
+test('the Agent card keeps its Background control OUTSIDE the collapse button', () => {
+  // Not a style preference: the identity line lives inside the collapse
+  // `<button>`, and an interactive element nested there makes the HTML parser
+  // close the outer button early, which tears the card apart. A card WITH a body
+  // is the case that has the collapse button at all, so it is the one to pin.
+  const row = agentRow(
+    'nested',
+    { subagent_type: 'Explore', description: 'map the seam' },
+    'pending',
+    [toolRow({ toolName: 'Grep', toolFamily: 'grep', input: { pattern: 'x' }, status: 'success' })],
+  )
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      agentBackground={{
+        backgroundable: new Set([row.toolUseId]),
+        onBackground: () => {},
+      }}
+    />,
+  )
+  const collapse = html.indexOf('aria-expanded')
+  const action = html.indexOf('>Background<')
+  expect(collapse).toBeGreaterThan(-1)
+  expect(action).toBeGreaterThan(-1)
+  // The action is emitted BEFORE the collapse button opens, so it cannot be
+  // inside it. A nested render would put it after.
+  expect(action).toBeLessThan(collapse)
+})
+
 test('P4-8c: an Agent card derives type/state/task from the row input + status (data-path honest)', () => {
   const html = render(
     agentRow('solo', { subagent_type: 'Explore', description: 'map the seam' }, 'pending'),

@@ -82,6 +82,9 @@ test('P4-8b — stop() is throw-free even when the executor throws a non-StopTas
       background() {
         throw new Error('boom')
       },
+      backgroundOne() {
+        throw new Error('boom')
+      },
       async stop() {
         throw new Error('boom')
       },
@@ -133,6 +136,111 @@ test('task.background fails closed when no foreground task is running', async ()
 
   expect(result.ok).toBe(false)
   expect(result.message).toBe('No foreground task is running.')
+})
+
+test('task.background.one backgrounds the ONE worker named by tool-use id, and leaves the others', async () => {
+  // The whole reason this verb exists: the session-wide Ctrl+B verb would take
+  // both of these, and the card acts on the worker the reader is looking at.
+  const store = createStore(getDefaultAppState())
+  const target = {
+    ...runningWorker('t-one'),
+    isBackgrounded: false,
+    toolUseId: 'toolu_target',
+  } as unknown as TaskState
+  const bystander = {
+    ...runningWorker('t-other'),
+    isBackgrounded: false,
+    toolUseId: 'toolu_other',
+  } as unknown as TaskState
+  store.setState(prev => ({
+    ...prev,
+    tasks: { 't-one': target, 't-other': bystander },
+  }))
+  let notifications = 0
+  store.subscribe(() => {
+    notifications += 1
+  })
+
+  const result =
+    await createSidecarTaskControlDomain(store).backgroundOne('toolu_target')
+
+  expect(result).toEqual({
+    ok: true,
+    message: 'Moved that worker to the background.',
+  })
+  const tasks = store.getState().tasks as Record<string, { isBackgrounded?: boolean }>
+  expect(tasks['t-one'].isBackgrounded).toBe(true)
+  expect(tasks['t-other'].isBackgrounded).toBe(false)
+  // The store mutation is what drives the existing snapshot re-broadcast; no
+  // synthetic frame is minted for this verb.
+  expect(notifications).toBeGreaterThan(0)
+})
+
+test('task.background.one fails closed on an unknown tool-use id, mutating nothing', async () => {
+  const store = createStore(getDefaultAppState())
+  const worker = {
+    ...runningWorker('t-live'),
+    isBackgrounded: false,
+    toolUseId: 'toolu_live',
+  } as unknown as TaskState
+  store.setState(prev => ({ ...prev, tasks: { 't-live': worker } }))
+
+  const result =
+    await createSidecarTaskControlDomain(store).backgroundOne('toolu_forged')
+
+  expect(result.ok).toBe(false)
+  expect(result.message).toBe('That worker is no longer running.')
+  expect(
+    (store.getState().tasks['t-live'] as { isBackgrounded?: boolean })
+      .isBackgrounded,
+  ).toBe(false)
+})
+
+test('task.background.one says so when the worker is already in the background', async () => {
+  // Distinct from not_found on purpose: a second click on a card whose snapshot
+  // has not caught up is a different thing to report than a forged id.
+  const store = createStore(getDefaultAppState())
+  const worker = {
+    ...runningWorker('t-already'),
+    isBackgrounded: true,
+    toolUseId: 'toolu_already',
+  } as unknown as TaskState
+  store.setState(prev => ({ ...prev, tasks: { 't-already': worker } }))
+
+  const result =
+    await createSidecarTaskControlDomain(store).backgroundOne('toolu_already')
+
+  expect(result.ok).toBe(false)
+  expect(result.message).toBe('That worker is already in the background.')
+})
+
+test('task.background.one honors the terminal background-disable setting', async () => {
+  // The per-worker route must not be a way around the setting the session-wide
+  // verb already respects.
+  const previous = process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+  process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1'
+  try {
+    const store = createStore(getDefaultAppState())
+    const worker = {
+      ...runningWorker('t-one-disabled'),
+      isBackgrounded: false,
+      toolUseId: 'toolu_disabled',
+    } as unknown as TaskState
+    store.setState(prev => ({ ...prev, tasks: { 't-one-disabled': worker } }))
+
+    const result =
+      await createSidecarTaskControlDomain(store).backgroundOne('toolu_disabled')
+
+    expect(result.ok).toBe(false)
+    expect(result.message).toBe('Background tasks are disabled.')
+    expect(
+      (store.getState().tasks['t-one-disabled'] as { isBackgrounded?: boolean })
+        .isBackgrounded,
+    ).toBe(false)
+  } finally {
+    if (previous === undefined) delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+    else process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = previous
+  }
 })
 
 test('task.background honors the terminal background-disable setting', async () => {
@@ -305,6 +413,9 @@ test('CC-32 — dismiss() is throw-free when the executor throws', async () => {
     executor: {
       background() {
         return false
+      },
+      backgroundOne() {
+        return 'not_found'
       },
       async stop() {
         throw new Error('unused')

@@ -111,6 +111,9 @@ function toSubagentMetadata(task: TaskState): TaskSubagentMetadata[] {
     agentType: task.agentType,
     isSidechain: true,
     spawnedAt: task.startTime,
+    // Normalised, not passed through: the engine field is optional, and the wire
+    // type is a plain boolean so a card never has to treat absent as a third state.
+    isBackgrounded: task.isBackgrounded === true,
   }]
 }
 

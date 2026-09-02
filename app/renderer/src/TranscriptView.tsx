@@ -96,6 +96,7 @@ import {
   TOOL_CARD_SHELL_CLASS,
   TOOL_CARD_SUB_CLASS,
   ToolCardStyleContext,
+  type ToolCardStyle,
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
@@ -228,6 +229,45 @@ import {
  * always-visible entry to a destination that repeated the card, so the drawer is
  * reached only for output a card had to cut.
  */
+/**
+ * Backgrounding one running subagent, from its own transcript card.
+ *
+ * A context rather than a prop drilled through the row tree, mirroring
+ * `ToolInspectorContext` right below: an agent card sits an unknown number of
+ * levels down (top-level row, delegate-group member, nested sub-agent branch),
+ * and every level between here and it is generic over row kind.
+ *
+ * `backgroundable` is the set of `tool_use` ids whose worker is running in the
+ * FOREGROUND right now, derived from `TasksSnapshot.subagents`. It gates display
+ * only — the sidecar re-resolves the id against its live store and fails closed,
+ * so a stale set can never background the wrong worker (see
+ * `TaskBackgroundOneMessage`).
+ */
+export type AgentBackgroundControl = {
+  backgroundable: ReadonlySet<string>
+  onBackground: (toolUseId: string) => void
+}
+
+// Not exported: only this module reads it, and a runtime export from a `.tsx`
+// would break the Fast Refresh boundary (`lint:fast-refresh`). The TYPE above is
+// exported so a pane can build the value; type-only exports are allowed.
+const AgentBackgroundContext = createContext<AgentBackgroundControl | null>(null)
+
+/**
+ * Where the card's Background control pins itself: the identity line's right
+ * edge, in whichever card style is drawn. It is positioned rather than laid out
+ * because the identity line lives INSIDE the collapse `<button>` and interactive
+ * content may not nest there, so the control has to be a sibling of that button
+ * while still reading as part of the row it acts on.
+ *
+ * The heights are the identity line's own: `TOOL_CARD_INSET_CLASS` padding either
+ * side of a 19px `AgentFace` (33px in `cards`, 25px in `lines`).
+ */
+const AGENT_BACKGROUND_ANCHOR_CLASS: Record<ToolCardStyle, string> = {
+  cards: 'right-3 h-[33px]',
+  lines: 'right-0 h-[25px]',
+}
+
 const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
   null,
 )
@@ -283,6 +323,7 @@ export const TranscriptView = memo(function TranscriptView({
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
+  agentBackground = null,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -327,6 +368,8 @@ export const TranscriptView = memo(function TranscriptView({
    * holds. Optional and null-tolerant: the plane is Codex-only and per-process.
    */
   leases?: LeaseSnapshot | null
+  /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
+  agentBackground?: AgentBackgroundControl | null
 }) {
   return (
     <TranscriptRowsView
@@ -347,6 +390,7 @@ export const TranscriptView = memo(function TranscriptView({
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
       onMessageAction={onMessageAction}
+      agentBackground={agentBackground}
     />
   )
 })
@@ -368,12 +412,15 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
+  agentBackground = null,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
   compacting?: boolean
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
   leases?: LeaseSnapshot | null
+  /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
+  agentBackground?: AgentBackgroundControl | null
   accounts?: AccountsSnapshot | null
   orchestratorActive?: boolean
   onToggleOrchestrator?: (next: boolean) => void
@@ -562,6 +609,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
+          <AgentBackgroundContext.Provider value={agentBackground}>
           <ToolInspectorContext.Provider value={openInspector}>
             <TurnErrorActionsContext.Provider
               value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
@@ -581,6 +629,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
               </FilePathMenuContext.Provider>
             </TurnErrorActionsContext.Provider>
           </ToolInspectorContext.Provider>
+          </AgentBackgroundContext.Provider>
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
@@ -3081,6 +3130,7 @@ function AgentIdentityLine({
   typeWord,
   slot,
   slotLive,
+  slotYields = false,
 }: {
   axes: FaceAxes
   fill: number
@@ -3090,10 +3140,19 @@ function AgentIdentityLine({
   typeWord: string | null
   slot: string | null
   slotLive: boolean
+  /**
+   * The card is offering its Background control, which pins itself to this same
+   * right edge (`AGENT_BACKGROUND_ANCHOR_CLASS`). The slot steps aside on hover
+   * so the two never overlap; both are right-anchored, so neither moves.
+   */
+  slotYields?: boolean
 }) {
   const { style } = useContext(ToolCardStyleContext)
   // `span`, not `div`: on a card with a body the whole two-line block IS the
-  // collapse button, and only phrasing content may live inside a `button`.
+  // collapse button, and only phrasing content may live inside a `button`. That
+  // is also why the Background control is NOT rendered here: an interactive
+  // element nested in a `button` makes the HTML parser close the outer one, so it
+  // rides as a sibling of the collapse button instead (`AgentToolCard`).
   return (
     <span className={`flex items-center gap-[9px] ${TOOL_CARD_INSET_CLASS[style]}`}>
       <AgentFace axes={axes} fill={fill} pulse={pulse} />
@@ -3119,8 +3178,8 @@ function AgentIdentityLine({
       {slot === null ? null : (
         <span
           className={`ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-            slotLive ? 'text-blue-400' : 'text-text-subtle'
-          }`}
+            slotYields ? 'group-hover/agentcard:invisible ' : ''
+          }${slotLive ? 'text-blue-400' : 'text-text-subtle'}`}
         >
           {slot}
         </span>
@@ -3279,6 +3338,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const faces = useAgentFaceRegistry()
   const leases = useContext(LeaseSnapshotContext)
+  const agentBackground = useContext(AgentBackgroundContext)
   const resumeAck =
     row.toolName === 'ResumeAgent' ? toolAckForResult(row.result) : null
   const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
@@ -3345,6 +3405,13 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // registry, and it never moves with a state.
   const stateWord =
     state === 'failed' || state === 'stopped' ? vocab.state.label : null
+  // Only a worker the live snapshot still reports as FOREGROUND gets the control;
+  // a backgrounded, finished or launch-record card has nothing to offer. The set
+  // gates display only — the sidecar re-resolves and fails closed.
+  const backgroundAction =
+    agentBackground !== null && agentBackground.backgroundable.has(row.toolUseId)
+      ? agentBackground
+      : null
   const lines = (
     <>
       <AgentIdentityLine
@@ -3358,6 +3425,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         }
         slot={slot}
         slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
+        slotYields={backgroundAction !== null}
       />
       <AgentTaskLine
         stateWord={stateWord}
@@ -3369,7 +3437,19 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     </>
   )
   return (
-    <div className={TOOL_CARD_SHELL_CLASS[cardStyle]}>
+    <div
+      className={`${TOOL_CARD_SHELL_CLASS[cardStyle]} group/agentcard relative`}
+    >
+      {backgroundAction === null ? null : (
+        <button
+          className={`invisible absolute top-0 z-10 flex items-center whitespace-nowrap font-mono text-[11px] text-text-subtle group-hover/agentcard:visible hover:text-text-primary ${AGENT_BACKGROUND_ANCHOR_CLASS[cardStyle]}`}
+          onClick={() => backgroundAction.onBackground(row.toolUseId)}
+          title="Keep this worker running in the background"
+          type="button"
+        >
+          Background
+        </button>
+      )}
       {body === null ? (
         lines
       ) : (

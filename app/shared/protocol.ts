@@ -1325,6 +1325,17 @@ export type TaskSubagentMetadata = {
   agentType: string
   isSidechain: true
   spawnedAt: number
+  /**
+   * Whether this worker already runs in the background, so a card can tell a
+   * backgroundable worker from one there is nothing left to do to.
+   *
+   * It has to ride HERE rather than on `TaskSnapshotItem`: `items` is display-
+   * filtered by `isVisibleBackgroundTask` (`tasksDomain.ts`), which excludes a
+   * FOREGROUND `local_agent` by construction — precisely the worker
+   * `task.background.one` targets. This list is the one that carries them
+   * ("Includes foregrounded workers too", `TasksSnapshot.subagents`).
+   */
+  isBackgrounded: boolean
 }
 
 export type TasksSnapshot = {
@@ -1680,6 +1691,7 @@ export const TASK_CONTROL_VERB_TYPES = [
   'task.stop',
   'task.dismiss',
   'task.background',
+  'task.background.one',
 ] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
@@ -1710,10 +1722,40 @@ export type TaskBackgroundMessage = {
   requestId: string
 }
 
+/**
+ * Background ONE foreground subagent — the per-worker counterpart of the
+ * session-wide `task.background` above, and the verb the transcript's agent card
+ * carries.
+ *
+ * It names a `toolUseId`, NOT a task id, and that is the whole point of the
+ * shape. The renderer holds a worker's `toolUseId` legitimately: it is on the
+ * `tool_use` row the card is drawn from, and `TasksSnapshot.subagents` already
+ * joins on that key (`messageMetadata.ts` `selectMessageMetadata`). A FOREGROUND
+ * worker's `AppState.tasks` key, by contrast, is NOT on the wire at all —
+ * `items` filters it out — so a task-id verb would have required widening the
+ * read seam to hand the renderer an id it has no other reason to hold.
+ *
+ * Same trust shape as `task.stop` (T6-analog): the id is a CLAIM. The sidecar
+ * re-resolves it against the live store and acts only on a `local_agent` that is
+ * running and not already backgrounded; anything else fails closed with
+ * `ok:false`, no side effect. T5a-analog `requestId`; T7 caps unchanged. The
+ * write itself is the engine's own `backgroundAgentTask`
+ * (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:762`), never a store mutation in
+ * `app/` code, so the live agent-iterator handoff added on 2026-09-01 keeps
+ * working; the store mutation drives the existing snapshot re-broadcasts.
+ */
+export type TaskBackgroundOneMessage = {
+  type: 'task.background.one'
+  requestId: string
+  /** The target worker's `tool_use` id, as carried by its transcript row. */
+  toolUseId: string
+}
+
 export type TaskControlVerbMessage =
   | TaskStopMessage
   | TaskDismissMessage
   | TaskBackgroundMessage
+  | TaskBackgroundOneMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated

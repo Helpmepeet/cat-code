@@ -67,6 +67,7 @@ const tasks = {
     agentType: 'verification',
     isSidechain: true as const,
     spawnedAt: Date.UTC(2026, 6, 26, 12, 4, 18),
+    isBackgrounded: false,
   }],
 }
 
