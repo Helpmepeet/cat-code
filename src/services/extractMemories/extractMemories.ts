@@ -50,6 +50,7 @@ import {
   runForkedAgent,
 } from '../../utils/forkedAgent.js'
 import type { REPLHookContext } from '../../utils/hooks/postSamplingHooks.js'
+import { resolveRequestProvider } from '../../utils/model/providers.js'
 import {
   createMemorySavedMessage,
   createUserMessage,
