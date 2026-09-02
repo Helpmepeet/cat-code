@@ -22,6 +22,7 @@ import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { TODO_WRITE_TOOL_NAME } from '../../tools/TodoWriteTool/constants.js'
 import { TASK_CREATE_TOOL_NAME } from '../../tools/TaskCreateTool/constants.js'
 import type { Tools } from '../../Tool.js'
@@ -227,8 +228,8 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const editToolName = getPreferredEditToolName(enabledTools)
 
   const preferredToolRules = [
-    `File reading → ${FILE_READ_TOOL_NAME} (not cat, head, tail, sed)`,
-    `File editing → ${editToolName} (not sed, awk)`,
+    `File reading → ${FILE_READ_TOOL_NAME} for whole files; it is bounded (offset/limit) and numbered`,
+    `File editing → ${editToolName}`,
     // The patch format requires relative paths but never says relative to what,
     // so a session rooted in a subdirectory invites project-root-style paths
     // that resolve one level too deep.
@@ -237,18 +238,20 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
           `${FILE_PATCH_TOOL_NAME} file paths → resolved against the session working directory, which is not always the project root`,
         ]
       : []),
-    `File creation → ${FILE_WRITE_TOOL_NAME} (not heredoc or echo redirection)`,
+    `File creation → ${FILE_WRITE_TOOL_NAME}`,
     ...(embedded
       ? []
       : [
-          `File search → ${GLOB_TOOL_NAME} (not find or ls)`,
-          `Content search → ${GREP_TOOL_NAME} (not grep or rg)`,
+          `File search → ${GLOB_TOOL_NAME}`,
+          `Content search → ${GREP_TOOL_NAME}`,
         ]),
-    `Shell execution → ${BASH_TOOL_NAME} only for operations that have no dedicated tool. When in doubt, use the dedicated tool.`,
+    `Shell execution → ${BASH_TOOL_NAME} for commands, builds, tests, and targeted shell reads and searches`,
   ]
 
   const items = [
-    `RULE — Prefer dedicated tools over ${BASH_TOOL_NAME}: Dedicated tools let the user review your work. Use ${BASH_TOOL_NAME} only when no dedicated tool exists for the operation.`,
+    `RULE — File mutations: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
+    `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+    `RULE — Tool routing: Dedicated tools let the user review your work. Route each operation to its tool:`,
     preferredToolRules,
     taskToolName
       ? `TASK TRACKING: Use ${taskToolName} to break down and track work. Mark each task complete as soon as it is done. Do not batch completions.`
@@ -403,9 +406,13 @@ export function getGPTSessionGuidanceSection(
   const searchTools = embeddedSearch
     ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
     : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
+  // Reads and search stay open through Bash: they are cheap and lossless, so
+  // only mutations are steered to a dedicated tool (see the file-mutation rule
+  // in Using Your Tools).
+  const shellReadRule = `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
   const readDiscipline = embeddedSearch
-    ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
-    : `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`
+    ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read. ${shellReadRule}`
+    : `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read. ${shellReadRule}`
 
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()

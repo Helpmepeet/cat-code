@@ -15,6 +15,7 @@ import {
 } from '../constants/prompts.js'
 import {
   getGPTDoingTasksSection,
+  getGPTSessionGuidanceSection,
   getGPTUsingToolsSection,
 } from '../constants/promptStyles/gpt.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
@@ -423,5 +424,52 @@ describe('provider and prompt regressions', () => {
 
     const withoutPatchTool = getGPTUsingToolsSection(new Set())
     expect(withoutPatchTool).not.toContain('resolved against the session working directory')
+  })
+
+  test('GPT tool rules carry the Apply_patch mutation rule and the diff check', () => {
+    const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
+
+    expect(section).toContain('Use Apply_patch for local file edits.')
+    expect(section).toContain(
+      'Do not create or edit files with cat, heredocs, or other shell write tricks.',
+    )
+    expect(section).toContain(
+      'Formatting commands and bulk mechanical rewrites do not need Apply_patch.',
+    )
+    expect(section).toContain(
+      'Do not use Python to read or write files when a simple shell command or Apply_patch is enough.',
+    )
+    expect(section).toContain(
+      'After any file mutation performed by a command rather than by Apply_patch, Write, or NotebookEdit',
+    )
+    expect(section).toContain('show the resulting git diff before moving on')
+    expect(section).toContain(
+      'show git diff --stat and git status --short instead',
+    )
+    expect(section).toContain('Never skip the check.')
+
+    expect(section).not.toContain('no dedicated tool')
+  })
+
+  test('GPT read discipline permits shell reads and states why Read is the default', () => {
+    const guidance = getGPTSessionGuidanceSection(new Set(['Grep', 'Read']), [])
+
+    expect(guidance).toContain('`rg`')
+    expect(guidance).toContain('`sed -n` line ranges')
+    expect(guidance).toContain('`git blame`')
+    expect(guidance).toContain('bounded (offset/limit) and numbered')
+  })
+
+  test('the Claude system prompt keeps its own dedicated-tool wording', async () => {
+    setSessionProvider('firstParty')
+
+    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+
+    expect(prompt).toContain('To edit files use Edit instead of sed or awk')
+    expect(prompt).toContain(
+      'To read files use Read instead of cat, head, tail, or sed',
+    )
+    expect(prompt).not.toContain('Use Apply_patch for local file edits')
+    expect(prompt).not.toContain('show the resulting git diff before moving on')
   })
 })

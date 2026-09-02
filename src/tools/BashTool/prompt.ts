@@ -16,8 +16,10 @@ import {
   isUndercover,
 } from '../../utils/undercover.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { BASH_TOOL_NAME } from './toolName.js'
@@ -199,6 +201,13 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   // so we don't steer away from them (and Glob/Grep tools are removed).
   const embedded = hasEmbeddedSearchTools()
 
+  // The registry swaps Edit for Apply_patch on the OpenAI path
+  // (getProviderFileEditTool in ../../tools.ts), so the prompt must name the
+  // tool this provider actually ships.
+  const editToolName = isGPTPromptStyle(provider)
+    ? FILE_PATCH_TOOL_NAME
+    : FILE_EDIT_TOOL_NAME
+
   const toolPreferenceItems = [
     ...(embedded
       ? []
@@ -207,7 +216,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
           `Content search: Use ${GREP_TOOL_NAME} (NOT grep or rg)`,
         ]),
     `Read files: Use ${FILE_READ_TOOL_NAME} (NOT cat/head/tail)`,
-    `Edit files: Use ${FILE_EDIT_TOOL_NAME} (NOT sed/awk)`,
+    `Edit files: Use ${editToolName} (NOT sed/awk)`,
     `Write files: Use ${FILE_WRITE_TOOL_NAME} (NOT echo >/cat <<EOF)`,
     'Communication: Output text directly (NOT echo/printf)',
   ]
@@ -277,14 +286,33 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   ]
 
   if (isGPTPromptStyle(provider)) {
+    // Mutations are steered to a dedicated tool so the user can review them;
+    // reads and search stay open because they are cheap and lossless.
+    const gptToolPreferenceItems = [
+      ...(embedded
+        ? []
+        : [
+            `File search: Use ${GLOB_TOOL_NAME}, or \`rg --files\``,
+            `Content search: Use ${GREP_TOOL_NAME}, or \`rg\``,
+          ]),
+      `Read files: Use ${FILE_READ_TOOL_NAME} for whole files; \`sed -n\` line ranges are fine here for a slice`,
+      `Edit files: Use ${editToolName}`,
+      `Write files: Use ${FILE_WRITE_TOOL_NAME}`,
+      'Communication: Output text directly (NOT echo/printf)',
+    ]
+
     return [
       'Executes a given bash command and returns its output.',
       '',
       workingDirectoryNote,
       '',
-      `TOOL SELECTION CONSTRAINT: Before using ${BASH_TOOL_NAME}, check whether a dedicated tool can perform the task. Avoid using this tool to run ${avoidCommands} commands unless you have verified that no dedicated tool can accomplish the task or the user explicitly asked for Bash.`,
+      `FILE MUTATIONS: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
       '',
-      ...prependBullets(toolPreferenceItems),
+      `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+      '',
+      `READS AND SEARCH: \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run here. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`,
+      '',
+      ...prependBullets(gptToolPreferenceItems),
       '',
       'COMMAND EXECUTION RULES',
       ...prependBullets(instructionItems),
