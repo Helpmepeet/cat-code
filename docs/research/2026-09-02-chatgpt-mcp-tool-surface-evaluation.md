@@ -247,7 +247,7 @@ Output on 2026-09-02, after this report landed:
 
 ```text
 files 4769 | last inside budget: src/components/TagTabs.tsx
-budgeted: 3 2000 True | definition reached: False
+budgeted: 0 2000 True | definition reached: False
 path=src/utils: ['src/utils/model/providers.ts']
-unbudgeted: 4 3840 ['docs/research/2026-09-02-chatgpt-mcp-tool-surface-evaluation.md', 'src/utils/model/providers.ts']
+unbudgeted: 1 3840 ['src/utils/model/providers.ts']
 ```
