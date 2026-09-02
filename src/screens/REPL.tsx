@@ -3274,12 +3274,6 @@ export function REPL({
     })) {
       onQueryEvent(event);
     }
-    if (feature('BUDDY')) {
-      void fireCompanionObserver(messagesRef.current, reaction => setAppState(prev => prev.companionReaction === reaction ? prev : {
-        ...prev,
-        companionReaction: reaction
-      }));
-    }
     queryCheckpoint('query_end');
     const completedTurnToolCount = getTurnToolCount();
     // Progress is judged here and consumed by accountCompletedTurnThreadGoal

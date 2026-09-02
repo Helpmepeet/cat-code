@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { useEffect } from 'react'
 import type { Message } from '../types/message.js'
 import { createSystemMessage } from '../utils/messages.js'

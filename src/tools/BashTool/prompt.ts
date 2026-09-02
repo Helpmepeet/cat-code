@@ -1,3 +1,4 @@
+import { type APIProvider, getAPIProvider } from '../../utils/model/providers.js'
 import { feature } from 'bun:bundle'
 import { prependBullets } from '../../constants/prompts.js'
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'

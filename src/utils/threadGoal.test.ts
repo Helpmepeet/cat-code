@@ -1,3 +1,4 @@
+import type { ThreadGoal } from './threadGoal.js'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getSessionId, getSessionProjectDir, switchSession } from '../bootstrap/state.js'
 import { asSessionId } from '../types/ids.js'

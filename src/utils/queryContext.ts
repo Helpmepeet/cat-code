@@ -9,6 +9,7 @@
  * import from here (QueryEngine.ts, cli/print.ts).
  */
 
+import { feature } from 'bun:bundle'
 import type { Command } from '../commands.js'
 import { getAgentModeSystemPromptSections, getSystemPrompt } from '../constants/prompts.js'
 import { getSystemContext, getUserContext } from '../context.js'

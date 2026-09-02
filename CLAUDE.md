@@ -95,7 +95,7 @@ instead of assuming.
 When writing or changing Cat Code tests, use the repository `writing-cat-code-tests` skill.
 
 ```bash
-bun run build:dev:full        # THE build gate: maps:lint + branch-diff lint + ./cli-dev + version print
+bun run build:dev:full        # THE build gate: maps:lint + undefined-name lint + branch-diff lint + ./cli-dev + version print
 bun test <specific paths>     # focused tests only — there is NO root test script
 ```
 
@@ -103,11 +103,22 @@ bun test <specific paths>     # focused tests only — there is NO root test scr
 - Never bare `bun test` on the whole repo; some suites (Codex account suites)
   only pass file-isolated.
 - Test routing per subsystem: `docs/maps/build-release-testing.md` §Test Routing.
-- **Root `bun run typecheck` is KNOWN-RED** (1,974 pre-existing errors across
-  `src/` as of 2026-08-19; tsconfig is `strict:false` and test files dominate).
+- **Root `bun run typecheck` is KNOWN-RED** (1,879 pre-existing errors across
+  `src/` as of 2026-09-03; tsconfig is `strict:false` and test files dominate).
   It is NOT a gate and not your job to fix. The engine gate is
   `build:dev:full` + focused tests. If you must reason about types in `src/`,
   compare error output before/after your change — zero NEW errors is the bar.
+- **One slice of that red IS a gate, held at zero: undefined names.**
+  `bun run lint:undefined-names` (in `build:dev:full`, ~9s) fails on any
+  TS2304/TS2503, i.e. a name used but never imported or declared. Nothing else
+  catches these: eslint's rules are all `createNoopRule()` stubs, and esbuild
+  compiles a free identifier into a bundle-clean global reference, so the build
+  passes and the line throws `X is not defined` only when it runs. Added
+  2026-09-03 after `toSDKRetryError` shipped unimported in `41849349` and broke
+  every retryable API error for four days; the sweep that followed found 93
+  more, 3 of them live (`resolveRequestProvider` on the auto-memory path, `z`
+  and `extractTextContent` in `/insights`). All 93 are fixed, so the bar is
+  zero, not a baseline — a new one is always a real bug.
 
 ### Desktop (`app/`) — root commands do NOT cover this package
 

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import type { UUID } from 'crypto'
 import { getSessionId } from '../bootstrap/state.js'
 import { prepareHumanPromptAgainstDeferredContinuation, takeDeferredContinuationNotice } from '../services/deferredContinuation.js'

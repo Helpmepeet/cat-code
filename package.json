@@ -14,9 +14,10 @@
   "scripts": {
     "build": "bun run ./scripts/build.ts",
     "build:dev": "bun run ./scripts/build.ts --dev",
-    "build:dev:full": "bun run maps:lint && bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
+    "build:dev:full": "bun run maps:lint && bun run lint:undefined-names && bun run lint && bun run ./scripts/build.ts --dev --feature-set=dev-full && ./cli-dev --version",
     "lint": "files=$(git diff --name-only --diff-filter=d main...HEAD -- '*.ts' '*.tsx' | while IFS= read -r file; do [ -f \"$file\" ] && printf '%s\\n' \"$file\"; done); [ -z \"$files\" ] || eslint --suppressions-location eslint-suppressions.json --suppress-rule react-hooks/rules-of-hooks --suppress-rule react-hooks/exhaustive-deps --suppress-rule custom-rules/prefer-use-terminal-size $files",
     "maps:lint": "bun run ./scripts/workspaceMapLint.ts",
+    "lint:undefined-names": "bun run ./scripts/undefinedNamesLint.ts",
     "typecheck": "tsc --noEmit",
     "compile": "bun run ./scripts/build.ts --compile",
     "dev": "bun run ./src/entrypoints/cli.tsx",
