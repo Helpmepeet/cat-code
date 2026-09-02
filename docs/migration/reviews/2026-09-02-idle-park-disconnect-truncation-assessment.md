@@ -12,14 +12,44 @@ ruling and every locked decision was declared reopenable for this review.
 the brief pointed at. "Disconnect" is park, and it lands on the owner's
 primary session twice an hour; on top of that, every ordinary quit leaves the
 parked sessions reading **crashed** on the next launch. "Message truncate" is
-the replay ring, and the ring is about 95% streaming deltas, so it holds
-roughly two hundred real messages instead of the thousands its caps suggest.
-No locked decision needs reopening: the friction comes from three tunables
-and one retention bug.
+most likely the replay ring: the ring is about 95% streaming deltas, so it
+holds roughly two hundred real messages instead of the thousands its caps
+suggest, and that tail is what a reload or a relaunch preview shows. That is
+the leading hypothesis, not a reproduction; §4 states the evidence and what
+would confirm it. No locked decision needs reopening: the friction comes from
+two tunables and one retention bug.
 
 Everything below is read from source or measured on this machine unless the
 §Extrapolations section says otherwise. Measurements read aggregates only; no
 transcript content left the analysis.
+
+> **Revised 2026-09-02 after the cold review**
+> (`2026-09-02-idle-park-disconnect-truncation-assessment-review.md`, `f0c04357`).
+> Each finding was re-verified against source before this revision:
+>
+> - **F1 accepted.** Recommendation 2's compaction boundary was wrong: an
+>   `assistant` frame is emitted per content block, and the projector needs the
+>   stream's `message_start` for every later delta. Boundary corrected in §5.
+> - **F2 accepted in part.** The model is restored from the transcript on
+>   resume and persisted effort levels survive; my "runs on the defaults"
+>   claim was wrong for both, and the `modeApi: null` citation was Agent Mode,
+>   not permission mode. Permission mode and fast mode DO reset, which the
+>   review did not dispute. §2 rewritten field by field.
+> - **F3 narrowed, not accepted as stated.** The correlation the review asked
+>   for is now in §4: all four sessions in the Aug 30 window have transcripts
+>   of 1.4–2.6 MiB, under the 4 MiB restore cap, so park→restore removed no
+>   rows for them, while two of them have ring-truncated caches at 200 and 468
+>   messages. The ring stays the leading explanation; it is labelled a
+>   hypothesis pending the owner's reproduction, and the 4 MiB reset path is
+>   kept as the secondary one.
+> - **F4 accepted.** Five open tabs are not five live engines; no cap victim
+>   was produced in the window. The TTL is the operative knob; §2 and §5
+>   corrected.
+> - **F5/F6 accepted.** Main can mint the load-earlier anchor; that is better
+>   than a renderer-authored uuid. §6 corrected.
+> - The review's framing that the document "should not be used as an
+>   implementation brief" is agreed; it was written as an assessment, and the
+>   §5 sketches now state the ordering requirements they omitted.
 
 ## 1. Evidence
 
@@ -107,25 +137,45 @@ synchronous, every gate read is synchronous
 `cleanup()` → `server.close()` runs inside the same dispatch
 (`app/sidecar/index.ts:598-613`).
 
-**Why it fires on the owner:** five sessions open against a cap of four means
-the cap is over on every host event, and a 20-minute TTL is shorter than the
-owner's gap between visits to a session they are multiplexing. Both knobs
-were set for "a typical 2–3 live sessions" (`idleParkDriver.ts:18`); the
-observed workload is five.
+**Why it fires on the owner: the TTL, not the cap.** Only `spawning` and
+`ready` descriptors count as live (`idleParkDriver.ts:55-58`, `:193`); a
+parked tab stays open but does not count, so "five sessions open" is not five
+live engines. No cap victim was produced in the Aug 30 window: 0bd22b4a
+spawned at 16:25:32 with no park following it, and every observed park landed
+20m30s–20m50s after a turn end, which is the TTL plus up to one 60 s sweep. A
+20-minute TTL is simply shorter than the owner's gap between visits to a
+session they are multiplexing. The knobs were set for "a typical 2–3 live
+sessions" (`idleParkDriver.ts:18`); how many engines are concurrently live in
+the owner's real use is not in the bundle (two of the five sessions predate
+its window).
 
-**What a park costs, verified:**
+**What a park costs, verified field by field** (corrects the first edition,
+which claimed everything the rail shows resets to defaults):
 
-1. **The first message after a park runs on the defaults, not on what the
-   rail shows.** CC-33 keeps model, effort, fast and mode on screen as
-   read-only faces (`app/renderer/src/composerRailModel.ts`, DISPLAY outlives
-   the engine). The restore re-spawns with the in-memory model override gone
-   (`app/sidecar/runControlsDomain.ts:431` reads `getMainLoopModelOverride()`),
-   `modeApi: null` (`app/sidecar/sessionResume.ts:262`), and the only model
-   restore on resume is from a resumed agent definition
-   (`src/utils/sessionRestore.ts:273-279`). The rail displays a promise the
-   submit breaks. The DIE-list (IDLE-PARK.md §7) was accepted as "identical
-   to what a crash→restore already loses"; true, but a crash is rare and a
-   park happens twice an hour.
+| Rail face | After park→restore | Evidence |
+|---|---|---|
+| Model | **Survives.** Resume selects the latest non-error assistant model from the transcript and installs it before QueryEngine construction. Narrow gap: a model picked in the rail but never answered on before the park is not in the transcript and does not come back. | `app/sidecar/sessionController.ts:225-236` `initializeSidecarModelProvider`, `:268-281` `selectResumedProviderModel` |
+| Effort | **Persisted levels survive**, shared last-writer-wins across sessions; ephemeral levels (xhigh/ultra/numeric) die. | `sessionController.ts:312-320` `getInitialEffortSetting()`; `runControlsDomain.ts:145-155` `executeEffort` persists |
+| Permission mode | **Resets** to the settings default. There is no per-session restore; `resumedInitialState` is applied before a fresh `toolPermissionContext`. | `sessionController.ts:127-144` `initialPermissionModeFromCLI`, `:302-309` |
+| Fast | **Resets.** `setFast` writes the store only. | `runControlsDomain.ts:158-169` |
+| Thread goal | **Survives** (the IDLE-PARK.md §7 DIE row is stale). | `app/sidecar/sessionResume.ts:106-110`, `:290` |
+
+The first edition cited `sessionResume.ts:262` `modeApi: null` as the
+permission-mode reset; that field is Agent Mode's API, not permission mode.
+
+What this means on screen: CC-33 keeps the last model, effort, fast and mode
+on the rail as read-only faces while parked
+(`app/renderer/src/composerRailModel.ts`). On restore the fresh snapshots
+replace them (`app/renderer/src/runControlsState.ts:66-83`), so the display
+converges to the truth; the residual gap is that the held prompt's first turn
+runs with the default permission mode and fast off, while the parked rail
+showed otherwise until `ready`. Smaller than the first edition claimed, still
+a promise the submit breaks for a session the owner had put into `auto`.
+
+The DIE-list (IDLE-PARK.md §7) was accepted as "identical to what a
+crash→restore already loses". True, but a crash is rare and a park happens
+twice an hour; and two of its rows (model, thread goal) no longer match
+source.
 2. **The transcript is rebuilt.** The resumed sidecar's `ready` frame wipes
    the session's rows (`app/renderer/src/transcriptProjector.ts:1276-1288`)
    and the newest ≤ 4 MiB tail is replayed from disk
@@ -194,12 +244,33 @@ sit between them on the wire.
   tail with the boundary row and no load-earlier control, because a preview
   has no engine (`app/renderer/src/App.tsx:3692-3702`). Typing engages a
   resume, which then replays up to 4 MiB from disk.
-- **Park → restore.** NOT a truncation path in practice: the renderer keeps
-  its rows through the park, and the restore replays up to 4 MiB, which covers
-  all but 6 of the last 14 days' transcripts (§1.3). The brief's hypothesis
-  that park-driven buffer loss (`main.ts:1847` `clearSession`) is the
-  truncation mechanism is wrong; that loss becomes visible only through the
-  two paths above.
+- **Park → restore, the secondary path.** Every resumed `ready` resets the
+  renderer's rows and the replacement is a newest tail capped at 4 MiB, so a
+  session above that cap loses visible rows on every park. That did not apply
+  to any session in the Aug 30 window:
+
+  | Session (Aug 30) | Transcript | Cache on disk today |
+  |---|---|---|
+  | ca05a9f2 (parked twice) | 2.07 MiB, 691 records | 461 finished, 0 deltas, no marker (backfill-written) |
+  | 3440ab20 (parked once) | 1.36 MiB, 384 records | 7,058 frames, 6,745 deltas, no marker yet |
+  | b64260f6 | 2.61 MiB, 660 records | 7,997 frames, 7,528 deltas, marker N = 468 |
+  | 0bd22b4a | 1.47 MiB, 588 records | 8,000 frames, 7,799 deltas, marker N = 200 |
+
+  All four are under the 4 MiB cap, so park→restore replayed them whole, while
+  two of them already carry ring-truncated caches. The 6 transcripts above
+  4 MiB in the last 14 days (§1.3) are real but were not the parked ones.
+  The brief's hypothesis that park-driven buffer loss (`main.ts:1847`
+  `clearSession`) is the truncation mechanism is therefore not supported;
+  that loss becomes visible only through the two paths above.
+
+**Status of the claim.** The ring is the leading explanation because it is
+the only truncation path that fires on ordinary sessions: 59 of 176 previews
+on disk are ring tails today, and a ring-distilled cache is replaced by the
+backfill worker only when the transcript's mtime is newer than the cache
+(`app/main/main.ts:883-884` `isCacheStale`), which a park-time cache rarely
+is. It remains a hypothesis until the owner reproduces the complaint on a
+named session; what would confirm it is the boundary row appearing on a
+reload or a relaunch preview of a session the owner considers truncated.
 
 **Accounting details, verified:**
 
@@ -219,40 +290,63 @@ sit between them on the wire.
    (`registry.ts:895`) or a sibling `markParkedCleanSync`. Removes the red
    **crashed** roster after every relaunch. Trivial.
 2. **Stop retaining `stream_event` partials in the ring once their message
-   completes.** Main-only, in `FrameReplayBuffer.record`; no protocol, no
-   inbound surface, no security change. Roughly ten times more real history
+   has fully stopped.** Main-only, in `FrameReplayBuffer.record`; no protocol,
+   no inbound surface, no security change. Roughly ten times more real history
    per reload and per preview for the same 8 MiB, and the at-rest caches shrink
-   about seven-fold. Keep the deltas of the one in-flight message so a reload
-   mid-stream still shows partial text; drop them when the finished
-   `assistant` message lands. Then re-measure: the byte cap binds again and the
-   2026-08-19 verdict is void.
-3. **Retune the park knobs to the observed workload.** `PARK_IDLE_TTL_MS`
-   20 min → 120 min and `MAX_LIVE_ENGINES` 4 → 8 (`idleParkDriver.ts:41,49`).
-   Cost is RAM: eight live engines is about 1.8 GB worst case at the measured
-   ~223 MB per engine. If that is too much, gate the TTL on free system memory
-   (`process.getSystemMemoryInfo()` in main) rather than on time. Either way
-   the parks observed in §1.1 stop.
-4. **Re-apply what the rail displays when a parked session restores.** The
-   renderer already holds the last model, effort, fast and mode, and each has
-   an existing sidecar-validated verb (run-control verbs, `permission.setMode`
-   with its auto-mode gate). Replaying them after the resumed `ready` frame
-   adds no inbound surface. Alternative with a cleaner trust story: main
-   records the last `run-controls.snapshot` / `permission.context` it forwarded
-   and passes them as spawn config, at the cost of a registry field and its
-   migration (CLAUDE.md §6).
+   about seven-fold. **Boundary, corrected after review:** compact at the
+   stream's `message_stop` (or at the turn's `result`), never at a finished
+   `assistant` frame. The provider loop yields one `assistant` message per
+   `content_block_stop` and reaches `message_stop` only later
+   (`src/services/api/claude.ts:2425-2467`, `:2561`), and the projector opens
+   a stream on `message_start`, requires that id for every later delta, and
+   closes it on `message_stop`
+   (`app/renderer/src/transcriptProjector.ts:1894-1906`, `:1948-1968`,
+   `:1991`). Dropping deltas at the first `assistant` frame would strip the
+   `message_start` a later block's deltas need on reload. Keep an interrupted
+   stream's deltas until the next `message_stop` or `result`. Add a
+   replay-buffer plus projector regression: two blocks, reload between block
+   completions. Then re-measure: the byte cap binds again and the 2026-08-19
+   verdict is void.
+3. **Raise the idle TTL.** `PARK_IDLE_TTL_MS` 20 min → 120 min
+   (`idleParkDriver.ts:49`) stops every park observed in §1.1. Cost is RAM
+   held for longer by sessions the owner has genuinely left, about 223 MB
+   each. If that is too much, gate the TTL on free system memory
+   (`process.getSystemMemoryInfo()` in main) rather than on time. Leave
+   `MAX_LIVE_ENGINES` alone until concurrent-live counts are measured: the
+   bundle shows no cap victim, so raising it is not supported by this
+   evidence.
+4. **Restore permission mode and fast across a park, with an ordering
+   barrier.** Scope narrowed after review: model and persisted effort already
+   survive (§2). What does not is the per-session permission mode and fast.
+   Any fix must (a) capture the values BEFORE the park, since the resumed
+   sidecar's fresh `permission.context` and `run-controls.snapshot` overwrite
+   the renderer's retained faces on `ready` (`runControlsState.ts:66-83`);
+   (b) hold them as separate pending-control state, because `PendingSubmit`
+   carries none of them; and (c) apply them before the held prompt is
+   released, since the drain submits on the first `ready`
+   (`App.tsx:2925-2980`). The cleanest place is sidecar startup, before
+   `ready`: main records the last `permission.context` mode and fast flag it
+   forwarded for that session and passes them as spawn config on restore, at
+   the cost of a registry field and its migration (CLAUDE.md §6). A
+   renderer-side replay of `permission.setMode` and the fast verb after
+   `ready` is possible only with the barrier in (c); never replay effort this
+   way, because `setEffort` writes the persisted setting and would clobber a
+   newer choice made in another session.
 5. **§1d ruling.** Pick (b), route the click to the composer, plus the (c)
    tooltip. A better option not on the table: keep the pickers live while
    parked and let a pick trigger the same restore a submit does
-   (`resolvePendingSubmit` → `'restore'`, `app/renderer/src/composerState.ts:894-916`),
-   applying the pick after `ready`. That is item 4's mechanism with one more
-   trigger.
+   (`resolvePendingSubmit` → `'restore'`, `app/renderer/src/composerState.ts:894-916`).
+   The pick then needs item 4's pending-control state and barrier; without
+   them it is overwritten by the fresh snapshot on `ready`.
 
 **Locked decisions.** None needs reopening. N-process is why park exists, but
 replacing it to save ~230 MB per idle tab is a rewrite of the supervisor plane
 for a problem item 3 solves by spending the RAM. Die-with-window makes every
 relaunch go through preview → resume, and item 2 is what makes that preview
 whole. UDS transport, raw-event fidelity and the two-id model are untouched by
-any of the above.
+any of the above. The one recorded rule this document does propose to bend is
+HISTORY-LOAD-EARLIER's "the renderer names a session and a verb, nothing
+else", and only by a main-authored field (§6).
 
 ## 6. Correctness risks found along the way
 
@@ -265,9 +359,17 @@ any of the above.
   per-connection anchor still points at the attach-time oldest message
   (`sidecarServer.ts:1121`), so the recovered prefix ends above a gap the
   renderer never receives, again reported complete. Both become rare once
-  item 2 lands. The honest fix needs the renderer to state its oldest row id,
-  which reopens HISTORY-LOAD-EARLIER's "parameterless" rule by one validated
-  uuid.
+  item 2 lands. **Fix, corrected after review:** the anchor should be minted by
+  MAIN, not the renderer. Main owns the ring and knows the oldest retained
+  finished message for the session, and every renderer frame passes through
+  one point on its way to the sidecar (`app/main/main.ts:3195` `forward`).
+  Stamping that uuid onto the `history.loadEarlier` message there, and adding
+  one uuid-shaped key to the sidecar's allowlist and local schema
+  (`sidecarServer.ts:5504`, `:5608`), gives the sidecar a diff anchor that
+  matches what the reader actually holds, including the fresh-session case
+  where its own `history` is empty. Main overwrites whatever the renderer
+  sends in that field, so nothing renderer-authored widens. The first edition
+  proposed a renderer-stated uuid; that was the wrong side of the boundary.
 - **Same-chunk dispatch after the latch.** `handleData` keeps dispatching the
   rest of a decoded chunk after `handlePark` has latched and closed the server
   (`sidecarServer.ts:1183`, guard only at entry). Turn-starting verbs carry a
@@ -289,9 +391,12 @@ any of the above.
 - **Reload frequency.** Not measured. Dev-mode HMR fall-through to a full
   reload is plausible given concurrent renderer edits while the app is open;
   a `renderer-ready` count per launch in the operational log would settle it.
-- **Rail-then-defaults sequence and the scroll jump on restore.** Reasoned
-  from the code paths cited, not observed live. One forced park with a
-  non-default model, then a submit, settles both.
+- **Permission-mode and fast reset on restore, and the scroll jump.**
+  Reasoned from the code paths cited in §2, not observed live. One forced park
+  of a session in `auto` with fast on, then a submit, settles both.
+- **Concurrent live-engine count.** Not in the bundle; two of the five
+  sessions predate its window. A `listSessions` live count sampled with the
+  renderer health record would settle whether the cap ever fires.
 - **Per-message clipping.** "Message truncate" could also mean a single long
   message being cut. The CC-59 leaf windowing (`app/renderer/src/lineWindow.ts`,
   `markdownRenderPlan.ts`) mounts ranges rather than cutting content, but this
