@@ -6,13 +6,20 @@ My Mac Files connector, against the served folder as of 2026-09-02
 the outbox. Companion to `2026-08-30-chatgpt-review-behavior.md`, which measured
 what came back; this measures what the model could see while producing it.
 
-**Headline.** The descriptions and server instructions are sound. The binding
-constraint is coverage: `grep_files` stops after 2,000 files in path-name order
-and cat-code serves 4,766, so an unscoped content search never reaches most of
-`src/`. That is the mechanism behind the failure the behaviour note recorded as
-"never asks who calls it" (8 of 29 refutations, two findings filed in code with
-no live caller). Fixing it is cheap: a full-tree scan costs 0.6 s in the current
-Python, 0.05 s with ripgrep.
+Revised the same day after a review pass: the grep description overpromise,
+the causal wording, the `IGNORE_DIRS` semantics, the inventory arithmetic, and
+the reproduction harness were all corrected. §7 lists the changes.
+
+**Headline.** The descriptions and server instructions are mostly sound. The
+one overpromise sits in `grep_files` itself: its description says "one call
+covers the whole folder", while the implementation stops after 2,000 files in
+path-name order, and cat-code serves 4,766. So an unscoped content search never
+reaches most of `src/`. That is a mechanism that would produce exactly the
+failure the behaviour note recorded as "never asks who calls it" (8 of 29
+refutations, two findings filed in code with no live caller). It is
+demonstrated from source and consistent with the replies (§3, §4); no per-call
+trace exists to prove which rounds hit it (§6). Fixing it is cheap: a full-tree
+scan costs 0.6 s in the current Python, 0.05 s with ripgrep.
 
 ---
 
@@ -37,7 +44,7 @@ Python, 0.05 s with ripgrep.
 | `search_filenames` | substring on **basename** only, case-insensitive | `model/providers` returns nothing |
 | `read_file` / `fetch` | 20,000 bytes default, 200,000 max; `start_line`/`end_line` | header first, `[TRUNCATED]` marker names the resume point |
 | `read_multiple_files` | 20 files, 200,000 bytes total | manifest first |
-| `grep_files` | literal substring; **2,000-file scan budget**; 100 results default, 500 max; 3 context lines; `include` glob only | budget applied after `include`, before scan |
+| `grep_files` | literal substring; **2,000-file scan budget**; 100 results default, 500 max; 3 context lines; `include` glob only | budget applied after `include`, before scan; **description claims "one call covers the whole folder"** |
 | `git_status` `git_branch` | | |
 | `git_log` | 20 default, 100 max; `path` filter; no `ref`, no range, no stat | |
 | `git_diff` | single `ref` (working tree vs commit) or `staged`; no `base..head` | 200 KB cap |
@@ -59,7 +66,7 @@ calls it unprompted.
 | Where the budget ends | all of `app/`, `docs/`, `ds-bundle/`, `scripts/`; `src/` only through 188 of 404 files in `src/components` |
 | `src/` dirs never reached by a bare grep | 47 dirs, 1,631 files: `src/utils` (708), `src/tools` (287), `src/services` (210), `src/hooks` (111), `src/ink` (99), `src/query.ts`, `src/main.tsx`, `src/screens` … |
 | `grep path=src` | still budget-hit; `src/utils` reached 302/708, `src/vim` and `src/voice` never |
-| Bare grep for `export function resolveRequestProvider` | 0 matches (reads as "not defined") |
+| Bare grep for the line that defines `resolveRequestProvider` | 0 matches (reads as "not defined") |
 | Same with `path=src/utils` | 1 match, `src/utils/model/providers.ts` |
 | Bare grep `resolveRequestProvider`, budgeted vs full | 64 vs 164 matches |
 | Full-tree scan, budget removed, current Python | 0.55 to 0.67 s (3,837 text files) |
@@ -74,12 +81,21 @@ calls it unprompted.
 Ignoring `tmp/` and `ds-bundle/` alone leaves 3,767 files, still over the
 budget. The ignore list helps; it does not fix coverage on its own.
 
+`docs/` sorts before `src/`, so this report is itself inside bare-grep reach.
+Every literal quoted in this file adds one match to any grep for it; the
+figures above were taken before the file existed, and re-measuring after it
+landed reads one match higher per quoted symbol. The reproduction in §8 builds
+its probe from fragments for that reason.
+
 ## 4. The real requests, and what each required field needs from the tools
 
-Reply inventory (first line of chunk 0 of every request): 28 area-scoped bug or
-perf hunts of cat-code, 3 web-research requests, one fix plan, one plan
-critique, plus 7 probes. The 28 hunts share the two standing request files in
-`chatgpt-handoff/` (`bug-hunt-ledger.md`, `perf-hunt-ledger.md`).
+Reply inventory, from the first line of chunk 0 of every request: 41 request
+ids. Seven are probes (`request-test`, `A7F6AAB5-…`, `e2e_…`, `probeA_…`,
+`probeB_…`, `autosend_…`, and `handoff_3e5d34071978e0d9`, whose reply is the
+word "test"). The 34 real ones are 24 bug hunts and 5 perf hunts of cat-code,
+3 web-research requests, one fix plan, and one plan critique. The 29 hunts
+share the two standing request files in `chatgpt-handoff/`
+(`bug-hunt-ledger.md`, `perf-hunt-ledger.md`).
 
 | Required field in the request | Tool it needs | Status |
 |---|---|---|
@@ -88,7 +104,7 @@ critique, plus 7 probes. The 28 hunts share the two standing request files in
 | "search that area thoroughly first" | `list_files`/`grep_files` with `path` | works for areas under 2,000 files; `src/` overflows |
 | "what n actually is in THIS repo, with evidence" | `list_files` totals | works |
 | **"paste the calling line and its file path"** (bug hunt) · **"who calls it and how often"** (perf hunt) | whole-tree backward search for a symbol | **broken by the budget** |
-| out of scope `tmp/`, `.worktrees/` | server-side ignore | `tmp/` is served anyway; `.worktrees/` is a dot dir and already invisible, so that clause is inert |
+| out of scope `tmp/`, `.worktrees/` | server-side ignore | `tmp/` is discoverable and readable; `.worktrees/` is a dot dir and invisible to the connector, so that clause is inert here (it may still matter if the same brief is reused on the cat-code lane) |
 
 Caller search for symbols in the perf-hunt area `src/utils/permissions/`:
 
@@ -111,21 +127,31 @@ the behaviour note.
 
 ## 5. What to change, ranked
 
-1. **Fix grep coverage.** Minimum: raise or drop `GREP_MAX_FILES`; the full
-   scan is 0.6 s here. Better: back `grep_files` with ripgrep, already at
-   `/opt/homebrew/bin/rg`, using the fixed-argv, no-shell, timeout discipline
-   the git tools already use. That buys regex on a linear-time engine (the
-   literal-only DoS rationale no longer applies; keep `-F` as the default),
-   `.gitignore` awareness, and speed. Preserve the deny-list twice, as rg
-   `--glob` exclusions and as a post-filter on returned paths, the same
-   belt-and-braces `_git_pathspec_args` uses. Add: `exclude` glob (the hunts
-   want non-test source; there is no way to say `*.ts` but not `*.test.ts`),
-   a `count` mode returning per-file match counts so caller distribution is
-   one small call, and `whole_word`.
-2. **Stop serving scratch.** For the cat-code deployment set `IGNORE_DIRS` to
-   the default list plus `tmp`, `ds-bundle`, `scratchpad`. `IGNORE_DIRS`
-   replaces the default list, so restate all of it. Honouring `.gitignore`
-   would do this generically and is free with rg.
+1. **Fix grep coverage, and fix its description first.** The description
+   change is independent of any implementation work: state the 2,000-file
+   cap and tell the model that `scan_budget_reached: true` means part of the
+   tree was never searched. Then the coverage itself. Minimum: raise or drop
+   `GREP_MAX_FILES`; the full scan is 0.6 s here. Better: back `grep_files`
+   with ripgrep, already at `/opt/homebrew/bin/rg`, using the fixed-argv,
+   no-shell, timeout discipline the git tools already use. That buys regex on
+   a linear-time engine (the literal-only DoS rationale no longer applies;
+   keep `-F` as the default) and speed. Run it with `--no-ignore` and pass
+   server-owned exclusions built from `IGNORE_DIRS` and the deny-list; do not
+   let it read `.gitignore`, because `chatgpt-handoff/` is excluded through
+   `.git/info/exclude` and a default `rg` from the cat-code root does not
+   discover the standing request files (verified; `--no-ignore` does).
+   Preserve the deny-list twice, as `--glob` exclusions and as a post-filter
+   on returned paths, the same belt-and-braces `_git_pathspec_args` uses.
+   Add: `exclude` glob (the hunts want non-test source; there is no way to
+   say `*.ts` but not `*.test.ts`), a `count` mode returning per-file match
+   counts so caller distribution is one small call, and `whole_word`.
+2. **Remove scratch from unscoped discovery.** For the cat-code deployment set
+   `IGNORE_DIRS` to the default list plus `tmp`, `ds-bundle`, `scratchpad`.
+   `IGNORE_DIRS` replaces the default list, so restate all of it. This is a
+   discovery filter only: an ignored directory is still listable and readable
+   by explicit path, and the `list_files` description says so. It buys back
+   about a fifth of every listing page and of the scan budget; it does not
+   make the prompts' `tmp/` exclusion redundant.
 3. **Orientation.** The default first page shows nothing about `src/`. Add
    directory entries with file counts, or a `dirs_only` mode, and let
    `search_filenames` match the relative path rather than the basename.
@@ -139,8 +165,10 @@ the behaviour note.
    `name_only` mode on `git_log` and `git_show` so the model can learn which
    files a commit touched without pulling a 66 KB patch. Lower priority: none
    of the 28 review requests needed history.
-6. **Prompt hygiene, once 2 lands.** Delete the `.worktrees/` clause from both
-   ledgers now (inert) and the `tmp/` clause after the ignore list changes.
+6. **Prompt hygiene.** The `.worktrees/` clause in both ledgers is inert for
+   the connector, since dot directories are never served. Keep it only if the
+   same brief is reused on the cat-code lane, where the directory is visible.
+   Keep the `tmp/` clause regardless; see item 2.
 
 ### Not a lever
 
@@ -163,21 +191,62 @@ the behaviour note.
 - The 16 KB "experimentally measured single-request floor" for submit chunks
   is cited in a code comment; the measurement itself was not found.
 
-## Reproduce
+## 7. Revision notes
 
-From `~/chatgpt-mcp/chatgpt-custom-mcp-for-local-files`, in a separate process
-(the deployed `.env` is read; nothing is written):
+Corrected after a review pass on 2026-09-02:
+
+- The headline called the descriptions sound; `grep_files` says one call
+  covers the whole folder. Now stated, and the description fix is item 5.1.
+- The headline stated causation; no per-call trace exists. Now stated as a
+  source-demonstrated mechanism consistent with the replies.
+- Item 5.2 said "stop serving"; `IGNORE_DIRS` only prunes discovery. Retitled,
+  and the prompt exclusions are kept. Item 5.1 no longer recommends
+  `.gitignore` awareness, which would hide the standing request files.
+- The reply inventory did not sum to 41; recounted in §4.
+- The reproduction searched for a literal this file quotes, so it returned
+  matches from this file, and it imported the module against the deployed
+  `.env`. The first measurements in this report were taken that way: importing
+  `mcp_server` runs `mkdir` on missing outbox directories, `chmod 0700` on the
+  existing ones, and reads the OAuth client and token files. On this machine
+  that changed no mode and wrote no content, but it did update the ctime of
+  the real outbox directories. §8 now uses an isolated harness.
+
+## 8. Reproduce
+
+Isolated harness. `load_dotenv` does not override variables already set, so
+setting every variable explicitly keeps the deployed `.env` out of it; the
+state directory and outbox point at a scratch location; the probe is built from
+fragments so this file cannot match it; and the check is whether any match sits
+under `src/`, not a bare count.
 
 ```bash
-./venv/bin/python -c "
-import json,logging; logging.disable(logging.CRITICAL)
+H=$(mktemp -d) && mkdir -p "$H/state" && cd "$H" && env -i PATH="$PATH" HOME="$HOME" \
+  BASE_DIR=/Users/pt/cat-code STATE_DIR="$H/state" RESPONSE_OUTBOX="$H/outbox" \
+  OAUTH_CLIENT_SECRET=harness-only AUTH_PASSWORD=harness-only MCP_HOSTNAME=localhost \
+  PYTHONPATH=/Users/pt/chatgpt-mcp/chatgpt-custom-mcp-for-local-files \
+  /Users/pt/chatgpt-mcp/chatgpt-custom-mcp-for-local-files/venv/bin/python - <<'EOF'
+import json, logging, os
+logging.disable(logging.CRITICAL)
 import mcp_server as m
-items,_=m.list_files(); paths=[i['path'] for i in items]
-print(len(paths), paths[m.GREP_MAX_FILES-1])
-p=json.loads(m.tool_call_grep_files({'query':'export function resolveRequestProvider'})['content'][0]['text'])
-print(p['total_matches'], p['scan_budget_reached'])
-m.GREP_MAX_FILES=10**6
-p=json.loads(m.tool_call_grep_files({'query':'export function resolveRequestProvider'})['content'][0]['text'])
-print(p['total_matches'], p['files_searched'])
-"
+assert str(m.RESPONSE_OUTBOX).startswith(os.environ["RESPONSE_OUTBOX"])
+probe = "export function " + "resolveRequest" + "Provider"
+def run(q, **kw):
+    p = json.loads(m.tool_call_grep_files(dict(query=q, **kw))["content"][0]["text"])
+    return p["total_matches"], p["files_searched"], p["scan_budget_reached"], sorted({x["path"] for x in p["matches"]})
+items, _ = m.list_files(); paths = [i["path"] for i in items]
+print("files", len(paths), "| last inside budget:", paths[m.GREP_MAX_FILES - 1])
+n, s, b, f = run(probe); print("budgeted:", n, s, b, "| definition reached:", any(x.startswith("src/") for x in f))
+n, s, b, f = run(probe, path="src/utils"); print("path=src/utils:", f)
+m.GREP_MAX_FILES = 10**6
+n, s, b, f = run(probe); print("unbudgeted:", n, s, f)
+EOF
+```
+
+Output on 2026-09-02, after this report landed:
+
+```text
+files 4769 | last inside budget: src/components/TagTabs.tsx
+budgeted: 3 2000 True | definition reached: False
+path=src/utils: ['src/utils/model/providers.ts']
+unbudgeted: 4 3840 ['docs/research/2026-09-02-chatgpt-mcp-tool-surface-evaluation.md', 'src/utils/model/providers.ts']
 ```
