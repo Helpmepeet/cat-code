@@ -2155,6 +2155,8 @@ export type AccountStatus = {
   usageLimitReached: boolean
   /** wham/usage reset, Unix SECONDS (the pool's native unit), or null. */
   usageResetAt: number | null
+  /** Weekly wham/usage reset, Unix SECONDS, or null when the upstream omits it. */
+  usageWeeklyResetAt?: number | null
   lastRefreshIso: string | null
   /** Normalized block reason (no token content by construction), or null. */
   lastError: string | null

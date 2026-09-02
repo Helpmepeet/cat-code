@@ -418,6 +418,7 @@ export function buildAccountStatus(
     usageWeekly: account.usageWeekly ?? null,
     usageLimitReached: account.usageLimitReached === true,
     usageResetAt: account.usageResetAt ?? null,
+    usageWeeklyResetAt: account.usageWeeklyResetAt ?? null,
     lastRefreshIso: account.lastRefreshIso ?? null,
     lastError: account.lastError ?? null,
     planType: account.planType ?? null,

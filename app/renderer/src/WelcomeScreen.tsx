@@ -39,8 +39,8 @@
  *  - Greeting username: DEFERRED — no engine-user seam in the renderer today.
  *  - Per-recent trust badge: best-effort (only live sessions expose trust); a
  *    global projects-trust feed is out of scope (no new feed rule).
- *  - Per-window reset: the pool seam carries ONE `usageResetAt`, not per-5h/weekly,
- *    so one reset label is shown (prototype's two reset columns were mock).
+ *  - Per-window reset: the pool seam carries the real five-hour and weekly reset
+ *    timestamps, so each window shows its own countdown.
  *
  * ➕ real-added (ruled), P4-48 — the first-run order line under the greeting. It
  * has no prototype counterpart: `Startup.jsx:461-489` gates trust and OAuth at
@@ -585,8 +585,12 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
 function CodexRow({ account }: { account: AccountStatus }) {
   const capped = account.status === 'capped' || account.usageLimitReached
-  const reset =
+  const primaryReset =
     account.usageResetAt != null ? formatResetCompact(account.usageResetAt) : ''
+  const weeklyReset =
+    account.usageWeeklyResetAt != null
+      ? formatResetCompact(account.usageWeeklyResetAt)
+      : ''
   return (
     <div className="grid grid-cols-[1.4fr_1.6fr_0.5fr_0.6fr_1.6fr_0.5fr_0.6fr] items-center gap-x-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -602,13 +606,10 @@ function CodexRow({ account }: { account: AccountStatus }) {
       </div>
       <UsageBar label="5-hour" pct={account.usagePrimary} />
       <UsagePct pct={account.usagePrimary} />
-      <ResetCell label="5-hour reset" value={reset} />
+      <ResetCell label="5-hour reset" value={primaryReset} />
       <UsageBar label="Weekly" pct={account.usageWeekly} />
       <UsagePct pct={account.usageWeekly} />
-      {/* §0: the seam carries ONE `usageResetAt` (the 5h/primary window), so the
-          weekly reset column stays blank rather than duplicating or fabricating
-          a second value — never a mock. */}
-      <ResetCell label="Weekly reset" value="" />
+      <ResetCell label="Weekly reset" value={weeklyReset} />
     </div>
   )
 }

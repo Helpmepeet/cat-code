@@ -455,6 +455,7 @@ function updateRoutingHintsFromUsage(usages: readonly AccountUsage[]): void {
       // already-reset escape on its reset, not max() across windows (the weekly
       // reset is days out and would keep a reset 5h account blocked).
       resetAt: r.primaryWindow.resetAt,
+      weeklyResetAt: r.secondaryWindow.resetAt,
       fetchedAt: r.fetchedAt,
     })),
   )

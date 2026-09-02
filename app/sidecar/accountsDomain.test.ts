@@ -54,6 +54,7 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
     usageWeekly: 55,
     usageLimitReached: false,
     usageResetAt: 1_700_000_000,
+    usageWeeklyResetAt: 1_700_200_000,
     lastRefreshIso: '2026-07-07T10:00:00Z',
     planType: 'plus',
     ...overrides,
@@ -128,6 +129,16 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
 })
 
 describe('P4-5 read-seam — projection semantics', () => {
+  test('projection carries the weekly reset independently of the 5h reset', () => {
+    const status = buildAccountStatus(poolAccount({
+      usageResetAt: 1_700_000_000,
+      usageWeeklyResetAt: 1_700_200_000,
+    }), true)
+
+    expect(status.usageResetAt).toBe(1_700_000_000)
+    expect(status.usageWeeklyResetAt).toBe(1_700_200_000)
+  })
+
   test('snapshot includes a redacted Anthropic account pool', () => {
     const claudeAccount: ClaudePoolAccount = {
       accountUuid: 'claude-account-1',

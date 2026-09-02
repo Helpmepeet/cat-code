@@ -52,6 +52,7 @@ export interface PoolAccount {
   usageLimitReached?: boolean
   usageFetchedAt?: number       // when usage was last fetched
   usageResetAt?: number
+  usageWeeklyResetAt?: number
   cappedAt?: number             // when a hard 429 capped this account; uncap only from usage data fetched after this
   redeemedAt?: number           // when applyRedeemedUsageReset last healed this account; lag guard in updateAccountUsageHints
   // Saved id_token plan metadata. May be stale — warning only, never a blocker.
@@ -1379,6 +1380,7 @@ export function updateAccountUsageHints(
     allowed?: boolean
     limitReached?: boolean
     resetAt?: number
+    weeklyResetAt?: number
     fetchedAt?: number
   }>,
 ): void {
@@ -1394,6 +1396,7 @@ export function updateAccountUsageHints(
         // Still update the non-blocking fields so scoring stays current.
         acct.usagePrimary = hint.primaryPercent
         acct.usageWeekly = hint.weeklyPercent
+        acct.usageWeeklyResetAt = hint.weeklyResetAt
         // Don't update usageFetchedAt/usageAllowed/usageLimitReached/usageResetAt:
         // applying them would re-block the account via getCodexAccountAvailability.
         continue
@@ -1414,6 +1417,7 @@ export function updateAccountUsageHints(
       if (!hintReportsUncapped || hintUncapsHard429 || acct.status !== 'capped' || acct.statusReason !== 'usage_cap') {
         acct.usageResetAt = hint.resetAt
       }
+      acct.usageWeeklyResetAt = hint.weeklyResetAt
 
       if (hintUncapsHard429) {
         const previousLastError = acct.lastError
@@ -1901,6 +1905,7 @@ export function applyRedeemedUsageReset(accountId: string): void {
   acct.usageLimitReached = false
   acct.usageFetchedAt = undefined
   acct.usageResetAt = undefined
+  acct.usageWeeklyResetAt = undefined
 
   // Stamp for the REDEEM_HINT_LAG_GRACE_MS guard in updateAccountUsageHints.
   acct.redeemedAt = Date.now()

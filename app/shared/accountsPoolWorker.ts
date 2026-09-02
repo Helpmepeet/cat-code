@@ -491,26 +491,28 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
 
 function parseAccountStatus(value: unknown): AccountStatus | null {
   if (!isRecord(value)) return null
+  const baseKeys = [
+    'id',
+    'alias',
+    'status',
+    'statusReason',
+    'availability',
+    'availabilityLabel',
+    'isDefault',
+    'hasVaultProfile',
+    'source',
+    'usagePrimary',
+    'usageWeekly',
+    'usageLimitReached',
+    'usageResetAt',
+    'lastRefreshIso',
+    'lastError',
+    'planType',
+    'switchable',
+  ] as const
   if (
-    !hasExactKeys(value, [
-      'id',
-      'alias',
-      'status',
-      'statusReason',
-      'availability',
-      'availabilityLabel',
-      'isDefault',
-      'hasVaultProfile',
-      'source',
-      'usagePrimary',
-      'usageWeekly',
-      'usageLimitReached',
-      'usageResetAt',
-      'lastRefreshIso',
-      'lastError',
-      'planType',
-      'switchable',
-    ])
+    !hasExactKeys(value, baseKeys) &&
+    !hasExactKeys(value, [...baseKeys, 'usageWeeklyResetAt'])
   ) {
     return null
   }
@@ -547,6 +549,13 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
   if (!isNumberOrNull(value.usageWeekly)) return null
   if (typeof value.usageLimitReached !== 'boolean') return null
   if (!isNumberOrNull(value.usageResetAt)) return null
+  const usageWeeklyResetAt = value.usageWeeklyResetAt
+  if (
+    usageWeeklyResetAt !== undefined &&
+    !isNumberOrNull(usageWeeklyResetAt)
+  ) {
+    return null
+  }
   if (!isStringOrNull(value.lastRefreshIso)) return null
   if (!isStringOrNull(value.lastError)) return null
   if (!isStringOrNull(value.planType)) return null
@@ -567,6 +576,7 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
     usageWeekly: value.usageWeekly,
     usageLimitReached: value.usageLimitReached,
     usageResetAt: value.usageResetAt,
+    ...(usageWeeklyResetAt !== undefined ? { usageWeeklyResetAt } : {}),
     lastRefreshIso: value.lastRefreshIso,
     lastError: value.lastError,
     planType: value.planType,

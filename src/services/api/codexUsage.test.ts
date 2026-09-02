@@ -358,6 +358,8 @@ describe('codexUsage display helpers', () => {
     // Gating on the primary reset (not max across windows) lets the account
     // route again now that the 5h window has reset.
     expect(account ? isCodexAccountSwitchable(account) : false).toBe(true)
+    expect(account?.usageResetAt).toBe(nowSeconds - 60)
+    expect(account?.usageWeeklyResetAt).toBe(nowSeconds + 300_000)
   })
 
   test('fetchPoolUsage parses a free/capped account with a null secondary window', async () => {

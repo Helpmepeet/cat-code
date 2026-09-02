@@ -250,11 +250,20 @@ test("P4-48 — the 'session' variant never carries the line", () => {
 })
 
 test('the Codex table renders real pool rows (alias, capped badge, usage %)', () => {
+  const now = Math.floor(Date.now() / 1000)
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
       accounts={pool([
-        account({ id: 'main', alias: 'main', isDefault: true, usagePrimary: 20, usageWeekly: 40 }),
+        account({
+          id: 'main',
+          alias: 'main',
+          isDefault: true,
+          usagePrimary: 20,
+          usageWeekly: 40,
+          usageResetAt: now + 3 * 3600,
+          usageWeeklyResetAt: now + 4 * 3600,
+        }),
         account({ id: 'b', alias: 'backup', status: 'capped', usageLimitReached: true, usagePrimary: 100 }),
       ])}
       orchestratorActive={false}
@@ -272,6 +281,8 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   expect(html).toContain('capped')
   expect(html).toContain('20%')
   expect(html).toContain('100%')
+  expect(html).toContain('aria-label="5-hour reset: 3h"')
+  expect(html).toContain('aria-label="Weekly reset: 4h"')
   // Flat accent-gradient bars, not tone-coded green/amber/red.
   expect(html).toContain('from-accent-soft to-accent')
   expect(html).toContain('aria-label="5-hour usage: 20%"')

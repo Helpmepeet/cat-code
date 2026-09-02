@@ -34,6 +34,7 @@ function account(over: Partial<AccountStatus> = {}): AccountStatus {
     usageWeekly: 17,
     usageLimitReached: false,
     usageResetAt: 1_700_000_000,
+    usageWeeklyResetAt: 1_700_200_000,
     lastRefreshIso: null,
     lastError: null,
     planType: 'plus',
@@ -99,6 +100,17 @@ describe('parseAccountsPoolWorkerResult — accepts', () => {
     const parsed = parseAccountsSnapshot(JSON.parse(JSON.stringify(pool())))
     expect(parsed).not.toBeNull()
     expect('anthropicSubscriptionActive' in (parsed ?? {})).toBe(false)
+  })
+
+  test('accepts a weekly reset while rejecting an invalid value', () => {
+    expect(parseAccountsSnapshot(pool())?.accounts[0]?.usageWeeklyResetAt).toBe(
+      1_700_200_000,
+    )
+    expect(
+      parseAccountsSnapshot(pool({
+        accounts: [account({ usageWeeklyResetAt: 'tomorrow' as never })],
+      })),
+    ).toBeNull()
   })
 
   test('an empty pool is valid (no accounts is a real state, not a failure)', () => {
