@@ -1087,6 +1087,34 @@ test('an Agent card offers Background only while its worker is foreground', () =
   expect(render(row)).not.toContain('>Background<')
 })
 
+test('in a co-spawned group of three, only the named worker offers Background', () => {
+  // Three parallel subagents are ONE grouped card (`groupAgentDelegates`), not
+  // three siblings, so this is the shape the control is normally met in. Each
+  // member still renders a full `AgentToolCard`, and the group must not smear one
+  // member's affordance across the set.
+  const a = agentRow('m1', { subagent_type: 'Explore', description: 'map the seam' }, 'pending')
+  const b = agentRow('m2', { subagent_type: 'Explore', description: 'audit the gate' }, 'pending')
+  const c = agentRow('m3', { subagent_type: 'Explore', description: 'read the ledger' }, 'pending')
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[a, b, c]}
+      agentBackground={{
+        backgroundable: new Set([b.toolUseId]),
+        onBackground: () => {},
+      }}
+    />,
+  )
+
+  // Grouped, not three separate cards.
+  expect(html).toContain('3 explore workers')
+  // Exactly one control, and the slot that yields is the one beside it.
+  expect(html.split('>Background<').length - 1).toBe(1)
+  expect(html.split('group-hover/agentcard:invisible').length - 1).toBe(1)
+  // Each member carries its OWN hover group, so hovering one cannot reveal
+  // another's control.
+  expect(html.split('group/agentcard').length - 1).toBe(3)
+})
+
 test('the Agent card keeps its Background control OUTSIDE the collapse button', () => {
   // Not a style preference: the identity line lives inside the collapse
   // `<button>`, and an interactive element nested there makes the HTML parser
