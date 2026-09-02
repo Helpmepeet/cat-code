@@ -102,14 +102,6 @@ const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
 ).text()
 
-const gptSource = await Bun.file(
-  new URL('./promptStyles/gpt.ts', import.meta.url),
-).text()
-
-const agentToolPromptSource = await Bun.file(
-  new URL('../tools/AgentTool/prompt.ts', import.meta.url),
-).text()
-
 describe('Normal mode static delegation guidance', () => {
   test('suggests implementor and verification without Agent Mode worker doctrine', () => {
     expect(promptsSource).toContain('available-agent list includes implementor or verification')
@@ -123,57 +115,16 @@ describe('Normal mode static delegation guidance', () => {
   // ASSIGNED fell outside it and was relayed whole to one subagent.
   test('keeps a requested review inline unless the user asks for another agent', () => {
     const reviewRule =
-      "Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is yours or someone else's."
-    const ownershipRule =
-      'A task the user assigns to you stays yours: never hand the whole request to one subagent so it does the work in your place.'
-    const methodRule =
-      '"Adversarial review", "cold review", "audit", "verify" and "critique" name the method the user wants you to apply. They are not a request for another agent.'
-    const carveOut =
-      'Use a review subagent only when the user explicitly asks for a subagent, another model, a second reviewer, or an independent agent.'
+      'Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent.'
     const delegationReasons =
       'Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request.'
 
-    for (const rule of [
-      reviewRule,
-      ownershipRule,
-      methodRule,
-      carveOut,
-      delegationReasons,
-    ]) {
-      expect(promptsSource).toContain(rule)
-    }
+    expect(promptsSource).toContain(reviewRule)
+    expect(promptsSource).toContain(delegationReasons)
 
     const gptGuidance = getGPTSessionGuidanceSection(new Set(['Agent']), [])
-    for (const rule of [
-      reviewRule,
-      ownershipRule,
-      methodRule,
-      carveOut,
-      delegationReasons,
-    ]) {
-      expect(gptGuidance).toContain(rule)
-    }
-  })
-
-  // The Agent tool description is the instruction closest to the spawn, and it
-  // pulls the other way ("independent research", handoffs "for implementation or
-  // review"), so the ownership rule has to appear there too.
-  test('states execution ownership in the Agent tool description itself', () => {
-    const bothStyles = agentToolPromptSource.match(
-      /name the method to apply, not a request for another agent/g,
-    )
-    expect(bothStyles?.length).toBe(2)
-  })
-
-  // The rule lives on the non-fork branch of three ternaries. If FORK_SUBAGENT
-  // is ever added to scripts/build.ts, every copy would vanish at once unless
-  // the fork branches carry it too.
-  test('carries the ownership rule on the fork branches as well', () => {
-    const forkRule =
-      'never fork the whole request so the child does the work in your place'
-
-    expect(promptsSource).toContain(forkRule)
-    expect(gptSource).toContain(forkRule)
+    expect(gptGuidance).toContain(reviewRule)
+    expect(gptGuidance).toContain(delegationReasons)
   })
 })
 

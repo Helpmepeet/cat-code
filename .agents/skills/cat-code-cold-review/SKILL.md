@@ -14,13 +14,8 @@ house methodology (P2-0 → P4 tranche-A reviews); follow it, don't improvise.
 
 ## Execution ownership
 
-"Cold" and "adversarial" describe how YOU review, not who reviews. A review the
-user asks for is your task: do it in this thread, from your own reads and
-commands. Handing the whole audit to one subagent is not a cold review, it is a
-relay, and it does not transfer responsibility for the findings. Spawn a review
-agent only when the user explicitly asks for a subagent, another model, or a
-second reviewer. A bounded supporting lane (one parallel dimension, one large
-corpus sweep) is fine; the verdict stays yours.
+"Cold" and "adversarial" describe how YOU review, not who reviews. Do the review
+in this thread; spawn an agent only if the user asks for one.
 
 ## Step 1 — Establish the contract
 

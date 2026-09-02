@@ -359,12 +359,10 @@ function getUsingYourToolsSection(enabledTools: Set<string>): string {
 
 function getAgentToolSection(): string {
   return isForkSubagentEnabled()
-    ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** \u2014 execute directly; do not re-delegate. A task the user assigns to you stays yours: never fork the whole request so the child does the work in your place, and words like "adversarial review", "audit" or "verify" name a method to apply, not a request for another agent.`
+    ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** \u2014 execute directly; do not re-delegate.`
     : `Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task clearly benefits from delegation. Subagents are useful for parallelizing independent work or protecting the main context from large amounts of raw output, but should not be used when the work can reasonably be done in this thread.
 
-Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is yours or someone else's. Do that directly in the main thread. A task the user assigns to you stays yours: never hand the whole request to one subagent so it does the work in your place.
-
-"Adversarial review", "cold review", "audit", "verify" and "critique" name the method the user wants you to apply. They are not a request for another agent. Use a review subagent only when the user explicitly asks for a subagent, another model, a second reviewer, or an independent agent. Delegating a bounded supporting investigation is fine, but it never transfers responsibility for inspecting the evidence and reaching every finding yourself.
+Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent.
 
 Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request. If none applies, do the work yourself. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
 }
