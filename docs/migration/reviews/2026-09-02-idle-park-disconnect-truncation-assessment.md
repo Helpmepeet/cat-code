@@ -54,6 +54,10 @@ transcript content left the analysis.
 >   §5 sketches now state the ordering requirements they omitted.
 > - **Constants audit** added the same day as §9 on the owner's ask, and folded
 >   into the verdict, §5 (items 6–8) and §7.
+> - **Deep dives** (§10) added the same day: a three-day reconstruction of the
+>   local operational log and a compaction dry run through the real
+>   `FrameReplayBuffer`. Reload frequency moved from extrapolation to
+>   measurement; §3, §4, §5 and §7 updated from them.
 
 ## 1. Evidence
 
@@ -214,7 +218,9 @@ was parked". It runs on every ordinary quit. Since most background sessions
 are parked at any moment under a 20-minute TTL, most of the sidebar, the
 Sessions page and the ⌘K palette read **crashed** after every relaunch. This
 is the strongest single explanation for "disconnect" feeling pervasive rather
-than occasional.
+than occasional. Three days of log hold 11 sidecar exits and every one is a
+park; there is no crash at all (§10.1). On that evidence the 53 `crashed`
+rows in the registry are parked-at-quit rows.
 
 ## 4. Mechanism 3 — the replay ring and truncation
 
@@ -272,9 +278,12 @@ the only truncation path that fires on ordinary sessions: 59 of 176 previews
 on disk are ring tails today, and a ring-distilled cache is replaced by the
 backfill worker only when the transcript's mtime is newer than the cache
 (`app/main/main.ts:883-884` `isCacheStale`), which a park-time cache rarely
-is. It remains a hypothesis until the owner reproduces the complaint on a
-named session; what would confirm it is the boundary row appearing on a
-reload or a relaunch preview of a session the owner considers truncated.
+is. The one input the first edition extrapolated, reload frequency, is now
+measured: 25 full document reloads in three days, 13 of them in the single
+launch that also produced 10 of the 11 parks (§10.1). Each reload replays
+the ring tail. What remains is the owner's word: naming one session that felt
+truncated, and checking whether its preview or its last reload carried the
+boundary row.
 
 **Accounting details, verified:**
 
@@ -310,15 +319,22 @@ reload or a relaunch preview of a session the owner considers truncated.
    stream's deltas until the next `message_stop` or `result`. Add a
    replay-buffer plus projector regression: two blocks, reload between block
    completions. Then re-measure: the byte cap binds again and the 2026-08-19
-   verdict is void.
+   verdict is void. The rule was run against all 179 caches through the real
+   buffer class (§10.2): 2,655 streams, 2,644 closed by `message_stop`, 11
+   never closed, 990 deltas kept as interrupted, and no sequence the rule
+   could not pair. Subagent streams carry no partials on this wire, so the
+   per-stream-key branch is unexercised.
 3. **Raise the idle TTL.** `PARK_IDLE_TTL_MS` 20 min → 120 min
-   (`idleParkDriver.ts:49`) stops every park observed in §1.1. Cost is RAM
-   held for longer by sessions the owner has genuinely left, about 223 MB
-   each. If that is too much, gate the TTL on free system memory
-   (`process.getSystemMemoryInfo()` in main) rather than on time. Leave
-   `MAX_LIVE_ENGINES` alone until concurrent-live counts are measured: the
-   bundle shows no cap victim, so raising it is not supported by this
-   evidence.
+   (`idleParkDriver.ts:49`). Three days of log (§10.1) hold 11 parks, all
+   TTL-driven, 6 of them followed by a restore within an hour and 3 within
+   15 minutes; the primary session alone was parked four times and restored
+   after 4, 13, 35 and 38 minutes. At 120 minutes every one of those six
+   restores finds a live engine, and the five parks that were never restored
+   hold about 223 MB each for up to two hours longer. If that is too much,
+   gate the TTL on free system memory (`process.getSystemMemoryInfo()` in
+   main) rather than on time. Leave `MAX_LIVE_ENGINES` alone: no cap-driven
+   park exists in three days of log, and the live-engine count the log
+   supports is an upper bound inflated by unlogged closes (§7).
 4. **Restore permission mode and fast across a park, with an ordering
    barrier.** Scope narrowed after review: model and persisted effort already
    survive (§2). What does not is the per-session permission mode and fast.
@@ -349,7 +365,11 @@ reload or a relaunch preview of a session the owner considers truncated.
    and the 256 MiB figure in the file assumes 32 live sessions that the cap
    never allows (§9.1). Once deltas stop riding the ring, 16 MiB holds every
    one of the last 14 days' transcripts whole on a reload or a preview
-   (§9.2). Before item 2 it buys ~420 messages and is not worth the churn.
+   (§9.2). The dry run (§10.2) puts a finished message at p50 1,341 B and
+   mean 4,252 B serialized, so 8 MiB holds about 1,970 messages at the mean
+   and 16 MiB about 3,950; the 8,000-frame count is unreachable for any real
+   session (corpus max 2,988 records) and stays as a backstop. Before item 2
+   it buys ~420 messages and is not worth the churn.
    `MAX_TRANSCRIPT_CACHE_BYTES` follows automatically. Do NOT raise the 4 MiB
    restore replay in the same change: every replayed row stays mounted for
    the pane's life, its per-row cost is unmeasured (§7), and the
@@ -420,15 +440,19 @@ else", and only by a main-authored field (§6).
 
 ## 7. Extrapolations and what would settle them
 
-- **Reload frequency.** Not measured. Dev-mode HMR fall-through to a full
-  reload is plausible given concurrent renderer edits while the app is open;
-  a `renderer-ready` count per launch in the operational log would settle it.
+- **Reload frequency: measured, no longer an extrapolation.** 25 document
+  reloads in three days, counted as `renderer.navigation.started` minus
+  `renderer.load.started` (`app/main/main.ts:1564-1568`, `:1627`), 13 of
+  them in one launch (§10.1). What is not known is which of them landed on a
+  long session.
 - **Permission-mode and fast reset on restore, and the scroll jump.**
   Reasoned from the code paths cited in §2, not observed live. One forced park
   of a session in `auto` with fast on, then a submit, settles both.
-- **Concurrent live-engine count.** Not in the bundle; two of the five
-  sessions predate its window. A `listSessions` live count sampled with the
-  renderer health record would settle whether the cap ever fires.
+- **Concurrent live-engine count.** Still open. The three-day reconstruction
+  gives an upper bound of 2–7 at the parks, but the launch holding 10 of the
+  11 parks logs no `session.close.requested` at all, so closed tabs inflate
+  it. A `listSessions` live count sampled with the renderer health record
+  would settle whether the cap ever fires.
 - **Per-row renderer cost.** The renderer mounts every transcript row with no
   virtualization, and the only memory figure on record is the 360–390 MB
   working set at five sessions of unknown row count. CC-59's 6.4 GB was
@@ -540,3 +564,73 @@ suppressed at the source, and 974 operational records covering 100 minutes of
 a day-long launch. For a complaint of this shape the bundle cannot show a
 day. Raise the bundle cap, or add an operational-only export variant that
 skips the delivery trace.
+
+## 10. Deep dives (added 2026-09-02, same day)
+
+Two mechanical reconstructions were dispatched to a smaller model with the
+event vocabulary, the denominators, the drop rule and a known-answer check
+fixed in the brief. Their outputs were verified here against the
+hand-reconstructed Aug 30 window and the §1.2 cache measurements before use.
+Scripts and full reports live in the session scratchpad, not in the repo; the
+numbers that matter are reproduced below. One caveat on provenance: the
+dry-run script carries a single NUL byte from the write tool, the recurring
+grep blind spot recorded in this workspace's memory notes; it ran, and every
+figure used from it was re-derived from the raw cache files.
+
+### 10.1 Three-day operational log
+
+Window 2026-08-30T00:29Z to 2026-09-02T06:17Z, 16,473 records, 5 launches,
+read from `~/.cat-code/desktop/logs/operational-*.jsonl`. Known-answer check
+passed: the three Aug 30 parks and both restores reproduced to the second.
+
+| Measure | Result |
+|---|---|
+| Parks | 11 (Aug 30: 6 · Aug 31: 4 · Sep 1: 1 · Sep 2: 0); 10 in one launch |
+| Classification | 11 TTL-driven, 0 cap-driven, 0 unexplained; every park 20.06–26.65 min after its last turn end |
+| Restore after park | ≤5 min 2 · ≤15 min 1 · ≤60 min 3 · >60 min 0 · never 5 |
+| Parks on the primary session ca05a9f2 | 4; restored after 13m04s, 4m25s, 34m51s, 38m20s |
+| `sidecar.exit` mix | 11 parks (code 5); 0 crashes, 0 clean, 0 resume-failed, 0 resume-busy |
+| `sidecar.disconnected` | 0 |
+| Renderer reloads | 25 (13 · 0 · 7 · 0 · 5 per launch), `renderer.navigation.started` minus `renderer.load.started` |
+| Turns | 99; median 32 s, p90 16m22s, 8 over 20 minutes, max 7h10m |
+| Parks labelled `expected: false` | 10 of 11; the Sep 1 park reads `true`, consistent with `supervisor.ts:418` landing in between |
+
+The live-engine count at each park is an upper bound (spawns minus exits
+minus close requests) and reads 2–7. The launch holding 10 of the parks logs
+no close requests, so the count is inflated and says nothing about the cap.
+
+### 10.2 Compaction dry run, 179 caches through the real `FrameReplayBuffer`
+
+Frames fed in file order into a fresh buffer imported from
+`app/main/replayBuffer.ts`, with the §5 item 2 drop rule applied as a
+pre-pass. Known-answer check passed over all 179 caches: with the rule
+applied, every cache whose finished messages fit the budget retained all of
+them.
+
+| Measure | Result |
+|---|---|
+| Caches written at exactly the 8,000-frame cap | 6, holding 5.50–6.34 MiB compact: the count cap bound with 1.66–2.50 MiB unspent |
+| Worst cache | c27e8027: 7,997 deltas, 2 finished messages |
+| Deltas' share in streaming caches | 95.4% of frames, 78.3% of bytes |
+| Streams | 2,655; 2,644 closed by `message_stop`; 11 never closed |
+| Deltas dropped / kept | 596,724 by `message_stop`; 8,691 by a later `result`; 990 kept as interrupted, 532 of them in one cache |
+| Unpairable sequences | 0 stops without an open stream; 8 starts over an open stream; 41 streams whose start was already evicted, all in truncated caches |
+| Bytes per finished message | p50 1,341 · p90 8,866 · mean 4,252 · max 1.66 MiB |
+| Implied capacity, finished only | 8 MiB ≈ 1,970 at the mean; 16 MiB ≈ 3,950 |
+| Subagent partials | none: every delta carries `parent_tool_use_id: null`, so the per-stream-key branch is unexercised |
+
+The re-recorded retention percentages are deliberately not reported: a cache
+is already a P0 end state, so re-recording it is a fixed point, and the
+truncated group's P1 count is only a lower bound.
+
+### 10.3 Memory dive: not run; operator experiment instead
+
+`app/scripts/renderer-memory-trajectory.ts` attaches to an app the operator
+already started, by design (its header cites CLAUDE.md §8), and the
+browser-pane substitute would mount the transcript surface outside `App`,
+which nothing in the suite does. The experiment that settles whether the
+4 MiB restore replay can follow the ring: run the sampler with
+`--workload single-turn` against the largest recent session, once at the
+current cap and once with `MAX_HISTORY_REPLAY_BYTES` doubled on a scratch
+branch, and compare physical footprint and PartitionAlloc dirty bytes between
+the two summaries.
