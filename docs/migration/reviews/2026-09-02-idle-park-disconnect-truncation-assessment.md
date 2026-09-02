@@ -418,3 +418,86 @@ else", and only by a main-authored field (§6).
   as a bound, not as the ring's own accounting.
 - Transcript sizes: `os.stat` over `~/.cat-code/projects/**/*.jsonl`
   excluding `/subagents/`, mtime within 14 days.
+
+## 9. Constants audit (added 2026-09-02, same day, on the owner's ask)
+
+The first edition evaluated the TTL and the ring's count-versus-bytes and
+took every other number at face value. This section checks each constant on
+these paths against the evidence available: this machine (24 GB RAM,
+`sysctl hw.memsize`), the Aug 30 bundle's renderer health samples, the
+2026-07-22 fleet measurement, the 139 transcripts touched in the last 14
+days, the 176 caches, and the registry file. The app was not running during
+the audit, so no live per-process RSS was taken.
+
+### 9.1 RAM: what the park lever actually buys
+
+| Item | Constant / measurement | Cost on this machine |
+|---|---|---|
+| Engine process | ~223 MB RSS each (IDLE-PARK.md header, `app/scripts/ram-fleet.ts` 2026-07-22) | 4 live = ~0.9 GB (3.7% of 24 GB); 8 live = ~1.8 GB (7.4%) |
+| Renderer, 5 sessions open | working set 360–390 MB, JS heap 98–108 MB (bundle `renderer.health.sample`) | fixed cost of the window, not of live engines |
+| Main replay ring | 8 MiB per live session, `replayBuffer.ts:83` | the file's 256 MiB ceiling assumes 32 live buffers; park clears parked buffers and the cap holds live at 4, so the real ceiling is 4 × 8 = **32 MiB** (8x overstated) |
+| Preview tier | 32 MiB per live session, `replayBuffer.ts:89-91` | real ceiling 4 × 32 = 128 MiB, and only with generated images |
+
+One park saves ~223 MB, under 1% of the machine. The whole policy, at its
+cap, is defending about 0.9 GB. That is the number to hold against §2's
+cost per park.
+
+### 9.2 Transcript-size caps against the owner's last 14 days (139 transcripts)
+
+| Cap | Where | Fits whole |
+|---|---|---|
+| 4 MiB | restore-time history replay, `limits.ts:167` | 133 / 139 (95.7%) |
+| 8 MiB | replay ring (`replayBuffer.ts:83`), export cap (`limits.ts:106`) | 137 / 139 (98.6%) |
+| 16 MiB | load-earlier read, `limits.ts:203` | 139 / 139; corpus max 18.1 MiB, 1 of 1,849 |
+| 8,000 / 4,000 frames | ring / replay counts | corpus max 2,988 finished records: backstops once deltas stop riding the ring; today the 8,000 binds at ~210 messages |
+
+Finished-message frames average 3,792 B against 4,165 B per JSONL record
+(§1.2), so a byte cap on frames covers roughly the same span as the same cap
+on the file.
+
+Verdicts: **ring 8 → 16 MiB is cheap** (at most 64 MiB of main at cap 4,
+128 MiB at cap 8) and makes reload and preview whole for ~99% of sessions,
+but only AFTER recommendation 2; before compaction 16 MiB holds ~420 messages
+and is still short. **Restore replay 4 → 8 MiB** would make restore whole for
+98.6%, but every replayed row is mounted for the pane's life (no
+virtualization) and the per-row cost is unmeasured since CC-59's blowup was
+traced to React DEV performance measures; measure before raising, and keep
+the replay-below-ring alignment invariant (`limits.ts:139-145`). **16 MiB
+load-earlier: keep.** **Frame counts: keep as backstops.**
+
+### 9.3 Time constants
+
+| Constant | Value | Evidence | Verdict |
+|---|---|---|---|
+| `PARK_IDLE_TTL_MS` | 20 min | parks at 20m30s–20m50s after turn end; owner returned in 4 and 13 min | change (§5 item 3) |
+| `DEFAULT_SWEEP_INTERVAL_MS` | 60 s | adds ≤ 60 s jitter to the TTL | keep |
+| `DEFAULT_SIDECAR_IDLE_TTL_MS` | 15 min, `app/sidecar/index.ts:73` | fires only at zero supervisor connections, which never happens under the desktop supervisor | inert; keep |
+| `DEFAULT_TURN_STALL_MS` | 10 min quiet, `sidecarServer.ts:219` | report-only (`:1881-1903`); the 23 and 24 minute turns in the window produced no stall record | keep |
+| `disconnectSettleMs` | 250 ms, `supervisor.ts:226` | measured FIN-to-exit gap 7 ms | keep, 35x margin |
+| `LAZY_REPLAY_FLUSH_MS` | 50 ms | bounded restore batching | keep |
+| Renderer health | sample 30 s, degraded at 3 misses, unavailable at 6 (`mainDecisions.ts:164-167`) | all 7 `renderer.health.unavailable` errors in the bundle carry `visible: false` and 59,999 ms lag, which is macOS hidden-window throttling | misfires on a hidden window; gate the escalation on visibility |
+
+### 9.4 Count and size bounds
+
+| Constant | Value | Evidence | Verdict |
+|---|---|---|---|
+| `MAX_PROMPT_BYTES` | 96 KiB | over-cap prompt is REFUSED, not cut (`sidecarServer.ts:2380-2382`, `bad_request`, text retained via the D5 retained-submit path) | keep; the refusal copy `prompt exceeds 98304 bytes` is engineering text on a user surface (§7) |
+| `MAX_SAVE_TEXT_BYTES` | 8 MiB | 2 of 139 recent transcripts exceed 8 MiB on disk; exported text is smaller than JSONL | borderline; copy already points to the terminal |
+| `MAX_REGISTRY_SESSIONS` | 256, `registry.ts:72` | registry today: 193 rows, 140 `clean`, 53 `crashed`. Real crashes are rare, so most of the 53 are parked-at-quit rows (§3) | reap at 256 removes the oldest terminal rows from the sidebar; the count corroborates §3 |
+| `MAX_LIVE_SESSIONS` | 32 | unreachable under a cap of 4; hostile bound | keep |
+| `MAX_OUTBOUND_FRAME_BYTES` vs ring | 32 MiB vs 8 MiB | a frame between the two is delivered live and marks the ring `truncated`, so one large image or tool result raises the boundary row after a reload although no message was lost | minor mislabel; keep |
+| `MAX_TRANSCRIPT_CACHE_BYTES` | ring + 256 KiB | largest cache file 8.38 MB against an 8.65 MB cap; envelope overhead is ~8 KB | keep; moves with the ring |
+| Preview tier | 32 MiB / 32 images | rarely exercised | keep |
+| `MAX_QUEUED_PROMPTS` / preview chars | 32 / 500 | display-only truncation of a waiting row | keep |
+
+### 9.5 Diagnostics numbers
+
+The operational log keeps 8 MiB across 16 files for 14 days
+(`operationalLog.ts`, bundle manifest), which is enough. The EXPORT is not:
+`MAX_BUNDLE_BYTES` is 2 MiB with 512 KiB per file
+(`app/main/diagnosticsBundle.ts:52-53`), and the Aug 30 export reports
+`bundleLimitReached: true`, `sourceWindowTruncated: true`, 2,583 records
+suppressed at the source, and 974 operational records covering 100 minutes of
+a day-long launch. For a complaint of this shape the bundle cannot show a
+day. Raise the bundle cap, or add an operational-only export variant that
+skips the delivery trace.
