@@ -17,7 +17,9 @@ holds roughly two hundred real messages instead of the thousands its caps
 suggest, and that tail is what a reload or a relaunch preview shows. That is
 the leading hypothesis, not a reproduction; §4 states the evidence and what
 would confirm it. No locked decision needs reopening: the friction comes from
-two tunables and one retention bug.
+two tunables and one retention bug. The RAM the park policy defends is about
+0.9 GB of this machine's 24 GB, one park saves under 1% of it, and the memory
+ceiling used to justify the ring's size is overstated eightfold (§9.1).
 
 Everything below is read from source or measured on this machine unless the
 §Extrapolations section says otherwise. Measurements read aggregates only; no
@@ -50,6 +52,8 @@ transcript content left the analysis.
 > - The review's framing that the document "should not be used as an
 >   implementation brief" is agreed; it was written as an assessment, and the
 >   §5 sketches now state the ordering requirements they omitted.
+> - **Constants audit** added the same day as §9 on the owner's ask, and folded
+>   into the verdict, §5 (items 6–8) and §7.
 
 ## 1. Evidence
 
@@ -338,6 +342,34 @@ reload or a relaunch preview of a session the owner considers truncated.
    (`resolvePendingSubmit` → `'restore'`, `app/renderer/src/composerState.ts:894-916`).
    The pick then needs item 4's pending-control state and barrier; without
    them it is overwritten by the fresh snapshot on `ready`.
+6. **Raise the ring to 16 MiB, after item 2 and not before.**
+   `DEFAULT_MAX_BUFFERED_BYTES` 8 → 16 MiB (`replayBuffer.ts:83`), leaving
+   the 8,000-frame count as a backstop. Cost is at most 64 MiB of main at the
+   current cap and 128 MiB at a cap of 8, because park clears parked buffers
+   and the 256 MiB figure in the file assumes 32 live sessions that the cap
+   never allows (§9.1). Once deltas stop riding the ring, 16 MiB holds every
+   one of the last 14 days' transcripts whole on a reload or a preview
+   (§9.2). Before item 2 it buys ~420 messages and is not worth the churn.
+   `MAX_TRANSCRIPT_CACHE_BYTES` follows automatically. Do NOT raise the 4 MiB
+   restore replay in the same change: every replayed row stays mounted for
+   the pane's life, its per-row cost is unmeasured (§7), and the
+   replay-below-ring invariant (`limits.ts:139-145`) must keep its headroom.
+7. **Let the diagnostics export show a day.** `MAX_BUNDLE_BYTES` 2 MiB and
+   `MAX_FILE_BYTES` 512 KiB (`app/main/diagnosticsBundle.ts:52-53`) cut the
+   Aug 30 export to 100 minutes of a day-long launch with 2,583 records
+   suppressed at the source (§9.5). The log itself keeps 14 days. Raise the
+   bundle cap, or add an operational-only export that skips the delivery
+   trace, which is what dominates the bytes.
+8. **Gate renderer-health escalation on visibility.** All seven
+   `renderer.health.unavailable` errors in the bundle carry `visible: false`
+   and 59,999 ms lag, which is macOS hidden-window throttling
+   (`mainDecisions.ts:164-167`, §9.3). A hidden window should not count
+   misses toward the flight recorder.
+
+Two numbers to watch rather than change: the registry holds 193 of 256 rows
+today, 53 of them `crashed`, and the reap at 256 drops the oldest terminal
+rows from the sidebar (§9.4); and the 8 MiB export cap is within reach of the
+two largest recent transcripts.
 
 **Locked decisions.** None needs reopening. N-process is why park exists, but
 replacing it to save ~230 MB per idle tab is a rewrite of the supervisor plane
@@ -397,6 +429,13 @@ else", and only by a main-authored field (§6).
 - **Concurrent live-engine count.** Not in the bundle; two of the five
   sessions predate its window. A `listSessions` live count sampled with the
   renderer health record would settle whether the cap ever fires.
+- **Per-row renderer cost.** The renderer mounts every transcript row with no
+  virtualization, and the only memory figure on record is the 360–390 MB
+  working set at five sessions of unknown row count. CC-59's 6.4 GB was
+  React DEV performance measures, not rows, so the row cost that the 4 MiB
+  restore cap protects against has never been measured. One
+  `rendererMemoryTrajectory` run at 2,000 and 4,000 mounted rows would
+  settle whether that cap can follow the ring.
 - **Per-message clipping.** "Message truncate" could also mean a single long
   message being cut. The CC-59 leaf windowing (`app/renderer/src/lineWindow.ts`,
   `markdownRenderPlan.ts`) mounts ranges rather than cutting content, but this
