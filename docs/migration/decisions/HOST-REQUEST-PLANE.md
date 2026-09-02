@@ -69,7 +69,7 @@ main → sidecar   host.result   { protocolVersion, sessionId, requestId, ok, va
 |---|---|---|
 | `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), busy, createdBy (resolved to a name, or `gone`), lastActivity, title |
 | `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`/`createdBy` in the child's spawn env → persist the row → await that row's `ready` → deliver the creation prompt as a `request` | the new row's name + appSessionId |
-| `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar; parked/closed: main's own restore-then-deliver (§4 step 5) | outcome enum (§4) |
+| `peer.deliver` | resolve name → row; refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`); live: forward `peer.deliver` inbound to that sidecar; parked/closed: main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
 | `peer.notifyWhenIdle` | one-shot: when the named row next goes from busy to idle (per the sidecar's `activity` frame, §4a), deliver a `notify` to the requester | ack |
 
 `engineSessionId` is on the list result because `ReadPeer` opens
@@ -116,8 +116,10 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
   `peer.create` passes through `Host.createSession`'s HC4 caps
   (`MAX_LIVE_SESSIONS` 32, `MAX_SPAWNS_PER_WINDOW` 8 / 10 s) unchanged, plus
   `MAX_PEERS_PER_CREATOR` (proposed 4 live peers whose `createdBy` is this
-  row) so recursion (Bear creates Charlie creates Dave) cannot ladder to the
-  global cap. Either breach → `session_limit`.
+  row), `MAX_PEER_DEPTH` (proposed 2) and `MAX_PEERS_PER_ROOT` (proposed 8),
+  all computed by walking `createdBy` in main, so recursion (Bear creates
+  Charlie creates Dave) cannot ladder to the global cap: a per-creator cap
+  alone bounds a level, not a tree. Any breach → `session_limit`.
 - **HR5 — the result is a new INBOUND kind, treated as such.** `host.result`
   and `peer.deliver` arrive at a sidecar over the socket, so each gets what
   every inbound kind gets (CLAUDE.md §5/§6): a sidecar-local schema, an
@@ -179,7 +181,8 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    makes `notify` cost the recipient no turn; without it the two kinds differ
    only in mid-turn timing.
    The sidecar also emits an outbound app-owned `activity` frame
-   `{ busy: boolean }` on turn start and end. Main today knows only recency
+   `{ presence: 'running' | 'needs_user' | 'idle' }` on turn start and end
+   and when a permission prompt opens or closes. Main today knows only recency
    (`idleParkDriver.ts:151-157` `recencyOf`) and never reads the engine's
    `turn.status` events (zero non-test `activeTurn` reads outside
    `app/sidecar`); this frame is how main learns busy/idle for `peers.list`
@@ -197,9 +200,13 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    `notify` to a parked or closed row is stored in main and delivered at the
    next restore; it does NOT wake.
 6. The `host.result` reports what happened: `queued_live`, `held_notice`,
-   `queued_wake`, `stored_for_restore`, `refused:<reason>`. The sending model
-   sees this in its tool result, so it never reasons from a false belief that a
-   peer heard it.
+   `queued_wake`, `stored_for_restore`, `refused:<reason>` (reasons include
+   `user_stopped`, `hop_loop`, `hop_runaway`, `rate`, `duplicate`,
+   `queue_full`, `wake_failed`), plus the main-minted `messageId`. The sending
+   model sees this in its tool result, so it never reasons from a false
+   belief that a peer heard it. The recipient sidecar acks consumption by
+   `messageId`; main records `consumedAt` and writes the metadata-only
+   operational-log line (PEER-SESSIONS §10).
 
 ## 5. Per-plane change list (for the dispatch that builds it)
 
@@ -210,6 +217,8 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 | `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row busy state from `activity`; the deliver-after-ready state machine (§4 step 5); the durable pending-notice and notify-when-idle stores (in-memory: they die with the window like everything else, SESSION-LIFETIME L1, and a pending subscription also expires when either row is reaped or after 12 h, the upstream precedent). |
 | `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`); the spawn path accepts them; per-creator count; the name picker (PEER-SESSIONS §2). |
 | `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; `request` → task-notification enqueue with origin `peer`; `notify` → held notices + `peer.notice` event + enqueue-at-next-turn + ack; `activity` on turn start/end; doctrine block from env. |
+| `app/host/hostApi.ts`, `app/preload/preload.ts` | one host method + one fixed preload sender to set/clear a row's `peerWakeBlocked` from the sidebar row menu (HC3 pattern, `closeSession` precedent); renderer-facing only, no sidecar surface. |
+| `app/shared/operationalLog.ts` | one new closed event kind for routed peer messages (metadata only). |
 | `app/main/idleParkDriver.ts` | none. A wake through restore is already a spawn the driver sees. |
 
 ## 6. Tests owed before ratification of the build

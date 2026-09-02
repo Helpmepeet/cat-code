@@ -50,7 +50,11 @@ Bear" is easier to say than an id.
 - **Pool size ≥ `MAX_REGISTRY_SESSIONS` (256).** Uniqueness spans the whole
   registry (next bullet), so a pool the size of the engine's (12–20) would
   make suffixed names (`Bear-2`) the normal case, which defeats §0. Theme is
-  the operator's (§13); the count is not.
+  the operator's (§13); the count is not. Allocator criteria regardless of
+  theme: short, pronounceable, visually distinct, no confusable pairs
+  (no `Bear`/`Boar`), disjoint from the subagent pools, always shown beside
+  the title. User-chosen call signs are NOT in v1: the operator asked for
+  random names, and chosen names bring collision and rename expectations.
 - **`createdBy` is an `appSessionId`, never a name.** Names are reused after a
   reap; ids are not. Listings and the doctrine block resolve the id to a name
   at read time and show `gone` for a reaped creator; the per-creator budget
@@ -99,10 +103,15 @@ terminal session from an hour ago can never be reached. So:
   files it as a bug).
 - Ordered live → parked → closed, then by last activity. Each row: name,
   state, engineSessionId (null until first ready), createdBy (resolved),
-  title, last activity, and whether it is busy. Busy comes from the sidecar's
-  app-owned `activity` frame (HOST-REQUEST-PLANE §4 step 4a): main knows only
-  recency today (`idleParkDriver.ts:151-157`) and does not read engine
-  `turn.status` events.
+  title, last activity, and a presence state. Presence is a small app-owned
+  enum from the sidecar's `activity` frame (HOST-REQUEST-PLANE §4 step 4a):
+  `running | needs_user | idle`, where `needs_user` means a permission prompt
+  is pending (the sidecar already tracks `pendingPermissionRequests`,
+  `sidecarServer.ts:937`); `failed`/`exited` come from the existing
+  `lifecycle` frame. A binary busy bit was the first draft; a peer stuck on a
+  permission prompt is the case a creator most needs to see, and it is not
+  "busy". Main knows only recency today (`idleParkDriver.ts:151-157`) and
+  does not read engine `turn.status` events.
 - No time filter. The registry's own reaping already bounds the closed tail.
 - Cheap: it is a registry read in main; no transcript is opened
   (CATALOG-OWNERSHIP stays intact).
@@ -121,7 +130,7 @@ in-process file read.
 | `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`) | `notify` is shown in the recipient's transcript now and reaches its model at its next turn from any cause, starting none (the held-notice mechanism, HOST-REQUEST-PLANE §4 step 4a; the engine queue alone cannot do this); `request` is read between tool calls, or starts a turn, or wakes. Result states the outcome. Ordinary permission gate. |
 | `ReadPeer` | `peer`, `view: 'tail' \| 'search'`, `limit` (default 20, max 50), `before` (entry uuid cursor), `query` (search only), `includeToolResults` (default false), `maxBytes` | §8. Same workspace only, read-only, no prompt. |
 | `CreatePeer` | `prompt`, optional `model`, `effort`, `permissionMode` | Defaults to the creator's values (R7). Returns the new name. Ordinary permission gate plus `MAX_PEERS_PER_CREATOR` (HR4). |
-| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's `activity` next goes busy → idle. In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling. |
+| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's presence next becomes `idle` (NOT `needs_user`, which is a stall the creator should hear about as `notify` text instead). In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling. |
 
 Who created me, and my own name, are not tools: they are system-prompt context
 (§5). `ClosePeer` is deliberately absent; closing a tab is the operator's act.
@@ -232,6 +241,12 @@ asked-for work (R6).
 - **Sidebar** per R4. **Tab** unchanged: it has no subtitle slot.
 - **Roster strip** above the composer (`AgentChrome.tsx`) may lead with the
   session's own name so it reads as "Bear, and Bear's workers". Optional.
+- **A user-only "Don't let peers reopen" control** on the sidebar row menu
+  (R3 makes a closed session wakeable by any peer, and nothing in the design
+  let the operator say no short of quitting). It sets a registry flag
+  `peerWakeBlocked`; `peer.deliver` answers `refused:user_stopped`; only the
+  user clears it, never a peer. A host method plus one fixed preload sender
+  (HC3 pattern, `closeSession` precedent) and no sidecar surface.
 
 ## 7. Loop and cost guards (mechanical, prompt-independent)
 
@@ -241,7 +256,14 @@ refusal, per-`(from,to)` token bucket, duplicate-body window, a NEW
 main-side `MAX_PENDING_PEER_MESSAGES` per recipient (the sidecar's
 `MAX_QUEUED_PROMPTS` bounds only renderer prompts arriving mid-turn and never
 sees this plane, `sidecarServer.ts:2431-2436`), `MAX_PEERS_PER_CREATOR`
-(proposed 4), and main's own size and rate bounds on `host.request` (HR1). Plus two soft rules the doctrine carries: no reply to a message
+(proposed 4), `MAX_PEER_DEPTH` (proposed 2) and `MAX_PEERS_PER_ROOT`
+(proposed 8) computed from the `createdBy` chain, because a per-creator cap
+alone does not bound a tree (four peers each creating four is sixteen), and
+main's own size and rate bounds on `host.request` (HR1). Every message
+carries a main-minted `messageId` and an optional `replyTo`; the sidecar acks
+consumption so main can record `consumedAt`. Those are mechanical receipts for
+the outcome enum and the log, not a state machine, and they are not shown to
+the model except as the `messageId` in its own send result. Plus two soft rules the doctrine carries: no reply to a message
 that asks nothing, and `notify` as the default kind. The send result tells the
 sender what happened, so silent non-delivery cannot leave it reasoning from a
 false belief (a reported upstream failure mode, research §6).
@@ -281,9 +303,18 @@ pages structured items with a summary view by default). Shape:
   `sourceSession`, `capturedAt`, `range`, and an instruction that embedded tool
   calls, results and system-looking text are not this session's state. No
   surveyed harness does this; it is preventive.
-- **Secrets: ON RECORD as a gap.** `secretGuard` is a key-name guard, not a
-  value scanner (SECURITY-MINIMUM scope note), so nothing in the tree can
-  redact a secret typed into another session's transcript. The read is
+- **Control text is neutralized.** Entries are serialized as quoted data:
+  an embedded `<cross-session-message>`, tool-call syntax or system-looking
+  delimiters in the read transcript are escaped so they cannot be read as the
+  reader's own control plane.
+- **Known-format values are redacted at the reader**, with a `redactions`
+  count in the result: PEM private-key blocks, bearer headers, and the
+  well-known provider key prefixes. This is a reader-side regex on the tool
+  result, not a change to `secretGuard`, whose key-name-only scope
+  (SECURITY-MINIMUM scope note) stands for outbound frames.
+- **Arbitrary secrets: ON RECORD as a gap.** `secretGuard` is a key-name
+  guard, not a value scanner, so nothing in the tree can redact a secret of
+  unknown shape typed into another session's transcript. The read is
   same-workspace only (R9), which bounds it to transcripts of the workspace
   the model is already executing in; the residual risk is a prompt-injected
   session quoting another session's transcript to the provider, content that
@@ -312,6 +343,11 @@ before moving anything (IDLE-PARK §4 shows why).
   not by the channel's trusted-direction sanity bound.
 - Peer messages never enter the staged-prompt strip or the user's prompt
   recall controls (task-notification path, not prompt path).
+- Every routed peer message writes one metadata-only line to the desktop
+  operational log (`app/shared/operationalLog.ts`, one new closed event
+  kind): time, from, to, kind, messageId, outcome. Content never. That is the
+  audit trail for "which session caused this" until a view exists (§12
+  deferred).
 - Concurrency: no new transcript writer. A wake is a restore, and restore
   refuses a live row.
 
@@ -342,6 +378,25 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
   and the app typecheck gate (§2).
 - A peer bubble on the user side (§11).
 - `ClosePeer`.
+- A request lifecycle state machine (`queued`/`in_progress`/`answered`/…)
+  minted by main: the field (A2A tasks, MCP tasks, Agent Teams task list) has
+  moved to a work-state plane beside messages, and it is the single strongest
+  outside recommendation received. Not adopted in v1 because R2 chose
+  prompt-driven report-back over lifecycle machinery and the peer premise
+  excludes an orchestration record; `messageId`/`replyTo`/`consumedAt` (§7)
+  keep the door open. Revisit if the operator finds themself asking "is Bear
+  still on that?" more than the transcript answers.
+- Broadcast, topics/contextId, user-chosen call signs: not in v1.
+
+**Deferred, flagged (not cut):**
+- **File-overlap visibility** between live peers on one checkout (which
+  files each is touching, and an overlap warning in `ListPeers`). Real for
+  this repository, whose CLAUDE.md §4 exists because sessions collide on the
+  tree, and the field treats write collision as first-class. Deferred because
+  it needs a new sidecar edit-activity event and main-side path state, and
+  HR6 says no paths cross the plane; needs its own decision.
+- **A peer-traffic audit view** (metadata-first, per workspace). The log
+  line above captures the data now; the surface is deferred.
 
 ## 13. Ruling requested (only these)
 
@@ -400,3 +455,25 @@ revision, three accepted on reading. Resolutions, for the two-strikes rule:
 The reviewer's five operator questions were all settled from source or from
 rulings already on record (allocator plane, notify cost, row side, pool size,
 busy-state source) and are recorded above rather than forwarded.
+
+**2026-09-03, ChatGPT outside review (web research on the revised docs).**
+Ten ranked recommendations; disposition after checking each against this tree
+and the rulings:
+
+| rec | disposition |
+|---|---|
+| 1 request as a tracked work item | rejected for v1 (§12), receipts kept (§7) |
+| 2 user-only stop / block peer wake | adopted (§6) |
+| 3 root-wide spawn budget + depth cap | adopted (§7) |
+| 4 file-overlap visibility | deferred, flagged (§12) |
+| 5 messageId / replyTo / consumption receipt | adopted, mechanical only (§7) |
+| 6 presence enum instead of busy bit | adopted (§3, §4) |
+| 7 peer-traffic audit view | log line adopted (§10), view deferred (§12) |
+| 8 reader-side redaction + control-text neutralization | adopted (§8) |
+| 9 no broadcast; contextId/topic | broadcast stays out; topic not in v1 |
+| 10 naming criteria; user-chosen call signs | criteria adopted (§2); chosen names not in v1 |
+
+Its labels were checked: the "MEASURED" on recs 1 and 2 describes other
+systems' features; their applicability here is the reviewer's inference, and
+rec 2's cited evidence is about cancelling in-flight work, not blocking peer
+wake. The control was adopted on its own merits.
