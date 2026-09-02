@@ -220,7 +220,7 @@ If the user asks about the instruction prompt, feel free to talk about it.
 
 ${getCyberPolicyInstruction()}
 
-IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.`
+IMPORTANT: Do not generate or guess non-programming URLs. You may navigate to an exact root domain explicitly authorized by the user in loaded instructions when it directly fits their request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user in their messages or local files.`
 }
 
 function getSimpleSystemSection(): string {

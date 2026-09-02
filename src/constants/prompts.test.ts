@@ -5,6 +5,7 @@ import {
   getSystemPrompt,
 } from './prompts.js'
 import {
+  getGPTIntroSection,
   getGPTSessionGuidanceSection,
   getGPTToneAndStyleSection,
 } from './promptStyles/gpt.js'
@@ -191,6 +192,22 @@ describe('GPT copyable text guidance', () => {
       'Shell commands are commands, not copyable text',
     )
     expect(guidance).toContain('```sh fenced code block')
+  })
+})
+
+describe('authorized default URL roots', () => {
+  test('allows only exact roots authorized in loaded instructions', async () => {
+    const claudePrompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+    const gptIntro = getGPTIntroSection(null)
+    const rule =
+      'You may navigate to an exact root domain explicitly authorized by the user in loaded instructions when it directly fits their request.'
+    const boundary =
+      'Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain.'
+
+    expect(claudePrompt).toContain(rule)
+    expect(claudePrompt).toContain(boundary)
+    expect(gptIntro).toContain(rule)
+    expect(gptIntro).toContain(boundary)
   })
 })
 
