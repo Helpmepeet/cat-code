@@ -226,9 +226,10 @@ H=$(mktemp -d) && mkdir -p "$H/state" && cd "$H" && env -i PATH="$PATH" HOME="$H
   PYTHONPATH=/Users/pt/chatgpt-mcp/chatgpt-custom-mcp-for-local-files \
   /Users/pt/chatgpt-mcp/chatgpt-custom-mcp-for-local-files/venv/bin/python - <<'EOF'
 import json, logging, os
+from pathlib import Path
 logging.disable(logging.CRITICAL)
 import mcp_server as m
-assert str(m.RESPONSE_OUTBOX).startswith(os.environ["RESPONSE_OUTBOX"])
+assert m.RESPONSE_OUTBOX == Path(os.environ["RESPONSE_OUTBOX"]).resolve()  # mktemp paths resolve under /private on macOS
 probe = "export function " + "resolveRequest" + "Provider"
 def run(q, **kw):
     p = json.loads(m.tool_call_grep_files(dict(query=q, **kw))["content"][0]["text"])
