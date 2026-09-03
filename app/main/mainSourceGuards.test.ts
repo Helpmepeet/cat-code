@@ -245,3 +245,32 @@ test('F2: a torn-down host after registry launch resets the transcript-backfill 
   expect(reset).toBeGreaterThan(nullHostBranch)
   expect(reset).toBeLessThan(returnStatement)
 })
+
+test('HR2/HR6: a host.request is consumed by main and never reaches the renderer', () => {
+  // The one property this frame's whole design rests on: `host.request` carries
+  // a MODEL-AUTHORED payload, and the renderer is the least trusted zone on this
+  // wire, so the branch must return BEFORE the attachment gate — which is both
+  // the replay buffer and the route to `webContents.send`. Its retention entry
+  // in `replayBuffer.ts` classifies a frame this return makes unreachable; that
+  // table is exhaustive by construction, not a permission to forward.
+  //
+  // A source guard because importing Electron main launches the application.
+  // What it proves is an ORDERING inside one function, which is exactly the
+  // shape the duplicate-restore guard above proves, and it fails loudly if the
+  // region moves rather than narrowing to an empty string.
+  const bridge = region(
+    'function wireRendererBridge(sup: SidecarSupervisor): void',
+    'function wireHostEvents(h: Host): void',
+  )
+  const branch = bridge.indexOf("if (frame.kind === 'host.request')")
+  expect(branch).toBeGreaterThanOrEqual(0)
+  const handled = bridge.indexOf('peerPlane?.handleRequest(', branch)
+  const gate = bridge.indexOf('attachmentGate.onFrame(event.sessionId, traced)')
+  const returnStatement = bridge.indexOf('return', handled)
+  expect(handled).toBeGreaterThan(branch)
+  expect(returnStatement).toBeGreaterThan(handled)
+  expect(returnStatement).toBeLessThan(gate)
+  // …and it is never handed to `deliver`, the only path to `webContents.send`.
+  const interceptRegion = bridge.slice(branch, returnStatement)
+  expect(interceptRegion).not.toContain('deliver(')
+})

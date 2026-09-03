@@ -303,3 +303,49 @@ test('a session.restore.failed record keeps its resume-failure reason', () => {
     { launchId: 'launch', processInstanceId: 'process' },
   )).toThrow('unsafe field count')
 })
+
+// PEER-SESSIONS §10 — one metadata-only line per routed peer message, and the
+// field list IS the privacy guarantee rather than a convention anyone has to
+// remember.
+test('a peer.message.routed record carries who/what/outcome and can never carry the text', () => {
+  const record = createOperationalRecord(
+    {
+      level: 'info',
+      event: 'peer.message.routed',
+      process: 'main',
+      appSessionId: 'app-alex',
+      fields: {
+        from: 'Alex',
+        to: 'Bear',
+        kind: 'request',
+        messageId: 'm-1',
+        outcome: 'queued_live',
+      },
+    },
+    { launchId: 'launch', processInstanceId: 'process' },
+  )
+  expect(record.fields).toEqual({
+    from: 'Alex',
+    to: 'Bear',
+    kind: 'request',
+    messageId: 'm-1',
+    outcome: 'queued_live',
+  })
+
+  // The message body has no key on this event and cannot acquire one without
+  // editing the table, which is the point of discriminating fields by event.
+  const smuggledKeys: readonly string[] = ['reason', 'source']
+  for (const key of smuggledKeys) {
+    expect(() =>
+      createOperationalRecord(
+        {
+          level: 'info',
+          event: 'peer.message.routed',
+          process: 'main',
+          fields: { from: 'Alex', to: 'Bear', [key]: 'the message body' },
+        },
+        { launchId: 'launch', processInstanceId: 'process' },
+      ),
+    ).toThrow('unsafe field')
+  }
+})

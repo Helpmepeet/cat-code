@@ -60,6 +60,11 @@ const ATTACH_BURST_KINDS = [
   'remoteSettings.snapshot',
   'slash-catalog.snapshot',
   'queued-prompts.snapshot',
+  // LAST in the burst, before history replay (HOST-REQUEST-PLANE §4 step 4a).
+  // Its value is derived at ready from the same state the ready payload was
+  // built from; it sits here rather than at the head because C3 pins
+  // `permission.context` immediately after `ready`.
+  'activity',
 ] as const satisfies readonly ServerFrame['kind'][]
 
 /**

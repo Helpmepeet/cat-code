@@ -100,7 +100,10 @@ test('attach replays history after ready as replay:true event frames in order; l
   const { socket, received } = makeSocket()
 
   const connection = server.addConnection(socket)
-  expect(received.map(f => f.kind)).toEqual(['ready', 'event', 'event'])
+  // `activity` closes the attach burst, before history replay
+  // (HOST-REQUEST-PLANE §4 step 4a). This server has no snapshot domains, so
+  // the burst is that one frame.
+  expect(received.map(f => f.kind)).toEqual(['ready', 'activity', 'event', 'event'])
 
   const replayFrames = received.filter(f => f.kind === 'event')
   for (const frame of replayFrames) {
@@ -113,19 +116,25 @@ test('attach replays history after ready as replay:true event frames in order; l
   expect(JSON.stringify(replayFrames[0])).toContain('F2-nonce')
   expect(JSON.stringify(replayFrames[1])).toContain('second restored message')
 
-  // A live controller event after attach carries NO replay flag.
+  // A live controller event after attach carries NO replay flag. Read the last
+  // EVENT rather than the last frame: a turn now closes with an `activity`
+  // presence frame (HOST-REQUEST-PLANE §4 step 4a), and this test is about the
+  // replay flag on transcript traffic, not about which frame arrives last.
   await server['controller'].submit('live-turn')
-  const live = received[received.length - 1]!
+  const live = received.filter(f => f.kind === 'event').at(-1)!
   expect(live.kind).toBe('event')
   expect('replay' in live).toBe(false)
   void connection
 })
 
-test('a fresh session (no history) sends only ready on attach', () => {
+test('a fresh session (no history) sends no transcript frames on attach', () => {
   const server = makeServer([])
   const { socket, received } = makeSocket()
   server.addConnection(socket)
-  expect(received.map(f => f.kind)).toEqual(['ready'])
+  // Ready plus the attach burst, which for a domain-less server is the single
+  // `activity` presence frame. What matters is what is ABSENT: no `event`, no
+  // truncation boundary — a fresh session replays nothing.
+  expect(received.map(f => f.kind)).toEqual(['ready', 'activity'])
 })
 
 test('restored GenerateImage history cannot authorize a generated-image file read', () => {
@@ -200,15 +209,18 @@ test('frames cap keeps the NEWEST contiguous tail and announces the loss BEFORE 
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
-  // ready → truncation boundary → exactly the cap of newest events.
+  // ready → attach burst (`activity`) → truncation boundary → exactly the cap
+  // of newest events. The boundary still precedes every retained frame, which
+  // is the property this test is about.
   expect(received[0]!.kind).toBe('ready')
-  const boundary = received[1]!
+  expect(received[1]!.kind).toBe('activity')
+  const boundary = received[2]!
   expect(boundary.kind).toBe('error')
   if (boundary.kind === 'error') {
     expect(boundary.requestId).toBe(HISTORY_REPLAY_TRUNCATION_REQUEST_ID)
     expect(boundary.retryable).toBe(false)
   }
-  const events = received.slice(2)
+  const events = received.slice(3)
   expect(events.length).toBe(MAX_HISTORY_REPLAY_FRAMES)
   // The oldest message (index 0) was dropped; the tail is contiguous newest.
   expect(JSON.stringify(events[0])).toContain('"restored message 1"')
@@ -230,14 +242,16 @@ test('byte cap: oversized history retains only the newest frames that fit, loss 
   server.addConnection(socket)
 
   expect(received[0]!.kind).toBe('ready')
-  const boundary = received[1]!
+  // `activity` closes the attach burst before history replay begins.
+  expect(received[1]!.kind).toBe('activity')
+  const boundary = received[2]!
   expect(boundary.kind).toBe('error')
   if (boundary.kind === 'error') {
     expect(boundary.requestId).toBe(HISTORY_REPLAY_TRUNCATION_REQUEST_ID)
   }
   // Newest tail: the small newest message + the mid one that still fits; the
   // oldest overflows and everything older stops (contiguous, no gaps).
-  const events = received.slice(2)
+  const events = received.slice(3)
   expect(events.length).toBe(2)
   expect(JSON.stringify(events[0])).toContain('mid ')
   expect(JSON.stringify(events[1])).toContain('newest small restored message')
@@ -252,11 +266,12 @@ test('a loader-truncated archival prefix is announced even when retained frames 
   server.addConnection(socket)
 
   expect(received[0]!.kind).toBe('ready')
-  expect(received[1]).toMatchObject({
+  expect(received[1]!.kind).toBe('activity')
+  expect(received[2]).toMatchObject({
     kind: 'error',
     requestId: HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   })
-  expect(JSON.stringify(received[2])).toContain(
+  expect(JSON.stringify(received[3])).toContain(
     'newest retained display message',
   )
 })

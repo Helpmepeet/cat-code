@@ -217,6 +217,28 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   // every other event; pinning the completion itself would replay a finished
   // answer to every later attach.
   'history.loadEarlier.result': 'ring',
+  // Sticky, per HOST-REQUEST-PLANE §5: point-in-time state a reader applies
+  // wholesale and the next frame replaces, exactly like the snapshots above.
+  // Nothing re-sends it on a renderer reload — the sidecar emits it at attach
+  // and then only on a real change — so an evicted one would leave main's
+  // per-row presence blank until the peer's next turn boundary, which is
+  // precisely the window `peers.list` exists to answer for.
+  activity: 'sticky',
+  // Ring, and deliberately UNREACHABLE — the third kind this buffer never sees
+  // (`session-title` and `sessions.snapshot` above are the other two).
+  //
+  // `host.request` is consumed by MAIN, not by the renderer: it carries a
+  // model-authored request payload, and `wireRendererBridge` returns on it
+  // before the attachment gate for the same reason it returns on
+  // `session-title`. So `record` is never called with one, and this entry
+  // exists only because `FRAME_RETENTION` is a total `Record` — the property
+  // that makes a new outbound kind impossible to land silently in the evictable
+  // ring. Ring rather than `sticky`/`head` on purpose: those two tiers pin a
+  // slot outside the replay budget and would be a live memory claim if the
+  // intercept were ever removed, whereas a ring entry degrades to ordinary
+  // evictable traffic. It is not evidence the frame may be forwarded; the
+  // intercept is what makes that true, and `peerRequestPlane.test.ts` holds it.
+  'host.request': 'ring',
 }
 
 /** The once-per-attach kinds that survive ring eviction, for tests + callers. */

@@ -230,3 +230,102 @@ export const RESUME_FAILED_EXIT_CODE = 4
 
 /** Sidecar resume was refused because another process owns the transcript. */
 export const RESUME_BUSY_EXIT_CODE = 6
+
+/* ------------------------------------------------------------------------- *
+ * Peer sessions + the host request plane
+ * (decisions/PEER-SESSIONS.md §7, decisions/HOST-REQUEST-PLANE.md HR1/§4).
+ *
+ * These bound a THIRD traffic class that neither direction above describes: a
+ * request authored by a MODEL inside a sidecar, travelling sidecar → main. It
+ * rides the outbound direction, whose only decoder bound is
+ * `MAX_OUTBOUND_FRAME_BYTES` — "a sanity bound, not a policy gate" — and which
+ * has no per-window rate cap at all. So the consumer applies its own two bounds
+ * below. Neither directional limit above moves, and they are never unified:
+ * this is a third bound at the consumer, not a re-reading of either.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * HR1 — main's own size cap on one serialized `host.request`, applied at MAIN.
+ *
+ * Deliberately equal to `MAX_FRAME_BYTES` rather than derived from the outbound
+ * sanity bound: the payload is model-authored under the §8 A1 threat model, so
+ * it belongs on the hostile-input scale, not the trusted-engine-output one. It
+ * is written as an alias so the two can never drift apart by a stale literal.
+ */
+export const MAX_HOST_REQUEST_BYTES = MAX_FRAME_BYTES
+
+/**
+ * HR1 — main's own per-session rate cap on `host.request`, all verbs together.
+ * A sliding window like `MAX_FRAMES_PER_WINDOW`, but a far longer one: these are
+ * deliberate model actions (list, create, send), not UI traffic, so the honest
+ * bound is "a minute's worth of tool calls", not a per-second burst.
+ */
+export const MAX_HOST_REQUESTS_PER_WINDOW = 60
+/** The window `MAX_HOST_REQUESTS_PER_WINDOW` is counted over. */
+export const HOST_REQUEST_WINDOW_MS = 60_000
+
+/**
+ * The longest a chain of peer messages may grow before main refuses it
+ * (`hop_runaway`). Upstream's equivalent is 28; a chain this long is a loop
+ * with extra steps, and every hop is a billed turn.
+ */
+export const MAX_PEER_HOPS = 16
+
+/**
+ * Per RECIPIENT, how many routed peer messages main may be holding undelivered
+ * or unacked at once (`queue_full`). Main-side and new: the sidecar's
+ * `MAX_QUEUED_PROMPTS` bounds only renderer `app.submit` prompts arriving
+ * mid-turn and never sees this plane at all.
+ */
+export const MAX_PENDING_PEER_MESSAGES = 50
+
+/**
+ * Per `(from, to)` token bucket on peer sends: `PEER_SEND_BURST` tokens, one
+ * refilled every `PEER_SEND_REFILL_MS`. Upstream's reference was 30 / 2 s; the
+ * burst is lowered because a burst here is a burst of BILLED TURNS at the
+ * recipient, not of frames.
+ */
+export const PEER_SEND_BURST = 10
+export const PEER_SEND_REFILL_MS = 2_000
+
+/** An identical body to the same recipient inside this window is `duplicate`. */
+export const PEER_DEDUP_WINDOW_MS = 30_000
+
+/**
+ * How long main keeps a delivered chain available for inheritance. Past it a
+ * send starts a fresh chain of one, so an exchange resumed hours later is a new
+ * conversation rather than a continuation that is already near the hop cap.
+ */
+export const PEER_CHAIN_WINDOW_MS = 10 * 60_000
+
+/**
+ * Max UTF-8 BYTES of one peer message body (a send's text, a creation prompt).
+ *
+ * The same headroom rule as `MAX_PROMPT_BYTES` above, for the same reason and
+ * against a different frame: main REBUILDS the inbound `peer.deliver` frame
+ * around this text, adding the sender name, the hop chain, a message id and the
+ * `ClientFrame` envelope, and the supervisor rejects the whole ENCODED frame
+ * against `MAX_FRAME_BYTES` (128 KiB). Measured in bytes, not JS chars, so
+ * multibyte text cannot advertise a size the frame cannot carry.
+ */
+export const MAX_PEER_TEXT_BYTES = 64 * 1024
+
+/**
+ * How long main waits for a woken row's `ready` frame before answering
+ * `refused:wake_failed` (HOST-REQUEST-PLANE §4 step 5).
+ *
+ * NOT in the §7 constants table — that table names the guards, and the wake has
+ * none. It needs one all the same: without it a `peer.deliver` to a row whose
+ * spawn never completes leaves the requesting model's tool call pending for the
+ * life of the window. Sized above a cold sidecar spawn plus a transcript resume,
+ * and it MUST stay below the sidecar's own request timeout so the caller learns
+ * `wake_failed` rather than `timeout`.
+ */
+export const PEER_WAKE_TIMEOUT_MS = 30_000
+
+/**
+ * How long a sidecar waits for the `host.result` answering its `host.request`
+ * before resolving the caller with a typed timeout failure. Strictly greater
+ * than `PEER_WAKE_TIMEOUT_MS`, which is the longest main can legitimately take.
+ */
+export const HOST_REQUEST_TIMEOUT_MS = 45_000

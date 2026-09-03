@@ -566,12 +566,245 @@ export type HistoryLoadEarlierMessage = {
   viewAnchorUuid?: string
 }
 
+/* ------------------------------------------------------------------------- *
+ * HOST-REQUEST-PLANE (decisions/HOST-REQUEST-PLANE.md)
+ *
+ * The one place the desktop wire runs the OTHER way: a sidecar asks Electron
+ * main to do something, and main answers. Everything else inbound is a renderer
+ * verb; these two are main-originated, and they are the only two inbound kinds
+ * SECURITY-MINIMUM's Addendum 2026-07-04 (as amended 2026-09-03, HRP §9) admits.
+ * A third is not an addition, it is a re-opened ruling.
+ *
+ * Both are app-owned vocabulary validated by sidecar-LOCAL schemas plus a closed
+ * `checkStrictKeys` entry, exactly like C2 and the load-earlier verb: the
+ * engine's shared `appClientMessageSchema` is deliberately NOT extended.
+ * Additive under v1 — no `PROTOCOL_VERSION` bump.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The CLOSED verb allowlist (HR1). Three are the model-facing verbs of HRP §2;
+ * `peer.ack` is the fourth and is not model-facing at all.
+ *
+ * `peer.ack` exists because HRP §4 step 6 rules "ack = enqueued" and makes main
+ * hold a routed message until the recipient sidecar says it took it — but names
+ * no transport for the ack itself. The two candidates were a new OUTBOUND frame
+ * kind (which §5's change list does not list, and which would put a third
+ * app-owned kind on the wire for one boolean) and this: an existing frame, an
+ * existing handler, one more entry in a list main already closes. It carries no
+ * model input — the sidecar mints it from a `messageId` main itself stamped —
+ * and it is unreachable from any tool.
+ */
+export const HOST_REQUEST_VERBS = [
+  'peers.list',
+  'peer.create',
+  'peer.deliver',
+  'peer.ack',
+] as const
+
+export type HostRequestVerb = (typeof HOST_REQUEST_VERBS)[number]
+
+/**
+ * The host-request plane's own closed error vocabulary — a THIRD union beside
+ * `ErrorFrame['code']` (transport) and `HostErrorCode` (control plane). It is
+ * kept separate for the same reason those two are (hostApi.ts F3 §3): merging
+ * them would make one plane's refusal readable as another's, and this one is the
+ * only plane whose caller is a model rather than a person or a process.
+ */
+export const HOST_REQUEST_ERROR_CODES = [
+  /** Args failed the per-verb schema, or a strict-key check. */
+  'bad_request',
+  /** HR1 — over `MAX_HOST_REQUEST_BYTES`. */
+  'too_large',
+  /** HR1 — over `MAX_HOST_REQUESTS_PER_WINDOW` in the window. */
+  'rate_limited',
+  /** Not on the closed verb allowlist. */
+  'unknown_verb',
+  /** HR3 — no such row, or a row the caller may not name (another workspace). */
+  'session_not_found',
+  /** HR4 — HC4's caps, or the registry churn rule. */
+  'session_limit',
+  /** The requester's own workspace no longer exists. */
+  'invalid_cwd',
+  /** The child process failed to start. */
+  'spawn_failed',
+  /** Main failed in a way the caller cannot act on. */
+  'internal_error',
+  /**
+   * SIDECAR-minted, not main's: no `host.result` arrived inside
+   * `HOST_REQUEST_TIMEOUT_MS`. It is in this union rather than a second one so a
+   * caller pattern-matches ONE closed set; the requesting side never hangs, and
+   * a timeout on `peer.create` deliberately does not auto-retry — the row is
+   * named and visible from the moment it is persisted, so the answer is to look
+   * at the peer list, not to spawn again.
+   */
+  'timeout',
+  /** SIDECAR-minted: no connection to main is open, so nothing can be asked. */
+  'unavailable',
+] as const
+
+export type HostRequestErrorCode = (typeof HOST_REQUEST_ERROR_CODES)[number]
+
+/** A typed host-request failure. Never a throw into main (HR1). */
+export type HostRequestError = {
+  code: HostRequestErrorCode
+  message: string
+}
+
+/** A peer row's liveness, as `peers.list` reports it (PEER-SESSIONS §3). */
+export type PeerStatus = 'live' | 'parked' | 'closed'
+
+/**
+ * What a live session is DOING, as the `activity` frame reports it. `needs_user`
+ * outranks `running` because a peer stuck on a permission prompt is the case a
+ * creator most needs to see, and it is not "busy".
+ */
+export const ACTIVITY_PRESENCES = ['running', 'needs_user', 'idle'] as const
+
+export type ActivityPresence = (typeof ACTIVITY_PRESENCES)[number]
+
+/** One row of the `peers.list` answer (HRP §2 verb table, PEER-SESSIONS §3). */
+export type PeerDescriptor = {
+  name: string
+  appSessionId: SessionId
+  /**
+   * The transcript key. Null until the row's first ready frame, which means
+   * "nothing to read yet", NOT "no such peer". It is here because a later
+   * wave's reader opens `<engineSessionId>.jsonl` itself and the mapping lives
+   * only in main's registry, which R2 forbids a sidecar to read.
+   */
+  engineSessionId: string | null
+  status: PeerStatus
+  /** From the `activity` frame. ABSENT for a row that is not live. */
+  presence?: ActivityPresence
+  /**
+   * The creating session, when an agent created this one. `name` is null when
+   * the creator's row has been reaped: ids are not reused and names are, so the
+   * id is what is stored and the name is resolved at read time.
+   */
+  createdBy?: { appSessionId: SessionId; name: string | null }
+  title: string | null
+  lastActivity: number
+}
+
+/** Why main refused to route a peer message (HRP §4 step 6). */
+export const PEER_DELIVER_REFUSAL_REASONS = [
+  'user_stopped',
+  'hop_loop',
+  'hop_runaway',
+  'rate',
+  'duplicate',
+  'queue_full',
+  'wake_failed',
+] as const
+
+export type PeerDeliverRefusalReason =
+  (typeof PEER_DELIVER_REFUSAL_REASONS)[number]
+
+/**
+ * What happened to one routed peer message. The sending model reads this in its
+ * tool result, so it never reasons from a false belief that a peer heard it.
+ */
+export type PeerDeliverOutcome =
+  | 'queued_live'
+  | 'queued_wake'
+  | `refused:${PeerDeliverRefusalReason}`
+
+/**
+ * Per-verb ARGS. Model-authored (HRP §8 A1), so every one of these is validated
+ * at main under a per-verb Zod schema before anything is done with it. Note what
+ * is absent by decision: no path anywhere (HC1/HR3 — main sources the cwd from
+ * the requester's own registry row), no account field (R10), no permission mode
+ * (§0a), and no `from` (HR2 — identity is the connection).
+ */
+export type HostRequestArgs = {
+  'peers.list': Record<string, never>
+  'peer.create': { prompt: string; model?: string; effort?: string }
+  'peer.deliver': { to: string; text: string }
+  'peer.ack': { messageId: string }
+}
+
+/** Per-verb `value` on a successful `host.result`. */
+export type HostRequestValues = {
+  'peers.list': { peers: PeerDescriptor[] }
+  'peer.create': {
+    name: string
+    appSessionId: SessionId
+    /**
+     * Present when the row exists but a later step failed. `ready` = the child
+     * never announced itself in time; `prompt` = it did and the opening message
+     * was refused. The row is KEPT either way: it is a real session the operator
+     * can see, and the caller can send it the prompt itself.
+     */
+    failedStep?: 'ready' | 'prompt'
+  }
+  'peer.deliver': { messageId: string; outcome: PeerDeliverOutcome }
+  'peer.ack': { messageId: string }
+}
+
+/**
+ * Main's answer to one `host.request`, correlated by the `requestId` the SIDECAR
+ * minted (the T5a analog `history.loadEarlier.result` already uses). A result
+ * whose id matches no pending request is dropped and logged at the sidecar.
+ *
+ * `protocolVersion` and `sessionId` are deliberately absent: they are the
+ * `ClientFrame` envelope `supervisor.send` adds, not fields the handler authors
+ * twice (HRP §2).
+ */
+export type HostResultMessage = {
+  type: 'host.result'
+  requestId: string
+  ok: boolean
+  /** Present when `ok`. */
+  value?: HostRequestValues[HostRequestVerb]
+  /** Present when not `ok`. */
+  error?: HostRequestError
+}
+
+/**
+ * One peer message, routed by main to the recipient sidecar (HRP §4 step 2).
+ *
+ * Every field is MAIN-STAMPED. `from` and `fromSessionId` are the requester's
+ * identity as main read it off the connection (HR2), never anything the sending
+ * sidecar wrote; `hops` is derived by main from its own per-pair record, so a
+ * compromised sidecar cannot launder a loop by shortening a chain it never held;
+ * `messageId` is minted by main and is what the ack and the operational-log line
+ * are keyed on. The recipient sidecar treats all of it as DATA.
+ *
+ * The only field carrying model-authored content is `text`, and it is bounded by
+ * `MAX_PEER_TEXT_BYTES` at main and re-bounded at the sidecar.
+ */
+export type PeerDeliverMessage = {
+  type: 'peer.deliver'
+  messageId: string
+  /** The SENDER's peer name, for the transcript label and the tag attribute. */
+  from: string
+  fromSessionId: SessionId
+  text: string
+  /** appSessionIds of every sender in this chain, oldest first. */
+  hops: SessionId[]
+  /**
+   * Deliver the text WITHOUT the `<cross-session-message>` wrapper.
+   *
+   * True for exactly one message: the creation prompt of a session this peer
+   * plane just spawned (PEER-SESSIONS §5). R8 defines an agent-created session
+   * as the operator opening a tab, so its opening instruction is its own first
+   * prompt; tagging it would make the auto-mode classifier judge every gated
+   * action in that session with zero user intent behind it.
+   *
+   * OPTIONAL and default-false on purpose: absent means tagged, which is the
+   * fail-closed direction. It is an explicit flag rather than something the
+   * sidecar infers from "is this the first message", because inferring it would
+   * make the classifier's posture depend on a race.
+   */
+  untagged?: boolean
+}
+
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
  * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, main's
  * host-originated account-deletion invalidation, the P4-13 RemoteSettings verbs,
- * the P4-19 settings write verb, the IDLE-PARK frame, and the load-earlier read
- * verb.
+ * the P4-19 settings write verb, the IDLE-PARK frame, the load-earlier read
+ * verb, and the two host-request-plane kinds above.
  */
 export type SidecarClientMessage =
   | AppClientMessage
@@ -592,6 +825,8 @@ export type SidecarClientMessage =
   | PromptForceMessage
   | AppParkMessage
   | HistoryLoadEarlierMessage
+  | HostResultMessage
+  | PeerDeliverMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -3323,6 +3558,60 @@ export type HistoryLoadEarlierResultFrame = {
   complete: boolean
 }
 
+/**
+ * The sidecar asking main to do something (HOST-REQUEST-PLANE §2).
+ *
+ * The one outbound frame that is NOT engine output and NOT for the renderer.
+ * Main INTERCEPTS it in `wireRendererBridge` and returns before the attachment
+ * gate, the same shape the `session-title` rider already has, so a
+ * model-authored request payload never reaches the least-trusted zone and never
+ * enters a replay buffer. Its `FRAME_RETENTION` entry
+ * (`app/main/replayBuffer.ts`) therefore classifies a frame the buffer can never
+ * see; it exists because that table is exhaustive by construction.
+ *
+ * `requestId` is minted by the SIDECAR and echoed on the result. It correlates
+ * one pending call and authorizes nothing.
+ *
+ * It rides the normal outbound `send`, so `secretGuard` runs on it like every
+ * other frame (HR7): a verb arg carrying a credential-SHAPED KEY is blocked at
+ * the sidecar before it can leave. The guard is key-name-only by design and
+ * nothing here relies on value scanning.
+ */
+export type HostRequestFrame = {
+  kind: 'host.request'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: HostRequestVerb
+  args: HostRequestArgs[HostRequestVerb]
+}
+
+/**
+ * What this session is doing right now (HOST-REQUEST-PLANE §4 step 4a, the half
+ * that survived the §0a cut).
+ *
+ * It exists because main knows only RECENCY (`idleParkDriver.ts` `recencyOf`)
+ * and deliberately does not read the engine's `turn.status` vocabulary, so
+ * without this frame `peers.list` could not tell a creator "Bear is running"
+ * from "Bear is stuck on a permission prompt" from "Bear is done". The same
+ * app-owned-field pattern as `ReadyFrame.engineSessionId`: the sidecar computes
+ * the app's answer, main stores it, and no engine event vocabulary crosses.
+ *
+ * `sticky` in `FRAME_RETENTION`: point-in-time state a reader applies wholesale,
+ * replaced by the next one, never a transcript row.
+ *
+ * Its initial value is emitted at attach, derived from the SAME two sources the
+ * ready payload is built from, so a freshly ready idle session is `idle` at once
+ * rather than absent. Presence is a fact about a LIVE row only; main clears it
+ * on every terminal lifecycle, and absence means not live, nothing else.
+ */
+export type ActivityFrame = {
+  kind: 'activity'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  presence: ActivityPresence
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -3364,6 +3653,8 @@ export type ServerFramePayload =
   | PromptForceResultFrame
   | SubmitResultFrame
   | HistoryLoadEarlierResultFrame
+  | HostRequestFrame
+  | ActivityFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -3424,6 +3715,8 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'prompt-force.result': true,
   'submit.result': true,
   'history.loadEarlier.result': true,
+  'host.request': true,
+  activity: true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {

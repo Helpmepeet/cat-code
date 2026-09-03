@@ -94,6 +94,10 @@ import {
   supervisorEventToServerFrame,
   validateSaveTextRequest,
 } from './mainDecisions.js'
+import {
+  createPeerRequestPlane,
+  type PeerRequestPlane,
+} from './peerRequestPlane.js'
 import { readGlassPreference, writeGlassPreference } from './glassPreference.js'
 import {
   clampWindowBounds,
@@ -594,6 +598,12 @@ let supervisor: SidecarSupervisor | null = null
 let host: Host | null = null
 let mainWindow: BrowserWindow | null = null
 let registryForDebug: SessionRegistry | null = null
+/**
+ * HOST-REQUEST-PLANE — the consumer of `host.request` (`peerRequestPlane.ts`).
+ * Rebuilt with the host, because every store it holds is per-runtime and dies
+ * with the window like the rest of the session state (SESSION-LIFETIME L1).
+ */
+let peerPlane: PeerRequestPlane | null = null
 let latestRendererSnapshot: DebugRendererSnapshot | null = null
 
 /**
@@ -1815,12 +1825,41 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       void host?.setTitle(event.sessionId, frame.title)
       return
     }
+    // HOST-REQUEST-PLANE §2 — the sidecar asking MAIN to do something. It is
+    // consumed here and NEVER forwarded: the payload is model-authored, and the
+    // renderer is the least trusted zone on this wire. Same shape as the title
+    // rider above — mark the arrival that really happened, then handle it and
+    // return before the attachment gate, so it enters no replay buffer and
+    // reaches no window. Its `FRAME_RETENTION` entry classifies a frame this
+    // return makes unreachable; the table is exhaustive, not a permission.
+    //
+    // `event.sessionId` is the supervisor's routing key, i.e. the identity read
+    // off the connection. That, and nothing inside the frame, is the requester
+    // (HR2).
+    if (frame.kind === 'host.request') {
+      const received = traceFrame(frame, 'supervisor.socket.received')
+      traceFrame(received, 'host.received')
+      void peerPlane?.handleRequest(event.sessionId, frame)
+      return
+    }
     if (frame.kind === 'ready') {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
       flushAccountDeletionNotices(event.sessionId)
+      // §4 step 5/6 — releases anything waiting on this row's wake and re-sends
+      // whatever it never acked.
+      peerPlane?.onReady(event.sessionId)
+    }
+    if (frame.kind === 'activity') {
+      // §4 step 4a — per-row presence for `peers.list`. The frame still forwards
+      // normally: it is app-owned point-in-time state, and main reading it does
+      // not make it main's alone.
+      peerPlane?.recordActivity(event.sessionId, frame.presence)
     }
     if (isTerminalLifecycleFrame(frame)) {
       pendingAccountDeletionNotices.delete(event.sessionId)
+      // Presence is a fact about a LIVE row. Absence means not live, nothing
+      // else, so it is cleared here rather than left to read as stale.
+      peerPlane?.onSessionDown(event.sessionId)
     }
     if (frame.kind === 'session-action.result') {
       rememberBranchOpenSeed(event.sessionId, frame)
@@ -1873,6 +1912,11 @@ function wireHostEvents(h: Host): void {
     // engineSessionId cleared) must not keep an at-rest transcript cache.
     if (event.type === 'session-removed') {
       deleteCache(TRANSCRIPT_CACHE_DIR, event.appSessionId)
+      // HOST-REQUEST-PLANE §5 — every per-row and per-pair peer store is
+      // cleared on reap. They are in-memory only, so this is not persistence
+      // hygiene: it is what keeps a reused NAME from inheriting the previous
+      // row's chain, rate bucket or pending messages.
+      peerPlane?.onSessionRemoved(event.appSessionId)
     }
     scheduleDebugStateExport.schedule()
   })
@@ -3473,6 +3517,30 @@ function ensureHost(): Host {
     },
   })
   wireHostEvents(host)
+
+  // HOST-REQUEST-PLANE §5 — the request plane, composed from the same host and
+  // registry this function just built. It gets NARROW capabilities on purpose:
+  // two read-only registry views, the two host methods its three verbs need,
+  // main's own `forward`, and one log writer. It cannot reach a window, a file,
+  // the supervisor, or any host method beyond these — which is what makes the
+  // §3 trust rules reviewable in one module instead of across main.
+  const liveHost = host
+  const liveRegistry = registry
+  peerPlane = createPeerRequestPlane({
+    rows: () => liveRegistry.sessions,
+    isLive: appSessionId =>
+      supervisor?.listSessions().some(row => row.sessionId === appSessionId) === true,
+    createSessionInWorkspace: (fromAppSessionId, peer) =>
+      liveHost.createSessionInWorkspace(fromAppSessionId, peer),
+    restoreSession: async appSessionId => {
+      const result = await liveHost.restoreSession(appSessionId)
+      return result.ok ? { ok: true } : { ok: false, error: result.error }
+    },
+    forward,
+    logRouted: (appSessionId, fields) =>
+      logOperational('peer.message.routed', 'info', fields, appSessionId),
+    log: line => logLegacyDiagnostic(line, 'host', 'main'),
+  })
 
   // IS-A startup GC: after the launch sweep settles (its reaps predate the
   // HostEvent subscription, so they emit no session-removed), drop any orphaned

@@ -51,6 +51,7 @@ import {
   reserveTaskNotification,
   subscribeToCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
+import { CROSS_SESSION_MESSAGE_TAG } from '../../src/constants/xml.js'
 import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js'
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
@@ -76,6 +77,7 @@ import {
 } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  HOST_REQUEST_TIMEOUT_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
@@ -83,6 +85,8 @@ import {
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
+  MAX_PEER_HOPS,
+  MAX_PEER_TEXT_BYTES,
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
@@ -103,9 +107,14 @@ import {
   HISTORY_LOAD_EARLIER_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   type AccountVerbMessage,
+  type ActivityPresence,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
   type ErrorFrame,
+  type HostRequestArgs,
+  type HostRequestError,
+  type HostRequestValues,
+  type HostRequestVerb,
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
@@ -584,6 +593,28 @@ export class SidecarServer {
   /** A non-QueryEngine adapter completed without durable-input acknowledgement. */
   private taskNotificationAwaitingDurableAcceptance = false
   /**
+   * HOST-REQUEST-PLANE §5 — the request client's in-flight table. One entry per
+   * `host.request` this sidecar has sent and not yet had answered, keyed by the
+   * `requestId` IT minted. A `host.result` whose id matches nothing here is
+   * dropped and logged (§2); a request that times out is settled with a typed
+   * failure and its entry removed, so nothing here can grow without bound and no
+   * caller can hang.
+   */
+  private readonly pendingHostRequests = new Map<
+    string,
+    {
+      verb: HostRequestVerb
+      settle: (result: HostRequestOutcome<HostRequestVerb>) => void
+      timer: ReturnType<typeof setTimeout>
+    }
+  >()
+  /**
+   * The last `activity` presence published, so a recomputation that lands on the
+   * same answer costs no frame. `null` means nothing has been published yet,
+   * which is only true before the first attach.
+   */
+  private lastPublishedPresence: ActivityPresence | null = null
+  /**
    * Queued prompts already requeued once after a turn refused them. Bounds the
    * boundary-drain retry to one attempt per prompt; entries are removed as soon
    * as a turn durably accepts the prompt, so this only ever holds failures.
@@ -740,6 +771,17 @@ export class SidecarServer {
       this.observeTurnEvent(event)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
+      // HOST-REQUEST-PLANE §4 step 4a — the three events that can move presence,
+      // and only those: turn boundaries and permission open/close. Deliberately
+      // NOT every event: `message` fires many times a second during streaming
+      // and cannot change either input, so recomputing on it would be pure cost.
+      if (
+        event.type === 'turn.status' ||
+        event.type === 'permission.requested' ||
+        event.type === 'permission.resolved'
+      ) {
+        this.publishActivity()
+      }
       // NO per-turn context-breakdown refresh. The analysis is not cheap enough
       // to be automatic: `analyzeContextUsage` fans out to ~10
       // `countTokensWithFallback` calls (system prompt, tool schemas, each memory
@@ -1038,6 +1080,25 @@ export class SidecarServer {
       this.sendQueuedPrompts(connection, stagedForAttach)
       this.lastQueuedPromptsKey = JSON.stringify(stagedForAttach)
     }
+    // HOST-REQUEST-PLANE §4 step 4a — presence, last in the attach burst and
+    // before history replay.
+    //
+    // Its VALUE is derived at ready: `currentPresence()` reads the same two
+    // sources the `app.ready` payload above was built from, and nothing between
+    // here and there can start a turn or open a permission prompt, so a freshly
+    // ready idle session reports `idle` at once and is never simply absent from
+    // `peers.list`. It is sent UNCONDITIONALLY, unlike the conditional snapshots
+    // above it, because "no presence" and "idle" are different answers and only
+    // one of them is true.
+    //
+    // Last rather than first because C3 pins `permission.context` immediately
+    // after `ready` and that adjacency is a renderer contract; presence is not,
+    // and it is `sticky` in main's retention table for the same reason as the
+    // snapshots it joins — nothing re-sends it on a renderer reload, so an
+    // evicted one would blank the very window `peers.list` exists to answer for.
+    const attachPresence = this.currentPresence()
+    this.lastPublishedPresence = attachPresence
+    this.sendActivity(connection, attachPresence)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1222,6 +1283,17 @@ export class SidecarServer {
     this.stagedPrompts.clear()
     this.recalledPrompts.clear()
     this.lateRecallDeliveries.clear()
+    // Settle every in-flight host request rather than leaving its caller waiting
+    // on a socket that is about to close, and clear the timers so a closed
+    // server holds nothing (the boundary tests build several per process).
+    for (const [requestId, pending] of this.pendingHostRequests) {
+      clearTimeout(pending.timer)
+      this.pendingHostRequests.delete(requestId)
+      pending.settle({
+        ok: false,
+        error: { code: 'unavailable', message: 'the session is closing' },
+      })
+    }
     this.stopPanelTaskReaper?.()
     this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
@@ -1313,6 +1385,24 @@ export class SidecarServer {
       (frame.message as { type?: unknown } | null | undefined)?.type === 'app.park'
     ) {
       this.handlePark(connection, frame.message)
+      return
+    }
+
+    // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds, app-owned
+    // vocabulary validated by sidecar-LOCAL schemas exactly like C2 and the park
+    // frame above. `host.result` settles one request this sidecar minted an id
+    // for; `peer.deliver` is a message another session sent, routed by main.
+    // Both are inbound at the trust boundary and are treated as such.
+    if (
+      (frame.message as { type?: unknown } | null | undefined)?.type === 'host.result'
+    ) {
+      this.handleHostResult(frame.message)
+      return
+    }
+    if (
+      (frame.message as { type?: unknown } | null | undefined)?.type === 'peer.deliver'
+    ) {
+      this.handlePeerDeliver(connection, frame.message)
       return
     }
 
@@ -1701,7 +1791,16 @@ export class SidecarServer {
     const started = this.startTurn({
       prompt: command.value,
       origin,
-      generateTitle: false,
+      // HOST-REQUEST-PLANE §4 step 4 — `false` is right for a worker RESULT,
+      // which is why this drain has always passed it, and wrong for a peer
+      // message: a session created by a peer would otherwise carry the cwd
+      // basename forever, because its first prompt arrives here rather than
+      // through `handleSubmit`. Turning it on for a `peer` origin is safe
+      // without a second title check here: the generator is already run-once,
+      // fresh-only, resumed-never and no-clobber (`sessionTitleGen.ts`), so on
+      // a session that HAS a title this is a no-op, which is exactly the
+      // decision's "on a session whose title is unset".
+      generateTitle: origin.kind === 'peer',
       onInputPersisted: () => {
         persisted = true
         releaseTaskNotificationReservation(reservationTaskId)
@@ -5001,6 +5100,225 @@ export class SidecarServer {
     }
   }
 
+  /* --------------------------------------------------------------------- *
+   * HOST-REQUEST-PLANE (decisions/HOST-REQUEST-PLANE.md) — this sidecar's half.
+   *
+   * The one direction where this process is the CLIENT: it mints a request id,
+   * emits `host.request` outbound, and waits for main's `host.result` on the
+   * same id. Outbound rides the ordinary `send`, so `secretGuard` runs on the
+   * request like every other frame (HR7); inbound is validated here at the trust
+   * boundary like every other inbound kind (HR5).
+   * --------------------------------------------------------------------- */
+
+  /**
+   * Ask main to do one bounded thing. Resolves with main's typed answer, or with
+   * a typed local failure — NEVER hangs, and never throws at the caller.
+   *
+   * `requestId` is minted HERE and echoed on the result (the T5a analog
+   * `history.loadEarlier.result` already uses). Nothing about the id authorizes
+   * anything: it correlates one pending call and is forgotten on settle.
+   */
+  async requestHost<V extends HostRequestVerb>(
+    verb: V,
+    args: HostRequestArgs[V],
+  ): Promise<HostRequestOutcome<V>> {
+    if (this.connections.size === 0 || this.closed) {
+      return {
+        ok: false,
+        error: { code: 'unavailable', message: 'not connected to the host' },
+      }
+    }
+    const requestId = randomUUID()
+    const frame: ServerFrame = {
+      kind: 'host.request',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId,
+      verb,
+      args,
+    }
+    return new Promise<HostRequestOutcome<V>>(resolve => {
+      const timer = setTimeout(() => {
+        // Settle, then forget: a late result for this id then matches nothing
+        // and is dropped and logged, which is the designed behaviour (§2) rather
+        // than a second resolution of a settled promise.
+        this.pendingHostRequests.delete(requestId)
+        resolve({
+          ok: false,
+          error: { code: 'timeout', message: 'the host did not answer in time' },
+        })
+      }, HOST_REQUEST_TIMEOUT_MS)
+      timer.unref?.()
+      this.pendingHostRequests.set(requestId, {
+        verb,
+        // The per-verb value shape is known only to this caller, which asked for
+        // this verb; the boundary schema deliberately does not guess it (see
+        // `hostResultMessageSchema`). The settle callback is stored under the
+        // widened verb so one table holds every in-flight request.
+        settle: outcome => resolve(outcome as HostRequestOutcome<V>),
+        timer,
+      })
+      let sent = false
+      for (const connection of this.connections) {
+        this.send(connection, frame)
+        sent = true
+      }
+      if (!sent) {
+        clearTimeout(timer)
+        this.pendingHostRequests.delete(requestId)
+        resolve({
+          ok: false,
+          error: { code: 'unavailable', message: 'not connected to the host' },
+        })
+      }
+    })
+  }
+
+  /** HR5 — main's answer to one request this sidecar minted an id for. */
+  private handleHostResult(message: unknown): void {
+    const parsed = hostResultMessageSchema.safeParse(message)
+    if (!parsed.success) {
+      // No `sendError`: this frame answers a request, so there is no renderer
+      // click to retire, and the only honest record is the log line. The pending
+      // entry stays until its own timeout settles it.
+      this.log(
+        `[sidecar] rejected host.result: ${
+          parsed.error.issues[0]?.message ?? 'invalid message'
+        }`,
+      )
+      return
+    }
+    const pending = this.pendingHostRequests.get(parsed.data.requestId)
+    if (!pending) {
+      // §2 — "a result whose id matches no pending request is dropped and logged
+      // at the sidecar". This is also where a result that arrives after its own
+      // timeout lands, which is why it is a log line and not an error.
+      this.log('[sidecar] dropped host.result for an unknown request id')
+      return
+    }
+    this.pendingHostRequests.delete(parsed.data.requestId)
+    clearTimeout(pending.timer)
+    if (parsed.data.ok) {
+      pending.settle({
+        ok: true,
+        value: parsed.data.value as HostRequestValues[HostRequestVerb],
+      })
+      return
+    }
+    pending.settle({
+      ok: false,
+      error: (parsed.data.error ?? {
+        code: 'internal_error',
+        message: 'the host refused the request',
+      }) as HostRequestError,
+    })
+  }
+
+  /**
+   * HR5 / §4 step 4 — one peer message, routed by main.
+   *
+   * It enters the engine command queue at `next` priority ON THE
+   * TASK-NOTIFICATION PATH, never the prompt path: `enqueueMidTurnPrompt` stages
+   * a `mode:'prompt'` command into the renderer's waiting-messages strip, which
+   * would show a peer message as something the USER typed and hand it to the
+   * user's own recall controls. A busy recipient reads this at the next tool
+   * boundary (`src/query.ts`), an idle one starts a turn from
+   * `drainOneTaskNotification`.
+   *
+   * `MessageOrigin` kind `peer` is the engine's own (`src/types/message.ts`), so
+   * the provenance the transcript records is structural rather than sniffed out
+   * of the text — the same discriminant `toSDKMessageOriginProp` carries to the
+   * renderer for every other injected turn.
+   *
+   * Ack = ENQUEUED (§4 step 6). The ack goes back the moment the command is on
+   * the queue, because that is the point past which this process will deliver it
+   * or die trying; main holds the message until then and re-sends it after this
+   * row's next `ready` if the process exits first.
+   */
+  private handlePeerDeliver(connection: Connection, message: unknown): void {
+    const parsed = peerDeliverMessageSchema.safeParse(message)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        undefined,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid peer message',
+        false,
+      )
+      return
+    }
+    const delivered = parsed.data
+    const origin: MessageOrigin = {
+      kind: 'peer',
+      name: delivered.from,
+      appSessionId: delivered.fromSessionId,
+    }
+    enqueuePendingNotification({
+      value: delivered.untagged === true
+        ? delivered.text
+        : wrapCrossSessionMessage(delivered.from, delivered.text),
+      mode: 'task-notification',
+      // §4 step 4 — `next`, ahead of worker results, behind a human prompt.
+      priority: 'next',
+      origin,
+    })
+    // Enqueued: tell main it may forget the message. Fire-and-forget by
+    // necessity (this handler is synchronous, and the ack's own result carries
+    // nothing a caller acts on), but never silent — a failed ack is logged, and
+    // its only cost is one duplicate row after a restore, the crash window §4
+    // step 6 accepts.
+    void this.requestHost('peer.ack', { messageId: delivered.messageId }).then(
+      outcome => {
+        if (!outcome.ok) {
+          this.log(`[sidecar] peer message ack failed: ${outcome.error.code}`)
+        }
+      },
+    )
+  }
+
+  /**
+   * §4 step 4a's surviving half — publish this session's presence when it
+   * CHANGES, so main can answer "is Bear busy, stuck, or done" without ever
+   * reading engine event vocabulary.
+   *
+   * Both inputs are read from the SAME two sources the `ready` payload is built
+   * from (`controller.getPendingPermissionRequests()` and the turn flags), which
+   * is what makes the value at attach and the value on change the same fact
+   * rather than two derivations that can disagree.
+   *
+   * `needs_user` outranks `running` because a peer waiting on a permission
+   * prompt is the case a creator most needs to see, and it is not "busy". It
+   * holds while the pending set is NON-EMPTY rather than flipping on the first
+   * resolve, so two prompts answered out of order cannot report the session free
+   * while one is still open — the engine keeps them in a map, and this reads its
+   * size.
+   */
+  private currentPresence(): ActivityPresence {
+    if (this.controller.getPendingPermissionRequests().length > 0) return 'needs_user'
+    if (this.activeTurn || this.controller.isTurnActive()) return 'running'
+    return 'idle'
+  }
+
+  private sendActivity(connection: Connection, presence: ActivityPresence): void {
+    this.send(connection, {
+      kind: 'activity',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      presence,
+    })
+  }
+
+  /** Broadcast presence if, and only if, it moved. */
+  private publishActivity(): void {
+    if (this.connections.size === 0) return
+    const presence = this.currentPresence()
+    if (presence === this.lastPublishedPresence) return
+    this.lastPublishedPresence = presence
+    for (const connection of this.connections) {
+      this.sendActivity(connection, presence)
+    }
+  }
+
   private send(connection: Connection, frame: ServerFrame): void {
     // F6 — outbound secret-key assertion on EVERY frame (events AND ready). The
     // engine is the sole secret owner; a token key must never cross IPC. This is
@@ -5436,6 +5754,39 @@ function generatedImageResult(event: AppSessionEvent): {
 }
 
 /**
+ * What one `host.request` resolves to. Typed per verb so a caller narrows
+ * against the verb it asked for; a local failure (`timeout`, `unavailable`)
+ * arrives in the same closed shape as one main minted, so a caller has exactly
+ * one thing to pattern-match and can never be left waiting.
+ */
+export type HostRequestOutcome<V extends HostRequestVerb> =
+  | { ok: true; value: HostRequestValues[V] }
+  | { ok: false; error: HostRequestError }
+
+/**
+ * PEER-SESSIONS §5 — the wrapping the decision records as WORK OWED: the tag
+ * constant has existed in the engine with zero call sites, and this is its first
+ * one. The auto-mode classifier's rule 8 treats anything so tagged as never user
+ * intent, which is the whole point: a peer's request must not be able to lift a
+ * boundary the peer could not lift itself (R6's permission-laundering rule).
+ *
+ * Only the ATTRIBUTE is escaped. The sender name is a pool word main stamped, so
+ * it cannot contain a quote today, and escaping it is cheap insurance against
+ * that ever changing. The BODY is left verbatim, matching how the engine already
+ * renders teammate and channel messages: an escaped body would reach the model
+ * as entity soup, and a body that forges a closing tag still arrives inside a
+ * message the classifier has already been told came from another session.
+ */
+function wrapCrossSessionMessage(from: string, text: string): string {
+  const attribute = from
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+  return `<${CROSS_SESSION_MESSAGE_TAG} from="${attribute}">\n${text}\n</${CROSS_SESSION_MESSAGE_TAG}>`
+}
+
+/**
  * F10 — strict per-type key allowlist. The reused Zod schemas strip unknown
  * keys; this rejects a frame that carries any key not in the renderer-facing
  * contract, at every renderer-controlled level: the message itself,
@@ -5551,6 +5902,31 @@ function checkStrictKeys(message: unknown): string | null {
     // equality against uuids from this sidecar's own disk read. Any OTHER key
     // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
     ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid'])],
+    // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds. No preload
+    // channel forwards either one and no renderer can author one, but they are
+    // on the closed allowlist all the same, because the sidecar is the trust
+    // boundary and a main-side check is never sufficient on its own
+    // (SECURITY-MINIMUM §2 R2). These are the ONLY two the amended Addendum
+    // admits; a third is a re-opened ruling, not an addition.
+    //
+    // `host.result` answers a request THIS sidecar minted the id for, so an
+    // unmatched id settles nothing and is dropped downstream. `peer.deliver`
+    // carries main-stamped identity (`from`, `fromSessionId`) and a
+    // main-derived hop chain, all of which the sidecar treats as DATA: it is
+    // never read as authority, and the chain is never authored on this side.
+    ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
+    [
+      'peer.deliver',
+      new Set([
+        'type',
+        'messageId',
+        'from',
+        'fromSessionId',
+        'text',
+        'hops',
+        'untagged',
+      ]),
+    ],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   // `submitId` is admitted (SubmitOptions.submitId): the renderer's own
@@ -5668,6 +6044,63 @@ const historyLoadEarlierMessageSchema = z.object({
     .string()
     .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i)
     .optional(),
+})
+
+/**
+ * HOST-REQUEST-PLANE HR5 — sidecar-LOCAL schemas for the two main-originated
+ * inbound kinds. App-owned, NOT part of the engine's shared
+ * `appClientMessageSchema` (the WS server shares that schema and has no handler
+ * for either), and `checkStrictKeys` has already REJECTED any key outside the
+ * closed sets above, so these parses enforce the VALUE types.
+ *
+ * `host.result.value` is deliberately `z.unknown()`. Its shape is per-verb and
+ * the caller that minted the request is the only party that knows which verb it
+ * asked for, so it narrows there against its own expectation; a union of four
+ * result shapes at this level would accept the wrong one for the right verb and
+ * call it validated. What matters at the boundary is what is checked here: the
+ * envelope, the correlation id, the ok flag, and a closed error shape.
+ */
+const hostResultMessageSchema = z.object({
+  type: z.literal('host.result'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  ok: z.boolean(),
+  value: z.unknown().optional(),
+  error: z
+    .object({
+      code: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+      message: z.string().max(MAX_TEXT_FIELD_CHARS),
+    })
+    .strict()
+    .optional(),
+})
+
+/**
+ * `peer.deliver` — one routed peer message. Every field is main-stamped except
+ * `text`, which is the only model-authored content that crosses; it is bounded
+ * at main by `MAX_PEER_TEXT_BYTES` and re-bounded here because the sidecar does
+ * not take main's word for a size any more than for anything else.
+ *
+ * `hops` is a bounded list of opaque session addresses the sidecar treats as
+ * data: it is never authored on this side, never extended here, and steers
+ * nothing. It rides so the recipient's transcript can show where a message came
+ * through; the loop stop itself is entirely main's (§4 step 2).
+ *
+ * `untagged` is the creation-prompt flag (PEER-SESSIONS §5). Optional, and
+ * absent means TAGGED, which is the fail-closed direction: a message that
+ * forgets the flag is wrapped and therefore judged by the auto-mode classifier
+ * as never user intent, which is the conservative half of that rule.
+ */
+const peerDeliverMessageSchema = z.object({
+  type: z.literal('peer.deliver'),
+  messageId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  from: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  fromSessionId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  text: z.string().min(1).refine(
+    value => new TextEncoder().encode(value).byteLength <= MAX_PEER_TEXT_BYTES,
+    { message: 'text is too long' },
+  ),
+  hops: z.array(z.string().min(1).max(MAX_TEXT_FIELD_CHARS)).max(MAX_PEER_HOPS),
+  untagged: z.boolean().optional(),
 })
 
 /**

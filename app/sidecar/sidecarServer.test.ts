@@ -36,6 +36,7 @@ import {
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
+  MAX_PEER_TEXT_BYTES,
   MAX_TEXT_FIELD_CHARS,
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
@@ -346,7 +347,10 @@ test('production delivery envelope adds metadata beside, never inside, the raw S
     deliveryTrace?: { sequence?: unknown; sourceProcessInstanceId?: unknown }
   }
   expect(envelope.kind).toBe('sidecar.delivery-envelope')
-  expect(stages).toEqual(['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'])
+  // The four stages of the FIRST frame. Attach emits more than one frame now
+  // (the `activity` presence frame closes the burst), and this assertion is
+  // about one frame's stage sequence, not about how many frames attach sends.
+  expect(stages.slice(0, 4)).toEqual(['engine.produced', 'sidecar.received', 'sidecar.socket.queued', 'sidecar.socket.sent'])
   expect(envelope.frame?.kind).toBe('ready')
   expect(envelope.frame).not.toHaveProperty('deliveryTrace')
   expect(envelope.deliveryTrace?.sequence).toBe(1)
@@ -9689,4 +9693,410 @@ test('P4-32b — the inbound allowlist did NOT grow: a lease verb is rejected ba
   }
   // And nothing was emitted in response beyond the refusals.
   expect(received.filter(f => f.kind === 'lease.snapshot').length).toBe(1)
+})
+
+/* ------------------------------------------------------------------------- *
+ * HOST-REQUEST-PLANE (decisions/HOST-REQUEST-PLANE.md HR5 / §4, §6)
+ *
+ * The two new inbound kinds and this sidecar's request client. `peer.deliver`
+ * is driven against the REAL engine command queue — not a stub — so what these
+ * assert is that a routed peer message becomes a queue entry the engine's own
+ * drain will pick up, with the engine's own `MessageOrigin`.
+ * ------------------------------------------------------------------------- */
+
+/** The inbound kinds are main-originated, so they need their own frame builder. */
+function hostPlaneFrame(message: Record<string, unknown>): Buffer {
+  return encodeFrame({
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    message: message as unknown as ClientFrame['message'],
+  })
+}
+
+function validPeerDeliver(overrides: Record<string, unknown> = {}) {
+  return {
+    type: 'peer.deliver',
+    messageId: 'm-1',
+    from: 'Alex',
+    fromSessionId: 'app-alex',
+    text: 'take a look at the parser',
+    hops: ['app-alex'],
+    ...overrides,
+  }
+}
+
+test('HR5 — a valid peer.deliver reaches the REAL engine queue as a peer-origin task notification', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+
+  const queued = getCommandQueueSnapshot()
+  expect(queued).toHaveLength(1)
+  // The task-notification path, never the prompt path: the prompt path stages
+  // into the renderer's waiting-messages strip, which would show a peer message
+  // as something the user typed and hand it to the user's recall controls.
+  expect(queued[0]?.mode).toBe('task-notification')
+  // `next`: ahead of worker results, behind a human prompt (§4 step 4).
+  expect(queued[0]?.priority).toBe('next')
+  // The ENGINE's own origin discriminant (src/types/message.ts), so provenance
+  // is structural rather than sniffed out of the text downstream.
+  expect(queued[0]?.origin).toEqual({
+    kind: 'peer',
+    name: 'Alex',
+    appSessionId: 'app-alex',
+  })
+  // PEER-SESSIONS §5 — the wrapping that was recorded as work owed. The
+  // auto-mode classifier reads this tag as "never user intent".
+  expect(queued[0]?.value).toBe(
+    '<cross-session-message from="Alex">\ntake a look at the parser\n</cross-session-message>',
+  )
+})
+
+test('the creation prompt is delivered UNTAGGED, and only when main says so', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true })))
+
+  // R8 defines an agent-created session as the operator opening a tab, so its
+  // opening instruction is its own first prompt. Tagged, it would leave an
+  // auto-mode peer able to do nothing the autonomous allowlist already permits.
+  expect(getCommandQueueSnapshot()[0]?.value).toBe('take a look at the parser')
+  // Still a peer-origin row, so it renders with the sender label rather than as
+  // a user bubble containing words the operator did not type.
+  expect(getCommandQueueSnapshot()[0]?.origin).toMatchObject({ kind: 'peer' })
+})
+
+test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and nothing is queued', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    hostPlaneFrame(validPeerDeliver({ replyTo: 'm-0' })),
+  )
+
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  for (const bad of [
+    validPeerDeliver({ hops: 'app-alex' }),
+    validPeerDeliver({ from: 42 }),
+    validPeerDeliver({ text: '' }),
+    validPeerDeliver({ untagged: 'yes' }),
+  ]) {
+    const before = received.filter(f => f.kind === 'error').length
+    server.handleData(conn, hostPlaneFrame(bad))
+    expect(received.filter(f => f.kind === 'error').length).toBe(before + 1)
+  }
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+})
+
+test('HR5 — a peer.deliver whose text exceeds the peer cap is rejected', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    hostPlaneFrame(validPeerDeliver({ text: 'x'.repeat(MAX_PEER_TEXT_BYTES + 1) })),
+  )
+  // Main bounds it too; the sidecar does not take main's word for a size any
+  // more than for anything else.
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+})
+
+test('a delivered peer message is acked with a host.request, which is what lets main forget it', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  // Ack = ENQUEUED (§4 step 6): the command is on the queue BEFORE the ack goes
+  // out, so main can only forget a message this process has actually taken.
+  // Read synchronously — the idle boundary drain starts a turn for it on the
+  // next microtask, which is the delivery this ack is a promise of.
+  const queuedAtAckTime = getCommandQueueSnapshot().length
+
+  await waitFor(() => received.some(f => f.kind === 'host.request'))
+  const ack = received.find(f => f.kind === 'host.request')
+  expect(ack).toMatchObject({
+    kind: 'host.request',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    verb: 'peer.ack',
+    args: { messageId: 'm-1' },
+  })
+  expect(queuedAtAckTime).toBe(1)
+})
+
+test('the request client mints an id, awaits its result, and resolves the caller', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const sent = received.find(f => f.kind === 'host.request')
+  expect(sent).toMatchObject({ verb: 'peers.list', args: {} })
+  const requestId = (sent as { requestId: string }).requestId
+  expect(requestId.length).toBeGreaterThan(0)
+
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      value: { peers: [{ name: 'Bear' }] },
+    }),
+  )
+
+  // A partial descriptor: the boundary schema deliberately does not guess the
+  // per-verb value shape, so what comes back is what main sent.
+  const outcome = await pending
+  expect(outcome.ok).toBe(true)
+  expect(outcome.ok ? outcome.value : null).toEqual({
+    peers: [{ name: 'Bear' }],
+  } as never)
+})
+
+test('a host.result whose requestId matches nothing settles nobody and is dropped', async () => {
+  const logged: string[] = []
+  const controller = new AppSessionController(probeAdapter())
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller,
+    log: line => logged.push(line),
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  server.handleData(
+    conn,
+    hostPlaneFrame({ type: 'host.result', requestId: 'not-mine', ok: true, value: {} }),
+  )
+  expect(logged.some(line => line.includes('unknown request id'))).toBe(true)
+
+  // The real request is still open and is settled by ITS own id, so a stray
+  // result cannot retire a call it has nothing to do with.
+  server.handleData(
+    conn,
+    hostPlaneFrame({ type: 'host.result', requestId, ok: true, value: { peers: [] } }),
+  )
+  expect(await pending).toEqual({ ok: true, value: { peers: [] } })
+})
+
+test('a malformed host.result settles nobody rather than resolving a caller with garbage', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  // Right id, wrong shape: `ok` is not a boolean.
+  server.handleData(
+    conn,
+    hostPlaneFrame({ type: 'host.result', requestId, ok: 'yes' }),
+  )
+  // The pending entry survives its own boundary rejection, so a later valid
+  // result still settles it.
+  server.handleData(
+    conn,
+    hostPlaneFrame({ type: 'host.result', requestId, ok: false, error: { code: 'rate_limited', message: 'slow down' } }),
+  )
+  expect(await pending).toEqual({
+    ok: false,
+    error: { code: 'rate_limited', message: 'slow down' },
+  })
+})
+
+test('an unanswered host request resolves with a typed failure instead of hanging', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket } = makeSocket()
+  server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  // `close()` settles every in-flight request. Without that a caller waits on a
+  // socket that is gone until the request timeout, and a closing process may
+  // never get there.
+  server.close()
+  expect(await pending).toEqual({
+    ok: false,
+    error: { code: 'unavailable', message: 'the session is closing' },
+  })
+})
+
+test('a host request with no connection open fails fast rather than queueing', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  expect(await server.requestHost('peers.list', {})).toEqual({
+    ok: false,
+    error: { code: 'unavailable', message: 'not connected to the host' },
+  })
+})
+
+test('presence is idle at ready, and two prompts resolved out of order stay needs_user', async () => {
+  const controller = new AppSessionController({
+    async *runTurn({ onPermissionRequest }) {
+      const first = onPermissionRequest({
+        requestId: 'perm-1',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          input: { command: 'ls' },
+          tool_use_id: 'toolu_1',
+        },
+      })
+      const second = onPermissionRequest({
+        requestId: 'perm-2',
+        request: {
+          subtype: 'can_use_tool',
+          tool_name: 'Bash',
+          input: { command: 'pwd' },
+          tool_use_id: 'toolu_2',
+        },
+      })
+      await Promise.all([first, second])
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const presences = () =>
+    received.filter(f => f.kind === 'activity').map(f => (f as { presence: string }).presence)
+
+  // Derived at ready from the same state the ready payload was built from, so a
+  // freshly ready idle session is `idle` at once, never absent.
+  expect(presences()).toEqual(['idle'])
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'p', prompt: 'go' }),
+  )
+  await waitFor(() => controller.getPendingPermissionRequests().length === 2)
+  expect(presences().at(-1)).toBe('needs_user')
+
+  const pending = controller.getPendingPermissionRequests()
+  // Resolve the SECOND prompt first. The engine keeps pending requests in a map,
+  // so presence must read the set's emptiness, not the last event: flipping here
+  // would tell a creator its peer is free while a prompt is still on screen.
+  controller.respondToPermissionRequest(pending[1]!.requestId, {
+    behavior: 'allow',
+    updatedInput: { command: 'pwd' },
+  })
+  await waitFor(() => controller.getPendingPermissionRequests().length === 1)
+  expect(presences().at(-1)).toBe('needs_user')
+
+  controller.respondToPermissionRequest(pending[0]!.requestId, {
+    behavior: 'allow',
+    updatedInput: { command: 'ls' },
+  })
+  await waitFor(() => presences().at(-1) !== 'needs_user')
+  expect(presences().at(-1)).toBe('running')
+})
+
+test('presence is published only when it MOVES', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'p1', prompt: 'go' }),
+  )
+  await waitFor(() =>
+    received.filter(f => f.kind === 'activity').length >= 2,
+  )
+  const presences = received
+    .filter(f => f.kind === 'activity')
+    .map(f => (f as { presence: string }).presence)
+  // No repeats: a recomputation that lands on the same answer costs no frame.
+  for (let i = 1; i < presences.length; i++) {
+    expect(presences[i]).not.toBe(presences[i - 1])
+  }
+})
+
+function titleProbeServer(generated: string[]): SidecarServer {
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    // Title generation hangs off DURABLE input acceptance, so the adapter has to
+    // announce it the way the real engine does (`P4-6 title-rider` above).
+    controller: new AppSessionController({
+      async *runTurn({ options }) {
+        options?.onInputPersisted?.()
+        yield buildProbeToolUseMessage()
+      },
+    }),
+    resumed: false,
+    titleDeps: {
+      generate: async prompt => {
+        generated.push(prompt)
+        return 'A peer named this'
+      },
+      hasExistingTitle: () => false,
+      persist: () => {},
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  return server
+}
+
+test('a peer-origin turn generates a title from the message that started it', async () => {
+  // §4 step 4 — the task-notification drain passes `generateTitle: false`, which
+  // is right for a worker RESULT (the twin test below) and wrong for a peer
+  // message: a session created by a peer receives its first prompt HERE, not
+  // through `handleSubmit`, so without this it would carry the cwd basename for
+  // the rest of its life.
+  const generated: string[] = []
+  const server = titleProbeServer(generated)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true })))
+
+  await waitFor(() => received.some(f => f.kind === 'session-title'))
+  expect(generated).toEqual(['take a look at the parser'])
+})
+
+test('a worker result on the same drain still titles nothing', async () => {
+  // The twin. Same server, same drain, same `startTurn` — only the origin
+  // differs, which is what makes the peer case above a real behaviour change
+  // rather than a blanket one.
+  const generated: string[] = []
+  const server = titleProbeServer(generated)
+  const { socket, received } = makeSocket()
+  server.addConnection(socket)
+
+  enqueuePendingNotification({
+    mode: 'task-notification',
+    value: 'Task notification\nTask ID: worker-1\nSummary: Agent @Ada completed',
+  })
+
+  await waitFor(() =>
+    received.some(f => f.kind === 'event' && f.event.type === 'message'),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(generated).toEqual([])
+  expect(received.some(f => f.kind === 'session-title')).toBe(false)
 })
