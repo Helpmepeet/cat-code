@@ -742,6 +742,24 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
 }
 
 /**
+ * The editable composer's prompt, addressed to the session by its own name
+ * (PEER-SESSIONS §6). One function rather than a ternary at the call site so the
+ * unnamed fallback is the ORIGINAL string byte for byte, and a test can hold it
+ * to that: a row with no name is every row that predates the field, so the
+ * fallback is the common case for existing installs, not an edge.
+ *
+ * The doc's example copy ("Message Bear", replacing "Message Cat Code") does not
+ * describe this app: `Message Cat Code` exists only in a test fixture. The shape
+ * below is the real one it replaces, with the name in place of the product.
+ */
+export function composerPromptPlaceholder(name: string | null): string {
+  const trimmed = name?.trim() ?? ''
+  return trimmed.length > 0
+    ? `Ask ${trimmed} anything or describe a task…`
+    : 'Ask Cat Code anything or describe a task…'
+}
+
+/**
  * Whether a submit the user did not type can be sent right now: the donut's
  * Compact row, which puts `/compact` on the wire without going through the draft.
  *

@@ -42,6 +42,7 @@ import {
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
+import type { SessionCreationSeam } from './shellState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
 import {
@@ -320,6 +321,7 @@ export const TranscriptView = memo(function TranscriptView({
   loadEarlierPending,
   loadEarlierFailure,
   onLoadEarlier,
+  creationSeam,
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
@@ -359,6 +361,14 @@ export const TranscriptView = memo(function TranscriptView({
    * process is gone) still shows the boundary row, and has nothing to ask.
    */
   onLoadEarlier?: () => void
+  /**
+   * "Bear · created by Alex" — the provenance row a session created by another
+   * session opens with (PEER-SESSIONS §6). Resolved by the caller from the
+   * roster (`selectCreationSeam`), because the creator is stored as an id and
+   * the name it resolves to is only true at read time. Absent for a session the
+   * user opened, which is every session until a peer creates one.
+   */
+  creationSeam?: SessionCreationSeam | null
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
   /** Present only for an ordinary live pane. */
@@ -387,6 +397,7 @@ export const TranscriptView = memo(function TranscriptView({
       loadEarlierPending={loadEarlierPending ?? false}
       loadEarlierFailure={loadEarlierFailure ?? null}
       onLoadEarlier={onLoadEarlier}
+      creationSeam={creationSeam ?? null}
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
       onMessageAction={onMessageAction}
@@ -409,6 +420,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending = false,
   loadEarlierFailure = null,
   onLoadEarlier,
+  creationSeam = null,
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
@@ -431,6 +443,8 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending?: boolean
   loadEarlierFailure?: string | null
   onLoadEarlier?: () => void
+  /** See `TranscriptView`'s prop of the same name. */
+  creationSeam?: SessionCreationSeam | null
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
   onMessageAction?: MessageActionHandler
@@ -567,6 +581,19 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6"
         data-card-style={cardStyle}
       >
+        {/* The provenance row a created session opens with (PEER-SESSIONS §6).
+          * Neutral, and glyphless: an accent hairline is this app's live/active
+          * signal, and where a session came from is neither. It carries no
+          * `data-row-key` on purpose, the way `CompactingSeam` at the foot of
+          * this column does not: the scroll memory anchors on transcript ROWS,
+          * and this is a fixed header that is always at the top. */}
+        {creationSeam ? (
+          <Seam
+            tone="neutral"
+            label={creationSeam.label}
+            detail={creationSeam.detail}
+          />
+        ) : null}
         {items.map(item => {
           // The wrapper publishes the row's identity to the pane's scroll memory
           // (`transcriptScrollMemory.ts`): the reading position is remembered as
@@ -5253,7 +5280,7 @@ function AgentCompletionBody({
 }
 
 /**
- * InjectedTurnRow: one of the four other engine-injected `role:'user'` turns.
+ * InjectedTurnRow: one of the other engine-injected `role:'user'` turns.
  * Rendered in the SAME left-aligned notice grammar as TaskNotificationBox — the
  * GUI's "this row came from the engine, not from you" shape — never the
  * right-aligned accent bubble they used to land in.
@@ -5272,6 +5299,15 @@ function AgentCompletionBody({
  *    come from the engine's own canonical description of each kind in
  *    `wrapCommandText` (`src/utils/messages.ts:5681,5686`) — the one exhaustive
  *    per-kind statement in the engine. §0 flag: 🔁 adapted(no TUI precedent).
+ *  - `peer` — `←`, the sending session's own name, and the row's one accent
+ *    moved off the glyph onto that name (`emphasizeSender`). A peer message is
+ *    the fifth injected origin and takes this same row rather than a bubble
+ *    (PEER-SESSIONS §6); it is the only kind whose sender is a session the user
+ *    named, so the name is the part that has to read as a sender. A peer row
+ *    that arrived with no usable name keeps the ghost glyph but drops back to
+ *    the muted heading: the emphasis exists to separate a NAME from body text,
+ *    and "Peer message" is not a name, so emphasising it would make a degraded
+ *    row louder than a correctly attributed one.
  *  - anything else — a kind minted by a newer engine: neutral "Injected
  *    message" heading, row still rendered (display degrades, never drops).
  */
@@ -5287,12 +5323,25 @@ function InjectedTurnBox({
   const style = INJECTED_TURN_STYLE[injectedKind] ?? INJECTED_TURN_FALLBACK
   return (
     <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      <span className="text-[12px] leading-5 text-accent" aria-hidden>
+      <span
+        className={
+          'text-[12px] leading-5 ' +
+          (style.emphasizeSender ? 'text-text-ghost' : 'text-accent')
+        }
+        aria-hidden
+      >
         {style.glyph}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium text-text-muted">
+          <span
+            className={
+              'font-medium ' +
+              (style.emphasizeSender && label !== null
+                ? 'text-text-primary'
+                : 'text-text-muted')
+            }
+          >
             {label === null ? style.heading : `${style.prefix}${label}`}
           </span>
         </div>
@@ -5310,11 +5359,35 @@ type InjectedTurnStyle = {
   heading: string
   /** Prefix in front of a named sender (`@` for a teammate, '' for a channel). */
   prefix: string
+  /**
+   * Move the row's one accent off the decorative glyph and onto the sender:
+   * label at `text-text-primary`, glyph dropped to `text-text-ghost`. Set ONLY
+   * by `peer`, and optional precisely so the four older kinds keep the shared
+   * `text-accent` glyph / `text-text-muted` label they have always had.
+   *
+   * It exists because in the default shape the sender and the body are both
+   * `text-text-muted` at the same size, so a peer's name reads as the message's
+   * first line rather than as who sent it (operator ruling, 2026-09-03).
+   *
+   * The LABEL half is additionally conditioned on there actually being a label
+   * (operator ruling, 2026-09-03): a row falls back to `heading` only when the
+   * origin carried no usable name, which is a degraded row, and display that
+   * degrades should get quieter rather than louder. The GLYPH half is keyed on
+   * this flag alone — a peer row is still a peer row, and the accent must not
+   * come back on the arrow.
+   */
+  emphasizeSender?: boolean
 }
 
 const INJECTED_TURN_STYLE: Record<string, InjectedTurnStyle> = {
   channel: { glyph: '←', heading: 'Channel message', prefix: '' },
   teammate: { glyph: '@', heading: 'Teammate', prefix: '@' },
+  peer: {
+    glyph: '←',
+    heading: 'Peer message',
+    prefix: '',
+    emphasizeSender: true,
+  },
   coordinator: {
     glyph: '⤷',
     heading: 'Coordinator',

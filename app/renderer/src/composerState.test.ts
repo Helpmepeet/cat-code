@@ -62,6 +62,7 @@ import {
   resolvePendingSubmit,
   restoreSelectedPrompt,
   restoreDraftWithPending,
+  composerPromptPlaceholder,
   selectComposerGate,
   selectFileAttachment,
   selectPendingSubmit,
@@ -602,6 +603,30 @@ function gateInput(overrides: Partial<ComposerGateInput> = {}): ComposerGateInpu
     ...overrides,
   }
 }
+
+/**
+ * The editable composer's prompt (PEER-SESSIONS §6). A named session is
+ * addressed by its own name; an unnamed one keeps the original string, which is
+ * the case for every session that predates the field.
+ */
+describe('composer prompt placeholder', () => {
+  test('a named session is addressed by its name', () => {
+    expect(composerPromptPlaceholder('Bear')).toBe(
+      'Ask Bear anything or describe a task…',
+    )
+  })
+
+  test('an unnamed session keeps the original prompt, byte for byte', () => {
+    // Pinned as a literal, not derived: this is the string on screen for every
+    // existing install, and a "harmless" reword of it would ship unreviewed.
+    const original = 'Ask Cat Code anything or describe a task…'
+    expect(composerPromptPlaceholder(null)).toBe(original)
+    // A name that is only whitespace is not a name; it would otherwise render
+    // as "Ask  anything or describe a task…".
+    expect(composerPromptPlaceholder('')).toBe(original)
+    expect(composerPromptPlaceholder('   ')).toBe(original)
+  })
+})
 
 describe('composer gate — three reasons the engine cannot take a submit YET', () => {
   test('a live, idle session is editable and engine-enabled', () => {

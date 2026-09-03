@@ -114,6 +114,16 @@ export type MergedSessionRow = {
   title: string | null
   /** The label to render: title > first prompt > cwd basename > fallback. */
   displayLabel: string
+  /**
+   * The session's peer NAME (PEER-SESSIONS §2), or null. Distinct from `title`
+   * and `displayLabel`: the title is what this session is ABOUT and the user can
+   * rewrite it, the name is who it IS and is allocated once at spawn.
+   *
+   * A registry field, so a history-only row never has one and a registry row
+   * carries it whether it is live, parked or closed. Null for a registry row
+   * that predates the field and has not been spawned since.
+   */
+  name: string | null
   /** A live registry row with a running process. */
   live: boolean
   /** A registry row whose process is gone but can be re-spawned. */
@@ -217,6 +227,7 @@ export function selectMergedSessionRows(
       cwdExists: entry?.cwdExists ?? true,
       title,
       displayLabel: resolveSessionLabel(title, descriptor.cwd),
+      name: descriptor.name ?? null,
       live: !descriptor.restorable && descriptor.status !== 'exited',
       restorable: descriptor.restorable,
       status: descriptor.status,
@@ -246,6 +257,8 @@ export function selectMergedSessionRows(
       cwdExists: entry.cwdExists,
       title: entry.title,
       displayLabel: resolveSessionLabel(entry.title, entry.cwd),
+      // A transcript the registry never tracked was never allocated a name.
+      name: null,
       live: false,
       restorable: false,
       status: 'history',

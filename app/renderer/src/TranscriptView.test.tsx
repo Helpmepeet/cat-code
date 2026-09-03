@@ -2401,6 +2401,145 @@ test('an injected turn renders system-side — never in the operator user column
   }
 })
 
+/**
+ * PEER-SESSIONS §6 — the peer row is the fifth injected turn and takes the same
+ * grammar, with ONE difference the shared shape could not express: in the
+ * default row the sender label and the body are both `text-text-muted` at the
+ * same size, so a peer's name reads as the message's first line rather than as
+ * who sent it. The row's one accent therefore moves off the decorative glyph
+ * (dropped to `text-text-ghost`) and onto the name (`text-text-primary`).
+ */
+test('a peer turn names its sender, and the row accent sits on the name not the glyph', () => {
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:injected-peer',
+    kind: 'injected-turn',
+    injectedKind: 'peer',
+    label: 'Bear',
+    content: 'ran the migration, all green',
+    isReplay: false,
+  })
+
+  expect(html).toContain('ran the migration, all green')
+  expect(html).toContain('Bear')
+  // The name carries the emphasis; the arrow gives its colour up for it.
+  expect(html).toContain('font-medium text-text-primary')
+  expect(html).toContain('text-[12px] leading-5 text-text-ghost')
+  expect(html).not.toContain('text-[12px] leading-5 text-accent')
+  // Still an injected row, never the operator's bubble.
+  expect(html).not.toContain('justify-end')
+  expect(html).not.toContain('bg-accent/10')
+
+  // A peer claim with no usable name falls back to a neutral heading rather
+  // than drawing an anonymous row that looks like it lost its sender.
+  const unnamed = render({
+    ...blockSource,
+    id: 's:m:0:injected-peer-unnamed',
+    kind: 'injected-turn',
+    injectedKind: 'peer',
+    label: null,
+    content: 'ran the migration, all green',
+    isReplay: false,
+  })
+  expect(unnamed).toContain('Peer message')
+  expect(unnamed).not.toContain('>peer<')
+
+  // …and it is QUIETER than a named row, not louder (operator ruling
+  // 2026-09-03). The emphasis exists to separate a sender NAME from body text;
+  // a generic heading is not a name, and a row only reaches this heading
+  // because `origin.name` was missing or empty off the wire, which is exactly
+  // the degraded case the renderer's display posture says to soften.
+  expect(unnamed).toContain('font-medium text-text-muted')
+  expect(unnamed).not.toContain('text-text-primary')
+  // The GLYPH still gives its accent up: a peer row is still a peer row.
+  expect(unnamed).toContain('text-[12px] leading-5 text-text-ghost')
+  expect(unnamed).not.toContain('text-[12px] leading-5 text-accent')
+})
+
+/**
+ * The other four kinds must come out BYTE-IDENTICAL after the peer row's
+ * emphasis was added. `emphasizeSender` is optional and set only by `peer`
+ * precisely so the shared class strings never moved; this pins that, because
+ * folding the emphasis into those strings is the tidier-looking change and is
+ * the wrong one.
+ */
+test.each([
+  ['coordinator', null],
+  ['channel', 'slack · dana'],
+  ['teammate', 'scout'],
+  ['deferred-continuation', null],
+  ['future-kind-2027', null],
+])('the %s injected row keeps the accent glyph and muted label it had', (injectedKind, label) => {
+  const html = render({
+    ...blockSource,
+    id: `s:m:0:injected-${injectedKind}`,
+    kind: 'injected-turn',
+    injectedKind,
+    label,
+    content: 'a message the operator did not write',
+    isReplay: false,
+  })
+
+  expect(html).toContain('text-[12px] leading-5 text-accent')
+  expect(html).toContain('font-medium text-text-muted')
+  expect(html).not.toContain('text-text-ghost')
+  expect(html).not.toContain('font-medium text-text-primary')
+})
+
+/**
+ * PEER-SESSIONS §6 — the created-session seam. It opens the transcript and is
+ * derived by the renderer, so the row's only job here is to draw what it is
+ * handed through the shared centered-divider grammar rather than as a sentence.
+ */
+test('a created session opens with one provenance seam, above its first row', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:user-text',
+          kind: 'user-text',
+          role: 'user',
+          content: 'first message',
+          isReplay: false,
+        },
+      ]}
+      creationSeam={{ label: 'Bear', detail: 'created by Alex' }}
+    />,
+  )
+
+  expect(html).toContain('Bear')
+  expect(html).toContain('created by Alex')
+  // The component's own label/detail split supplies the middot: one seam row,
+  // not a hand-built sentence.
+  expect(html).toContain('· created by Alex')
+  // Above the first transcript row.
+  expect(html.indexOf('Bear')).toBeLessThan(html.indexOf('first message'))
+  // Neutral, and glyphless: an accent hairline is the live/active signal here
+  // and provenance is not that.
+  expect(html).toContain('bg-shell-seam')
+  expect(html).not.toContain('bg-accent/20')
+})
+
+test('a session the user opened themselves shows no provenance seam', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[
+        {
+          ...blockSource,
+          id: 's:m:0:user-text',
+          kind: 'user-text',
+          role: 'user',
+          content: 'first message',
+          isReplay: false,
+        },
+      ]}
+    />,
+  )
+  expect(html).toContain('first message')
+  expect(html).not.toContain('created by')
+})
+
 test('P4-18a: a command echo renders the slash command in the user column', () => {
   const html = render({
     ...blockSource,

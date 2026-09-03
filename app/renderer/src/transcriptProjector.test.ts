@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
-import type { ServerFrame } from '../../shared/protocol.js'
+import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import {
+  createQueuedPromptsState,
+  reduceQueuedPromptsState,
+  selectQueuedPrompts,
+} from './queuedPromptsState.js'
 import {
   createTranscriptState,
   groupAgentDelegates,
@@ -1255,10 +1260,11 @@ test('a task-notification with no summary yields a row the view declines to draw
 })
 
 /**
- * The four kinds that had NO desktop handling at all: `coordinator`, `channel`,
- * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10).
- * Each carries `role:'user'` but was written by the engine, and each rendered as
- * the operator's own right-aligned bubble before `origin` crossed the wire.
+ * The kinds that had NO desktop handling at all: `coordinator`, `channel`,
+ * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10),
+ * joined 2026-09-03 by `peer`. Each carries `role:'user'` but was written by the
+ * engine, and each rendered as the operator's own right-aligned bubble before
+ * `origin` crossed the wire.
  */
 test.each([
   [{ kind: 'coordinator' }, 'coordinator', null],
@@ -1267,6 +1273,14 @@ test.each([
   [{ kind: 'teammate', from: 'scout' }, 'teammate', 'scout'],
   [{ kind: 'teammate' }, 'teammate', null],
   [{ kind: 'deferred-continuation' }, 'deferred-continuation', null],
+  // PEER-SESSIONS §6 / HOST-REQUEST-PLANE §6: the sender is the peer's NAME,
+  // the one sender fact `SDKMessageOrigin`'s `peer` member carries.
+  [{ kind: 'peer', name: 'Bear' }, 'peer', 'Bear'],
+  // A peer claim off the socket with no usable name still reads as injected —
+  // unlabelled, never re-attributed to the operator.
+  [{ kind: 'peer' }, 'peer', null],
+  [{ kind: 'peer', name: '' }, 'peer', null],
+  [{ kind: 'peer', name: 42 }, 'peer', null],
 ])(
   'projects origin %j as an injected-turn row, never a user bubble',
   (origin, injectedKind, label) => {
@@ -1282,6 +1296,43 @@ test.each([
     expect(rows[0]?.kind).not.toBe('user-text')
   },
 )
+
+/**
+ * HOST-REQUEST-PLANE §6 owes the OTHER half of the peer-rendering rule: an
+ * incoming peer message must never appear in the staged-prompt strip either.
+ * That strip is fed by the `queued-prompts.snapshot` read seam, a different
+ * frame on a different store, so the guarantee is that the two paths do not
+ * meet: the same user frame that mints a peer transcript row leaves the queued
+ * store untouched, and the strip therefore has nothing to draw.
+ *
+ * A message from a peer has already reached the model. Showing it as "waiting
+ * to be sent", in the user's own dashed bubble, would attribute the peer's text
+ * to the operator on the one surface that draws it as their unsent draft.
+ */
+test('a peer message reaches the transcript only, never the staged-prompt strip', () => {
+  const frame = messageFrame(
+    'session-1',
+    JSON.parse(
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: 'ran the migration, all green' },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-000000000401',
+        origin: { kind: 'peer', name: 'Bear' },
+      }),
+    ) as SDKMessage,
+  )
+
+  let transcript = createTranscriptState()
+  transcript = projectServerFrame(transcript, ready('session-1'))
+  transcript = projectServerFrame(transcript, frame)
+  expect(selectTranscriptRows(transcript, 'session-1')).toHaveLength(1)
+
+  // The same frame through the queued store: nothing staged, no session key.
+  let queued = createQueuedPromptsState()
+  queued = reduceQueuedPromptsState(queued, { type: 'frame', frame })
+  expect(selectQueuedPrompts(queued, 'session-1' as SessionId)).toHaveLength(0)
+})
 
 test('an operator turn still renders as a user bubble — with or without a human origin', () => {
   for (const origin of [undefined, { kind: 'human' }]) {

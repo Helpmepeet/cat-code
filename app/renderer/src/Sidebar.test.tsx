@@ -36,6 +36,7 @@ function registryRow(
     cwdExists: true,
     title: 'Alpha',
     displayLabel: 'Alpha',
+    name: null,
     live: true,
     restorable: false,
     parked: false,
@@ -62,6 +63,8 @@ function historyRow(
 ): MergedSessionRow {
   return registryRow(id, {
     appSessionId: null,
+    // A transcript the registry never tracked was never allocated a name.
+    name: null,
     inRegistry: false,
     live: false,
     restorable: false,
@@ -86,7 +89,6 @@ function renderRow(
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void,
-  modelForSession?: (id: SessionId) => string | null,
 ): string {
   return renderToStaticMarkup(
     <SidebarRowItem
@@ -96,7 +98,6 @@ function renderRow(
       onRestore={noop}
       onOpenHistory={noop}
       onOpenRowActions={onOpenRowActions}
-      modelForSession={modelForSession}
     />,
   )
 }
@@ -198,39 +199,52 @@ test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallb
 })
 
 /**
- * The `time · model` subtitle. `modelForSession` is asked for the LIVE model
- * (App reads the re-broadcast run-controls seam, not the spawn-frozen
- * diagnostics snapshot), and only a row with an `appSessionId` can be asked at
- * all — a history row has no session to resolve.
+ * The `time · name` subtitle (PEER-SESSIONS R4). The name replaced the running
+ * model here on 2026-09-03: it is a registry field carried on the merged row
+ * itself, so it needs no per-row resolver callback and it renders identically
+ * whether the row is live, parked or closed.
  */
-test('the subtitle renders the model name verbatim, and asks only for rows that have a session', () => {
-  const asked: (SessionId | null)[] = []
-  const model = (id: SessionId) => {
-    asked.push(id)
-    return 'GPT-5.6 Sol'
-  }
+test('the subtitle renders the session name, for a live row and a closed one alike', () => {
+  const live = renderRow(registryRow('a', { displayLabel: 'Alpha', name: 'Bear' }))
+  expect(live).toContain('<span class="truncate">Bear</span>')
 
-  // Verbatim: a display name carries its own spaces and dots, and the row used
-  // to cut it at the last hyphen (leaving "5.6 Sol", and a bare "5" for Opus 5).
-  const live = renderRow(registryRow('a', { displayLabel: 'Alpha' }), undefined, model)
-  expect(live).toContain('<span class="truncate">GPT-5.6 Sol</span>')
-  expect(asked).toEqual(['a'])
+  // Registry field, not a live-process one: a closed row still shows its name.
+  const closed = renderRow(
+    registryRow('b', {
+      displayLabel: 'Beta',
+      name: 'Quartz',
+      live: false,
+      restorable: true,
+      status: 'exited',
+    }),
+  )
+  expect(closed).toContain('<span class="truncate">Quartz</span>')
 
-  // A model the engine has no marketing name for arrives as its raw id, and is
-  // shown as-is rather than trimmed to a meaningless fragment.
-  const raw = renderRow(registryRow('b'), undefined, () => 'claude-opus-5')
-  expect(raw).toContain('<span class="truncate">claude-opus-5</span>')
+  // Parked is the third state R4 names.
+  const parked = renderRow(
+    registryRow('c', { displayLabel: 'Gamma', name: 'Cinnabar', parked: true }),
+  )
+  expect(parked).toContain('<span class="truncate">Cinnabar</span>')
+})
 
-  // A history row carries no appSessionId, so the resolver is never called and
-  // the subtitle is recency alone — never a borrowed model from another row.
-  asked.length = 0
-  const history = renderRow(historyRow('h'), undefined, model)
-  expect(history).not.toContain('terra')
-  expect(asked).toEqual([])
+/**
+ * R4: an unnamed row keeps `time` alone. That is every history row, plus any
+ * registry row written before the field existed — the common case for an
+ * existing install, not an edge.
+ */
+test('an unnamed row shows the time alone, with no separator and no placeholder', () => {
+  const now = Date.now()
+  const unnamed = renderRow(
+    registryRow('a', { displayLabel: 'Alpha', name: null, lastMessageSentAt: now }),
+  )
+  expect(unnamed).toContain('<span class="shrink-0">now</span>')
+  // No trailing half at all: neither a value nor the middot that joins one.
+  expect(unnamed).not.toContain('class="truncate"')
+  expect(unnamed).not.toContain('text-text-ghost">·<')
 
-  // An unknown model is omitted rather than printed as a placeholder.
-  const unknown = renderRow(registryRow('c'), undefined, () => null)
-  expect(unknown).not.toContain('class="truncate"')
+  // A history row is unnamed by construction and behaves the same way.
+  const history = renderRow(historyRow('h', { lastMessageSentAt: now }))
+  expect(history).not.toContain('class="truncate"')
 })
 
 test('every registry row in a group gets its own action kebab (target-session-bound)', () => {

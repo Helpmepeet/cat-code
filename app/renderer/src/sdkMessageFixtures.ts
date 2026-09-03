@@ -979,6 +979,24 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
+      name: 'user: peer origin (a named session messaging another)',
+      anchor: 'src/types/message.ts ({ kind: "peer" }); PEER-SESSIONS §6',
+      reach: 'app-seam',
+      expectRows: 1,
+      message: {
+        type: 'user',
+        message: { role: 'user', content: 'ran the migration, all green' },
+        parent_tool_use_id: null,
+        isReplay: true,
+        // The SDK projection carries the sender's NAME only: the internal
+        // origin's `appSessionId` is deliberately not on this surface.
+        origin: { kind: 'peer', name: 'Bear' },
+        session_id: SESSION,
+        uuid: '00000000-0000-4000-8000-00000000u022',
+        timestamp: '2026-07-04T09:03:04.500Z',
+      },
+    },
+    {
       name: 'user: human origin (explicitly the operator — stays a user bubble)',
       anchor: 'src/types/message.ts:11 ({ kind: "human" })',
       reach: 'app-seam',

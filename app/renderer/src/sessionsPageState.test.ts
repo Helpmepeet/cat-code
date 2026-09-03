@@ -28,6 +28,7 @@ function row(
     cwdExists: true,
     title: null,
     displayLabel: partial.sessionId,
+    name: null,
     live: false,
     restorable: false,
     parked: false,

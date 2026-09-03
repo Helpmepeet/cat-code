@@ -4054,6 +4054,7 @@ function projectMessageOrigin(value: unknown): InjectedOrigin | null {
   const server = nonEmptyString(value.server)
   const user = nonEmptyString(value.user)
   const from = nonEmptyString(value.from)
+  const name = nonEmptyString(value.name)
   const label =
     kind === 'channel'
       ? server === null
@@ -4063,7 +4064,14 @@ function projectMessageOrigin(value: unknown): InjectedOrigin | null {
           : `${server} · ${user}`
       : kind === 'teammate'
         ? from
-        : null
+        : kind === 'peer'
+          ? // The sending peer's NAME, the only sender fact the SDK projection
+            // carries (`SDKMessageOrigin`'s `peer` member is `{ kind, name }` —
+            // `appSessionId` is deliberately engine-side only). Without a label
+            // the row would name no sender at all, which is the whole point of
+            // an incoming peer message.
+            name
+          : null
   const isTaskNotification = kind === 'task-notification'
   const status = isTaskNotification ? nonEmptyString(value.status) : null
   return {

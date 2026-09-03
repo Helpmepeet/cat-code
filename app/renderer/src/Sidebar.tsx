@@ -19,11 +19,13 @@
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the design source, by design):
- *  - ➕ KEPT, not in the design source: the `time · model` subtitle and the O1
- *    live dot. The design source's rows are title-only because its sample data
- *    carries no timestamps or models at all, not because the operator asked for
- *    the subtitle to go; dropping real, already-shipped information on that
- *    reading would be a silent cut. Both stay.
+ *  - ➕ KEPT, not in the design source: the recency subtitle and the O1 live
+ *    dot. The design source's rows are title-only because its sample data
+ *    carries no timestamps at all, not because the operator asked for the
+ *    subtitle to go; dropping real, already-shipped information on that reading
+ *    would be a silent cut. Both stay. Its trailing half is the session NAME
+ *    (PEER-SESSIONS R4); it carried the running model until 2026-09-03, and the
+ *    model now reads from the open session's run controls instead.
  *  - 🔁 adapted: the design source also drags SESSION rows to reorder them
  *    inside a project. That is not built. A manual per-project row order would
  *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
@@ -54,7 +56,7 @@
  *    (`aria-hidden`): the state is already in the row's `aria-label`, and a
  *    second announcement would be a duplicate. It sits in a fixed leading lane
  *    that EVERY row reserves, centred on the title's line box, so its presence
- *    never reflows the title or the `time · model` line. Richer per-state status
+ *    never reflows the title or the subtitle line. Richer per-state status
  *    still surfaces on the TabBar.
  *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
  *    Accounts (P4-5), and Settings. None are mocked. They now live behind the
@@ -301,7 +303,6 @@ export function Sidebar({
   onAddProject,
   accountAlias = null,
   accountsNeedingSignIn = 0,
-  modelForSession,
   menuActive = false,
   storage,
 }: {
@@ -359,11 +360,6 @@ export function Sidebar({
    * it rather than interrupting.
    */
   accountsNeedingSignIn?: number
-  /** The DISPLAY NAME of the model a session is running (the subtitle's
-   * "· model"), rendered verbatim: the engine's own marketing name for it, or the
-   * raw model id when it has none. null when unknown, e.g. a restorable row that
-   * never attached this run. */
-  modelForSession?: (id: SessionId) => string | null
   /**
    * P4-33 — true while an overlay ANCHORED TO A ROW HERE is open (the ⋮ actions
    * menu or the rename editor). Those render as App-level `fixed` overlays
@@ -783,7 +779,6 @@ export function Sidebar({
     onOpenHistory,
     onOpenRowActions,
     onTogglePin: togglePin,
-    modelForSession,
   }
 
   return (
@@ -1363,7 +1358,6 @@ export function SessionGroup({
   onOpenWorkspaceActions,
   onTogglePin,
   pinnedSessions = [],
-  modelForSession,
   reorder,
   rowRef,
   headerRef,
@@ -1394,7 +1388,6 @@ export function SessionGroup({
    * normally lifted into the Pinned section, so this matters for the boundary
    * where a group still holds one. */
   pinnedSessions?: PinnedSessions
-  modelForSession?: (id: SessionId) => string | null
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
   reorder?: WorkspaceReorderHandlers
@@ -1625,7 +1618,6 @@ export function SessionGroup({
               onOpenHistory={onOpenHistory}
               onOpenRowActions={onOpenRowActions}
               onTogglePin={onTogglePin}
-              modelForSession={modelForSession}
               rowRef={
                 rowRef
                   ? element => rowRef(row.sessionId, element)
@@ -1667,7 +1659,6 @@ export function SidebarRowItem({
   rowRef,
   dragging = false,
   dropEdge = null,
-  modelForSession,
 }: {
   row: MergedSessionRow
   isActive: boolean
@@ -1695,7 +1686,6 @@ export function SidebarRowItem({
   dragging?: boolean
   /** This row is the drop target; which edge the dragged row would land on. */
   dropEdge?: RowDropEdge | null
-  modelForSession?: (id: SessionId) => string | null
 }) {
   const visual = deriveMergedRowVisual(row)
   const title = row.displayLabel
@@ -1704,11 +1694,13 @@ export function SidebarRowItem({
   // the transcript mtime for a history row — `sidebarActivityKey` folds both, and
   // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
   const recency = formatRecency(sidebarActivityKey(row))
-  // The subtitle is `time · model`. Only a registry row that attached this run
-  // has a known model; a history row shows none. Rendered verbatim: the caller
-  // hands over the engine's own display NAME for the model ("Opus 5"), so
-  // shortening it here would cut a real name apart ("GPT-5.6 Sol" → "5.6 Sol").
-  const model = appSessionId != null ? modelForSession?.(appSessionId) ?? null : null
+  // The subtitle is `time · name` (PEER-SESSIONS R4). The name replaced the
+  // model here: it is the session's identity rather than a run setting, it is a
+  // registry field so it renders the same live, parked or closed, and the model
+  // is still on screen in the open session's run controls. A row with no name (a
+  // history row, or a registry row that predates the field) keeps the time
+  // alone, exactly as a row with no model did.
+  const name = row.name
 
   const openable = visual.openable
   const showActions = openable && (onOpenRowActions != null || onTogglePin != null)
@@ -1891,7 +1883,7 @@ export function SidebarRowItem({
        * conditional, so a live row and a not-live row share one text edge and
        * neither reflows. `self-start` plus a lane exactly as tall as the title's
        * line box centres the dot on the TITLE; centring it on the row instead
-       * dropped it into the gap between the title and the `time · model` line
+       * dropped it into the gap between the title and the subtitle line
        * and read as floating (operator, 2026-07-31). Static classes: an
        * interpolated arbitrary value silently no-ops in this Tailwind v4 setup. */}
       <span
@@ -1922,17 +1914,17 @@ export function SidebarRowItem({
             {title}
           </span>
         </div>
-        {recency || model ? (
-          /* `min-w-0` so the model name's `truncate` can actually shrink: a flex
-           * child's automatic minimum size is its content, so without it a long
-           * name ("Opus 5 (with 1M context)") widens the row instead of
-           * ellipsing. Recency keeps its `shrink-0` and is never the part cut. */
+        {recency || name ? (
+          /* `min-w-0` so the trailing half's `truncate` can actually shrink: a
+           * flex child's automatic minimum size is its content, so without it a
+           * long value widens the row instead of ellipsing. Recency keeps its
+           * `shrink-0` and is never the part cut. */
           <div className="flex min-w-0 items-center gap-[5px] text-[10px] text-text-faint">
             {recency ? <span className="shrink-0">{recency}</span> : null}
-            {recency && model ? (
+            {recency && name ? (
               <span className="shrink-0 text-text-ghost">·</span>
             ) : null}
-            {model ? <span className="truncate">{model}</span> : null}
+            {name ? <span className="truncate">{name}</span> : null}
           </div>
         ) : null}
       </div>

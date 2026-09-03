@@ -160,6 +160,7 @@ describe('buildSessionMetadataView', () => {
     cwdExists: true,
     title: 't',
     displayLabel: 't',
+    name: null,
     live: true,
     restorable: false,
     parked: false,

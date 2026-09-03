@@ -584,6 +584,9 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
         title: null,
         forked: false,
         titleUpdatedAt: null,
+        name: null,
+        createdBy: null,
+        peerWakeBlocked: false,
         status: 'ready',
         restorable: false,
         parked: false,
@@ -708,6 +711,9 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
         title: null,
         forked: false,
         titleUpdatedAt: null,
+        name: null,
+        createdBy: null,
+        peerWakeBlocked: false,
         status: 'exited',
         restorable: true,
         parked: false,
@@ -1559,6 +1565,9 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
         title: null,
         forked: false,
         titleUpdatedAt: null,
+        name: null,
+        createdBy: null,
+        peerWakeBlocked: false,
         status: 'ready',
         restorable: false,
         parked: false,
@@ -1815,6 +1824,9 @@ test('composer form owns the ↑/↓ history key scope', () => {
         title: null,
         forked: false,
         titleUpdatedAt: null,
+        name: null,
+        createdBy: null,
+        peerWakeBlocked: false,
         status: 'ready',
         restorable: false,
         parked: false,
@@ -1883,6 +1895,9 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
         title: null,
         forked: false,
         titleUpdatedAt: null,
+        name: null,
+        createdBy: null,
+        peerWakeBlocked: false,
         status: 'ready',
         restorable: false,
         parked: false,
@@ -2845,30 +2860,52 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
 })
 
 /**
- * The two surfaces that print a session's model must read the LIVE run-controls
+ * PEER-SESSIONS §6 — the two peer surfaces App itself owns. Both live in the
+ * pane's render body, which this SSR-only suite never reaches, so their logic is
+ * tested where it lives (`composerState.ts`, `shellState.ts`) and the CALL SITE
+ * is pinned here by source text. Without this a revert that kept the helper but
+ * put the old literal back at the call site would break nothing.
+ */
+test('the composer prompt and the provenance seam are wired to their selectors', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  // The prompt is addressed to the session by name, via the one function that
+  // owns the unnamed fallback. A bare literal here is the regression.
+  expect(source).toContain(
+    "composerPromptPlaceholder(activeDescriptor?.name ?? null)",
+  )
+  expect(source).not.toContain(
+    "? 'Ask Cat Code anything or describe a task…'",
+  )
+
+  // The seam resolves the creator id against the roster at read time. Reading
+  // it off the descriptor instead would be the stale-name bug §2 rejects.
+  expect(source).toContain('selectCreationSeam(shell, id)')
+  expect(source).toContain('creationSeam={creationSeamsById.get(sessionId) ?? null}')
+})
+
+/**
+ * The surface that prints a session's model must read the LIVE run-controls
  * seam, not the spawn-frozen `diagnostics` snapshot. Reading diagnostics alone
  * made every session that used the model picker report the model it STARTED
- * with: the sidebar subtitle and the inspector's "Resolved model" both sat on
- * the frozen value while the composer face (already on run controls) moved. Both
- * call sites are in App's render body, unreachable from this SSR-only suite;
- * source text can still decide which selector each one reads.
+ * with, while the composer face (already on run controls) moved.
+ *
+ * This covered TWO surfaces until 2026-09-03, when PEER-SESSIONS R4 replaced the
+ * sidebar subtitle's model with the session's name; the inspector's "Resolved
+ * model" is now the only place a per-session model is printed from App's render
+ * body. The sidebar half is asserted GONE rather than deleted quietly, so a
+ * later change cannot reintroduce the frozen-value bug on a surface this test no
+ * longer watches. The call site is unreachable from this SSR-only suite; source
+ * text can still decide which selector it reads.
  */
 test('the model a session displays comes from the live run-controls seam', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-  // Fixed windows, not brace-matching: an added object literal inside either
-  // call site must not truncate the slice into a spurious failure.
-  const sidebarStart = source.indexOf('modelForSession={id =>')
-  expect(sidebarStart).toBeGreaterThan(-1)
-  const sidebarBody = source.slice(sidebarStart, sidebarStart + 400)
-  expect(sidebarBody).toContain('selectRunControlsSnapshot(runControls, id)?.model')
-  // The engine's display name first, the raw id only when it has none, and the
-  // frozen snapshot last.
-  expect(sidebarBody).toContain('live?.currentLabel ??')
-  expect(sidebarBody.indexOf('live?.currentLabel')).toBeLessThan(
-    sidebarBody.indexOf('mainLoopModelForSession'),
-  )
+  // R4: the sidebar row subtitle no longer carries a model at all.
+  expect(source).not.toContain('modelForSession')
 
+  // Fixed window, not brace-matching: an added object literal inside the call
+  // site must not truncate the slice into a spurious failure.
   const inspectorStart = source.indexOf('<MetadataInspector')
   expect(inspectorStart).toBeGreaterThan(-1)
   const inspectorBody = source.slice(

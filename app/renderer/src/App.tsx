@@ -51,8 +51,10 @@ import {
   activeAfterPaneChange,
   createShellState,
   reduceShellState,
+  selectCreationSeam,
   selectPaneSessions,
   sessionAtSlot,
+  type SessionCreationSeam,
   type ShellState,
 } from './shellState.js'
 import {
@@ -155,6 +157,7 @@ import {
   createImageAttachmentState,
   createPasteState,
   canSendUntypedSubmit,
+  composerPromptPlaceholder,
   createPendingSubmitState,
   createRetainedSubmitState,
   createTransportErrorState,
@@ -1539,6 +1542,20 @@ export function App() {
         tabs.map(tab => [tab.descriptor.appSessionId, tab.descriptor] as const),
       ),
     [tabs],
+  )
+
+  // PEER-SESSIONS §6 — "Bear · created by Alex", the row a session created by
+  // another session opens with. Derived, never delivered: the descriptor stores
+  // the creator as an ID precisely so no stale name can be frozen into a
+  // snapshot, so the name is resolved here against the roster at read time.
+  //
+  // Memoized per roster change rather than recomputed per render: the seam is a
+  // fresh object each call, and the transcript below is `memo`, so an unmemoized
+  // one would re-render every pane on every keystroke in the composer.
+  const creationSeamsById = useMemo(
+    () =>
+      new Map(paneSessionIds.map(id => [id, selectCreationSeam(shell, id)] as const)),
+    [shell, paneSessionIds],
   )
 
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
@@ -3378,6 +3395,7 @@ export function App() {
             onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
+	            creationSeam={creationSeamsById.get(sessionId) ?? null}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
                 isActivePane={sessionId === activeSessionId}
@@ -4006,28 +4024,6 @@ export function App() {
           accountsNeedingSignIn={selectAccountsNeedingSignIn(
             selectGlobalAccountsSnapshot(accounts),
           )}
-          /* The row subtitle's "· model" reads the LIVE run-controls seam, which is
-           * re-broadcast on every model change (P4-24c). The diagnostics snapshot is
-           * spawn-frozen, so on its own it kept printing the model a session started
-           * with after the picker moved it — it stays only as the pre-snapshot
-           * fallback.
-           *
-           * `currentLabel` before `current`: the engine's own marketing name
-           * ("Opus 5", "GPT-5.6 Sol"), the same string the composer face and the
-           * picker row show, so a row and the chip above it never disagree. Only a
-           * model the engine has no name for (a custom model, a Foundry deployment
-           * id) falls back to the raw id. Operator ruling 2026-08-09: the row used
-           * to print the id's last hyphen segment, which reads as a bare "5" for
-           * every claude-* model. */
-          modelForSession={id => {
-            const live = selectRunControlsSnapshot(runControls, id)?.model
-            return (
-              live?.currentLabel ??
-              live?.current ??
-              selectDiagnosticsSnapshot(diagnostics, id)?.mainLoopModelForSession ??
-              null
-            )
-          }}
         />
 
         <div className="relative flex min-w-0 flex-1 flex-col">
@@ -4635,6 +4631,7 @@ export function SessionPane({
   activeConnection,
   turnStartedAt = null,
   activeDescriptor,
+  creationSeam = null,
   branch,
   sandboxed,
   activeLog,
@@ -5032,8 +5029,13 @@ export function SessionPane({
   // previewed, connecting and mid-turn panes are all editable with the ordinary
   // prompt; only terminal/no-session states keep the separate connection copy.
   const composerReadOnly = !composerGate.editable
+  // A named session is addressed by its own name (PEER-SESSIONS §6): the user
+  // is talking to Bear, not to "Cat Code" in general, and the name is what its
+  // peers use for it too. A row with no name (one that predates the field and
+  // has not been spawned since) keeps the original prompt verbatim. The
+  // connection copy is untouched either way.
   const composerPlaceholder = composerGate.editable
-    ? 'Ask Cat Code anything or describe a task…'
+    ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
     : 'Connecting…'
   const paused = permissionQueue.length > 0
   // Slice-cached: stable ref while the session's rows are unchanged, so both
@@ -5600,6 +5602,7 @@ export function SessionPane({
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={onLoadEarlierHistory}
+            creationSeam={creationSeam ?? null}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onMessageAction={onMessageAction}
@@ -6458,6 +6461,11 @@ type SessionPaneProps = {
    * session is off screen, and the elapsed clock must survive that. */
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
+  /**
+   * "Bear · created by Alex" (PEER-SESSIONS §6), resolved by App against the
+   * roster. Null for a session the user opened themselves.
+   */
+  creationSeam?: SessionCreationSeam | null
   activeLog: RawMessageSessionLog
   /** Read-only git branch for the empty-state meta strip — this session's own
    * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */
