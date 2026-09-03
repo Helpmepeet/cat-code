@@ -348,7 +348,12 @@ asked-for work (R6).
   frame; the centered-divider seam grammar in `TranscriptView.tsx`), followed
   by the creation prompt as a `peer`-origin injected row from Alex, never as a
   user bubble containing words the operator did not type.
-- **Composer placeholder** becomes "Message Bear" (today "Message Cat Code").
+- **Composer placeholder** names the session. 🔁 CORRECTED during the build: the
+  "today" string quoted here was wrong, so the replacement drawn from it was too.
+  `Message Cat Code` exists only in a test fixture; the real placeholder is
+  `Ask Cat Code anything or describe a task…`, and it becomes
+  `Ask <name> anything or describe a task…`, falling back unchanged when a
+  session has no name.
 - **Sidebar** per R4. **Tab** unchanged: it has no subtitle slot.
 - **Roster strip** above the composer (`AgentChrome.tsx`) may lead with the
   session's own name so it reads as "Bear, and Bear's workers". Optional.
@@ -388,13 +393,18 @@ Values, so the build does not invent them (all new constants in
 |---|---|---|
 | `MAX_PEER_HOPS` | 16 | upstream 28; a chain this long is a loop with extra steps |
 | `MAX_PENDING_PEER_MESSAGES` | 50 | per recipient, undelivered, main-side |
-| `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all verbs |
+| `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all model-facing verbs. 🔁 `peer.ack` is exempt (amended 2026-09-03 during the build): an ack is main-induced bookkeeping forced by a delivery, so charging it here let a few senders spend a recipient's whole allowance and starve it off the plane. Every frame including acks is still charged to `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` below |
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
 | `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body to the same recipient |
 | `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2). 🔁 The refusal rule that reads this chain was AMENDED 2026-09-03 during the build: a recipient already in the chain is a loop only when it is not the chain's last entry, so replying to whoever last wrote to you is bounded by `MAX_PEER_HOPS` rather than refused. HRP §4 step 2 carries the derivation |
 | `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
 | `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 16 KiB / 64 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors |
 | `MAX_PEER_QUERY_BYTES` | 512 | `ReadPeer` search query |
+| `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` | 240 per 60 s | 🔁 added during the build. Charged to EVERY inbound `host.request` before it is validated, because the rate cap above counted only requests that parsed, so the cheapest flood to send was the one nothing counted (HR1/A6) |
+| `MAX_HOST_REQUEST_ARG_CHARS` | 256 | 🔁 added during the build. Per string argument, at main |
+| `MAX_PEER_DELIVERY_ATTEMPTS` | 3 | 🔁 added during the build. Bounds redelivery after a recipient rejects a frame, which otherwise recurred at every `ready` forever while holding a pending slot |
+| `PEER_WAKE_TIMEOUT_MS` | 30 s | 🔁 added during the build. Without it a deliver to a row whose spawn never completes leaves the sending model's tool call pending for the window's life |
+| `HOST_REQUEST_TIMEOUT_MS` | 45 s | 🔁 added during the build. Deliberately greater than the wake timeout, so the caller learns `wake_failed` rather than a bare timeout |
 | (retention) | none | main holds a pending message only until the sidecar acks enqueue; every per-session and per-pair structure (buckets, dedup windows, pair chains) is cleared when either row is reaped (`session-removed`, `host.ts:484`) and at runtime teardown |
 
 Upstream's numbers were the reference, not adopted verbatim: burst 30,

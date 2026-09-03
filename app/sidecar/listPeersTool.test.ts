@@ -12,12 +12,10 @@ import {
 } from './listPeersTool.js'
 
 /**
- * The one cast in this file, and it is the point rather than a shortcut: the
- * result envelope is validated at the socket for its correlation id, ok flag and
- * error shape, but `value` crosses as unknown and the per-verb type only
- * DESCRIBES it. So a test that could not put a malformed value into that slot
- * could not exercise the narrowing the tool does. This helper is the socket's
- * own honesty gap, made available to a test.
+ * The one cast in this file, and it is the point rather than a shortcut. The
+ * result value is schema-checked per verb at the trust boundary now, so no fake
+ * obeying that schema could produce the malformed value the tool's own local
+ * narrowing exists to absorb. This helper manufactures it.
  */
 function hostAnswers<V extends HostRequestVerb>(
   value: unknown,
@@ -140,8 +138,8 @@ test('ListPeers says plainly when no other session is open', async () => {
 })
 
 test('a malformed row is dropped and the rest of the roster still lists', async () => {
-  // Display degrades gracefully: `value` is unvalidated at the boundary, so one
-  // bad row must cost that row and not the answer.
+  // Display degrades gracefully: whatever reaches the narrowing, one bad row
+  // must cost that row and not the whole answer.
   const { requestHost } = requesterReturning(() => ({
     peers: [liveRow, { name: 'Nameless' }, { status: 'live' }, closedRow],
   }))

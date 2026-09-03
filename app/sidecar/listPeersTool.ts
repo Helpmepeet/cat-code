@@ -81,12 +81,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Turn one entry of a `peers.list` answer into a row, or drop it.
  *
- * This is a real narrowing, not a formality: the result envelope is validated at
- * the socket boundary for its correlation id, its ok flag and its error shape,
- * but `value` itself arrives as unknown and is only DESCRIBED by the per-verb
- * type. So every field is checked here before it is read, and a row that fails
- * is dropped rather than rendered half-formed. Display degrades gracefully
- * (CLAUDE.md §7): one malformed row must not cost the model the whole roster.
+ * `host.result.value` IS now schema-checked per verb at the trust boundary, so
+ * this is a SECOND, local check rather than the only one. It stays deliberately.
+ * Two of the fields read here are closed vocabularies rendered straight to a
+ * model as another session's state, and a lookup at the point of use costs a map
+ * scan and does not depend on another module keeping its enums in step with the
+ * ones below. A row that fails is dropped rather than rendered half-formed:
+ * display degrades gracefully (CLAUDE.md §7), and one malformed row must not
+ * cost the model the whole roster.
  */
 export function narrowPeerView(value: unknown): PeerView | null {
   if (!isRecord(value)) return null
@@ -169,8 +171,10 @@ export function createListPeersTool(
           data: { ok: false, message: describeHostRequestError(outcome.error) },
         }
       }
-      // `value` is typed per verb but validated only as unknown at the socket,
-      // so it is read back through `unknown` and narrowed rather than trusted.
+      // Read back through `unknown` and narrowed again here rather than
+      // trusted: see `narrowPeerView` for why the local check stays. An answer
+      // that does not narrow is reported as unreadable, never as an empty
+      // roster.
       const value: unknown = outcome.value
       const peers = narrowPeerList(value)
       if (peers === null) {

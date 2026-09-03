@@ -170,7 +170,7 @@ function describeOutcome(
         to,
         delivered: false,
         outcome: 'peer_queue_full',
-        summary: `Not delivered. ${to} already has as many waiting messages as it can hold. Wait until it works through them.`,
+        summary: `Not delivered. Too many messages are already waiting to be handed to ${to}. Wait until those have gone through, then send again.`,
       }
     case 'refused:wake_failed':
       return {
@@ -266,14 +266,21 @@ export function createSendToPeerTool(
     },
 
     /**
-     * §4 — the classifier projection is OWED, not optional. A tool that projects
-     * nothing encodes to `''`, which the auto-mode classifier reads as "no
+     * §4 — the classifier projection is OWED, not optional. It is what makes
+     * this tool VISIBLE to the auto-mode classifier, and nothing more: a tool
+     * that projects nothing encodes to `''`, which the classifier reads as "no
      * security relevance" and permits WITHOUT evaluating it at all
      * (`src/Tool.ts:764` documents the contract, `:777` is the default, and
      * `src/utils/permissions/yoloClassifier.ts:1228-1232` is the short circuit).
      * The whole body is projected because the body is the action: a message that
      * relays an instruction the sender was denied is exactly what R6's
      * permission-laundering rule exists to catch.
+     *
+     * OUTSIDE auto mode there is no gate on this tool at all: it declares no
+     * `checkPermissions`, and the engine's default for a tool that declares none
+     * is to allow (`src/Tool.ts:772`). That is the same effect `AgentTool`
+     * reaches deliberately, by auto-approving in every mode but auto
+     * (`src/tools/AgentTool/AgentTool.tsx:2258-2273`).
      *
      * `request` is the only kind in v1 (the `notify` kind was designed and cut,
      * §0a); it is projected all the same so the classifier sees the same shape

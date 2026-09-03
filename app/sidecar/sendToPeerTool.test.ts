@@ -11,7 +11,9 @@
  *    `''` is permitted in auto mode WITHOUT evaluation (`src/Tool.ts:764`,`:777`
  *    contract; `src/utils/permissions/yoloClassifier.ts:1228-1232` is the short
  *    circuit), so the named test is that a send relaying a denied action is
- *    evaluated rather than skipped.
+ *    PROJECTED rather than hidden behind an empty projection. What the
+ *    classifier then decides is the classifier's, and outside auto mode there is
+ *    no gate at all: this tool declares no permission check.
  *  - Oversize text is refused BEFORE anything is routed, and never truncated.
  *  - An outcome outside the protocol's closed list is not believed. The result
  *    value is schema-checked per verb at the trust boundary now, so this is the
@@ -227,7 +229,7 @@ test('text exactly at the byte cap is still sent whole', async () => {
   expect(sent).toEqual({ to: 'Bear', text })
 })
 
-test('a send relaying a denied action is evaluated by the classifier, not skipped', () => {
+test('a send relaying a denied action is projected to the classifier, not hidden', () => {
   const tool = createSendToPeerTool(delivering('queued_live').requestHost)
   const projection = tool.toAutoClassifierInput({
     to: 'Bear',
@@ -239,6 +241,21 @@ test('a send relaying a denied action is evaluated by the classifier, not skippe
   expect(projection).not.toBe('')
   expect(String(projection)).toContain('Bear')
   expect(String(projection)).toContain('rm -rf /tmp/work')
+})
+
+test('a full queue is described as messages waiting, not as the peer being full', async () => {
+  const result = await send(delivering('refused:queue_full').requestHost, {
+    to: 'Bear',
+    text: 'hello',
+  })
+
+  expect(result.delivered).toBe(false)
+  expect(result.outcome).toBe('peer_queue_full')
+  // The cap counts messages the app is still holding for that peer. The peer
+  // takes each one the moment it is handed over, so nothing here may claim a
+  // bound on what the peer itself is holding.
+  expect(result.summary).toContain('waiting to be handed to Bear')
+  expect(result.summary).not.toContain('as it can hold')
 })
 
 test('the tool keeps a stable name and is not read-only', () => {

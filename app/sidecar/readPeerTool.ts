@@ -182,8 +182,16 @@ const UNTRUSTED_NOTICE =
 const SECRET_PATTERNS: RegExp[] = [
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z0-9 ]*PRIVATE KEY-----/g,
   /\bBearer\s+[A-Za-z0-9\-._~+/]{8,}={0,2}/g,
+  // A JWT, matched by its SHAPE and not by the `eyJ` prefix alone: three
+  // base64url runs joined by dots, each long enough that ordinary prose cannot
+  // form one. It sits after the bearer pattern on purpose, so a token carried in
+  // an authorization header is still removed once, by the header match.
+  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
   /\bsk-ant-[A-Za-z0-9\-_]{8,}/g,
   /\bsk-proj-[A-Za-z0-9\-_]{8,}/g,
+  // Stripe secret and restricted keys, live and test. Underscore-separated, so
+  // the general `sk-` pattern at the end of this list never sees them.
+  /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}/g,
   /\bgithub_pat_[A-Za-z0-9_]{20,}/g,
   /\bgh[pousr]_[A-Za-z0-9]{16,}/g,
   /\bxox[baprse]-[A-Za-z0-9-]{10,}/g,
@@ -276,20 +284,37 @@ function renderContent(content: unknown, includeToolResults: boolean): string {
     .join('\n')
 }
 
+/** The three escapes `quoteAsData` writes, longest first so a prefix cannot win. */
+const WRITTEN_ESCAPES = ['&amp;', '&lt;', '&gt;']
+
 /**
- * Slice `text` to at most `budget` UTF-8 bytes without splitting a code point.
- * Used only when a single message is bigger than the whole budget, so that a
- * read always returns something rather than an empty page.
+ * Slice `text` to at most `budget` UTF-8 bytes without splitting a code point,
+ * and without splitting one of the escapes above. Used only when a single
+ * message is bigger than the whole budget, so that a read always returns
+ * something rather than an empty page.
+ *
+ * This runs on ALREADY-ESCAPED text, which is why the escapes are units here: a
+ * cut that lands inside `&lt;` leaves the reader a fragment where a bracket used
+ * to be, and the fragment is not readable as anything.
  */
 function sliceToBytes(text: string, budget: number): string {
   if (Buffer.byteLength(text, 'utf8') <= budget) return text
   let out = ''
   let used = 0
-  for (const char of text) {
-    const size = Buffer.byteLength(char, 'utf8')
+  let index = 0
+  while (index < text.length) {
+    const escape =
+      text[index] === '&'
+        ? WRITTEN_ESCAPES.find(candidate => text.startsWith(candidate, index))
+        : undefined
+    const codePoint = text.codePointAt(index)
+    if (codePoint === undefined) break
+    const unit = escape ?? String.fromCodePoint(codePoint)
+    const size = Buffer.byteLength(unit, 'utf8')
     if (used + size > budget) break
-    out += char
+    out += unit
     used += size
+    index += unit.length
   }
   return out
 }
@@ -530,6 +555,19 @@ export function createReadPeerTool(
           }
         }
         scoped = rendered.slice(0, index)
+        // Walking back past the oldest readable message is not a read of zero
+        // messages, and must not be reported as one: a model told it read
+        // nothing tries again, a model told there is nothing earlier stops.
+        if (scoped.length === 0) {
+          return {
+            data: {
+              sourceSession: peer.name,
+              capturedAt,
+              status: 'nothing_to_read' as const,
+              summary: `That position is the oldest readable message from ${peer.name}, so there is nothing earlier to read.`,
+            },
+          }
+        }
       }
 
       const matching =
@@ -540,9 +578,9 @@ export function createReadPeerTool(
           : scoped
       const selected = matching.slice(-limit)
 
-      // Redaction runs on the raw text, escaping after it: neither pattern
-      // contains an angle bracket, so the order costs nothing and keeps the
-      // patterns matching what a transcript actually holds.
+      // Redaction runs on the raw text, escaping after it: no pattern contains
+      // an angle bracket, so the order costs nothing and keeps the patterns
+      // matching what a transcript actually holds.
       let redactions = 0
       const cleaned = selected.map(entry => {
         const removal = removeKnownSecrets(entry.text)
@@ -554,6 +592,10 @@ export function createReadPeerTool(
       // what is actually spent. At least one message always comes back.
       const kept: ReadPeerEntry[] = []
       let used = 0
+      // Set only when a message was actually CUT. Spending the budget exactly is
+      // not truncation, and reporting it as such would tell the model text was
+      // withheld that never existed.
+      let slicedOneMessage = false
       for (let index = cleaned.length - 1; index >= 0; index -= 1) {
         const entry = cleaned[index]
         if (!entry) continue
@@ -561,7 +603,7 @@ export function createReadPeerTool(
         if (used + size > maxBytes) {
           if (kept.length === 0) {
             kept.unshift({ ...entry, text: sliceToBytes(entry.text, maxBytes) })
-            used = maxBytes
+            slicedOneMessage = true
           }
           break
         }
@@ -572,7 +614,7 @@ export function createReadPeerTool(
       const droppedByBudget = kept.length < cleaned.length
       const truncated =
         droppedByBudget ||
-        used >= maxBytes ||
+        slicedOneMessage ||
         display.truncated ||
         matching.length > selected.length
       const olderRemain = matching.length > selected.length || droppedByBudget

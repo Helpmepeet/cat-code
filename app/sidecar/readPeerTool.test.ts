@@ -14,9 +14,10 @@
  *    the assertion is that neither survives into the result in a form this
  *    session could read as its own control plane. Delete `quoteAsData` from the
  *    render path and that test fails.
- *  - KNOWN-FORMAT REDACTION. A private-key block, a bearer header and provider
- *    key prefixes are removed and counted. Delete `removeKnownSecrets` from the
- *    render path and that test fails on both the text and the count.
+ *  - KNOWN-FORMAT REDACTION. A private-key block, a bearer header, provider key
+ *    prefixes, a Stripe key and a JSON web token are removed and counted. Delete
+ *    `removeKnownSecrets` from the render path, or any one of its patterns, and
+ *    that test fails on both the text and the count.
  *
  * And the one GUARANTEE §8 records as deliberate: a read never wakes anything.
  * The tool is proved to ask the app for `peers.list` and nothing else.
@@ -355,12 +356,21 @@ test('known secret formats are removed from the quoted text and counted', async 
     'MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
     '-----END RSA PRIVATE KEY-----',
   ].join('\n')
+  // Three base64url segments, which is the shape the pattern matches: a value
+  // merely starting `eyJ` is not enough and must not be.
+  const jwt = [
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9',
+    'eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFsZXgifQ',
+    'SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJVXadQssw5c',
+  ].join('.')
   const body = [
     'here is the config we used',
     pem,
     'Authorization: Bearer abcdefghijklmnopqrstuvwxyz0123456789',
     'ANTHROPIC_API_KEY=sk-ant-api03-AAAAAAAAAAAAAAAAAAAAAAAA',
     'GITHUB_TOKEN=ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    'STRIPE_SECRET_KEY=sk_live_AAAAAAAAAAAAAAAAAAAAAAAA',
+    `SESSION_TOKEN=${jwt}`,
   ].join('\n')
   const { engineSessionId } = writeTranscript(workspace, [
     text('user', body),
@@ -376,7 +386,12 @@ test('known secret formats are removed from the quoted text and counted', async 
   expect(quoted).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789')
   expect(quoted).not.toContain('sk-ant-api03-')
   expect(quoted).not.toContain('ghp_AAAAAAAA')
-  expect(result.redactions).toBe(4)
+  // Two formats the earlier list missed entirely. A miss is worse than a missing
+  // feature here, because the summary line below tells the reader values that
+  // look like keys were taken out.
+  expect(quoted).not.toContain('sk_live_')
+  expect(quoted).not.toContain('eyJhbGciOiJIUzI1NiI')
+  expect(result.redactions).toBe(6)
   expect(result.summary).toContain('keys or tokens')
   // The surrounding prose is untouched: this removes values, not content.
   expect(quoted).toContain('here is the config we used')
@@ -394,6 +409,24 @@ test('a transcript with no secrets reports none removed', async () => {
 
   expect(result.redactions).toBe(0)
   expect(result.summary).not.toContain('keys or tokens')
+})
+
+test('ordinary prose is not mistaken for a token, and the count stays honest', async () => {
+  const workspace = isolatedWorkspace()
+  // Dotted prose, a version string, a file name and a bare `eyJ` word: none of
+  // them is three base64url runs, and none may be removed. This is the other
+  // half of the count assertion above, which would pass on a constant.
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'we ran v1.2.3 of the parser. see notes.md. eyJ was a typo.'),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+  })
+
+  expect(result.redactions).toBe(0)
+  expect(result.entries?.[0]?.text).toContain('v1.2.3')
+  expect(result.entries?.[0]?.text).toContain('eyJ was a typo')
 })
 
 /* ------------------------------------------------------------------------- *
@@ -536,6 +569,68 @@ test('the byte budget clamps rather than errors, and says what it left out', asy
   expect(tiny.entries?.length).toBe(1)
   expect(tiny.truncated).toBe(true)
   expect(tiny.nextPosition).not.toBeNull()
+})
+
+test('a read that exactly fills the budget is not reported as truncated', async () => {
+  const workspace = isolatedWorkspace()
+  // Spending the budget exactly is not truncation: nothing was left out, so the
+  // result may not say anything was.
+  const budget = 1024
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'z'.repeat(budget)),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+    maxBytes: budget,
+  })
+
+  expect(result.status).toBe('ok')
+  expect(result.entries?.[0]?.text.length).toBe(budget)
+  expect(result.truncated).toBe(false)
+  expect(result.nextPosition).toBeNull()
+})
+
+test('a message cut to fit the budget never leaves half an escape behind', async () => {
+  const workspace = isolatedWorkspace()
+  const budget = 1024
+  // The quoted text is 1022 plain characters and then `&lt;`, so the cut lands
+  // inside that escape. Cutting by code point would end the text on `&l`, which
+  // reads as neither a bracket nor text.
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', `${'x'.repeat(budget - 2)}<${'z'.repeat(2000)}`),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+    maxBytes: budget,
+  })
+  const body = result.entries?.[0]?.text ?? ''
+
+  expect(result.truncated).toBe(true)
+  expect(body.length).toBeGreaterThan(0)
+  // Every `&` that survived still opens a complete escape.
+  expect(/&(?!amp;|lt;|gt;)/.test(body)).toBe(false)
+})
+
+test('a position at the oldest message says there is nothing earlier, not zero messages', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'the very first thing'),
+    text('assistant', 'the second thing'),
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const all = await read(fake.requestHost, { peer: 'Bear' })
+  const oldest = all.entries?.[0]?.id
+
+  const earlier = await read(fake.requestHost, { peer: 'Bear', before: oldest })
+
+  // A model told it read zero messages tries again. One told there is nothing
+  // earlier stops, which is the whole reason this is worded rather than counted.
+  expect(earlier.status).toBe('nothing_to_read')
+  expect(earlier.summary).toContain('nothing earlier')
+  expect(earlier.entries).toBeUndefined()
 })
 
 /* ------------------------------------------------------------------------- *

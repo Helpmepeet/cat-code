@@ -127,12 +127,19 @@ export function createCreatePeerTool(
       return false
     },
     /**
-     * The auto-mode classifier is the "ordinary permission gate" this tool runs
-     * under, and it only sees a tool that projects something: a tool left on the
-     * default `''` is read as having no security relevance and permitted without
-     * evaluation (`src/Tool.ts:764`, `src/utils/permissions/yoloClassifier.ts`
-     * around the empty-action guard). So the whole prompt is projected, along
-     * with any model or effort the caller named.
+     * What makes this tool VISIBLE to the auto-mode classifier, and nothing
+     * more. A tool left on the default `''` is read as having no security
+     * relevance and permitted without evaluation (`src/Tool.ts:764`,
+     * `src/utils/permissions/yoloClassifier.ts` around the empty-action guard),
+     * so the whole prompt is projected here, along with any model or effort the
+     * caller named.
+     *
+     * OUTSIDE auto mode there is no gate on this tool at all: it declares no
+     * `checkPermissions`, and the engine's default for a tool that declares none
+     * is to allow (`src/Tool.ts:772`). That is the same effect `AgentTool`
+     * reaches deliberately, by auto-approving in every mode but auto
+     * (`src/tools/AgentTool/AgentTool.tsx:2258-2273`), so it is the intended
+     * shape rather than a missing check.
      */
     toAutoClassifierInput(input: Input) {
       return {
@@ -189,11 +196,12 @@ export function createCreatePeerTool(
           data: { ok: false, message: describeHostRequestError(outcome.error) },
         }
       }
-      // Read back through `unknown` and narrowed: the result envelope is
-      // validated at the socket for its correlation id, ok flag and error shape,
-      // but `value` arrives unvalidated and the per-verb type only describes it.
-      // A creation whose answer cannot be read must NOT report a peer that may
-      // not exist, and must not claim the prompt landed.
+      // Read back through `unknown` and narrowed a SECOND time, after the
+      // boundary's own per-verb schema check. The local check stays because the
+      // name is what the caller addresses the new session by afterwards, and a
+      // value that becomes an address is worth confirming where it is used: a
+      // creation whose answer cannot be read must NOT report a peer that may not
+      // exist, and must not claim the prompt landed.
       const value: unknown = outcome.value
       const created = narrowCreatedPeer(value)
       if (created === null) {
