@@ -87,8 +87,11 @@ test('ListPeers renders the host roster, and shows no presence for a row that is
 
   expect(asked).toEqual([{ verb: 'peers.list', args: {} }])
   expect(block.is_error).toBeUndefined()
-  const rows: unknown = JSON.parse(String(block.content))
-  expect(rows).toEqual([
+  const answer = JSON.parse(String(block.content)) as {
+    asOf: string
+    peers: unknown
+  }
+  expect(answer.peers).toEqual([
     {
       name: 'Bear',
       status: 'live',
@@ -112,10 +115,58 @@ test('ListPeers renders the host roster, and shows no presence for a row that is
   expect(String(block.content)).not.toContain('e1')
 })
 
+test('the roster is stamped with the instant it was read', async () => {
+  // The model has no clock: the engine injects a calendar date and no time of
+  // day, so an ISO `lastActivity` on its own cannot answer "how long has this
+  // peer been quiet". Both ends have to be in the result, and both absolute:
+  // a rendered duration would be a lie on the next turn, since the result
+  // stays in context long after the turn that fetched it.
+  const before = Date.now()
+  const { requestHost } = requesterReturning(() => ({ peers: [liveRow] }))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call()
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-5')
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  const asOf = Date.parse(result.data.asOf)
+  expect(Number.isNaN(asOf)).toBe(false)
+  expect(asOf).toBeGreaterThanOrEqual(before)
+  expect(asOf).toBeLessThanOrEqual(Date.now())
+  expect(String(block.content)).toContain(result.data.asOf)
+})
+
+test('a live peer that has not reported in yet lists as live with no presence', async () => {
+  // Reachable, and reachable exactly where a caller looks first: a session
+  // that spawned but has not sent its first activity frame has a non-terminal
+  // supervisor record, so main answers `live` while the presence map is still
+  // empty for it (`app/main/peerRequestPlane.ts:546`). It is the state
+  // CreatePeer sends the model here to check after "it did not finish
+  // starting". The row must still list, and must not gain an invented
+  // presence.
+  const { requestHost } = requesterReturning(() => ({
+    peers: [{ ...liveRow, presence: undefined }],
+  }))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call()
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  expect(result.data.peers).toHaveLength(1)
+  expect(result.data.peers[0]?.status).toBe('live')
+  expect(result.data.peers[0]).not.toHaveProperty('presence')
+})
+
 test('ListPeers reports a refusal instead of an empty roster', async () => {
   // The failure mode this guards is a model concluding "nobody else is here"
   // from a request that was refused. An empty list and a refusal must not
   // render the same.
+  //
+  // Asserted as properties, not as a sentence. The refusal text belongs to
+  // `describeHostRequestError`, so pinning its exact wording here made this
+  // file fail for an edit in another one, which is not a fact about ListPeers.
+  // What must hold is that the refusal is flagged, says something, is not the
+  // empty-roster answer, and does not reach the model as the raw error code.
   const { requestHost } = requesterReturning(() => ({ ok: false }))
   const tool = createListPeersTool(requestHost)
 
@@ -123,10 +174,19 @@ test('ListPeers reports a refusal instead of an empty roster', async () => {
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-2')
 
   expect(block.is_error).toBe(true)
-  expect(String(block.content)).toContain('Too many requests')
+  expect(result.data.ok).toBe(false)
+  const content = String(block.content)
+  expect(content.trim().length).toBeGreaterThan(0)
+  expect(content).not.toBe(
+    'This workspace has no other session, live, parked or closed.',
+  )
+  expect(content).not.toContain('rate_limited')
 })
 
-test('ListPeers says plainly when no other session is open', async () => {
+test('an empty roster says no session exists, not that none is open', async () => {
+  // A closed session still lists, so "no session is open" would be read as an
+  // empty workspace by a model that had just been told closed rows appear. The
+  // empty case has to deny the whole set, not the live part of it.
   const { requestHost } = requesterReturning(() => ({ peers: [] }))
   const tool = createListPeersTool(requestHost)
 
@@ -134,7 +194,9 @@ test('ListPeers says plainly when no other session is open', async () => {
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-3')
 
   expect(block.is_error).toBeUndefined()
-  expect(block.content).toBe('No other session is open on this workspace.')
+  expect(block.content).toBe(
+    'This workspace has no other session, live, parked or closed.',
+  )
 })
 
 test('a malformed row is dropped and the rest of the roster still lists', async () => {

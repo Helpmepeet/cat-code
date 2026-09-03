@@ -467,7 +467,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const presence = new Map<SessionId, ActivityPresence>()
   /** Per `(from, to)` token bucket (§4 step 3). */
   const buckets = new Map<string, Bucket>()
-  /** Identical body → same recipient, inside the dedup window (§4 step 3). */
+  /** Identical body → same sender, same recipient, inside the dedup window (§4 step 3). */
   const recentBodies = new Map<string, number>()
   /**
    * Hop chains, keyed by the ORDERED pair `recipient|sender`.
@@ -609,7 +609,15 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     return true
   }
 
-  function isDuplicate(to: SessionId, text: string): boolean {
+  /**
+   * Keyed by the SENDER too, not by recipient and body alone. Without the
+   * sender, two different peers reporting the same short body to one parent
+   * inside the window collide, and the second is told its message already
+   * arrived and to wait for a reply to something the recipient never got. The
+   * per-pair bucket is what bounds a single sender; two senders saying the same
+   * thing to one recipient is ordinary orchestration and has to go through.
+   */
+  function isDuplicate(from: SessionId, to: SessionId, text: string): boolean {
     const at = now()
     for (const [key, stamp] of recentBodies) {
       if (at - stamp >= PEER_DEDUP_WINDOW_MS) recentBodies.delete(key)
@@ -617,7 +625,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // The body is a map KEY held in memory for the dedup window and nothing
     // else: it is never written anywhere, and the operational line records the
     // id and the outcome, never this (PEER-SESSIONS §10, "Content never").
-    const key = `${to}|${text}`
+    const key = `${from}|${to}|${text}`
     if (recentBodies.has(key)) return true
     recentBodies.set(key, at)
     return false
@@ -635,8 +643,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * refusal gives the body back, and only a message main is actually holding
    * leaves a record standing.
    */
-  function forgetBody(to: SessionId, text: string): void {
-    recentBodies.delete(`${to}|${text}`)
+  function forgetBody(from: SessionId, to: SessionId, text: string): void {
+    recentBodies.delete(`${from}|${to}|${text}`)
   }
 
   /** The ordered-pair key: a hop routed toward `recipient` from `sender`. */
@@ -1094,7 +1102,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     const chain = buildHops(sessionId, target.appSessionId)
     if ('refusal' in chain) return refuse(`refused:${chain.refusal}`)
     if (!takeToken(sessionId, target.appSessionId)) return refuse('refused:rate')
-    if (isDuplicate(target.appSessionId, request.text)) return refuse('refused:duplicate')
+    if (isDuplicate(sessionId, target.appSessionId, request.text)) {
+      return refuse('refused:duplicate')
+    }
 
     // H2/M2 — past the dedup check the body is RECORDED and, once the slot is
     // claimed, one of the recipient's fifty is spoken for. A refusal from here
@@ -1103,7 +1113,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // for a reply to something the peer never got.
     let slotHeld = false
     const refuseAfterHolds = (outcome: PeerDeliverOutcome) => {
-      forgetBody(target.appSessionId, request.text)
+      forgetBody(sessionId, target.appSessionId, request.text)
       if (slotHeld) {
         releaseSlot(target.appSessionId)
         slotHeld = false
@@ -1428,7 +1438,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         }
       }
       for (const key of [...recentBodies.keys()]) {
-        if (key.startsWith(`${sessionId}|`)) recentBodies.delete(key)
+        const [from, to] = key.split('|')
+        if (from === sessionId || to === sessionId) recentBodies.delete(key)
       }
       // Every chain the reaped row is either end of. The key carries both, so
       // a reused NAME can never inherit the previous row's chain.

@@ -142,7 +142,11 @@ function describeOutcome(
         to,
         delivered: false,
         outcome: 'loop_stopped',
-        summary: `Not delivered. This message would send back around an exchange that already reached you. Answer what you were asked instead of passing it on.`,
+        // TEMPORAL, and it has to read that way. The chain this is measured
+        // against is only kept for a few minutes past its last hop, so a model
+        // that reads this as a standing rule about who it may talk to stops
+        // messaging a peer it is free to message again.
+        summary: `Not delivered. This message would send back around an exchange that already reached you. Answer what you were asked instead of passing it on. Only that exchange is blocked, and only while it is still live: once it has been quiet for several minutes you can message ${to} again.`,
       }
     case 'refused:hop_runaway':
       return {
@@ -156,7 +160,10 @@ function describeOutcome(
         to,
         delivered: false,
         outcome: 'too_many_messages',
-        summary: `Not delivered. Too many messages to ${to} in a short time. Wait a moment, then send one message that covers everything.`,
+        // Seconds, not the minute the session-wide allowance is counted over:
+        // this bucket is per recipient and refills continuously, so the two
+        // refusals must not offer the same advice.
+        summary: `Not delivered. Too many messages to ${to} in a short time. Wait a few seconds, then send one message that covers everything.`,
       }
     case 'refused:duplicate':
       return {
@@ -214,12 +221,16 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
         outcome: 'text_too_large',
         summary: `Not sent. The message is bigger than one message can carry. Send a shorter one, or split it in two.`,
       }
+    // A DIFFERENT limit from `refused:rate` above, and an order of magnitude
+    // apart in how long to wait, so the sentence is borrowed from the plane
+    // rather than written twice: one wording for this allowance everywhere it
+    // is refused, whichever peer tool asked.
     case 'rate_limited':
       return {
         to,
         delivered: false,
         outcome: 'too_many_messages',
-        summary: `Not delivered. This session has asked for too much too quickly. Wait a moment before trying again.`,
+        summary: `Not delivered. ${describeHostRequestError(error)}`,
       }
     case 'timeout':
       return {
@@ -302,7 +313,8 @@ export function createSendToPeerTool(
         '',
         'Every message costs the other session a turn. If it is working it reads',
         'yours at its next step, if it is idle it starts a turn, and if it is not',
-        'open it is started. So send one when it would change what you or they do',
+        'open it is started, which holds up your own turn for up to half a minute',
+        'while that happens. So send one when it would change what you or they do',
         'next: you need something only they know, you finished something they are',
         'waiting on, or you are about to touch something they are working on. Say',
         'everything you need in one message.',

@@ -175,7 +175,17 @@ test('a refusal by the host is an error, and names no peer', async () => {
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-3')
 
   expect(block.is_error).toBe(true)
-  expect(String(block.content)).toContain('session limit')
+  // One code, two opposite recoveries. The refusal a fan-out actually hits is
+  // the spawn rate cap, which clears in seconds, so the sentence has to offer
+  // retrying BEFORE it offers the reading that ends a plan. It must also not
+  // point at one workspace: every cap behind this code is counted app-wide.
+  const content = String(block.content)
+  expect(content).toContain('Wait a few seconds and try again')
+  expect(content).toContain('too many sessions are open')
+  expect(content).not.toContain('workspace')
+  expect(content.indexOf('Wait a few seconds')).toBeLessThan(
+    content.indexOf('too many sessions are open'),
+  )
 })
 
 test('an unreadable answer never reports a peer that may not exist', async () => {
@@ -244,4 +254,34 @@ test('the creation guidance names this session as the return channel', async () 
   const unnamed = await createCreatePeerTool(requestHost, null).prompt()
   expect(unnamed).toContain('back to the session that created you')
   expect(unnamed).not.toContain('send null')
+})
+
+test('the creation guidance says the call blocks, so a fan-out is a priced choice', async () => {
+  // Main bounds the spawn at ten seconds and then waits up to thirty more for
+  // the new session's ready before the instruction is delivered
+  // (`app/main/peerRequestPlane.ts`), so one call can hold the caller's turn for
+  // most of a minute. Nothing else on this tool says so, and a model planning
+  // four creations was committing minutes of its own turn blind.
+  const { requestHost } = requester({ name: 'Bear' })
+  const prompt = await createCreatePeerTool(requestHost, 'Alex').prompt()
+
+  expect(prompt).toContain('the better part of a minute')
+  expect(prompt).toContain('Creating several in a row')
+})
+
+test('the model and effort fields say what an unrecognised value does', () => {
+  // Neither value is validated anywhere: main's schema length-bounds them and
+  // passes them into the spawn env. That is deliberate for the model (a new id
+  // must work the day it ships), so the only place the caller can learn the two
+  // failure shapes is here. They differ, and the difference decides what a
+  // caller does: a wrong model kills the new session on its first turn, while an
+  // unrecognised effort is dropped and the session simply runs at the user's
+  // own setting.
+  const shape = createCreatePeerTool(requester({ name: 'Bear' }).requestHost, 'Alex')
+    .inputSchema.shape
+
+  expect(shape.model.description).toContain('not checked')
+  expect(shape.model.description).toContain('fails on its first turn')
+  expect(shape.effort.description).toContain('not recognised is ignored')
+  expect(shape.effort.description).toContain('whatever the user has set')
 })

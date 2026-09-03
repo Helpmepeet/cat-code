@@ -679,6 +679,31 @@ describe('loop and channel guards', () => {
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
   })
 
+  test('the same body from two different senders is not a duplicate', async () => {
+    // Two peers reporting to one parent inside the window. Keyed on recipient
+    // and body alone, the second is refused and told to wait for a reply to a
+    // message the parent never received.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'Done.' }, 'r1'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Bear', text: 'Done.' }, 'r2'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+
+    // Both actually reached the recipient, each stamped with its own sender.
+    expect(h.deliveries()).toHaveLength(2)
+    expect(h.deliveries().map(entry => [entry.sessionId, entry.message.from])).toEqual([
+      [BEAR, 'Alex'],
+      [BEAR, 'Coral'],
+    ])
+
+    // The same sender repeating itself is still a duplicate.
+    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Bear', text: 'Done.' }, 'r3'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:duplicate' })
+  })
+
   test('a recipient at MAX_PENDING_PEER_MESSAGES is refused queue_full', async () => {
     const h = harness()
     for (let i = 0; i < MAX_PENDING_PEER_MESSAGES; i++) {

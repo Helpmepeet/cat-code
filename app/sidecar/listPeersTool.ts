@@ -58,9 +58,18 @@ export type PeerView = {
   lastActivity: string
 }
 
-/** What the tool hands back to the app, after the narrowing below. */
+/**
+ * What the tool hands back to the app, after the narrowing below.
+ *
+ * `asOf` is the instant the roster was read, and it is here because the model
+ * has no clock: the engine injects a calendar date and no time of day
+ * (`src/context.ts:233`), so `lastActivity` alone cannot answer "how long has
+ * this peer been quiet". Both ends are absolute instants on purpose. A rendered
+ * duration would be correct once and then decay, because a tool result stays in
+ * context for many turns after the turn that fetched it.
+ */
 export type ListPeersOutput =
-  | { ok: true; peers: PeerView[] }
+  | { ok: true; asOf: string; peers: PeerView[] }
   | { ok: false; message: string }
 
 const PEER_STATUSES: readonly PeerDescriptor['status'][] = [
@@ -153,13 +162,18 @@ export function createListPeersTool(
       return ''
     },
     async description() {
-      return 'List the other sessions open on this workspace'
+      return 'List the other sessions in this workspace, live, parked or closed'
     },
     async prompt() {
       return [
-        'List the other sessions working in this workspace, newest activity first.',
+        // The ordering is main's (`app/main/peerRequestPlane.ts:937`) and is a
+        // status sort with a recency tiebreak inside each group, NOT a recency
+        // sort. Stating it as "newest first" made the first row read as the
+        // most recently active session, which it is not: a parked peer that
+        // finished a minute ago sits below live ones idle since morning.
+        'List the other sessions in this workspace. Live sessions come first, then parked, then closed, and inside each of those groups the most recently active comes first.',
         '',
-        'Each entry carries the session name, whether it is live, parked or closed, its title, when it was last active, and who created it. A live session also carries what it is doing right now: running a turn, waiting for the user to answer a permission question, or idle. A session that is not live has no such value, and none is shown.',
+        'Each entry carries the session name, whether it is live, parked or closed, its title, when it was last active, and who created it. The list is stamped with the time it was taken, so subtract to see how long ago that was. A live session also carries what it is doing right now: running a turn, waiting for the user to answer a permission question, or idle. A live session with no such value has not reported in yet and is still starting up, which is what a session you just created looks like when the create said it did not finish starting. A session that is not live never carries one.',
         '',
         'Use it to find out who else is working here before you message one of them, and to check whether a session you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
       ].join('\n')
@@ -185,7 +199,7 @@ export function createListPeersTool(
           },
         }
       }
-      return { data: { ok: true, peers } }
+      return { data: { ok: true, asOf: new Date().toISOString(), peers } }
     },
     mapToolResultToToolResultBlockParam(data: ListPeersOutput, toolUseID) {
       if (!data.ok) {
@@ -200,13 +214,17 @@ export function createListPeersTool(
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content: 'No other session is open on this workspace.',
+          // Empty means no other row at all, not "none currently open": a
+          // closed session still lists, so "no session is open" would read as
+          // an empty workspace when the answer is that there has never been
+          // another session here.
+          content: 'This workspace has no other session, live, parked or closed.',
         }
       }
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: jsonStringify(data.peers),
+        content: jsonStringify({ asOf: data.asOf, peers: data.peers }),
       }
     },
     renderToolUseMessage() {

@@ -189,6 +189,52 @@ test('a rate refusal from the plane is still reported as not delivered', async (
   expect(result.outcome).toBe('too_many_messages')
 })
 
+test('the two rate limits do not tell the model to wait the same amount', async () => {
+  const perRecipient = await send(delivering('refused:rate').requestHost, {
+    to: 'Bear',
+    text: 'hello',
+  })
+  const perSession = await send(
+    failing({ code: 'rate_limited', message: 'slow down' }).requestHost,
+    { to: 'Bear', text: 'hello' },
+  )
+
+  // They share an outcome word, so the SENTENCE is the only thing that can
+  // tell them apart, and they are an order of magnitude apart in how long to
+  // wait: the per-recipient bucket refills continuously, the session-wide
+  // allowance is counted over a minute.
+  expect(perRecipient.summary).not.toBe(perSession.summary)
+  expect(perRecipient.summary).toContain('seconds')
+  expect(perSession.summary).toContain('minute')
+  // And the instinctive recovery from any refusal, listing the peers again,
+  // is charged to the same allowance that just refused this send.
+  expect(perSession.summary).toContain('peer list')
+})
+
+test('a stopped loop reads as this exchange, for now, not as a standing rule', async () => {
+  const result = await send(delivering('refused:hop_loop').requestHost, {
+    to: 'Bear',
+    text: 'hello',
+  })
+
+  expect(result.outcome).toBe('loop_stopped')
+  // Read as a permanent routing rule, this refusal costs the model the peer
+  // entirely: it never sends to that name again. The chain it is measured
+  // against is only kept for a few minutes, so the wording has to say so.
+  expect(result.summary).toContain('quiet for several minutes')
+  expect(result.summary).toContain('message Bear again')
+})
+
+test('the prompt says that messaging a closed peer holds up the sending turn', async () => {
+  const prompt = await createSendToPeerTool(
+    delivering('queued_live').requestHost,
+  ).prompt()
+
+  // Starting a peer is a blocking wait bounded at half a minute, which is most
+  // of a turn spent on what the sender may have meant as a throwaway note.
+  expect(prompt).toContain('half a minute')
+})
+
 test('an outcome outside the protocol list is never read as a delivery', async () => {
   // A local check, not a boundary check: if the upstream schema and this union
   // ever fall out of step, a wrong or future string reaches this tool wearing

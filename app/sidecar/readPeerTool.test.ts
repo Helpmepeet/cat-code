@@ -467,6 +467,113 @@ test('tool output is left out by default and included on request', async () => {
   expect(JSON.stringify(with_)).toContain('SECRET-LOOKING-OUTPUT-BODY')
 })
 
+test('a tool call names what it acted on, so a search finds the file a peer edited', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'on it' },
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'Edit',
+          input: {
+            file_path: 'app/sidecar/foo.ts',
+            old_string: 'WHOLE-BODY-OF-THE-FILE-BEFORE',
+            new_string: 'WHOLE-BODY-OF-THE-FILE-AFTER',
+          },
+        },
+      ],
+    },
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  expect(tail.entries?.[0]?.text).toContain('[tool call: Edit app/sidecar/foo.ts]')
+  // The TARGET is rendered, never the payload: a file body must not reach the
+  // reader's context through a tool call.
+  expect(JSON.stringify(tail)).not.toContain('WHOLE-BODY-OF-THE-FILE')
+
+  // The question this fix exists for. Before it, the path lived only in the
+  // discarded input and this search answered "found 0".
+  const found = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'sidecar/foo.ts',
+  })
+  expect(found.status).toBe('ok')
+  expect(found.entries?.length).toBe(1)
+})
+
+test('a tool outside the table renders as before, and a long target is cut', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'WebFetch',
+          input: { url: 'https://example.invalid/page' },
+        },
+        {
+          type: 'tool_use',
+          id: 'tu2',
+          name: 'Bash',
+          input: { command: `echo ${'z'.repeat(400)}` },
+        },
+      ],
+    },
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+  })
+  const body = result.entries?.[0]?.text ?? ''
+
+  expect(body).toContain('[tool call: WebFetch]')
+  expect(body).not.toContain('example.invalid')
+  expect(body).toContain('[tool call: Bash echo ')
+  expect(body).toContain('...]')
+  // Bounded: a target is an identifier, not a payload.
+  expect(body.length).toBeLessThan(300)
+})
+
+test('a secret in a tool target is removed before the cap, never fragmented by it', async () => {
+  const workspace = isolatedWorkspace()
+  // The key starts at character 110 of the command and runs past the 120-char
+  // cap. Cutting first would leave `sk-ant-api`, which is too short for the
+  // pattern to match, so the later pass over the whole entry would not remove
+  // it: truncation would have manufactured a surviving fragment out of a value
+  // that is removed whole when redaction runs first.
+  const secret = `sk-ant-api03-${'A'.repeat(24)}`
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'Bash',
+          input: { command: `echo ${'a'.repeat(104)} ${secret}` },
+        },
+      ],
+    },
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+  })
+  const body = result.entries?.[0]?.text ?? ''
+
+  expect(body).toContain('[removed]')
+  expect(body).not.toContain(secret)
+  // No fragment of it either, which is the half a cut-then-redact order loses.
+  expect(body).not.toContain('sk-ant')
+})
+
 test('limit bounds the tail and the cursor pages further back', async () => {
   const workspace = isolatedWorkspace()
   const turns = Array.from({ length: 8 }, (_unused, index) =>
@@ -526,6 +633,55 @@ test('search returns only the turns containing the text', async () => {
     'the migration branch is green',
     'the migration branch broke again',
   ])
+})
+
+test('a search with no text to look for is refused, never answered with everything', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'one'),
+    text('assistant', 'two'),
+    text('user', 'three'),
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  // An empty term matches every message through `''.includes()`, so the old
+  // answer was the whole transcript under "found 3 of 3 containing that text".
+  const missing = await read(fake.requestHost, { peer: 'Bear', view: 'search' })
+  expect(missing.status).toBe('missing_query')
+  expect(missing.entries).toBeUndefined()
+  expect(missing.summary).toContain('tail')
+
+  const blank = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: '   ',
+  })
+  expect(blank.status).toBe('missing_query')
+  expect(blank.entries).toBeUndefined()
+
+  // Refused before anything is asked of the app.
+  expect(fake.calls).toEqual([])
+})
+
+test('a search says how many messages it looked at, not just how many matched', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'one'),
+    text('assistant', 'two'),
+    text('user', 'three'),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'nothing like this appears',
+  })
+
+  // "Found 0 of 0" alone reads the same for a three-message transcript and a
+  // five-hundred-message one.
+  expect(result.status).toBe('ok')
+  expect(result.summary).toContain('Found 0 of 0')
+  expect(result.summary).toContain('3 messages were searched')
 })
 
 test('an over-long search query is refused with something to do about it', async () => {
@@ -613,6 +769,53 @@ test('a message cut to fit the budget never leaves half an escape behind', async
   expect(/&(?!amp;|lt;|gt;)/.test(body)).toBe(false)
 })
 
+test('reading fewer messages than exist is not truncation', async () => {
+  const workspace = isolatedWorkspace()
+  const turns = Array.from({ length: 8 }, (_unused, index) =>
+    text(index % 2 === 0 ? 'user' : 'assistant', `turn-${index}`),
+  )
+  const { engineSessionId } = writeTranscript(workspace, turns)
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  // Asking for 3 of 8 cuts no text out of the 3. `nextPosition` is what carries
+  // "more remains", and saying it twice made `truncated` true on ordinary reads.
+  const tail = await read(fake.requestHost, { peer: 'Bear', limit: 3 })
+  expect(tail.truncated).toBe(false)
+  expect(tail.nextPosition).not.toBeNull()
+
+  const searched = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'turn-',
+    limit: 2,
+  })
+  expect(searched.entries?.length).toBe(2)
+  expect(searched.truncated).toBe(false)
+  expect(searched.nextPosition).not.toBeNull()
+})
+
+test('a search hit cut to fit the budget says the match may be in the missing part', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', `${'x'.repeat(4000)} needle-at-the-very-end`),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'needle-at-the-very-end',
+    maxBytes: 1024,
+  })
+
+  // Answered `ok` with an entry that does not contain what was searched for.
+  // Without the sentence the summary reads as a complete answer.
+  expect(result.status).toBe('ok')
+  expect(result.truncated).toBe(true)
+  expect(result.entries?.[0]?.text).not.toContain('needle-at-the-very-end')
+  expect(result.summary).toContain('cut short')
+  expect(result.summary).toContain('the part left out')
+})
+
 test('a position at the oldest message says there is nothing earlier, not zero messages', async () => {
   const workspace = isolatedWorkspace()
   const { engineSessionId } = writeTranscript(workspace, [
@@ -644,6 +847,15 @@ test('the tool is read-only and projects nothing to the classifier, deliberately
   expect(tool.name).toBe('ReadPeer')
   expect(tool.isReadOnly()).toBe(true)
   expect(tool.toAutoClassifierInput()).toBe('')
+})
+
+test('the tool output flag says it also decides what search covers', () => {
+  const tool = createReadPeerTool(listing().requestHost)
+
+  // The flag governs two things, and a description that names only volume left
+  // the second one invisible to the caller.
+  const described = tool.inputSchema.shape.includeToolResults.description ?? ''
+  expect(described).toContain('search')
 })
 
 test('the peer list being unavailable is answered, not thrown', async () => {

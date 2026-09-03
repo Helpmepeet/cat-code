@@ -78,13 +78,24 @@ export function describeHostRequestError(error: HostRequestError): string {
     case 'too_large':
       return 'That request was too large.'
     case 'rate_limited':
-      return 'Too many requests just now. Wait a moment before trying again.'
+      // The session-wide allowance, counted over a minute, and spent by EVERY
+      // peer call. So the sentence has to name the recovery a model reaches for
+      // first: listing peers again is charged to the same allowance that just
+      // refused it, and a second refusal reads as the peer system being down.
+      return 'Too many requests from this session in the past minute. Checking the peer list spends the same allowance, so do something else first, then try again.'
     case 'unknown_verb':
       return 'That action is not available in this session.'
     case 'session_not_found':
       return 'There is no session by that name in this workspace.'
     case 'session_limit':
-      return 'No new session can start right now: this workspace is at its session limit.'
+      // THREE conditions share this code, and two of them recover in opposite
+      // ways (`app/host/host.ts`: the live-process cap, the registry row bound
+      // with nothing reapable, and the spawn rate cap). The rate cap is the one
+      // a fan-out actually hits, and it clears by itself in seconds, so the
+      // recovery a model should try FIRST is named first. All three are counted
+      // across the app, not per workspace, so the sentence must not send the
+      // user looking at one workspace's tabs.
+      return 'No new session can start right now. Wait a few seconds and try again: a burst of new sessions clears on its own. If it fails again, too many sessions are open and some have to be closed first.'
     case 'invalid_cwd':
       return 'This workspace is no longer available.'
     case 'spawn_failed':

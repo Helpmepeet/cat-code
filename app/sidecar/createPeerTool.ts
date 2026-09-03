@@ -43,12 +43,22 @@ const inputSchema = lazySchema(() =>
     model: z
       .string()
       .optional()
-      .describe('Model for the new session. Defaults to the one you are on'),
+      // Nothing validates this id, at any layer, and that is deliberate: the
+      // engine passes unrecognised ids through so a new model works the day it
+      // ships. The cost lands on the caller, which is told the session started
+      // and only later finds it dead, so the description carries the warning the
+      // absent check cannot.
+      .describe(
+        'Model for the new session. Defaults to the one you are on. The id is not checked, and a wrong one means the new session fails on its first turn, so leave it out unless you are sure of the id',
+      ),
     effort: z
       .string()
       .optional()
+      // Same shape, softer failure: an unrecognised level is accepted here and
+      // at main, then dropped at the child in favour of the user's saved setting
+      // (`readSpawnEffort` in `sessionController.ts`).
       .describe(
-        'Reasoning effort for the new session. Defaults to the one you are on',
+        'Reasoning effort for the new session. Defaults to the one you are on. A level that is not recognised is ignored, and the new session runs at whatever the user has set',
       ),
   }),
 )
@@ -160,6 +170,8 @@ export function createCreatePeerTool(
           '.',
         '',
         'The new session starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
+        '',
+        'Each call waits for the new session to start and take your instruction, which can hold up your own turn for the better part of a minute. Creating several in a row costs that each time.',
         '',
         'Create a session only when the user or your instructions ask for one. Never on your own judgment.',
       ].join('\n')
