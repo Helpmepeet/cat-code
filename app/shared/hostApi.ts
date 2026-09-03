@@ -84,6 +84,52 @@ export type SessionDescriptor = {
   cwd: string
   title: string | null
   /**
+   * The session's peer NAME (PEER-SESSIONS §2), or null for a row that predates
+   * the field and has not been spawned since — every LIVE session has one,
+   * because the spawn path allocates it.
+   *
+   * On the descriptor, not only in the registry, because the sidebar row and its
+   * menu must RENDER from state: a name the renderer could not read would make
+   * "Message Bear" and the row subtitle guesswork. Additive control-plane
+   * descriptor field, not a wire frame, so no `protocol.ts` version bump (the
+   * `lastMessageSentAt` / `titleUpdatedAt` precedent).
+   *
+   * OPTIONAL, unlike `forked` / `parked`, and deliberately so for now: the host
+   * always sets it (`descriptorFromRow`), but 22 descriptor FIXTURES under
+   * `app/main` and `app/renderer` build the type by hand, and a required field
+   * would have made this control-plane change edit twenty-two files that own
+   * nothing in it. Readers use `descriptor.name ?? null`. Tighten to required in
+   * the wave that touches those surfaces anyway.
+   */
+  name?: string | null
+  /**
+   * The `appSessionId` of the session that created this one, when an agent did
+   * (PEER-SESSIONS §2), or null for a user-created session.
+   *
+   * An ID, deliberately NEVER a name, and no resolved creator name is offered
+   * beside it. Names are reused after a reap; ids are not, so a name baked into
+   * a descriptor would outlive the row it came from and quietly start pointing
+   * at a different session. Readers resolve the id against the sessions they can
+   * see and render a creator they cannot find as gone.
+   *
+   * On the descriptor because the renderer derives the "Bear, created by Alex"
+   * seam row from `name` and this (PEER-SESSIONS §6) and may not read the
+   * registry itself. Additive control-plane descriptor field, not a wire frame,
+   * so no `protocol.ts` version bump. Optional for the same fixture reason as
+   * `name` above; the host always sets it, and readers use `?? null`.
+   */
+  createdBy?: string | null
+  /**
+   * The user's standing "do not let peers reopen this session" answer
+   * (PEER-SESSIONS §6). False for every row that has not been blocked.
+   *
+   * Here for the same reason `name` is: without it the row menu would be a
+   * write-only toggle that cannot show its own state. Additive control-plane
+   * descriptor field, not a wire frame. Optional for the same fixture reason as
+   * `name` above; the host always sets it, and readers test `=== true`.
+   */
+  peerWakeBlocked?: boolean
+  /**
    * Main-supplied branch provenance, persisted by the host registry. Additive
    * control-plane descriptor state, not a wire frame.
    */
@@ -354,6 +400,23 @@ export type HostApi = {
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>>
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /**
+   * Set or clear this row's "do not let peers reopen this session" flag
+   * (PEER-SESSIONS §6) — the user's one control over the ruling that a peer
+   * message may wake a closed session. Renderer-facing: the sidebar row menu
+   * reaches it through one fixed preload sender (HC3, the `closeSession`
+   * precedent), and it takes a session id and a boolean, nothing else. No
+   * sidecar surface: no frame carries it and no peer can clear it.
+   *
+   * Durable (a registry field), so it survives close, park, restore and
+   * relaunch. An unknown id is `session_not_found` (HC2), never a silent
+   * success — a toggle that reports OK while persisting nothing is how a
+   * write-only control lies to the user.
+   */
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>>
   listSessions(): SessionDescriptor[]
   /**
    * IDLE-PARK §1c — may this row's engine session id be resumed if its live

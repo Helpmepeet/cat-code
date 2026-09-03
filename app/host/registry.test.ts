@@ -1309,3 +1309,159 @@ test('registry diagnostics carry no em dash (user-visible text rule)', async () 
     expect(line).not.toContain('—')
   }
 })
+
+/* ------------------------------------------------------------------------- *
+ * Peer fields — name / createdBy / peerWakeBlocked (PEER-SESSIONS §2, §6;
+ * HOST-REQUEST-PLANE §5, HR4)
+ * ------------------------------------------------------------------------- */
+
+test('a row written before peer names existed gains one on its next spawn, and keeps it', async () => {
+  // The whole additive-migration claim in PEER-SESSIONS §2: no migration step,
+  // no schema bump — the row simply has no `name` on disk and the spawn fills it.
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  seed(registryPath, [
+    baseRow({ appSessionId: 'app-old', engineSessionId: 'engine-old', shutdown: 'clean' }),
+  ])
+  writeTranscript(storageDir, 'engine-old')
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.findSession('app-old')?.name).toBeUndefined()
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-old',
+    cwd: '/Users/pt/cat-code',
+    name: 'Bear',
+    createdBy: 'app-creator',
+  })
+  expect(registry.findSession('app-old')?.name).toBe('Bear')
+  expect(registry.findSession('app-old')?.createdBy).toBe('app-creator')
+
+  // Write-once: a later spawn replays whatever the caller has and must NOT
+  // rename the session or re-parent it. Restore takes this exact path.
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-old',
+    cwd: '/Users/pt/cat-code',
+    name: 'Quartz',
+    createdBy: 'app-someone-else',
+  })
+  expect(registry.findSession('app-old')?.name).toBe('Bear')
+  expect(registry.findSession('app-old')?.createdBy).toBe('app-creator')
+
+  // …and it is the DISK that carries it, not just the in-memory doc.
+  expect(readDoc(registryPath).sessions[0]?.name).toBe('Bear')
+})
+
+test('peerWakeBlocked survives a relaunch, clears to absent, and is gone once the row is reaped', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  const first = makeRegistry({ storageDir })
+  await first.registry.launch()
+  await first.registry.upsertOnSpawn({
+    appSessionId: 'app-blocked',
+    cwd: '/Users/pt/cat-code',
+    name: 'Bear',
+  })
+  await first.registry.fillEngineSessionId('app-blocked', 'engine-blocked')
+  writeTranscript(storageDir, 'engine-blocked')
+  expect(await first.registry.setPeerWakeBlocked('app-blocked', true)).toBe(true)
+  await first.registry.markClean('app-blocked')
+
+  // Relaunch: a fresh registry over the same file (the process-restart case).
+  const second = makeRegistry({ storageDir })
+  await second.registry.launch()
+  expect(second.registry.findSession('app-blocked')?.peerWakeBlocked).toBe(true)
+  expect(second.registry.findSession('app-blocked')?.name).toBe('Bear')
+
+  // Only the user clears it, and clearing leaves no residue on disk: a cleared
+  // row must be byte-identical to one that never carried the flag.
+  expect(await second.registry.setPeerWakeBlocked('app-blocked', false)).toBe(true)
+  expect(
+    Object.prototype.hasOwnProperty.call(
+      readDoc(registryPath).sessions[0] ?? {},
+      'peerWakeBlocked',
+    ),
+  ).toBe(false)
+
+  // Gone with the row: the reap drops rows whose transcript vanished, and the
+  // flag has no life of its own after that.
+  await second.registry.setPeerWakeBlocked('app-blocked', true)
+  rmSync(join(storageDir, 'transcripts', 'engine-blocked.jsonl'))
+  const third = makeRegistry({ storageDir })
+  await third.registry.launch()
+  expect(third.registry.findSession('app-blocked')).toBeUndefined()
+  expect(readDoc(registryPath).sessions).toEqual([])
+})
+
+test('setPeerWakeBlocked reports an unknown id rather than silently succeeding', async () => {
+  const { registry, logs } = makeRegistry()
+  await registry.launch()
+  expect(await registry.setPeerWakeBlocked('app-nobody', true)).toBe(false)
+  expect(logs.some(line => line.includes('setPeerWakeBlocked: no row'))).toBe(true)
+})
+
+test('atBoundWithNothingReapable is true only when the registry is full of rows the reap cannot touch', async () => {
+  // HOST-REQUEST-PLANE HR4. The eligibility test must be the SAME one
+  // `enforceBound` uses: live and parked rows are exempt, so a registry full of
+  // them has nothing to give back and a create must be refused rather than grow
+  // the file.
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  const parked = Array.from({ length: MAX_REGISTRY_SESSIONS }, (_, i) =>
+    baseRow({
+      appSessionId: `app-${i}`,
+      engineSessionId: `engine-${i}`,
+      shutdown: 'clean',
+    }),
+  )
+  seed(registryPath, parked)
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) writeTranscript(storageDir, `engine-${i}`)
+  const { registry } = makeRegistry({ storageDir, acquireLock: async () => async () => {} })
+  await registry.launch()
+
+  // Full, but every row is a closed row the reap may drop.
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  expect(registry.atBoundWithNothingReapable()).toBe(false)
+
+  // Park every row (IDLE-PARK: an open tab whose engine was reclaimed). Parked
+  // rows leave the live count AND are exempt from the reap, which is the exact
+  // hole HR4 closes.
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+    await registry.upsertOnSpawn({ appSessionId: `app-${i}`, cwd: '/Users/pt/cat-code' })
+    await registry.markParked(`app-${i}`)
+  }
+  expect(registry.atBoundWithNothingReapable()).toBe(true)
+
+  // One reapable row is enough to allow a create again.
+  await registry.upsertOnSpawn({ appSessionId: 'app-0', cwd: '/Users/pt/cat-code' })
+  await registry.markClean('app-0')
+  expect(registry.atBoundWithNothingReapable()).toBe(false)
+})
+
+test('a concurrent writer never rolls back a name or a wake block it did not change', async () => {
+  // The merge rule for the three peer fields, in the shape the registry's own
+  // concurrent-writer tests use: two instances over one file, each holding a
+  // stale snapshot of the other's row.
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+  const a = makeRegistry({ storageDir })
+  const b = makeRegistry({ storageDir })
+  await a.registry.launch()
+  await a.registry.upsertOnSpawn({
+    appSessionId: 'app-shared',
+    cwd: '/Users/pt/cat-code',
+    name: 'Bear',
+  })
+  await b.registry.launch()
+
+  // A writes the wake block; B, which never touched that field, then writes an
+  // unrelated change to the SAME row.
+  await a.registry.setPeerWakeBlocked('app-shared', true)
+  await b.registry.touchAttached('app-shared')
+
+  const persisted = readDoc(registryPath).sessions.find(
+    row => row.appSessionId === 'app-shared',
+  )
+  expect(persisted?.name).toBe('Bear')
+  expect(persisted?.peerWakeBlocked).toBe(true)
+})

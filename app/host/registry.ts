@@ -118,6 +118,36 @@ export type RegistrySession = {
    * every reopen.
    */
   titleUpdatedAt?: number
+  /**
+   * [D] The session's peer NAME (PEER-SESSIONS §2) — short, pool-allocated, and
+   * unique across the registry, so a model can address "Bear" instead of a UUID.
+   * Absent only on a row written before the field existed AND never re-spawned
+   * since: the spawn path allocates one when it is missing, so every LIVE row
+   * has a name and an unnamed row is always a never-restored history row.
+   *
+   * NOT the title: `title` is display text the user or the engine may rewrite at
+   * any time (`titleUpdatedAt` above), while the name is minted once and only
+   * released when the row is reaped, after which the pool may hand it out again.
+   */
+  name?: string
+  /**
+   * [D] The `appSessionId` of the session that created this one, when an agent
+   * did (PEER-SESSIONS §2). An ID, deliberately NEVER a name: names are reused
+   * after a reap and ids are not, so a stored name could silently come to mean a
+   * different session. Readers resolve it to a name at read time and say the
+   * creator is gone when no row carries the id any more.
+   */
+  createdBy?: string
+  /**
+   * [D] The user's standing "do not let peers reopen this" answer (PEER-SESSIONS
+   * §6, HOST-REQUEST-PLANE §5). Absent means false. Durable on purpose: it
+   * survives close, park, restore and relaunch, and disappears only with the row
+   * on reap. Only the user ever clears it — reopening the session by hand does
+   * NOT, because the flag is about who may WAKE the session, not about whether it
+   * is currently open. A live row ignores it: peer messages still arrive, since
+   * there is nothing to reopen.
+   */
+  peerWakeBlocked?: boolean
   /** [D] */
   createdAt: number
   /** [D] recency for restore-ordering / reaping. */
@@ -616,11 +646,7 @@ export class SessionRegistry {
     if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
-      // IDLE-PARK (decisions/IDLE-PARK.md §8): a `'parked'` row is an OPEN tab
-      // (its engine was reclaimed, the tab stays), not a terminal row — exclude
-      // it from the reap so a new spawn never dangles a parked tab. Live rows
-      // (`shutdown === null`) are already excluded by `!== null`.
-      .filter(r => r.shutdown !== null && r.shutdown !== 'parked')
+      .filter(isReapableForBound)
       .sort((a, b) => a.lastAttachedAt - b.lastAttachedAt)
     const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
     const doomedRows = terminal.slice(0, removeCount)
@@ -698,6 +724,15 @@ export class SessionRegistry {
      * new rows default false for additive migration compatibility.
      */
     forked?: boolean
+    /**
+     * PEER-SESSIONS §2 — the peer name and creator for this spawn. Both are
+     * WRITE-ONCE: an existing row keeps whatever it already has, so a restore
+     * (which replays the row's own values) and a later re-spawn can never
+     * rename a session or re-parent it. The host allocates a name and passes
+     * it here exactly when the row has none.
+     */
+    name?: string
+    createdBy?: string
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
@@ -714,6 +749,15 @@ export class SessionRegistry {
         existing.title = input.title
       }
       if (input.forked !== undefined) existing.forked = input.forked
+      // Write-once (see the input doc): fill a gap, never replace a value. This
+      // is what lets a row that predates the field gain its name on its next
+      // spawn, create or restore without any migration.
+      if (input.name !== undefined && existing.name === undefined) {
+        existing.name = input.name
+      }
+      if (input.createdBy !== undefined && existing.createdBy === undefined) {
+        existing.createdBy = input.createdBy
+      }
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = now
@@ -728,6 +772,8 @@ export class SessionRegistry {
           ? { title: input.title, titleUpdatedAt: now }
           : {}),
         forked: input.forked ?? false,
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
         createdAt: now,
         lastAttachedAt: now,
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
@@ -791,6 +837,47 @@ export class SessionRegistry {
     row.title = title
     row.titleUpdatedAt = Date.now()
     await this.persist()
+  }
+
+  /**
+   * Set or clear the user's peer-wake block (PEER-SESSIONS §6). Returns false
+   * when no row carries the id, so the host can answer `session_not_found`
+   * (HC2) rather than persist nothing and report success.
+   *
+   * Clearing DELETES the key instead of storing `false`, so a cleared row and a
+   * row that never had the flag are the same document — otherwise every clear
+   * would leave a diff that `rowsEqual` reports as a change forever.
+   */
+  async setPeerWakeBlocked(appSessionId: string, blocked: boolean): Promise<boolean> {
+    const row = this.find(appSessionId)
+    if (!row) {
+      this.log(`[registry] setPeerWakeBlocked: no row for ${appSessionId}`)
+      return false
+    }
+    if (blocked) {
+      row.peerWakeBlocked = true
+    } else {
+      delete row.peerWakeBlocked
+    }
+    await this.persist()
+    return true
+  }
+
+  /**
+   * HOST-REQUEST-PLANE HR4 — is the registry full with nothing the bound-reap
+   * could remove?
+   *
+   * `enforceBound` only ever removes TERMINAL, non-parked rows and removes fewer
+   * than needed rather than refusing, so a caller that can create-park-create at
+   * machine speed grows this file without limit: a parked row is neither live
+   * (it leaves the host's live count) nor reapable (it is an open tab). A caller
+   * subject to that rule asks this first and refuses instead. It lives here, not
+   * in the host, so the eligibility test stays the SAME expression the reap uses
+   * — two copies would drift the moment either changed.
+   */
+  atBoundWithNothingReapable(): boolean {
+    if (this.doc.sessions.length < MAX_REGISTRY_SESSIONS) return false
+    return !this.doc.sessions.some(isReapableForBound)
   }
 
   /** Heartbeat `lastAttachedAt` on attach (§4.5). */
@@ -1045,6 +1132,17 @@ export class SessionRegistry {
  * Module-private helpers
  * ------------------------------------------------------------------------- */
 
+/**
+ * May the bound-reap drop this row? Live rows (`shutdown === null`) never, and
+ * IDLE-PARK (decisions/IDLE-PARK.md §8) exempts `'parked'` too: a parked row is
+ * an OPEN tab whose engine was reclaimed, not a terminal row, so reaping it
+ * would dangle the tab. The single expression behind both `enforceBound` and
+ * `atBoundWithNothingReapable` (HOST-REQUEST-PLANE HR4), which must agree.
+ */
+function isReapableForBound(row: RegistrySession): boolean {
+  return row.shutdown !== null && row.shutdown !== 'parked'
+}
+
 function emptyDoc(): RegistryDocument {
   return {
     registryVersion: REGISTRY_VERSION,
@@ -1132,6 +1230,9 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.cwd === right.cwd &&
     left.title === right.title &&
     left.forked === right.forked &&
+    left.name === right.name &&
+    left.createdBy === right.createdBy &&
+    left.peerWakeBlocked === right.peerWakeBlocked &&
     left.titleUpdatedAt === right.titleUpdatedAt &&
     left.createdAt === right.createdAt &&
     left.lastAttachedAt === right.lastAttachedAt &&
@@ -1159,6 +1260,21 @@ function mergeRegistryRow(
   // from its baseline, preserve a concurrent writer's newer trusted value.
   const forked =
     baseline && local.forked === baseline.forked ? latest.forked : local.forked
+  // The three peer fields are durable identity/intent, not runtime hints, so they
+  // follow the `forked` rule: a writer that did not change a field from its own
+  // baseline must not roll back a concurrent writer's newer value. That is what
+  // keeps an allocated name and a user-set wake block from being lost when
+  // another host writes an unrelated row between our read and our write.
+  const name =
+    baseline && local.name === baseline.name ? latest.name : local.name
+  const createdBy =
+    baseline && local.createdBy === baseline.createdBy
+      ? latest.createdBy
+      : local.createdBy
+  const peerWakeBlocked =
+    baseline && local.peerWakeBlocked === baseline.peerWakeBlocked
+      ? latest.peerWakeBlocked
+      : local.peerWakeBlocked
 
   return {
     appSessionId: local.appSessionId,
@@ -1169,6 +1285,9 @@ function mergeRegistryRow(
       ? { titleUpdatedAt: titleSource.titleUpdatedAt }
       : {}),
     forked,
+    ...(name !== undefined ? { name } : {}),
+    ...(createdBy !== undefined ? { createdBy } : {}),
+    ...(peerWakeBlocked ? { peerWakeBlocked } : {}),
     createdAt: Math.min(latest.createdAt, local.createdAt),
     lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
     lastMessageSentAt: maxNullableTimestamp(
@@ -1244,6 +1363,13 @@ function validateRow(candidate: unknown): RegistrySession | null {
     shutdown,
   }
   if (typeof candidate.title === 'string') row.title = candidate.title
+  // PEER-SESSIONS §2 — additive migration, the `forked` treatment: a row written
+  // before peer names existed simply has none, and the next spawn allocates one.
+  if (typeof candidate.name === 'string') row.name = candidate.name
+  if (typeof candidate.createdBy === 'string') row.createdBy = candidate.createdBy
+  // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a
+  // row the user cleared are byte-identical on disk.
+  if (candidate.peerWakeBlocked === true) row.peerWakeBlocked = true
   // Absent on rows written before the field existed → "never stamped", which the
   // renderer reads as 0, so a real transcript title wins and a terminal rename
   // made before this shipped still surfaces.

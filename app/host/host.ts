@@ -25,6 +25,8 @@
 import { randomUUID } from 'node:crypto'
 
 import type { SessionRegistry, RegistrySession } from './registry.js'
+import { MAX_REGISTRY_SESSIONS } from './registry.js'
+import { pickPeerName, randomPeerNameCursor } from './peerNames.js'
 import type {
   SidecarStatus,
   SidecarSupervisor,
@@ -57,6 +59,42 @@ import {
  * ------------------------------------------------------------------------- */
 
 export type CwdValidation = { ok: true; realpath: string } | { ok: false }
+
+/**
+ * Peer-session inputs for a spawn (PEER-SESSIONS §2/§4, HOST-REQUEST-PLANE HR4).
+ *
+ * Deliberately NOT on the `HostApi` interface: main's peer-request handler holds
+ * the concrete `Host`, while the renderer reaches `createSessionInWorkspace`
+ * through a fixed preload sender that passes an id and nothing else. Keeping
+ * this off the renderer-facing type is what makes it structurally impossible for
+ * a compromised renderer to author a creator or a churn exemption. A NAME is not
+ * authorable by anyone, on any plane: the picker in main owns the whole set.
+ */
+export type PeerSpawnOptions = {
+  /**
+   * The creating session's `appSessionId` — an id, never a name (§2).
+   *
+   * There is deliberately NO caller-supplied NAME here. PEER-SESSIONS §2 makes
+   * the allocator an owned picker in main and rules user-chosen call signs out
+   * of v1; §4's `CreatePeer` takes a prompt and optional model/effort and
+   * nothing else. A name parameter would also be an unvalidated free-text path
+   * into `CATCODE_SIDECAR_NAME` and from there into the doctrine block, which is
+   * fixed at controller construction and can never be re-checked.
+   */
+  createdBy?: SessionId
+  /** Model / effort the new session starts on (R7), carried in the spawn env. */
+  model?: string
+  effort?: string
+  /**
+   * HR4 — apply the registry churn rule to THIS create: refuse with
+   * `session_limit` when the registry is at `MAX_REGISTRY_SESSIONS` rows and the
+   * bound-reap could remove none of them. Opt-in because the rule exists for the
+   * one caller that can create-park-create at machine speed; a person clicking
+   * "+" cannot, and refusing them a tab because 256 rows are parked would be a
+   * regression, not a guard.
+   */
+  enforceRegistryChurnLimit?: boolean
+}
 type SpawnReservation = {
   ok: true
   token: string
@@ -158,6 +196,14 @@ export class Host implements HostApi {
 
   /** Resolves once the registry launch sweep has completed (B4 / REGISTRY §4). */
   private readonly launched: Promise<unknown>
+
+  /**
+   * Where the peer-name picker resumes (PEER-SESSIONS §2). Seeded randomly so a
+   * fresh launch does not always hand out the same first name, then advanced by
+   * each allocation. In-memory only: the registry rows ARE the reservation set,
+   * so a lost cursor costs nothing but a re-scan from a different offset.
+   */
+  private peerNameCursor = randomPeerNameCursor()
 
   constructor(options: HostOptions) {
     this.supervisor = options.supervisor
@@ -414,6 +460,13 @@ export class Host implements HostApi {
       title: row.title,
       resumeEngineSessionId: row.engineSessionId,
       forked: row.forked,
+      // PEER-SESSIONS §2/§5 + R1 — a restore of a created peer must rebuild the
+      // SAME identity. The row keeps `createdBy`, but `spawn` reads the creator
+      // only from its input, so omitting it here left `CATCODE_SIDECAR_CREATED_BY`
+      // and `..._NAME` unset and the doctrine block, which is fixed at controller
+      // construction, lost "You were created by …". Every wake goes through this
+      // path, including the peer-message restore (HOST-REQUEST-PLANE §4 step 5).
+      ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
     }, reservation)
   }
 
@@ -429,6 +482,7 @@ export class Host implements HostApi {
 
   async createSessionInWorkspace(
     appSessionId: SessionId,
+    peer?: PeerSpawnOptions,
   ): Promise<HostResult<SessionDescriptor>> {
     await this.launched
     // HC2 — validate id shape before any lookup; unknown → session_not_found. A
@@ -452,6 +506,17 @@ export class Host implements HostApi {
       return hostError('invalid_cwd', `workspace cwd no longer exists: ${row.cwd}`)
     }
 
+    // HR4 — checked BEFORE the spawn reservation, so a refusal costs no fork
+    // budget. HC4's live cap and rate cap do not bound this: a parked row leaves
+    // the live count and is exempt from the reap, so create-park-create would
+    // grow the registry, the tab bar and main's peer state without limit.
+    if (peer?.enforceRegistryChurnLimit && this.registry.atBoundWithNothingReapable()) {
+      return hostError(
+        'session_limit',
+        `at most ${MAX_REGISTRY_SESSIONS} sessions, and none can be removed to make room`,
+      )
+    }
+
     const reservation = this.reserveSpawn(true)
     if (!reservation.ok) return reservation.result
 
@@ -463,6 +528,9 @@ export class Host implements HostApi {
       title: undefined,
       resumeEngineSessionId: undefined,
       forked: false,
+      ...(peer?.createdBy !== undefined ? { createdBy: peer.createdBy } : {}),
+      ...(peer?.model !== undefined ? { model: peer.model } : {}),
+      ...(peer?.effort !== undefined ? { effort: peer.effort } : {}),
     }, reservation)
   }
 
@@ -477,9 +545,21 @@ export class Host implements HostApi {
     title: string | null | undefined
     resumeEngineSessionId: string | undefined
     forked: boolean
+    createdBy?: SessionId
+    model?: string
+    effort?: string
   }, reservation: SpawnReservation): Promise<HostResult<SessionDescriptor>> {
     const { appSessionId, cwd, resumeEngineSessionId, forked } = input
     const title = input.title ?? undefined
+
+    // PEER-SESSIONS §2 — every session is named, user-created and agent-created
+    // alike, and a row that predates the field gains its name HERE, on its next
+    // spawn, create or restore. Reuse the row's own name when it has one: the
+    // upsert below is write-once for the field, but allocating a second name we
+    // then discard would burn a pool entry on every restore.
+    const existingName = this.registry.findSession(appSessionId)?.name
+    const name = existingName ?? this.allocatePeerName()
+    const createdByName = this.creatorNameFor(input.createdBy)
 
     // Persist the live row BEFORE spawning so a crash between spawn and the next
     // launch still finds a row to sweep (REGISTRY.md §4.5 write points). The
@@ -500,6 +580,8 @@ export class Host implements HostApi {
           ? { engineSessionId: resumeEngineSessionId }
           : {}),
         forked,
+        name,
+        ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
       })
       rowPersisted = true
       for (const reapedId of reaped) {
@@ -508,6 +590,11 @@ export class Host implements HostApi {
       this.supervisor.spawnSession(appSessionId, {
         cwd,
         ...(resumeEngineSessionId !== undefined ? { resumeEngineSessionId } : {}),
+        name,
+        ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
+        ...(createdByName !== undefined ? { createdByName } : {}),
+        ...(input.model !== undefined ? { model: input.model } : {}),
+        ...(input.effort !== undefined ? { effort: input.effort } : {}),
       })
       // The child is now supervisor-visible, so replace the in-flight slot with
       // the real live record before any later persistence await can yield.
@@ -551,6 +638,70 @@ export class Host implements HostApi {
     }
     this.emit({ type: 'session-added', session: descriptor })
     return { ok: true, value: descriptor }
+  }
+
+  /**
+  /**
+   * The creating session's NAME, for the child's spawn env (PEER-SESSIONS §5).
+   *
+   * The label has to be resolved HERE, on every path that starts a process,
+   * because the sidecar cannot do it: `appendSystemPrompt` is fixed when the
+   * controller is built, before the socket to main exists, and a sidecar may not
+   * read the registry (CATALOG-OWNERSHIP). So a child handed only an id holds a
+   * value it can never render. One helper rather than three copies of the
+   * lookup, for spawn, restore and restart.
+   *
+   * Undefined when the creator's row is gone: names are released on reap, so a
+   * stale label would be worse than none (§2 — a reaped creator reads as gone).
+   */
+  private creatorNameFor(createdBy: string | undefined): string | undefined {
+    if (createdBy === undefined) return undefined
+    return this.registry.findSession(createdBy)?.name
+  }
+
+  /**
+   * Allocate a peer name (PEER-SESSIONS §2). Takes no preference: the picker in
+   * main owns the whole set, and user-chosen call signs are out of v1.
+   *
+   * The reserved set is the names on ALL current registry rows — live, parked
+   * and closed alike — because that is the uniqueness scope: a name is released
+   * only when its row is reaped, and may be handed out again after that. The
+   * cursor is in-memory and reseeded at every launch, so after a relaunch it
+   * restarts at an arbitrary offset and THIS reserved set is the only thing
+   * preventing a duplicate. `host.test.ts` drives that case directly.
+   */
+  private allocatePeerName(): string {
+    const reserved = this.registry.sessions
+      .map(row => row.name)
+      .filter((value): value is string => typeof value === 'string')
+    const picked = pickPeerName(reserved, this.peerNameCursor)
+    this.peerNameCursor = picked.nextCursor
+    return picked.name
+  }
+
+  /* --------------------------------------------------------------------- *
+   * setPeerWakeBlocked — the user's one control over peer wake (PEER-SESSIONS
+   * §6). Renderer-facing, `closeSession`-shaped: typed HostResult,
+   * `session_not_found` for an unknown id (HC2), never a throw-through.
+   * --------------------------------------------------------------------- */
+
+  async setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>> {
+    await this.launched
+    if (!isUuid(appSessionId)) {
+      return hostError('session_not_found', 'malformed session id')
+    }
+    const updated = await this.registry.setPeerWakeBlocked(appSessionId, blocked === true)
+    if (!updated) {
+      return hostError('session_not_found', `unknown session ${appSessionId}`)
+    }
+    this.surfaceRegistryHealth(appSessionId)
+    // The row menu renders from the descriptor, so the toggle must publish its
+    // new state rather than leave the menu showing what the user just changed.
+    this.emitStatus(appSessionId)
+    return { ok: true, value: undefined }
   }
 
   /* --------------------------------------------------------------------- *
@@ -700,12 +851,20 @@ export class Host implements HostApi {
 
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
+    const creatorName = this.creatorNameFor(row.createdBy)
     try {
       this.supervisor.restartSession(appSessionId, {
         cwd: row.cwd,
         ...(row.engineSessionId !== null
           ? { resumeEngineSessionId: row.engineSessionId }
           : {}),
+        // The fresh process must boot with the SAME identity: a restart that
+        // dropped the name would leave a live session no peer could address, and
+        // one that dropped the creator's LABEL would leave it holding an id it
+        // cannot resolve (see `creatorNameFor`).
+        ...(row.name !== undefined ? { name: row.name } : {}),
+        ...(row.createdBy !== undefined ? { createdBy: row.createdBy } : {}),
+        ...(creatorName !== undefined ? { createdByName: creatorName } : {}),
       })
       this.commitSpawnReservation(reservation)
     } catch (error) {
@@ -904,6 +1063,13 @@ export class Host implements HostApi {
       engineSessionId: row?.engineSessionId ?? null,
       cwd: row?.cwd ?? '',
       title: row?.title ?? null,
+      // PEER-SESSIONS §2/§6. null ⇒ a row that predates the field and has not
+      // been spawned since; false ⇒ the user has not blocked peer wake here.
+      name: row?.name ?? null,
+      // The creator's ID, never a resolved name: a name baked in here would
+      // outlive the row it came from and later point at a different session.
+      createdBy: row?.createdBy ?? null,
+      peerWakeBlocked: row?.peerWakeBlocked === true,
       forked: row?.forked ?? false,
       // null ⇒ the app never recorded a title intent for this row, so the
       // renderer lets a real transcript title win (the terminal-rename fix).

@@ -774,3 +774,105 @@ test('a sidecar that exits on SIGTERM is never force-killed', async () => {
   await Bun.sleep(400)
   expect(lines.filter(line => line.includes('SIGKILL'))).toEqual([])
 })
+
+test('carries the peer spawn-env keys and CLEARS the ones the host did not supply', async () => {
+  // PEER-SESSIONS §2/§5 + HOST-REQUEST-PLANE §5. The spawn environment is main's
+  // only contact with a sidecar before its socket exists, and the sidecar needs
+  // its name and creator at CONSTRUCTION (its system prompt is fixed then), so
+  // these cannot arrive as a frame.
+  //
+  // The poisoning is the point. This object spreads the parent environment and
+  // then `sidecarEnv` BEFORE the peer keys, so a key merely left unset would be
+  // INHERITED, letting a process outside main name a session. `sidecarEnv` is
+  // the LATER of the two spreads, so a fix that defeats a poisoned `sidecarEnv`
+  // necessarily defeats a poisoned `process.env` too; the next test covers the
+  // literal parent-environment case as well. Same guard the resume id above has.
+  const socketDir = makeTempDir('catcode-supervisor-peer-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedPath = join(socketDir, 'observed-peer.json')
+  const keys = [
+    'CATCODE_SIDECAR_NAME',
+    'CATCODE_SIDECAR_CREATED_BY',
+    'CATCODE_SIDECAR_CREATED_BY_NAME',
+    'CATCODE_SIDECAR_MODEL',
+    'CATCODE_SIDECAR_EFFORT',
+  ]
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    `const keys = ${JSON.stringify(keys)}`,
+    'const seen = {}',
+    "for (const key of keys) seen[key] = key in process.env ? process.env[key] : 'ABSENT'",
+    'writeFileSync(process.argv[1], JSON.stringify(seen))',
+  ].join(';')
+
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script, observedPath],
+    sidecarCwd: sessionCwd,
+    // Every peer key poisoned, so an unwritten key would arrive as this value.
+    sidecarEnv: {
+      CATCODE_SIDECAR_NAME: 'InheritedName',
+      CATCODE_SIDECAR_CREATED_BY: 'inherited-creator-id',
+      CATCODE_SIDECAR_CREATED_BY_NAME: 'InheritedCreator',
+      CATCODE_SIDECAR_MODEL: 'inherited-model',
+      CATCODE_SIDECAR_EFFORT: 'inherited-effort',
+    },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('peer-session', {
+    cwd: sessionCwd,
+    name: 'Bear',
+    createdBy: 'creator-app-session-id',
+    createdByName: 'Quartz',
+    // model / effort deliberately omitted: they must arrive EMPTY, never
+    // carrying the poisoned inherited value.
+  })
+
+  await waitFor(
+    () => existsSync(observedPath) && readFileSync(observedPath, 'utf8').length > 0,
+    'sidecar did not report its peer environment',
+  )
+  expect(JSON.parse(readFileSync(observedPath, 'utf8'))).toEqual({
+    CATCODE_SIDECAR_NAME: 'Bear',
+    CATCODE_SIDECAR_CREATED_BY: 'creator-app-session-id',
+    CATCODE_SIDECAR_CREATED_BY_NAME: 'Quartz',
+    CATCODE_SIDECAR_MODEL: '',
+    CATCODE_SIDECAR_EFFORT: '',
+  })
+})
+
+test('a session spawned without a name does not inherit one from the parent process', async () => {
+  // The literal `...process.env` case: a `CATCODE_SIDECAR_NAME` in main's own
+  // environment must not name a session main never named. This is the
+  // `CATCODE_SIDECAR_RESUME_SESSION_ID` lesson applied to identity.
+  const socketDir = makeTempDir('catcode-supervisor-peer-inherit-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedPath = join(socketDir, 'observed-name.txt')
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(process.argv[1], JSON.stringify(process.env.CATCODE_SIDECAR_NAME ?? 'ABSENT'))",
+  ].join(';')
+
+  const previous = process.env.CATCODE_SIDECAR_NAME
+  process.env.CATCODE_SIDECAR_NAME = 'InheritedName'
+  try {
+    const supervisor = new SidecarSupervisor({
+      sidecarCommand: process.execPath,
+      sidecarArgs: ['-e', script, observedPath],
+      sidecarCwd: sessionCwd,
+      socketDir,
+    })
+    supervisors.push(supervisor)
+    supervisor.spawnSession('unnamed-session', { cwd: sessionCwd })
+
+    await waitFor(
+      () => existsSync(observedPath) && readFileSync(observedPath, 'utf8').length > 0,
+      'sidecar did not report its name environment',
+    )
+    expect(JSON.parse(readFileSync(observedPath, 'utf8'))).toBe('')
+  } finally {
+    if (previous === undefined) delete process.env.CATCODE_SIDECAR_NAME
+    else process.env.CATCODE_SIDECAR_NAME = previous
+  }
+})

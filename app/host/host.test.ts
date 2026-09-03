@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 import { SessionRegistry } from './registry.js'
+import { PEER_NAME_POOL } from './peerNames.js'
 import { Host, type CwdValidation } from './host.js'
 import type { SessionId } from '../shared/protocol.js'
 import type {
@@ -45,6 +46,23 @@ type FakeRecord = {
   socketPath: string
   cwd: string
   resumeEngineSessionId?: string
+  /** PEER-SESSIONS §2 — recorded so a test can prove what reached the spawn env. */
+  name?: string
+  createdBy?: string
+  createdByName?: string
+  model?: string
+  effort?: string
+}
+
+/** The peer half of the real `SpawnConfig` (`app/supervisor/supervisor.ts`). */
+type FakeSpawnConfig = {
+  cwd: string
+  resumeEngineSessionId?: string
+  name?: string
+  createdBy?: string
+  createdByName?: string
+  model?: string
+  effort?: string
 }
 
 class FakeSupervisor {
@@ -64,10 +82,7 @@ class FakeSupervisor {
     return () => this.listeners.delete(listener)
   }
 
-  spawnSession(
-    sessionId: SessionId,
-    config?: { cwd: string; resumeEngineSessionId?: string },
-  ): SessionId {
+  spawnSession(sessionId: SessionId, config?: FakeSpawnConfig): SessionId {
     if (this.closed) {
       throw new Error('supervisor has shut down; refusing to spawn')
     }
@@ -86,6 +101,13 @@ class FakeSupervisor {
       ...(config?.resumeEngineSessionId !== undefined
         ? { resumeEngineSessionId: config.resumeEngineSessionId }
         : {}),
+      ...(config?.name !== undefined ? { name: config.name } : {}),
+      ...(config?.createdBy !== undefined ? { createdBy: config.createdBy } : {}),
+      ...(config?.createdByName !== undefined
+        ? { createdByName: config.createdByName }
+        : {}),
+      ...(config?.model !== undefined ? { model: config.model } : {}),
+      ...(config?.effort !== undefined ? { effort: config.effort } : {}),
     })
     return sessionId
   }
@@ -102,10 +124,7 @@ class FakeSupervisor {
     this.emit({ type: 'exit', sessionId, code: null, signal: 'SIGTERM' })
   }
 
-  restartSession(
-    sessionId: SessionId,
-    config?: { cwd: string; resumeEngineSessionId?: string },
-  ): void {
+  restartSession(sessionId: SessionId, config?: FakeSpawnConfig): void {
     const record = this.records.get(sessionId)
     if (!record) throw new Error('no such session')
     // Fresh child = new pid + socketPath (what SF5 must re-record).
@@ -117,6 +136,14 @@ class FakeSupervisor {
       record.resumeEngineSessionId = config.resumeEngineSessionId
     } else {
       delete record.resumeEngineSessionId
+    }
+    // A restart re-applies the peer identity too: the fresh process must boot
+    // knowing its own name and its creator's LABEL, or a live session becomes
+    // unaddressable and a created one holds an id it cannot render.
+    if (config?.name !== undefined) record.name = config.name
+    if (config?.createdBy !== undefined) record.createdBy = config.createdBy
+    if (config?.createdByName !== undefined) {
+      record.createdByName = config.createdByName
     }
   }
 
@@ -2197,4 +2224,340 @@ test('shutdownAll marks every live row clean so the next launch sweep sees no cr
 
   expect(h.registry.sessions.length).toBe(2)
   expect(h.registry.sessions.every(row => row.shutdown === 'clean')).toBe(true)
+})
+
+/* ------------------------------------------------------------------------- *
+ * Peer sessions — naming, the wake-block toggle, and the HR4 churn rule
+ * (PEER-SESSIONS §2/§6 · HOST-REQUEST-PLANE HR4)
+ * ------------------------------------------------------------------------- */
+
+test('every created session is named, the name reaches the spawn config, and a restore never renames it', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
+  const { appSessionId } = created.value
+
+  const name = h.registry.findSession(appSessionId)?.name
+  expect(typeof name).toBe('string')
+  expect(name!.length).toBeGreaterThan(0)
+  // The name is handed to the child at spawn, not after: the sidecar's system
+  // prompt is fixed when its controller is built, before any socket exists.
+  expect(h.supervisor.records.get(appSessionId)?.name).toBe(name!)
+  // …and the descriptor carries it, so the sidebar renders from state.
+  expect(created.value.name).toBe(name!)
+  expect(created.value.peerWakeBlocked).toBe(false)
+
+  // Give the row a transcript, close it, and restore: the name must survive.
+  h.supervisor.emitReady(appSessionId, 'engine-named')
+  await settle(() => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-named')
+  writeTranscript(h.storageDir, 'engine-named')
+  await h.host.closeSession(appSessionId)
+  const restored = await h.host.restoreSession(appSessionId)
+  if (!restored.ok) throw new Error(`restore failed: ${restored.error.code}`)
+  expect(restored.value.name).toBe(name!)
+  expect(h.supervisor.records.get(appSessionId)?.name).toBe(name!)
+})
+
+test('allocation consults the names on registry rows, not just the cursor', async () => {
+  // R3. Six sequential creates draw six consecutive pool entries whether or not
+  // the reserved set is consulted, because the host carries the picker's cursor
+  // across spawns — so "they were all different" proves nothing.
+  //
+  // The case that matters in life is a RELAUNCH: `peerNameCursor` is in-memory
+  // and reseeded by `randomPeerNameCursor()` every launch, so it comes back at
+  // an arbitrary offset and the registry rows are the only thing standing
+  // between it and a duplicate. Drive exactly that: learn where the cursor is,
+  // plant a row holding the very name the next allocation would hand out, and
+  // require the host to step over it.
+  const h = makeHost()
+  const first = await h.host.createSession({ cwd: h.cwd })
+  if (!first.ok) throw new Error('first create failed')
+  const firstName = String(first.value.name)
+
+  // After allocating `firstName` the cursor sits one past it, so this is the
+  // name an unreserved allocation would return next.
+  const firstIndex = PEER_NAME_POOL.findIndex(entry => entry === firstName)
+  expect(firstIndex).toBeGreaterThanOrEqual(0)
+  const nextUp = PEER_NAME_POOL[(firstIndex + 1) % PEER_NAME_POOL.length]!
+
+  // Plant it on an unrelated row, the way a relaunch finds names it did not
+  // allocate this run.
+  await h.registry.upsertOnSpawn({
+    appSessionId: randomUUID(),
+    cwd: h.cwd,
+    name: nextUp,
+  })
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const second = await h.host.createSession({ cwd: h.cwd })
+  if (!second.ok) throw new Error('second create failed')
+  expect(second.value.name).not.toBe(nextUp)
+  expect(second.value.name).toBe(
+    PEER_NAME_POOL[(firstIndex + 2) % PEER_NAME_POOL.length]!,
+  )
+})
+
+test('setPeerWakeBlocked persists, publishes the new state, and refuses an unknown id', async () => {
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
+  const { appSessionId } = created.value
+
+  const blocked = await h.host.setPeerWakeBlocked(appSessionId, true)
+  expect(blocked.ok).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.peerWakeBlocked).toBe(true)
+  // A write-only toggle cannot show its own state: the change must reach the
+  // subscriber as a descriptor, not just the file.
+  const published = h.events
+    .filter(e => e.type === 'session-status')
+    .map(e => (e as { session: { appSessionId: string; peerWakeBlocked?: boolean } }).session)
+    .filter(session => session.appSessionId === appSessionId)
+  expect(published.at(-1)?.peerWakeBlocked).toBe(true)
+
+  const cleared = await h.host.setPeerWakeBlocked(appSessionId, false)
+  expect(cleared.ok).toBe(true)
+  expect(h.registry.findSession(appSessionId)?.peerWakeBlocked).toBeUndefined()
+
+  const unknown = await h.host.setPeerWakeBlocked(randomUUID(), true)
+  expect(unknown.ok).toBe(false)
+  if (unknown.ok) return
+  expect(unknown.error.code).toBe('session_not_found')
+  const malformed = await h.host.setPeerWakeBlocked('not-a-uuid', true)
+  expect(malformed.ok).toBe(false)
+})
+
+test('HR4: a peer create is refused at the registry bound when nothing is reapable, and the file stops growing', async () => {
+  // The create-park-create churn HC4 does not bound: parked rows leave the live
+  // count and are exempt from the reap, so without this rule the registry, the
+  // tab bar and main's peer state grow without limit at 8 spawns per 10 s.
+  const storageDir = tempDir()
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+    acquireLock: async () => async () => {},
+  })
+  const h = makeHost({ registry })
+  const { MAX_REGISTRY_SESSIONS } = await import('./registry.js')
+
+  // One real workspace row to name the workspace, then fill to the bound with
+  // PARKED rows — the state the reap refuses to touch.
+  const seedSession = await h.host.createSession({ cwd: h.cwd })
+  if (!seedSession.ok) throw new Error('seed create failed')
+  const workspaceId = seedSession.value.appSessionId
+  for (let i = registry.sessions.length; i < MAX_REGISTRY_SESSIONS; i++) {
+    const id = randomUUID()
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: h.cwd })
+    await registry.markParked(id)
+  }
+  await registry.markParked(workspaceId)
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const refused = await h.host.createSessionInWorkspace(workspaceId, {
+    enforceRegistryChurnLimit: true,
+  })
+  expect(refused.ok).toBe(false)
+  if (refused.ok) return
+  expect(refused.error.code).toBe('session_limit')
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+
+  // The rule is opt-in: the operator's own "+" is not refused because 256 rows
+  // happen to be parked. It reaches the ordinary caps instead, which is the
+  // behavior every other create has.
+  const rendererCreate = await h.host.createSessionInWorkspace(workspaceId)
+  expect(rendererCreate.ok).toBe(true)
+
+  // One reapable row is enough for the peer create to proceed again.
+  const reapable = randomUUID()
+  await registry.upsertOnSpawn({ appSessionId: reapable, cwd: h.cwd })
+  await registry.markClean(reapable)
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const allowed = await h.host.createSessionInWorkspace(workspaceId, {
+    enforceRegistryChurnLimit: true,
+  })
+  expect(allowed.ok).toBe(true)
+})
+
+test('a peer create carries its creator id and the creator name into the spawn config', async () => {
+  const h = makeHost()
+  const creator = await h.host.createSession({ cwd: h.cwd })
+  if (!creator.ok) throw new Error('creator create failed')
+  const creatorId = creator.value.appSessionId
+  const creatorName = String(creator.value.name)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const peer = await h.host.createSessionInWorkspace(creatorId, {
+    createdBy: creatorId,
+    model: 'gpt-5.6-luna',
+    effort: 'low',
+  })
+  if (!peer.ok) throw new Error(`peer create failed: ${peer.error.code}`)
+  const peerId = peer.value.appSessionId
+
+  // The name is the picker's, never the caller's: PEER-SESSIONS §2 rules out
+  // user-chosen call signs in v1, so there is no name argument to pass.
+  expect(typeof peer.value.name).toBe('string')
+  expect(h.registry.findSession(peerId)?.createdBy).toBe(creatorId)
+  // The creator is on the DESCRIPTOR too, as an id: the renderer derives the
+  // "Bear, created by Alex" seam row from `name` + `createdBy` (§6) and cannot
+  // read the registry itself. Deliberately no resolved creator NAME here, which
+  // would bake a reusable name into a snapshot outliving the row (§2).
+  expect(peer.value.createdBy).toBe(creatorId)
+
+  const spawned = h.supervisor.records.get(peerId)
+  expect(spawned?.name).toBe(String(peer.value.name))
+  expect(spawned?.createdBy).toBe(creatorId)
+  // The creator's NAME is resolved by the host, the only process that can read
+  // the registry, and travels as a label beside the id.
+  expect(spawned?.createdByName).toBe(creatorName)
+  expect(spawned?.model).toBe('gpt-5.6-luna')
+  expect(spawned?.effort).toBe('low')
+
+  // An ordinary user-created session has no creator at all.
+  expect(creator.value.createdBy).toBeNull()
+  expect(h.registry.findSession(creatorId)?.createdBy).toBeUndefined()
+})
+
+test('a restore of a created peer rebuilds the creator id AND the creator name in its spawn config', async () => {
+  // PEER-SESSIONS §5 + R1. The doctrine block is built from the spawn env when
+  // the controller is constructed, so anything missing here is lost for the life
+  // of the process: a restored Bear boots reading as user-created. Every wake
+  // takes this path, including the peer-message restore (HRP §4 step 5).
+  // The config asserted here is what the supervisor turns into env, which
+  // `supervisor.test.ts` proves separately.
+  const h = makeHost()
+  const alex = await h.host.createSession({ cwd: h.cwd })
+  if (!alex.ok) throw new Error('creator create failed')
+  const alexId = alex.value.appSessionId
+  const alexName = String(alex.value.name)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const bear = await h.host.createSessionInWorkspace(alexId, { createdBy: alexId })
+  if (!bear.ok) throw new Error(`peer create failed: ${bear.error.code}`)
+  const bearId = bear.value.appSessionId
+  const bearName = String(bear.value.name)
+  expect(h.supervisor.records.get(bearId)?.createdByName).toBe(alexName)
+
+  // Park/close Bear, then bring it back the way a peer message would.
+  h.supervisor.emitReady(bearId, 'engine-bear')
+  await settle(() => h.registry.findSession(bearId)?.engineSessionId === 'engine-bear')
+  writeTranscript(h.storageDir, 'engine-bear')
+  await h.host.closeSession(bearId)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const restored = await h.host.restoreSession(bearId)
+  if (!restored.ok) throw new Error(`restore failed: ${restored.error.code}`)
+  const afterRestore = h.supervisor.records.get(bearId)
+  expect(afterRestore?.name).toBe(bearName)
+  expect(afterRestore?.createdBy).toBe(alexId)
+  expect(afterRestore?.createdByName).toBe(alexName)
+})
+
+test('a restart of a created peer re-applies the creator name, not just the opaque id', async () => {
+  // The sidecar cannot resolve an id at boot: its system prompt is fixed before
+  // the socket to main exists and it may not read the registry. So a restart
+  // that carried only `createdBy` would leave Bear holding a value it can never
+  // render.
+  const h = makeHost()
+  const alex = await h.host.createSession({ cwd: h.cwd })
+  if (!alex.ok) throw new Error('creator create failed')
+  const alexId = alex.value.appSessionId
+  const alexName = String(alex.value.name)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const bear = await h.host.createSessionInWorkspace(alexId, { createdBy: alexId })
+  if (!bear.ok) throw new Error(`peer create failed: ${bear.error.code}`)
+  const bearId = bear.value.appSessionId
+  const bearName = String(bear.value.name)
+
+  h.supervisor.emitReady(bearId, 'engine-bear-restart')
+  await settle(
+    () => h.registry.findSession(bearId)?.engineSessionId === 'engine-bear-restart',
+  )
+  writeTranscript(h.storageDir, 'engine-bear-restart')
+
+  // Clear what the create recorded, so the assertion can only pass if the
+  // RESTART re-supplied all three values.
+  const record = h.supervisor.records.get(bearId)!
+  delete record.name
+  delete record.createdBy
+  delete record.createdByName
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const restarted = await h.host.restartSession(bearId)
+  if (!restarted.ok) throw new Error(`restart failed: ${restarted.error.code}`)
+  // Re-read rather than reuse the alias above: the `delete`s narrowed its
+  // fields to `undefined`, which would make these assertions uncheckable.
+  const afterRestart = h.supervisor.records.get(bearId)
+  expect(afterRestart?.name).toBe(bearName)
+  expect(afterRestart?.createdBy).toBe(alexId)
+  expect(afterRestart?.createdByName).toBe(alexName)
+})
+
+test('restoring a row written before peer names existed allocates one and hands it to the spawn', async () => {
+  // HOST-REQUEST-PLANE §6 names this test: "restoring a pre-field row allocates
+  // a name". It is the load-bearing half of PEER-SESSIONS §2's invariant that
+  // every LIVE session has a name — an unnamed live row could never be listed,
+  // addressed or reported back to. The other naming tests all restore a row that
+  // already has one, so they prove survival, not minting.
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'project')
+  mkdirSync(cwd, { recursive: true })
+  const registryPath = join(storageDir, 'registry.json')
+  const appSessionId = randomUUID()
+
+  // The exact on-disk shape of a row written before the field existed: no
+  // `name`, no `createdBy`, no `peerWakeBlocked`.
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify({
+      registryVersion: 1,
+      hostPid: 999999,
+      updatedAt: Date.now(),
+      sessions: [
+        {
+          appSessionId,
+          engineSessionId: 'engine-prefield',
+          cwd,
+          forked: false,
+          createdAt: 1_700_000_000_000,
+          lastAttachedAt: 1_700_000_000_000,
+          lastMessageSentAt: null,
+          shutdown: 'clean',
+        },
+      ],
+    }, null, 2)}\n`,
+  )
+  writeTranscript(storageDir, 'engine-prefield')
+
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_c, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  await registry.launch()
+  expect(registry.findSession(appSessionId)?.name).toBeUndefined()
+
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (c: string): CwdValidation =>
+      c === cwd ? { ok: true, realpath: c } : { ok: false },
+  })
+
+  const restored = await host.restoreSession(appSessionId)
+  if (!restored.ok) throw new Error(`restore failed: ${restored.error.code}`)
+
+  // Minted, persisted, published, and — the half that actually reaches the
+  // engine process — handed to the spawn, since the doctrine block is built
+  // from the spawn env at controller construction.
+  const allocated = registry.findSession(appSessionId)?.name
+  expect(typeof allocated).toBe('string')
+  expect(PEER_NAME_POOL).toContain(allocated!)
+  expect(restored.value.name).toBe(allocated!)
+  expect(supervisor.records.get(appSessionId)?.name).toBe(allocated!)
 })
