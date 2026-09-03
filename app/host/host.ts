@@ -641,7 +641,6 @@ export class Host implements HostApi {
   }
 
   /**
-  /**
    * The creating session's NAME, for the child's spawn env (PEER-SESSIONS §5).
    *
    * The label has to be resolved HERE, on every path that starts a process,

@@ -1298,18 +1298,27 @@ test.each([
 )
 
 /**
- * HOST-REQUEST-PLANE §6 owes the OTHER half of the peer-rendering rule: an
- * incoming peer message must never appear in the staged-prompt strip either.
- * That strip is fed by the `queued-prompts.snapshot` read seam, a different
- * frame on a different store, so the guarantee is that the two paths do not
- * meet: the same user frame that mints a peer transcript row leaves the queued
- * store untouched, and the strip therefore has nothing to draw.
+ * The PROJECTOR half of the peer-rendering rule in HOST-REQUEST-PLANE §6: a
+ * peer-origin user frame mints a transcript row and stages nothing in the
+ * queued-prompts store, so the same frame is never held by both. The strip is
+ * fed by the `queued-prompts.snapshot` read seam, a different frame on a
+ * different store, and it has nothing to draw here.
  *
- * A message from a peer has already reached the model. Showing it as "waiting
- * to be sent", in the user's own dashed bubble, would attribute the peer's text
- * to the operator on the one surface that draws it as their unsent draft.
+ * This is only half the guarantee, and the name says so on purpose. The way
+ * the rule actually breaks is upstream, in the sidecar, by routing a peer
+ * message through the mid-turn prompt path instead of the task-notification
+ * path. That routing is covered by the queue test in
+ * `app/sidecar/sidecarServer.test.ts`, not here: this suite stays green
+ * through it. A test whose name claims more than its assertions is worse than
+ * no test, because the next person to change the routing reads the name,
+ * believes they are covered, and ships.
+ *
+ * Why the rule exists: a message from a peer has already reached the model.
+ * Showing it as "waiting to be sent", in the user's own dashed bubble, would
+ * attribute the peer's text to the operator on the one surface that draws it
+ * as their unsent draft.
  */
-test('a peer message reaches the transcript only, never the staged-prompt strip', () => {
+test('a peer-origin user frame mints a transcript row and stages nothing in the queued store', () => {
   const frame = messageFrame(
     'session-1',
     JSON.parse(
