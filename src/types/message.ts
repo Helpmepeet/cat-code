@@ -41,6 +41,12 @@ export type MessageOrigin =
       jobId: string
       attemptUuid: string
     }
+  /**
+   * A message delivered from another named session. `appSessionId` is the
+   * sender's app-side address, carried as a plain string: the engine never
+   * depends on `app/`.
+   */
+  | { kind: 'peer'; name: string; appSessionId: string }
 
 export type DeferredTerminalFailureV1 = {
   version: 1

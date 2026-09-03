@@ -230,6 +230,8 @@ export function toSDKMessageOrigin(
     }
     case 'deferred-continuation':
       return { kind: 'deferred-continuation' }
+    case 'peer':
+      return { kind: 'peer', name: origin.name }
     default: {
       // Closed-union tripwire: a new MessageOrigin must decide its SDK-facing
       // projection here rather than silently vanishing from the wire and being

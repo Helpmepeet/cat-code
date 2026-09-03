@@ -196,6 +196,22 @@ function syncInterruptionOrigin(contents: string): string {
   return `${contents.slice(0, start)}${nextDeclaration}${contents.slice(end)}`
 }
 
+function syncPeerOrigin(contents: string): string {
+  const member = "\n  | { kind: 'peer'; name: string }"
+  const hasPeerSchema =
+    /z\.object\(\{ kind: z\.literal\('peer'\), name: z\.string\(\) \}\)/.test(schemas)
+  const start = contents.indexOf('export type SDKMessageOrigin =')
+  if (start < 0) return contents
+  const end = contents.indexOf('\n\nexport type SDKUserMessage =', start)
+  if (end < 0) return contents
+  const declaration = contents.slice(start, end)
+  const withoutMember = declaration.replace(member, '')
+  const nextDeclaration = hasPeerSchema
+    ? `${withoutMember}${member}`
+    : withoutMember
+  return `${contents.slice(0, start)}${nextDeclaration}${contents.slice(end)}`
+}
+
 function syncToolResultStatus(contents: string): string {
   const field = "  tool_result_status?: 'cancelled'\n"
   const hasStatusSchema =
@@ -230,7 +246,9 @@ for (const path of effortSnapshotPaths) {
 
 for (const path of effortSnapshotPaths) {
   const contents = readFileSync(path, 'utf-8')
-  const nextContents = syncToolResultStatus(syncInterruptionOrigin(contents))
+  const nextContents = syncToolResultStatus(
+    syncPeerOrigin(syncInterruptionOrigin(contents)),
+  )
   if (nextContents !== contents) {
     writeFileSync(path, nextContents, 'utf-8')
     console.log(`Synced user-turn status fields in ${path.slice(repoRoot.length + 1)}.`)
