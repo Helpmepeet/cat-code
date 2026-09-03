@@ -1,9 +1,9 @@
 # PEER-SESSIONS — named desktop sessions that can list, message, read and create each other
 
-**Status: PROPOSED 2026-09-03 — operator ruling required on §13 only; every
-other choice below was ruled by the operator in the 2026-09-03 design session
-and is recorded here as decided. No implementation is authorized by this
-document.** Branch `migration`. Desktop app (`app/`) ONLY: the operator scoped
+**Status: RULED 2026-09-03 — every open item in §13 was ruled by the operator
+the same day; nothing in this document awaits a decision. Implementation is
+NOT yet dispatched; this document authorizes the design, not a build. Build
+order: §15.** Branch `migration`. Desktop app (`app/`) ONLY: the operator scoped
 the terminal out ("this feature is reserved to application only"). Depends on
 `HOST-REQUEST-PLANE.md`, which carries the one trust ruling this needs. Anchors
 verified against the working tree on 2026-09-03; source wins on conflict.
@@ -448,12 +448,13 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 - **A peer-traffic audit view** (metadata-first, per workspace). The log
   line above captures the data now; the surface is deferred.
 
-## 13. Ruling requested (only these)
+## 13. Rulings requested (all RULED 2026-09-03)
 
 1. ~~Name-pool theme~~ Ruled: gems and minerals plus metals, alchemy and
    mining (R11, §2a).
 2. ~~`MAX_PEERS_PER_CREATOR`~~ Ruled: no budget (R8).
-3. The SECURITY-MINIMUM amendment, asked in HOST-REQUEST-PLANE §9.
+3. ~~The SECURITY-MINIMUM amendment~~ Ruled: approved, applied
+   (HOST-REQUEST-PLANE §9).
 
 ## 14. Inputs
 

@@ -296,9 +296,13 @@ Rules (extend §2's R-rules; all enforced in main/host, never in the preload):
   raising it for a UX fix would have silently raised this cap. Splitting them left the effective
   live limit unchanged at 32.
 
-The sidecar trust boundary (§2) is unchanged: the control plane never adds an inbound frame
-type to the socket protocol; its only contact with a sidecar is the spawn environment
-(`CATCODE_SIDECAR_SESSION_ID`, cwd, resume id), which is main-owned input, not renderer input.
+The sidecar trust boundary (§2) is unchanged: the control plane adds inbound frame types only
+as results of sidecar-originated requests and as main-stamped peer deliveries, each validated
+at the sidecar under `HOST-REQUEST-PLANE.md` HR5 (amended 2026-09-03, operator ruling; the
+original sentence read "never adds an inbound frame type to the socket protocol"); beyond
+those, its only contact with a sidecar is the spawn environment
+(`CATCODE_SIDECAR_SESSION_ID`, cwd, resume id, and the peer `name`/`createdBy` keys), which
+is main-owned input, not renderer input.
 
 ---
 

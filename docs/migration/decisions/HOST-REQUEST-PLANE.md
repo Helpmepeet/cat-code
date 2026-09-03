@@ -1,7 +1,8 @@
 # HOST-REQUEST-PLANE — the sidecar asks main to do something
 
-**Status: PROPOSED 2026-09-03 — operator ruling required. No implementation is
-authorized by this document.** Branch `migration`. Companion to
+**Status: RULED 2026-09-03 (operator approved the §9 amendment; SECURITY-MINIMUM
+Addendum 2026-07-04 amended the same day). Implementation is NOT yet dispatched;
+this document authorizes the design, not a build.** Branch `migration`. Companion to
 `PEER-SESSIONS.md`, which is the first consumer; this document is kept separate
 because it changes WHO MAY ASK WHOM FOR WHAT, and that rule outlives any one
 feature. Anchors verified against the working tree on 2026-09-03; where this
@@ -41,8 +42,8 @@ designed blind.* E-3 says wire frames come "only when a remote client exists
   main to spawn processes. `SECURITY-MINIMUM.md` Addendum 2026-07-04 states
   the opposite as an invariant: "the control plane never adds an inbound frame
   type to the socket protocol; its only contact with a sidecar is the spawn
-  environment." **This document amends that one sentence**, and that amendment
-  is the ruling the operator is asked for (§9).
+  environment." **This document amends that one sentence**; the operator
+  approved the amendment on 2026-09-03 and it is applied (§9).
 - **Locked decisions (CLAUDE.md §5): none moved.** Transport stays the
   Unix-domain socket. N-process stays; there are more processes, not fewer.
   Raw `AppSessionEvent` stays raw; the new kinds sit beside events, no mapper.
@@ -286,7 +287,8 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 
 ## 9. Ruling requested
 
-**Amend `SECURITY-MINIMUM.md` Addendum 2026-07-04:** replace "the control plane
+**RULED 2026-09-03: approved and applied to `SECURITY-MINIMUM.md`.** The ask was:
+amend the Addendum 2026-07-04 by replacing "the control plane
 never adds an inbound frame type to the socket protocol" with "the control plane
 adds inbound frame types only as results of sidecar-originated requests and
 as main-stamped peer deliveries, each validated at the sidecar under HR5". That
