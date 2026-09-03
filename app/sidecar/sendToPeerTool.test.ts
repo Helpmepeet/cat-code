@@ -14,8 +14,9 @@
  *    evaluated rather than skipped.
  *  - Oversize text is refused BEFORE anything is routed, and never truncated.
  *  - An outcome outside the protocol's closed list is not believed. The result
- *    value is validated as `unknown` at the trust boundary and narrowed by type
- *    alone, so the tool checks the one field it acts on.
+ *    value is schema-checked per verb at the trust boundary now, so this is the
+ *    tool's own second check on the one field that decides what the model is
+ *    told about delivery.
  */
 
 import { expect, test } from 'bun:test'
@@ -132,6 +133,27 @@ test('every refusal reason is rendered, and none of them reads as delivered', as
   expect(outcomes.size).toBe(PEER_DELIVER_REFUSAL_REASONS.length)
 })
 
+test('a live peer that refused the hand-off is not reported as unwakeable', async () => {
+  const failedOnALivePeer = await send(
+    delivering('refused:delivery_failed').requestHost,
+    { to: 'Bear', text: 'hello' },
+  )
+  const failedToWake = await send(delivering('refused:wake_failed').requestHost, {
+    to: 'Bear',
+    text: 'hello',
+  })
+
+  expect(failedOnALivePeer.delivered).toBe(false)
+  expect(failedOnALivePeer.outcome).toBe('peer_did_not_take_it')
+  // The distinction IS the behaviour: reporting a live peer as one that never
+  // started sends the model looking for a session that is sitting right there,
+  // and stops it waiting on work that peer may still be doing.
+  expect(failedOnALivePeer.outcome).not.toBe(failedToWake.outcome)
+  expect(failedOnALivePeer.summary).not.toBe(failedToWake.summary)
+  expect(failedOnALivePeer.summary).toContain('running')
+  expect(failedOnALivePeer.summary).not.toContain('starting')
+})
+
 test('a name the caller may not address comes back as no such peer, not an error', async () => {
   const result = await send(
     failing({ code: 'session_not_found', message: 'no row' }).requestHost,
@@ -166,13 +188,14 @@ test('a rate refusal from the plane is still reported as not delivered', async (
 })
 
 test('an outcome outside the protocol list is never read as a delivery', async () => {
-  // The boundary validates `value` as unknown, so a wrong or future string can
-  // reach this tool wearing the right type. It must not become "delivered".
+  // A local check, not a boundary check: if the upstream schema and this union
+  // ever fall out of step, a wrong or future string reaches this tool wearing
+  // the right type. It must not become "delivered".
   const fake = fakeRequester({
     'peer.deliver': {
       ok: true,
-      // The cast is the POINT of the test: it reproduces exactly what the
-      // unvalidated boundary can hand this tool today.
+      // The cast is the POINT of the test: it manufactures the drift the local
+      // check exists to absorb, which no fake obeying the schema could.
       value: { messageId: 'm1', outcome: 'queued_somehow' as PeerDeliverOutcome },
     },
   })

@@ -78,6 +78,7 @@ export type SendToPeerOutcome =
   | 'already_sent'
   | 'peer_queue_full'
   | 'peer_did_not_start'
+  | 'peer_did_not_take_it'
   | 'no_such_peer'
   | 'text_too_large'
   | 'send_failed'
@@ -93,12 +94,13 @@ export type SendToPeerResult = {
  * Every outcome the wire can actually carry, as a lookup rather than a type
  * assertion.
  *
- * It exists because `host.result.value` is validated as `unknown` at the trust
- * boundary and then narrowed by TYPE alone, so `value.outcome` arrives wearing a
- * union it was never checked against. This tool reads exactly one field off that
- * value and it decides what the model is told about delivery, so it is checked
- * here against the protocol's own closed list before it is believed. Derived
- * from `PEER_DELIVER_REFUSAL_REASONS` so it cannot drift from the wire.
+ * `host.result.value` IS now schema-checked per verb at the trust boundary, so
+ * this is a SECOND, local check rather than the only one. It stays deliberately.
+ * This tool reads exactly one field off that value and that field decides what
+ * the model is told about delivery, which is the one thing §7 says must never be
+ * wrong; a check at the point of use costs a map lookup and does not depend on
+ * another module keeping its schema in step with this union. Derived from
+ * `PEER_DELIVER_REFUSAL_REASONS` so it cannot drift from the wire.
  */
 const DELIVER_OUTCOMES = new Map<string, PeerDeliverOutcome>([
   ['queued_live', 'queued_live'],
@@ -176,6 +178,17 @@ function describeOutcome(
         delivered: false,
         outcome: 'peer_did_not_start',
         summary: `Not delivered. ${to} did not finish starting, so nothing reached it. Check the peer list before trying again.`,
+      }
+    // Deliberately NOT worded as a wake failure. The peer was already running:
+    // saying it could not be started would send the model looking for a session
+    // that is sitting right there, and it would stop waiting on work that peer
+    // may still be doing.
+    case 'refused:delivery_failed':
+      return {
+        to,
+        delivered: false,
+        outcome: 'peer_did_not_take_it',
+        summary: `Not delivered. ${to} is running but did not take the message. It is still working, so wait and send again rather than treating it as gone.`,
       }
   }
 }

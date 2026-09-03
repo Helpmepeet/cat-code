@@ -301,10 +301,11 @@ function clamp(value: number, low: number, high: number): number {
 /**
  * The two fields this tool reads off a peer row, CHECKED rather than trusted.
  *
- * `host.result.value` is validated as `unknown` at the trust boundary and then
- * narrowed by type alone, so a row arrives wearing a shape nothing verified. One
- * of these two fields becomes a file name, so the row is parsed here and a row
- * that does not match is skipped rather than read.
+ * `host.result.value` IS now schema-checked per verb at the trust boundary, so
+ * this is a SECOND, local check rather than the only one. It stays because one
+ * of these two fields becomes a FILE NAME, and a path-forming value is worth
+ * checking where it is used and not only where it arrived. A row that does not
+ * parse here is skipped rather than read.
  */
 const peerRowSchema = lazySchema(() =>
   z.object({
@@ -330,9 +331,11 @@ function findPeer(peers: unknown, name: string): PeerRow | undefined {
 }
 
 /**
- * The transcript key comes from main's own registry, not from the model, but it
- * is about to become a file name: a shape check keeps a malformed value from
- * ever reaching `join`.
+ * The transcript key comes from main's own registry, not from the model, and the
+ * boundary now checks it is a string or null. That is its TYPE; this is its
+ * SHAPE, which is a different property and the one that matters here, because
+ * the value is about to become a file name. A string that is not a transcript id
+ * never reaches `join`.
  */
 const ENGINE_SESSION_ID =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/

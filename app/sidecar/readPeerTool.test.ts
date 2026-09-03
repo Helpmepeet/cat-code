@@ -567,10 +567,10 @@ test('the peer list being unavailable is answered, not thrown', async () => {
 
 test('a malformed peer row is skipped rather than trusted', async () => {
   isolatedWorkspace()
-  // The boundary validates the result value as unknown, so a row can arrive
-  // with the wrong shape wearing the right type.
-  // The cast is the POINT of the test: it reproduces exactly the shape the
-  // unvalidated boundary can hand this tool while the type says otherwise.
+  // A local check, not a boundary check: the row is schema-checked upstream,
+  // and this tool checks again because one of its fields becomes a file name.
+  // The cast is the POINT of the test: it manufactures the shape the local
+  // check exists to absorb, which no fake obeying the schema could.
   const broken = {
     name: 42,
     engineSessionId: { path: '/etc/passwd' },
