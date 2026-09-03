@@ -36,15 +36,15 @@ import { join } from 'node:path'
 
 // zod comes from the ENGINE'S copy, by path, on purpose. `app/` has a second,
 // transitive zod (4.4.3) beside the engine's root one (4.3.6), and a bare
-// `zod/v4` written in this directory resolves to the app copy. That breaks a
-// tool schema twice over: by type, because the two ZodObject types are
-// nominally unrelated and the schema then fails the engine's own tool
-// constraint, and at runtime, because the engine converts and parses this
-// schema with its copy's code (`zodToJsonSchema` -> root `toJSONSchema`). The
-// directory specifier resolves through `zod/v4/package.json` exactly as the
-// bare one does from `src/`, so both planes end up on one library. A tool
-// module speaks the engine's zod; the app copy stays right for everything in
-// `app/` that keeps its schemas to itself.
+// `zod/v4` written in this directory resolves to the app copy. TypeScript
+// dedupes two node_modules copies by package id, and that id carries the exact
+// version STRING: one string means one type identity, two strings mean two,
+// and comparing zod's recursive conditional types across two identities
+// exhausts the heap. The symptom is `tsc` dying at ~4GB with no diagnostic,
+// not a type error you can read. The path specifier resolves to the same
+// realpath `src/` gets, so both planes share one identity whatever the
+// versions say. At runtime the copies interoperate (a 4.4.3 schema converts
+// and parses fine through 4.3.6); it is the typecheck that breaks.
 import { z } from '../../node_modules/zod/v4'
 
 import { getOriginalCwd } from '../../src/bootstrap/state.js'

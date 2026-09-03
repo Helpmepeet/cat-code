@@ -16,14 +16,16 @@
 //
 // `app/node_modules/zod` (4.4.3) shadows the repository's own `zod` (4.3.6) for
 // every module under `app/`, so a bare `zod/v4` here resolves to a DIFFERENT
-// copy from the one `src/Tool.ts` sees. The two copies are structurally
-// incompatible to the type checker (their `$ZodCheck` and `ParsePayload` types
-// come from different files), so a schema built with the app copy does not
-// satisfy the engine's `AnyObject` constraint and the whole tool stops being a
-// `Tool` at all. Naming the path pins this file to the engine's copy, which also
-// means one zod instance rather than two inside the engine's own tool pipeline.
-// The durable fix is deduplicating the dependency; that is a package change, not
-// this file's to make.
+// copy from the one `src/Tool.ts` sees. TypeScript dedupes node_modules copies
+// by package id, which carries the exact version STRING, so two different
+// strings are two type identities and comparing zod's recursive conditional
+// types across them exhausts the heap: `tsc` dies at ~4GB without printing a
+// diagnostic. Byte-identical copies fail the same way once the version strings
+// differ, and matching strings are fine, so this is version skew and not a 4.3
+// versus 4.4 incompatibility. Naming the path pins this file to the engine's
+// realpath, and it is that shared realpath, not a matching version, that keeps
+// the two planes on one identity. The durable fix is deduplicating the
+// dependency; that is a package change, not this file's to make.
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type ToolDef } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'

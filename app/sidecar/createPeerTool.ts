@@ -16,9 +16,10 @@
  */
 
 // By path, not by package name: `app/node_modules/zod` shadows the engine's own
-// copy for every module under `app/`, and a schema built with the wrong one is
-// not a `Tool` input schema to the type checker. See the same note in
-// `listPeersTool.ts` for the full reason.
+// copy for every module under `app/`, and two copies whose version strings
+// differ are two type identities, which makes `tsc` exhaust its heap rather
+// than report an error. See the same note in `listPeersTool.ts` for the full
+// reason.
 import { z } from '../../node_modules/zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../src/Tool.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
