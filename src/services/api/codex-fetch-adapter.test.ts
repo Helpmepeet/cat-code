@@ -517,6 +517,58 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  test('streaming HTTP 404 with an empty body still retries over WebSocket', async () => {
+    const accessToken = createAccessToken('acct_ws_retry_empty')
+    const conv = 'conv_ws_retry_empty'
+    const originalFetch = globalThis.fetch
+    let httpCalls = 0
+    globalThis.fetch = (async () => {
+      httpCalls++
+      return new Response('', {
+        status: 404,
+        headers: { 'Content-Type': 'text/plain' },
+      })
+    }) as unknown as typeof globalThis.fetch
+
+    const streamingBody = JSON.stringify({
+      stream: true,
+      model: 'claude-sonnet-4-6', // maps to gpt-5.6-luna
+      _openaiInstructionAssembly: { instructions: 'Be precise.', inputMessages: [] },
+    })
+
+    try {
+      // Attempt 1: sticky forces HTTP for this account -> 404 -> throws + clears sticky.
+      _markStickyHttpFallbackForTest(conv, 'initial_ws_unavailable', 'acct_ws_retry_empty')
+      await expect(
+        createCodexFetch(accessToken, conv)('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: streamingBody,
+        }),
+      ).rejects.toThrow(/retrying over WebSocket/i)
+      expect(httpCalls).toBe(1)
+      expect(_hasStickyHttpFallbackForTest(conv, 'acct_ws_retry_empty')).toBe(false)
+
+      // Attempt 2 (what withRetry does): sticky cleared -> WebSocket is used, succeeds.
+      const fakeWs = installFakeWs()
+      fakeWs.responseBatches = [
+        [{ type: 'response.output_text.delta', delta: 'ws ok' }, completedWsResponse()],
+      ]
+      const res2 = await createCodexFetch(accessToken, conv)(
+        'https://api.anthropic.com/v1/messages',
+        { method: 'POST', body: streamingBody },
+      )
+      const body2 = await res2.text()
+      expect(fakeWs.getSentCount()).toBeGreaterThan(0) // attempt 2 went over WebSocket
+      expect(httpCalls).toBe(1) // and NOT over HTTP again
+      expect(body2).toContain('event: message_stop')
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conv)
+      resetCodexCacheContext()
+    }
+  })
+
   test('non-streaming HTTP model-404 does not claim a WebSocket retry', async () => {
     const accessToken = createAccessToken('acct_luna_nonstream')
     const conv = 'conv_luna_nonstream'

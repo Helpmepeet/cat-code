@@ -4023,25 +4023,25 @@ export function createCodexFetch(
           throw accountError
         }
       }
-      // Model-not-found over HTTP is a transport-cohort limitation, not a terminal
-      // error: the ChatGPT/Codex HTTP channel refuses some models (e.g. gpt-5.6-luna)
-      // that the WebSocket channel serves. Only STREAMING requests have a WebSocket
-      // path in this adapter, so only they can recover — clear this
-      // (conversation, account) sticky flag and surface a retryable error so
-      // withRetry re-attempts over WebSocket. Non-streaming requests have no WS path
-      // here; throwing "retry over WS" for them would loop, so they fall through to
-      // the plain 404 response below (unchanged behavior).
+      // ANY 404 on the streaming HTTP path is treated as a transport-cohort
+      // problem and retried over WebSocket. The response body is deliberately
+      // not consulted because an outage can return 404 with an empty body.
+      // Only STREAMING requests have a WebSocket path in this adapter, so only
+      // they can recover: clear this (conversation, account) sticky flag and
+      // surface a retryable error so withRetry re-attempts over WebSocket.
+      // Non-streaming requests have no WS path here; throwing "retry over WS"
+      // for them would loop, so they fall through to the plain 404 response
+      // below (unchanged behavior).
       // See docs/codex/2026-07-12-bug-luna-sticky-http-fallback-404.md.
       if (
         isStreamingAnthropicRequest &&
-        codexResponse.status === 404 &&
-        /model not found/i.test(errorText)
+        codexResponse.status === 404
       ) {
         clearStickyHttpFallback(conversationId, currentAccountId)
         throw new APIConnectionError({
           message:
             `Codex HTTP channel does not serve model ${codexModel} ` +
-            `(404 Model not found); retrying over WebSocket`,
+            `(404); retrying over WebSocket`,
         })
       }
       const errorBody = {

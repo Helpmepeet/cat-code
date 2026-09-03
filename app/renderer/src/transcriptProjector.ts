@@ -417,6 +417,7 @@ export type SystemNoticeRow = FrameRowSource & {
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
+    | 'provider_error'
   content: string
 }
 
@@ -1826,9 +1827,33 @@ function projectBatchAssistant(
   if (frameId && draft.session.seenFrameIds[frameId]) return false
 
   let changed = foldBatchToolResultBlocks(draft, body.content)
+  // The engine authors this text for the user, so it is surfaced as a notice
+  // rather than dropped.
   if (typeof message.error === 'string') {
-    if (frameId) markBatchFrameSeen(draft, frameId)
-    return true
+    const text = body.content
+      .filter((block): block is { type: 'text'; text: string } =>
+        isRecord(block) && block.type === 'text' && typeof block.text === 'string',
+      )
+      .map(block => block.text)
+      .join('\n')
+    if (text.length === 0) {
+      if (frameId) markBatchFrameSeen(draft, frameId)
+      return true
+    }
+    // Frame ids key both row identity and replay dedupe, so a constant would
+    // collide: the first notice would mark the key seen and silently swallow
+    // every later provider error. Derive one the way the block path does.
+    const messageIdForNotice = nonEmptyString(body.id)
+    const noticeFrameId =
+      frameId ?? (messageIdForNotice && `${messageIdForNotice}:provider_error`)
+    if (!noticeFrameId) return true
+    return appendBatchSystemNotice(
+      draft,
+      noticeFrameId,
+      'provider_error',
+      text,
+      recoveryInsertAt,
+    ) || changed
   }
   const messageId = nonEmptyString(body.id) ?? frameId
   if (!messageId) return changed
@@ -2354,15 +2379,37 @@ function projectAssistantFrame(
   // `user`-frame path so both shapes resolve the same ToolCard.
   state = foldToolResultBlocks(state, body.content)
 
-  // Typed assistant error codes classify provider failure. Their content is not
-  // safe assistant prose; the terminal result renders the curated explanation.
+  // The engine authors this text for the user, so it is surfaced as a notice
+  // rather than dropped.
   if (typeof message.error === 'string') {
-    return {
-      ...state,
-      seenFrameIds: frameId
-        ? { ...state.seenFrameIds, [frameId]: true }
-        : state.seenFrameIds,
+    const text = body.content
+      .filter((block): block is { type: 'text'; text: string } =>
+        isRecord(block) && block.type === 'text' && typeof block.text === 'string',
+      )
+      .map(block => block.text)
+      .join('\n')
+    if (text.length === 0) {
+      return {
+        ...state,
+        seenFrameIds: frameId
+          ? { ...state.seenFrameIds, [frameId]: true }
+          : state.seenFrameIds,
+      }
     }
+    // Frame ids key both row identity and replay dedupe, so a constant would
+    // collide: the first notice would mark the key seen and silently swallow
+    // every later provider error. Derive one the way the block path does.
+    const messageIdForNotice = nonEmptyString(body.id)
+    const noticeFrameId =
+      frameId ?? (messageIdForNotice && `${messageIdForNotice}:provider_error`)
+    if (!noticeFrameId) return state
+    return appendSystemNotice(
+      state,
+      sessionId,
+      noticeFrameId,
+      'provider_error',
+      text,
+    )
   }
 
   const messageId =

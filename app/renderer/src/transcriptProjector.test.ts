@@ -230,7 +230,7 @@ test('marks a persisted cancelled tool result separately from a failure', () => 
   ])
 })
 
-test('suppresses typed provider error text before the curated result seam', () => {
+test('projects typed provider error text before the curated result seam', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   const play = (message: SDKMessage) => {
@@ -266,6 +266,11 @@ test('suppresses typed provider error text before the curated result seam', () =
   })
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({
+      kind: 'system-notice',
+      noticeType: 'provider_error',
+      content: 'OAuth access token has been revoked',
+    }),
     expect.objectContaining({ kind: 'result', subtype: 'error_auth_required' }),
   ])
 })
@@ -5524,3 +5529,31 @@ test('a mid-turn reload replays the open stream, so the turn’s second block st
     ),
   ).toMatchObject(finished)
 })
+
+test('assistant frame with error produces a provider_error system notice', () => {
+  const frame = messageFrame('session-1', {
+    type: 'assistant',
+    error: 'invalid_request',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: "There's an issue with the selected model" },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000001',
+  } as unknown as SDKMessage)
+
+  const state = projectSequential([ready('session-1'), frame])
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'provider_error',
+    content: "There's an issue with the selected model",
+  })
+  expect(
+    projectServerFrames(createTranscriptState(), [ready('session-1'), frame]),
+  ).toEqual(state)
+})
+

@@ -5118,6 +5118,7 @@ function SystemNoticeBox({
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
+    | 'provider_error'
   content: string
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
@@ -5136,12 +5137,14 @@ function SystemNoticeBox({
 const NOTICE_STYLE: Record<
   | 'api_retry'
   | 'local_command_output'
-  | 'account_diagnostic',
+  | 'account_diagnostic'
+  | 'provider_error',
   { glyph: string; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
+  provider_error: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
 
