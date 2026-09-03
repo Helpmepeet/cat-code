@@ -31,7 +31,7 @@ Bear" is easier to say than an id.
 | R8 | Creation gating: the ordinary permission gate is enough. **No peer budget** (2026-09-03, second ruling: "no budget, allow it to spawn as much as possible"). | Holds because creation is instruction-driven, never self-initiated (§5). Under that rule an agent-created session is the operator opening a tab. The only bounds are the ones every session already has, HC4 (`MAX_LIVE_SESSIONS` 32, `MAX_SPAWNS_PER_WINDOW` 8 / 10 s); raising those is a SECURITY-MINIMUM change, not a peer decision. |
 | R9 | Same workspace only. | Create, list, read and send are scoped to the caller's cwd. No cross-workspace tool exists in v1, so no cross-workspace gate exists either. |
 | R10 | Codex account for a created peer: "reuse the same logic as how we assign account to that session." | Nothing new. No account field crosses the request plane (HOST-REQUEST-PLANE HR6). `peer.create` spawns through the same path as a user-created session, and the engine in the new process picks its account exactly as it does today: at its first query it registers a main lease (`src/query.ts:422`) via `selectMainAccountForLease` (`src/services/api/codexAccountLeaseManager.ts:511`), which pins the pool's persisted active account and repairs to a healthy one if that is unusable. The supervisor spawn env carries no account key (`app/supervisor/supervisor.ts:354-364`), so there is nothing to inherit or override; the creator and the peer read the same pool file. |
-| R11 | Name-pool theme: animals REJECTED ("give me other theme"). | Open; candidates in §13. |
+| R11 | Name-pool theme: **gems and minerals**, extended with metals, alchemy and mining vocabulary to reach the count ("if it not enough we can just combine with other thing also. maybe alchemy related word? or mine related"). Animals rejected. | Pool drafted in §2a: 306 words across five groups, 255 of them at 8 letters or fewer, so the ≥256 floor holds even after the build prunes confusable pairs. The list is the build's input, not a contract; the picker file owns the final set. |
 
 ## 2. Naming
 
@@ -82,6 +82,55 @@ Bear" is easier to say than an id.
   two-id model is untouched.
 - **Every session is named**, user-created and agent-created alike. Sessions
   that predate the field have none and are simply not peers (§3).
+
+### 2a. Name pool (R11), drafted 2026-09-03
+
+Theme ruled by the operator: gems and minerals first, extended with metals,
+alchemy and mining words because gems alone stop near 150. Criteria from §2
+apply: short, pronounceable, visually distinct, disjoint from the subagent
+scientist pools, no confusable pairs. The build prunes; this list proves the
+count is reachable (306 words, 255 at ≤8 letters, floor is 256 after
+pruning). Known pairs the build should resolve to one side: Sodium/Sodalite,
+Zircon/Zincite, Barium/Barite, Rhodium/Rhodonite, Beryl/Beryllium,
+Cerium/Cesium, Erbium/Terbium, Selenium/Selenite, Agate/Augite. Words that
+read as UI verbs or states were already left out (Strike, Charge, Skip, Cage,
+Dump, Blast, Face, Claim).
+
+- **Gems:** Agate Amber Beryl Citrine Coral Diamond Emerald Garnet Jade Jasper
+  Jet Lapis Onyx Opal Pearl Peridot Ruby Sapphire Spinel Topaz Zircon Iolite
+  Kunzite Kyanite Larimar Morganite Nephrite Sodalite Sphene Sugilite Unakite
+  Howlite Charoite Fluorite Selenite Celestite Ammolite Painite Bixbite Pyrope
+  Hessonite Prehnite Rhodonite Apatite Azurite Ametrine Variscite Malachite
+  Goshenite Heliodor Danburite Hiddenite Cavansite Benitoite Tsavorite
+  Sardonyx Scapolite Zoisite Almandine Andradite Uvarovite Sunstone Moonstone
+  Turquoise Amethyst Carnelian Tanzanite Obsidian Bloodstone
+- **Minerals and rocks:** Quartz Feldspar Mica Gypsum Calcite Halite Galena
+  Pyrite Hematite Bauxite Cinnabar Corundum Dolomite Barite Talc Olivine
+  Augite Biotite Zeolite Stibnite Bornite Cuprite Rutile Ilmenite Zincite
+  Willemite Aragonite Siderite Witherite Kaolin Basalt Granite Marble Slate
+  Shale Flint Chert Pumice Tuff Gneiss Schist Gabbro Diorite Rhyolite
+  Andesite Dacite Scoria Breccia Porphyry Syenite Lignite Graphite Ochre
+  Umber Sienna Loess Marl Alabaster Soapstone Sandstone Quartzite Wulfenite
+  Crocoite Scheelite Cerussite Anglesite Vanadinite Cassiterite
+- **Metals and elements:** Gold Silver Copper Iron Tin Lead Zinc Nickel Cobalt
+  Platinum Iridium Osmium Rhodium Titanium Tungsten Chromium Vanadium Bismuth
+  Antimony Mercury Cadmium Indium Gallium Tantalum Niobium Rhenium Selenium
+  Silicon Sulfur Carbon Boron Lithium Sodium Cesium Barium Radium Uranium
+  Thorium Cerium Yttrium Scandium Erbium Terbium Holmium Lutetium Hafnium
+  Manganese Magnesium Beryllium Strontium Rubidium Potassium Argon Neon
+  Krypton Xenon Radon Helium Bronze Brass Steel Pewter Electrum Sterling Invar
+  Cupronickel
+- **Alchemy:** Aether Azoth Elixir Tincture Crucible Alembic Retort Athanor
+  Cucurbit Pelican Mortar Pestle Calx Regulus Vitriol Nitre Alum Borax Natron
+  Verdigris Litharge Minium Realgar Orpiment Philtre Aludel Nigredo Albedo
+  Rubedo Ouroboros Hermes Paracelsus Flamel Zosimos Geber Rebis Homunculus
+  Basilisk Salamander Undine Sylph Gnome Sol Luna Mercurius Quintessence
+- **Mining:** Shaft Adit Drift Stope Lode Vein Seam Reef Placer Ore Tailings
+  Gangue Headframe Winze Crosscut Gallery Tunnel Quarry Sluice Rocker Cradle
+  Riffle Nugget Assay Smelter Furnace Forge Anvil Ingot Bloom Slag Flux Kiln
+  Bellows Mattock Auger Lantern Canary Hoist Windlass Kibble Stull Pillar Muck
+  Spoil Grubstake Prospect Motherlode Bonanza Gulch Bedrock Paydirt Kobold
+  Tommyknocker Collier Hewer Banksman
 
 ## 3. Which sessions are listed, and by what logic
 
@@ -401,15 +450,8 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 
 ## 13. Ruling requested (only these)
 
-1. **Name-pool theme.** Animals rejected (R11). Constraints stand: ≥256
-   short, pronounceable, visually distinct words, disjoint from the subagent
-   scientist pools. Candidates that meet the count: **human first names**
-   (the operator's own examples were Alex, Bear, Charlie, Dave; thousands
-   available, one or two syllables, the most natural to say aloud);
-   **plants and trees** (Oak, Fern, Moss, Sage, Ivy, Maple; ~300 usable);
-   **gems and minerals** (Opal, Jade, Onyx, Flint, Amber; ~150, short of the
-   count without suffixes); **foods and spices** (Mango, Basil, Cocoa, Pepper;
-   ~300). First names is the recommendation.
+1. ~~Name-pool theme~~ Ruled: gems and minerals plus metals, alchemy and
+   mining (R11, §2a).
 2. ~~`MAX_PEERS_PER_CREATOR`~~ Ruled: no budget (R8).
 3. The SECURITY-MINIMUM amendment, asked in HOST-REQUEST-PLANE §9.
 
