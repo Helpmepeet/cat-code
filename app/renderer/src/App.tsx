@@ -2547,6 +2547,24 @@ export function App() {
     }
   }, [releasePendingSubmit])
 
+  const setPeerWakeBlocked = useCallback(
+    async (sessionId: SessionId, blocked: boolean) => {
+      // PEER-SESSIONS §6 — the user's one control over the ruling that a peer
+      // message may wake a closed session. Durable host state, so nothing is
+      // written locally: the row re-renders from the host update that follows,
+      // which is the only copy that survives a relaunch. A typed refusal is
+      // surfaced instead of being swallowed, because a toggle that silently
+      // fails would leave the menu showing a decision that was never saved.
+      try {
+        const result = await getBridge().setPeerWakeBlocked(sessionId, blocked)
+        if (!result.ok) setShellError(hostErrorMessage(result.error))
+      } catch (error) {
+        setShellError(errorMessage(error))
+      }
+    },
+    [],
+  )
+
   const restartTab = useCallback(async (sessionId: SessionId) => {
     // The fixed control-plane response carries a typed refusal instead of relying
     // on a later lifecycle event that may never arrive.
@@ -4087,6 +4105,17 @@ export function App() {
                           delete next[targetId]
                           return next
                         })
+                      // PEER-SESSIONS §6 — the user's standing decision about
+                      // whether a peer may reopen this session. Sends the id and
+                      // the OPPOSITE of the state the row is showing, and nothing
+                      // else; the new state comes back on the row's own host
+                      // update, so there is no optimistic local write to disagree
+                      // with what was actually persisted.
+                      else if (kind === 'peer-wake-blocked')
+                        void setPeerWakeBlocked(
+                          targetId,
+                          targetRow.peerWakeBlocked !== true,
+                        )
                       // P4-29 — was a bare `selectTab`, which merely re-focused a
                       // stale pane for the very rows whose menu says "Restore".
                       else if (kind === 'open') openCatalogRow(targetRow)

@@ -213,6 +213,7 @@ const CH_HOST_CREATE = 'catcode:host:create'
 const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
 const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
+const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'
@@ -567,6 +568,24 @@ const bridge: CatCodeBridge = {
   closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
     sendGuard.assertAllowed({ appSessionId })
     return ipcRenderer.invoke(CH_HOST_CLOSE, appSessionId) as Promise<
+      HostResult<void>
+    >
+  },
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>> {
+    // PEER-SESSIONS §6 — the user's "don't let peers reopen this" decision.
+    // Id-only + a boolean, the same posture as closeSession: the renderer names
+    // an EXISTING row and authors no rule, no path and no peer. Main re-validates
+    // and the host re-checks the id against its own rows (HC2), because the
+    // preload runs in the renderer's process and is never the boundary.
+    sendGuard.assertAllowed({ appSessionId, blocked })
+    // One line on purpose: `preloadSource.test.ts` scrapes `ipcRenderer.invoke(`
+    // for the channel constant that follows it, and a wrapped argument list makes
+    // this sender invisible to the guard that proves no invoke rides a
+    // renderer-supplied channel name.
+    return ipcRenderer.invoke(CH_HOST_SET_PEER_WAKE_BLOCKED, appSessionId, blocked) as Promise<
       HostResult<void>
     >
   },

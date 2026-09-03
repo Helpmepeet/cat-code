@@ -747,6 +747,52 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
   }
 }
 
+describe('PEER-SESSIONS §6 — the peer-reopen decision reaches the merged row', () => {
+  test('a blocked registry row carries the decision; an unblocked one does not', () => {
+    // The whole control is durable state the user alone clears, and the sidebar
+    // menu renders from THIS row. A merge that dropped the field would leave the
+    // menu permanently unchecked for a session that really does refuse peer
+    // wake-ups, which is the failure the toggle exists to prevent.
+    const merged = selectMergedSessionRows(
+      [
+        descriptor({ appSessionId: 'app-blocked', peerWakeBlocked: true }),
+        descriptor({ appSessionId: 'app-open' }),
+      ],
+      null,
+    )
+    const byApp = new Map(merged.map(r => [r.appSessionId, r]))
+    expect(byApp.get('app-blocked')!.peerWakeBlocked).toBe(true)
+    expect(byApp.get('app-open')!.peerWakeBlocked).toBe(false)
+  })
+
+  test('a closed row keeps it: those are the rows a peer can wake', () => {
+    const [row] = selectMergedSessionRows(
+      [
+        descriptor({
+          appSessionId: 'app-closed',
+          engineSessionId: 'engine-closed',
+          status: 'exited',
+          restorable: true,
+          peerWakeBlocked: true,
+        }),
+      ],
+      null,
+    )
+    expect(row!.live).toBe(false)
+    expect(row!.peerWakeBlocked).toBe(true)
+  })
+
+  test('a transcript the app never opened has no decision to carry', () => {
+    const merged = selectMergedSessionRows(
+      [],
+      snapshot([entry({ sessionId: 'history-1' })]),
+    )
+    expect(merged).toHaveLength(1)
+    expect(merged[0]!.inRegistry).toBe(false)
+    expect(merged[0]!.peerWakeBlocked).toBe(false)
+  })
+})
+
 describe('selectRowEngineSessionId (the merge key read back apart)', () => {
   test('a history row is keyed by its engine id', () => {
     expect(selectRowEngineSessionId(row({ sessionId: 'engine-1' }))).toBe('engine-1')

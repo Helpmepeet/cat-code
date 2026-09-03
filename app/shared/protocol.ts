@@ -4154,6 +4154,22 @@ export type CatCodeBridge = {
   previewSession(appSessionId: SessionId): Promise<TranscriptCache | null>
   /** Graceful close; the row is kept restorable. */
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /**
+   * PEER-SESSIONS §6 — set or clear this session's "do not let peers reopen me"
+   * standing decision, the user's ONE control over the ruling that a peer
+   * message may wake a closed session. HC3 fixed sender, modelled on
+   * `closeSession`: a session id and a boolean, nothing else. The renderer
+   * authors no path and no rule, and only the user can clear it — no peer, and
+   * no reopen, does.
+   *
+   * Durable host state, so it survives close, park, restore and relaunch, and an
+   * unknown id answers `session_not_found` (HC2) rather than reporting a success
+   * that persisted nothing.
+   */
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>>
   /** Snapshot of live ∪ restorable sessions. */
   listSessions(): Promise<SessionDescriptor[]>
   /**

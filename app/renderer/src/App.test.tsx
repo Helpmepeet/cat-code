@@ -542,6 +542,43 @@ test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the p
   expect(echoBody).not.toContain('setSessionsTagEcho({ sessionIds:')
 })
 
+test('PEER-SESSIONS §6 wiring tripwire: the peer-reopen row toggles, and writes nothing locally', () => {
+  // Two things the resolver and the menu cannot see, and both are how this
+  // control would quietly become a lie:
+  //
+  //   1. It must send the OPPOSITE of the state it rendered. A dispatch that
+  //      always sent `true` would be a one-way switch with a check on it, and
+  //      the user could never clear a decision only they are allowed to clear.
+  //   2. It must not write the new state locally. The row is durable host state;
+  //      an optimistic local write would tick the box for a call that failed and
+  //      leave the menu disagreeing with what a relaunch will show.
+  //
+  // LAYER HONESTY: SSR-only suite, so this is a source assertion over the
+  // dispatch arm, not a click. The resolved row's state and the rendered check
+  // are covered for real next door (`sessionActions.test.ts`,
+  // `SessionActionsMenu.test.tsx`).
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const armStart = source.indexOf("else if (kind === 'peer-wake-blocked')")
+  expect(armStart).toBeGreaterThan(-1)
+  const armEnd = source.indexOf("else if (kind === 'open')", armStart)
+  expect(armEnd).toBeGreaterThan(armStart)
+  const arm = source.slice(armStart, armEnd)
+  expect(arm).toContain('setPeerWakeBlocked(')
+  expect(arm).toContain('targetRow.peerWakeBlocked !== true')
+
+  const handlerStart = source.indexOf('const setPeerWakeBlocked = useCallback(')
+  expect(handlerStart).toBeGreaterThan(-1)
+  const handlerEnd = source.indexOf('const restartTab = useCallback(', handlerStart)
+  expect(handlerEnd).toBeGreaterThan(handlerStart)
+  const handler = source.slice(handlerStart, handlerEnd)
+  expect(handler).toContain('getBridge().setPeerWakeBlocked(sessionId, blocked)')
+  expect(handler).toContain('if (!result.ok) setShellError(hostErrorMessage(result.error))')
+  // No local echo of the new state: the row re-renders from the host update.
+  expect(handler).not.toContain('setSessionCatalogRows')
+  expect(handler).not.toContain('peerWakeBlocked:')
+})
+
 test('P4-29 wiring tripwire: the Sessions-page write boundary gets the same hasEngine input as the ⋯ menu', () => {
   // The defect this pins: `isWritableSessionRow` (`sessionsPageState.ts`) checked
   // only `row.live`, which stays true for a host row whose supervisor record has

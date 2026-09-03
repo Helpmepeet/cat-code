@@ -260,6 +260,58 @@ describe('resolveSessionActions', () => {
     expect(kinds).not.toContain('hide-hidden' as SessionActionKind)
   })
 
+  test('PEER-SESSIONS §6: the peer-reopen row reads its state off the row, not local memory', () => {
+    // The point of the whole control: the decision is durable and only the user
+    // clears it, so the menu must show what was PERSISTED. A row that always
+    // rendered unchecked would be a lie about state that survives a relaunch.
+    const off = byKind(resolveSessionActions(row(), { isActiveOpen: true })).get(
+      'peer-wake-blocked',
+    )!
+    expect(off.label).toBe('Don’t let peers reopen')
+    expect(off.section).toBe('primary')
+    expect(off.checked).toBe(false)
+
+    const on = byKind(
+      resolveSessionActions(row({ peerWakeBlocked: true }), { isActiveOpen: true }),
+    ).get('peer-wake-blocked')!
+    expect(on.checked).toBe(true)
+    // One row with a constant label, never a relabelled verb pair: the state is
+    // the check.
+    expect(on.label).toBe(off.label)
+  })
+
+  test('PEER-SESSIONS §6: the peer-reopen row survives every state a peer could wake', () => {
+    // The rows this control EXISTS for are the ones a peer can reopen: parked and
+    // closed. Gating it on `live` (as Rename and Export are) would disable it for
+    // exactly those, and gating it on the active tab would disable it for every
+    // row but one.
+    for (const overrides of [
+      { live: true, restorable: false, status: 'ready' as const },
+      { live: false, restorable: true, status: 'exited' as const, parked: true },
+      { live: false, restorable: true, status: 'exited' as const },
+    ]) {
+      for (const isActiveOpen of [true, false]) {
+        const item = byKind(
+          resolveSessionActions(row(overrides), { isActiveOpen, hasEngine: false }),
+        ).get('peer-wake-blocked')!
+        expect(item.enabled).toBe(true)
+        expect(item.reason).toBeUndefined()
+      }
+    }
+  })
+
+  test('PEER-SESSIONS §6: a session the app never opened has nothing to carry the decision', () => {
+    const item = byKind(
+      resolveSessionActions(
+        row({ appSessionId: null, inRegistry: false, live: false, status: 'history' }),
+        { isActiveOpen: false },
+      ),
+    ).get('peer-wake-blocked')!
+    expect(item.enabled).toBe(false)
+    expect(item.reason).toContain('Open this session here first')
+    expect(item.checked).toBe(false)
+  })
+
   test('every item belongs to a known section', () => {
     for (const item of resolveSessionActions(row(), { isActiveOpen: true })) {
       expect(SESSION_ACTION_SECTIONS).toContain(item.section)

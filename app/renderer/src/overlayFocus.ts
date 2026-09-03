@@ -20,8 +20,13 @@ export const FOCUSABLE_ELEMENT_SELECTOR = [
 export const MENU_ITEM_SELECTOR = [
   'button[role="menuitem"]:not([disabled])',
   'button[role="menuitemradio"]:not([disabled])',
+  // A toggle row inside a menu is `menuitemcheckbox`, and arrow-key roving must
+  // reach it like any other row; without this it is Tab-reachable but skipped by
+  // the arrows, which reads as a dead row to anyone driving the menu by keyboard.
+  'button[role="menuitemcheckbox"]:not([disabled])',
   '[role="menuitem"][tabindex]:not([tabindex="-1"])',
   '[role="menuitemradio"][tabindex]:not([tabindex="-1"])',
+  '[role="menuitemcheckbox"][tabindex]:not([tabindex="-1"])',
 ].join(', ')
 
 type FocusableElement = {

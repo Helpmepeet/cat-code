@@ -124,6 +124,13 @@ export type MergedSessionRow = {
    * that predates the field and has not been spawned since.
    */
   name: string | null
+  /**
+   * PEER-SESSIONS §6 — has the user said that peers may not reopen this session?
+   * Optional, exactly like the descriptor field it mirrors: absent is the same
+   * answer as false, and only a registry-backed row can carry it at all, so the
+   * menu reads it as `=== true`.
+   */
+  peerWakeBlocked?: boolean
   /** A live registry row with a running process. */
   live: boolean
   /** A registry row whose process is gone but can be re-spawned. */
@@ -228,6 +235,7 @@ export function selectMergedSessionRows(
       title,
       displayLabel: resolveSessionLabel(title, descriptor.cwd),
       name: descriptor.name ?? null,
+      peerWakeBlocked: descriptor.peerWakeBlocked === true,
       live: !descriptor.restorable && descriptor.status !== 'exited',
       restorable: descriptor.restorable,
       status: descriptor.status,
@@ -257,8 +265,10 @@ export function selectMergedSessionRows(
       cwdExists: entry.cwdExists,
       title: entry.title,
       displayLabel: resolveSessionLabel(entry.title, entry.cwd),
-      // A transcript the registry never tracked was never allocated a name.
+      // A transcript the registry never tracked was never allocated a name, and
+      // has no row to carry the user's peer-reopen decision either.
       name: null,
+      peerWakeBlocked: false,
       live: false,
       restorable: false,
       status: 'history',

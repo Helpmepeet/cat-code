@@ -327,6 +327,9 @@ const CH_HOST_CREATE = 'catcode:host:create'
 const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
 const CH_HOST_RESTORE = 'catcode:host:restore'
 const CH_HOST_CLOSE = 'catcode:host:close'
+// PEER-SESSIONS §6 — the user's "don't let peers reopen this session" decision.
+// Renderer-facing only: no frame carries it and no peer can clear it.
+const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'
 const CH_HOST_LIST = 'catcode:host:list'
 const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
 const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'
@@ -2873,6 +2876,36 @@ function registerHostControlPlane(): void {
       )
       if (!host) return Promise.resolve(noHost<void>())
       return host.closeSession(sessionId)
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_SET_PEER_WAKE_BLOCKED,
+    (
+      event,
+      appSessionId: unknown,
+      blocked: unknown,
+    ): Promise<HostResult<void>> => {
+      // PEER-SESSIONS §6 — the user's standing "don't let peers reopen this"
+      // decision. Validated HERE and again at the host (HC2): the renderer is
+      // the least trusted zone, so the id must be a real string and the state a
+      // real boolean, never a coerced truthy value. `String(x)`/`!!x` would turn
+      // a broken caller into a silent write of the WRONG state, which for a
+      // control whose whole point is durability is the worst failure available.
+      if (!isMainWindowSender(event)) {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'session_not_found', message: 'unknown sender' },
+        } satisfies HostResult<void>)
+      }
+      if (typeof appSessionId !== 'string' || typeof blocked !== 'boolean') {
+        return Promise.resolve({
+          ok: false,
+          error: { code: 'session_not_found', message: 'invalid request' },
+        } satisfies HostResult<void>)
+      }
+      if (!host) return Promise.resolve(noHost<void>())
+      return host.setPeerWakeBlocked(appSessionId, blocked)
     },
   )
 

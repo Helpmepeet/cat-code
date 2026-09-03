@@ -55,6 +55,8 @@ export function SessionActionIcon({
       return <ActionEyeIcon />
     case 'hide-hidden':
       return <ActionEyeOffIcon />
+    case 'peer-wake-blocked':
+      return <ActionBellOffIcon />
     default: {
       const exhaustive: never = kind
       void exhaustive
@@ -189,10 +191,39 @@ export function ActionEyeOffIcon(): ReactNode {
   )
 }
 
+/**
+ * PEER-SESSIONS §6 — the struck-through bell for "don't let peers reopen".
+ * The bell is the thing that would wake this session; the slash is the standing
+ * refusal. Its stroke runs at the eye-off slash's 45°, so the two negated glyphs
+ * in this menu strike the same way, but NOT on the eye's exact coordinates:
+ * `M1 1l22 22` is how `SessionActionsMenu.test.tsx` tells eye from eye-off in
+ * static markup, and a second glyph carrying it would make that check answer
+ * true for any menu containing this row.
+ */
+export function ActionBellOffIcon(): ReactNode {
+  return (
+    <Glyph>
+      <path d="M8.6 3.6A6 6 0 0 1 18 8c0 2.4.5 4.2 1.2 5.5" />
+      <path d="M6 8a6 6 0 0 1 .1-1.2M6 8c0 5-2 6-2 6h12.5" />
+      <path d="M10.3 20a2 2 0 0 0 3.4 0" />
+      <path d="M2.5 2.5l19 19" />
+    </Glyph>
+  )
+}
+
 export function ActionChevronIcon(): ReactNode {
   return (
     <Glyph>
       <polyline points="9 18 15 12 9 6" />
+    </Glyph>
+  )
+}
+
+/** The tick a checked toggle row draws in its trailing slot. */
+export function ActionCheckIcon(): ReactNode {
+  return (
+    <Glyph>
+      <polyline points="20 6 9 17 4 12" />
     </Glyph>
   )
 }
