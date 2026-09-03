@@ -130,6 +130,27 @@ export function parsePromptTooLongTokenCounts(rawMessage: string): {
  * Reactive compact uses this gap to jump past multiple groups in one retry
  * instead of peeling one-at-a-time.
  */
+/**
+ * The Codex/OpenAI spelling of a context overflow.
+ *
+ * Matched on the API's documented error CODE, deliberately never on its
+ * human-readable sentence. The sentence is what the Anthropic branch matches,
+ * and that is precisely why this case went unhandled: an OpenAI overflow reads
+ * "your input exceeds the context window of this model", which shares no words
+ * with "prompt is too long". Nothing recognized it, `isPromptTooLongMessage`
+ * stayed false, and the collapse-drain and reactive-compaction recovery never
+ * ran on a `gpt-*` turn. A code is a stable API constant; a sentence is not.
+ *
+ * Honest limit: five months of local transcripts contain no live instance of
+ * this error, so the code comes from OpenAI's published error vocabulary rather
+ * than from observed traffic. If the shape is wrong this branch is inert, which
+ * is today's behaviour rather than a regression. It cannot fire on Anthropic,
+ * which has no such code.
+ */
+export function isCodexContextOverflowError(error: Error): boolean {
+  return /context_length_exceeded/i.test(error.message)
+}
+
 export function getPromptTooLongTokenGap(
   msg: AssistantMessage,
 ): number | undefined {
@@ -695,7 +716,8 @@ function getAssistantMessageFromErrorInternal(
   // Use case-insensitive check since Vertex returns "Prompt is too long" (capitalized)
   if (
     error instanceof Error &&
-    error.message.toLowerCase().includes('prompt is too long')
+    (error.message.toLowerCase().includes('prompt is too long') ||
+      isCodexContextOverflowError(error))
   ) {
     // Content stays generic (UI matches on exact string). The raw error with
     // token counts goes into errorDetails — reactive compact's retry loop

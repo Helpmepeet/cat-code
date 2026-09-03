@@ -1805,12 +1805,19 @@ export async function bashToolHasPermission(
     astCommands = astResult.commands
   }
 
-  // Legacy shell-quote pre-check. Only reached on 'parse-unavailable'
-  // (tree-sitter not loaded OR TREE_SITTER_BASH feature gated off). Falls
+  // Legacy shell-quote pre-check. Reached on 'parse-unavailable', which has
+  // THREE causes, not two: tree-sitter not loaded, TREE_SITTER_BASH gated off,
+  // or shadow mode forcing it above so legacy stays authoritative. Falls
   // through to the full legacy path below.
   if (astResult.kind === 'parse-unavailable') {
+    // Shadow mode is the common case in a dev build, and reporting it as
+    // "unavailable" was a false claim about a permission-path component:
+    // 9,025 such lines across 126 sessions asserted the parser was missing
+    // while it was loaded and working exactly as designed.
     logForDebugging(
-      'bashToolHasPermission: tree-sitter unavailable, using legacy shell-quote path',
+      shadowEnabled
+        ? 'bashToolHasPermission: tree-sitter in shadow mode, legacy shell-quote path is authoritative'
+        : 'bashToolHasPermission: tree-sitter unavailable, using legacy shell-quote path',
     )
     const parseResult = tryParseShellCommand(input.command)
     if (!parseResult.success) {

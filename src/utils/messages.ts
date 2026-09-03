@@ -841,6 +841,17 @@ export function normalizeMessages(messages: Message[]): NormalizedMessage[] {
             uuid,
             error: message.error,
             isApiErrorMessage: message.isApiErrorMessage,
+            // `errorDetails` carries the raw provider text that
+            // `getPromptTooLongTokenGap`, `isMediaSizeErrorMessage` and
+            // reactive compact's strip-retry all parse. Dropping it here meant
+            // those three silently returned false on every resumed session and
+            // every desktop replay: 176 persisted API errors across five months
+            // carry none of it, so a reader can never say how far over the
+            // limit a prompt was. Only present on the five error branches that
+            // set it, so this adds nothing to an ordinary assistant message.
+            ...(message.errorDetails === undefined
+              ? {}
+              : { errorDetails: message.errorDetails }),
             isInternalNoResponseSentinel:
               message.isInternalNoResponseSentinel,
             advisorModel: message.advisorModel,

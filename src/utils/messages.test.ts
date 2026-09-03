@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import type { UUID } from 'crypto'
 import { annotateBoundaryWithPreservedSegment } from '../services/compact/compact.js'
 import {
+  createAssistantAPIErrorMessage,
   createAssistantMessage,
   createCompactBoundaryMessage,
   createUserMessage,
   dropPreservedMessageDuplicates,
+  normalizeMessages,
   wrapCommandText,
 } from './messages.js'
 
@@ -155,5 +157,26 @@ work or side effects that already completed.`
     expect(wrapCommandText('hi', { kind: 'coordinator' })).toContain(
       'The coordinator sent a message',
     )
+  })
+})
+
+describe('normalizeMessages preserves errorDetails', () => {
+  test('a persisted API error keeps the raw text its recovery predicates parse', () => {
+    const error = createAssistantAPIErrorMessage({
+      content: 'Prompt is too long',
+      error: 'invalid_request',
+      errorDetails: 'input length 250000 exceeds 200000 maximum',
+    })
+    const [normalized] = normalizeMessages([error])
+    // Without this, getPromptTooLongTokenGap / isMediaSizeErrorMessage /
+    // reactive compact's strip-retry all degrade to false after a resume.
+    expect(normalized!.errorDetails).toBe(
+      'input length 250000 exceeds 200000 maximum',
+    )
+  })
+
+  test('an ordinary assistant message gains no errorDetails key', () => {
+    const [normalized] = normalizeMessages([createAssistantMessage({ content: 'hello' })])
+    expect('errorDetails' in normalized!).toBe(false)
   })
 })

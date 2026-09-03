@@ -30,6 +30,20 @@ export const MAX_OPERATIONAL_LOG_TOTAL_BYTES = 8 * 1024 * 1024
 export const MAX_OPERATIONAL_LOG_FILES = 16
 export const MAX_OPERATIONAL_LOG_AGE_MS = 14 * 24 * 60 * 60 * 1000
 
+/**
+ * Exempt from the one-second rate dedupe below. That dedupe keys on
+ * `event:appSessionId:reason`, which is right for a failure repeating in a
+ * loop and wrong for turn lifecycle: two quick turns in one session share all
+ * three parts, so the second pair was suppressed and a real `started` /
+ * `completed` became silence. These events are bounded by actual turns rather
+ * than by failure duration, so they cannot run away (OBSERVABILITY-MINIMUM §5).
+ */
+const DEDUPE_EXEMPT_EVENTS: ReadonlySet<string> = new Set([
+  'session.turn.started',
+  'session.turn.completed',
+  'session.turn.stalled',
+])
+
 export type OperationalLogSink = {
   readonly launchId: string
   readonly processInstanceId: string
@@ -116,7 +130,12 @@ export function createOperationalLogSink({
     const key = `${input.event}:${input.appSessionId ?? ''}:${input.fields?.reason ?? ''}`
     const current = now().getTime()
     const prior = recent.get(key)
-    if (input.level !== 'fatal' && prior && current - prior.at < 1_000) {
+    if (
+      input.level !== 'fatal' &&
+      !DEDUPE_EXEMPT_EVENTS.has(input.event) &&
+      prior &&
+      current - prior.at < 1_000
+    ) {
       prior.count++
       suppressed++
       return
