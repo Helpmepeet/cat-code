@@ -73,6 +73,19 @@ main → sidecar   host.result   { protocolVersion, sessionId, requestId, ok, va
 | `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), presence (`running` \| `needs_user` \| `idle`, from the `activity` frame, §4 step 4a; absent for a row that is not live), createdBy (resolved to a name, or `gone`), lastActivity, title |
 | `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`, `createdBy` (id) and the creator's name in the child's spawn env → persist the row → await that row's `ready` → deliver the creation prompt as a `request` with `generateTitle` on and the text untagged (PEER-SESSIONS §5). Model and effort travel in the spawn env (`CATCODE_SIDECAR_MODEL`, `CATCODE_SIDECAR_EFFORT`, from the request args, which the requesting sidecar filled from its own state); permission mode is neither carried nor inherited (PEER-SESSIONS §0a). No idempotency cache: the sidecar client never auto-retries this verb, and a timeout result tells the model to check `ListPeers` before trying again, because the row is named and visible from the moment it is persisted (`host.ts:484` order). A prompt send rejected after `ready` (`supervisor.send`, `supervisor.ts:459`) keeps the row, since it is a real session the operator can see, and the result names the peer and the failed step so the caller can `SendToPeer` the prompt itself | the new row's name + appSessionId, plus a failed step when one failed |
 | `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar (the wake-block flag is irrelevant to a live row); parked/closed: refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`), else main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
+| `peer.ack` | release the pending message the RECIPIENT is acking and write its metadata-only operational-log line; the id is looked up in that session's own pending list, so a forged id can only drop the acking session's own message | the `messageId` |
+
+**🔁 AMENDED 2026-09-03 during the build: four verbs, not three.** `peer.ack` was
+added because §4 step 6's "ack = enqueued" is IN v1 scope (PEER-SESSIONS §0a keeps
+it; only the `onInputPersisted` ack and its redelivery dedup were cut) and the
+original text ruled the behaviour without naming a transport. The alternatives
+were worse: a third outbound frame kind for one boolean is not on §5's change
+list, and a third INBOUND kind at the sidecar is forbidden by the amended
+SECURITY-MINIMUM addendum, which permits exactly `host.result` and `peer.deliver`.
+A verb on the existing `host.request` frame adds neither a frame kind nor an
+inbound surface, so the security baseline is untouched; only this closed
+allowlist widens. `peer.ack` is not model-facing: no tool reaches it, and its
+argument is an id main itself minted.
 
 On the wire, `host.result` and `peer.deliver` are two new variants of
 `SidecarClientMessage` (`protocol.ts:576`), sent through the existing
@@ -171,11 +184,34 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    window, plus the requester's id; a send to a peer that has not written to
    the requester within the window starts a fresh chain of one. So two peers
    answering each other extend one chain whatever the model does, which is
-   what makes the stop mechanical rather than a prompt hope. Main rejects a send whose
-   chain already contains the recipient (`hop_loop`) or exceeds
-   `MAX_PEER_HOPS` (`hop_runaway`). With one trusted router deriving the chain
-   there is no need for the upstream blinded-token variant, and a compromised
-   sidecar cannot shorten a chain it never held.
+   what makes the stop mechanical rather than a prompt hope. Main rejects a send
+   whose chain already contains the recipient **at any position other than its
+   last entry** (`hop_loop`), or whose chain exceeds `MAX_PEER_HOPS`
+   (`hop_runaway`). A self-send is a loop of one. With one trusted router
+   deriving the chain there is no need for the upstream blinded-token variant,
+   and a compromised sidecar cannot shorten a chain it never held.
+
+   **🔁 AMENDED 2026-09-03 during the build.** The original sentence read
+   "rejects a send whose chain already contains the recipient", with no
+   last-entry exception, and that cannot hold together with the rest of this
+   step. A chain delivered to A by B always ENDS with B, so under the original
+   test A's reply to B is refused as a loop, every reply is, on the first hop,
+   and `MAX_PEER_HOPS` becomes unreachable dead code while §6 owes a test in
+   which two sessions answering each other stop AT that cap. Two weaker repairs
+   were tried against four traffic shapes and both failed: excluding the
+   chain's last entry by index refuses a two-party exchange at hop 4 (by then A
+   appears twice and the earlier occurrence trips the test), and refusing only
+   when a third participant is present kills the feature's own workflow, since
+   it refuses `A→B, B→C, C→B` — the report-back R2 is built on and the ladder
+   R8 permits — and bounds a two-party sub-exchange below the root at three
+   messages. The shipped rule is the one that leaves both guards alive: a reply
+   to whoever last wrote to you is never a loop and is bounded by the hop cap,
+   while revisiting anyone earlier in the chain closes a cycle and is refused.
+
+   A refused hop still ADVANCES the pair's chain, and must: without it the two
+   directions drift by one, so the peer under the cap keeps sending and the one
+   over it keeps being refused, leaking one message every other attempt
+   forever. A stop that leaks is not a stop.
 3. Main applies the channel guards: per `(from, to)` token bucket, duplicate
    body within a short window, and `MAX_PENDING_PEER_MESSAGES` per recipient
    (a NEW main-side count of undelivered peer messages; the sidecar's

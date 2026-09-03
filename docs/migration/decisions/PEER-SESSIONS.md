@@ -391,7 +391,7 @@ Values, so the build does not invent them (all new constants in
 | `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all verbs |
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
 | `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body to the same recipient |
-| `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2) |
+| `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2). 🔁 The refusal rule that reads this chain was AMENDED 2026-09-03 during the build: a recipient already in the chain is a loop only when it is not the chain's last entry, so replying to whoever last wrote to you is bounded by `MAX_PEER_HOPS` rather than refused. HRP §4 step 2 carries the derivation |
 | `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
 | `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 16 KiB / 64 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors |
 | `MAX_PEER_QUERY_BYTES` | 512 | `ReadPeer` search query |
