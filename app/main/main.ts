@@ -92,6 +92,7 @@ import {
   frameMutatedAccountsPool,
   stampHistoryViewAnchor,
   supervisorEventToServerFrame,
+  isSessionLive,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
@@ -3528,8 +3529,12 @@ function ensureHost(): Host {
   const liveRegistry = registry
   peerPlane = createPeerRequestPlane({
     rows: () => liveRegistry.sessions,
+    // Membership in `listSessions()` is NOT liveness: the supervisor keeps a
+    // record after the child exits, and an idle park IS an exit. The predicate
+    // lives in `mainDecisions.ts` so it is executable by a test rather than
+    // being the one line of this plane nothing could reach.
     isLive: appSessionId =>
-      supervisor?.listSessions().some(row => row.sessionId === appSessionId) === true,
+      supervisor !== null && isSessionLive(supervisor.listSessions(), appSessionId),
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),
     restoreSession: async appSessionId => {

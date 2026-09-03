@@ -33,6 +33,7 @@
 
 import {
   HOST_REQUEST_VERBS,
+  PROTOCOL_VERSION,
   type ActivityPresence,
   type HostRequestError,
   type HostRequestErrorCode,
@@ -48,7 +49,10 @@ import {
 import {
   HOST_REQUEST_WINDOW_MS,
   MAX_HOST_REQUESTS_PER_WINDOW,
+  MAX_HOST_REQUEST_ARG_CHARS,
   MAX_HOST_REQUEST_BYTES,
+  MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
+  MAX_PEER_DELIVERY_ATTEMPTS,
   MAX_PEER_HOPS,
   MAX_PEER_TEXT_BYTES,
   MAX_PENDING_PEER_MESSAGES,
@@ -171,9 +175,6 @@ const FRAME_KEYS = new Set([
   'args',
 ])
 
-/** Bounds every free-form string arg that is NOT a message body. */
-const MAX_ARG_CHARS = 256
-
 /** The args whose size is governed by `MAX_PEER_TEXT_BYTES` instead. */
 const BODY_ARGS = new Set(['text', 'prompt'])
 
@@ -187,6 +188,21 @@ function utf8Bytes(value: string): number {
 
 function fail(code: HostRequestErrorCode, message: string): HostRequestError {
   return { code, message }
+}
+
+/**
+ * The correlation id off an UNVALIDATED frame, for answering a refusal that
+ * happens before validation (a flood, an oversize payload). It is echoed back
+ * and nothing else; it names no work and authorizes none.
+ */
+function readRequestId(frame: unknown): string | null {
+  if (!isPlainObject(frame)) return null
+  const value = frame.requestId
+  return typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= MAX_HOST_REQUEST_ARG_CHARS
+    ? value
+    : null
 }
 
 /** The validated request, narrowed to one verb and its own arg shape. */
@@ -216,7 +232,7 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
   if (
     typeof rawId !== 'string' ||
     rawId.length === 0 ||
-    rawId.length > MAX_ARG_CHARS
+    rawId.length > MAX_HOST_REQUEST_ARG_CHARS
   ) {
     return { ok: false, requestId: null, error: fail('bad_request', 'missing requestId') }
   }
@@ -224,6 +240,20 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
   for (const key of Object.keys(frame)) {
     if (!FRAME_KEYS.has(key)) {
       return { ok: false, requestId, error: fail('bad_request', `unexpected key "${key}"`) }
+    }
+  }
+  // F9 — every other validated surface on this wire checks the envelope version,
+  // and this one admitted the key without ever comparing it. A frame from a
+  // future protocol must be refused here rather than interpreted under this
+  // one's field meanings.
+  if (
+    frame.protocolVersion !== undefined &&
+    frame.protocolVersion !== PROTOCOL_VERSION
+  ) {
+    return {
+      ok: false,
+      requestId,
+      error: fail('bad_request', 'unsupported protocolVersion'),
     }
   }
   const verb = frame.verb
@@ -271,7 +301,7 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
       if (utf8Bytes(value) > MAX_PEER_TEXT_BYTES) {
         return { ok: false, requestId, error: fail('too_large', `${key} is too long`) }
       }
-    } else if (value.length > MAX_ARG_CHARS) {
+    } else if (value.length > MAX_HOST_REQUEST_ARG_CHARS) {
       return { ok: false, requestId, error: fail('bad_request', `${key} is too long`) }
     }
   }
@@ -312,7 +342,12 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
  * ------------------------------------------------------------------------- */
 
 type Bucket = { tokens: number; lastRefillAt: number }
-type ChainRecord = { chain: SessionId[]; fromAppSessionId: SessionId; at: number }
+/**
+ * One record of a hop main routed toward `recipient` from `sender`. `viaRefusal`
+ * marks a hop that was REFUSED rather than delivered — see `buildHops` for why
+ * those two are stored together but inherited differently.
+ */
+type ChainRecord = { chain: SessionId[]; viaRefusal: boolean; at: number }
 type PendingMessage = {
   messageId: string
   toAppSessionId: SessionId
@@ -321,6 +356,13 @@ type PendingMessage = {
   toName: string
   kind: 'request' | 'creation'
   outcome: PeerDeliverOutcome
+  /**
+   * How many times this message has been handed to the recipient's process,
+   * counting the first. Bounded by `MAX_PEER_DELIVERY_ATTEMPTS` so a message the
+   * recipient REJECTS rather than drops cannot be re-sent on every subsequent
+   * ready forever, holding a pending slot for the life of the window.
+   */
+  attempts: number
 }
 type ReadyWaiter = { resolve: (ready: boolean) => void; timer: unknown }
 
@@ -353,8 +395,17 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const clearTimer =
     deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
 
-  /** HR1 — per requesting session, all verbs together. */
-  const requestWindow = new Map<SessionId, number[]>()
+  /**
+   * HR1 — the MODEL's allowance, charged only for model-facing verbs. An ack is
+   * main-induced bookkeeping and is deliberately not charged here (F4): senders
+   * would otherwise spend the recipient's budget and starve it off the plane.
+   */
+  const verbWindow = new Map<SessionId, number[]>()
+  /**
+   * HR1 / A6 — the flood bound, charged on EVERY frame before it is parsed or
+   * serialized, valid or not, ack or not.
+   */
+  const frameWindow = new Map<SessionId, number[]>()
   /** Presence, per LIVE row only (§4 step 4a). */
   const presence = new Map<SessionId, ActivityPresence>()
   /** Per `(from, to)` token bucket (§4 step 3). */
@@ -362,15 +413,29 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   /** Identical body → same recipient, inside the dedup window (§4 step 3). */
   const recentBodies = new Map<string, number>()
   /**
-   * The chain of the last message main delivered TO each row, and who sent it.
-   * Keyed by recipient because that is what a send reads: the requester inherits
-   * the chain last delivered to IT (§4 step 2).
+   * Hop chains, keyed by the ORDERED pair `recipient|sender`.
+   *
+   * Keyed by pair, not by recipient alone, because a single slot per recipient is
+   * shared mutable state that any peer can write: an unrelated message overwrites
+   * a live conversation's chain, and a refusal writes onto a key an uninvolved
+   * pair then inherits. Both are exploitable; see `buildHops`.
    */
-  const lastChainTo = new Map<SessionId, ChainRecord>()
+  const chains = new Map<string, ChainRecord>()
   /** Messages main is holding: forwarded but not yet acked. */
   const pending = new Map<SessionId, PendingMessage[]>()
   /** Callers parked on a row's next `ready`. */
   const readyWaiters = new Map<SessionId, ReadyWaiter[]>()
+  /**
+   * F11 — when each row last announced itself.
+   *
+   * `awaitReady` can only register AFTER the host call it is waiting behind
+   * resolves, and `onReady` is fire-once with no memory, so a `ready` that lands
+   * in that gap used to be missed entirely: the caller then waited out the full
+   * wake timeout and reported `failedStep: 'ready'` or `refused:wake_failed` for
+   * a session that was fine. A one-entry-per-row timestamp closes it without a
+   * state machine — a waiter registering just after a ready resolves at once.
+   */
+  const lastReadyAt = new Map<SessionId, number>()
 
   function rowFor(appSessionId: string): PeerRegistryRow | undefined {
     return deps.rows().find(row => row.appSessionId === appSessionId)
@@ -448,17 +513,21 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     })
   }
 
-  function withinRate(sessionId: SessionId): boolean {
+  function charge(
+    window: Map<SessionId, number[]>,
+    sessionId: SessionId,
+    cap: number,
+  ): boolean {
     const at = now()
-    const seen = (requestWindow.get(sessionId) ?? []).filter(
+    const seen = (window.get(sessionId) ?? []).filter(
       stamp => at - stamp < HOST_REQUEST_WINDOW_MS,
     )
-    if (seen.length >= MAX_HOST_REQUESTS_PER_WINDOW) {
-      requestWindow.set(sessionId, seen)
+    if (seen.length >= cap) {
+      window.set(sessionId, seen)
       return false
     }
     seen.push(at)
-    requestWindow.set(sessionId, seen)
+    window.set(sessionId, seen)
     return true
   }
 
@@ -495,51 +564,98 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     return false
   }
 
+  /** The ordered-pair key: a hop routed toward `recipient` from `sender`. */
+  function chainKey(recipient: SessionId, sender: SessionId): string {
+    return `${recipient}|${sender}`
+  }
+
   /**
-   * §4 step 2, with the one reading of its two guard sentences that leaves both
-   * guards alive. This is a flagged deviation, and here is the derivation.
+   * §4 step 2. Two things are deliberate here and both are flagged deviations
+   * from the decision text, with the derivations.
    *
-   * The decision says main keeps one chain per `(from, to)` pair, that a send
-   * inherits "the chain last delivered TO the requester", and that main refuses a
-   * send "whose chain already contains the recipient". Taken literally those
-   * sentences cannot both hold. A chain delivered to A by B always ENDS with B,
-   * so under the literal test A's reply to B is refused as a loop — every reply
-   * is, on the very first one — and `MAX_PEER_HOPS` becomes unreachable dead
-   * code, while §6 owes a test in which two sessions answering each other stop
-   * AT that cap.
+   * ONE — the loop predicate. The decision says a send inherits "the chain last
+   * delivered TO the requester" and that main refuses a send "whose chain
+   * already contains the recipient". Taken literally those cannot both hold: a
+   * chain delivered to A by B always ENDS with B, so A's reply to B is refused
+   * as a loop, every reply is, and `MAX_PEER_HOPS` becomes unreachable dead code
+   * while §6 owes a test in which two peers answering each other stop AT that
+   * cap. So the rule is: a loop is the recipient being in the inherited chain
+   * AND NOT its last entry. The last entry is by construction the peer being
+   * answered, so a reply is never a loop; reaching PAST it to someone earlier is
+   * what closes a cycle.
    *
-   * The rule implemented is: a send is a loop when the recipient is ALREADY IN
-   * the inherited chain AND IS NOT ITS LAST ENTRY. The last entry is, by
-   * construction, the peer who just wrote to the requester, so answering it is
-   * never a loop however many times the two have gone back and forth; reaching
-   * PAST it to someone earlier in the chain is the thing that closes a cycle.
+   *   A→B, B→A, A→B, …   the recipient is always the chain's last entry: the
+   *                      chain grows one per hop and stops at MAX_PEER_HOPS.
+   *   A→B, B→C, C→A      inherited [A, B], last is B, recipient A present and
+   *                      not last: hop_loop, on the hop that closes the cycle.
+   *   A→B, B→C, C→B      recipient IS last: allowed. This is the report-back R2
+   *                      makes the delivery model for, one rung down the R8
+   *                      ladder; refusing it breaks the primary workflow.
+   *   A→B, B→C, C→B, …   a two-party sub-exchange, bounded by MAX_PEER_HOPS.
    *
-   *   A→B, B→A, A→B, …   the recipient is always the chain's last entry, so the
-   *                      chain grows one per hop and the exchange stops at
-   *                      MAX_PEER_HOPS (hop_runaway), never at hop_loop.
-   *   A→B, B→C, C→A      inherited [A, B], last is B, recipient A is present and
-   *                      is not last: hop_loop, on the hop that closes the cycle.
-   *   A→B, B→C, C→B      inherited [A, B], last is B, recipient IS last: allowed.
-   *                      This is the report-back R2 makes the delivery model for
-   *                      ("when done, message Alex") one rung down the R8 ladder,
-   *                      and refusing it would break the feature's primary
-   *                      workflow with a loop refusal the model did not cause.
-   *   A→B, B→C, C→B, …   a two-party sub-exchange between B and C, each hop
-   *                      answering the last sender: bounded by MAX_PEER_HOPS.
+   * TWO — what a send inherits, and this is where the STORE shape matters. The
+   * records are per ORDERED PAIR, but a send inherits the LONGEST chain among
+   * every pair that has delivered to the requester, because a chain has to
+   * travel across pairs or a ring is invisible to it. Refusal records are the
+   * exception: they are inherited only by their own pair.
    *
-   * A self-send is a loop of one and is refused the same way. Nothing here reads
-   * anything the sending sidecar wrote: the chain is main's own record, so a
-   * compromised sidecar cannot launder a loop by shortening what it never held,
-   * and it cannot escape either guard by omitting a field it never sends.
+   * That combination is what it is because a single slot per recipient — the
+   * first shape this had — is shared mutable state any peer can write, and two
+   * separate exploits fall straight out of it:
+   *
+   *   - A third peer sending one message to either party of a long exchange
+   *     overwrote that pair's chain with a chain of one, resetting `hop_runaway`
+   *     on demand, forever. Inheriting the LONGEST chain rather than the most
+   *     recent one closes it: a fresh short conversation cannot shorten a live
+   *     long one.
+   *   - A refusal wrote onto the recipient's slot, so `A→B, B→C, C→A` (correctly
+   *     refused) then made an unrelated `A→B` refuse `hop_loop` for the whole
+   *     window. A prompt-injected peer triggers that deliberately with one
+   *     message it never needed delivered. Keeping refusal records pair-local
+   *     closes it: they are inherited only by the pair they belong to.
+   *
+   * Refusal records still have to EXIST, because a refusal must advance the pair
+   * or the stop leaks: without one, the two directions' chains drift by one, the
+   * capped direction refuses while the other still holds a shorter chain, and
+   * the exchange leaks a message every other attempt forever.
+   *
+   * ACCEPTED COST, stated plainly rather than left for a later reader to find: a
+   * ring of three or more (A→B→C→A→…) is DETECTED and refused once per lap, not
+   * killed. The refusing hop's record is pair-local, so the next lap starts from
+   * a fresh chain. Killing a ring outright needs refusals to be visible across
+   * pairs, which is exactly the second exploit above. A throttled ring is a
+   * worse outcome than a dead one and a better outcome than an uninvolved pair
+   * being silenced by a peer that only had to send one message to do it, and the
+   * per-pair token bucket and dedup window still apply to every lap.
+   *
+   * Nothing here reads anything the sending sidecar wrote: the chain is main's
+   * own record, so a compromised sidecar cannot launder a loop by shortening
+   * what it never held, nor escape a guard by omitting a field it never sends.
    */
+  function inheritedChain(from: SessionId, to: SessionId): SessionId[] {
+    const at = now()
+    let longest: SessionId[] = []
+    for (const [key, record] of [...chains.entries()]) {
+      if (at - record.at > PEER_CHAIN_WINDOW_MS) {
+        chains.delete(key)
+        continue
+      }
+      const [recipient, sender] = key.split('|')
+      if (recipient !== from) continue
+      // A refusal is evidence about ONE pair, never about the requester's other
+      // conversations. Inheriting it across pairs is the second exploit above.
+      if (record.viaRefusal && sender !== to) continue
+      if (record.chain.length > longest.length) longest = record.chain
+    }
+    return longest
+  }
+
   function buildHops(
     from: SessionId,
     to: SessionId,
   ): { hops: SessionId[] } | { refusal: 'hop_loop' | 'hop_runaway' } {
     if (from === to) return { refusal: 'hop_loop' }
-    const record = lastChainTo.get(from)
-    const inherited =
-      record !== undefined && now() - record.at <= PEER_CHAIN_WINDOW_MS ? record.chain : []
+    const inherited = inheritedChain(from, to)
     const hops = [...inherited, from]
     const answersLastSender = inherited[inherited.length - 1] === to
     const refusal =
@@ -549,17 +665,15 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
           ? ('hop_runaway' as const)
           : null
     if (refusal !== null) {
-      // A refused hop still ADVANCES the pair, and it has to, or the stop is not
-      // a stop. Without this the two directions' chains drift by one: A is
-      // refused at the cap while B still holds the shorter chain it was last
-      // delivered, so B sends, A is refused again, B sends again — one message
-      // every other attempt, forever. Recording the over-cap chain against the
-      // recipient makes the next hop in EITHER direction inherit it, so the
-      // exchange stops dead on the hop after the cap instead of leaking.
-      lastChainTo.set(to, { chain: hops, fromAppSessionId: from, at: now() })
+      chains.set(chainKey(to, from), { chain: hops, viaRefusal: true, at: now() })
       return { refusal }
     }
     return { hops }
+  }
+
+  /** Record a hop main actually delivered toward `to` from `from`. */
+  function recordDelivered(from: SessionId, to: SessionId, hops: SessionId[]): void {
+    chains.set(chainKey(to, from), { chain: hops, viaRefusal: false, at: now() })
   }
 
   /**
@@ -584,7 +698,12 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     return entry
   }
 
-  function awaitReady(sessionId: SessionId): Promise<boolean> {
+  function awaitReady(sessionId: SessionId, since: number): Promise<boolean> {
+    // F11 — a ready that landed while the caller was awaiting the host counts.
+    // `since` is read before that call, so this can only match a ready that
+    // arrived after the caller committed to waiting for one.
+    const announced = lastReadyAt.get(sessionId)
+    if (announced !== undefined && announced >= since) return Promise.resolve(true)
     return new Promise<boolean>(resolve => {
       const waiter: ReadyWaiter = {
         resolve,
@@ -626,6 +745,18 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     | { ok: true; value: HostRequestValues['peer.create'] }
     | { ok: false; error: HostRequestError }
   > {
+    // F5 — PEER-SESSIONS §2 says every LIVE session is named, and the recipient's
+    // schema requires a non-empty `from`. Defaulting a missing name to '' built a
+    // frame the recipient rejects at every ready forever; a broken invariant has
+    // to surface as a typed answer, not as a silent permanent retry.
+    const fromName = requesterRow.name
+    if (fromName === undefined || fromName.length === 0) {
+      return {
+        ok: false,
+        error: fail('internal_error', 'this session cannot address peers yet'),
+      }
+    }
+    const readySince = now()
     const created = await deps.createSessionInWorkspace(sessionId, {
       createdBy: sessionId,
       ...(request.model !== undefined ? { model: request.model } : {}),
@@ -640,12 +771,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     }
     const appSessionId = created.value.appSessionId
     const name = created.value.name ?? ''
-    const fromName = requesterRow.name ?? ''
 
     // §2 — await the new row's ready, then deliver the creation prompt. Both
     // failures KEEP the row: it is a real session the operator can see, and the
     // caller can send it the prompt itself.
-    const ready = await awaitReady(appSessionId)
+    const ready = await awaitReady(appSessionId, readySince)
     if (!ready) {
       return { ok: true, value: { name, appSessionId, failedStep: 'ready' } }
     }
@@ -657,7 +787,6 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       from: fromName,
       fromSessionId: sessionId,
       text: request.prompt,
-      hops: [sessionId],
       // PEER-SESSIONS §5 — the one message that is not framed as peer-sent.
       untagged: true,
     }
@@ -679,12 +808,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       toName: name,
       kind: 'creation',
       outcome: 'queued_wake',
+      attempts: 1,
     })
-    lastChainTo.set(appSessionId, {
-      chain: [sessionId],
-      fromAppSessionId: sessionId,
-      at: now(),
-    })
+    recordDelivered(sessionId, appSessionId, [sessionId])
     return { ok: true, value: { name, appSessionId } }
   }
 
@@ -696,6 +822,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     | { ok: true; value: HostRequestValues['peer.deliver'] }
     | { ok: false; error: HostRequestError }
   > {
+    // F5 — see `handlePeerCreate`: a live session without a name is a broken
+    // §2 invariant, and it must answer rather than mint a frame its recipient
+    // will reject on every ready for the rest of the window.
+    const fromName = requesterRow.name
+    if (fromName === undefined || fromName.length === 0) {
+      return {
+        ok: false,
+        error: fail('internal_error', 'this session cannot address peers yet'),
+      }
+    }
     // §4 step 1 — resolve the name inside the requester's own workspace.
     const target = peersOf(requesterRow).find(
       row => nameKey(row.name) === nameKey(request.to),
@@ -706,7 +842,6 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         error: fail('session_not_found', `no session named ${request.to} in this workspace`),
       }
     }
-    const fromName = requesterRow.name ?? ''
     const toName = target.name
     const messageId = newId()
     const live = deps.isLive(target.appSessionId)
@@ -743,23 +878,30 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       from: fromName,
       fromSessionId: sessionId,
       text: request.text,
-      hops: chain.hops,
     }
 
     if (!live) {
       // §4 step 5 — main's OWN deliver-after-ready. `already restoring` and
       // `already live` both currently answer `session_not_found`, and neither is
       // a missing row: treat them as pending and wait for the row's next ready.
+      const readySince = now()
       const restored = await deps.restoreSession(target.appSessionId)
       if (!restored.ok && restored.error.code !== 'session_not_found') {
         return refuse('refused:wake_failed')
       }
       // Never `session_not_found` from here on: HR3 reserves that code for a row
       // the caller may not name, and this one it may.
-      if (!(await awaitReady(target.appSessionId))) return refuse('refused:wake_failed')
+      if (!(await awaitReady(target.appSessionId, readySince))) {
+        return refuse('refused:wake_failed')
+      }
     }
 
-    if (!forwarded(target.appSessionId, message)) return refuse('refused:wake_failed')
+    // F7 — a live recipient was never woken, so `wake_failed` would tell the
+    // sending model its peer is unreachable while the peer is sitting there
+    // running. The two failures are different facts and get different reasons.
+    if (!forwarded(target.appSessionId, message)) {
+      return refuse(live ? 'refused:delivery_failed' : 'refused:wake_failed')
+    }
 
     const outcome: PeerDeliverOutcome = live ? 'queued_live' : 'queued_wake'
     hold({
@@ -770,12 +912,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       toName,
       kind: 'request',
       outcome,
+      attempts: 1,
     })
-    lastChainTo.set(target.appSessionId, {
-      chain: chain.hops,
-      fromAppSessionId: sessionId,
-      at: now(),
-    })
+    recordDelivered(sessionId, target.appSessionId, chain.hops)
     return { ok: true, value: { messageId, outcome } }
   }
 
@@ -829,11 +968,29 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * --------------------------------------------------------------------- */
 
   async function handleRequest(sessionId: SessionId, frame: unknown): Promise<void> {
-    const validated = validateHostRequest(frame)
+    // HR1 / A6 — the flood bound FIRST, before the frame is parsed, serialized
+    // or measured. Charging only what survives validation bounded nothing that
+    // mattered: an invalid or unknown-verb request answered and returned without
+    // touching any budget, and each one still cost a `JSON.stringify` on a
+    // payload the channel bounds only at 32 MiB. The cheapest flood to send was
+    // the one nothing counted.
+    //
+    // The requestId is read directly rather than through the validator, because
+    // answering has to work for a frame that will not validate; it is only ever
+    // echoed back, and it authorizes nothing.
+    const echoId = readRequestId(frame)
+    if (!charge(frameWindow, sessionId, MAX_HOST_REQUEST_FRAMES_PER_WINDOW)) {
+      log(`[peer-plane] flood-refused host.request from ${sessionId}`)
+      if (echoId !== null) {
+        answer(sessionId, echoId, {
+          ok: false,
+          error: fail('rate_limited', 'too many requests; try again shortly'),
+        })
+      }
+      return
+    }
 
     // HR1 — main's OWN size bound, on the serialized request, at the consumer.
-    // Measured before anything is done with the request and after the requestId
-    // is known, so an oversize frame is still ANSWERED rather than dropped.
     let serialized: string | undefined
     try {
       serialized = JSON.stringify(frame)
@@ -842,14 +999,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     }
     if (serialized === undefined || utf8Bytes(serialized) > MAX_HOST_REQUEST_BYTES) {
       log(`[peer-plane] refused oversize host.request from ${sessionId}`)
-      if (validated.requestId !== null) {
-        answer(sessionId, validated.requestId, {
+      if (echoId !== null) {
+        answer(sessionId, echoId, {
           ok: false,
           error: fail('too_large', 'request is too large'),
         })
       }
       return
     }
+
+    const validated = validateHostRequest(frame)
     if (!validated.ok) {
       log(`[peer-plane] rejected host.request from ${sessionId}: ${validated.error.message}`)
       if (validated.requestId !== null) {
@@ -857,7 +1016,14 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       }
       return
     }
-    if (!withinRate(sessionId)) {
+
+    // F4 — the model's own allowance, charged for model-facing verbs only. An
+    // ack is work main asked the recipient to do; billing it to the recipient
+    // lets senders exhaust a session's budget on its behalf.
+    if (
+      validated.request.verb !== 'peer.ack' &&
+      !charge(verbWindow, sessionId, MAX_HOST_REQUESTS_PER_WINDOW)
+    ) {
       answer(sessionId, validated.requestId, {
         ok: false,
         error: fail('rate_limited', 'too many requests; try again shortly'),
@@ -929,6 +1095,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   }
 
   function onReady(sessionId: SessionId): void {
+    // F11 — remembered so a waiter that registers moments later resolves at once
+    // instead of sitting out the wake timeout for a session that is already up.
+    lastReadyAt.set(sessionId, now())
     const waiters = readyWaiters.get(sessionId)
     if (waiters) {
       readyWaiters.delete(sessionId)
@@ -945,6 +1114,26 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     const held = pending.get(sessionId)
     if (!held || held.length === 0) return
     for (const entry of [...held]) {
+      // F5 — bounded. The redelivery exists for a recipient that DIED before
+      // acking; a recipient that REJECTS the frame acks nothing either, and
+      // without a counter it is re-sent on every ready for the life of the
+      // window while holding one of the fifty pending slots. Give up loudly
+      // after a few tries rather than retrying something already refused.
+      if (entry.attempts >= MAX_PEER_DELIVERY_ATTEMPTS) {
+        release(sessionId, entry.messageId)
+        deps.logRouted(sessionId, {
+          from: entry.fromName,
+          to: entry.toName,
+          kind: entry.kind,
+          messageId: entry.messageId,
+          outcome: 'refused:delivery_failed',
+        })
+        log(
+          `[peer-plane] gave up redelivering a peer message to ${sessionId} after ${entry.attempts} attempts`,
+        )
+        continue
+      }
+      entry.attempts += 1
       deps.forward(sessionId, entry.message)
     }
   }
@@ -961,8 +1150,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     onSessionRemoved: sessionId => {
       presence.delete(sessionId)
       pending.delete(sessionId)
-      requestWindow.delete(sessionId)
-      lastChainTo.delete(sessionId)
+      verbWindow.delete(sessionId)
+      frameWindow.delete(sessionId)
+
       const waiters = readyWaiters.get(sessionId)
       if (waiters) {
         readyWaiters.delete(sessionId)
@@ -979,8 +1169,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       for (const key of [...recentBodies.keys()]) {
         if (key.startsWith(`${sessionId}|`)) recentBodies.delete(key)
       }
-      for (const [to, record] of [...lastChainTo.entries()]) {
-        if (record.fromAppSessionId === sessionId) lastChainTo.delete(to)
+      // Every chain the reaped row is either end of. The key carries both, so
+      // a reused NAME can never inherit the previous row's chain.
+      for (const key of [...chains.keys()]) {
+        const [recipient, sender] = key.split('|')
+        if (recipient === sessionId || sender === sessionId) chains.delete(key)
       }
     },
     pendingFor: sessionId => (pending.get(sessionId) ?? []).map(entry => entry.messageId),

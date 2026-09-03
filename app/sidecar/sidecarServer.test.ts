@@ -9713,6 +9713,17 @@ function hostPlaneFrame(message: Record<string, unknown>): Buffer {
   })
 }
 
+/** A schema-valid `peers.list` row, for the per-verb result validation (F6). */
+const BEAR_DESCRIPTOR = {
+  name: 'Bear',
+  appSessionId: 'app-bear',
+  engineSessionId: 'engine-bear',
+  status: 'live' as const,
+  presence: 'idle' as const,
+  title: null,
+  lastActivity: 1_000,
+}
+
 function validPeerDeliver(overrides: Record<string, unknown> = {}) {
   return {
     type: 'peer.deliver',
@@ -9720,7 +9731,6 @@ function validPeerDeliver(overrides: Record<string, unknown> = {}) {
     from: 'Alex',
     fromSessionId: 'app-alex',
     text: 'take a look at the parser',
-    hops: ['app-alex'],
     ...overrides,
   }
 }
@@ -9775,11 +9785,14 @@ test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and noth
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
-  server.handleData(
-    conn,
-    hostPlaneFrame(validPeerDeliver({ replyTo: 'm-0' })),
-  )
-
+  for (const unknownKey of [{ replyTo: 'm-0' }, { hops: ['app-alex'] }]) {
+    const before = received.filter(f => f.kind === 'error').length
+    server.handleData(conn, hostPlaneFrame(validPeerDeliver(unknownKey)))
+    // `hops` is in this list deliberately: F10 removed it from the inbound
+    // vocabulary because nothing on this side ever read it, so a frame still
+    // carrying one is now rejected rather than validated and dropped.
+    expect(received.filter(f => f.kind === 'error').length).toBe(before + 1)
+  }
   expect(getCommandQueueSnapshot()).toHaveLength(0)
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
@@ -9790,8 +9803,8 @@ test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () 
   const conn = server.addConnection(socket)
 
   for (const bad of [
-    validPeerDeliver({ hops: 'app-alex' }),
     validPeerDeliver({ from: 42 }),
+    validPeerDeliver({ fromSessionId: 7 }),
     validPeerDeliver({ text: '' }),
     validPeerDeliver({ untagged: 'yes' }),
   ]) {
@@ -9858,7 +9871,7 @@ test('the request client mints an id, awaits its result, and resolves the caller
       type: 'host.result',
       requestId,
       ok: true,
-      value: { peers: [{ name: 'Bear' }] },
+      value: { peers: [BEAR_DESCRIPTOR] },
     }),
   )
 
@@ -9866,8 +9879,10 @@ test('the request client mints an id, awaits its result, and resolves the caller
   // per-verb value shape, so what comes back is what main sent.
   const outcome = await pending
   expect(outcome.ok).toBe(true)
+  // Validated per verb (F6/HR5), so what the caller receives has been checked
+  // against the shape its own verb answers with — no cast, no narrowing owed.
   expect(outcome.ok ? outcome.value : null).toEqual({
-    peers: [{ name: 'Bear' }],
+    peers: [BEAR_DESCRIPTOR],
   } as never)
 })
 
@@ -10099,4 +10114,85 @@ test('a worker result on the same drain still titles nothing', async () => {
   await new Promise(resolve => setTimeout(resolve, 0))
   expect(generated).toEqual([])
   expect(received.some(f => f.kind === 'session-title')).toBe(false)
+})
+
+test('HR5/F6 — a host.result whose value does not match its verb is refused, not handed on', async () => {
+  // `value` was the one inbound field on this plane with no schema behind it:
+  // `z.unknown()` plus a cast, with every tool told to narrow defensively. A
+  // well-formed envelope carrying the wrong shape reached the caller wearing a
+  // type nothing had checked — and `peers.list` carries an `engineSessionId`
+  // that a reader joins into a filesystem path.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      // Right envelope, right id, wrong shape for this verb: `engineSessionId`
+      // is a number and `status` is not in the enum.
+      value: { peers: [{ ...BEAR_DESCRIPTOR, engineSessionId: 7, status: 'zombie' }] },
+    }),
+  )
+
+  const outcome = await pending
+  expect(outcome.ok).toBe(false)
+  expect(outcome.ok ? null : outcome.error.code).toBe('internal_error')
+})
+
+test('HR5/F6 — a result for one verb cannot satisfy another verb schema', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peer.deliver', { to: 'Bear', text: 'hi' })
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  // A perfectly valid `peers.list` value, answered to a `peer.deliver` request.
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      value: { peers: [BEAR_DESCRIPTOR] },
+    }),
+  )
+
+  const outcome = await pending
+  expect(outcome.ok).toBe(false)
+})
+
+test('HR5/F6 — an unrecognised host error code degrades to the closed union', async () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: false,
+      error: { code: 'something_new', message: 'from a future main' },
+    }),
+  )
+
+  // A caller matching on `error.code` is matching a value the union contains,
+  // rather than a string cast through it.
+  const outcome = await pending
+  expect(outcome.ok ? null : outcome.error.code).toBe('internal_error')
+  expect(outcome.ok ? null : outcome.error.message).toBe('from a future main')
 })

@@ -695,6 +695,15 @@ export const PEER_DELIVER_REFUSAL_REASONS = [
   'duplicate',
   'queue_full',
   'wake_failed',
+  /**
+   * The recipient was ALREADY AWAKE and the hand-off to its process failed
+   * anyway. Distinct from `wake_failed` on purpose: that one means a parked row
+   * could not be brought back, and reporting it for a live peer tells the
+   * sending model its peer is unreachable when the peer is sitting there
+   * running. Not in §4 step 6's original list; the decision doc needs the
+   * addition recorded.
+   */
+  'delivery_failed',
 ] as const
 
 export type PeerDeliverRefusalReason =
@@ -765,10 +774,18 @@ export type HostResultMessage = {
  *
  * Every field is MAIN-STAMPED. `from` and `fromSessionId` are the requester's
  * identity as main read it off the connection (HR2), never anything the sending
- * sidecar wrote; `hops` is derived by main from its own per-pair record, so a
- * compromised sidecar cannot launder a loop by shortening a chain it never held;
- * `messageId` is minted by main and is what the ack and the operational-log line
- * are keyed on. The recipient sidecar treats all of it as DATA.
+ * sidecar wrote; `messageId` is minted by main and is what the ack and the
+ * operational-log line are keyed on. The recipient sidecar treats all of it as
+ * DATA.
+ *
+ * There is deliberately NO hop chain on this frame. An earlier revision carried
+ * one so a recipient could show where a message came through, and nothing ever
+ * read it: it crossed the trust boundary, was validated, and was dropped. HR5's
+ * whole posture is the smallest inbound surface that does the job, and a field
+ * with no consumer is surface for nothing. The chain stays entirely main-side,
+ * where the loop stop lives (§4 step 2) and where a compromised sidecar cannot
+ * reach it — which it could not anyway, since main derived it rather than
+ * reading it, but a field that does not exist cannot be argued about later.
  *
  * The only field carrying model-authored content is `text`, and it is bounded by
  * `MAX_PEER_TEXT_BYTES` at main and re-bounded at the sidecar.
@@ -780,8 +797,6 @@ export type PeerDeliverMessage = {
   from: string
   fromSessionId: SessionId
   text: string
-  /** appSessionIds of every sender in this chain, oldest first. */
-  hops: SessionId[]
   /**
    * Deliver the text WITHOUT the `<cross-session-message>` wrapper.
    *

@@ -47,6 +47,8 @@ import {
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
   stampHistoryViewAnchor,
+  isLiveSidecarStatus,
+  isSessionLive,
   supervisorEventToServerFrame,
   resolveSidecarLaunch,
   validateSaveTextRequest,
@@ -1455,4 +1457,55 @@ test('a non-load-earlier message is returned unchanged', () => {
   expect(stampHistoryViewAnchor(submit, 'ffffffff-ffff-4fff-8fff-ffffffffffff')).toBe(
     submit,
   )
+})
+
+describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () => {
+  // The supervisor keeps a record after its child exits and deletes one only in
+  // `killSession`, so `listSessions()` membership is not liveness. An idle park
+  // is a self-exit, which makes the tombstone case the ORDINARY one, not an
+  // edge: `some(row => row.sessionId === id)` reported every parked, crashed and
+  // closed session as live.
+  const records = [
+    { sessionId: 'spawning-1', status: 'spawning' as const },
+    { sessionId: 'connecting-1', status: 'connecting' as const },
+    { sessionId: 'ready-1', status: 'ready' as const },
+    { sessionId: 'disconnected-1', status: 'disconnected' as const },
+    { sessionId: 'exited-1', status: 'exited' as const },
+    { sessionId: 'failed-1', status: 'failed' as const },
+  ]
+
+  test('a parked or crashed session is NOT live, though its record is still there', () => {
+    // The defect this exists to prevent: a `peer.deliver` to one of these skipped
+    // the wake-block check, skipped restore, skipped the wait for ready, and
+    // forwarded into a socket that was not there — so "a message to a parked
+    // peer wakes it" could never happen (PEER-SESSIONS §15 step 6).
+    expect(isSessionLive(records, 'exited-1')).toBe(false)
+    expect(isSessionLive(records, 'failed-1')).toBe(false)
+    expect(records.some(row => row.sessionId === 'exited-1')).toBe(true)
+  })
+
+  test('a session mid-spawn or attached IS live', () => {
+    expect(isSessionLive(records, 'spawning-1')).toBe(true)
+    expect(isSessionLive(records, 'connecting-1')).toBe(true)
+    expect(isSessionLive(records, 'ready-1')).toBe(true)
+    // `disconnected` means the socket closed but the child may still be running,
+    // so it is not terminal and the host does not count it as one either.
+    expect(isSessionLive(records, 'disconnected-1')).toBe(true)
+  })
+
+  test('an unknown id is not live', () => {
+    expect(isSessionLive(records, 'never-existed')).toBe(false)
+    expect(isSessionLive([], 'ready-1')).toBe(false)
+  })
+
+  test('the predicate agrees with the host own liveness rule', () => {
+    // `Host.liveCount()` counts exactly `!isTerminalStatus`. If these two drift,
+    // the control plane and the peer plane disagree about which sessions exist.
+    for (const status of ['spawning', 'connecting', 'ready', 'disconnected'] as const) {
+      expect(isLiveSidecarStatus(status)).toBe(true)
+    }
+    for (const status of ['exited', 'failed'] as const) {
+      expect(isLiveSidecarStatus(status)).toBe(false)
+    }
+  })
 })

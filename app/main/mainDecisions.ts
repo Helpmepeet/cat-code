@@ -40,7 +40,7 @@ import {
   type SubmitPrompt,
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
-import type { SupervisorEvent } from '../supervisor/supervisor.js'
+import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
 
 /**
  * Keep the desktop sidecar on the engine's default runtime features. Without
@@ -533,6 +533,50 @@ export function stampHistoryViewAnchor<T extends { type: string }>(
   const { viewAnchorUuid: _rendererAuthored, ...rest } =
     message as T & { viewAnchorUuid?: unknown }
   return (anchor === undefined ? rest : { ...rest, viewAnchorUuid: anchor }) as T
+}
+
+/**
+ * Is a supervisor record a LIVE engine, or a tombstone?
+ *
+ * `SidecarSupervisor.listSessions()` returns every record it holds with its
+ * status and filters nothing, and the supervisor deletes a record only in
+ * `killSession`. So an engine that exited — which for an idle-parked session is
+ * the DESIGNED path, a self-exit with `PARKED_EXIT_CODE` — leaves a record
+ * behind reading `exited`. Membership in that list is therefore not liveness,
+ * and treating it as liveness is a false POSITIVE: the dead read as alive.
+ *
+ * That direction is the dangerous one for the peer plane. A `peer.deliver` to a
+ * row that reads live skips the wake-block check, skips `restoreSession`, skips
+ * the wait for `ready`, and forwards into a socket that is not there — so the
+ * message is refused and dropped, and "a message to a parked peer wakes it"
+ * (PEER-SESSIONS §15 step 6's own acceptance criterion) can never happen for any
+ * row parked, crashed or closed during the run. `peers.list` reports the same
+ * rows as `live` with no presence, which contradicts what absence of presence
+ * means on the wire.
+ *
+ * The rule is the host's own, not a second opinion: `Host.liveCount()` counts
+ * exactly `!isTerminalStatus`, and this must agree with it or the two planes
+ * disagree about which sessions exist.
+ *
+ * It lives HERE, in the Electron-free decisions module, because as a lambda in
+ * main's host wiring it was the one line of the peer plane no test could reach:
+ * every plane test injects its own `isLive`, so the real predicate had no
+ * coverage at all and its defect was invisible to a green battery.
+ */
+export function isLiveSidecarStatus(status: SidecarStatus): boolean {
+  return status !== 'exited' && status !== 'failed'
+}
+
+/**
+ * Liveness for one session, over the supervisor's own record list. See
+ * `isLiveSidecarStatus` for why membership alone is the wrong test.
+ */
+export function isSessionLive(
+  records: readonly { sessionId: string; status: SidecarStatus }[],
+  appSessionId: string,
+): boolean {
+  const record = records.find(row => row.sessionId === appSessionId)
+  return record !== undefined && isLiveSidecarStatus(record.status)
 }
 
 export function supervisorEventToServerFrame(

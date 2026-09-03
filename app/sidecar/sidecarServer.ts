@@ -85,7 +85,6 @@ import {
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
-  MAX_PEER_HOPS,
   MAX_PEER_TEXT_BYTES,
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
@@ -106,6 +105,9 @@ import {
   CONTEXT_BREAKDOWN_VERB_TYPES,
   HISTORY_LOAD_EARLIER_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
+  ACTIVITY_PRESENCES,
+  HOST_REQUEST_ERROR_CODES,
+  PEER_DELIVER_REFUSAL_REASONS,
   type AccountVerbMessage,
   type ActivityPresence,
   type AskUserQuestionAnswerMessage,
@@ -113,6 +115,7 @@ import {
   type ErrorFrame,
   type HostRequestArgs,
   type HostRequestError,
+  type HostRequestErrorCode,
   type HostRequestValues,
   type HostRequestVerb,
   type OAuthLoginProgress,
@@ -603,9 +606,10 @@ export class SidecarServer {
   private readonly pendingHostRequests = new Map<
     string,
     {
-      verb: HostRequestVerb
       settle: (result: HostRequestOutcome<HostRequestVerb>) => void
       timer: ReturnType<typeof setTimeout>
+      /** The verb's own value schema, so the result is validated per verb (HR5). */
+      valueSchema: z.ZodType
     }
   >()
   /**
@@ -5150,13 +5154,13 @@ export class SidecarServer {
       }, HOST_REQUEST_TIMEOUT_MS)
       timer.unref?.()
       this.pendingHostRequests.set(requestId, {
-        verb,
-        // The per-verb value shape is known only to this caller, which asked for
-        // this verb; the boundary schema deliberately does not guess it (see
-        // `hostResultMessageSchema`). The settle callback is stored under the
-        // widened verb so one table holds every in-flight request.
+        // Narrowing is safe and checked: the entry carries the schema for the
+        // verb it was minted for, and `handleHostResult` parses `value` against
+        // it before settling, so a result whose shape does not match the verb
+        // that asked for it never reaches this resolve.
         settle: outcome => resolve(outcome as HostRequestOutcome<V>),
         timer,
+        valueSchema: HOST_RESULT_VALUE_SCHEMAS[verb],
       })
       let sent = false
       for (const connection of this.connections) {
@@ -5176,7 +5180,7 @@ export class SidecarServer {
 
   /** HR5 — main's answer to one request this sidecar minted an id for. */
   private handleHostResult(message: unknown): void {
-    const parsed = hostResultMessageSchema.safeParse(message)
+    const parsed = hostResultEnvelopeSchema.safeParse(message)
     if (!parsed.success) {
       // No `sendError`: this frame answers a request, so there is no renderer
       // click to retire, and the only honest record is the log line. The pending
@@ -5199,20 +5203,42 @@ export class SidecarServer {
     this.pendingHostRequests.delete(parsed.data.requestId)
     clearTimeout(pending.timer)
     if (parsed.data.ok) {
+      // HR5 — the value is validated against the schema for the verb THIS
+      // request asked for. A well-formed envelope carrying the wrong shape is a
+      // failure the caller is told about, not something handed on for a tool to
+      // discover by reading a field that is not there.
+      const value = pending.valueSchema.safeParse(parsed.data.value)
+      if (!value.success) {
+        this.log(
+          `[sidecar] rejected host.result value: ${
+            value.error.issues[0]?.message ?? 'invalid value'
+          }`,
+        )
+        pending.settle({
+          ok: false,
+          error: {
+            code: 'internal_error',
+            message: 'the host answered with an unexpected shape',
+          },
+        })
+        return
+      }
       pending.settle({
         ok: true,
-        value: parsed.data.value as HostRequestValues[HostRequestVerb],
+        value: value.data as HostRequestValues[HostRequestVerb],
       })
       return
     }
     pending.settle({
       ok: false,
-      error: (parsed.data.error ?? {
-        code: 'internal_error',
-        message: 'the host refused the request',
-      }) as HostRequestError,
+      error: {
+        code: hostRequestErrorCode(parsed.data.error?.code),
+        message: parsed.data.error?.message ?? 'the host refused the request',
+      },
     })
   }
+
+  
 
   /**
    * HR5 / §4 step 4 — one peer message, routed by main.
@@ -5754,6 +5780,18 @@ function generatedImageResult(event: AppSessionEvent): {
 }
 
 /**
+ * Narrow a host-minted error code to the closed union, so a caller matching on
+ * `error.code` is matching a value the union actually contains. An unrecognised
+ * code degrades to `internal_error` rather than being cast through.
+ */
+function hostRequestErrorCode(value: unknown): HostRequestErrorCode {
+  return typeof value === 'string' &&
+    (HOST_REQUEST_ERROR_CODES as readonly string[]).includes(value)
+    ? (value as HostRequestErrorCode)
+    : 'internal_error'
+}
+
+/**
  * What one `host.request` resolves to. Typed per verb so a caller narrows
  * against the verb it asked for; a local failure (`timeout`, `unavailable`)
  * arrives in the same closed shape as one main minted, so a caller has exactly
@@ -5917,15 +5955,7 @@ function checkStrictKeys(message: unknown): string | null {
     ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
     [
       'peer.deliver',
-      new Set([
-        'type',
-        'messageId',
-        'from',
-        'fromSessionId',
-        'text',
-        'hops',
-        'untagged',
-      ]),
+      new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
     ],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
@@ -6053,14 +6083,19 @@ const historyLoadEarlierMessageSchema = z.object({
  * for either), and `checkStrictKeys` has already REJECTED any key outside the
  * closed sets above, so these parses enforce the VALUE types.
  *
- * `host.result.value` is deliberately `z.unknown()`. Its shape is per-verb and
- * the caller that minted the request is the only party that knows which verb it
- * asked for, so it narrows there against its own expectation; a union of four
- * result shapes at this level would accept the wrong one for the right verb and
- * call it validated. What matters at the boundary is what is checked here: the
- * envelope, the correlation id, the ok flag, and a closed error shape.
+ * `value` is validated PER VERB. The sidecar knows which verb each pending
+ * request asked for, so the right schema is always available at the moment the
+ * result lands; leaving it `z.unknown()` and telling callers to narrow was the
+ * one inbound field on this plane with no schema behind it, and it handed every
+ * tool the same runtime-narrowing chore plus a cast that hid the gap. HR5 says
+ * an inbound kind gets a sidecar-local schema, and this is the rest of that.
+ *
+ * The shapes are structural only. `peers.list` in particular carries an
+ * `engineSessionId` a reader joins into a transcript path, so it is checked to
+ * be a string or null here rather than trusted from a frame; nothing downstream
+ * has to re-derive that.
  */
-const hostResultMessageSchema = z.object({
+const hostResultEnvelopeSchema = z.object({
   type: z.literal('host.result'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   ok: z.boolean(),
@@ -6074,16 +6109,56 @@ const hostResultMessageSchema = z.object({
     .optional(),
 })
 
+const peerNameSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const peerIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+
+const peerDescriptorSchema = z
+  .object({
+    name: peerNameSchema,
+    appSessionId: peerIdSchema,
+    engineSessionId: peerIdSchema.nullable(),
+    status: z.enum(['live', 'parked', 'closed']),
+    presence: z.enum(ACTIVITY_PRESENCES).optional(),
+    createdBy: z
+      .object({ appSessionId: peerIdSchema, name: peerNameSchema.nullable() })
+      .strict()
+      .optional(),
+    title: z.string().max(MAX_TEXT_FIELD_CHARS).nullable(),
+    lastActivity: z.number().finite(),
+  })
+  .strict()
+
+const peerDeliverOutcomeSchema = z.union([
+  z.literal('queued_live'),
+  z.literal('queued_wake'),
+  ...PEER_DELIVER_REFUSAL_REASONS.map(reason => z.literal(`refused:${reason}` as const)),
+])
+
+/** One schema per verb, keyed so the pending request selects its own. */
+const HOST_RESULT_VALUE_SCHEMAS = {
+  'peers.list': z.object({ peers: z.array(peerDescriptorSchema) }).strict(),
+  'peer.create': z
+    .object({
+      name: peerNameSchema,
+      appSessionId: peerIdSchema,
+      failedStep: z.enum(['ready', 'prompt']).optional(),
+    })
+    .strict(),
+  'peer.deliver': z
+    .object({ messageId: peerIdSchema, outcome: peerDeliverOutcomeSchema })
+    .strict(),
+  'peer.ack': z.object({ messageId: peerIdSchema }).strict(),
+} as const satisfies Record<HostRequestVerb, z.ZodType>
+
 /**
  * `peer.deliver` — one routed peer message. Every field is main-stamped except
  * `text`, which is the only model-authored content that crosses; it is bounded
  * at main by `MAX_PEER_TEXT_BYTES` and re-bounded here because the sidecar does
  * not take main's word for a size any more than for anything else.
  *
- * `hops` is a bounded list of opaque session addresses the sidecar treats as
- * data: it is never authored on this side, never extended here, and steers
- * nothing. It rides so the recipient's transcript can show where a message came
- * through; the loop stop itself is entirely main's (§4 step 2).
+ * There is no hop chain here: it had no consumer on this side, and an inbound
+ * field nothing reads is boundary surface bought for nothing. The loop stop is
+ * entirely main's (§4 step 2).
  *
  * `untagged` is the creation-prompt flag (PEER-SESSIONS §5). Optional, and
  * absent means TAGGED, which is the fail-closed direction: a message that
@@ -6099,7 +6174,6 @@ const peerDeliverMessageSchema = z.object({
     value => new TextEncoder().encode(value).byteLength <= MAX_PEER_TEXT_BYTES,
     { message: 'text is too long' },
   ),
-  hops: z.array(z.string().min(1).max(MAX_TEXT_FIELD_CHARS)).max(MAX_PEER_HOPS),
   untagged: z.boolean().optional(),
 })
 
