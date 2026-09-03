@@ -581,9 +581,11 @@ const bridge: CatCodeBridge = {
     // and the host re-checks the id against its own rows (HC2), because the
     // preload runs in the renderer's process and is never the boundary.
     sendGuard.assertAllowed({ appSessionId, blocked })
-    // One line on purpose: `preloadSource.test.ts` scrapes `ipcRenderer.invoke(`
-    // for the channel constant that follows it, and a wrapped argument list makes
-    // this sender invisible to the guard that proves no invoke rides a
+    // `preloadSource.test.ts` scrapes `ipcRenderer.invoke(` for the channel
+    // constant that follows it, and cross-checks that scrape against an
+    // independent count of the call sites. A channel argument it cannot read (a
+    // helper call, a cast, a literal) now FAILS that guard instead of vanishing
+    // from it, so no sender can hide from the proof that none rides a
     // renderer-supplied channel name.
     return ipcRenderer.invoke(CH_HOST_SET_PEER_WAKE_BLOCKED, appSessionId, blocked) as Promise<
       HostResult<void>

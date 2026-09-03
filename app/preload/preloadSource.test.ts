@@ -188,12 +188,40 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   )
   expect(source).toContain("const CH_HOST_EVENT = 'catcode:host:event'")
 
+  // Comments are stripped once, up front, and every scan below reads the result.
+  // One comment in preload.ts QUOTES `ipcRenderer.invoke(` as prose, and the
+  // default-deny checks at the end of this test name the patterns they forbid;
+  // only real code counts for either.
+  const code = source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+
   // Every invoke targets one of those FIXED constants — never a renderer-supplied
   // channel name. Extract the first argument of each ipcRenderer.invoke(...) and
   // assert it is a known CH_HOST_* constant (HC3: no renderer-controlled channel).
-  const invokeChannels = [...source.matchAll(/ipcRenderer\.invoke\((\w+)/g)].map(
-    m => m[1],
+  //
+  // Find the call sites INDEPENDENTLY of the channel regex first, and require
+  // every site to be one the extractor could read. A scrape can only reject what
+  // it can read, and an unreadable call does not raise the pinned count either,
+  // so without this cross-check a sender whose channel argument sat on the next
+  // line, or behind a helper call or a cast, was BOTH invisible to the allowlist
+  // and free at 16: a silent pass. An unreadable site now fails here, quoted by
+  // its own source text, instead of vanishing from the scan.
+  const invokeSites = [...code.matchAll(/\.invoke\s*\(/g)]
+  const readableInvokes = [
+    ...code.matchAll(/ipcRenderer\.invoke\s*\(\s*(\w+)\s*[,)]/g),
+  ]
+  const readableSites = new Set(
+    readableInvokes.map(match => (match.index ?? -1) + 'ipcRenderer'.length),
   )
+  const unreadableInvokes = invokeSites
+    .filter(site => !readableSites.has(site.index ?? -1))
+    .map(site => {
+      const at = site.index ?? 0
+      return code.slice(Math.max(0, at - 24), at + 48).trim()
+    })
+  expect(unreadableInvokes).toEqual([])
+  const invokeChannels = readableInvokes.map(m => m[1])
   expect(invokeChannels.length).toBe(16)
   const allowed = new Set([
     'CH_HOST_CREATE',
@@ -218,12 +246,10 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
   }
   expect(source).not.toContain('ipcRenderer.invoke(CH_DEBUG_SHELL_STATE')
 
-  // Default-deny stays intact: no generic escape hatches. Strip comments first
-  // so the prose that DESCRIBES the forbidden pattern ("no generic send(channel,
-  // payload)") does not trip the check — only real code counts.
-  const code = source
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/\/\/.*$/gm, '')
+  // Default-deny stays intact: no generic escape hatches. This reads the
+  // comment-stripped `code` built above, so the prose that DESCRIBES the
+  // forbidden pattern ("no generic send(channel, payload)") does not trip the
+  // check — only real code counts.
   expect(code).not.toContain('send(channel')
   expect(code).not.toContain('invoke(channel')
   // No control-plane method returns filesystem contents — the picker returns a
