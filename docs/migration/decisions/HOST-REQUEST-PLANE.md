@@ -112,14 +112,17 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
   equals the requester's. HC1 is preserved in full: no path is ever authored
   by the model. A `peer.deliver` to a row outside the workspace is
   `session_not_found`, the HC2 answer for an id the caller may not name.
-- **HR4 — spawning stays bounded, and gains a per-requester budget.**
+- **HR4 — spawning stays bounded by HC4, and by nothing else.**
   `peer.create` passes through `Host.createSession`'s HC4 caps
-  (`MAX_LIVE_SESSIONS` 32, `MAX_SPAWNS_PER_WINDOW` 8 / 10 s) unchanged, plus
-  `MAX_PEERS_PER_CREATOR` (proposed 4 live peers whose `createdBy` is this
-  row), `MAX_PEER_DEPTH` (proposed 2) and `MAX_PEERS_PER_ROOT` (proposed 8),
-  all computed by walking `createdBy` in main, so recursion (Bear creates
-  Charlie creates Dave) cannot ladder to the global cap: a per-creator cap
-  alone bounds a level, not a tree. Any breach → `session_limit`.
+  (`MAX_LIVE_SESSIONS` 32, `MAX_SPAWNS_PER_WINDOW` 8 / 10 s) unchanged; a
+  breach is the existing `session_limit`. No per-creator, depth or root budget:
+  the operator ruled "no budget, allow it to spawn as much as possible"
+  (PEER-SESSIONS R8), so recursion (Bear creates Charlie creates Dave) may
+  ladder to the global cap, which is the same cap a human opening tabs meets.
+  `createdBy` is still recorded (listing, `gone` resolution), just not counted.
+  Account selection is untouched by this plane: no account field is a verb arg
+  (HR6), and the new process picks its Codex account as every session does
+  (PEER-SESSIONS R10).
 - **HR5 — the result is a new INBOUND kind, treated as such.** `host.result`
   and `peer.deliver` arrive at a sidecar over the socket, so each gets what
   every inbound kind gets (CLAUDE.md §5/§6): a sidecar-local schema, an
@@ -215,7 +218,7 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 | `app/shared/protocol.ts` | outbound: `HostRequestFrame`, `ActivityFrame`, `PeerNoticeFrame` in `ServerFramePayload`; inbound: `HostResultFrame` + `PeerDeliverFrame`; doc comments cite this file. No version bump (additive). |
 | `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`); two additive spawn-env keys `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY` beside `CATCODE_SIDECAR_CWD` (`:355-359`), threaded through the per-spawn `SpawnConfig` (`:138`). |
 | `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row busy state from `activity`; the deliver-after-ready state machine (§4 step 5); the durable pending-notice and notify-when-idle stores (in-memory: they die with the window like everything else, SESSION-LIFETIME L1, and a pending subscription also expires when either row is reaped or after 12 h, the upstream precedent). |
-| `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`); the spawn path accepts them; per-creator count; the name picker (PEER-SESSIONS §2). |
+| `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`); the spawn path accepts them; the name picker (PEER-SESSIONS §2). |
 | `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; `request` → task-notification enqueue with origin `peer`; `notify` → held notices + `peer.notice` event + enqueue-at-next-turn + ack; `activity` on turn start/end; doctrine block from env. |
 | `app/host/hostApi.ts`, `app/preload/preload.ts` | one host method + one fixed preload sender to set/clear a row's `peerWakeBlocked` from the sidebar row menu (HC3 pattern, `closeSession` precedent); renderer-facing only, no sidecar surface. |
 | `app/shared/operationalLog.ts` | one new closed event kind for routed peer messages (metadata only). |
@@ -227,7 +230,8 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
   unknown key, wrong type, missing `requestId`, mismatched `requestId`.
 - Main: unknown verb → typed error; verb args failing schema → typed error;
   HR3: a `peer.deliver` naming a row in another cwd → `session_not_found`;
-  HR4: fifth live peer for one creator → `session_limit`.
+  HR4: the 33rd live session via `peer.create` → the existing `session_limit`,
+  and no refusal below it for any creator count or depth.
 - Loop: a chain containing the recipient is refused; a chain over the cap is
   refused; two sessions replying to each other stop within the cap without
   prompt help (run against the real queue, not a stub: CLAUDE.md §8 rule 1).
@@ -261,8 +265,11 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 ## 8. Adversarial self-review
 
 - **A1 — a compromised sidecar (prompt-injected model) forks the machine.**
-  HR4: HC4 caps plus the per-creator budget bound it to a handful of
-  processes; each spawn is also a real, visible tab the operator sees appear.
+  HR4: HC4 caps bound it to 32 live sessions and 8 spawns per 10 s, the same
+  as a runaway renderer; there is no tighter peer budget by operator ruling,
+  so a prompt-injected model CAN fill the window with tabs up to that cap.
+  Each spawn is a real, visible tab the operator sees appear, and every one
+  is an ordinary session the operator can close. Accepted cost of R8.
 - **A2 — a compromised sidecar reaches another workspace.** HR3 answers with
   `session_not_found`; the only cwd it can spawn into is its own.
 - **A3 — a peer message impersonates the user.** `from` is main-stamped (HR2)

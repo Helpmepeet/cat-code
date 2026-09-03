@@ -28,8 +28,10 @@ Bear" is easier to say than an id.
 | R5 | Initiation is ALLOWED. "Send only when the user asks" was rejected. | Doctrine is a purpose test, not a trigger list (§5). Loops are prevented by mechanics, not prompt text (§7). |
 | R6 | Authority: "most of the time Bear just follows Alex." | A peer request is a task from the one user who runs both sessions, done under the recipient's own permission mode. The only block is the existing permission-laundering rule. |
 | R7 | A created peer inherits model, effort and permission mode unless the user or the creation prompt names a choice. | `CreatePeer` takes optional overrides that default to the creator's current values. |
-| R8 | Creation gating: the ordinary permission gate plus a per-creator budget is enough. | Holds because creation is instruction-driven, never self-initiated (§5). Under that rule an agent-created session is the operator opening a tab. |
+| R8 | Creation gating: the ordinary permission gate is enough. **No peer budget** (2026-09-03, second ruling: "no budget, allow it to spawn as much as possible"). | Holds because creation is instruction-driven, never self-initiated (§5). Under that rule an agent-created session is the operator opening a tab. The only bounds are the ones every session already has, HC4 (`MAX_LIVE_SESSIONS` 32, `MAX_SPAWNS_PER_WINDOW` 8 / 10 s); raising those is a SECURITY-MINIMUM change, not a peer decision. |
 | R9 | Same workspace only. | Create, list, read and send are scoped to the caller's cwd. No cross-workspace tool exists in v1, so no cross-workspace gate exists either. |
+| R10 | Codex account for a created peer: "reuse the same logic as how we assign account to that session." | Nothing new. No account field crosses the request plane (HOST-REQUEST-PLANE HR6). `peer.create` spawns through the same path as a user-created session, and the engine in the new process picks its account exactly as it does today: at its first query it registers a main lease (`src/query.ts:422`) via `selectMainAccountForLease` (`src/services/api/codexAccountLeaseManager.ts:511`), which pins the pool's persisted active account and repairs to a healthy one if that is unusable. The supervisor spawn env carries no account key (`app/supervisor/supervisor.ts:354-364`), so there is nothing to inherit or override; the creator and the peer read the same pool file. |
+| R11 | Name-pool theme: animals REJECTED ("give me other theme"). | Open; candidates in §13. |
 
 ## 2. Naming
 
@@ -57,8 +59,7 @@ Bear" is easier to say than an id.
   random names, and chosen names bring collision and rename expectations.
 - **`createdBy` is an `appSessionId`, never a name.** Names are reused after a
   reap; ids are not. Listings and the doctrine block resolve the id to a name
-  at read time and show `gone` for a reaped creator; the per-creator budget
-  counts by id.
+  at read time and show `gone` for a reaped creator.
 - **Storage.** Additive `RegistrySession` fields `name` and `createdBy`
   (`app/host/registry.ts:94`), the `forked` / `titleUpdatedAt` precedent:
   descriptor fields, not wire frames, no `PROTOCOL_VERSION` bump. Mirrored on
@@ -129,7 +130,7 @@ in-process file read.
 | `ListPeers` | none | §3. Read-only, no prompt. |
 | `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`) | `notify` is shown in the recipient's transcript now and reaches its model at its next turn from any cause, starting none (the held-notice mechanism, HOST-REQUEST-PLANE §4 step 4a; the engine queue alone cannot do this); `request` is read between tool calls, or starts a turn, or wakes. Result states the outcome. Ordinary permission gate. |
 | `ReadPeer` | `peer`, `view: 'tail' \| 'search'`, `limit` (default 20, max 50), `before` (entry uuid cursor), `query` (search only), `includeToolResults` (default false), `maxBytes` | §8. Same workspace only, read-only, no prompt. |
-| `CreatePeer` | `prompt`, optional `model`, `effort`, `permissionMode` | Defaults to the creator's values (R7). Returns the new name. Ordinary permission gate plus `MAX_PEERS_PER_CREATOR` (HR4). |
+| `CreatePeer` | `prompt`, optional `model`, `effort`, `permissionMode` | Defaults to the creator's values (R7). Returns the new name. Ordinary permission gate and the HC4 caps every session has; no peer budget (R8). Account: R10. |
 | `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's presence next becomes `idle` (NOT `needs_user`, which is a stall the creator should hear about as `notify` text instead). In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling. |
 
 Who created me, and my own name, are not tools: they are system-prompt context
@@ -255,11 +256,11 @@ stop lives in main (HOST-REQUEST-PLANE §4): hop chain with loop and runaway
 refusal, per-`(from,to)` token bucket, duplicate-body window, a NEW
 main-side `MAX_PENDING_PEER_MESSAGES` per recipient (the sidecar's
 `MAX_QUEUED_PROMPTS` bounds only renderer prompts arriving mid-turn and never
-sees this plane, `sidecarServer.ts:2431-2436`), `MAX_PEERS_PER_CREATOR`
-(proposed 4), `MAX_PEER_DEPTH` (proposed 2) and `MAX_PEERS_PER_ROOT`
-(proposed 8) computed from the `createdBy` chain, because a per-creator cap
-alone does not bound a tree (four peers each creating four is sixteen), and
-main's own size and rate bounds on `host.request` (HR1). Every message
+sees this plane, `sidecarServer.ts:2431-2436`), and main's own size and rate
+bounds on `host.request` (HR1). Spawn count is NOT a guard here: the operator
+ruled no peer budget (R8), so a tree of peers is bounded only by HC4, the same
+bound a human opening tabs meets. The proposed per-creator, depth and root
+caps were withdrawn on that ruling (§16). Every message
 carries a main-minted `messageId` and an optional `replyTo`; the sidecar acks
 consumption so main can record `consumedAt`. Those are mechanical receipts for
 the outcome enum and the log, not a state machine, and they are not shown to
@@ -400,9 +401,16 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 
 ## 13. Ruling requested (only these)
 
-1. **Name-pool theme.** Short pronounceable words disjoint from the scientist
-   pools; the brief's example was "Bear". Animals is the proposal.
-2. **`MAX_PEERS_PER_CREATOR` = 4** unless the operator wants another number.
+1. **Name-pool theme.** Animals rejected (R11). Constraints stand: ≥256
+   short, pronounceable, visually distinct words, disjoint from the subagent
+   scientist pools. Candidates that meet the count: **human first names**
+   (the operator's own examples were Alex, Bear, Charlie, Dave; thousands
+   available, one or two syllables, the most natural to say aloud);
+   **plants and trees** (Oak, Fern, Moss, Sage, Ivy, Maple; ~300 usable);
+   **gems and minerals** (Opal, Jade, Onyx, Flint, Amber; ~150, short of the
+   count without suffixes); **foods and spices** (Mango, Basil, Cocoa, Pepper;
+   ~300). First names is the recommendation.
+2. ~~`MAX_PEERS_PER_CREATOR`~~ Ruled: no budget (R8).
 3. The SECURITY-MINIMUM amendment, asked in HOST-REQUEST-PLANE §9.
 
 ## 14. Inputs
@@ -464,7 +472,7 @@ and the rulings:
 |---|---|
 | 1 request as a tracked work item | rejected for v1 (§12), receipts kept (§7) |
 | 2 user-only stop / block peer wake | adopted (§6) |
-| 3 root-wide spawn budget + depth cap | adopted (§7) |
+| 3 root-wide spawn budget + depth cap | adopted 2026-09-03, then WITHDRAWN the same day by operator ruling R8 (no budget); HC4 alone bounds spawning |
 | 4 file-overlap visibility | deferred, flagged (§12) |
 | 5 messageId / replyTo / consumption receipt | adopted, mechanical only (§7) |
 | 6 presence enum instead of busy bit | adopted (§3, §4) |
