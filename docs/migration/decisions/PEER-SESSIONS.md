@@ -200,6 +200,20 @@ terminal session from an hour ago can never be reached. So:
   permission prompt is the case a creator most needs to see, and it is not
   "busy". Main knows only recency today (`idleParkDriver.ts:151-157`) and
   does not read engine `turn.status` events.
+- 🔁 AMENDED 2026-09-04, from the `ListPeers` use-report. The ordering above
+  was right and the TOOL's prompt was wrong: it said "newest activity first",
+  so a caller read row one as the most recently active session when a parked
+  peer that finished a minute ago sits below live rows idle since morning.
+  Two additions follow from the same report. The result carries `asOf`, the
+  instant the roster was taken, because the engine injects a calendar date
+  with no time of day (`src/context.ts:233`) and `lastActivity` alone
+  therefore cannot answer "how long has this peer been quiet"; both ends stay
+  absolute, since a rendered duration is correct once and then decays as the
+  result sits in context. And presence is absent on a LIVE row in one
+  reachable state, a session spawned but not yet attached, which is exactly
+  what `CreatePeer` leaves behind when it reports that the session did not
+  finish starting; the tool now describes that state instead of claiming
+  every live row carries one.
 - No time filter. The registry's own reaping already bounds the closed tail.
 - Cheap: it is a registry read in main; no transcript is opened
   (CATALOG-OWNERSHIP stays intact).
@@ -395,7 +409,7 @@ Values, so the build does not invent them (all new constants in
 | `MAX_PENDING_PEER_MESSAGES` | 50 | per recipient, undelivered, main-side |
 | `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all model-facing verbs. 🔁 `peer.ack` is exempt (amended 2026-09-03 during the build): an ack is main-induced bookkeeping forced by a delivery, so charging it here let a few senders spend a recipient's whole allowance and starve it off the plane. Every frame including acks is still charged to `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` below |
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
-| `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body to the same recipient |
+| `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body, same sender, same recipient. 🔁 AMENDED 2026-09-04: the key was recipient and body alone, so two peers reporting the same short text to one parent collided and the second was told its message had already arrived and to await a reply to it. The tool's own prompt asks for short single messages, so the collision is ordinary orchestration, not a corner. A single sender is bounded by the per-pair bucket; fan-in by the pending cap. The recipient-only key never was a fan-in defence, since anything actually flooding varies one character and walks past it |
 | `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2). 🔁 The refusal rule that reads this chain was AMENDED 2026-09-03 during the build: a recipient already in the chain is a loop only when it is not the chain's last entry, so replying to whoever last wrote to you is bounded by `MAX_PEER_HOPS` rather than refused. HRP §4 step 2 carries the derivation |
 | `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
 | `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 16 KiB / 64 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors |
@@ -427,6 +441,33 @@ pages structured items with a summary view by default). Shape:
 - **Search is a separate view**, scoped to the one named peer, returning
   snippets with cursors. Catalog-wide search is the catalog's job and would
   reopen CATALOG-OWNERSHIP.
+- 🔁 **AMENDED 2026-09-04, after four use-reports** (one per tool, each written
+  by a model asked to USE the tool rather than review it). Four claims above
+  were true of the code and wrong for the caller:
+  - **A tool call now renders its target, and the target is searchable.**
+    Previously a `tool_use` block rendered as `[tool call: Edit]` with the
+    input discarded, so searching a peer for a path it had just edited
+    answered "Found 0 of 0" with `status: ok`. A confident false negative is
+    worse than a missing feature. An allow-list maps a tool to the ONE input
+    field naming its target (command, file_path, pattern, description); a tool
+    outside it renders as before. This is deliberately not a serializer:
+    `content`, `old_string` and `new_string` never render, so file bodies do
+    not move between sessions. Tool RESULTS remain opt-in, unchanged.
+  - **Redaction runs before the target's length cap**, not after. Capping
+    first can cut a value below its pattern's minimum length, so truncation
+    would manufacture a surviving fragment out of a secret that would
+    otherwise have been removed whole. Order is load-bearing here.
+  - **`view: "search"` with no query is refused** (`missing_query`). The empty
+    string matched every message and reported them as hits.
+  - **`truncated` means only that text was cut from what you hold.** It also
+    fired on "you asked for 20 of 200", which is the ordinary case, so it
+    carried no information; `nextPosition` already says more remains.
+  Kept deliberately: `Bash`'s `command` stays in the allow-list. It
+  concentrates exposure but introduces no new class of it (§8 already records
+  the unknown-shape gap, which applies equally to prose), and with tool output
+  off by default the command line is the only trace a shell-heavy peer leaves.
+  Dropping it would make such a peer read as idle, which is the same false
+  report this amendment exists to remove.
 - **Passive: a read never wakes.** It is a file read of
   `~/.cat-code/projects/<projectDir>/<engineSessionId>.jsonl`, keyed by the
   engine id that `ListPeers` returns for the name. The reader derives the
