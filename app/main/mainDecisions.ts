@@ -579,6 +579,44 @@ export function isSessionLive(
   return record !== undefined && isLiveSidecarStatus(record.status)
 }
 
+/**
+ * Can this session take a frame RIGHT NOW?
+ *
+ * A different question from `isLiveSidecarStatus`, and the reason both exist.
+ * That one answers whether a session EXISTS, deliberately matching
+ * `Host.liveCount()`'s `!isTerminalStatus` so the two planes never disagree
+ * about the set of sessions. Existence is the wrong test for a delivery:
+ * `spawning`, `connecting` and `disconnected` are all non-terminal, so a row in
+ * any of them exists, and `SidecarSupervisor.send` still refuses the frame
+ * (`sendFailureCodeForStatus`). Only `ready` means the socket is there.
+ *
+ * The cost of conflating them fell on the peer plane, which read existence and
+ * concluded delivery: a `peer.deliver` to a row in one of those three skipped
+ * the wake block, skipped `restoreSession`, skipped the wait for `ready`, and
+ * handed the frame to a socket that was not there. The sender got
+ * `delivery_failed`, and for a `disconnected` row it got it every time, because
+ * a row that reads live is never woken.
+ *
+ * So the two predicates answer two questions and neither may stand in for the
+ * other: existence for anything that counts or lists sessions, readiness for
+ * anything that writes to one.
+ */
+export function isReadyForFrames(status: SidecarStatus): boolean {
+  return status === 'ready'
+}
+
+/**
+ * Readiness for one session, over the supervisor's own record list. A row with
+ * no record at all is not ready, the same way it is not live.
+ */
+export function isSessionReadyForFrames(
+  records: readonly { sessionId: string; status: SidecarStatus }[],
+  appSessionId: string,
+): boolean {
+  const record = records.find(row => row.sessionId === appSessionId)
+  return record !== undefined && isReadyForFrames(record.status)
+}
+
 export function supervisorEventToServerFrame(
   event: SupervisorEvent,
 ): ServerFrame | null {

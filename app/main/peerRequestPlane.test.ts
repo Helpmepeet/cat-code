@@ -34,7 +34,15 @@ import {
 const ALEX = 'aaaaaaaa-0000-4000-8000-000000000001'
 const BEAR = 'bbbbbbbb-0000-4000-8000-000000000002'
 const CORAL = 'cccccccc-0000-4000-8000-000000000003'
+const DUNE = 'dddddddd-0000-4000-8000-000000000004'
 const WORKSPACE = '/w/one'
+
+/** Let every queued microtask run, so parked awaits reach their next step. */
+function settle(): Promise<void> {
+  return new Promise<void>(resolve => {
+    setImmediate(resolve)
+  })
+}
 
 function row(
   appSessionId: string,
@@ -72,6 +80,8 @@ function harness(
   options: {
     rows?: PeerRegistryRow[]
     live?: Set<string>
+    /** Rows whose socket can take a frame right now. Defaults to `live`. */
+    ready?: Set<string>
     createResult?: PeerRequestPlaneDeps['createSessionInWorkspace']
     restoreResult?: PeerRequestPlaneDeps['restoreSession']
     forwardFails?: Set<string>
@@ -79,6 +89,8 @@ function harness(
 ) {
   const rows = options.rows ?? [row(ALEX, 'Alex'), row(BEAR, 'Bear')]
   const live = options.live ?? new Set([ALEX, BEAR])
+  const ready = options.ready
+  const restored: string[] = []
   const sent: Sent[] = []
   const logged: LogLine[] = []
   const timers: Array<{ fn: () => void; fired: boolean }> = []
@@ -88,10 +100,14 @@ function harness(
   const plane = createPeerRequestPlane({
     rows: () => rows,
     isLive: id => live.has(id),
+    isReady: id => (ready ?? live).has(id),
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
-    restoreSession: options.restoreResult ?? (async () => ({ ok: true })),
+    restoreSession: appSessionId => {
+      restored.push(appSessionId)
+      return (options.restoreResult ?? (async () => ({ ok: true })))(appSessionId)
+    },
     forward: (sessionId, message) => {
       sent.push({ sessionId, message })
       return options.forwardFails?.has(sessionId) === true ? 'session_not_found' : null
@@ -114,6 +130,7 @@ function harness(
     plane,
     rows,
     live,
+    restored,
     sent,
     logged,
     advance: (ms: number) => {
@@ -718,9 +735,12 @@ describe('ack and durability', () => {
       request('peer.ack', { messageId: 'msg-1' }, 'ack-1'),
     )
     expect(h.plane.pendingFor(BEAR)).toEqual([])
+    // Attributed to the SENDER, exactly like the refusal lines above it. The ack
+    // arrives from Bear, and billing the line to whoever happened to close the
+    // message made "which session caused this" depend on how it ended.
     expect(h.logged).toEqual([
       {
-        appSessionId: BEAR,
+        appSessionId: ALEX,
         from: 'Alex',
         to: 'Bear',
         kind: 'request',
@@ -1071,5 +1091,305 @@ describe('F5/F7/F9/F11 — smaller fixes', () => {
     await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'wake' }))
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_wake' })
     expect(h.deliveries()).toHaveLength(1)
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * Second-review fixes
+ * ------------------------------------------------------------------------- */
+
+describe('H1 — the hop budget belongs to the pair, the chain belongs to the ring', () => {
+  test('a first message to a NEW peer is allowed however long another exchange ran', async () => {
+    // The defect this pins: the inherited chain was both the ring evidence and
+    // the budget, so eight legitimate Alex/Bear round trips left a chain of
+    // sixteen, and Alex's FIRST EVER message to Coral inherited it and came back
+    // `hop_runaway`. The sender was told its back-and-forth with Coral had run
+    // too long before the two had exchanged anything, and it stayed refused for
+    // as long as Alex and Bear kept the record fresh.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+    let sender = ALEX
+    let recipient = BEAR
+    const pair: string[] = []
+    for (let i = 0; i < MAX_PEER_HOPS + 1; i++) {
+      h.advance(3_000)
+      await h.plane.handleRequest(
+        sender,
+        request(
+          'peer.deliver',
+          { to: recipient === BEAR ? 'Bear' : 'Alex', text: `turn ${i}` },
+          `r${i}`,
+        ),
+      )
+      pair.push((h.lastResult()?.value as { outcome: string } | undefined)?.outcome ?? 'error')
+      const next = recipient
+      recipient = sender
+      sender = next
+    }
+    // The pair is genuinely saturated: this is the state that used to poison
+    // every other conversation the sender had.
+    expect(pair.at(-1)).toBe('refused:hop_runaway')
+
+    h.advance(3_000)
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Coral', text: 'new' }, 'c1'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+
+    // And the new pair has its OWN budget, not a leftover slice of the old one.
+    h.advance(3_000)
+    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Alex', text: 'back' }, 'c2'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+  })
+
+  test('a one-way stream is not a runaway conversation', async () => {
+    // The budget counts an exchange, so it advances off the record the RECIPIENT
+    // wrote. Counting the sender's own direction too would have made fifty sends
+    // with no reply a `hop_runaway`, taking the pending cap out of reach.
+    const h = harness()
+    for (let i = 0; i < MAX_PEER_HOPS + 4; i++) {
+      h.advance(2_000)
+      await h.plane.handleRequest(
+        ALEX,
+        request('peer.deliver', { to: 'Bear', text: `body ${i}` }, `r${i}`),
+      )
+      expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+    }
+  })
+
+  test('T1 — a ring is caught by the LONGEST chain, not the last one written', async () => {
+    // The chain store is a map, and the fixture's insertion order happened to
+    // leave the long chain last, so a re-implementation that took any matching
+    // record passed every test. Here the SHORT record is written after the long
+    // one: Dune messages Coral between Bear's hop and Coral's reply, so
+    // last-iterated-wins inherits `[Dune]`, sees no Alex in it, and lets the ring
+    // close.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral'), row(DUNE, 'Dune')],
+      live: new Set([ALEX, BEAR, CORAL, DUNE]),
+    })
+    h.advance(3_000)
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'a' }, 'r1'))
+    h.advance(3_000)
+    await h.plane.handleRequest(BEAR, request('peer.deliver', { to: 'Coral', text: 'b' }, 'r2'))
+    h.advance(3_000)
+    await h.plane.handleRequest(DUNE, request('peer.deliver', { to: 'Coral', text: 'noise' }, 'r3'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+
+    h.advance(3_000)
+    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Alex', text: 'c' }, 'r4'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:hop_loop' })
+  })
+})
+
+describe('H2 — a message that went nowhere is not reported as already delivered', () => {
+  test('a retry after a failed wake is attempted again, not refused as a duplicate', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+      restoreResult: async () => ({ ok: false, error: { code: 'spawn_failed', message: 'no' } }),
+    })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r1'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
+
+    // The body was recorded before the wake was attempted, so the retry used to
+    // come back `refused:duplicate`: the peer already has it, wait for a reply.
+    // It never had it.
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r2'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
+    expect(h.restored).toEqual([BEAR, BEAR])
+  })
+
+  test('two identical sends in flight are still caught', async () => {
+    const h = harness()
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r1'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r2'))
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:duplicate' })
+  })
+})
+
+describe('M2 — the pending cap bounds the wake path too', () => {
+  test('deliveries waking the same recipient concurrently cannot pass the cap', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+    })
+    const overshoot = 30
+    const inflight: Promise<void>[] = []
+    for (let i = 0; i < MAX_PENDING_PEER_MESSAGES + overshoot; i++) {
+      h.advance(2_000)
+      inflight.push(
+        h.plane.handleRequest(
+          ALEX,
+          request('peer.deliver', { to: 'Bear', text: `body ${i}` }, `r${i}`),
+        ),
+      )
+    }
+    // Every one of them is now parked on the same wake, past the check that used
+    // to read the pending count: each read zero and all of them were held.
+    await settle()
+    h.plane.onReady(BEAR)
+    await Promise.all(inflight)
+
+    expect(h.plane.pendingFor(BEAR)).toHaveLength(MAX_PENDING_PEER_MESSAGES)
+    const refused = h
+      .results()
+      .filter(
+        result =>
+          result.ok === true &&
+          (result.value as { outcome?: string }).outcome === 'refused:queue_full',
+      )
+    expect(refused).toHaveLength(overshoot)
+  })
+
+  test('a refused wake gives its slot back', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+      restoreResult: async () => ({ ok: false, error: { code: 'spawn_failed', message: 'no' } }),
+    })
+    for (let i = 0; i < MAX_PENDING_PEER_MESSAGES + 5; i++) {
+      h.advance(2_000)
+      await h.plane.handleRequest(
+        ALEX,
+        request('peer.deliver', { to: 'Bear', text: `body ${i}` }, `r${i}`),
+      )
+      // A held reservation that is never released would start answering
+      // queue_full for a recipient holding nothing at all.
+      expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
+    }
+    expect(h.plane.pendingFor(BEAR)).toEqual([])
+  })
+})
+
+describe('M4 — a host call cannot outrun the caller waiting on it', () => {
+  test('a restore that never answers is bounded and refused', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+      restoreResult: () => new Promise(() => {}),
+    })
+    const inflight = h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }),
+    )
+    await settle()
+    // Unbounded, this await never returns and the sidecar settles the caller
+    // with a timeout while main is still working.
+    h.expireWakes()
+    await inflight
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
+  })
+
+  test('a spawn that never answers is bounded and refused', async () => {
+    const h = harness({ createResult: () => new Promise(() => {}) })
+    const inflight = h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'go' }))
+    await settle()
+    // The one that costs a real session: the sidecar forgets the request id and
+    // the model's retry spawns a SECOND session for the same ask.
+    h.expireWakes()
+    await inflight
+    expect(h.lastResult()?.ok).toBe(false)
+    expect(h.lastResult()?.error?.code).toBe('spawn_failed')
+  })
+})
+
+describe('M1 — existence and readiness are different questions', () => {
+  test('a row that exists but cannot take a frame is WOKEN, not written to', async () => {
+    // `spawning`, `connecting` and `disconnected` all read as existing. Treating
+    // that as live skipped the wake entirely, the send was refused, and for a
+    // disconnected row nothing on this path ever tried again.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear')],
+      live: new Set([ALEX, BEAR]),
+      ready: new Set([ALEX]),
+    })
+    const inflight = h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }),
+    )
+    await settle()
+    h.plane.onReady(BEAR)
+    await inflight
+
+    expect(h.restored).toEqual([BEAR])
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_wake' })
+    expect(h.deliveries()).toHaveLength(1)
+  })
+})
+
+describe('redelivery, naming and reap', () => {
+  test('only a hand-off that succeeded is charged to the delivery budget', async () => {
+    const forwardFails = new Set<string>()
+    const h = harness({ forwardFails })
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'survive' }))
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+
+    // Two transient send failures. Counting these spent the allowance on
+    // failures the recipient never saw, so one real rejection afterwards dropped
+    // the message.
+    forwardFails.add(BEAR)
+    h.plane.onReady(BEAR)
+    h.plane.onReady(BEAR)
+    forwardFails.delete(BEAR)
+    h.plane.onReady(BEAR)
+
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+    expect(h.logged).toEqual([])
+  })
+
+  test('the give-up line is attributed to the sender, like every other line', async () => {
+    const h = harness()
+    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'survive' }))
+    for (let i = 0; i < MAX_PEER_DELIVERY_ATTEMPTS; i++) h.plane.onReady(BEAR)
+    expect(h.plane.pendingFor(BEAR)).toEqual([])
+    expect(h.logged).toEqual([
+      {
+        appSessionId: ALEX,
+        from: 'Alex',
+        to: 'Bear',
+        kind: 'request',
+        messageId: 'msg-1',
+        outcome: 'refused:delivery_failed',
+      },
+    ])
+  })
+
+  test('a created session with no name is a typed failure, not a frame nobody accepts', async () => {
+    // `''` is a value the recipient's own schema rejects, so it turned a session
+    // that WAS created into an internal error at the boundary instead.
+    const h = harness({
+      createResult: async () => ({ ok: true, value: { appSessionId: CORAL, name: '' } }),
+    })
+    const inflight = h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'go' }))
+    await settle()
+    // Minting `''` did not answer at all until the wake timed out, and then
+    // answered `ok` with an unusable name; both halves are wrong.
+    h.expireWakes()
+    await inflight
+    expect(h.lastResult()?.ok).toBe(false)
+    expect(h.lastResult()?.error?.code).toBe('internal_error')
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
+  test('a reaped row leaves no ready timestamp behind', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+    })
+    h.plane.onReady(BEAR)
+    h.plane.onSessionRemoved(BEAR)
+
+    // The stale timestamp used to satisfy the next wake instantly, so a row that
+    // had announced nothing since it was reaped read as already up.
+    const inflight = h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }),
+    )
+    await settle()
+    h.expireWakes()
+    await inflight
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
   })
 })

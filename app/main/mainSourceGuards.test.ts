@@ -274,3 +274,64 @@ test('HR2/HR6: a host.request is consumed by main and never reaches the renderer
   const interceptRegion = bridge.slice(branch, returnStatement)
   expect(interceptRegion).not.toContain('deliver(')
 })
+
+test('the peer plane is composed with the supervisor-backed liveness predicate', () => {
+  // T2 — the one line that turns `mainDecisions.ts`'s predicate into the plane's
+  // `isLive`. Both halves are covered for real (the predicate in
+  // `mainDecisions.test.ts`, the plane in `peerRequestPlane.test.ts`) and the
+  // JOIN between them was covered by nothing: every plane test injects its own
+  // `isLive`, so a composition wired to `listSessions().some(...)` again, or to
+  // nothing at all, would break delivery with a fully green battery.
+  //
+  // Same shape as the `host.request` ordering guard above: an ORDERING and a
+  // presence inside one region, failing loudly if the region moves.
+  const composition = region(
+    'peerPlane = createPeerRequestPlane({',
+    '// IS-A startup GC',
+  )
+  expect(composition).toContain('isSessionLive(supervisor.listSessions(), appSessionId)')
+  // Membership is the defect this replaced; it must not come back.
+  expect(composition).not.toContain('listSessions().some(')
+})
+
+test('the plane sends through the entry point that raises no renderer error frame', () => {
+  // A SOURCE guard, not a behavioural one, for the reason at the top of this
+  // file: `forwardInternal` lives in `main.ts`, and importing `main.ts` starts
+  // an Electron app, so no unit test can call it. What is asserted here is
+  // therefore the composition and an ABSENCE inside one region — the shape this
+  // file is honest about — while the plane's own use of its `forward` dep is
+  // covered for real in `peerRequestPlane.test.ts`.
+  //
+  // The property: plane traffic is a `host.result` answering the engine's own
+  // request and a `peer.deliver` no pane asked for. Sent through the
+  // renderer-facing `forward`, a failure is turned into an error frame and
+  // delivered, and `connectionState.ts` reduces `session_not_found`,
+  // `session_not_ready` and `session_disconnected` into a pane's connection
+  // status by CODE, ignoring the request id. So one failed internal ack shows a
+  // danger banner and locks the composer of a session the user never touched.
+  const composition = region(
+    'peerPlane = createPeerRequestPlane({',
+    '// IS-A startup GC',
+  )
+  expect(composition).toContain('forward: forwardInternal')
+
+  // …and the entry point it names must actually skip the notification. The
+  // failure code still travels back — the plane picks `delivery_failed` vs
+  // `wake_failed` from it — so only the notification half may be dropped.
+  const wrapper = region('function forwardInternal(', 'function handOff(')
+  expect(wrapper).toContain("return handOff(sessionId, message, 'internal')")
+  expect(wrapper).not.toContain('deliver(')
+
+  // In the shared body every `deliver` sits inside the renderer branch, so the
+  // internal audience reaches none of them: one guard per delivery, none of
+  // them before the first guard.
+  const guard = /if \(audience === 'renderer'\) \{/g
+  const body = region('function handOff(', 'function sanitizeSubmitOptions(')
+  expect(body).toContain("audience: 'renderer' | 'internal'")
+  const segments = body.split(guard)
+  expect(body.match(/deliver\(/g) ?? []).not.toHaveLength(0)
+  expect(segments[0]).not.toContain('deliver(')
+  for (const segment of segments.slice(1)) {
+    expect(segment.match(/deliver\(/g) ?? []).toHaveLength(1)
+  }
+})

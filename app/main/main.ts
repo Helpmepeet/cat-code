@@ -93,6 +93,7 @@ import {
   stampHistoryViewAnchor,
   supervisorEventToServerFrame,
   isSessionLive,
+  isSessionReadyForFrames,
   validateSaveTextRequest,
 } from './mainDecisions.js'
 import {
@@ -3329,6 +3330,44 @@ function forward(
   sessionId: SessionId,
   message: SidecarClientMessage,
 ): ErrorFrame['code'] | null {
+  return handOff(sessionId, message, 'renderer')
+}
+
+/**
+ * The same hand-off, for a message NO renderer request is waiting on.
+ *
+ * The peer request plane's traffic is internal: a `host.result` answering the
+ * engine's own `host.request`, and a `peer.deliver` message the recipient pane
+ * never asked for. It rides main's socket, but its failures are the plane's to
+ * read, not the window's to see. Notifying the renderer of them is actively
+ * wrong: `connectionState.ts` reduces `session_not_found`, `session_not_ready`
+ * and `session_disconnected` into the pane's connection status by CODE alone,
+ * with no reference to any request id, so one failed internal ack flips the
+ * banner and locks the composer of a session whose user did nothing, over a
+ * request id that belongs to no renderer request at all.
+ *
+ * The failure code still comes back, unchanged, because the plane chooses
+ * `delivery_failed` versus `wake_failed` from it and counts delivery attempts.
+ * Only the notification half is skipped.
+ */
+function forwardInternal(
+  sessionId: SessionId,
+  message: SidecarClientMessage,
+): ErrorFrame['code'] | null {
+  return handOff(sessionId, message, 'internal')
+}
+
+/**
+ * The shared body of the two above. `audience` is REQUIRED and has no default:
+ * whether a failure reaches the window is the whole difference between them,
+ * and a defaulted answer to that question is the kind of thing a new caller
+ * inherits by accident.
+ */
+function handOff(
+  sessionId: SessionId,
+  message: SidecarClientMessage,
+  audience: 'renderer' | 'internal',
+): ErrorFrame['code'] | null {
   if (!SESSION_ID_RE.test(sessionId)) return 'bad_request'
   message = stampHistoryViewAnchor(
     message,
@@ -3336,18 +3375,20 @@ function forward(
   )
 
   if (!supervisor) {
-    const frame: ServerFrame = {
-      kind: 'error',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId,
-      ...('requestId' in message && typeof message.requestId === 'string'
-        ? { requestId: message.requestId }
-        : {}),
-      code: 'session_not_found',
-      message: 'That session is no longer available.',
-      retryable: false,
+    if (audience === 'renderer') {
+      const frame: ServerFrame = {
+        kind: 'error',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId,
+        ...('requestId' in message && typeof message.requestId === 'string'
+          ? { requestId: message.requestId }
+          : {}),
+        code: 'session_not_found',
+        message: 'That session is no longer available.',
+        retryable: false,
+      }
+      deliver(attachmentGate.onFrame(sessionId, frame))
     }
-    deliver(attachmentGate.onFrame(sessionId, frame))
     process.stderr.write(`[main] forward to ${sessionId} failed: no live host\n`)
     return 'session_not_found'
   }
@@ -3357,18 +3398,20 @@ function forward(
   } catch (error) {
     const messageText = error instanceof Error ? error.message : String(error)
     const code = isSidecarSendError(error) ? error.code : 'bad_request'
-    const frame: ServerFrame = {
-      kind: 'error',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId,
-      ...('requestId' in message && typeof message.requestId === 'string'
-        ? { requestId: message.requestId }
-        : {}),
-      code,
-      message: messageText,
-      retryable: isSidecarSendError(error) ? error.retryable : false,
+    if (audience === 'renderer') {
+      const frame: ServerFrame = {
+        kind: 'error',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId,
+        ...('requestId' in message && typeof message.requestId === 'string'
+          ? { requestId: message.requestId }
+          : {}),
+        code,
+        message: messageText,
+        retryable: isSidecarSendError(error) ? error.retryable : false,
+      }
+      deliver(attachmentGate.onFrame(sessionId, frame))
     }
-    deliver(attachmentGate.onFrame(sessionId, frame))
     process.stderr.write(
       `[main] forward to ${sessionId} failed: ${messageText}\n`,
     )
@@ -3568,13 +3611,23 @@ function ensureHost(): Host {
     // being the one line of this plane nothing could reach.
     isLive: appSessionId =>
       supervisor !== null && isSessionLive(supervisor.listSessions(), appSessionId),
+    // …and existence is NOT readiness. `spawning`, `connecting` and
+    // `disconnected` are all non-terminal, so the row above reads live while
+    // `SidecarSupervisor.send` still refuses its frame. The delivery branch asks
+    // this stricter question instead, so a row in one of those three is woken
+    // rather than written to and lost.
+    isReady: appSessionId =>
+      supervisor !== null && isSessionReadyForFrames(supervisor.listSessions(), appSessionId),
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),
     restoreSession: async appSessionId => {
       const result = await liveHost.restoreSession(appSessionId)
       return result.ok ? { ok: true } : { ok: false, error: result.error }
     },
-    forward,
+    // Not `forward`: see `forwardInternal`. Plane traffic answers the engine,
+    // not the window, and the renderer-facing path turns a failure into an
+    // error frame that flips a pane's connection status by code alone.
+    forward: forwardInternal,
     logRouted: (appSessionId, fields) =>
       logOperational('peer.message.routed', 'info', fields, appSessionId),
     log: line => logLegacyDiagnostic(line, 'host', 'main'),

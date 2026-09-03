@@ -6,7 +6,7 @@ import {
   type HistoryLoadEarlierMessage,
   type ServerFrame,
 } from '../shared/protocol.js'
-import type { SupervisorEvent } from '../supervisor/supervisor.js'
+import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
 import {
   MAX_FRAME_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
@@ -48,7 +48,9 @@ import {
   selectTranscriptBackfillCandidates,
   stampHistoryViewAnchor,
   isLiveSidecarStatus,
+  isReadyForFrames,
   isSessionLive,
+  isSessionReadyForFrames,
   supervisorEventToServerFrame,
   resolveSidecarLaunch,
   validateSaveTextRequest,
@@ -1507,5 +1509,60 @@ describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () =
     for (const status of ['exited', 'failed'] as const) {
       expect(isLiveSidecarStatus(status)).toBe(false)
     }
+  })
+
+  test('EXISTENCE is not readiness, over all six statuses', () => {
+    // The whole reason there are two predicates. `isLiveSidecarStatus` answers
+    // whether a session exists and must keep agreeing with `Host.liveCount()`;
+    // three of the statuses it admits cannot take a frame, and the supervisor
+    // refuses one sent to them. A delivery path that reads the existence answer
+    // skips the wake and loses the message, which is what happened.
+    const existence: Record<SidecarStatus, boolean> = {
+      spawning: true,
+      connecting: true,
+      ready: true,
+      disconnected: true,
+      exited: false,
+      failed: false,
+    }
+    const readiness: Record<SidecarStatus, boolean> = {
+      spawning: false,
+      connecting: false,
+      ready: true,
+      disconnected: false,
+      exited: false,
+      failed: false,
+    }
+    // Listed rather than derived from the tables, so a status added to the union
+    // fails to compile here instead of quietly going untested.
+    const all = [
+      'spawning',
+      'connecting',
+      'ready',
+      'disconnected',
+      'exited',
+      'failed',
+    ] as const satisfies readonly SidecarStatus[]
+    for (const status of all) {
+      expect(isLiveSidecarStatus(status)).toBe(existence[status])
+      expect(isReadyForFrames(status)).toBe(readiness[status])
+    }
+    // The three that separate them, named rather than left to the tables.
+    const existsButCannotTakeAFrame = all.filter(
+      status => existence[status] && !readiness[status],
+    )
+    expect(existsButCannotTakeAFrame).toEqual(['spawning', 'connecting', 'disconnected'])
+  })
+
+  test('readiness over the record list, including a row with no record', () => {
+    expect(isSessionReadyForFrames(records, 'ready-1')).toBe(true)
+    for (const id of ['spawning-1', 'connecting-1', 'disconnected-1', 'exited-1', 'failed-1']) {
+      expect(isSessionReadyForFrames(records, id)).toBe(false)
+      // Every one of these EXISTS as far as the other predicate is concerned for
+      // the first three, which is the confusion the pair exists to end.
+      expect(records.some(row => row.sessionId === id)).toBe(true)
+    }
+    expect(isSessionReadyForFrames(records, 'never-existed')).toBe(false)
+    expect(isSessionReadyForFrames([], 'ready-1')).toBe(false)
   })
 })

@@ -88,8 +88,23 @@ type NamedRow = PeerRegistryRow & { name: string }
 export type PeerRequestPlaneDeps = {
   /** Every current registry row, live and dead alike. Read-only. */
   rows: () => readonly PeerRegistryRow[]
-  /** Is a sidecar process live for this row right now? */
+  /** Does a sidecar record still EXIST for this row, live or in between? */
   isLive: (appSessionId: SessionId) => boolean
+  /**
+   * Can this row take a frame right now? A different question from `isLive`,
+   * and the delivery path needs this one. A row that is spawning, connecting or
+   * disconnected still EXISTS, so `isLive` says yes, but its socket will refuse
+   * the frame; treating that as live skips the wake entirely and the send is
+   * lost with nothing left to retry it.
+   *
+   * REQUIRED, with no fallback to `isLive`, and that is the point. It shipped
+   * optional with exactly that fallback, main never passed it, and the fix was
+   * inert for a day behind a fully green battery: an optional dependency can be
+   * forgotten silently, a required one cannot, because the compiler refuses the
+   * build. The stricter readiness answer is one only the composer can give, so
+   * there is no honest default for it to fall back to.
+   */
+  isReady: (appSessionId: SessionId) => boolean
   /**
    * HR4 — the host's own create path, with the peer options it already exposes.
    * Not reimplemented here: the HC4 caps and the churn rule are the host's, and
@@ -118,7 +133,15 @@ export type PeerRequestPlaneDeps = {
    * message was handed over and a closed error code when it was not.
    */
   forward: (appSessionId: SessionId, message: SidecarClientMessage) => unknown
-  /** One metadata-only operational line per routed message (PEER-SESSIONS §10). */
+  /**
+   * One metadata-only operational line per routed message (PEER-SESSIONS §10).
+   *
+   * The `appSessionId` is always the SENDER's, whatever the outcome. The line
+   * exists to answer "which session caused this", and a delivered message
+   * attributed to its recipient while a refused one is attributed to its sender
+   * makes that answer depend on how the message ended, which is the one thing
+   * the reader is trying to find out.
+   */
   logRouted: (
     appSessionId: SessionId,
     fields: {
@@ -137,6 +160,11 @@ export type PeerRequestPlaneDeps = {
    * to sit through `PEER_WAKE_TIMEOUT_MS`.
    */
   wakeTimeoutMs?: number
+  /**
+   * How long to wait for one host call (`restoreSession`, `createSessionInWorkspace`)
+   * before giving up on it. See `PEER_HOST_CALL_TIMEOUT_MS`.
+   */
+  hostCallTimeoutMs?: number
   /** Schedule the wake timeout. Injected for the same reason. */
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
@@ -341,13 +369,40 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
  * The plane
  * ------------------------------------------------------------------------- */
 
+/**
+ * The bound on ONE host call made while a `host.request` is outstanding.
+ *
+ * The sidecar settles its caller after `HOST_REQUEST_TIMEOUT_MS` (45 s) and
+ * forgets the id, so anything main takes longer than that over is work whose
+ * answer nobody will ever read: for `peer.create` that means main goes on to
+ * spawn a session the caller was told it did not get, and a retry spawns a
+ * second one. `limits.ts` reasons that the 30 s ready wait is the longest main
+ * can legitimately take, but a restore or a spawn runs BEFORE that wait and was
+ * unbounded, so the two ran back to back and the total could pass 45 s with
+ * both steps behaving normally. Ten seconds plus the 30 s wait keeps main's
+ * worst case under the sidecar's cap with room to answer.
+ *
+ * It lives here rather than in `limits.ts` because it bounds a call this module
+ * makes, not a value that crosses the wire.
+ */
+const PEER_HOST_CALL_TIMEOUT_MS = 10_000
+
 type Bucket = { tokens: number; lastRefillAt: number }
 /**
  * One record of a hop main routed toward `recipient` from `sender`. `viaRefusal`
  * marks a hop that was REFUSED rather than delivered — see `buildHops` for why
  * those two are stored together but inherited differently.
+ *
+ * `chain` and `pairHops` are two DIFFERENT quantities and answer two different
+ * questions; `buildHops` derives both and explains why they had to be split.
  */
-type ChainRecord = { chain: SessionId[]; viaRefusal: boolean; at: number }
+type ChainRecord = {
+  chain: SessionId[]
+  /** Hops this pair has exchanged, counting both directions of the exchange. */
+  pairHops: number
+  viaRefusal: boolean
+  at: number
+}
 type PendingMessage = {
   messageId: string
   toAppSessionId: SessionId
@@ -391,6 +446,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const newId = deps.newId ?? (() => globalThis.crypto.randomUUID())
   const log = deps.log ?? (() => {})
   const wakeTimeoutMs = deps.wakeTimeoutMs ?? PEER_WAKE_TIMEOUT_MS
+  const hostCallTimeoutMs = deps.hostCallTimeoutMs ?? PEER_HOST_CALL_TIMEOUT_MS
+  const isReady = deps.isReady
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer =
     deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>))
@@ -423,6 +480,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const chains = new Map<string, ChainRecord>()
   /** Messages main is holding: forwarded but not yet acked. */
   const pending = new Map<SessionId, PendingMessage[]>()
+  /** Pending slots claimed by a delivery that is still waking its recipient. */
+  const reservations = new Map<SessionId, number>()
   /** Callers parked on a row's next `ready`. */
   const readyWaiters = new Map<SessionId, ReadyWaiter[]>()
   /**
@@ -564,6 +623,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     return false
   }
 
+  /**
+   * H2 — undo the record above.
+   *
+   * The check records the body BEFORE the message is delivered, because two
+   * identical sends racing each other have to be caught by the first one that
+   * arrives. That makes every refusal below the check a lie by default: the
+   * message went nowhere, and the sender retrying it inside the window was told
+   * `refused:duplicate`, which says the peer already has it and to wait for a
+   * reply that is never coming. So every path below the check that ends in a
+   * refusal gives the body back, and only a message main is actually holding
+   * leaves a record standing.
+   */
+  function forgetBody(to: SessionId, text: string): void {
+    recentBodies.delete(`${to}|${text}`)
+  }
+
   /** The ordered-pair key: a hop routed toward `recipient` from `sender`. */
   function chainKey(recipient: SessionId, sender: SessionId): string {
     return `${recipient}|${sender}`
@@ -592,6 +667,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    *                      makes the delivery model for, one rung down the R8
    *                      ladder; refusing it breaks the primary workflow.
    *   A→B, B→C, C→B, …   a two-party sub-exchange, bounded by MAX_PEER_HOPS.
+   *   A→C after A↔B      first contact with a NEW peer: allowed, whatever the
+   *                      A↔B exchange has spent. See THREE.
    *
    * TWO — what a send inherits, and this is where the STORE shape matters. The
    * records are per ORDERED PAIR, but a send inherits the LONGEST chain among
@@ -628,6 +705,41 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * being silenced by a peer that only had to send one message to do it, and the
    * per-pair token bucket and dedup window still apply to every lap.
    *
+   * THREE — loop detection and the runaway budget are now two quantities, and
+   * this is the correction to the shape TWO describes rather than a replacement
+   * for it. Both of the above still hold for LOOPS.
+   *
+   * One quantity was doing both jobs: the length of the inherited chain was both
+   * the ring evidence and the budget. Cross-pair inheritance is required for the
+   * first and is wrong for the second, and the two collided on the ladder the
+   * design exists to permit. After eight legitimate A↔B round trips the pair's
+   * chain is sixteen long; A's FIRST EVER message to C inherited it, the hop
+   * count came to seventeen, and C was refused `hop_runaway` — the sender told
+   * its back-and-forth with C had run too long when the two had exchanged
+   * nothing, and told it again for as long as A↔B kept the record fresh.
+   *
+   * So:
+   *
+   *   - LOOPS keep cross-pair inheritance exactly as TWO describes it. A ring is
+   *     only visible in a chain that travelled across pairs.
+   *   - RUNAWAY is a count carried forward from THIS pair's own record, the last
+   *     hop the recipient routed toward the sender, and compared to
+   *     `MAX_PEER_HOPS`. A pair that has never spoken starts at zero however long
+   *     anyone else's conversation is, which is the whole point.
+   *
+   * The five shapes, and what each one now does:
+   *
+   *   A↔B sustained         count 1, 2, 3, … refused on hop MAX_PEER_HOPS + 1,
+   *                         and it STAYS refused: a refusal advances the pair.
+   *   A→B, B→C, C→A         hop_loop on the closing hop (A is in the inherited
+   *                         chain and is not its last entry).
+   *   A→B, B→C, C→B         allowed: B IS the last entry, so it is the
+   *                         report-back, and the (B, C) count is 2.
+   *   B↔C sustained below A allowed and bounded: no hop is a loop, and the
+   *                         (B, C) count reaches the cap on its own.
+   *   A→C after A↔B saturated  allowed: the (A, C) count is zero, and the long
+   *                         inherited chain contains no C.
+   *
    * Nothing here reads anything the sending sidecar wrote: the chain is main's
    * own record, so a compromised sidecar cannot launder a loop by shortening
    * what it never held, nor escape a guard by omitting a field it never sends.
@@ -650,30 +762,64 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     return longest
   }
 
+  /** A record only if it is still inside the chain window. */
+  function freshRecord(key: string): ChainRecord | undefined {
+    const record = chains.get(key)
+    if (record === undefined) return undefined
+    if (now() - record.at > PEER_CHAIN_WINDOW_MS) {
+      chains.delete(key)
+      return undefined
+    }
+    return record
+  }
+
+  /**
+   * THREE — hops this pair has already spent, read off the ONE record that says
+   * so: the last hop `to` routed toward `from`. It is the count carried by the
+   * message being answered, so a back-and-forth advances it by one each turn
+   * whichever way the turn goes, and a pair that has never answered anything
+   * starts at zero.
+   *
+   * Only `to` can write that key, which is what keeps the count honest: no third
+   * peer can reset it, and the sender cannot either by talking to someone else.
+   * Reading the other direction as well would count a one-way stream of sends as
+   * a runaway conversation, which it is not; that is the pending cap's and the
+   * token bucket's job, and both still apply.
+   */
+  function pairHopsSoFar(from: SessionId, to: SessionId): number {
+    return freshRecord(chainKey(from, to))?.pairHops ?? 0
+  }
+
   function buildHops(
     from: SessionId,
     to: SessionId,
-  ): { hops: SessionId[] } | { refusal: 'hop_loop' | 'hop_runaway' } {
+  ): { hops: SessionId[]; pairHops: number } | { refusal: 'hop_loop' | 'hop_runaway' } {
     if (from === to) return { refusal: 'hop_loop' }
     const inherited = inheritedChain(from, to)
     const hops = [...inherited, from]
+    const pairHops = pairHopsSoFar(from, to) + 1
     const answersLastSender = inherited[inherited.length - 1] === to
     const refusal =
       inherited.includes(to) && !answersLastSender
         ? ('hop_loop' as const)
-        : hops.length > MAX_PEER_HOPS
+        : pairHops > MAX_PEER_HOPS
           ? ('hop_runaway' as const)
           : null
     if (refusal !== null) {
-      chains.set(chainKey(to, from), { chain: hops, viaRefusal: true, at: now() })
+      chains.set(chainKey(to, from), { chain: hops, pairHops, viaRefusal: true, at: now() })
       return { refusal }
     }
-    return { hops }
+    return { hops, pairHops }
   }
 
   /** Record a hop main actually delivered toward `to` from `from`. */
-  function recordDelivered(from: SessionId, to: SessionId, hops: SessionId[]): void {
-    chains.set(chainKey(to, from), { chain: hops, viaRefusal: false, at: now() })
+  function recordDelivered(
+    from: SessionId,
+    to: SessionId,
+    hops: SessionId[],
+    pairHops: number,
+  ): void {
+    chains.set(chainKey(to, from), { chain: hops, pairHops, viaRefusal: false, at: now() })
   }
 
   /**
@@ -685,6 +831,62 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     const list = pending.get(entry.toAppSessionId)
     if (list) list.push(entry)
     else pending.set(entry.toAppSessionId, [entry])
+  }
+
+  /**
+   * M2 — claim one of the recipient's pending slots for the whole wake.
+   *
+   * The cap used to be read once, before the restore and the ready wait, and the
+   * message was held after them. Every delivery that arrived during a wake read
+   * the same pre-await count, so the cap bounded nothing on the path it exists
+   * to bound: eighty messages were held against a limit of fifty. Reading it
+   * again just before `hold` is not the fix either, since by then the frame has
+   * been handed to the recipient and refusing the sender says nothing true. So
+   * the slot is CLAIMED at the check and given back on every refusal below it,
+   * which makes concurrent deliveries see each other.
+   */
+  function reserveSlot(to: SessionId): boolean {
+    const claimed = (pending.get(to)?.length ?? 0) + (reservations.get(to) ?? 0)
+    if (claimed >= MAX_PENDING_PEER_MESSAGES) return false
+    reservations.set(to, (reservations.get(to) ?? 0) + 1)
+    return true
+  }
+
+  function releaseSlot(to: SessionId): void {
+    const left = (reservations.get(to) ?? 0) - 1
+    if (left > 0) reservations.set(to, left)
+    else reservations.delete(to)
+  }
+
+  /**
+   * M4 — one host call, bounded, so main's worst case stays under the sidecar's
+   * request timeout. See `PEER_HOST_CALL_TIMEOUT_MS`. A rejection still
+   * propagates: an unexpected throw is `handleRequest`'s to answer, and swallowing
+   * it here would report a failure main never had.
+   */
+  function bounded<T>(work: Promise<T>, onTimeout: () => T): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      let settled = false
+      const timer = setTimer(() => {
+        if (settled) return
+        settled = true
+        resolve(onTimeout())
+      }, hostCallTimeoutMs)
+      work.then(
+        value => {
+          if (settled) return
+          settled = true
+          clearTimer(timer)
+          resolve(value)
+        },
+        error => {
+          if (settled) return
+          settled = true
+          clearTimer(timer)
+          reject(error)
+        },
+      )
+    })
   }
 
   function release(sessionId: SessionId, messageId: string): PendingMessage | undefined {
@@ -757,20 +959,40 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       }
     }
     const readySince = now()
-    const created = await deps.createSessionInWorkspace(sessionId, {
-      createdBy: sessionId,
-      ...(request.model !== undefined ? { model: request.model } : {}),
-      ...(request.effort !== undefined ? { effort: request.effort } : {}),
-      // HR4 — opt in. The rule exists for the one caller that can
-      // create-park-create at machine speed; a person clicking "+" cannot, and
-      // refusing them a tab because 256 rows are parked would be a regression.
-      enforceRegistryChurnLimit: true,
-    })
+    // M4 — bounded, because the ready wait below runs AFTER it and the sidecar's
+    // own timeout covers both. A spawn that outruns the caller's patience must
+    // fail here rather than succeed into an answer nobody is left to read.
+    const created = await bounded(
+      deps.createSessionInWorkspace(sessionId, {
+        createdBy: sessionId,
+        ...(request.model !== undefined ? { model: request.model } : {}),
+        ...(request.effort !== undefined ? { effort: request.effort } : {}),
+        // HR4 — opt in. The rule exists for the one caller that can
+        // create-park-create at machine speed; a person clicking "+" cannot, and
+        // refusing them a tab because 256 rows are parked would be a regression.
+        enforceRegistryChurnLimit: true,
+      }),
+      () => ({
+        ok: false as const,
+        error: { code: 'spawn_failed', message: 'the new session did not start in time' },
+      }),
+    )
     if (!created.ok) {
       return { ok: false, error: fail(mapHostErrorCode(created.error.code), created.error.message) }
     }
     const appSessionId = created.value.appSessionId
-    const name = created.value.name ?? ''
+    // F5 again, on the other end of the create. `''` is a value the recipient's
+    // own `peer.create` schema rejects, so defaulting to it turned a session
+    // that WAS created into an internal error at the boundary, with nothing
+    // saying which of the two things went wrong. A broken §2 invariant answers
+    // for itself instead.
+    const name = created.value.name
+    if (name === undefined || name === null || name.length === 0) {
+      return {
+        ok: false,
+        error: fail('internal_error', 'the new session started but cannot be addressed yet'),
+      }
+    }
 
     // §2 — await the new row's ready, then deliver the creation prompt. Both
     // failures KEEP the row: it is a real session the operator can see, and the
@@ -810,7 +1032,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       outcome: 'queued_wake',
       attempts: 1,
     })
-    recordDelivered(sessionId, appSessionId, [sessionId])
+    recordDelivered(sessionId, appSessionId, [sessionId], 1)
     return { ok: true, value: { name, appSessionId } }
   }
 
@@ -844,7 +1066,12 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     }
     const toName = target.name
     const messageId = newId()
-    const live = deps.isLive(target.appSessionId)
+    // M1 — READINESS, not existence. A row that is spawning, connecting or
+    // disconnected exists, so the existence test called it live and this path
+    // skipped the wake block, the restore and the ready wait, then handed the
+    // frame to a socket that refused it. For a disconnected row that repeated
+    // forever, because nothing on this path ever tried to wake it.
+    const live = isReady(target.appSessionId)
 
     // Every refusal is typed AND logged: §4 step 3, "nothing is dropped
     // silently". It is reported as a successful REQUEST carrying a refused
@@ -868,9 +1095,24 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     if ('refusal' in chain) return refuse(`refused:${chain.refusal}`)
     if (!takeToken(sessionId, target.appSessionId)) return refuse('refused:rate')
     if (isDuplicate(target.appSessionId, request.text)) return refuse('refused:duplicate')
-    if ((pending.get(target.appSessionId)?.length ?? 0) >= MAX_PENDING_PEER_MESSAGES) {
-      return refuse('refused:queue_full')
+
+    // H2/M2 — past the dedup check the body is RECORDED and, once the slot is
+    // claimed, one of the recipient's fifty is spoken for. A refusal from here
+    // on has to hand both back: the message reached nobody, and a sender told
+    // `refused:duplicate` for a message that was never delivered is told to wait
+    // for a reply to something the peer never got.
+    let slotHeld = false
+    const refuseAfterHolds = (outcome: PeerDeliverOutcome) => {
+      forgetBody(target.appSessionId, request.text)
+      if (slotHeld) {
+        releaseSlot(target.appSessionId)
+        slotHeld = false
+      }
+      return refuse(outcome)
     }
+
+    if (!reserveSlot(target.appSessionId)) return refuseAfterHolds('refused:queue_full')
+    slotHeld = true
 
     const message: PeerDeliverMessage = {
       type: 'peer.deliver',
@@ -885,14 +1127,19 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       // `already live` both currently answer `session_not_found`, and neither is
       // a missing row: treat them as pending and wait for the row's next ready.
       const readySince = now()
-      const restored = await deps.restoreSession(target.appSessionId)
+      // M4 — bounded: this runs BEFORE the ready wait, and the two together are
+      // what the sidecar's request timeout has to cover.
+      const restored = await bounded(deps.restoreSession(target.appSessionId), () => ({
+        ok: false as const,
+        error: { code: 'wake_timeout', message: 'the peer did not wake in time' },
+      }))
       if (!restored.ok && restored.error.code !== 'session_not_found') {
-        return refuse('refused:wake_failed')
+        return refuseAfterHolds('refused:wake_failed')
       }
       // Never `session_not_found` from here on: HR3 reserves that code for a row
       // the caller may not name, and this one it may.
       if (!(await awaitReady(target.appSessionId, readySince))) {
-        return refuse('refused:wake_failed')
+        return refuseAfterHolds('refused:wake_failed')
       }
     }
 
@@ -900,10 +1147,12 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // sending model its peer is unreachable while the peer is sitting there
     // running. The two failures are different facts and get different reasons.
     if (!forwarded(target.appSessionId, message)) {
-      return refuse(live ? 'refused:delivery_failed' : 'refused:wake_failed')
+      return refuseAfterHolds(live ? 'refused:delivery_failed' : 'refused:wake_failed')
     }
 
     const outcome: PeerDeliverOutcome = live ? 'queued_live' : 'queued_wake'
+    releaseSlot(target.appSessionId)
+    slotHeld = false
     hold({
       messageId,
       toAppSessionId: target.appSessionId,
@@ -914,7 +1163,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       outcome,
       attempts: 1,
     })
-    recordDelivered(sessionId, target.appSessionId, chain.hops)
+    recordDelivered(sessionId, target.appSessionId, chain.hops, chain.pairHops)
     return { ok: true, value: { messageId, outcome } }
   }
 
@@ -932,7 +1181,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     | { ok: false; error: HostRequestError } {
     const entry = release(sessionId, request.messageId)
     if (entry) {
-      deps.logRouted(sessionId, {
+      // The SENDER, not this acking recipient. See `logRouted`: attribution that
+      // changes with the outcome cannot answer the question the line is for.
+      deps.logRouted(entry.message.fromSessionId, {
         from: entry.fromName,
         to: entry.toName,
         kind: entry.kind,
@@ -1121,7 +1372,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       // after a few tries rather than retrying something already refused.
       if (entry.attempts >= MAX_PEER_DELIVERY_ATTEMPTS) {
         release(sessionId, entry.messageId)
-        deps.logRouted(sessionId, {
+        // The sender's id, same as every other line about this message.
+        deps.logRouted(entry.message.fromSessionId, {
           from: entry.fromName,
           to: entry.toName,
           kind: entry.kind,
@@ -1133,8 +1385,12 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         )
         continue
       }
+      // Count a hand-off that HAPPENED. The counter exists to stop re-sending a
+      // frame the recipient rejects, and a send the supervisor never took is not
+      // that: charging it spent the allowance on failures the recipient never
+      // saw, so two transient ones plus one real rejection dropped the message.
+      if (!forwarded(sessionId, entry.message)) continue
       entry.attempts += 1
-      deps.forward(sessionId, entry.message)
     }
   }
 
@@ -1150,8 +1406,13 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     onSessionRemoved: sessionId => {
       presence.delete(sessionId)
       pending.delete(sessionId)
+      reservations.delete(sessionId)
       verbWindow.delete(sessionId)
       frameWindow.delete(sessionId)
+      // The module header says every store is cleared on reap, and this one was
+      // not: a reaped row's ready timestamp outlived it, so a later row reusing
+      // the id would have resolved a wake it never announced.
+      lastReadyAt.delete(sessionId)
 
       const waiters = readyWaiters.get(sessionId)
       if (waiters) {

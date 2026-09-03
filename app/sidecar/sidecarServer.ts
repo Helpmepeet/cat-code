@@ -5808,20 +5808,31 @@ export type HostRequestOutcome<V extends HostRequestVerb> =
  * intent, which is the whole point: a peer's request must not be able to lift a
  * boundary the peer could not lift itself (R6's permission-laundering rule).
  *
- * Only the ATTRIBUTE is escaped. The sender name is a pool word main stamped, so
- * it cannot contain a quote today, and escaping it is cheap insurance against
- * that ever changing. The BODY is left verbatim, matching how the engine already
- * renders teammate and channel messages: an escaped body would reach the model
- * as entity soup, and a body that forges a closing tag still arrives inside a
- * message the classifier has already been told came from another session.
+ * The ATTRIBUTE is escaped. The sender name is a pool word main stamped, so it
+ * cannot contain a quote today, and escaping it is cheap insurance against that
+ * ever changing.
+ *
+ * The BODY is not escaped, but the ENVELOPE'S OWN TAG in it is neutralized,
+ * opening and closing. Verbatim, a body containing `</cross-session-message>`
+ * closed the envelope early and put everything after it OUTSIDE the one marker
+ * the auto-mode classifier keys on, so a peer could hand this session text the
+ * classifier reads as the session's own — which is the permission laundering
+ * R6 forbids, done from inside the thing built to prevent it. Escaping every
+ * `<` instead would wreck the code and markup peers legitimately send, so only
+ * this tag's name is touched and all other content stays readable. The same
+ * situation on the other untrusted-content path is handled the same way, by
+ * `quoteAsData` in `readPeerTool.ts`.
  */
+const ENVELOPE_TAG_IN_BODY = new RegExp(`<(/?)(${CROSS_SESSION_MESSAGE_TAG})\\b`, 'gi')
+
 function wrapCrossSessionMessage(from: string, text: string): string {
   const attribute = from
     .replaceAll('&', '&amp;')
     .replaceAll('"', '&quot;')
     .replaceAll('<', '&lt;')
     .replaceAll('>', '&gt;')
-  return `<${CROSS_SESSION_MESSAGE_TAG} from="${attribute}">\n${text}\n</${CROSS_SESSION_MESSAGE_TAG}>`
+  const body = text.replace(ENVELOPE_TAG_IN_BODY, '&lt;$1$2')
+  return `<${CROSS_SESSION_MESSAGE_TAG} from="${attribute}">\n${body}\n</${CROSS_SESSION_MESSAGE_TAG}>`
 }
 
 /**
