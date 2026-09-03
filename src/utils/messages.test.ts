@@ -120,6 +120,28 @@ work or side effects that already completed.`
     )
   })
 
+  test('attributes a peer message to its sender, never to the user', () => {
+    // A message from another session was falling through the closed-union
+    // switch to the human default, which told a mid-turn recipient "The user
+    // sent a new message ... you MUST address the user's message above" and
+    // laundered a peer request into user intent.
+    const wrapped = wrapCommandText(
+      '<cross-session-message from="Agate">\nhi\n</cross-session-message>',
+      { kind: 'peer', name: 'Agate', appSessionId: 'app-session-1' },
+    )
+
+    expect(wrapped).not.toContain('The user sent a new message')
+    expect(wrapped).not.toContain("address the user's message")
+    expect(wrapped).toContain('Agate')
+    expect(wrapped).not.toContain('app-session-1')
+  })
+
+  test('leaves an interruption marker verbatim', () => {
+    expect(wrapCommandText('[Request interrupted by user]', {
+      kind: 'interruption',
+    })).toBe('[Request interrupted by user]')
+  })
+
   test('keeps the untrusted-source framing for non-user origins', () => {
     expect(
       wrapCommandText('hi', { kind: 'channel', server: 'slack' }),
