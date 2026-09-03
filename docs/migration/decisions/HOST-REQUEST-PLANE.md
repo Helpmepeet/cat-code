@@ -68,10 +68,17 @@ main → sidecar   host.result   { protocolVersion, sessionId, requestId, ok, va
 
 | verb | what main does | returns |
 |---|---|---|
-| `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), busy, createdBy (resolved to a name, or `gone`), lastActivity, title |
-| `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`/`createdBy` in the child's spawn env → persist the row → await that row's `ready` → deliver the creation prompt as a `request` | the new row's name + appSessionId |
-| `peer.deliver` | resolve name → row; refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`); live: forward `peer.deliver` inbound to that sidecar; parked/closed: main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
-| `peer.notifyWhenIdle` | one-shot: when the named row next goes from busy to idle (per the sidecar's `activity` frame, §4a), deliver a `notify` to the requester | ack |
+| `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), presence (`running` \| `needs_user` \| `idle`, from the `activity` frame, §4 step 4a; absent for a row that is not live), createdBy (resolved to a name, or `gone`), lastActivity, title |
+| `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`, `createdBy` (id) and the creator's name in the child's spawn env → persist the row → await that row's `ready` → replay to the new sidecar the last `model.set`, `effort.set` and `permission.setMode` main forwarded to the creator (existing inbound kinds, `protocol.ts:126,1816,1824`; main keeps a per-row copy of what it last forwarded; if it forwarded none, the settings default applies to both, so nothing is sent), then the `model`/`effort` overrides from the args; permission mode is not an arg (PEER-SESSIONS §4) → deliver the creation prompt as a `request` with `generateTitle` on and the text untagged (PEER-SESSIONS §5) | the new row's name + appSessionId |
+| `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar (the wake-block flag is irrelevant to a live row); parked/closed: refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`), else main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
+| `peer.notifyWhenIdle` | one-shot: if the named row is not `running` now, answer with its current presence and subscribe nothing; else when its presence next leaves `running` deliver a `notify` to the requester saying `idle` or `needs_user`; if the row leaves live first, deliver `peer_gone` with the reason | ack with `subscribed` \| `already_idle` \| `already_needs_user` |
+
+On the wire, `host.result` and `peer.deliver` are two new variants of
+`SidecarClientMessage` (`protocol.ts:576`), sent through the existing
+`forward(sessionId, …)` (`main.ts:3250`); the `protocolVersion` and
+`sessionId` shown in the shape above are the `ClientFrame` envelope that
+`supervisor.send` adds (`supervisor.ts:460-480`), not fields the handler
+authors twice.
 
 `engineSessionId` is on the list result because `ReadPeer` opens
 `<engineSessionId>.jsonl` (`src/utils/sessionStorage.ts:320`) and the sidecar
@@ -146,11 +153,17 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 1. Main resolves `to` (a name) against the registry, HR3-scoped. No row →
    `session_not_found`.
 2. Main builds the inbound `peer.deliver` frame: `{ from: <requester name>,
-   fromSessionId, kind: 'notify' | 'request', text, hops: [...appSessionIds] }`.
-   `hops` is the requester's incoming chain (if this send is a reply) plus the
-   requester's own id. Main rejects a send whose chain already contains the
-   recipient (`hop_loop`) or exceeds `MAX_PEER_HOPS` (`hop_runaway`). With one
-   trusted router there is no need for the upstream blinded-token variant.
+   fromSessionId, kind: 'notify' | 'request', messageId, text,
+   hops: [...appSessionIds] }`. **The sidecar never sends a chain.** Its
+   request carries an optional `replyTo` (a `messageId` main minted and
+   delivered to this requester); main looks that id up in its own message
+   table and sets `hops` to that message's chain plus the requester's id. A
+   `replyTo` main did not deliver to this requester is ignored (fresh chain,
+   logged); no `replyTo` is a fresh chain of one. Main rejects a send whose
+   chain already contains the recipient (`hop_loop`) or exceeds
+   `MAX_PEER_HOPS` (`hop_runaway`). With one trusted router deriving the chain
+   there is no need for the upstream blinded-token variant, and a compromised
+   sidecar cannot shorten a chain it never held.
 3. Main applies the channel guards: per `(from, to)` token bucket, duplicate
    body within a short window, and `MAX_PENDING_PEER_MESSAGES` per recipient
    (a NEW main-side count of undelivered peer messages; the sidecar's
@@ -167,7 +180,11 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    user's recall controls. A busy recipient reads it between tool calls at the
    existing drain (`src/query.ts:1942`); an idle recipient starts a turn from
    the sidecar's boundary drain (`drainOneTaskNotification` → `startTurn`,
-   `sidecarServer.ts:1676`).
+   `sidecarServer.ts:1676`). That drain passes `generateTitle: false`
+   (`sidecarServer.ts:1704`), which is right for every peer message except the
+   creation prompt: the sidecar passes `generateTitle: true` for a
+   `peer`-origin request on a session whose title is unset, so a created peer
+   gets a title from its first turn like any session.
 4a. Recipient live, `kind: 'notify'`: **the engine queue cannot carry a
    turn-free message.** The sidecar's boundary drains ignore priority and start
    a turn for anything they dequeue (`isDeliverableParentPrompt` /
@@ -176,14 +193,20 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    `src/utils/attachments.ts:1054`), so a `later` command would simply be read
    at the next boundary and billed. A notify therefore does NOT enter the
    engine queue on arrival. The sidecar (a) holds it in an app-owned
-   `pendingNotices` list, (b) emits an outbound app-owned `peer.notice` event so
-   the renderer shows the row now, and (c) at the next `startTurn` from ANY
+   `pendingNotices` list, (b) emits an outbound app-owned `peer.notice` event
+   `{ messageId, from, kind, text, at }` so the renderer shows the row now,
+   and (c) at the next `startTurn` from ANY
    cause (user prompt, a `request`, a task notification) enqueues the held
    notices at `next` priority ahead of that turn's input so the drain attaches
    them. Main keeps the durable copy until the sidecar acks consumption, so a
-   park or crash between (b) and (c) loses nothing. This is the mechanism that
-   makes `notify` cost the recipient no turn; without it the two kinds differ
-   only in mid-turn timing.
+   park or crash between (b) and (c) loses nothing. The same notice then
+   reaches the renderer a second time inside the engine turn that consumed it,
+   as a `peer`-origin user row carrying the same `messageId`; the projector
+   keeps the earlier `peer.notice` row and drops the duplicate by id, so a
+   notice renders once, at the moment it arrived, and a reload (which never
+   sees the `peer.notice` frame again) renders it once from the transcript.
+   This is the mechanism that makes `notify` cost the recipient no turn;
+   without it the two kinds differ only in mid-turn timing.
    The sidecar also emits an outbound app-owned `activity` frame
    `{ presence: 'running' | 'needs_user' | 'idle' }` on turn start and end
    and when a permission prompt opens or closes. Main today knows only recency
@@ -217,13 +240,15 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 | plane | change |
 |---|---|
 | `app/shared/protocol.ts` | outbound: `HostRequestFrame`, `ActivityFrame`, `PeerNoticeFrame` in `ServerFramePayload`; inbound: `HostResultFrame` + `PeerDeliverFrame`; doc comments cite this file. No version bump (additive). |
-| `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`); two additive spawn-env keys `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY` beside `CATCODE_SIDECAR_CWD` (`:355-359`), threaded through the per-spawn `SpawnConfig` (`:138`). |
-| `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row busy state from `activity`; the deliver-after-ready state machine (§4 step 5); the durable pending-notice and notify-when-idle stores (in-memory: they die with the window like everything else, SESSION-LIFETIME L1, and a pending subscription also expires when either row is reaped or after 12 h, the upstream precedent). |
+| `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`); three additive spawn-env keys `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY` (id), `CATCODE_SIDECAR_CREATED_BY_NAME` beside `CATCODE_SIDECAR_CWD` (`:355-359`), threaded through the per-spawn `SpawnConfig` (`:138`). |
+| `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row presence from `activity`; a per-row copy of the last `model.set` / `effort.set` / `permission.setMode` forwarded, for `peer.create` replay; the message table (`messageId` → chain, recipient, `consumedAt`) that `replyTo` resolves against; the deliver-after-ready state machine (§4 step 5); the durable pending-notice and notify-when-idle stores (in-memory: they die with the window like everything else, SESSION-LIFETIME L1, and a pending subscription also expires when either row is reaped or after 12 h, the upstream precedent). |
 | `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`); the spawn path accepts them; the name picker (PEER-SESSIONS §2). |
-| `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; `request` → task-notification enqueue with origin `peer`; `notify` → held notices + `peer.notice` event + enqueue-at-next-turn + ack; `activity` on turn start/end; doctrine block from env. |
+| `app/sidecar/sidecarServer.ts` | request client (mint id, await result, timeout); inbound schemas + allowlist for `host.result` and `peer.deliver`; `request` → task-notification enqueue with origin `peer` (title generation on for an untitled session's creation prompt; creation prompt untagged, later messages wrapped with `id`); `notify` → held notices + `peer.notice` event + enqueue-at-next-turn + ack; `activity` on turn start/end and permission open/close; doctrine block from env incl. creator name. |
 | `app/host/hostApi.ts`, `app/preload/preload.ts` | one host method + one fixed preload sender to set/clear a row's `peerWakeBlocked` from the sidebar row menu (HC3 pattern, `closeSession` precedent); renderer-facing only, no sidecar surface. |
 | `app/shared/operationalLog.ts` | one new closed event kind for routed peer messages (metadata only). |
 | `app/main/idleParkDriver.ts` | none. A wake through restore is already a spawn the driver sees. |
+| `app/shared/limits.ts` | the six peer constants, values in PEER-SESSIONS §7. |
+| engine (`src/`) | `MessageOrigin` kind `peer` (`src/types/message.ts:10`) plus the matching case in `toSDKMessageOrigin` (`src/utils/messages/mappers.ts:243`, `never` tripwire); regenerate `coreTypes.generated.ts`; re-sync `app/shared/sdk-types.snapshot.d.ts`. Engine battery applies to this row (CLAUDE.md §3). |
 
 ## 6. Tests owed before ratification of the build
 
@@ -244,6 +269,16 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
   user-initiated restore is delivered, not answered `session_not_found`.
 - Size/rate: an oversized `host.request` and a request flood are refused with
   typed errors at main.
+- `peer.notifyWhenIdle`: on an idle row answers `already_idle` and subscribes
+  nothing; on a running row that is then closed, fires `peer_gone`; on a
+  running row that opens a permission prompt, fires `needs_user`.
+- `replyTo`: a reply inherits the delivered chain; a forged or foreign
+  `replyTo` yields a fresh chain and a log line, never a refusal.
+- Creation: the created session has a title after its first turn; its
+  opening prompt is untagged and a later `request` is tagged with `id`;
+  the peer's model, effort and mode equal the creator's at creation.
+- Notice dedup: a `peer.notice` followed by the consuming turn renders one
+  row; a reload of the same transcript renders one row.
 - Rendering: a `peer` origin row renders as an injected-turn row with the
   sender label, never as a user bubble, and never appears in the staged-prompt
   strip (extend `transcriptProjector.test.ts:1271`).

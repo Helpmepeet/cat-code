@@ -177,10 +177,10 @@ in-process file read.
 | tool | args | notes |
 |---|---|---|
 | `ListPeers` | none | §3. Read-only, no prompt. |
-| `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`) | `notify` is shown in the recipient's transcript now and reaches its model at its next turn from any cause, starting none (the held-notice mechanism, HOST-REQUEST-PLANE §4 step 4a; the engine queue alone cannot do this); `request` is read between tool calls, or starts a turn, or wakes. Result states the outcome. Ordinary permission gate. |
+| `SendToPeer` | `to` (name), `text`, `kind: 'notify' \| 'request'` (default `notify`), optional `replyTo` (the `id` of the incoming peer message this answers) | `notify` is shown in the recipient's transcript now and reaches its model at its next turn from any cause, starting none (the held-notice mechanism, HOST-REQUEST-PLANE §4 step 4a; the engine queue alone cannot do this); `request` is read between tool calls, or starts a turn, or wakes. `replyTo` is how a reply inherits the hop chain: main looks the id up in its own message table and prepends that chain; a send without `replyTo` starts a fresh chain (HOST-REQUEST-PLANE §4 step 2). The sidecar never authors hops. Result states the outcome. Ordinary permission gate. |
 | `ReadPeer` | `peer`, `view: 'tail' \| 'search'`, `limit` (default 20, max 50), `before` (entry uuid cursor), `query` (search only), `includeToolResults` (default false), `maxBytes` | §8. Same workspace only, read-only, no prompt. |
-| `CreatePeer` | `prompt`, optional `model`, `effort`, `permissionMode` | Defaults to the creator's values (R7). Returns the new name. Ordinary permission gate and the HC4 caps every session has; no peer budget (R8). Account: R10. |
-| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's presence next becomes `idle` (NOT `needs_user`, which is a stall the creator should hear about as `notify` text instead). In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling. |
+| `CreatePeer` | `prompt`, optional `model`, `effort` | Model and effort default to the creator's current values (R7): main replays to the new sidecar, after its `ready`, the last `model.set` / `effort.set` / `permission.setMode` it forwarded to the creator (main is the only path those frames take, so it knows them without trusting the requester's claim), then applies the two overrides. **Permission mode is NOT a tool argument** (🔁 adapted from the first draft of R7): a model-authored mode for another session would be the model authoring permission posture, which T6b forbids; the peer inherits the creator's mode and the user changes it in the peer's own run controls. Returns the new name. Ordinary permission gate and the HC4 caps every session has; no peer budget (R8). Account: R10. |
+| `NotifyWhenIdle` | `peer` | One-shot; delivered as a `notify` from main when the peer's presence next leaves `running`, and the text says which way: `idle`, or `needs_user` (a stall on a permission prompt; the peer itself cannot report it, because its turn is suspended inside `canUseTool` until the user answers). If the peer is not `running` when the call arrives, main answers at once with the current presence instead of subscribing (`already_idle` / `already_needs_user`). If the row leaves live before that (closed, exited, crashed), the subscription fires with `peer_gone` and the reason. In-memory in main: dies with the window (SESSION-LIFETIME L1), and expires when either row is reaped or after 12 h. No polling, no silent hang. |
 
 Who created me, and my own name, are not tools: they are system-prompt context
 (§5). `ClosePeer` is deliberately absent; closing a tab is the operator's act.
@@ -198,14 +198,20 @@ for this document's `ListPeers`.
 
 ## 5. Doctrine (system-prompt text, proposed verbatim)
 
-Injected at session start by the sidecar from the env values in §2. Kept short
-on purpose: the model's trained bias already makes it quiet, and prompt text is
-not the loop guard (§7).
+Injected at session start by the sidecar from the spawn env. That is the only
+source it has: `appendSystemPrompt` is fixed when the controller is built
+(`app/sidecar/sessionController.ts:422`), before the socket to main is up
+(`app/sidecar/index.ts:489`), so the sidecar cannot ask main for anything at
+that moment, and it may not read the registry (CATALOG-OWNERSHIP). Hence the
+env carries the creator's NAME as well as its id (`CATCODE_SIDECAR_CREATED_BY`
+for the id, `CATCODE_SIDECAR_CREATED_BY_NAME` for the label), and the block
+carries no roster: `ListPeers` is the roster. Kept short on purpose: the
+model's trained bias already makes it quiet, and prompt text is not the loop
+guard (§7).
 
 ```text
 You are the session named Bear. You were created by the session named Alex.
-Other sessions in this workspace: Alex (live). Use ListPeers for the current
-roster.
+Use ListPeers to see the other sessions in this workspace.
 
 Message a peer when it would change what you or they do next: you need
 something only they know, you finished something they are waiting on, or you
@@ -231,14 +237,28 @@ like, the files in scope, and the return channel ("when finished, send
 <your name> a request/notify with …").
 
 Inbound peer messages reach the model wrapped in
-`<cross-session-message from="…">`. The tag CONSTANT exists
+`<cross-session-message from="…" id="…">`, the `id` being the main-minted
+`messageId` so a reply can name it in `replyTo`. The tag CONSTANT exists
 (`src/constants/xml.ts:59`) with zero call sites; **the wrapping is work
 owed**, done by the sidecar when it enqueues a `request` or attaches held
-notices. The auto-mode classifier rule that treats that tag as never user
-intent and blocks permission laundering is on record
+notices. **The creation prompt is the one message that is NOT wrapped and not
+framed as peer-sent.** R8 defines an agent-created session as the operator
+opening a tab, so its opening instruction is delivered as the session's own
+first prompt (still on the task-notification path with a `peer` origin, so it
+renders with the sender label, but untagged, and with title generation ON,
+which the task-notification drain otherwise turns off, `sidecarServer.ts:1704`).
+The reason is the auto-mode classifier: its rule 8 treats anything tagged or
+framed as from another session as never user intent and evaluates the action
+as fully autonomous
 (`src/utils/permissions/yolo-classifier-prompts/upstream/system_prompt.txt:77`,
-compiled in under `AUTO_MODE_UPSTREAM_PORT`, `scripts/build.ts:86`), but it
-runs only in auto mode; in default or plan mode the recipient's own
+compiled in under `AUTO_MODE_UPSTREAM_PORT`, `scripts/build.ts:86`). A peer
+session has no human turn at all; if its opening instruction were tagged,
+every gated action in an auto-mode peer would be judged with zero user intent
+behind it, and the peer could do nothing the autonomous allowlist does not
+already permit. Later peer messages ARE tagged and DO carry that consequence:
+in auto mode a peer `request` cannot by itself justify a gated action, which
+is the permission-laundering rule R6 already names as the only block. That
+rule runs only in auto mode; in default or plan mode the recipient's own
 permission prompts are the gate, which is what R6 says anyway. The
 recipient-side "input, not authority" line above is the half of the upstream
 doctrine this fork lacked; the upstream "peers are not your workers" line is
@@ -294,7 +314,10 @@ asked-for work (R6).
 - **A user-only "Don't let peers reopen" control** on the sidebar row menu
   (R3 makes a closed session wakeable by any peer, and nothing in the design
   let the operator say no short of quitting). It sets a registry flag
-  `peerWakeBlocked`; `peer.deliver` answers `refused:user_stopped`; only the
+  `peerWakeBlocked`; `peer.deliver` answers `refused:user_stopped` **only when
+  the row is not live** (parked or closed): the control is about reopening, so
+  a live session with the flag set still receives peer messages, and the flag
+  does not clear itself when the user reopens the session by hand. Only the
   user clears it, never a peer. A host method plus one fixed preload sender
   (HC3 pattern, `closeSession` precedent) and no sidecar surface.
 
@@ -318,8 +341,20 @@ that asks nothing, and `notify` as the default kind. The send result tells the
 sender what happened, so silent non-delivery cannot leave it reasoning from a
 false belief (a reported upstream failure mode, research §6).
 
-Upstream's numbers for reference, not adopted verbatim: burst 30, sustained one
-per 2 s, dedup 30 s, queue 50, chain 28.
+Values, so the build does not invent them (all new constants in
+`app/shared/limits.ts`, named here so a later change is a visible diff):
+
+| constant | value | note |
+|---|---|---|
+| `MAX_PEER_HOPS` | 16 | upstream 28; a chain this long is a loop with extra steps |
+| `MAX_PENDING_PEER_MESSAGES` | 50 | per recipient, undelivered, main-side |
+| `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all verbs |
+| `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
+| `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body to the same recipient |
+| `PEER_NOTIFY_WHEN_IDLE_TTL_MS` | 12 h | upstream precedent |
+
+Upstream's numbers were the reference, not adopted verbatim: burst 30,
+sustained one per 2 s, dedup 30 s, queue 50, chain 28.
 
 ## 8. Inspection (`ReadPeer`)
 
@@ -339,10 +374,19 @@ pages structured items with a summary view by default). Shape:
   snippets with cursors. Catalog-wide search is the catalog's job and would
   reopen CATALOG-OWNERSHIP.
 - **Passive: a read never wakes.** It is a file read of
-  `~/.cat-code/projects/**/<engineSessionId>.jsonl`
-  (`src/utils/sessionStorage.ts:320`), keyed by the engine id that `ListPeers`
-  returns for the name; a null id (a peer that has not yet sent its first
-  ready frame) is answered "nothing to read yet", not "no such peer". It
+  `~/.cat-code/projects/<projectDir>/<engineSessionId>.jsonl`, keyed by the
+  engine id that `ListPeers` returns for the name. The reader derives the
+  project directory from its own launch cwd (`CATCODE_SIDECAR_CWD`), NOT via
+  `getTranscriptPathForSession` (`src/utils/sessionStorage.ts:303-322`), which
+  for another session's id guesses from `getOriginalCwd()`; that value moves
+  when the reader enters a worktree (`EnterWorktreeTool.ts:97-104`), and the
+  peer's file does not. A null id (a peer that has not yet sent its first
+  ready frame) and an `ENOENT` (a peer that is ready but has not written its
+  first entry) are both answered "nothing to read yet", not "no such peer".
+  **Known gap, on record:** a peer that itself entered a worktree writes its
+  transcript under the worktree's project directory, and the reader cannot
+  find it there without a path from main, which HR6 forbids; such a peer
+  reads as "nothing to read yet". Resolving it needs its own decision. It
   cannot restore a parked session. Recorded as a guarantee, not an accident (Codex users hit
   multi-second stalls when viewing a chat resumed it).
 - **Reading while the owner appends** tolerates a torn last line: the reader
@@ -400,6 +444,18 @@ before moving anything (IDLE-PARK §4 shows why).
   deferred).
 - Concurrency: no new transcript writer. A wake is a restore, and restore
   refuses a live row.
+- **Accepted consequence of R8:** the creation prompt is untagged (§5), so in
+  auto mode a peer treats its opening instruction as user intent although it
+  was authored by the creator's model. That is exactly the equivalence R8
+  ruled ("how will it be different than I create Bear myself? nothing
+  change"); the prompt can lift no boundary a typed prompt could not, and a
+  prompt-injected creator can at most open a tab with a bad first message,
+  which the operator sees appear. Every later peer message is tagged and is
+  never user intent to the classifier.
+- Permission mode never crosses the request plane (§4 `CreatePeer`); a peer's
+  mode is main's replay of the creator's, then the user's.
+- Hop chains are main-derived from `replyTo`, never sidecar-authored, so a
+  compromised sidecar cannot launder a loop by dropping its chain.
 
 ## 11. Prototype parity
 
@@ -477,8 +533,8 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
 
 1. Registry fields + spawn-env handoff + owned picker in `app/host` (no UI, no tools).
 2. HOST-REQUEST-PLANE frames incl. `activity` and `peer.notice`, main handler with size/rate, deliver-after-ready, sidecar client, boundary tests.
-3. `ListPeers`, `CreatePeer`, doctrine injection; seam row + placeholder + sidebar subtitle.
-4. `SendToPeer` + `peer.deliver` + guards + peer-row rendering; `NotifyWhenIdle`.
+3. `ListPeers`, `CreatePeer` (post-ready replay of model/effort/mode, untagged opening prompt with title generation), doctrine injection from env incl. creator name; seam row + placeholder + sidebar subtitle.
+4. `SendToPeer` + `peer.deliver` + guards + peer-row rendering (incl. `peer.notice` dedup by `messageId`); `NotifyWhenIdle`. Engine-side: the `peer` `MessageOrigin` kind trips `toSDKMessageOrigin`'s `never` tripwire (`src/utils/messages/mappers.ts:243`), so this step also adds that case, regenerates `src/entrypoints/sdk/coreTypes.generated.ts`, and re-syncs `app/shared/sdk-types.snapshot.d.ts` (CLAUDE.md §6: regenerate, never hand-edit).
 5. `ReadPeer`.
 6. Hardening smoke, then operator GUI acceptance (a peer created by prompt appears as a tab; a message to a parked peer wakes it; a loop stops).
 
@@ -528,3 +584,26 @@ Its labels were checked: the "MEASURED" on recs 1 and 2 describes other
 systems' features; their applicability here is the reviewer's inference, and
 rec 2's cited evidence is about cancelling in-flight work, not blocking peer
 wake. The control was adopted on its own merits.
+
+**2026-09-03, third review (another model, read-only, all anchors opened;
+findings written before it read this section).** Fourteen findings; every one
+checked against source by the author. Thirteen are real gaps or contradictions
+and are folded in; one (frame envelope) is a precision fix, not a defect.
+None overlapped the two earlier reviews except the auto-mode half of its #10.
+
+| finding | resolution |
+|---|---|
+| 1 sidecar cannot resolve creator name or roster at boot | §5: env carries the creator name; roster line dropped |
+| 2 R7 inheritance had no transport | §4 `CreatePeer`: main replays model/effort/mode after ready; mode not a tool arg (flagged adaptation) |
+| 3 task-notification drain sets `generateTitle: false` | §5, HRP §4 step 4: creation prompt generates a title |
+| 4 `replyTo` absent from the tool; hop inheritance ambiguous | §4, §5 tag `id`, HRP §4 step 2: hops main-derived from `replyTo` |
+| 5 `peer.notice` had no payload; double render | HRP §4 step 4a: payload defined; projector dedups by `messageId` |
+| 6 `NotifyWhenIdle` hangs on already-idle or closed peer | §4: immediate answer; `peer_gone` on exit |
+| 7 a peer on a permission prompt cannot author text | §4: fires on `needs_user` too, says which |
+| 8 wake-block gate blocked live rows; no clear rule | §6, HRP §2: not-live only; never auto-clears |
+| 9 result frame shape vs `SidecarClientMessage` envelope | HRP §2: variants of `SidecarClientMessage`; envelope from `supervisor.send` |
+| 10 auto-mode classifier sees zero user turns in a peer | §5, §10: creation prompt untagged; later messages tagged, consequence stated |
+| 11 `toSDKMessageOrigin` `never` tripwire | §15 step 4 |
+| 12 numeric limits unspecified | §7 table |
+| 13 `ReadPeer` path via `getOriginalCwd`; `ENOENT` | §8: launch-cwd derivation; worktree peer recorded as a gap |
+| 14 HRP still said `busy` | HRP §2: `presence` |
