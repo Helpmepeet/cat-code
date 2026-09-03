@@ -80,8 +80,15 @@ Bear" is easier to say than an id.
   (`titleUpdatedAt`, `pickTitle`); a rename never touches the name. Every tool
   resolves a name to an `appSessionId` in main before acting (HR3); the
   two-id model is untouched.
-- **Every session is named**, user-created and agent-created alike. Sessions
-  that predate the field have none and are simply not peers (§3).
+- **Every session is named**, user-created and agent-created alike. A row
+  that predates the field gains its name on its next spawn, create or restore
+  (`host.ts:342` reuses the row; the spawn update preserves fields it does not
+  replace, `registry.ts:706`, so the allocator fills `name` when it is
+  absent). Hence every LIVE session has a name, and an unnamed row is always a
+  never-restored history row that cannot be a caller. 🔁 This replaces the
+  first draft's "predating rows stay unnamed": that left restored old
+  sessions holding tools whose every delivery needs a `from` name (HR2) and
+  unable to be listed or reported back to (R2).
 
 ### 2a. Name pool (R11), drafted 2026-09-03
 
@@ -184,6 +191,17 @@ in-process file read.
 
 Who created me, and my own name, are not tools: they are system-prompt context
 (§5). `ClosePeer` is deliberately absent; closing a tab is the operator's act.
+
+**Auto-mode classifier projections are owed, not optional.** A tool built
+through `buildTool` without `toAutoClassifierInput` gets `''`, which the
+classifier reads as "no security relevance" and permits without evaluation
+(`src/Tool.ts:764,777`; `src/utils/permissions/yoloClassifier.ts:1228-1232`).
+So in auto mode the "ordinary permission gate" R8 relies on is the classifier,
+and it sees `CreatePeer` and `SendToPeer` only if they project. `CreatePeer`
+projects its full prompt and overrides; `SendToPeer` projects recipient, kind
+and full text; `NotifyWhenIdle` projects the peer name. `ListPeers` and
+`ReadPeer` are read-only and project `''` deliberately. Tests: a `SendToPeer`
+whose text relays a denied action is evaluated, not skipped.
 
 **Overlap flag.** The engine's `SendMessageTool` is already in the desktop tool
 list (`src/tools.ts:261`) and its prompt teaches `uds:` socket addresses that do
@@ -352,6 +370,11 @@ Values, so the build does not invent them (all new constants in
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
 | `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body to the same recipient |
 | `PEER_NOTIFY_WHEN_IDLE_TTL_MS` | 12 h | upstream precedent |
+| `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2) |
+| `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
+| `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 16 KiB / 64 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors |
+| `MAX_PEER_QUERY_BYTES` | 512 | `ReadPeer` search query |
+| `PEER_MESSAGE_RETENTION_MS` | 24 h | main's message table keeps a consumed record this long (a late `replyTo` still inherits its chain), then drops it; every per-session and per-pair structure (buckets, dedup windows, subscriptions, setting snapshots, message records) is cleared when either row is reaped (`session-removed`, `host.ts:484`) and at runtime teardown |
 
 Upstream's numbers were the reference, not adopted verbatim: burst 30,
 sustained one per 2 s, dedup 30 s, queue 50, chain 28.
@@ -383,11 +406,12 @@ pages structured items with a summary view by default). Shape:
   peer's file does not. A null id (a peer that has not yet sent its first
   ready frame) and an `ENOENT` (a peer that is ready but has not written its
   first entry) are both answered "nothing to read yet", not "no such peer".
-  **Known gap, on record:** a peer that itself entered a worktree writes its
-  transcript under the worktree's project directory, and the reader cannot
-  find it there without a path from main, which HR6 forbids; such a peer
-  reads as "nothing to read yet". Resolving it needs its own decision. It
-  cannot restore a parked session. Recorded as a guarantee, not an accident (Codex users hit
+  A peer that itself enters a worktree keeps writing where it started:
+  `EnterWorktreeTool` pins the session project directory before it moves
+  `originalCwd` (`EnterWorktreeTool.ts:97-105`, `pinSessionProjectDir`,
+  `sessionStorage.ts:296`), so the launch-cwd derivation above finds it. (An
+  earlier revision recorded this as a gap; that was wrong, corrected by the
+  fourth review.) It cannot restore a parked session. Recorded as a guarantee, not an accident (Codex users hit
   multi-second stalls when viewing a chat resumed it).
 - **Reading while the owner appends** tolerates a torn last line: the reader
   drops an unparsable tail entry. This is not the SESSIONS-UNIFICATION
@@ -414,6 +438,17 @@ pages structured items with a summary view by default). Shape:
   session quoting another session's transcript to the provider, content that
   reached a provider once already. Accepted for v1 under the same reasoning as
   the scope note; a value-shaped redactor is the fix if it is ever wanted.
+- **Cross-provider movement, accepted, flagged for the operator.** "Reached a
+  provider" is not "reached THIS provider": a `ReadPeer` result is a tool
+  result sent to the reader's model, and the model string decides the
+  provider per request (`src/utils/model/providers.ts` `resolveRequestProvider`),
+  so an Anthropic session's tail can go to OpenAI or the reverse. This is
+  accepted for v1 because the app already does the same without a prompt on
+  every mid-session model switch, which re-sends the whole conversation to
+  the new provider; `ReadPeer` adds no new kind of movement. If the operator
+  wants a confirmation when providers differ, `peers.list` must carry the
+  peer's current model so the reader can decide before reading; that is a
+  one-field addition, not a redesign.
 
 ## 9. Caps
 
@@ -426,7 +461,13 @@ before moving anything (IDLE-PARK §4 shows why).
 ## 10. Security consequences, collected
 
 - HC1 preserved: no model-authored path anywhere (HR3).
-- HC2/HC4 preserved and extended by HR3/HR4.
+- HC2/HC4 preserved and extended by HR3/HR4, plus one registry rule HR4
+  adds because the fourth review showed HC4 alone does NOT bound a
+  create-park-create churn (parked rows leave the live count and are exempt
+  from the reap, so `MAX_REGISTRY_SESSIONS` never refuses): `peer.create` is
+  refused with `session_limit` when the registry is at 256 rows and none is
+  reappable. No budget per creator; a global ceiling that already exists on
+  paper becomes real for this one caller.
 - Two new inbound kinds at the sidecar (`host.result`, `peer.deliver`), each
   with schema, allowlist, `checkStrictKeys`, boundary tests (HR5).
 - One sentence of SECURITY-MINIMUM's addendum amended (HOST-REQUEST-PLANE §9).
@@ -501,6 +542,12 @@ injected-turn rule is followed instead (§6). The `from` leader is kept.
   tree, and the field treats write collision as first-class. Deferred because
   it needs a new sidecar edit-activity event and main-side path state, and
   HR6 says no paths cross the plane; needs its own decision.
+- **A background-attention signal.** A created peer joins the tab bar
+  without taking the pane (the existing host-added rule, `App.tsx:1318`),
+  and a `notify` to a background tab starts no turn, so nothing today tells
+  the operator that an unseen tab received something. v1 ships without a
+  global unread marker; the sidebar row's last-activity time moves, and that
+  is all. Deferred because an unread model touches every row, not only peers.
 - **A peer-traffic audit view** (metadata-first, per workspace). The log
   line above captures the data now; the surface is deferred.
 
@@ -607,3 +654,26 @@ None overlapped the two earlier reviews except the auto-mode half of its #10.
 | 12 numeric limits unspecified | §7 table |
 | 13 `ReadPeer` path via `getOriginalCwd`; `ENOENT` | §8: launch-cwd derivation; worktree peer recorded as a gap |
 | 14 HRP still said `busy` | HRP §2: `presence` |
+
+**2026-09-03, fourth review (another model, read-only; verdict RED).** Sixteen
+findings, every anchor re-opened by the author. All sixteen hold; one
+(its F16) corrects a gap the author had wrongly recorded the same day.
+
+| finding | resolution |
+|---|---|
+| 1 park churn escapes HC4 and the reap never refuses | §10, HRP HR4/A1: `peer.create` refused at 256 rows with none reappable |
+| 2 omitted `replyTo` bypasses the loop guard | HRP §4 step 2: chain inheritance is automatic per pair within `PEER_CHAIN_WINDOW_MS`; `replyTo` only lengthens |
+| 3 tools skip the auto-mode classifier unless they project | §4: projections owed per tool |
+| 4 no durable-acceptance point for `peer.deliver` | HRP §4 step 6: ack = the consuming turn's `onInputPersisted`; redeliver after restore; sidecar dedups by `messageId` |
+| 5 `peer.create` has no idempotency or commit point | HRP §2: key `(requester, requestId)`, commit = row persisted, cached result, partial outcome |
+| 6 restored pre-field rows are unnamed callers | §2: name allocated on next spawn (flagged change) |
+| 7 replaying forwarded frames misses resumed model and reset mode | HRP §2: snapshot the sidecar's own `run-controls.snapshot` for model/effort; mode only from user-forwarded frames, cleared at process exit |
+| 8 `ReadPeer` moves a transcript across providers | §8: accepted with reason, flagged for the operator |
+| 9 `peerWakeBlocked` not durable, not readable | HRP §5: registry field + descriptor field; lifetime stated |
+| 10 `peer.notice` retention unclassified | HRP §4 step 4a: retained in the ring; dedup handles both forms |
+| 11 no byte limits for text, prompt, read | §7 table |
+| 12 main-owned peer state has no retention | §7 table: `PEER_MESSAGE_RETENTION_MS`, clear on reap and teardown |
+| 13 `NotifyWhenIdle` result to a parked requester | HRP §2: stored non-waking notice, main-authored, labelled with the peer's name |
+| 14 presence has no initial value; overlapping prompts | HRP §4 step 4a: derived from the ready payload; `needs_user` while the pending set is non-empty |
+| 15 focus and unread | §6/§12: no focus steal; unread signal deferred |
+| 16 worktree gap was wrong | §8 corrected |
