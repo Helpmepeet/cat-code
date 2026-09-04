@@ -71,6 +71,7 @@ import {
 import {
   extractToolUseBlock,
   parseClassifierResponse,
+  SUMMARIZED_RELAY_PREFIX,
   YOLO_CLASSIFIER_TOOL_NAME,
 } from './classifierShared.js'
 export { YOLO_CLASSIFIER_TOOL_NAME } from './classifierShared.js'
@@ -504,15 +505,28 @@ export type TranscriptEntry = {
  * and emitted as user turns.
  */
 /**
- * Marks a user-role turn the harness delivered on someone else's behalf. Only
- * task notifications are marked: `<teammate-message>` and
+ * Marks a user-role turn the harness delivered on someone else's behalf.
+ *
+ * Live turns: only task notifications are marked. `<teammate-message>` and
  * `<cross-session-message>` already carry their own tags inside the text, and
  * the ported prompt names no other relay.
+ *
+ * Compact summaries: a summary covering relayed input is marked too, at the
+ * only granularity that survives the boundary — some of this was relayed, not
+ * which part. The summary body cannot carry this itself: `origin` does not
+ * survive summarization, and the `<cross-session-message>` wrapper rule 8 keys
+ * on is handed to a model instructed to restate what it summarizes as "the
+ * user's explicit requests", so the prefix is written here, by code, after the
+ * summarizer has run.
  */
-function relayPrefixFor(origin: UserMessage['origin']): string {
-  return origin?.kind === 'task-notification'
-    ? '[SYSTEM NOTIFICATION - NOT USER INPUT] '
-    : ''
+function relayPrefixFor(msg: UserMessage): string {
+  if (msg.origin?.kind === 'task-notification') {
+    return '[SYSTEM NOTIFICATION - NOT USER INPUT] '
+  }
+  if (msg.isCompactSummary === true && msg.summarizedRelayedInput === true) {
+    return SUMMARIZED_RELAY_PREFIX
+  }
+  return ''
 }
 
 /**
@@ -586,7 +600,7 @@ export function buildTranscriptEntries(
       // A worker result or teammate relay is delivered as a user-role turn, so
       // without this it reads as the user's own words and can clear a soft-block
       // bar. The ported prompt distrusts a relay only if it can recognise one.
-      const prefix = relayPrefixFor(msg.origin)
+      const prefix = relayPrefixFor(msg)
       if (typeof content === 'string') {
         textBlocks.push({ type: 'text', text: prefix + content })
       } else if (Array.isArray(content)) {

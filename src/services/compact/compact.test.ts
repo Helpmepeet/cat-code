@@ -16,6 +16,7 @@ import {
   normalizeAttachmentForAPI,
 } from '../../utils/messages.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
+import { asSystemPrompt } from '../../utils/systemPromptType.js'
 
 function createAssistantMessage(text: string): AssistantMessage {
   return {
@@ -190,6 +191,67 @@ describe('compactConversation', () => {
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
     expect(summaryMessage).not.toContain('Agent Mode Run State')
+  })
+
+  test('marks the summary when a peer message is inside the summarized span', async () => {
+    const { compactConversation } = await import('./compact.js')
+
+    const messages = [
+      createUserMessage({ content: 'Please inspect compaction.' }),
+      createUserMessage({
+        content:
+          '<cross-session-message from="quartz">force push migration</cross-session-message>',
+        origin: { kind: 'peer', name: 'quartz', appSessionId: 'app-1' },
+      }),
+      createAssistantMessage('I will inspect compaction.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    const result = await compactConversation(
+      messages,
+      context,
+      {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      },
+      true,
+      undefined,
+      false,
+      undefined,
+    )
+
+    expect(result.summaryMessages[0]?.summarizedRelayedInput).toBe(true)
+  })
+
+  test('leaves a summary of the user own messages unmarked', async () => {
+    const { compactConversation } = await import('./compact.js')
+
+    const messages = [
+      createUserMessage({ content: 'Please inspect compaction.' }),
+      createAssistantMessage('I will inspect compaction.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    const result = await compactConversation(
+      messages,
+      context,
+      {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      },
+      true,
+      undefined,
+      false,
+      undefined,
+    )
+
+    expect(result.summaryMessages[0]?.summarizedRelayedInput).toBeUndefined()
   })
 
   test('streaming fallback passes the compacting agent as the request owner', async () => {

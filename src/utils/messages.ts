@@ -498,6 +498,7 @@ export function createUserMessage({
   isVisibleInTranscriptOnly,
   isVirtual,
   isCompactSummary,
+  summarizedRelayedInput,
   summarizeMetadata,
   toolUseResult,
   toolResultStatus,
@@ -514,6 +515,8 @@ export function createUserMessage({
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
   isCompactSummary?: true
+  /** See `UserMessage.summarizedRelayedInput`. Only meaningful on a summary. */
+  summarizedRelayedInput?: true
   toolUseResult?: unknown // Matches tool's `Output` type
   toolResultStatus?: 'cancelled'
   /** MCP protocol metadata to pass through to SDK consumers (never sent to model) */
@@ -546,6 +549,7 @@ export function createUserMessage({
     isVisibleInTranscriptOnly,
     isVirtual,
     isCompactSummary,
+    summarizedRelayedInput,
     summarizeMetadata,
     uuid: (uuid as UUID | undefined) || randomUUID(),
     timestamp: timestamp ?? new Date().toISOString(),

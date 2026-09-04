@@ -117,6 +117,7 @@ import {
   roughTokenCountEstimationForMessages,
 } from '../tokenEstimation.js'
 import { groupMessagesByApiRound } from './grouping.js'
+import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactPrompt,
   getCompactUserSummaryMessage,
@@ -675,6 +676,7 @@ export async function compactConversation(
           toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
+        summarizedRelayedInput: summarizedRelayedInput(messages),
         isVisibleInTranscriptOnly: true,
       }),
     ]
@@ -1109,6 +1111,7 @@ export async function partialCompactConversation(
           toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
+        summarizedRelayedInput: summarizedRelayedInput(messagesToSummarize),
         ...(messagesToKeep.length > 0
           ? {
               summarizeMetadata: {

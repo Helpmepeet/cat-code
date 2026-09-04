@@ -85,6 +85,21 @@ export type UserMessage = {
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
   isCompactSummary?: true
+  /**
+   * Set on a compact summary when at least one message it summarizes was
+   * relayed on someone else's behalf (a peer session, a teammate, a task
+   * notification) rather than typed by this session's user.
+   *
+   * A summary is one user-role message standing in for many, so per-message
+   * attribution does not survive the boundary; this records only that some of
+   * the summarized input was relayed. It exists because `origin` is dropped by
+   * summarization and the textual `<cross-session-message>` wrapper is rewritten
+   * by the model that writes the summary — so without this, a peer's request can
+   * re-enter the conversation as the user's own stated intent.
+   *
+   * Read by the auto-mode classifier (`buildTranscriptEntries`).
+   */
+  summarizedRelayedInput?: true
   summarizeMetadata?: {
     messagesSummarized: number
     userContext?: string

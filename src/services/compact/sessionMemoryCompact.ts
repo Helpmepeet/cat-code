@@ -42,6 +42,7 @@ import {
   createPlanAttachmentIfNeeded,
 } from './compact.js'
 import { estimateMessageTokens } from './microCompact.js'
+import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactUserSummaryMessage,
   toAgentModeCompactState,
@@ -492,6 +493,7 @@ function createCompactionResultFromSessionMemory(
     createUserMessage({
       content: summaryContent,
       isCompactSummary: true,
+      summarizedRelayedInput: summarizedRelayedInput(messages),
       isVisibleInTranscriptOnly: true,
     }),
   ]
