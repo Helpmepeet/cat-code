@@ -689,7 +689,11 @@ export type PeerDescriptor = {
    * unrecognised effort is dropped at the child in favour of the user's saved
    * setting — so the asked-for value may never have been what ran. A parked row
    * keeps its last observed value: its engine is gone, so nothing can move it
-   * while parked, and the next snapshot lands before the woken row is ready.
+   * while parked. On the way back it is briefly the PREVIOUS process's value: a
+   * restoring row counts as live while it spawns, and the sidecar sends `ready`
+   * before it sends the run-controls snapshot, so a `peers.list` timed into that
+   * gap reads a value the new process has not confirmed. One synchronous frame
+   * dispatch wide, and only a concurrent list can observe it.
    *
    * The model id is NOT checked against a known set anywhere on this path. The
    * engine passes unrecognised ids through so a new model works the day it
