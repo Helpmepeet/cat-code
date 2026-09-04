@@ -1590,6 +1590,98 @@ test('the activity line keeps the command when the model wrote no description', 
   expect(html).not.toContain('Bash git status')
 })
 
+test('a SendToPeer card says who was messaged AND what was sent', () => {
+  // The operator's complaint: the header read `SendToPeer` and nothing else, so
+  // the only way to learn what went out was to open the card.
+  const html = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: {
+        to: 'Bear',
+        text: 'The sidecar rejects the frame.\nCan you check the schema?',
+      },
+      status: 'success',
+    }),
+  )
+  expect(html).toContain('message Bear')
+  expect(html).toContain('The sidecar rejects the frame. Can you check the schema?')
+  // The tool's own name is no longer what occupies the slot. (The row key still
+  // carries it; that is the test helper's id, not anything on screen.)
+  expect(html).not.toContain('>SendToPeer<')
+})
+
+test('a long peer message is cut in the header, and a short one is not marked as cut', () => {
+  const long = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'x'.repeat(400) },
+      status: 'success',
+    }),
+  )
+  expect(long).toContain(`${'x'.repeat(160)}…`)
+  expect(long).not.toContain('x'.repeat(161))
+
+  const short = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'success',
+    }),
+  )
+  expect(short).toContain('message Bear: ping')
+  expect(short).not.toContain('…')
+})
+
+test('a ReadPeer card names the peer, and its query only when it really searched', () => {
+  const tail = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      // A `query` the tool ignores, because the view is the default tail.
+      input: { peer: 'Bear', limit: 20, query: 'schema' },
+      status: 'success',
+    }),
+  )
+  expect(tail).toContain('read Bear')
+  expect(tail).not.toContain('schema')
+
+  const search = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      input: { peer: 'Bear', view: 'search', query: 'schema' },
+      status: 'success',
+      id: 'search',
+    }),
+  )
+  expect(search).toContain('read Bear: schema')
+})
+
+test('a CreatePeer card shows the instruction, because the new name does not exist yet', () => {
+  const html = render(
+    toolRow({
+      toolName: 'CreatePeer',
+      toolFamily: 'other',
+      input: { prompt: 'Audit the permission boundary tests', model: 'gpt-5.6-luna' },
+      status: 'success',
+    }),
+  )
+  expect(html).toContain('new session: Audit the permission boundary tests')
+  expect(html).not.toContain('>CreatePeer<')
+})
+
+test('a ListPeers card keeps the tool name, because the call carries no arguments', () => {
+  // Nothing is invented for it: its input schema is empty, so there is no fact
+  // to put in the slot that the name does not already give.
+  const html = render(
+    toolRow({ toolName: 'ListPeers', toolFamily: 'other', status: 'success' }),
+  )
+  expect(html).toContain('ListPeers')
+})
+
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [
