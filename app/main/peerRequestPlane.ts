@@ -201,6 +201,14 @@ const FRAME_KEYS = new Set([
   'requestId',
   'verb',
   'args',
+  // Every ServerFrame may carry the metadata-only delivery envelope
+  // (`protocol.ts` `ServerFrame`), and `host.request` is one: the sidecar stamps
+  // it at its single outbound send path and the supervisor merges it back onto
+  // the frame as a top-level key. Omitting it here refused EVERY peer request
+  // that crossed a real socket. It is ACCEPTED and then IGNORED — nothing below
+  // reads it, and nothing on this plane may: it is not identity (HR2 — the
+  // requester is the connection), not authority, and never routing input.
+  'deliveryTrace',
 ])
 
 /** The args whose size is governed by `MAX_PEER_TEXT_BYTES` instead. */
