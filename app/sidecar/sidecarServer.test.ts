@@ -9764,6 +9764,102 @@ test('HR5 — a valid peer.deliver reaches the REAL engine queue as a peer-origi
   )
 })
 
+/** The transcript rows a peer message produced, with the provenance they carry. */
+function peerUserRows(
+  received: ServerFrame[],
+): Array<{ text: unknown; origin: unknown }> {
+  return received.flatMap(frame => {
+    if (
+      frame.kind !== 'event' ||
+      frame.event.type !== 'message' ||
+      frame.event.message.type !== 'user' ||
+      frame.event.message.origin?.kind !== 'peer'
+    ) {
+      return []
+    }
+    return [
+      {
+        text: frame.event.message.message?.content,
+        origin: frame.event.message.origin,
+      },
+    ]
+  })
+}
+
+test('HR5 — a peer message a BUSY session receives gets its row when the turn takes it', async () => {
+  // The gap this closes sat between two green tests: one proving the command
+  // reaches the engine queue with peer origin, one proving a user frame with
+  // peer origin renders a peer row. Nothing emitted the frame in between.
+  //
+  // A busy recipient's running turn drains the queue itself at a tool boundary
+  // and folds the message into a `queued_command` attachment. The only thing it
+  // tells anyone is `notifyCommandLifecycle`, and it tells that only for a
+  // command carrying a uuid (`src/query.ts:2010`) — which a delivered peer
+  // message did not, so the row never existed anywhere.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await new Promise(resolve => setTimeout(resolve, 0))
+  // Busy: the message goes onto the queue behind the running turn, and the
+  // sidecar's own idle drain cannot take it.
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  expect(userMessageTexts(received)).toEqual(['start'])
+  expect(peerUserRows(received)).toEqual([])
+
+  const queued = getCommandQueueSnapshot()[0]
+  expect(queued?.uuid).toBeTruthy()
+
+  // Exactly what the running turn does at its next tool boundary.
+  notifyCommandLifecycle(queued?.uuid as string, 'started')
+
+  const rows = peerUserRows(received)
+  expect(rows).toHaveLength(1)
+  expect(rows[0]?.text).toBe(
+    '<cross-session-message from="Alex">\ntake a look at the parser\n</cross-session-message>',
+  )
+  expect(rows[0]?.origin).toEqual({ kind: 'peer', name: 'Alex' })
+  // NOT the user's draft: it never enters the waiting-messages strip, so it can
+  // never be recalled back into the composer.
+  expect(queuedPromptSnapshots(received).flat()).toEqual([])
+
+  release?.()
+})
+
+test('HR5 — an IDLE recipient still gets exactly one row, never a second', async () => {
+  // The idle path announces from `startTurn`, which is why a creation prompt has
+  // always rendered. It reaches the queue through `dequeue`, which fires no
+  // lifecycle signal, so the busy-path announcement cannot also run for it.
+  // Firing the signal that cannot arrive is the proof.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  const uuid = getCommandQueueSnapshot()[0]?.uuid
+  expect(uuid).toBeTruthy()
+
+  await waitFor(() => peerUserRows(received).length > 0)
+  expect(peerUserRows(received)).toHaveLength(1)
+
+  notifyCommandLifecycle(uuid as string, 'started')
+  expect(peerUserRows(received)).toHaveLength(1)
+})
+
 /** The queued prompt text, narrowed: a peer message is never a block array. */
 function queuedPeerText(): string {
   const value = getCommandQueueSnapshot()[0]?.value

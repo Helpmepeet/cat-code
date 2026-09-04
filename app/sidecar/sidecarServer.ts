@@ -682,6 +682,26 @@ export class SidecarServer {
   private readonly lateRecallDeliveries = new Map<string, number>()
   private lateRecallFlushScheduled = false
   /**
+   * A peer message sitting on the engine queue that still owes a transcript row.
+   *
+   * Deliberately NOT `stagedPrompts`: that map is the user's waiting-messages
+   * strip (`queuedPromptItems` reads it) and the vocabulary a recall takes
+   * messages back from. A peer message is not the user's draft, so it must
+   * neither appear there nor be recallable into the composer. It needs only the
+   * one thing staging also buys, a row written when the engine actually takes
+   * the message, so it gets its own map and nothing else.
+   *
+   * Emptied by whichever path delivers the message, never both: the lifecycle
+   * signal below when a BUSY session's running turn drains it at a tool
+   * boundary, or `drainOneTaskNotification` when an idle session starts a turn
+   * for it and `startTurn` announces it there. `dequeue` fires no lifecycle
+   * signal, so the idle path cannot reach the announcement below.
+   */
+  private readonly pendingPeerAnnouncements = new Map<
+    string,
+    { prompt: string; origin: MessageOrigin }
+  >()
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
    * the latch is rejected `session_disconnected` before `activeTurn` is touched,
@@ -848,6 +868,7 @@ export class SidecarServer {
     }
     setCommandLifecycleListener((uuid, state) => {
       if (state !== 'started') return
+      this.announcePeerDelivery(uuid)
       this.commitStagedPrompt(uuid)
     })
     commandLifecycleOwner = this
@@ -1287,6 +1308,7 @@ export class SidecarServer {
     this.stagedPrompts.clear()
     this.recalledPrompts.clear()
     this.lateRecallDeliveries.clear()
+    this.pendingPeerAnnouncements.clear()
     // Settle every in-flight host request rather than leaving its caller waiting
     // on a socket that is about to close, and clear the timers so a closed
     // server holds nothing (the boundary tests build several per process).
@@ -1831,6 +1853,12 @@ export class SidecarServer {
         }
       },
     })
+    if (started && command.uuid !== undefined) {
+      // `startTurn` announced it a moment ago, so the row is owed no longer.
+      // A turn that did NOT start leaves the entry alone: the command goes back
+      // on the queue below, and whichever path takes it next still owes the row.
+      this.pendingPeerAnnouncements.delete(command.uuid)
+    }
     if (!started) {
       releaseTaskNotificationReservation(reservationTaskId)
       enqueuePendingNotification(command)
@@ -2078,6 +2106,28 @@ export class SidecarServer {
       uuid,
       ...(isMeta ? { isMeta: true } : {}),
     })
+  }
+
+  /**
+   * The BUSY half of a peer message's transcript row.
+   *
+   * An idle recipient gets its row from `startTurn`, which is why a creation
+   * prompt has always rendered. A busy one never did: its running turn drains
+   * the queue itself and folds the message into a `queued_command` attachment,
+   * which reaches the model and nothing else. Writing the row from the same
+   * consumption signal keeps the two paths saying the same thing, and keeps the
+   * row honest about WHEN — the message appears where the model received it,
+   * not where the peer sent it.
+   *
+   * `broadcastPromptMessage` is the same emitter both other paths use, so the
+   * frame is byte-identical to the one the idle path sends and needs no new
+   * frame kind, no protocol change, and nothing new in the renderer.
+   */
+  private announcePeerDelivery(uuid: string): void {
+    const pending = this.pendingPeerAnnouncements.get(uuid)
+    if (!pending) return
+    this.pendingPeerAnnouncements.delete(uuid)
+    this.broadcastPromptMessage(pending.prompt, uuid, undefined, pending.origin)
   }
 
   /**
@@ -5285,13 +5335,23 @@ export class SidecarServer {
       appSessionId: delivered.fromSessionId,
       ...(delivered.untagged === true ? { creationPrompt: true as const } : {}),
     }
+    const value = delivered.untagged === true
+      ? delivered.text
+      : wrapCrossSessionMessage(delivered.from, delivered.text)
+    // The uuid is what makes a BUSY recipient announceable at all. A running
+    // turn drains this itself at a tool boundary and converts it into a
+    // `queued_command` attachment, and the only thing it tells anyone about
+    // that is `notifyCommandLifecycle`, which it fires ONLY for a command that
+    // carries a uuid (`src/query.ts:2010`). Without one, a message the model
+    // received and acted on had no transcript row anywhere.
+    const uuid = randomUUID()
+    this.pendingPeerAnnouncements.set(uuid, { prompt: value, origin })
     enqueuePendingNotification({
-      value: delivered.untagged === true
-        ? delivered.text
-        : wrapCrossSessionMessage(delivered.from, delivered.text),
+      value,
       mode: 'task-notification',
       // §4 step 4 — `next`, ahead of worker results, behind a human prompt.
       priority: 'next',
+      uuid,
       origin,
     })
     // Enqueued: tell main it may forget the message. Fire-and-forget by
