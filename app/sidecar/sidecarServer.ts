@@ -5312,6 +5312,24 @@ export class SidecarServer {
    * row's next `ready` if the process exits first.
    */
   private handlePeerDeliver(connection: Connection, message: unknown): void {
+    // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
+    // `handleSubmit`/`handlePromptRecall`/`handleHistoryLoadEarlier`, and here it
+    // is the difference between main holding the message and nobody holding it.
+    // A latched sidecar is exiting, but the exit is not synchronous: `index.ts`
+    // `exitCleanly` closes the server, then awaits the transcript-lease release,
+    // and the established connection carries frames the whole time. Enqueuing
+    // here would put the message on a queue this process is about to drop, and
+    // the ack below is precisely what tells main to forget its only copy — a
+    // sender already answered `queued_live` for a message that then exists
+    // nowhere. Refusing costs nothing instead: main keeps holding it and
+    // redelivers on this row's next `ready` (§4 step 6), the same path it takes
+    // for a delivery that arrives one moment later, after the exit. Silence is
+    // the refusal — `peer.deliver` carries no requestId to answer, and main's
+    // hold is released by the ack alone.
+    if (this.parking) {
+      this.log('[sidecar] peer message refused: session parking')
+      return
+    }
     const parsed = peerDeliverMessageSchema.safeParse(message)
     if (!parsed.success) {
       this.sendError(

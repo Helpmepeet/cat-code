@@ -10026,6 +10026,62 @@ test('a delivered peer message is acked with a host.request, which is what lets 
   expect(queuedAtAckTime).toBe(1)
 })
 
+test('IDLE-PARK — a peer.deliver landing after the park latch is refused, so main keeps holding it', async () => {
+  // The window is real on both sides. Main sends `app.park` and nothing moves
+  // the supervisor's status until the child actually exits, so a delivery in
+  // that gap takes the LIVE path and answers the sender `queued_live`. The
+  // sidecar has latched by then, and `index.ts` exitCleanly does not exit
+  // synchronously: it closes the server, then awaits the transcript-lease
+  // release, with the established connection carrying frames throughout.
+  //
+  // Without the latch check the message was enqueued onto a queue this process
+  // drops and then ACKED, which is what releases main's only copy — the sender
+  // was told `queued_live` for a message nobody held.
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-1' }))
+  expect(parkCount()).toBe(1)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  await flush()
+
+  // The assertion the defect turned on: no ack, so main keeps the message and
+  // redelivers it on this row's next `ready` (§4 step 6).
+  expect(
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toBe(false)
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  // Silent like the park itself: `peer.deliver` carries no requestId to answer,
+  // and an error frame here would reach the reader as a session error for
+  // something nobody in front of the app did.
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+})
+
+test('IDLE-PARK — the other ordering needs no new gate: a delivered peer message already blocks the park', () => {
+  // Deliver-then-park is the half `isParkGateOpen` has always covered, because a
+  // peer message enters the queue as a parent task notification and that is
+  // exactly what gate 3 reads. Proven through the real deliver path rather than
+  // a hand-built queue entry, so the two halves of the fix are pinned together:
+  // the guard above handles park-then-deliver, this handles deliver-then-park,
+  // and no third state is left where the message can go missing.
+  const { server, parkCount } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  // Read before the boundary drain runs, which is when the gate is asked in the
+  // race this covers.
+  server.handleData(conn, clientFrame({ type: 'app.park', requestId: 'park-peer' }))
+
+  expect(parkCount()).toBe(0)
+})
+
 test('the request client mints an id, awaits its result, and resolves the caller', async () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
