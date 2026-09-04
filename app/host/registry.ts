@@ -692,13 +692,44 @@ export class SessionRegistry {
    * are never reaped; only `shutdown != null` rows are eligible, oldest
    * (`lastAttachedAt`) first — matches §3. Returns the reaped ids so a
    * runtime caller can emit `session-removed` for them (F5).
+   *
+   * **What a reap costs the peer plane, and why that is the ruling.** Dropping
+   * a row does not drop its transcript, so the conversation comes back through
+   * the catalog and can be reopened by hand — as a NEW row, with a new
+   * `appSessionId`, a newly allocated `name`, and no `createdBy`. That is not a
+   * bug to repair: PEER-SESSIONS §2 rules that a name is released on reap and
+   * may be handed out again, which is only sound because identity is
+   * row-scoped. Restoring a former name at reopen would have to reclaim a word
+   * another live session may already be answering to. What the user reads as
+   * the session's identity — its title — is preserved independently, by the
+   * catalog-seeded `title` on the reopen path (`app/main/openHistorySession.ts`),
+   * so the conversation keeps its label and only its peer address is new.
+   *
+   * **`peerWakeBlocked` is the exception, and it is why the sort is not plain
+   * oldest-first.** Every other field here is machine-minted. That one is the
+   * user's own standing answer about a conversation they can still see, and the
+   * reap is the only thing that clears it without them (`setPeerWakeBlocked` is
+   * reachable only from the sidebar row menu). Losing it silently converts a
+   * recorded "no" into a "yes" at the moment the operator reopens the
+   * transcript, so blocked rows sort LAST and are discarded only when nothing
+   * else can satisfy the bound.
+   *
+   * Last, deliberately NOT exempt. `isReapableForBound` is shared with
+   * `atBoundWithNothingReapable`, the HR4 predicate that refuses `peer.create`
+   * when the registry is full with nothing to remove; excluding blocked rows
+   * there would let a row-menu toggle, repeated, refuse peer creation outright.
+   * The ordering keeps the bound and the churn rule exactly as they were.
    */
   private enforceBound(): string[] {
     if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
       .filter(isReapableForBound)
-      .sort((a, b) => a.lastAttachedAt - b.lastAttachedAt)
+      .sort(
+        (a, b) =>
+          Number(a.peerWakeBlocked === true) - Number(b.peerWakeBlocked === true) ||
+          a.lastAttachedAt - b.lastAttachedAt,
+      )
     const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
     const doomedRows = terminal.slice(0, removeCount)
     const doomed = new Set(doomedRows.map(r => r.appSessionId))

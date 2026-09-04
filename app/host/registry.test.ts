@@ -112,6 +112,9 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     ...(overrides.enginePid !== undefined ? { enginePid: overrides.enginePid } : {}),
     ...(overrides.socketPath !== undefined ? { socketPath: overrides.socketPath } : {}),
     ...(overrides.restartCount !== undefined ? { restartCount: overrides.restartCount } : {}),
+    ...(overrides.peerWakeBlocked !== undefined
+      ? { peerWakeBlocked: overrides.peerWakeBlocked }
+      : {}),
   }
 }
 
@@ -599,6 +602,97 @@ test('IDLE-PARK — a parked row is EXCLUDED from the over-bound reap (an open t
   expect(doc.sessions.find(r => r.appSessionId === 'app-parked')?.shutdown).toBe('parked')
   // …and an older-than-nothing-but-parked CLEAN row was the one reaped instead.
   expect(doc.sessions.some(r => r.appSessionId === 'app-clean-1')).toBe(false)
+})
+
+test('PEER-SESSIONS §6 — the over-bound reap discards a wake-blocked row LAST', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // The blocked row is the OLDEST of all, so the plain oldest-first order would
+  // pick it first. It carries the one field on a row that is the USER's standing
+  // decision rather than an allocator artifact, and the transcript it protects
+  // outlives the row — so reaping it silently turns a recorded "no" into a "yes"
+  // the next time the operator opens that transcript by hand.
+  writeTranscript(storageDir, 'engine-blocked')
+  const rows: RegistrySession[] = [
+    baseRow({
+      appSessionId: 'app-blocked',
+      engineSessionId: 'engine-blocked',
+      shutdown: 'clean',
+      peerWakeBlocked: true,
+      lastAttachedAt: 1_700_000_000_000,
+    }),
+  ]
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS - 1; i++) {
+    writeTranscript(storageDir, `engine-clean-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-clean-${i}`,
+        engineSessionId: `engine-clean-${i}`,
+        shutdown: 'clean',
+        lastAttachedAt: 1_700_000_100_000 + i, // all NEWER than the blocked row
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-new-live',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  // The blocked row survived, block intact…
+  expect(doc.sessions.find(r => r.appSessionId === 'app-blocked')?.peerWakeBlocked).toBe(
+    true,
+  )
+  // …and the oldest UNBLOCKED terminal row went instead.
+  expect(doc.sessions.some(r => r.appSessionId === 'app-clean-0')).toBe(false)
+})
+
+test('PEER-SESSIONS §6 — a registry of only wake-blocked rows still enforces the bound', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // Last, not exempt. An exemption would leak into `atBoundWithNothingReapable`
+  // — the SAME predicate HR4 uses to refuse `peer.create` — so a user who
+  // blocked enough rows would find peer creation refused by a row-menu toggle.
+  const rows: RegistrySession[] = []
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+    writeTranscript(storageDir, `engine-blocked-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-blocked-${i}`,
+        engineSessionId: `engine-blocked-${i}`,
+        shutdown: 'clean',
+        peerWakeBlocked: true,
+        lastAttachedAt: 1_700_000_000_000 + i, // app-blocked-0 is the oldest
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  // Blocked rows stay REAPABLE, so the churn refusal reads them as it always did.
+  expect(registry.atBoundWithNothingReapable()).toBe(false)
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-new-live',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  expect(doc.sessions.some(r => r.appSessionId === 'app-blocked-0')).toBe(false)
 })
 
 test("IDLE-PARK — a persisted 'parked' shutdown normalises to 'crashed' on disk read", async () => {

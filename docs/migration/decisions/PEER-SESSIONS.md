@@ -449,6 +449,29 @@ asked-for work (R6).
   does not clear itself when the user reopens the session by hand. Only the
   user clears it, never a peer. A host method plus one fixed preload sender
   (HC3 pattern, `closeSession` precedent) and no sidecar surface.
+- 🔁 **AMENDED 2026-09-04 — what a reap does to identity, decided.** The bound
+  reap (`registry.ts` `enforceBound`) drops a row and leaves its transcript, so
+  the conversation returns through the catalog and can be reopened by hand. That
+  mints a new `appSessionId`, so a new `name`, no `createdBy`, and — before this
+  amendment — a cleared `peerWakeBlocked`. Split ruling, because the three
+  fields are not the same kind of thing:
+  - **Name and `createdBy`: honest, not restored.** §2 releases a name on reap
+    and lets the pool reissue it, which is only sound because identity is
+    row-scoped; reclaiming a former name at reopen could take a word a live
+    session is already answering to. Nothing announces the change, and nothing
+    needs to: the peer name is an ADDRESS, while the identity the operator reads
+    is the title, and the title already survives the round trip
+    (`openHistorySession.ts` seeds it from the catalog entry they clicked). The
+    conversation keeps its label; only its peer address is new. A reaped
+    `createdBy` already resolved to `gone` by §2.
+  - **`peerWakeBlocked`: not discarded first.** It is the only field on the row
+    that is the user's own standing answer, about a session they can still see,
+    and the reap was the one thing clearing it without them. Blocked rows now
+    sort LAST in `enforceBound` and go only when nothing else can satisfy the
+    bound. Last rather than exempt: `isReapableForBound` is shared with
+    `atBoundWithNothingReapable`, the HR4 predicate that refuses `peer.create`
+    at a full registry, so an exemption would let a row-menu toggle, repeated,
+    refuse peer creation. The bound and the churn rule are unchanged.
 
 ## 7. Loop and cost guards (mechanical, prompt-independent)
 
