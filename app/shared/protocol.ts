@@ -630,8 +630,13 @@ export const HOST_REQUEST_ERROR_CODES = [
   /** Main failed in a way the caller cannot act on. */
   'internal_error',
   /**
-   * SIDECAR-minted, not main's: no `host.result` arrived inside
-   * `HOST_REQUEST_TIMEOUT_MS`. It is in this union rather than a second one so a
+   * Minted on BOTH sides for the same fact, that a call did not answer in
+   * time: by the sidecar when no `host.result` arrives inside
+   * `HOST_REQUEST_TIMEOUT_MS`, and by main when a host call it made outlives
+   * `PEER_HOST_CALL_TIMEOUT_MS`. Main used to report its own timeout as
+   * `spawn_failed`, which said the work had not happened when the truth was
+   * that it had not answered, and the work then often completed. It is in this
+   * union rather than a second one so a
    * caller pattern-matches ONE closed set; the requesting side never hangs, and
    * a timeout on `peer.create` deliberately does not auto-retry — the row is
    * named and visible from the moment it is persisted, so the answer is to look
