@@ -39,9 +39,39 @@ import {
 
 export const LIST_PEERS_TOOL_NAME = 'ListPeers'
 
-const inputSchema = lazySchema(() => z.strictObject({}))
+const inputSchema = lazySchema(() =>
+  z.strictObject({
+    all: z
+      .boolean()
+      .optional()
+      .describe(
+        'List every session, including ones that closed a while ago.',
+      ),
+  }),
+)
 
 type InputSchema = ReturnType<typeof inputSchema>
+type Input = z.infer<InputSchema>
+
+/**
+ * How many CLOSED peers an ordinary call carries.
+ *
+ * The live and parked parts of a roster are bounded by things outside this
+ * file: a live row costs a process (`MAX_LIVE_SESSIONS`) and the idle-park
+ * driver holds the number far below that, and a parked row is a tab somebody
+ * has open. The closed tail has no such bound. Names are write-once and a row
+ * survives until the registry reaps at `MAX_REGISTRY_SESSIONS`, so on a
+ * workspace that has been worked in for a while it is the whole cost of the
+ * answer: measured against a real 53-row workspace, 52 rows of roster spent
+ * about 1,500 tokens to say that nothing was open.
+ *
+ * Five keeps the ordinary answer the same order of size as the part that is
+ * bounded anyway, and keeps the peers a caller might still be picking up from.
+ * Older ones are not gone: the result says how many were left out and `all`
+ * returns them, which is what keeps a bounded default from reading as a peer
+ * that no longer exists.
+ */
+const CLOSED_PEERS_SHOWN = 5
 
 /**
  * The model-facing view of one row, and the ONLY shape this tool passes on.
@@ -69,9 +99,15 @@ export type PeerView = {
  * this peer been quiet". Both ends are absolute instants on purpose. A rendered
  * duration would be correct once and then decay, because a tool result stays in
  * context for many turns after the turn that fetched it.
+ *
+ * `notListed` is how many closed rows the bound above cut, and it is a COUNT
+ * rather than the sentence a model reads: the sentence is written once at
+ * render time, so the number and its plural cannot drift apart. Zero on a call
+ * that cut nothing, which is every call in a workspace small enough for the
+ * question not to arise.
  */
 export type ListPeersOutput =
-  | { ok: true; asOf: string; peers: PeerView[] }
+  | { ok: true; asOf: string; peers: PeerView[]; notListed: number }
   | { ok: false; message: string }
 
 const PEER_STATUSES: readonly PeerDescriptor['status'][] = [
@@ -139,6 +175,37 @@ export function narrowPeerList(value: unknown): PeerView[] | null {
   return rows
 }
 
+/**
+ * Keep every live and parked row, and only the first `limit` closed ones.
+ *
+ * Iterating in the order main sent rather than filtering by status and
+ * re-joining is what keeps the ordering main owns (`peerRequestPlane.ts:948`,
+ * status then recency inside each group) intact here: this drops rows, it never
+ * decides where one sits. That the closed rows kept are the most recent ones is
+ * a consequence of main's sort, not a second sort agreeing with it.
+ */
+export function boundClosedPeers(
+  peers: PeerView[],
+  limit: number = CLOSED_PEERS_SHOWN,
+): { peers: PeerView[]; notListed: number } {
+  const kept: PeerView[] = []
+  let shownClosed = 0
+  let notListed = 0
+  for (const peer of peers) {
+    if (peer.status !== 'closed') {
+      kept.push(peer)
+      continue
+    }
+    if (shownClosed < limit) {
+      shownClosed += 1
+      kept.push(peer)
+      continue
+    }
+    notListed += 1
+  }
+  return { peers: kept, notListed }
+}
+
 export function createListPeersTool(
   requestHost: PeerHostRequester = requestPeerHost,
 ) {
@@ -156,10 +223,11 @@ export function createListPeersTool(
     isConcurrencySafe() {
       return true
     },
-    // Read-only and takes no input, so there is nothing for the auto-mode
-    // classifier to weigh. `''` is the documented "no security relevance"
-    // value and is chosen here deliberately, not inherited by omission
-    // (PEER-SESSIONS §4; the contract is at `src/Tool.ts:764`).
+    // Read-only, and its one argument only widens what it reads, so there is
+    // nothing for the auto-mode classifier to weigh. `''` is the documented
+    // "no security relevance" value and is chosen here deliberately, not
+    // inherited by omission (PEER-SESSIONS §4; the contract is at
+    // `src/Tool.ts:764`).
     toAutoClassifierInput() {
       return ''
     },
@@ -180,7 +248,7 @@ export function createListPeersTool(
         'Use it to find out who else is working here before you message one of them, and to check whether a session you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
       ].join('\n')
     },
-    async call(): Promise<{ data: ListPeersOutput }> {
+    async call(input: Input): Promise<{ data: ListPeersOutput }> {
       const outcome = await requestHost('peers.list', {})
       if (!outcome.ok) {
         return {
@@ -201,7 +269,18 @@ export function createListPeersTool(
           },
         }
       }
-      return { data: { ok: true, asOf: new Date().toISOString(), peers } }
+      const bounded =
+        input.all === true
+          ? { peers, notListed: 0 }
+          : boundClosedPeers(peers)
+      return {
+        data: {
+          ok: true,
+          asOf: new Date().toISOString(),
+          peers: bounded.peers,
+          notListed: bounded.notListed,
+        },
+      }
     },
     mapToolResultToToolResultBlockParam(data: ListPeersOutput, toolUseID) {
       if (!data.ok) {
@@ -223,10 +302,23 @@ export function createListPeersTool(
           content: 'This workspace has no other session, live, parked or closed.',
         }
       }
+      // The note is written only when rows were actually cut. A line saying
+      // nothing was left out would be paid for on every call in every
+      // workspace, to report the ordinary case, which is the cost this bound
+      // exists to remove (CLAUDE.md §7: say only what is surprising).
+      const note =
+        data.notListed > 0
+          ? {
+              note:
+                data.notListed === 1
+                  ? '1 session that closed earlier is not listed. Set all to true to see it.'
+                  : `${data.notListed} sessions that closed earlier are not listed. Set all to true to see them.`,
+            }
+          : {}
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: jsonStringify({ asOf: data.asOf, peers: data.peers }),
+        content: jsonStringify({ asOf: data.asOf, peers: data.peers, ...note }),
       }
     },
     renderToolUseMessage() {

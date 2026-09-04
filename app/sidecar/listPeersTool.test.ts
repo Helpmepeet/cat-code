@@ -6,9 +6,11 @@ import type {
 import type { HostRequestOutcome } from './sidecarServer.js'
 import type { PeerHostRequester } from './peerHostRequester.js'
 import {
+  boundClosedPeers,
   createListPeersTool,
   narrowPeerList,
   narrowPeerView,
+  type PeerView,
 } from './listPeersTool.js'
 
 /**
@@ -82,7 +84,7 @@ test('ListPeers renders the host roster, and shows no presence for a row that is
   }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-1')
 
   expect(asked).toEqual([{ verb: 'peers.list', args: {} }])
@@ -125,7 +127,7 @@ test('the roster is stamped with the instant it was read', async () => {
   const { requestHost } = requesterReturning(() => ({ peers: [liveRow] }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-5')
 
   if (!result.data.ok) throw new Error('expected a roster')
@@ -149,7 +151,7 @@ test('a live peer that has not reported in yet lists as live with no presence', 
   }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
 
   if (!result.data.ok) throw new Error('expected a roster')
   expect(result.data.peers).toHaveLength(1)
@@ -170,7 +172,7 @@ test('ListPeers reports a refusal instead of an empty roster', async () => {
   const { requestHost } = requesterReturning(() => ({ ok: false }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-2')
 
   expect(block.is_error).toBe(true)
@@ -190,7 +192,7 @@ test('an empty roster says no session exists, not that none is open', async () =
   const { requestHost } = requesterReturning(() => ({ peers: [] }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-3')
 
   expect(block.is_error).toBeUndefined()
@@ -207,7 +209,7 @@ test('a malformed row is dropped and the rest of the roster still lists', async 
   }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
 
   expect(result.data.ok).toBe(true)
   if (!result.data.ok) throw new Error('expected a roster')
@@ -218,7 +220,7 @@ test('a value that is not a peer list is not read as an empty roster', async () 
   const { requestHost } = requesterReturning(() => ({ notPeers: true }))
   const tool = createListPeersTool(requestHost)
 
-  const result = await tool.call()
+  const result = await tool.call({})
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-4')
 
   expect(block.is_error).toBe(true)
@@ -246,4 +248,136 @@ test('ListPeers projects nothing to the auto-mode classifier, deliberately', () 
   const tool = createListPeersTool(requesterReturning(() => ({ peers: [] })).requestHost)
   expect(tool.toAutoClassifierInput()).toBe('')
   expect(tool.isReadOnly()).toBe(true)
+})
+
+/* ------------------------------------------------------------------------- *
+ * The bounded default
+ * ------------------------------------------------------------------------- */
+
+/** A roster row as MAIN sends it, before the tool's own narrowing. */
+function hostRow(
+  name: string,
+  status: 'live' | 'parked' | 'closed',
+  lastActivity: number,
+) {
+  return {
+    name,
+    appSessionId: `a-${name}`,
+    engineSessionId: null,
+    status,
+    title: null,
+    lastActivity,
+  }
+}
+
+/** Main's order: live, then parked, then closed, most recent first in each. */
+function roster(live: number, parked: number, closed: number) {
+  const rows = []
+  let at = 1_756_900_000_000
+  for (let i = 0; i < live; i += 1) rows.push(hostRow(`L${i}`, 'live', (at -= 1000)))
+  for (let i = 0; i < parked; i += 1) rows.push(hostRow(`P${i}`, 'parked', (at -= 1000)))
+  for (let i = 0; i < closed; i += 1) rows.push(hostRow(`C${i}`, 'closed', (at -= 1000)))
+  return { peers: rows }
+}
+
+test('an ordinary call carries the whole live and parked roster and only the newest closed peers', async () => {
+  // The point of the whole bound: the answer to "is anyone else working here"
+  // must not be priced by how long this workspace has been used. Live and
+  // parked stay complete because they are bounded by a process count and by
+  // open tabs; the closed tail is the part that grows without limit.
+  const { requestHost } = requesterReturning(() => roster(2, 1, 12))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call({})
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-6')
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  expect(result.data.peers.map(peer => peer.name)).toEqual([
+    'L0',
+    'L1',
+    'P0',
+    'C0',
+    'C1',
+    'C2',
+    'C3',
+    'C4',
+  ])
+  expect(result.data.notListed).toBe(7)
+  const answer = JSON.parse(String(block.content)) as { note?: string }
+  expect(answer.note).toBe(
+    '7 sessions that closed earlier are not listed. Set all to true to see them.',
+  )
+})
+
+test('all returns the roster whole', async () => {
+  // The half that keeps the bound honest: a model that reads the note must be
+  // able to see every name, or a closed peer it can still wake by name would
+  // read as a peer that no longer exists.
+  const { requestHost, asked } = requesterReturning(() => roster(2, 1, 12))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call({ all: true })
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-7')
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  expect(result.data.peers).toHaveLength(15)
+  expect(result.data.peers.map(peer => peer.name)).toContain('C11')
+  expect(result.data.notListed).toBe(0)
+  // Widening is the TOOL's own choice about what to render. Main is asked the
+  // same question either way, so the verb keeps its empty args.
+  expect(asked).toEqual([{ verb: 'peers.list', args: {} }])
+  expect(JSON.parse(String(block.content))).not.toHaveProperty('note')
+})
+
+test('a roster small enough to fit says nothing about what was left out', async () => {
+  // CLAUDE.md §7: say only what is surprising. A "nothing was omitted" line
+  // would be paid for on every call in every workspace to report the ordinary
+  // case, which is the cost this change exists to remove.
+  const { requestHost } = requesterReturning(() => roster(1, 1, 3))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call({})
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-8')
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  expect(result.data.notListed).toBe(0)
+  const answer = JSON.parse(String(block.content)) as Record<string, unknown>
+  expect(Object.keys(answer)).toEqual(['asOf', 'peers'])
+})
+
+test('a single left-out session is counted in the singular', async () => {
+  const { requestHost } = requesterReturning(() => roster(0, 0, 6))
+  const tool = createListPeersTool(requestHost)
+
+  const result = await tool.call({})
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-9')
+
+  if (!result.data.ok) throw new Error('expected a roster')
+  expect(result.data.notListed).toBe(1)
+  expect(String(block.content)).toContain(
+    '1 session that closed earlier is not listed. Set all to true to see it.',
+  )
+})
+
+test('the bound drops rows and never reorders them', () => {
+  // Ordering is main's (`peerRequestPlane.ts:948`) and is deliberate. This
+  // helper must be a filter, so a roster arriving in an order this file did not
+  // predict still leaves in the order it arrived.
+  const rows: PeerView[] = [
+    { name: 'C0', status: 'closed', title: null, lastActivity: 'x' },
+    { name: 'L0', status: 'live', title: null, lastActivity: 'x' },
+    { name: 'C1', status: 'closed', title: null, lastActivity: 'x' },
+    { name: 'P0', status: 'parked', title: null, lastActivity: 'x' },
+    { name: 'C2', status: 'closed', title: null, lastActivity: 'x' },
+  ]
+
+  expect(boundClosedPeers(rows, 2)).toEqual({
+    peers: [rows[0]!, rows[1]!, rows[2]!, rows[3]!],
+    notListed: 1,
+  })
+  // Every live and parked row survives whatever the limit is.
+  expect(boundClosedPeers(rows, 0).peers.map(peer => peer.name)).toEqual([
+    'L0',
+    'P0',
+  ])
 })
