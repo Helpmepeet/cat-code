@@ -2133,8 +2133,9 @@ function derivePeerTarget(
       const prompt = str('prompt')
       return prompt === null ? null : `new session: ${peerTargetFragment(prompt)}`
     }
-    // `ListPeers` takes no arguments at all (`listPeersTool.ts` `strictObject({})`),
-    // so there is nothing here the tool's own name does not already say.
+    // `ListPeers` takes one optional `all`, which only widens how much of the
+    // roster is rendered, so there is nothing here the tool's own name does not
+    // already say.
     default:
       return null
   }
