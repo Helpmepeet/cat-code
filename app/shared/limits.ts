@@ -315,6 +315,13 @@ export const MAX_HOST_REQUEST_ARG_CHARS = 256
  * construction — which is exactly why the loop needs a bound: an unreachable
  * state that becomes reachable must degrade to a logged drop, not to a
  * permanent retry against a recipient that has already refused it twice.
+ *
+ * What one attempt MEANS changed when the ack moved to consumption
+ * (2026-09-04): a wake that ends unacked is now the ordinary shape of a process
+ * that died before its turn reached the message, not evidence of a rejection.
+ * So `handlePeerAck` clears the count on every ack the row sends, and this
+ * bounds wakes during which the row consumed NOTHING. The number stays 3
+ * because that is still the shape of a recipient that refuses everything.
  */
 export const MAX_PEER_DELIVERY_ATTEMPTS = 3
 

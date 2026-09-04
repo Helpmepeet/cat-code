@@ -647,7 +647,15 @@ export async function createSidecarSessionController({
         submitMessage(prompt, options) {
           return createProbeAdapter().runTurn({
             prompt,
-            options: { uuid: options?.uuid, isMeta: options?.isMeta },
+            // `onInputPersisted` rides through because callers act on it: the
+            // durable-acceptance latch and a peer message's consumption ack
+            // both wait for it. Dropping it here made the probe session look
+            // like an engine that never accepts anything.
+            options: {
+              uuid: options?.uuid,
+              isMeta: options?.isMeta,
+              onInputPersisted: options?.onInputPersisted,
+            },
             signal: new AbortController().signal,
             onPermissionRequest: async () => ({
               behavior: 'deny',

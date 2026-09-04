@@ -585,9 +585,13 @@ export type HistoryLoadEarlierMessage = {
  * The CLOSED verb allowlist (HR1). Three are the model-facing verbs of HRP §2;
  * `peer.ack` is the fourth and is not model-facing at all.
  *
- * `peer.ack` exists because HRP §4 step 6 rules "ack = enqueued" and makes main
- * hold a routed message until the recipient sidecar says it took it — but names
- * no transport for the ack itself. The two candidates were a new OUTBOUND frame
+ * `peer.ack` exists because HRP §4 step 6 makes main hold a routed message until
+ * the recipient sidecar says it took it — but names no transport for the ack
+ * itself. (Step 6's "ack = enqueued" was reruled to "ack = consumed" on
+ * 2026-09-04: an enqueue is not a hand-off, so acking there lost the message
+ * whenever the recipient died before its turn read it. The verb and its payload
+ * are unchanged; only the moment the sidecar sends it moved, which is why this
+ * needed no wire change at all.) The two candidates were a new OUTBOUND frame
  * kind (which §5's change list does not list, and which would put a third
  * app-owned kind on the wire for one boolean) and this: an existing frame, an
  * existing handler, one more entry in a list main already closes. It carries no

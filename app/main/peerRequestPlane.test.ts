@@ -1250,6 +1250,40 @@ describe('F5/F7/F9/F11 — smaller fixes', () => {
     expect(h.logged.at(-1)).toMatchObject({ outcome: 'refused:delivery_failed' })
   })
 
+  test('a row that is consuming peer messages is not expired by the redelivery bound', async () => {
+    // The bound was calibrated for an ack that arrived milliseconds after the
+    // forward, so a wake that ended unacked meant a rejection. With the ack at
+    // consumption, an unacked wake is the ordinary shape of a process that died
+    // before its turn reached the message — which is the case redelivery exists
+    // for — and charging it dropped messages nobody ever refused.
+    const h = harness()
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'the slow one' }),
+    )
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+
+    // Bear wakes again and again, consuming a message each time and dying before
+    // it reaches this one — more wakes than the bound allows.
+    for (let i = 0; i < MAX_PEER_DELIVERY_ATTEMPTS + 2; i++) {
+      h.plane.onSessionDown(BEAR)
+      h.plane.onReady(BEAR)
+      await h.plane.handleRequest(
+        ALEX,
+        request('peer.deliver', { to: 'Bear', text: `newer ${i}` }, `d-${i}`),
+      )
+      await h.plane.handleRequest(
+        BEAR,
+        request('peer.ack', { messageId: `msg-${i + 2}` }, `a-${i}`),
+      )
+    }
+
+    expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
+    expect(h.logged.some(line => line.outcome === 'refused:delivery_failed')).toBe(
+      false,
+    )
+  })
+
   test('a frame from another protocol version is refused', async () => {
     const h = harness()
     await h.plane.handleRequest(ALEX, {

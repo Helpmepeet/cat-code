@@ -18,7 +18,11 @@
  * name it.
  *
  * The `peer.ack` verb is the trigger because it is the one request a sidecar
- * emits without a model turn: routing it a `peer.deliver` makes it ack.
+ * emits without a model deciding to: routing it a `peer.deliver` makes the idle
+ * session start a turn for the message, and the ack follows the turn taking it.
+ * (It used to follow the enqueue, which needed no turn at all; the probe
+ * adapter answers `onInputPersisted` exactly as the real one does, so the
+ * consumption ack is reachable here without a credential.)
  *
  * Run: `bun test app/main/peerRequestPlane.probe.test.ts`
  */

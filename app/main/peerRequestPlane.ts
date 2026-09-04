@@ -454,6 +454,16 @@ type PendingMessage = {
    * counting the first. Bounded by `MAX_PEER_DELIVERY_ATTEMPTS` so a message the
    * recipient REJECTS rather than drops cannot be re-sent on every subsequent
    * ready forever, holding a pending slot for the life of the window.
+   *
+   * Reset to 1 by `handlePeerAck` on every ack this row sends. Since the ack
+   * moved to CONSUMPTION, a wake that ends with the message still unacked is no
+   * longer evidence of a rejection — it is the ordinary shape of a process that
+   * died before its turn reached the message, which is exactly the case
+   * redelivery exists for. Counting those would expire messages the recipient
+   * never refused. So the count now means "wakes in a row during which this row
+   * consumed NOTHING", and any consumption clears it; a row that consumes
+   * nothing across `MAX_PEER_DELIVERY_ATTEMPTS` wakes is the refusing recipient
+   * the bound was written for.
    */
   attempts: number
 }
@@ -907,9 +917,18 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   }
 
   /**
-   * §4 step 6 — main holds a forwarded message until the recipient acks that it
-   * reached the engine command queue. A recipient that exits with it unacked
-   * gets it again after its next `ready`.
+   * §4 step 6 (reruled 2026-09-04) — main holds a forwarded message until the
+   * recipient acks that the ENGINE CONSUMED it, not merely that it reached the
+   * command queue. A recipient that exits with it unacked gets it again after
+   * its next `ready`.
+   *
+   * The queue is not a hand-off point: it does not survive the process, its
+   * durable log rides an unflushed batch, and restore rebuilds only
+   * `mode:'prompt'` records. So acking at enqueue released main's only copy of a
+   * message that could still evaporate, while its sender had been told
+   * `queued_live`. Holding to consumption is what makes that answer true. The
+   * price is at-least-once delivery, and the recipient pays it by recognising a
+   * message id it has already consumed.
    */
   function hold(entry: PendingMessage): void {
     const list = pending.get(entry.toAppSessionId)
@@ -1297,6 +1316,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * forgets the message". So a delivered message writes its ONE line here, with
    * the outcome it was routed under; a refused one wrote its line at the refusal
    * and never reaches this path. Exactly one line per message, either way.
+   *
+   * The ack now arrives at consumption rather than at enqueue, so that line
+   * lands when the recipient's engine actually took the message. It is the same
+   * line about the same message; only its timing moved, and it moved onto the
+   * event the line was always meant to describe.
    */
   function handlePeerAck(
     sessionId: SessionId,
@@ -1315,9 +1339,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         messageId: entry.messageId,
         outcome: entry.outcome,
       })
+      // This row just consumed a peer message, so it is taking them rather than
+      // refusing them, and nothing else it holds has been rejected either. See
+      // `PendingMessage.attempts`: without this the delivery bound counts
+      // ordinary wakes and expires messages nobody refused.
+      for (const held of pending.get(sessionId) ?? []) held.attempts = 1
     }
-    // A second ack for a message already forgotten is the ordinary shape of a
-    // crash-window duplicate, not an error the caller can act on.
+    // A second ack for a message already forgotten is ordinary, not an error the
+    // caller can act on: a redelivery the recipient recognised as already
+    // consumed acks it again precisely so main stops holding it, and that ack
+    // arrives whether or not the first one did.
     return { ok: true, value: { messageId: request.messageId } }
   }
 
@@ -1495,6 +1526,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       // without a counter it is re-sent on every ready for the life of the
       // window while holding one of the fifty pending slots. Give up loudly
       // after a few tries rather than retrying something already refused.
+      //
+      // Since the ack moved to consumption, the counter is cleared by any ack
+      // this row sends (`handlePeerAck`), so what it counts is wakes during
+      // which the row consumed nothing at all. A recipient that is working
+      // through peer messages can be redelivered as often as it needs.
       if (entry.attempts >= MAX_PEER_DELIVERY_ATTEMPTS) {
         release(sessionId, entry.messageId)
         // The sender's id, same as every other line about this message.

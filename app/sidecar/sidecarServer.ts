@@ -498,6 +498,14 @@ let commandLifecycleOwner: SidecarServer | null = null
 const EMPTY_QUEUED_PROMPTS_KEY = JSON.stringify([])
 
 /**
+ * What `crypto.randomUUID` produces, and therefore what the engine's queue uuid
+ * type admits. Used only to decide whether main's peer message id can BE the
+ * queue uuid (`peerQueueUuid`); nothing is refused on it.
+ */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
  * Wires a controller to a connection-handling façade. The transport (Bun's
  * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
  * to `handleData`; this class owns framing, validation, and forwarding. Keeping
@@ -702,6 +710,30 @@ export class SidecarServer {
     { prompt: string; origin: MessageOrigin }
   >()
   /**
+   * Peer messages this process put on the engine queue and has not yet acked:
+   * engine queue uuid → main's `messageId`.
+   *
+   * Main holds its copy until the ack and the ack now goes at CONSUMPTION, so
+   * every entry is a message main is still responsible for. It dies with the
+   * process deliberately — that is exactly the set main must redeliver, and main
+   * already holds it. Bounded by `MAX_PENDING_PEER_MESSAGES`, which is what
+   * makes the reverse lookup below a scan rather than a third map.
+   */
+  private readonly unconsumedPeerMessages = new Map<string, string>()
+  /**
+   * Peer message ids this session has already consumed — the effectively-once
+   * half of at-least-once delivery.
+   *
+   * The duplicate this suppresses is the one a late ack buys: the model read the
+   * message, the process died before main heard the ack, and main redelivers
+   * after the next ready. So the recognition has to outlive the process, and the
+   * store that already does is the transcript — a consumed peer message persists
+   * as a peer-origin row keyed by the message id (`seedConsumedPeerMessages`).
+   * The dedupe state therefore lasts exactly as long as the row a duplicate
+   * would double: lose the row and the duplicate is no longer a duplicate.
+   */
+  private readonly consumedPeerMessages = new Set<string>()
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
    * the latch is rejected `session_disconnected` before `activeTurn` is touched,
@@ -761,6 +793,7 @@ export class SidecarServer {
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
+    this.seedConsumedPeerMessages()
     this.historySourceTruncated = options.historySourceTruncated ?? false
     this.projectHistory = options.projectHistory ?? null
     this.loadEarlierHistory =
@@ -1817,6 +1850,15 @@ export class SidecarServer {
     const started = this.startTurn({
       prompt: command.value,
       origin,
+      // A peer message keeps main's message id as its transcript identity, so
+      // the row this turn persists is the durable record of WHICH peer message
+      // was consumed — the same identity the busy path's `queued_command`
+      // attachment already carried, and the one `seedConsumedPeerMessages`
+      // reads back after a restart. Peer only: a worker result's transcript
+      // identity is nobody's dedupe key and is left as it was.
+      ...(origin.kind === 'peer' && command.uuid !== undefined
+        ? { uuid: command.uuid }
+        : {}),
       // HOST-REQUEST-PLANE §4 step 4 — `false` is right for a worker RESULT,
       // which is why this drain has always passed it, and wrong for a peer
       // message: a session created by a peer would otherwise carry the cwd
@@ -1830,6 +1872,14 @@ export class SidecarServer {
       onInputPersisted: () => {
         persisted = true
         releaseTaskNotificationReservation(reservationTaskId)
+        // The IDLE path's consumption point, and deliberately not the line
+        // above where `started` came back true. A turn that never reaches
+        // durable acceptance puts the command back on the queue below, so a
+        // message acked at `started` could still be sitting unconsumed with
+        // main's copy already gone. Past `onInputPersisted` the engine has taken
+        // and persisted the input, which is both the consumption main is
+        // waiting for and the transcript row the dedupe reads back.
+        if (origin.kind === 'peer') this.ackPeerConsumption(command.uuid)
       },
       onSettled: error => {
         if (!persisted) {
@@ -2128,6 +2178,97 @@ export class SidecarServer {
     if (!pending) return
     this.pendingPeerAnnouncements.delete(uuid)
     this.broadcastPromptMessage(pending.prompt, uuid, undefined, pending.origin)
+    // The BUSY path's consumption point. `notifyCommandLifecycle(uuid,
+    // 'started')` fires on the drain that takes the command INTO the running
+    // turn, immediately before `removeFromQueue` (`src/query.ts`), so past this
+    // line the message is the model's and nothing can put it back. That is what
+    // main's hold was waiting for; the idle path reaches the same conclusion
+    // through `onInputPersisted` instead, because `dequeue` fires no lifecycle
+    // signal.
+    this.ackPeerConsumption(uuid)
+  }
+
+  /**
+   * The consumption ack, and the dedupe record that makes redelivery safe.
+   *
+   * Ordering is load-bearing: the id joins `consumedPeerMessages` BEFORE the ack
+   * leaves, so a redelivery that crosses the ack in flight is still recognised.
+   * Idempotent — only a message this process is actually holding acks, so the
+   * two drain paths can both call it without racing to double-ack.
+   */
+  private ackPeerConsumption(queueUuid: string | undefined): void {
+    if (queueUuid === undefined) return
+    const messageId = this.unconsumedPeerMessages.get(queueUuid)
+    if (messageId === undefined) return
+    this.unconsumedPeerMessages.delete(queueUuid)
+    this.consumedPeerMessages.add(messageId)
+    this.sendPeerAck(messageId)
+  }
+
+  /** Is this message already on the queue, waiting for its consumption ack? */
+  private hasUnconsumedPeerMessage(messageId: string): boolean {
+    for (const held of this.unconsumedPeerMessages.values()) {
+      if (held === messageId) return true
+    }
+    return false
+  }
+
+  /**
+   * Main's message id, reused as the engine queue uuid: that is what makes the
+   * transcript row a durable record of WHICH peer message the model consumed
+   * (`seedConsumedPeerMessages`), with no store of its own.
+   *
+   * The shape is checked rather than assumed — main mints these with
+   * `crypto.randomUUID`, but on the wire the field is a plain bounded string. A
+   * malformed one gets a fresh uuid instead of a refusal: refusing the frame
+   * would lose the message, which is the exact failure this change exists to
+   * end, and all that goes with the fallback is the cross-restart half of the
+   * dedupe.
+   */
+  private peerQueueUuid(messageId: string): ReturnType<typeof randomUUID> {
+    return UUID_SHAPE.test(messageId)
+      ? (messageId as ReturnType<typeof randomUUID>)
+      : randomUUID()
+  }
+
+  /**
+   * Fire-and-forget by necessity: both callers are synchronous and the ack's
+   * result carries nothing either acts on. Never silent, though — a failed ack
+   * leaves main holding the message, which is now the correct outcome rather
+   * than a lost one: main redelivers after the next ready and the dedupe above
+   * turns that redelivery into a re-ack instead of a second row.
+   */
+  private sendPeerAck(messageId: string): void {
+    void this.requestHost('peer.ack', { messageId }).then(outcome => {
+      if (!outcome.ok) {
+        this.log(`[sidecar] peer message ack failed: ${outcome.error.code}`)
+      }
+    })
+  }
+
+  /**
+   * Rebuild "what has this session already consumed" from the restored
+   * transcript, at construction, before any connection can deliver anything.
+   *
+   * Both drain paths persist a consumed peer message as a peer-origin user row
+   * keyed by the queue uuid — the idle path writes one directly, and the busy
+   * path's `queued_command` attachment is projected back into one by
+   * `historyProjection.restorePeerMessageRow`. Since the queue uuid IS main's
+   * message id (`peerQueueUuid`), that row is already the durable record of
+   * consumption and needs no store of its own.
+   *
+   * What it cannot cover: a row compaction has dropped, and a consumption whose
+   * transcript write did not reach disk before the process died. Both degrade to
+   * one duplicate row, which is the direction §4 step 6 already accepts.
+   */
+  private seedConsumedPeerMessages(): void {
+    for (const message of this.history) {
+      if (message.type !== 'user') continue
+      if (message.origin?.kind !== 'peer') continue
+      if (typeof message.uuid === 'string') {
+        this.consumedPeerMessages.add(message.uuid)
+      }
+    }
   }
 
   /**
@@ -5306,10 +5447,19 @@ export class SidecarServer {
    * of the text — the same discriminant `toSDKMessageOriginProp` carries to the
    * renderer for every other injected turn.
    *
-   * Ack = ENQUEUED (§4 step 6). The ack goes back the moment the command is on
-   * the queue, because that is the point past which this process will deliver it
-   * or die trying; main holds the message until then and re-sends it after this
-   * row's next `ready` if the process exits first.
+   * Ack = CONSUMED, not enqueued (§4 step 6, reruled 2026-09-04). Acking at
+   * enqueue was acking a promise this process could not keep: main spliced its
+   * only copy out on that ack, the queue does not survive the process, and the
+   * durable queue log is no help either — a task-notification enqueue rides the
+   * ordinary batch with no flush (`src/utils/messageQueueManager.ts`) and
+   * restore accepts only `mode:'prompt'` (`sessionResume.selectUndeliveredPrompts`).
+   * So a recipient killed between the ack and the model reading the message lost
+   * it outright, while its sender had already been told `queued_live` — widest
+   * exactly when the recipient is BUSY, since a busy session does not drain
+   * until its next tool boundary. The ack now goes from the two consumption
+   * points instead (`announcePeerDelivery`, `drainOneTaskNotification`), which
+   * makes `queued_live` true rather than changing what it says. The cost is
+   * at-least-once delivery, paid for by the id recognition below.
    */
   private handlePeerDeliver(connection: Connection, message: unknown): void {
     // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
@@ -5342,6 +5492,25 @@ export class SidecarServer {
       return
     }
     const delivered = parsed.data
+    // At-least-once transport, effectively-once processing. A redelivery is
+    // ordinary now, not exceptional: main re-sends anything unacked after this
+    // row's next `ready`, and "unacked" covers a message the model already read
+    // whose ack died with the process. Recognising the id is what keeps that
+    // from showing the same message twice, and the re-ack is what finally
+    // releases main's copy — without it main would hold a consumed message until
+    // the delivery bound gave up on it.
+    if (this.consumedPeerMessages.has(delivered.messageId)) {
+      this.log('[sidecar] peer message already consumed: re-acking')
+      this.sendPeerAck(delivered.messageId)
+      return
+    }
+    // Already on THIS process's queue and not consumed yet. The ack it owes is
+    // still owed, so there is nothing to say to main; enqueuing a second copy
+    // would hand the model the same message twice inside one process.
+    if (this.hasUnconsumedPeerMessage(delivered.messageId)) {
+      this.log('[sidecar] peer message already queued: ignoring the duplicate')
+      return
+    }
     // `untagged` decides BOTH halves of "not framed as peer-sent" (§5): the
     // missing XML wrapper below, and the engine's own prose framing, which
     // `wrapCommandText` derives from the origin alone. Carrying it here rather
@@ -5362,8 +5531,16 @@ export class SidecarServer {
     // that is `notifyCommandLifecycle`, which it fires ONLY for a command that
     // carries a uuid (`src/query.ts:2010`). Without one, a message the model
     // received and acted on had no transcript row anywhere.
-    const uuid = randomUUID()
+    //
+    // It is main's `messageId` rather than a fresh one, and that identity is the
+    // whole dedupe store: the row this uuid ends up on — a real user entry on
+    // the idle path, a `queued_command` attachment projected back into one on
+    // the busy path — is what `seedConsumedPeerMessages` reads after a restart.
+    // Minting a second id here would leave the transcript unable to say WHICH
+    // peer message it recorded, and dedupe would need a store of its own.
+    const uuid = this.peerQueueUuid(delivered.messageId)
     this.pendingPeerAnnouncements.set(uuid, { prompt: value, origin })
+    this.unconsumedPeerMessages.set(uuid, delivered.messageId)
     enqueuePendingNotification({
       value,
       mode: 'task-notification',
@@ -5372,18 +5549,6 @@ export class SidecarServer {
       uuid,
       origin,
     })
-    // Enqueued: tell main it may forget the message. Fire-and-forget by
-    // necessity (this handler is synchronous, and the ack's own result carries
-    // nothing a caller acts on), but never silent — a failed ack is logged, and
-    // its only cost is one duplicate row after a restore, the crash window §4
-    // step 6 accepts.
-    void this.requestHost('peer.ack', { messageId: delivered.messageId }).then(
-      outcome => {
-        if (!outcome.ok) {
-          this.log(`[sidecar] peer message ack failed: ${outcome.error.code}`)
-        }
-      },
-    )
   }
 
   /**

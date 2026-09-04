@@ -94,6 +94,7 @@ import {
   type SidecarRemoteSettingsDomain,
 } from './remoteSettingsDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
+import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 import type {
   SidecarWorkspaceTrustDomain,
@@ -10002,19 +10003,43 @@ test('HR5 — a peer.deliver whose text exceeds the peer cap is rejected', () =>
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
-test('a delivered peer message is acked with a host.request, which is what lets main forget it', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
+test('a delivered peer message is acked only once the engine has CONSUMED it, not when it is queued', async () => {
+  // §4 step 6, reruled. Enqueuing is not a hand-off: the queue dies with the
+  // process, the durable queue log rides an unflushed batch, and restore rebuilds
+  // only `mode:'prompt'` records. Acking there released main's only copy of a
+  // message that could still evaporate, after the sender had been told
+  // `queued_live`.
+  let persist: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      await new Promise<void>(resolve => {
+        persist = () => {
+          options?.onInputPersisted?.()
+          resolve()
+        }
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
-  // Ack = ENQUEUED (§4 step 6): the command is on the queue BEFORE the ack goes
-  // out, so main can only forget a message this process has actually taken.
-  // Read synchronously — the idle boundary drain starts a turn for it on the
-  // next microtask, which is the delivery this ack is a promise of.
-  const queuedAtAckTime = getCommandQueueSnapshot().length
+  // The command is on the queue and the turn for it has started, and that is
+  // still not enough: nothing has taken the message yet, so main must still be
+  // holding it.
+  await waitFor(() => persist !== undefined)
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toBe(false)
 
-  await waitFor(() => received.some(f => f.kind === 'host.request'))
+  persist?.()
+
+  await waitFor(() =>
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  )
   const ack = received.find(f => f.kind === 'host.request')
   expect(ack).toMatchObject({
     kind: 'host.request',
@@ -10023,7 +10048,164 @@ test('a delivered peer message is acked with a host.request, which is what lets 
     verb: 'peer.ack',
     args: { messageId: 'm-1' },
   })
-  expect(queuedAtAckTime).toBe(1)
+})
+
+test('a process killed between delivery and consumption acks nothing, so main is still holding the message', async () => {
+  // The failure the rerule exists to end. The recipient is BUSY, so its running
+  // turn will not reach the message until its next tool boundary, and the
+  // process dies first. Under ack-at-enqueue main had already been told to
+  // forget it: the queue does not survive the process, the durable queue log
+  // rides an unflushed batch, and restore rebuilds only `mode:'prompt'`
+  // records, so the message existed nowhere while its sender held a
+  // `queued_live`.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // A human turn is running, so the peer message waits on the queue.
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'working' }),
+  )
+  await waitFor(() => release !== undefined)
+  received.length = 0
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+  await flush()
+
+  // The kill.
+  server.close()
+
+  expect(
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toBe(false)
+  release?.()
+})
+
+test('a redelivered message the session already consumed is not handed to the model twice, and is re-acked', async () => {
+  // At-least-once transport, effectively-once processing. Main re-sends anything
+  // unacked after the next ready, and an ack that died with its process leaves a
+  // consumed message looking exactly like an unconsumed one from where main
+  // stands. Recognising the id is what keeps the model from reading it twice;
+  // the second ack is what finally releases main's copy.
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  const server = makeServer(controller)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Busy, so the message waits for the running turn's next tool boundary and
+  // the idle drain cannot take it instead.
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'human-1', prompt: 'working' }),
+  )
+  await waitFor(() => release !== undefined)
+
+  const messageId = '5f0b3d1a-1111-4111-8111-000000000001'
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
+  const uuid = getCommandQueueSnapshot()[0]?.uuid
+  // The id main minted IS the queue uuid, which is what makes the transcript row
+  // this message ends up on a durable record of WHICH message was consumed.
+  expect(uuid).toBe(messageId)
+
+  // The busy path's consumption signal: the running turn takes the command.
+  notifyCommandLifecycle(messageId, 'started')
+  await waitFor(() =>
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  )
+  const acksAfterFirst = received.filter(
+    f => f.kind === 'host.request' && f.verb === 'peer.ack',
+  ).length
+  expect(acksAfterFirst).toBe(1)
+  expect(peerUserRows(received)).toHaveLength(1)
+
+  // Main redelivers, having never heard the ack.
+  resetCommandQueue()
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
+  await flush()
+
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(peerUserRows(received)).toHaveLength(1)
+  expect(
+    received.filter(f => f.kind === 'host.request' && f.verb === 'peer.ack')
+      .length,
+  ).toBe(2)
+  release?.()
+})
+
+test('a message still waiting on the queue is not enqueued a second time by a redelivery', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const messageId = '5f0b3d1a-1111-4111-8111-000000000002'
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
+
+  expect(getCommandQueueSnapshot()).toHaveLength(1)
+  // Nothing to say to main: the ack this message owes is still owed.
+  expect(
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toBe(false)
+})
+
+test('the dedupe survives a restart: a consumed message is recognised from the restored transcript', async () => {
+  // Where the dedupe state lives, and the reason it lives there. The duplicate
+  // this suppresses arrives after the process that consumed the message is gone,
+  // so an in-memory set would be empty exactly when it is needed. A consumed peer
+  // message persists as a peer-origin row keyed by the message id — written
+  // directly on the idle path, projected back out of the `queued_command`
+  // attachment on the busy path — so the transcript already IS the record.
+  const messageId = '5f0b3d1a-1111-4111-8111-000000000003'
+  const restoredRow = {
+    type: 'user',
+    uuid: messageId,
+    session_id: ENGINE_SESSION,
+    parent_tool_use_id: null,
+    origin: { kind: 'peer', name: 'Alex' },
+    message: { role: 'user', content: 'read on the previous run' },
+  } as unknown as SDKMessage
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    history: [restoredRow],
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  received.length = 0
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
+  await flush()
+
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  // Re-acked, so main stops holding it rather than retrying until the delivery
+  // bound gives up.
+  expect(
+    received.filter(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toHaveLength(1)
 })
 
 test('IDLE-PARK — a peer.deliver landing after the park latch is refused, so main keeps holding it', async () => {
