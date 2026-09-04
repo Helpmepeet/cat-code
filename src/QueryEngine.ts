@@ -562,7 +562,7 @@ export class QueryEngine {
         (msg.type === 'user' &&
           !msg.isMeta && // Skip synthetic caveat messages
           !msg.toolUseResult && // Skip tool results (they'll be acked from query)
-          messageSelector().selectableUserMessagesFilter(msg)) || // Skip non-user-authored messages (task notifications, etc.)
+          messageSelector().replayableUserMessagesFilter(msg)) || // Skip engine output wearing a user role (task notifications, teammate relays)
         (msg.type === 'system' && msg.subtype === 'compact_boundary'), // Always ack compact boundaries
     )
     const messagesToAck = replayUserMessages ? replayableMessages : []
@@ -688,7 +688,7 @@ export class QueryEngine {
     if (!shouldQuery) {
       // Return the results of local slash commands.
       // Use messagesFromUserInput (not replayableMessages) for command output
-      // because selectableUserMessagesFilter excludes local-command-stdout tags.
+      // because replayableUserMessagesFilter excludes local-command-stdout tags.
       for (const msg of messagesFromUserInput) {
         if (
           msg.type === 'user' &&
@@ -772,7 +772,7 @@ export class QueryEngine {
 
     if (fileHistoryEnabled() && persistSession) {
       messagesFromUserInput
-        .filter(messageSelector().selectableUserMessagesFilter)
+        .filter(messageSelector().replayableUserMessagesFilter)
         .forEach(message => {
           void fileHistoryMakeSnapshot(
             (updater: (prev: FileHistoryState) => FileHistoryState) => {
