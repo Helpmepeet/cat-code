@@ -31,6 +31,7 @@ import { getImplementorSystemPrompt } from '../tools/AgentTool/built-in/implemen
 import { normalizeToolInput, splitSysPromptPrefix, toolToAPISchema } from './api.js'
 import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
+  OPENAI_PROPERTY_RENAMES,
   renameOpenAIInputKeysToOriginal,
   renameSchemaPropertiesForOpenAI,
 } from './openaiSchemaCompat.js'
@@ -522,6 +523,21 @@ describe('provider and prompt regressions', () => {
     const claudePrompt = getImplementorSystemPrompt('firstParty')
     expect(claudePrompt).toContain('Use Edit and Write for code changes')
     expect(claudePrompt).not.toContain('Apply_patch')
+  })
+
+  test('Grep output_mode does not name properties the OpenAI export renames', () => {
+    const outputMode = GrepTool.inputSchema.shape.output_mode
+    const description = outputMode.description ?? ''
+
+    // OPENAI_PROPERTY_RENAMES maps -A/-B/-C/-n/-i to identifier-safe names on
+    // the OpenAI schema, so naming the dash form pointed at keys that model
+    // never sees. The per-property "(rg -A)" notes are semantics, not keys.
+    for (const dashKey of Object.keys(OPENAI_PROPERTY_RENAMES)) {
+      expect(description).not.toContain(dashKey)
+    }
+    expect(description).toContain(
+      'supports context lines, line numbers, head_limit',
+    )
   })
 
   test('--dump-system-prompt renders the tool-gated rules a session gets', async () => {
