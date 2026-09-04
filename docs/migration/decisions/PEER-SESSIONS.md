@@ -491,6 +491,18 @@ pages structured items with a summary view by default). Shape:
     outside it renders as before. This is deliberately not a serializer:
     `content`, `old_string` and `new_string` never render, so file bodies do
     not move between sessions. Tool RESULTS remain opt-in, unchanged.
+    🔁 AMENDED 2026-09-04 by a seam review: the allow-list covered neither tool
+    this workspace mostly runs. `Apply_patch` is the edit tool whenever the
+    provider is OpenAI, so the same "Found 0 of 0 with `status: ok`" survived
+    in the place it does most harm, and `NotebookEdit` and `SendToPeer` were
+    absent while two of the ten keys were folder names matching no tool at all.
+    So it is no longer strictly ONE field: `SendToPeer` renders `to` and
+    `text`, both model-authored input from the session being read, and
+    `Apply_patch` needs an EXTRACTOR rather than a field, because its input is
+    the whole patch envelope or a list of ops with nothing naming a target.
+    That extractor reads only the four real header prefixes, imported from the
+    tool's own constants, and returns paths alone. The rule the amendment above
+    states is unchanged and is what bounds it: file bodies do not move.
   - **Redaction runs before the target's length cap**, not after. Capping
     first can cut a value below its pattern's minimum length, so truncation
     would manufacture a surviving fragment out of a secret that would
