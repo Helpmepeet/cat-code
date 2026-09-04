@@ -1240,6 +1240,16 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
  * Embedded-search builds remove the dedicated Glob/Grep tools (see
  * `hasEmbeddedSearchTools`), so this section names the search surface that
  * actually exists rather than a tool the model cannot call.
+ *
+ * The section is unconditional, so it also reaches sessions that have a tool
+ * for reading another session, and its recipes reach the same bytes with none
+ * of that tool's checks: no resolution of which sessions the caller may read,
+ * no bound on output, no redaction, and no workspace scope, since the resolve
+ * recipe globs the whole projects directory. Rather than drop guidance whose
+ * real uses (session-id forensics, subagent logs) are unserved elsewhere, the
+ * text states those uses and defers to a tool where one exists. Which route a
+ * model takes is behaviour nobody here has measured; this removes an avoidable
+ * collision, it does not close a hole.
  */
 function getSessionTranscriptsSection(): string {
   const embedded = hasEmbeddedSearchTools()
@@ -1250,7 +1260,7 @@ function getSessionTranscriptsSection(): string {
     ? `Given a session id prefix, resolve the file with \`find\` via the ${BASH_TOOL_NAME} tool, scoped to the projects dir:
 
     find ~/.cat-code/projects -name '*9a993deb*.jsonl'`
-    : `Given a session id prefix, resolve the file with ${GLOB_TOOL_NAME} — pass the projects dir as the \`path\` argument, not the default cwd:
+    : `Given a session id prefix, resolve the file with ${GLOB_TOOL_NAME}, passing the projects dir as the \`path\` argument rather than the default cwd:
 
     ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"`
   const query = (pattern: string) =>
@@ -1258,7 +1268,11 @@ function getSessionTranscriptsSection(): string {
 
   return `## Reading session transcripts
 
-Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields — do NOT write a custom parser. The shape is stable.
+These files are the raw record of a session. They are here for two jobs: forensics on a session id you were given, and reading the logs of subagents you spawned.
+
+Two things follow from that. A session id names exactly one file, so resolve by id, and do not search the projects directory for sessions whose id you were not given. And when a tool exists for what you actually want, such as reading or messaging a session that is running right now, call that tool instead of opening files: it resolves which sessions you are allowed to read, bounds what comes back, and redacts what should not be repeated. Reading a file here does none of that and drops the whole raw record into your context.
+
+Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields, and do NOT write a custom parser. The shape is stable.
 
 Paths:
 

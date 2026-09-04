@@ -258,6 +258,49 @@ describe('mechanical prompt cleanup', () => {
   })
 })
 
+describe('session transcript guidance scope', () => {
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  const transcriptSection = async () => {
+    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+    const start = prompt.indexOf('## Reading session transcripts')
+    expect(start).toBeGreaterThan(-1)
+    return prompt.slice(start)
+  }
+
+  test('names what the raw files are for instead of offering them as a general way to read sessions', async () => {
+    // Desktop sessions carry a tool for reading another session, which resolves
+    // who the caller may read, bounds the output, and redacts. This section is
+    // in the same prompt and its recipes reach the same bytes with none of
+    // that, so it has to say what it is for and defer where a tool exists.
+    const section = await transcriptSection()
+
+    expect(section).toContain('forensics on a session id you were given')
+    expect(section).toContain('subagents you spawned')
+    expect(section).toContain('call that tool')
+  })
+
+  test('tells the model to resolve by id rather than to search for sessions it was not pointed at', async () => {
+    // The resolve recipe globs every workspace, so without this the shortest
+    // route to "what is that other session doing" is a glob over all of them.
+    const section = await transcriptSection()
+
+    expect(section).toContain('resolve by id')
+    expect(section).toContain('you were not given')
+  })
+
+  test('keeps the recipes the real uses need', async () => {
+    const section = await transcriptSection()
+
+    expect(section).toContain('~/.cat-code/projects/')
+    expect(section).toContain('subagents/agent-')
+    expect(section).toContain('.meta.json')
+    expect(section).toContain(`Grep '"tool_use_id":"'`)
+  })
+})
+
 describe('system prompt section cache keying', () => {
   const withCleanPromptEnv = async (run: () => Promise<void>) => {
     const saved = {
