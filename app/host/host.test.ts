@@ -10,12 +10,12 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-import { SessionRegistry } from './registry.js'
+import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
 import { Host, type CwdValidation } from './host.js'
 import type { SessionId } from '../shared/protocol.js'
@@ -2256,6 +2256,149 @@ test('every created session is named, the name reaches the spawn config, and a r
   if (!restored.ok) throw new Error(`restore failed: ${restored.error.code}`)
   expect(restored.value.name).toBe(name!)
   expect(h.supervisor.records.get(appSessionId)?.name).toBe(name!)
+})
+
+test('a launch renames the recently-active rows a build without the field stripped, and leaves the rest', async () => {
+  // The registry exactly as a build that predates `name` leaves it. `validateRow`
+  // is a closed whitelist, so such a build drops the field from every row it
+  // loads and writes the stripped document back at its own launch — one run of a
+  // stale packaged app un-names a fully named registry. These are `clean` rows
+  // with transcripts: the closed history rows `peersOf`
+  // (`app/main/peerRequestPlane.ts`) drops for having no name, which is what
+  // makes the loss permanent — a row nobody can list is a row nobody can wake,
+  // and only a spawn would have given it a name back.
+  //
+  // The repair is bounded by `NAME_REPAIR_WINDOW_MS` on `lastAttachedAt`, so this
+  // pins THREE outcomes, one per row shape below. The stale row is the one a
+  // future reader will read as a bug: it is not one. A registry stripped at 224
+  // rows would otherwise hand a model a 223-name roster, and the window trades
+  // the archive's addressability for one a model can actually read.
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'project')
+  mkdirSync(cwd, { recursive: true })
+  const registryPath = join(storageDir, 'registry.json')
+
+  const day = 24 * 60 * 60 * 1000
+  const now = Date.now()
+  // Ages straddle the window rather than sitting on it: a row one hour inside is
+  // as much a pass as one a minute inside, and a test that hugs the boundary
+  // fails on clock skew instead of on behaviour.
+  const rows = [
+    { id: randomUUID(), age: 1 * day, name: undefined },
+    { id: randomUUID(), age: NAME_REPAIR_WINDOW_MS - 6 * 60 * 60 * 1000, name: undefined },
+    { id: randomUUID(), age: NAME_REPAIR_WINDOW_MS + 3 * day, name: undefined },
+    // Named, and far outside the window: proves the write-once rule is about the
+    // field being present, not about the row being recent enough to touch.
+    { id: randomUUID(), age: 90 * day, name: 'Kept' },
+  ]
+  const [freshest, insideEdge, stale, alreadyNamed] = rows
+  const repaired = [freshest!.id, insideEdge!.id]
+  rows.forEach((_row, index) => writeTranscript(storageDir, `engine-strip-${index}`))
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify(
+      {
+        registryVersion: 1,
+        hostPid: process.pid,
+        updatedAt: now,
+        sessions: rows.map((row, index) => ({
+          appSessionId: row.id,
+          engineSessionId: `engine-strip-${index}`,
+          cwd,
+          forked: false,
+          createdAt: now - row.age,
+          lastAttachedAt: now - row.age,
+          lastMessageSentAt: null,
+          shutdown: 'clean',
+          ...(row.name === undefined ? {} : { name: row.name }),
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (candidate: string): CwdValidation =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+    launched: registry.launch(),
+  })
+
+  await settle(() =>
+    repaired.every(
+      id =>
+        host.listSessions().find(session => session.appSessionId === id)?.name != null,
+    ),
+  )
+  // The stale row is asserted as a NEGATIVE, so give the fill every chance to
+  // reach it first — otherwise this passes because the repair had not run yet.
+  await drain()
+
+  const named = new Map(
+    host.listSessions().map(session => [session.appSessionId, session.name]),
+  )
+  expect(named.size).toBe(rows.length)
+
+  // (1) Inside the window: repaired.
+  for (const id of repaired) {
+    expect(typeof named.get(id as SessionId)).toBe('string')
+    expect(named.get(id as SessionId)!.length).toBeGreaterThan(0)
+  }
+  // Uniqueness is the point of a name: the allocator must widen its reserved set
+  // as it goes, not hand the same pool entry to every row it repairs.
+  expect(new Set(repaired.map(id => named.get(id as SessionId))).size).toBe(
+    repaired.length,
+  )
+
+  // (2) Outside the window: left nameless, ON PURPOSE. This row is now outside
+  // the peer world for good — it cannot be listed, so it cannot be woken, so it
+  // never spawns and never earns a name later. It stays openable from history.
+  expect(named.get(stale!.id as SessionId)).toBeNull()
+
+  // (3) Already named: untouched regardless of age.
+  expect(named.get(alreadyNamed!.id as SessionId)).toBe('Kept')
+
+  // …and it reached DISK. The in-memory row is what the previous test asserted,
+  // and the in-memory row is exactly what survives a quit only if it is written.
+  const persisted = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    sessions: Array<{ appSessionId: string; name?: string }>
+  }
+  const onDisk = new Map(persisted.sessions.map(row => [row.appSessionId, row.name]))
+  for (const id of repaired) {
+    expect(onDisk.get(id)).toBe(named.get(id as SessionId)!)
+  }
+  expect(onDisk.get(stale!.id)).toBeUndefined()
+  expect(onDisk.get(alreadyNamed!.id)).toBe('Kept')
+
+  // Idempotent: a second launch over the repaired file renames nothing, and does
+  // not reconsider the stale row either — the window is not a retry schedule.
+  const relaunched = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  const second = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry: relaunched,
+    validateCwd: (candidate: string): CwdValidation =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+    launched: relaunched.launch(),
+  })
+  await settle(() => second.listSessions().length === rows.length)
+  await drain()
+  for (const session of second.listSessions()) {
+    expect(session.name).toBe(named.get(session.appSessionId)!)
+  }
 })
 
 test('allocation consults the names on registry rows, not just the cursor', async () => {

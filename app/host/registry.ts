@@ -72,6 +72,32 @@ export const REGISTRY_VERSION = 1 as const
 export const MAX_REGISTRY_SESSIONS = 256
 
 /**
+ * How far back `fillMissingNames` reaches when it repairs rows that lost their
+ * `name` (PEER-SESSIONS §2). Measured by `lastAttachedAt` — the same field
+ * `enforceBound` reaps on, so "recent" means one thing in this file.
+ *
+ * This bounds a REPAIR, not the naming rule. Rows written from here on are named
+ * at spawn by `upsertOnSpawn`, and names are write-once, so the named set only
+ * grows; the window exists solely because one launch of a build predating the
+ * field can strip a whole registry at once, and the repair that follows should
+ * not hand a model back the entire archive.
+ *
+ * Sized at 7 days off the operator's real registry (2026-09-04, 224 rows, 223 of
+ * them stripped): 1 day covers 15 rows, 3 days 35, 7 days 56, 14 days 118, 30
+ * days 199. Seven days is the last step where the addressable roster stays
+ * something a model can read in a `ListPeers` result rather than a wall of
+ * history.
+ *
+ * The cost is accepted, not overlooked: a stripped row OLDER than this stays
+ * nameless forever. `peersOf` (`app/main/peerRequestPlane.ts:521`) drops rows
+ * without a name, so such a row can never be listed, therefore never woken,
+ * therefore never spawned, therefore never named on the spawn path. That is the
+ * intended trade — those rows remain openable from history by hand, they are
+ * simply not peers.
+ */
+export const NAME_REPAIR_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
  * How a session ended, from the host's point of view (§3).
  *
  * `'parked'` is the IDLE-PARK (decisions/IDLE-PARK.md §2/§8) in-memory-only
@@ -121,9 +147,12 @@ export type RegistrySession = {
   /**
    * [D] The session's peer NAME (PEER-SESSIONS §2) — short, pool-allocated, and
    * unique across the registry, so a model can address "Bear" instead of a UUID.
-   * Absent only on a row written before the field existed AND never re-spawned
-   * since: the spawn path allocates one when it is missing, so every LIVE row
-   * has a name and an unnamed row is always a never-restored history row.
+   * Every LIVE row has one: the spawn path allocates when it is missing.
+   *
+   * Absent on a row that lost the field to a build predating it (`validateRow`
+   * is a closed whitelist) and was last attached longer ago than
+   * `NAME_REPAIR_WINDOW_MS`, which is where the launch repair stops. Such a row
+   * keeps no name for the rest of its life — deliberately: see the constant.
    *
    * NOT the title: `title` is display text the user or the engine may rewrite at
    * any time (`titleUpdatedAt` above), while the name is minted once and only
@@ -792,6 +821,51 @@ export class SessionRegistry {
   }
 
   /**
+   * Give every RECENTLY-ACTIVE row that has no `name` one, in a SINGLE persist
+   * (PEER-SESSIONS §2 — "every session is named"). Recent = attached within
+   * `NAME_REPAIR_WINDOW_MS`. Returns the ids it named; when there is nothing to
+   * name it writes nothing.
+   *
+   * WRITE-ONCE, exactly like the `name` handling in `upsertOnSpawn`: a row that
+   * already carries a name is never renamed — at any age — so this is safe to
+   * run at every launch. `allocate` is the HOST's picker, because allocation
+   * policy belongs to the one process that sees every row (§2). It is called
+   * once per row and AFTER the previous name is already on `this.doc`, so a
+   * picker that reserves against the current rows widens its reserved set with
+   * each assignment and cannot hand out a duplicate.
+   *
+   * Why a launch-time fill and not the next spawn (`upsertOnSpawn`): §2 assumed
+   * an unnamed row is "a never-restored history row that cannot be a caller",
+   * but a nameless row cannot be reached at all. `peersOf`
+   * (`app/main/peerRequestPlane.ts:521`) drops rows without a name, so a closed
+   * row cannot be listed, therefore cannot be woken, therefore never spawns
+   * again — the only exit from namelessness is a door namelessness closes. And
+   * `validateRow` below is a closed whitelist, so ANY build that predates a
+   * field silently drops it from every row it loads and writes back: one launch
+   * of a stale packaged app un-names the whole registry. This write repairs
+   * both, and repairs them again after the next such launch.
+   *
+   * That same reasoning is why the window is a REPAIR bound and not a rule about
+   * naming: it can only ever leave rows unnamed, never un-name one, and rows
+   * created from here on are named at spawn regardless of it. A row it skips is
+   * out of the peer world permanently, by the deliberate choice recorded on the
+   * constant — not because a later pass will get to it.
+   */
+  async fillMissingNames(allocate: () => string): Promise<string[]> {
+    const cutoff = Date.now() - NAME_REPAIR_WINDOW_MS
+    const named: string[] = []
+    for (const row of this.doc.sessions) {
+      if (row.name !== undefined) continue
+      if (row.lastAttachedAt < cutoff) continue
+      row.name = allocate()
+      named.push(row.appSessionId)
+    }
+    if (named.length === 0) return named
+    await this.persist()
+    return named
+  }
+
+  /**
    * Refresh only the advisory runtime hints for a live row (F4): the child's
    * pid + socketPath once the spawn returned. Never touches `restartCount`,
    * `lastAttachedAt`, or shutdown state — those belong to the §4.5 write
@@ -1364,7 +1438,13 @@ function validateRow(candidate: unknown): RegistrySession | null {
   }
   if (typeof candidate.title === 'string') row.title = candidate.title
   // PEER-SESSIONS §2 — additive migration, the `forked` treatment: a row written
-  // before peer names existed simply has none, and the next spawn allocates one.
+  // before peer names existed simply has none, and `fillMissingNames` gives it
+  // one at the next launch — if it was attached inside `NAME_REPAIR_WINDOW_MS`;
+  // older rows deliberately stay nameless. NOTE this reconstruction is a closed
+  // WHITELIST in both directions: a build that predates a field drops it from every row it
+  // loads and writes the stripped row back, so a field added here is not durable
+  // against an older binary the user can still launch. That is why the name fill
+  // runs at every launch and not only on a row's next spawn.
   if (typeof candidate.name === 'string') row.name = candidate.name
   if (typeof candidate.createdBy === 'string') row.createdBy = candidate.createdBy
   // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a

@@ -215,7 +215,11 @@ export class Host implements HostApi {
     // Never reject the gate — a failed launch already logged and started empty;
     // ops proceed against the in-memory doc (the registry is an index, not a
     // backup). We only need the sweep's read-modify-write to have SETTLED first.
-    this.launched = (options.launched ?? Promise.resolve()).catch(() => undefined)
+    // The name repair joins the gate rather than following it: every op already
+    // awaits this, so no caller can read a row mid-repair and cache it nameless.
+    this.launched = (options.launched ?? Promise.resolve())
+      .then(() => this.nameUnnamedRows())
+      .catch(() => undefined)
     this.wireSupervisor()
   }
 
@@ -553,10 +557,14 @@ export class Host implements HostApi {
     const title = input.title ?? undefined
 
     // PEER-SESSIONS §2 — every session is named, user-created and agent-created
-    // alike, and a row that predates the field gains its name HERE, on its next
-    // spawn, create or restore. Reuse the row's own name when it has one: the
-    // upsert below is write-once for the field, but allocating a second name we
-    // then discard would burn a pool entry on every restore.
+    // alike. A row that has none by the time it is spawned gains one here; a
+    // recently-active row that was never spawned again gained one at launch
+    // (`nameUnnamedRows`), which is what keeps a closed row addressable at all.
+    // This path is what makes the launch repair a one-time thing rather than an
+    // ongoing rule: every row created from here on arrives named. Reuse the row's
+    // name when it has one: the upsert below is write-once for the field, but
+    // allocating a second name we then discard would burn a pool entry on every
+    // restore.
     const existingName = this.registry.findSession(appSessionId)?.name
     const name = existingName ?? this.allocatePeerName()
     const createdByName = this.creatorNameFor(input.createdBy)
@@ -676,6 +684,38 @@ export class Host implements HostApi {
     const picked = pickPeerName(reserved, this.peerNameCursor)
     this.peerNameCursor = picked.nextCursor
     return picked.name
+  }
+
+  /**
+   * Repair rows that lost their name, once the launch sweep has settled and
+   * before any op can read the rows (PEER-SESSIONS §2 — every session is
+   * named). Idempotent: a row that already has a name is never renamed, so this
+   * is a no-op on a registry the previous launch already repaired.
+   *
+   * It is not only a migration for rows that predate the field. `validateRow`
+   * is a closed whitelist, so a build that predates `name` drops it from every
+   * row it loads and writes the stripped document back at ITS launch — one run
+   * of a stale packaged app leaves a fully-named registry with no names at all,
+   * and nothing else ever puts them back: `upsertOnSpawn` only fills a name on
+   * a row being spawned, and a nameless row is invisible to the peer tools that
+   * would spawn it.
+   *
+   * Deliberately NOT every such row: the fill stops at `NAME_REPAIR_WINDOW_MS`
+   * of `lastAttachedAt`, so a stale-build launch resurrects a readable roster
+   * rather than the whole archive. Rows past the window keep no name for good;
+   * the reasoning, and its cost, are on the constant. Nothing downstream needs
+   * changing for that — every reader already tolerates a nameless row, because
+   * that is the state this method is repairing.
+   */
+  private async nameUnnamedRows(): Promise<void> {
+    const named = await this.registry.fillMissingNames(() =>
+      this.allocatePeerName(),
+    )
+    if (named.length > 0) {
+      this.log(
+        `[host] named ${named.length} recently-active registry row(s) that had none`,
+      )
+    }
   }
 
   /* --------------------------------------------------------------------- *
