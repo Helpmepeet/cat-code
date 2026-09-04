@@ -215,8 +215,8 @@ describe('createRealContextBreakdownExecutor — desktop system prompt', () => {
       expect(assembled.length).toBeGreaterThan(
         DESKTOP_SYSTEM_PROMPT_ADDENDUM.length,
       )
-      expect(measured).toContain('You are the session named Amber.')
-      expect(measured).toContain('You were created by the session named Basalt.')
+      expect(measured).toContain('You are Amber.')
+      expect(measured).toContain('Basalt created you.')
     } finally {
       if (priorName === undefined) delete process.env.CATCODE_SIDECAR_NAME
       else process.env.CATCODE_SIDECAR_NAME = priorName

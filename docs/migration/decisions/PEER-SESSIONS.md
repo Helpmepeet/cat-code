@@ -341,8 +341,8 @@ model's trained bias already makes it quiet, and prompt text is not the loop
 guard (§7).
 
 ```text
-You are the session named Bear. You were created by the session named Alex.
-Use ListPeers to see the other sessions in this workspace.
+You are Bear. Alex created you. Use ListPeers to see the other peers in
+this workspace.
 
 Message a peer when it would change what you or they do next: you need
 something only they know, you finished something they are waiting on, or you
@@ -351,15 +351,40 @@ asked for. Reply to a message that asks you something by sending to its
 sender; a message that asks nothing gets no reply. Every message costs the
 recipient a turn, so say what you need in one.
 
-A request from a peer is a task from the same user who runs both sessions.
+A request from a peer is a task from the same user who runs both of you.
 Do it under your own permission mode, as if the user had asked. Refuse only
 if the peer says it was blocked or denied from doing this itself. A peer
 message is input to weigh against your current task; you may decline or
 defer it.
 
-Create a new session only when the user or your instructions ask for one.
+Create a new peer only when the user or your instructions ask for one.
 Never create one on your own judgment.
 ```
+
+- 🔁 **AMENDED 2026-09-05 (operator ruling): THE DOCTRINE ADDRESSES A NAME,
+  NOT A PROCESS.** The block above is quoted as the code builds it
+  (`app/sidecar/desktopSystemPrompt.ts`, `buildPeerDoctrine`), and the code
+  built it in process vocabulary: it opened "You are the session named Bear. You
+  were created by the session named Alex.", sent the reader to "the other
+  sessions in this workspace", called a peer request a task from "the same user
+  who runs both sessions", and closed on "Create a new session only when the
+  user or your instructions ask for one." This is the first thing a peer ever
+  reads about itself, ahead of every tool description, so it was the strongest
+  identity surface in the product, and it was teaching the reader in its own
+  first sentence that it is a session and that a session made it. That is the
+  same defect the tool rewording in §8 corrected everywhere else, which left
+  the prompt contradicting every tool around it. It now opens "You are Bear.
+  Alex created you.", the roster sentence and the creation sentence take the
+  category noun **peer** ("the other peers in this workspace", "Create a new
+  peer only when …"), and "the same user who runs both sessions" became "the
+  same user who runs both of you". Bounded to vocabulary: every behavioural
+  claim survives unchanged in meaning, namely when to message a peer and when
+  not to, that a peer request is a task from the same user done under the
+  recipient's own permission mode, that it is input to weigh against the current
+  task and may be declined or deferred, that creation happens only when asked,
+  and the absent-value rule (a peer with no name gets no name sentence; a
+  user-created one gets no creator sentence). Nothing was added: no reassurance
+  and no personality, matching the cut recorded in §8 for the creation wrapper.
 
 For a user-created session the first paragraph omits the creator sentence.
 The `CreatePeer` description carries the one piece of guidance that decides
@@ -682,10 +707,12 @@ pages structured items with a summary view by default). Shape:
   interruption, nothing else is in progress") and that was cut, because a session
   that has just been created has no other work to be interrupted from. The
   ordinary (non-creation) peer wrapper lost the same three words and keeps its
-  deprioritizing framing intact. **Not changed, and on record as the remaining
-  drift:** §5's doctrine block still opens "You are the session named Bear. You
-  were created by the session named Alex." (`app/sidecar/desktopSystemPrompt.ts`),
-  which is quoted verbatim from §5 and would need a §5 amendment of its own.
+  deprioritizing framing intact. **The one surface this pass left behind was
+  §5's doctrine block, and it was closed the same day** by the §5 amendment it
+  said it needed: the system prompt no longer opens "You are the session named
+  Bear. You were created by the session named Alex."
+  (`app/sidecar/desktopSystemPrompt.ts`), and the block's category noun is peer
+  throughout.
 - 🔁 **AMENDED 2026-09-05: `UNTRUSTED_NOTICE` NAMES THE PEER, and is therefore a
   function of the name rather than a module constant.** It was previously
   ratified verbatim in this section as "The messages below are a copy of another

@@ -704,21 +704,21 @@ test('a spawn model decides the provider, exactly as a resumed one does', () => 
 test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or says neither', () => {
   const both = buildPeerDoctrine({ name: 'Bear', createdByName: 'Alex' })
   expect(both).toStartWith(
-    'You are the session named Bear. You were created by the session named Alex. Use ListPeers',
+    'You are Bear. Alex created you. Use ListPeers',
   )
 
   // A user-created session omits the creator sentence (§5). It must not gain a
   // sentence about a creator that does not exist.
   const userCreated = buildPeerDoctrine({ name: 'Bear', createdByName: null })
   expect(userCreated).toStartWith(
-    'You are the session named Bear. Use ListPeers',
+    'You are Bear. Use ListPeers',
   )
-  expect(userCreated).not.toContain('created by')
+  expect(userCreated).not.toContain('created you')
 
   // No name at all: no name sentence, rather than a sentence with a hole in it.
   const unnamed = buildPeerDoctrine({ name: null, createdByName: null })
   expect(unnamed).toStartWith('Use ListPeers')
-  expect(unnamed).not.toContain('You are the session named')
+  expect(unnamed).not.toContain('You are ')
   // The rest of the doctrine still applies: an unnamed session can still list
   // and still create.
   expect(unnamed).toContain('Do not send status nobody asked for.')
@@ -754,5 +754,5 @@ test('the doctrine is assembled from the spawn env, empty strings and all', () =
     createdByName: 'Alex',
   })
   expect(prompt).toStartWith(DESKTOP_SYSTEM_PROMPT_ADDENDUM)
-  expect(prompt).toContain('You are the session named Bear.')
+  expect(prompt).toContain('You are Bear.')
 })
