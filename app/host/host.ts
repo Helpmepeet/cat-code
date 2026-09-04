@@ -402,6 +402,29 @@ export class Host implements HostApi {
         `no restorable session ${appSessionId}`,
       )
     }
+    // Read the supervisor record ONCE, before the refusals that consult it: the
+    // stranded-transport test below has to win over the advisory-pid test, which
+    // fires for exactly the same row (a disconnected sidecar is still running,
+    // so its pid, socket file and command marker all still match) and would
+    // answer `session_not_found` again.
+    const record = this.supervisor
+      .listSessions()
+      .find(s => s.sessionId === appSessionId)
+
+    // A SETTLED `disconnected` record is a dead end this path cannot clear.
+    // `reportSocketLoss` (`app/supervisor/supervisor.ts`) never schedules a
+    // reconnect, so the only exits are a kill or an explicit restart in place —
+    // both user-driven. Reporting it as not-found told the peer plane to wait
+    // for a ready that can never arrive, which burned the whole wake timeout and
+    // held one of the recipient's delivery slots for its duration before failing
+    // anyway. The distinct code stops the wait; the row is still recoverable by
+    // the user, which is why nothing here kills the stranded child.
+    if (record?.status === 'disconnected') {
+      return hostError(
+        'session_unreachable',
+        'this session lost its connection and can only be restarted in place',
+      )
+    }
     // §9-A4 (SF6) — re-check resumability NOW, not just at launch: the transcript
     // may have been pruned between launch and this restore, or a prior attempt
     // this run may already have proven the id unloadable. Never offer a restore
@@ -422,10 +445,9 @@ export class Host implements HostApi {
     // record ('exited'/'failed') is a dead sidecar's tombstone — kept so the
     // tab's restart-in-place works — and is exactly the crashed restore-offer
     // case: deregister it below so the re-spawn can reuse the appSessionId
-    // (spawnSession rejects a duplicate id).
-    const record = this.supervisor
-      .listSessions()
-      .find(s => s.sessionId === appSessionId)
+    // (spawnSession rejects a duplicate id). `disconnected` was already answered
+    // above; what reaches here is `spawning`/`connecting`/`ready`, where waiting
+    // for the row's next ready IS the right advice.
     if (record && !isTerminalStatus(record.status)) {
       return hostError(
         'session_not_found',
@@ -739,7 +761,25 @@ export class Host implements HostApi {
     this.surfaceRegistryHealth(appSessionId)
     // The row menu renders from the descriptor, so the toggle must publish its
     // new state rather than leave the menu showing what the user just changed.
+    // Published even when the write below failed, because the in-memory doc IS
+    // the effective state for this run: the block is really on, it just will not
+    // survive a relaunch, and a menu showing the old value would be wrong twice.
     this.emitStatus(appSessionId)
+    // The degrade-not-die posture (§6.1, the file header) is about LIVENESS: a
+    // session must outlive a persistence failure, so `createSession` and
+    // `restartSession` report ok after a failed write and are left alone. This
+    // control has no liveness to protect. Durability is the entire promise the
+    // interface makes for it ("survives close, park, restore and relaunch"), and
+    // `persist()` swallows all five of its failure modes, so an unwritable file
+    // turned the one control the user has over peer wake into a toggle that
+    // reported success and was gone at the next launch. Reported, not reverted:
+    // rolling the row back would make the control do nothing THIS run either.
+    if (this.registry.lastWriteFailed) {
+      return hostError(
+        'registry_unavailable',
+        'this change could not be saved, so it will not survive a restart',
+      )
+    }
     return { ok: true, value: undefined }
   }
 

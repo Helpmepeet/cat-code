@@ -203,6 +203,19 @@ export type HostErrorCode =
   | 'spawn_failed'
   /** Registry file unwritable — sessions still work, persistence degrades. */
   | 'registry_unavailable'
+  /**
+   * The row exists and the caller may name it, but no restore can reach it.
+   *
+   * Deliberately NOT `session_not_found`, and that separation is the whole
+   * point of the code. A caller that cannot restore a session has to know
+   * whether waiting would help: `session_not_found` covers both an id nobody
+   * holds AND a row whose spawn is already in flight, so the peer plane reads
+   * it as "already restoring, wait for ready" and sits through the full wake
+   * timeout. For a settled `disconnected` process that readiness never comes:
+   * nothing reconnects a lost socket, and only a user-driven restart in place
+   * clears the state. One code that means "stop waiting, this one is stuck".
+   */
+  | 'session_unreachable'
 
 /** A typed host failure — never a bare thrown string (REGISTRY.md §6.1). */
 export type HostError = {

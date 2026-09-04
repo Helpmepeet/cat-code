@@ -366,13 +366,22 @@ test('reap drops a clean row that never acquired an engineSessionId (§9-A5)', a
   expect(logs.some(l => l.includes('never acquired content'))).toBe(true)
 })
 
-test('a crashed row with null engineSessionId is KEPT (only clean+null is reaped)', async () => {
+test('a crashed row that never acquired an engineSessionId is reaped, not kept forever', async () => {
+  // A session whose process died before its first ready frame leaves this row:
+  // named, crashed, and holding an address for content that was never written.
+  // It has no transcript, so `hasTranscript` is false, so the host's
+  // `isRestorable` refuses it and it reaches NO surface — not the sidebar, not
+  // the palette, not the peer roster — while every open path refuses it too.
+  // The old rule reaped only `clean` + null, so this shape accumulated for the
+  // life of the file: 13 of them in the operator's registry on 2026-09-04.
   const storageDir = tempDir()
   const registryPath = join(storageDir, 'registry.json')
+  writeTranscript(storageDir, 'engine-real')
 
-  // shutdown: null + enginePid gone → sweep marks it crashed; null engineSessionId
-  // must NOT then reap it (only shutdown:"clean" + null is the §9-A5 rule).
+  // shutdown: null + enginePid gone → the sweep marks it crashed first, which is
+  // the state that used to survive the reap.
   seed(registryPath, [
+    baseRow({ appSessionId: 'app-real', engineSessionId: 'engine-real', shutdown: 'clean' }),
     baseRow({
       appSessionId: 'app-crashed-empty',
       engineSessionId: null,
@@ -380,14 +389,28 @@ test('a crashed row with null engineSessionId is KEPT (only clean+null is reaped
       enginePid: 2,
       socketPath: join(storageDir, 'gone.sock'),
     }),
+    // A park before the first turn is the same dead end by a different route.
+    // It arrives here as `crashed`: reading a `parked` row at launch means the
+    // app died while it was parked, which `normalizeShutdown` calls a crash.
+    baseRow({
+      appSessionId: 'app-parked-empty',
+      engineSessionId: null,
+      shutdown: 'parked',
+    }),
   ])
 
-  const { registry } = makeRegistry({ storageDir, isProcessAlive: () => false })
+  const { registry, logs } = makeRegistry({ storageDir, isProcessAlive: () => false })
   const restorable = await registry.launch()
 
-  const row = restorable.find(r => r.appSessionId === 'app-crashed-empty')
-  expect(row).toBeDefined()
-  expect(row!.shutdown).toBe('crashed')
+  expect(restorable.map(r => r.appSessionId)).toEqual(['app-real'])
+  expect(
+    logs.filter(l => l.includes('row with no engineSessionId')).length,
+  ).toBe(2)
+  // …and it is gone from the FILE, not just from this run's memory.
+  const persisted = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    sessions: { appSessionId: string }[]
+  }
+  expect(persisted.sessions.map(r => r.appSessionId)).toEqual(['app-real'])
 })
 
 test('reap enforces MAX_REGISTRY_SESSIONS, dropping oldest terminal rows first', async () => {
@@ -925,6 +948,10 @@ test('titleUpdatedAt stamps on a real title change and NOT on a restore replay',
 test('a fresh row created WITH a title stamps titleUpdatedAt, and it survives a reload', async () => {
   const { registry, registryPath, storageDir } = makeRegistry()
   await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', title: 'Seeded at open' })
+  // The row has to reach the reload with content behind it: a row that never
+  // acquired an engineSessionId is reaped at launch whatever its title says.
+  await registry.fillEngineSessionId('app-1', 'engine-1')
+  writeTranscript(storageDir, 'engine-1')
   const stamped = readDoc(registryPath).sessions[0]!.titleUpdatedAt
   expect(typeof stamped).toBe('number')
 

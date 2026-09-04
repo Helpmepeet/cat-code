@@ -112,9 +112,11 @@ live at once is `MAX_LIVE_SESSIONS = 32` (`app/shared/hostApi.ts`) — see HC4 i
 
 **Raised 32 → 256 on 2026-07-26 (operator ruling).** The original 32 was justified by A5
 accretion hygiene (§9), but A5 is already handled independently by the immediate reap of
-`shutdown:"clean"` rows that never acquired an `engineSessionId` — a row that never ran a turn
-dies on its own, whatever the bound is. The number was also sized when the registry was the ONLY
-session list; post-`SESSIONS-UNIFICATION.md` the engine's transcript history is unlimited and this
+TERMINAL rows that never acquired an `engineSessionId` — a row that never ran a turn
+dies on its own, whatever the bound is. (That reap read `shutdown:"clean"` until 2026-09-04, so
+the crashed half of the same shape accumulated instead: 13 of them in the operator's file, each
+invisible on every surface and refused by every open path. See §4, step 3.)
+The number was also sized when the registry was the ONLY session list; post-`SESSIONS-UNIFICATION.md` the engine's transcript history is unlimited and this
 file is just the open+restorable layer over it.
 
 At 32 the bound was actively destructive. Opening a session from history mints a registry row, so
@@ -159,7 +161,13 @@ On host construction (every launch, before any spawn):
    is **kill it** (SIGTERM; die-with-window, D6 §2) — v2 flips this branch to attach. Dead or
    recycled-PID → nothing to do. Either way the row becomes `shutdown: "crashed"`. Best-effort
    unlink of its stale `socketPath`.
-3. **Reap**: drop rows over the bound and rows whose transcript is gone (§3).
+3. **Reap**: drop rows over the bound, rows whose transcript is gone (§3), and TERMINAL rows that
+   never acquired an `engineSessionId` at all. That last rule covered only `shutdown:"clean"`
+   until 2026-09-04; the crashed half of the same shape — a process that died before its first
+   ready frame — was kept forever instead, though it has no transcript, so `canResume` refuses
+   it, so it reaches no surface and no open path will take it. Keeping a row for a failure the
+   operator can SEE (HOST-REQUEST-PLANE §2) is a within-run rule; by the next launch there is no
+   tab left to dangle.
 4. **Offer restore** (UI policy, Phase-3 shell): rows by `lastAttachedAt`, `crashed` flagged.
    Accepting a row = `spawnSession(appSessionId)` on the existing supervisor
    (`app/supervisor/supervisor.ts:128` — it already accepts a caller-supplied id) **plus** the
@@ -240,7 +248,22 @@ type HostErrorCode =
   | 'session_limit'        // MAX_LIVE_SESSIONS or spawn rate cap hit (HC4)
   | 'spawn_failed'         // sidecar process failed to start / never sent ready
   | 'registry_unavailable' // registry file unwritable — sessions still work, persistence doesn't
+  | 'session_unreachable'  // row exists, no restore can reach it (added 2026-09-04)
 ```
+
+`session_unreachable` is the one refusal a caller must not read as "wait and retry". A session
+settled on a lost socket is never reconnected, so restore refuses it, and answering
+`session_not_found` put that refusal in the same bucket as a spawn genuinely in flight — which the
+peer plane waits out for the full wake timeout, holding one of the recipient's delivery slots, before
+failing anyway. The row is still recoverable by the user restarting it in place; restore does not do
+that for them, because killing a possibly-mid-turn engine is not a decision a peer's message makes.
+
+`registry_unavailable` is returned, not only logged, by `setPeerWakeBlocked` (2026-09-04). The
+degrade-not-die posture below is about LIVENESS: a session must outlive a failed write, so the spawn
+paths still report success. That control has no liveness to protect and durability is its entire
+promise, so a swallowed write made it a toggle that reported success and was gone at the next launch.
+The row is not rolled back — the block is in force for the run — the caller is simply told it was not
+saved.
 
 **Methods** (all return typed results or a typed `HostError` — never a bare thrown string):
 

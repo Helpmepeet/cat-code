@@ -631,17 +631,39 @@ export class SessionRegistry {
   }
 
   /**
-   * (3) Reap: drop rows whose transcript is gone, `shutdown:"clean"` rows that
-   * never acquired an `engineSessionId` (§9-A5 — an address that never got
-   * content is not restorable), and — for the bound — the oldest terminal
-   * (`shutdown != null`) rows over `MAX_REGISTRY_SESSIONS`.
+   * (3) Reap: drop rows whose transcript is gone, TERMINAL rows that never
+   * acquired an `engineSessionId` (an address that never got content is not
+   * restorable), and — for the bound — the oldest terminal (`shutdown != null`)
+   * rows over `MAX_REGISTRY_SESSIONS`.
+   *
+   * The null-`engineSessionId` rule used to read `shutdown === 'clean'`, so a
+   * row whose process died before its first ready frame was kept forever: it
+   * has no transcript, so `hasTranscript` is false, so `canResume` is false, so
+   * the host's `isRestorable` refuses it and it never reaches `listSessions` —
+   * invisible in the sidebar, in the palette, in the peer roster, and refused by
+   * every open path there is. The operator's file held 13 of them. What produces
+   * them is ordinary: a `src/**` or `app/sidecar/**` edit kills every new
+   * session an open dev app starts (CLAUDE.md §3), and each one leaves a row.
+   *
+   * This does not reverse HOST-REQUEST-PLANE §2's ruling that a peer create
+   * whose ready or prompt step failed KEEPS its row. That ruling turns on the
+   * row being "a real session the operator can see", and it holds for the whole
+   * run in which the failure happened, because this pass runs only from
+   * `launch()`. By the next launch there is no tab to dangle and nothing left
+   * to see: what remains is an address for content that was never written.
+   * `'parked'` is included for the same reason it is exempt from the BOUND reap
+   * and not from this one: the exemption exists because a parked row is an open
+   * tab, and at launch there are no tabs. (A parked row read at launch has
+   * already been normalized to `'crashed'` — §8 — so this is about intent, not
+   * an extra case.) The `shutdown !== null` guard is a safety net rather than a
+   * live branch: `sweepOrphans` runs first and settles every row.
    */
   private reap(): void {
-    // Drop missing-transcript rows and null-engineSessionId clean rows.
+    // Drop missing-transcript rows and null-engineSessionId terminal rows.
     this.doc.sessions = this.doc.sessions.filter(row => {
-      if (row.shutdown === 'clean' && row.engineSessionId === null) {
+      if (row.shutdown !== null && row.engineSessionId === null) {
         this.log(
-          `[registry] reaped clean row with no engineSessionId (${row.appSessionId}): ` +
+          `[registry] reaped ${row.shutdown} row with no engineSessionId (${row.appSessionId}): ` +
             'never acquired content, not restorable',
         )
         return false
