@@ -7,6 +7,7 @@ import {
   firstLineForLanguageDetection,
   getPatchFromContents,
 } from '../../utils/diff.js'
+import { getCwd } from '../../utils/cwd.js'
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
@@ -166,7 +167,7 @@ export const FilePatchTool = buildTool({
           return {
             result: false,
             behavior: 'ask',
-            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist — check the path, or use "*** Add File:" to create a new file.`,
+            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist. Apply_patch resolved it relative to the current session working directory ${getCwd()} — check the path, or use "*** Add File:" to create a new file.`,
             errorCode: 4,
           }
         }

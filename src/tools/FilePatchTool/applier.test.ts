@@ -7,6 +7,7 @@ import {
   setFsImplementation,
   setOriginalFsImplementation,
 } from '../../utils/fsOperations.js'
+import { runWithCwdOverride } from '../../utils/cwd.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
 import { FilePatchTool } from './FilePatchTool.js'
 import {
@@ -1116,6 +1117,38 @@ describe('FilePatchTool.validateInput move destination', () => {
 
     expect(result.result).toBe(false)
     expect((result as { message?: string }).message).toContain('Jupyter Notebook')
+  })
+
+  test('names the session working directory when a relative update path is missing', async () => {
+    const baseDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-base-'))
+    tempDirs.push(baseDir)
+
+    const result = await runWithCwdOverride(baseDir, () =>
+      FilePatchTool.validateInput(
+        {
+          ops: [
+            {
+              type: 'update',
+              path: 'nested/missing.ts',
+              hunks: [
+                hunk({
+                  lines: [{ kind: 'context', text: 'missing' }],
+                }),
+              ],
+            },
+          ],
+        },
+        validateContext(),
+      ),
+    )
+
+    expect(result.result).toBe(false)
+    expect((result as { message?: string }).message).toContain(
+      `current session working directory ${baseDir}`,
+    )
+    expect((result as { message?: string }).message).toContain(
+      join(baseDir, 'nested', 'missing.ts'),
+    )
   })
 
   test('a normal move to an absent non-team-memory destination completes', async () => {

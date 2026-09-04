@@ -25,6 +25,9 @@ import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
 import { getFilePatchToolDescription } from '../tools/FilePatchTool/prompt.js'
 import { getWriteToolDescription } from '../tools/FileWriteTool/prompt.js'
 import { GrepTool } from '../tools/GrepTool/GrepTool.js'
+import { getDescription as getGrepDescription } from '../tools/GrepTool/prompt.js'
+import { getPrompt as getPowerShellPrompt } from '../tools/PowerShellTool/prompt.js'
+import { getImplementorSystemPrompt } from '../tools/AgentTool/built-in/implementorAgent.js'
 import { normalizeToolInput, splitSysPromptPrefix, toolToAPISchema } from './api.js'
 import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
@@ -214,10 +217,13 @@ describe('provider and prompt regressions', () => {
     })
   })
 
-  test('FileWrite prompt variants keep the same underlying rules', () => {
-    expect(
-      normalizeConstraintLines(getWriteToolDescription('firstParty')),
-    ).toEqual(normalizeConstraintLines(getWriteToolDescription('openai')))
+  test('FileWrite prompt names the provider-specific edit tool', () => {
+    expect(getWriteToolDescription('firstParty')).toContain(
+      'check whether Edit is the better tool. Prefer Edit',
+    )
+    expect(getWriteToolDescription('openai')).toContain(
+      'check whether Apply_patch is the better tool. Prefer Apply_patch',
+    )
   })
 
   test('FileWrite requires a complete Read before whole-file replacement', () => {
@@ -471,5 +477,61 @@ describe('provider and prompt regressions', () => {
     )
     expect(prompt).not.toContain('Use Apply_patch for local file edits')
     expect(prompt).not.toContain('show the resulting git diff before moving on')
+  })
+
+  test('GrepTool prompt on GPT allows rg in Bash while Claude strictly forbids it', () => {
+    const gptPrompt = getGrepDescription('openai')
+    expect(gptPrompt).toContain('Targeted `rg` commands through Bash are also permitted')
+    expect(gptPrompt).not.toContain('NEVER invoke `grep` or `rg` as a Bash command')
+
+    const claudePrompt = getGrepDescription('firstParty')
+    expect(claudePrompt).toContain('NEVER invoke `grep` or `rg` as a Bash command')
+  })
+
+  test('FilePatchTool prompt refers to Apply_patch as a tool, not a shell command', () => {
+    const desc = getFilePatchToolDescription()
+    expect(desc).toContain('Use the `Apply_patch` tool to edit files')
+    expect(desc).not.toContain('shell command')
+    expect(desc).toContain(
+      'Patch paths resolve relative to the current session working directory.',
+    )
+    expect(desc).toContain(
+      'Later tools, including `Apply_patch`, use the updated directory',
+    )
+  })
+
+  test('PowerShellTool prompt distinguishes GPT hybrid policy from Claude strict policy', async () => {
+    const gptPsPrompt = await getPowerShellPrompt('openai')
+    expect(gptPsPrompt).toContain('FILE MUTATIONS: Use Apply_patch for local file edits')
+    expect(gptPsPrompt).toContain('READS AND SEARCH: `rg`, `rg --files`')
+    expect(gptPsPrompt).toContain('Edit files: Use Apply_patch')
+
+    const claudePsPrompt = await getPowerShellPrompt('firstParty')
+    expect(claudePsPrompt).toContain('DO NOT use it for file operations')
+    expect(claudePsPrompt).toContain('Edit files: Use Edit')
+    expect(claudePsPrompt).not.toContain('Apply_patch')
+  })
+
+  test('Implementor prompt names the session edit tool rather than both aliases simultaneously', () => {
+    setSessionProvider('openai')
+    const openaiPrompt = getImplementorSystemPrompt('openai')
+    expect(openaiPrompt).toContain('Use Apply_patch and Write for code changes')
+    expect(openaiPrompt).not.toContain('Use Edit, Apply_patch, and Write')
+
+    setSessionProvider('firstParty')
+    const claudePrompt = getImplementorSystemPrompt('firstParty')
+    expect(claudePrompt).toContain('Use Edit and Write for code changes')
+    expect(claudePrompt).not.toContain('Apply_patch')
+  })
+
+  test('restricted GPT tool sets do not leak mutation or unheld routing rules', () => {
+    const restrictedSection = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
+    expect(restrictedSection).not.toContain('File editing →')
+    expect(restrictedSection).not.toContain('File creation →')
+    expect(restrictedSection).not.toContain('File search →')
+    expect(restrictedSection).not.toContain('Content search →')
+    expect(restrictedSection).not.toContain('RULE — File mutations')
+    expect(restrictedSection).toContain('File reading → Read')
+    expect(restrictedSection).toContain('Shell execution → Bash')
   })
 })

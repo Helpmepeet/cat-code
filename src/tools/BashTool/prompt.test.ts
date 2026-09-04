@@ -8,7 +8,10 @@ describe('Bash prompt working-directory guidance', () => {
       const prompt = getBashPrompt(provider)
 
       expect(prompt).toContain(
-        "The main session's working directory persists between commands",
+        "The main session's working directory persists between commands and is used by later tools",
+      )
+      expect(prompt).toContain(
+        "A foreground Bash command updates it to the command's final `pwd`",
       )
       expect(prompt).toContain(
         'In agent threads, a `cd` applies only to the current Bash call',

@@ -260,7 +260,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   ]
   const backgroundNote = getBackgroundUsageNote()
   const workingDirectoryNote =
-    "The main session's working directory persists between commands, but shell state does not. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
+    "The main session's working directory persists between commands and is used by later tools. A foreground Bash command updates it to the command's final `pwd`, but shell state does not persist. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',

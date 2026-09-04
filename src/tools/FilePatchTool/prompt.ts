@@ -3,7 +3,7 @@ import { FILE_PATCH_TOOL_NAME } from './constants.js'
 export function getFilePatchToolDescription(): string {
   return `## \`Apply_patch\`
 
-Use the \`Apply_patch\` shell command to edit files.
+Use the \`Apply_patch\` tool to edit files.
 Your patch language is a stripped\u2011down, file\u2011oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high\u2011level envelope:
 
 *** Begin Patch
@@ -69,7 +69,10 @@ It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with \`+\` even when creating a new file
-- File references can only be relative, NEVER ABSOLUTE.`
+- File references can only be relative, NEVER ABSOLUTE.
+- Patch paths resolve relative to the current session working directory.
+- In the main session, a foreground Bash command updates that directory to the command's final \`pwd\`. Later tools, including \`Apply_patch\`, use the updated directory even though shell state does not persist.
+- In agent threads, a \`cd\` applies only to the current Bash call and does not change the thread's assigned patch base.`
 }
 
 export { FILE_PATCH_TOOL_NAME }
