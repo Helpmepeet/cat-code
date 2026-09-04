@@ -299,7 +299,7 @@ in-process file read.
 |---|---|---|
 | `ListPeers` | none | §3. Read-only, no prompt. |
 | `SendToPeer` | `to` (name), `text` | Every message is a request: a busy recipient reads it between tool calls, an idle one starts a turn, a parked or closed one wakes (HOST-REQUEST-PLANE §4). The hop chain is main-derived per pair (step 2); the sidecar never authors hops. Result states the outcome. Ordinary permission gate. (A `notify` kind that starts no turn was designed, reviewed and cut, §0a; its sketch is HOST-REQUEST-PLANE §4 step 4a, marked DEFERRED.) |
-| `ReadPeer` | `peer`, `view: 'tail' \| 'search'`, `limit` (default 20, max 50), `before` (entry uuid cursor), `query` (search only), `includeToolResults` (default false), `maxBytes` | §8. Same workspace only, read-only, no prompt. |
+| `ReadPeer` | `peer`, `before` (turn cursor from `nextPosition`), `query` (present means search, absent means tail), `maxBytes` (default 32 KiB, max 128 KiB) | §8. Same workspace only, read-only, no prompt. Returns TURNS (`asked` / `said` / `touched`), not messages. 🔁 AMENDED 2026-09-05: `view`, `limit` and `includeToolResults` were removed, see §8. |
 | `CreatePeer` | `prompt`, optional `model`, `effort` | Model and effort default to the creator's current values (R7): the requesting sidecar fills them from its own state, main threads them into the child's spawn env as `CATCODE_SIDECAR_MODEL` / `CATCODE_SIDECAR_EFFORT`, and the child applies them where it applies `resumedModel` today (`sessionController.ts:231`, `:319`). They are sidecar-authored and that is fine: a model choice is not permission posture. **Permission mode is neither an argument nor inherited** (🔁 §0a): the peer starts at the settings default like any new tab. Returns the new name. Ordinary permission gate and the HC4 caps every session has; no peer budget (R8). Account: R10. |
 
 Who created me, and my own name, are not tools: they are system-prompt context
@@ -504,7 +504,7 @@ Values, so the build does not invent them (all new constants in
 | `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body, same sender, same recipient. 🔁 AMENDED 2026-09-04: the key was recipient and body alone, so two peers reporting the same short text to one parent collided and the second was told its message had already arrived and to await a reply to it. The tool's own prompt asks for short single messages, so the collision is ordinary orchestration, not a corner. A single sender is bounded by the per-pair bucket; fan-in by the pending cap. The recipient-only key never was a fan-in defence, since anything actually flooding varies one character and walks past it |
 | `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2). 🔁 The refusal rule that reads this chain was AMENDED 2026-09-03 during the build: a recipient already in the chain is a loop only when it is not the chain's last entry, so replying to whoever last wrote to you is bounded by `MAX_PEER_HOPS` rather than refused. HRP §4 step 2 carries the derivation |
 | `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
-| `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 16 KiB / 64 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors |
+| `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 32 KiB / 128 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors. 🔁 RAISED 2026-09-05 from 16 KiB / 64 KiB when the unit became a TURN and `limit` went, leaving this the only count bound. A median peer session is 5 turns, and the shape built against two real peers of that length measured 24,089 and 17,272 bytes, so 16 KiB returned a median peer in pieces. Cost is not what bounds this: a peer runs at 372,000 tokens (Codex) or 1,000,000 (frontier Claude) of context, so 32 KiB is roughly 2.5% of the smaller window |
 | `MAX_PEER_QUERY_BYTES` | 512 | `ReadPeer` search query |
 | `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` | 240 per 60 s | 🔁 added during the build. Charged to EVERY inbound `host.request` before it is validated, because the rate cap above counted only requests that parsed, so the cheapest flood to send was the one nothing counted (HR1/A6) |
 | `MAX_HOST_REQUEST_ARG_CHARS` | 256 | 🔁 added during the build. Per string argument, at main |
@@ -572,6 +572,84 @@ pages structured items with a summary view by default). Shape:
   off by default the command line is the only trace a shell-heavy peer leaves.
   Dropping it would make such a peer read as idle, which is the same false
   report this amendment exists to remove.
+- 🔁 **AMENDED 2026-09-05: THE UNIT IS A TURN, NOT A MESSAGE.** Everything
+  above described a bounded tail of MESSAGES, and the bound was wrong by an
+  order of magnitude for the thing it was bounding. Measured over 61 real peer
+  transcripts from the registry: one turn spans 19 to 89 messages (median ~47),
+  a whole peer session is a median of 5 turns (22 of 61 have three or fewer),
+  30-43% of messages are user-role carriers holding only a `tool_result`, and
+  52-64% of assistant messages carry no text block at all. So the default read
+  of 20 messages returned less than HALF OF ONE TURN: no request that started
+  the work, no conclusion, and 10 to 19 of the 20 entries rendering as bare
+  `[thinking]` / `[tool output]` / `[tool call: X]` stubs. That is a wrong
+  answer, not an expensive one, and no count of messages fixes it because the
+  unit is the defect. What now comes back is turns. A turn opens at a `user`
+  message whose content carries a text block (an operator prompt, a peer
+  message, a slash command) and runs to the next one; a user message holding
+  only `tool_result` blocks does NOT open one and belongs to the turn in
+  progress; messages before the first opener in the loader's window are part of
+  no turn and are dropped. Each turn is three fields: `asked` (the opening
+  message's text), `said` (EVERY assistant text block in the turn, in order,
+  because at ~47 messages per turn the last block is frequently "Done." and
+  keeping only it discards the substance), and `touched` (the deduplicated
+  targets of the turn's tool calls, each `<ToolName> <target>`, through the
+  same allow-list and the same `Apply_patch` extractor the amendment above
+  installed, unchanged). `thinking` and `tool_result` blocks are no longer
+  represented at all, which removes the stub entries by construction instead of
+  filtering them. What follows from that unit change:
+  - **`includeToolResults` is GONE.** Tool output is what the forensic path is
+    for, and that path exists and is reachable from every session that can call
+    this tool (the `session-analysis` skill reads the same JSONL with
+    `overview`, `timeline`, `final`, `tools`, `trace`, `show`, `debug`).
+    Removing the flag also promotes "file bodies do not move between sessions"
+    from a per-path property to a WHOLE-TOOL one: the flattener it fed returned
+    raw text, so a `Read` result carried the file body whenever the flag was on.
+  - **`view` is GONE.** A non-empty `query` means search; its absence means
+    tail; whitespace-only is absent. That makes the empty-query bug
+    unrepresentable rather than caught, so the `missing_query` status goes with
+    it.
+  - **`limit` is GONE**, leaving `maxBytes` the only count bound. A count bound
+    on a unit whose size varies by two orders of magnitude was never a bound on
+    anything the caller cared about.
+  - **Removed from the result:** `range` (derivable from `turns`), the
+    `redactions` COUNT (the summary sentence saying values were removed stays,
+    which is the part a reader acts on), `role` and `entries`, and the per-turn
+    `id` and `at`. The id was redundant with `nextPosition`, which carries the
+    only cursor anyone ever passes back; `at` is covered by `ListPeers`, which
+    already reports each peer's last activity. Kept, each for the reason its
+    source comment states: `sourceSession`, `capturedAt`, `status`, `summary`,
+    `notice` verbatim, `turns`, `nextPosition`, `truncated`.
+  - **Search is tested on the RAW turn, before any cap**, against `asked`,
+    `said` and every `touched` entry, so a hit cannot be truncated into
+    invisibility. The count sentence keeps its job of saying how many were found
+    of how many searched.
+  - **Per-turn caps**, so one pathological turn cannot monopolise the budget:
+    `asked` 4 KiB, `said` 12 KiB (keeping the NEWEST text, since the conclusion
+    is at the end), `touched` 24 entries plus a trailing marker naming how many
+    were dropped. `maxBytes` remains the real bound and is still applied
+    newest-turn-first.
+  - **`truncated` keeps its meaning and gets narrower.** It is text cut from a
+    turn the reader HOLDS, and it no longer fires when the budget simply stopped
+    before older turns: with `limit` gone the budget is the ONLY paging
+    mechanism, so charging it to `truncated` would set the flag on every page of
+    any peer past 32 KiB, which is the always-true flag the amendment above
+    removed. `nextPosition` carries "more remains", `older_unread` carries "the
+    file is longer than the window opened", and this carries neither.
+  - **The prompt was rewritten.** It used to open by pulling forensic reads
+    TOWARD this tool ("search it here rather than opening its transcript
+    yourself"), which is close to the reverse of the ruling above. It now states
+    the question this tool answers, routes "is it done" to `ListPeers` and "tell
+    me when" to asking the peer, and says plainly that finding out why something
+    failed is not its job. The passivity warning is unchanged: "this never opens
+    or disturbs the other session", immediately followed by the sentence that
+    exists because a session sat reading a peer in a loop waiting for it.
+  Unchanged by all of the above: the read is still an in-process file read and
+  never a request-plane verb, the path is still derived from
+  `CATCODE_SIDECAR_CWD`, a read still never wakes, and the whole security
+  envelope (escaping, known-format redaction BEFORE any length cap, the
+  transcript-id shape check, the local peer-row check, the `''` classifier
+  projection, `UNTRUSTED_NOTICE` verbatim) stands exactly as recorded below.
+  `Bash`'s `command` stays in the target allow-list for the reason above.
 - **Passive: a read never wakes.** It is a file read of
   `~/.cat-code/projects/<projectDir>/<engineSessionId>.jsonl`, keyed by the
   engine id that `ListPeers` returns for the name. The reader derives the

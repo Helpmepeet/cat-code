@@ -1640,19 +1640,32 @@ test('a ReadPeer card names the peer, and its query only when it really searched
     toolRow({
       toolName: 'ReadPeer',
       toolFamily: 'other',
-      // A `query` the tool ignores, because the view is the default tail.
-      input: { peer: 'Bear', limit: 20, query: 'schema' },
+      // No query, so this is a tail read and there is nothing to quote.
+      input: { peer: 'Bear', maxBytes: 32768 },
       status: 'success',
     }),
   )
   expect(tail).toContain('read Bear')
-  expect(tail).not.toContain('schema')
+  expect(tail).not.toContain('read Bear:')
+
+  const blank = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      // Whitespace is absent to the tool, so it reads as a tail here as well.
+      input: { peer: 'Bear', query: '   ' },
+      status: 'success',
+      id: 'blank',
+    }),
+  )
+  expect(blank).toContain('read Bear')
+  expect(blank).not.toContain('read Bear:')
 
   const search = render(
     toolRow({
       toolName: 'ReadPeer',
       toolFamily: 'other',
-      input: { peer: 'Bear', view: 'search', query: 'schema' },
+      input: { peer: 'Bear', query: 'schema' },
       status: 'success',
       id: 'search',
     }),

@@ -386,9 +386,18 @@ export const MAX_PEER_TEXT_BYTES = 64 * 1024
  * spent. `maxBytes` outside the range is CLAMPED into it and never an error
  * (§7 table: "the tool clamps, never errors"), because a model that guesses a
  * bound should get a bounded read, not a refusal it has to learn to avoid.
+ *
+ * RAISED 2026-09-05, when the read's unit became a TURN and `limit` was
+ * removed, leaving this the only count bound there is. A median peer session is
+ * 5 turns, and the proposed shape built against two real peers measured 24,089
+ * and 17,272 bytes for exactly that: 16 KiB returned a median peer in pieces.
+ * Cost is not what bounds this. A peer runs at 372,000 tokens (Codex) or
+ * 1,000,000 (a frontier Claude model) of context (`src/utils/context.ts`), so
+ * 32 KiB is roughly 2.5% of the smaller window, and half an answer costs a
+ * second call plus the wrong conclusion drawn from the first.
  */
-export const PEER_READ_DEFAULT_BYTES = 16 * 1024
-export const MAX_PEER_READ_BYTES = 64 * 1024
+export const PEER_READ_DEFAULT_BYTES = 32 * 1024
+export const MAX_PEER_READ_BYTES = 128 * 1024
 
 /**
  * Max UTF-8 BYTES of a `ReadPeer` search query. Small on purpose: it is a

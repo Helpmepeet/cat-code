@@ -2119,10 +2119,11 @@ function derivePeerTarget(
     case 'ReadPeer': {
       const peer = str('peer')
       if (peer === null) return null
-      // Only a SEARCH has words worth showing. `query` is ignored by the tool
-      // in any other view, so printing it there would describe a read that did
-      // not happen.
-      const query = str('view') === 'search' ? str('query') : null
+      // Only a SEARCH has words worth showing, and a query is now the whole of
+      // what makes a read one: with it, only the turns containing it come back;
+      // without it, the most recent turns do. A whitespace-only query is
+      // absent to the tool, so it is absent here too.
+      const query = str('query')?.trim() || null
       return query === null
         ? `read ${peer}`
         : `read ${peer}: ${peerTargetFragment(query)}`
