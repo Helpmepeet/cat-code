@@ -57,6 +57,12 @@ function requester(answer: unknown): {
         error: { code: 'session_limit', message: 'no room' },
       })
     }
+    if (answer === 'unanswered') {
+      return Promise.resolve({
+        ok: false,
+        error: { code: 'timeout', message: 'no answer in time' },
+      })
+    }
     return Promise.resolve(hostAnswers<V>(answer))
   }
   return { requestHost, asked }
@@ -186,6 +192,27 @@ test('a refusal by the host is an error, and names no peer', async () => {
   expect(content.indexOf('Wait a few seconds')).toBeLessThan(
     content.indexOf('too many sessions are open'),
   )
+})
+
+test('F8 — a request that went unanswered sends the caller to the session list, not back to CreatePeer', async () => {
+  // Creating is a MUTATION, and no answer is not the same fact as no session:
+  // both the app and this sidecar stop waiting on a clock, while the create they
+  // asked for carries on. The generic sentence for this code says only that the
+  // app did not answer in time, which a model reads as nothing having happened
+  // and answers by asking again, which is how one instruction becomes two
+  // sessions. So the one recovery that is safe whichever way it went is named
+  // here, and creating again is not it.
+  const { requestHost } = requester('unanswered')
+  const tool = createCreatePeerTool(requestHost, 'Alex')
+
+  const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
+  const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-6')
+
+  expect(block.is_error).toBe(true)
+  const content = String(block.content)
+  expect(content).toContain('not clear whether a session was started')
+  expect(content).toContain('session list')
+  expect(content).not.toContain('could not be started')
 })
 
 test('an unreadable answer never reports a peer that may not exist', async () => {

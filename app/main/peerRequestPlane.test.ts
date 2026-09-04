@@ -1459,7 +1459,7 @@ describe('M2 — the pending cap bounds the wake path too', () => {
 })
 
 describe('M4 — a host call cannot outrun the caller waiting on it', () => {
-  test('a restore that never answers is bounded and refused', async () => {
+  test('a restore that never answers is bounded, and the refusal is the wake it really waited out', async () => {
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
       live: new Set([ALEX]),
@@ -1471,22 +1471,58 @@ describe('M4 — a host call cannot outrun the caller waiting on it', () => {
     )
     await settle()
     // Unbounded, this await never returns and the sidecar settles the caller
-    // with a timeout while main is still working.
+    // with a timeout while main is still working. Bounded, main stops waiting on
+    // the CALL and starts waiting on the row's ready, so the refusal below is
+    // reached only after the wake itself has run out.
+    h.expireWakes()
+    await settle()
     h.expireWakes()
     await inflight
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:wake_failed' })
+    expect(h.deliveries()).toHaveLength(0)
   })
 
-  test('a spawn that never answers is bounded and refused', async () => {
+  test('F8 — a restore that answers LATE still delivers, because a call that did not answer did not fail', async () => {
+    let finishRestore: (() => void) | undefined
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'parked' })],
+      live: new Set([ALEX]),
+      restoreResult: () =>
+        new Promise(resolve => {
+          finishRestore = () => resolve({ ok: true })
+        }),
+    })
+    const inflight = h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }),
+    )
+    await settle()
+    // Main gives up on the CALL, which the host is still running.
+    h.expireWakes()
+    await settle()
+    // ... and it completes a moment later, exactly as it was going to.
+    finishRestore?.()
+    await settle()
+    h.plane.onReady(BEAR)
+    await inflight
+
+    // The sender used to be told `refused:wake_failed` here, for a peer that
+    // woke, and the message was dropped with the refusal.
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_wake' })
+    expect(h.deliveries().map(entry => entry.sessionId)).toEqual([BEAR])
+  })
+
+  test('F8 — a spawn that never answers is reported as unknown, not as a session that did not start', async () => {
     const h = harness({ createResult: () => new Promise(() => {}) })
     const inflight = h.plane.handleRequest(ALEX, request('peer.create', { prompt: 'go' }))
     await settle()
-    // The one that costs a real session: the sidecar forgets the request id and
-    // the model's retry spawns a SECOND session for the same ask.
+    // The one that costs a real session: `spawn_failed` said the session does
+    // not exist, the create call ran on and made it anyway, and the model's
+    // retry spawned a SECOND session for the same ask.
     h.expireWakes()
     await inflight
     expect(h.lastResult()?.ok).toBe(false)
-    expect(h.lastResult()?.error?.code).toBe('spawn_failed')
+    expect(h.lastResult()?.error?.code).toBe('timeout')
   })
 })
 

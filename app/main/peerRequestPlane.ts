@@ -412,6 +412,19 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
  */
 const PEER_HOST_CALL_TIMEOUT_MS = 10_000
 
+/**
+ * F8 — what `bounded` hands back for a host call that did not ANSWER in time.
+ *
+ * A sentinel rather than a fabricated failure, because the whole defect it
+ * closes was the two being written as one value: main stopped waiting and told
+ * the caller the work had not happened, while the call ran on and did it. The
+ * host owns "no", this owns "nothing yet", and no code the host can also mint
+ * would keep them apart. Nothing here decides what an unanswered call means —
+ * every caller of `bounded` decides that for itself, and none of them may report
+ * it as a failure of the operation.
+ */
+const HOST_CALL_UNANSWERED = Symbol('host call unanswered')
+
 type Bucket = { tokens: number; lastRefillAt: number }
 /**
  * One record of a hop main routed toward `recipient` from `sender`. `viaRefusal`
@@ -934,14 +947,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * request timeout. See `PEER_HOST_CALL_TIMEOUT_MS`. A rejection still
    * propagates: an unexpected throw is `handleRequest`'s to answer, and swallowing
    * it here would report a failure main never had.
+   *
+   * F8 — and neither may the timeout. It used to take an `onTimeout` that built
+   * the caller's failure value, and both call sites built one saying the work had
+   * not happened, which is the one thing an unanswered call does not establish:
+   * the host promise is still running and the spawn or the wake usually lands
+   * moments later. There is no such parameter now, so the lie is not expressible
+   * here; what comes back is `HOST_CALL_UNANSWERED` and each caller answers for
+   * its own verb.
    */
-  function bounded<T>(work: Promise<T>, onTimeout: () => T): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
+  function bounded<T>(work: Promise<T>): Promise<T | typeof HOST_CALL_UNANSWERED> {
+    return new Promise<T | typeof HOST_CALL_UNANSWERED>((resolve, reject) => {
       let settled = false
       const timer = setTimer(() => {
         if (settled) return
         settled = true
-        resolve(onTimeout())
+        resolve(HOST_CALL_UNANSWERED)
       }, hostCallTimeoutMs)
       work.then(
         value => {
@@ -1032,7 +1053,7 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     const readySince = now()
     // M4 — bounded, because the ready wait below runs AFTER it and the sidecar's
     // own timeout covers both. A spawn that outruns the caller's patience must
-    // fail here rather than succeed into an answer nobody is left to read.
+    // answer here rather than succeed into an answer nobody is left to read.
     const created = await bounded(
       deps.createSessionInWorkspace(sessionId, {
         createdBy: sessionId,
@@ -1043,11 +1064,25 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         // refusing them a tab because 256 rows are parked would be a regression.
         enforceRegistryChurnLimit: true,
       }),
-      () => ({
-        ok: false as const,
-        error: { code: 'spawn_failed', message: 'the new session did not start in time' },
-      }),
     )
+    if (created === HOST_CALL_UNANSWERED) {
+      // F8 — ten seconds gone with the host still working. This used to answer
+      // `spawn_failed`, which is the one thing it does not mean: the create runs
+      // on, the row lands, it is named and visible, and the caller that was told
+      // its session did not start asks again and gets a second one. It cannot be
+      // reported through `failedStep` either, close as that is — that shape
+      // exists for a row main can NAME, and not knowing the name, the id or
+      // whether there is a row at all is the entire content of this outcome. So
+      // it is reported as the unknown it is, and `CreatePeer` turns the code into
+      // the only recovery that is safe either way: look at the session list.
+      return {
+        ok: false,
+        error: fail(
+          'timeout',
+          'the app did not answer in time, so whether a session started is not known',
+        ),
+      }
+    }
     if (!created.ok) {
       return { ok: false, error: fail(mapHostErrorCode(created.error.code), created.error.message) }
     }
@@ -1210,11 +1245,20 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       const readySince = now()
       // M4 — bounded: this runs BEFORE the ready wait, and the two together are
       // what the sidecar's request timeout has to cover.
-      const restored = await bounded(deps.restoreSession(target.appSessionId), () => ({
-        ok: false as const,
-        error: { code: 'wake_timeout', message: 'the peer did not wake in time' },
-      }))
-      if (!restored.ok && restored.error.code !== 'session_not_found') {
+      const restored = await bounded(deps.restoreSession(target.appSessionId))
+      // F8 — a restore that did not ANSWER in ten seconds has not failed, and
+      // refusing on it told the sender its peer could not be woken while the
+      // wake was still running; the peer then woke to nothing, because the
+      // refusal dropped the body and gave the slot back. An unanswered call is
+      // read exactly as `session_not_found` already is: nothing is settled yet,
+      // so wait for the row's next ready, which is the same evidence a restore
+      // that answered `ok` is judged by anyway. If no ready comes, the refusal
+      // below is then a fact rather than a guess.
+      if (
+        restored !== HOST_CALL_UNANSWERED &&
+        !restored.ok &&
+        restored.error.code !== 'session_not_found'
+      ) {
         return refuseAfterHolds('refused:wake_failed')
       }
       // Never `session_not_found` from here on: HR3 reserves that code for a row

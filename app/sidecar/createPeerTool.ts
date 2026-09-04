@@ -209,6 +209,23 @@ export function createCreatePeerTool(
         ...(effort !== undefined ? { effort } : {}),
       })
       if (!outcome.ok) {
+        // F8 — `timeout` means nobody answered, which for a MUTATION is not the
+        // same fact as nothing happening: the app bounds its own call to the
+        // host, this sidecar bounds its wait for the app, and the create carries
+        // on past both. The shared sentence for this code says only that the app
+        // did not answer in time, and a model reads that as a failed call and
+        // answers it by calling again, which is how one instruction becomes two
+        // sessions. The new session is named and visible from the moment it
+        // exists, so looking is the recovery that is right whichever way it went.
+        if (outcome.error.code === 'timeout') {
+          return {
+            data: {
+              ok: false,
+              message:
+                'The app did not answer in time, so it is not clear whether a session was started. Look at the session list before creating another one.',
+            },
+          }
+        }
         return {
           data: { ok: false, message: describeHostRequestError(outcome.error) },
         }
