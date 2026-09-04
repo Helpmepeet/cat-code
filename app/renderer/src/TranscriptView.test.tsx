@@ -2457,6 +2457,44 @@ test('a peer turn names its sender, and the row accent sits on the name not the 
 })
 
 /**
+ * From the delivered frame to the drawn row: the model-facing envelope the
+ * sidecar wraps a peer message in (`wrapCrossSessionMessage`) must not reach
+ * the screen. Driven through `projectServerFrame` rather than a hand-built row,
+ * because the strip lives in the projector and a row literal would prove
+ * nothing about it (operator sitting, 2026-09-04).
+ */
+test('a delivered peer message draws its body, not the envelope around it', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, inspectorReady('peer-1'))
+  state = projectServerFrame(
+    state,
+    inspectorMessage(
+      'peer-1',
+      // Parsed JSON, exactly as the socket delivers it.
+      JSON.parse(
+        JSON.stringify({
+          type: 'user',
+          message: {
+            role: 'user',
+            content:
+              '<cross-session-message from="Stope">\nran the migration, all green\n</cross-session-message>',
+          },
+          parent_tool_use_id: null,
+          uuid: '00000000-0000-4000-8000-0000000d0003',
+          origin: { kind: 'peer', name: 'Stope' },
+        }),
+      ) as SDKMessage,
+    ),
+  )
+  const row = selectNestedTranscriptRows(state, 'peer-1')[0]
+  if (row?.kind !== 'injected-turn') throw new Error('expected a projected injected-turn row')
+  const html = render(row)
+  expect(html).toContain('ran the migration, all green')
+  expect(html).toContain('Stope')
+  expect(html).not.toContain('cross-session-message')
+})
+
+/**
  * The other four kinds must come out BYTE-IDENTICAL after the peer row's
  * emphasis was added. `emphasizeSender` is optional and set only by `peer`
  * precisely so the shared class strings never moved; this pins that, because

@@ -3813,7 +3813,10 @@ function projectUserContentBlock(
         kind: 'injected-turn',
         injectedKind: origin.kind,
         label: origin.label,
-        content: block.text,
+        content:
+          origin.kind === 'peer'
+            ? stripCrossSessionEnvelope(block.text)
+            : block.text,
       }
     }
     // Ordered ahead of the command-echo heuristic exactly as the terminal
@@ -4067,6 +4070,32 @@ function isLegacyTaskNotificationBanner(text: string): boolean {
 /** The legacy envelope's `<status>` tag; null when absent. */
 function parseLegacyTaskNotificationStatus(text: string): string | null {
   return /<status>([\s\S]*?)<\/status>/.exec(text)?.[1]?.trim() || null
+}
+
+/**
+ * A delivered peer message reaches the engine wrapped as
+ * `<cross-session-message from="…">` (`app/sidecar/sidecarServer.ts`
+ * `wrapCrossSessionMessage`). That envelope is MODEL-facing: it is the marker
+ * telling the recipient the text came from another session, and neutralizing
+ * the tag inside the body is a security property. None of that is display: the
+ * row already names the sender in its own label, so on screen the envelope is
+ * redundant and is internal vocabulary besides (§7). Stripped here, at the
+ * display boundary only, so what the model receives is untouched.
+ *
+ * Anchored at both ends: only a body that IS the envelope is unwrapped, and
+ * anything else — a peer message quoting the tag, a shape a newer sidecar
+ * mints — renders verbatim rather than half-parsed.
+ *
+ * The `&lt;cross-session-message` sequences the wrapper neutralized are left as
+ * they are on purpose. They are what the model saw, and nothing here can tell
+ * an escape the wrapper introduced from one the sender typed, so restoring them
+ * would mangle a body that legitimately contains the second kind.
+ */
+const CROSS_SESSION_ENVELOPE =
+  /^<cross-session-message from="[^"]*">\n?([\s\S]*?)\n?<\/cross-session-message>$/
+
+function stripCrossSessionEnvelope(text: string): string {
+  return CROSS_SESSION_ENVELOPE.exec(text)?.[1] ?? text
 }
 
 /**

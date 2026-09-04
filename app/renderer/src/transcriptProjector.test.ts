@@ -1348,6 +1348,62 @@ test('a peer-origin user frame mints a transcript row and stages nothing in the 
   expect(selectQueuedPrompts(queued, 'session-1' as SessionId)).toHaveLength(0)
 })
 
+/**
+ * The envelope the sidecar wraps a delivered peer message in
+ * (`wrapCrossSessionMessage`, `app/sidecar/sidecarServer.ts`) is model-facing:
+ * it tells the recipient the text came from another session. It reached the
+ * screen verbatim, tag and `from` attribute included, beside a row that already
+ * names the sender in its label (operator sitting, 2026-09-04). Stripping is
+ * display-only; the engine-facing wrapping is untouched.
+ */
+test('a peer row shows the message, never the envelope the model was handed', () => {
+  const rows = rowsForUserOrigin(
+    { kind: 'peer', name: 'Stope' },
+    '<cross-session-message from="Stope">\nthere are exactly 102 files.\nI counted them with: find …\n</cross-session-message>',
+  )
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'injected-turn',
+    injectedKind: 'peer',
+    label: 'Stope',
+    content: 'there are exactly 102 files.\nI counted them with: find …',
+  })
+  expect(JSON.stringify(rows[0])).not.toContain('cross-session-message')
+  // The creation prompt is delivered untagged and was never wrapped; it must
+  // still arrive whole.
+  expect(rowsForUserOrigin({ kind: 'peer', name: 'Stope' }, 'count the files')[0]).toMatchObject(
+    { kind: 'injected-turn', content: 'count the files' },
+  )
+})
+
+test('a peer body that is not the envelope renders as-is rather than half-parsed', () => {
+  // Anchored at both ends: a body that merely quotes or opens the tag is text,
+  // and display degrades by leaving it alone.
+  for (const body of [
+    'the shape is <cross-session-message from="a">b</cross-session-message>, roughly',
+    '<cross-session-message from="Stope">\nno closing tag',
+    '<cross-session-message>\nno from attribute\n</cross-session-message>',
+  ]) {
+    expect(rowsForUserOrigin({ kind: 'peer', name: 'Stope' }, body)[0]).toMatchObject({
+      kind: 'injected-turn',
+      content: body,
+    })
+  }
+  // The wrapper neutralizes the envelope's own tag inside the body; the escape
+  // stays visible on purpose. Nothing here can tell an escape the wrapper
+  // introduced from one the sender typed, so reversing it would mangle the
+  // second kind.
+  expect(
+    rowsForUserOrigin(
+      { kind: 'peer', name: 'Stope' },
+      '<cross-session-message from="Stope">\nwatch out for &lt;cross-session-message in a body\n</cross-session-message>',
+    )[0],
+  ).toMatchObject({
+    kind: 'injected-turn',
+    content: 'watch out for &lt;cross-session-message in a body',
+  })
+})
+
 test('an operator turn still renders as a user bubble — with or without a human origin', () => {
   for (const origin of [undefined, { kind: 'human' }]) {
     const rows = rowsForUserOrigin(origin, 'run the tests please')
