@@ -28,7 +28,12 @@ import { GrepTool } from '../tools/GrepTool/GrepTool.js'
 import { getDescription as getGrepDescription } from '../tools/GrepTool/prompt.js'
 import { getPrompt as getPowerShellPrompt } from '../tools/PowerShellTool/prompt.js'
 import { getImplementorSystemPrompt } from '../tools/AgentTool/built-in/implementorAgent.js'
-import { normalizeToolInput, splitSysPromptPrefix, toolToAPISchema } from './api.js'
+import {
+  normalizeToolInput,
+  prependUserContext,
+  splitSysPromptPrefix,
+  toolToAPISchema,
+} from './api.js'
 import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
   OPENAI_PROPERTY_RENAMES,
@@ -523,6 +528,27 @@ describe('provider and prompt regressions', () => {
     const claudePrompt = getImplementorSystemPrompt('firstParty')
     expect(claudePrompt).toContain('Use Edit and Write for code changes')
     expect(claudePrompt).not.toContain('Apply_patch')
+  })
+
+  test('the user-context wrapper does not deny authority to claudeMd', () => {
+    // The wrapper called everything inside it metadata, while the claudeMd
+    // block carries MEMORY_INSTRUCTION_PROMPT saying those instructions
+    // OVERRIDE default behavior. Claude-path only; GPT appends claudeMd
+    // straight into `instructions`.
+    const originalNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'development'
+    try {
+      const [contextMessage] = prependUserContext([], {
+        claudeMd: 'Never run bare `bun test`.',
+      })
+      const text = JSON.stringify(contextMessage?.message.content ?? '')
+
+      expect(text).toContain('# claudeMd')
+      expect(text).not.toContain('not as a user instruction')
+      expect(text).toContain('a block whose own header states its authority')
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
   })
 
   test('Grep output_mode does not name properties the OpenAI export renames', () => {
