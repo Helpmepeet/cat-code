@@ -803,8 +803,11 @@ function makeParkServer(
     accounts?: SidecarAccountsDomain
     sessionActions?: SidecarSessionActionsDomain
   } = {},
-): { server: SidecarServer; parkCount: () => number } {
+): { server: SidecarServer; parkCount: () => number; logged: string[] } {
   let parks = 0
+  // `app.park` is main-originated, so a rejection of one is reported to main
+  // through the log rather than to a reader through an error frame (F20).
+  const logged: string[] = []
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
@@ -815,10 +818,10 @@ function makeParkServer(
     onPark: () => {
       parks += 1
     },
-    log: () => {},
+    log: line => logged.push(line),
   })
   servers.push(server)
-  return { server, parkCount: () => parks }
+  return { server, parkCount: () => parks, logged }
 }
 
 /** True iff a live (non-replay) `user` message event was broadcast — i.e. a turn
@@ -859,8 +862,10 @@ test('IDLE-PARK boundary — a valid app.park on an idle session gates the exit 
   expect(received.some(f => f.kind === 'error')).toBe(false)
 })
 
-test('IDLE-PARK boundary — an app.park with an extra key is rejected bad_request (no park)', () => {
-  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+test('IDLE-PARK boundary — an app.park with an extra key is rejected (no park)', () => {
+  const { server, parkCount, logged } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -873,12 +878,17 @@ test('IDLE-PARK boundary — an app.park with an extra key is rejected bad_reque
     }),
   )
 
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(logged.some(line => line.includes('unexpected key'))).toBe(true)
+  // F20 — nobody in front of the app asked for this park, so the rejection
+  // goes to the side that sent it and no error frame is minted.
+  expect(received.some(f => f.kind === 'error')).toBe(false)
   expect(parkCount()).toBe(0)
 })
 
-test('IDLE-PARK boundary — an app.park with a non-string requestId is rejected bad_request (no park)', () => {
-  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+test('IDLE-PARK boundary — an app.park with a non-string requestId is rejected (no park)', () => {
+  const { server, parkCount, logged } = makeParkServer(
+    new AppSessionController(probeAdapter()),
+  )
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -891,7 +901,8 @@ test('IDLE-PARK boundary — an app.park with a non-string requestId is rejected
     }),
   )
 
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(logged.some(line => line.includes('rejected app.park'))).toBe(true)
+  expect(received.some(f => f.kind === 'error')).toBe(false)
   expect(parkCount()).toBe(0)
 })
 
@@ -9736,6 +9747,17 @@ function validPeerDeliver(overrides: Record<string, unknown> = {}) {
   }
 }
 
+/**
+ * A server whose sidecar log is captured (`makeLoggingServer`). Rejecting a
+ * MAIN-authored inbound frame answers main, and the log line is the whole of
+ * that answer (F20), so these tests read it the way the renderer-facing ones
+ * read an error frame.
+ */
+function makePeerServer(): { server: SidecarServer; logged: string[] } {
+  const logged: string[] = []
+  return { server: makeLoggingServer(logged), logged }
+}
+
 test('HR5 — a valid peer.deliver reaches the REAL engine queue as a peer-origin task notification', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket } = makeSocket()
@@ -9954,24 +9976,26 @@ test('the creation-prompt flag survives onto the origin, so the engine can frame
 })
 
 test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and nothing is queued', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { server, logged } = makePeerServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
   for (const unknownKey of [{ replyTo: 'm-0' }, { hops: ['app-alex'] }]) {
-    const before = received.filter(f => f.kind === 'error').length
+    const before = logged.length
     server.handleData(conn, hostPlaneFrame(validPeerDeliver(unknownKey)))
     // `hops` is in this list deliberately: F10 removed it from the inbound
     // vocabulary because nothing on this side ever read it, so a frame still
     // carrying one is now rejected rather than validated and dropped.
-    expect(received.filter(f => f.kind === 'error').length).toBe(before + 1)
+    expect(logged.slice(before).some(line => line.includes('unexpected key'))).toBe(true)
   }
   expect(getCommandQueueSnapshot()).toHaveLength(0)
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  // F20 — the rejection answers main, which authored the frame, and not a
+  // reader who never caused it.
+  expect(received.some(f => f.kind === 'error')).toBe(false)
 })
 
 test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { server, logged } = makePeerServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -9981,15 +10005,18 @@ test('HR5 — a wrong-typed peer.deliver field is rejected at the boundary', () 
     validPeerDeliver({ text: '' }),
     validPeerDeliver({ untagged: 'yes' }),
   ]) {
-    const before = received.filter(f => f.kind === 'error').length
+    const before = logged.length
     server.handleData(conn, hostPlaneFrame(bad))
-    expect(received.filter(f => f.kind === 'error').length).toBe(before + 1)
+    expect(
+      logged.slice(before).some(line => line.includes('rejected peer.deliver')),
+    ).toBe(true)
   }
   expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(received.some(f => f.kind === 'error')).toBe(false)
 })
 
 test('HR5 — a peer.deliver whose text exceeds the peer cap is rejected', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { server, logged } = makePeerServer()
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -10000,7 +10027,67 @@ test('HR5 — a peer.deliver whose text exceeds the peer cap is rejected', () =>
   // Main bounds it too; the sidecar does not take main's word for a size any
   // more than for anything else.
   expect(getCommandQueueSnapshot()).toHaveLength(0)
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
+  expect(logged.some(line => line.includes('rejected peer.deliver'))).toBe(true)
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+})
+
+test('F20 — a rejected MAIN-authored frame answers main, while a renderer failure still answers the renderer', () => {
+  const { server, logged } = makePeerServer()
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  // Both branches a main-authored frame can be rejected on: the strict-key
+  // allowlist (F10), which runs ahead of the schema, and the sidecar-local Zod
+  // parse. Version skew reaches both — main and preload do not rebuild in dev
+  // while the sidecar re-reads the tree at every spawn.
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ replyTo: 'm-0' })))
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ from: 42 })))
+  server.handleData(conn, hostPlaneFrame({ type: 'app.park' }))
+
+  // Rejected in full, exactly as before: nothing reaches the engine queue, and
+  // no ack is owed, so main keeps its only copy and redelivers on this row's
+  // next `ready` (§4 step 6) until its own bound reports the refusal to the
+  // SENDING model.
+  expect(getCommandQueueSnapshot()).toHaveLength(0)
+  expect(
+    received.some(f => f.kind === 'host.request' && f.verb === 'peer.ack'),
+  ).toBe(false)
+  // The defect this closes: main forwards every error frame it does not itself
+  // consume, `replayBuffer` retains it and replays it on every reattach, and
+  // the renderer latches it into the pane's error banner until a `ready`. These
+  // kinds carry no renderer correlation id, so the frame left as
+  // `requestId: undefined`, indistinguishable from a genuine failure of
+  // something the user just did.
+  expect(received.some(f => f.kind === 'error')).toBe(false)
+  // Nothing is swallowed: each rejection is recorded to the side that sent it.
+  expect(
+    logged.filter(
+      line =>
+        line.includes('unexpected key') ||
+        line.includes('rejected peer.deliver') ||
+        line.includes('rejected app.park'),
+    ),
+  ).toHaveLength(3)
+
+  // The other half of the bar: this is not a blanket mute. A RENDERER-authored
+  // frame failing the very same strict-key check still gets its error frame,
+  // because that one really does answer the click that caused it.
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.abort',
+      requestId: 'abort-forged',
+      runCommand: 'rm -rf /',
+    } as unknown as ClientFrame['message']),
+  )
+  expect(
+    received.some(
+      f =>
+        f.kind === 'error' &&
+        f.code === 'bad_request' &&
+        f.message.includes('unexpected key'),
+    ),
+  ).toBe(true)
 })
 
 test('a delivered peer message is acked only once the engine has CONSUMED it, not when it is queued', async () => {

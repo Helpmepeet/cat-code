@@ -1409,14 +1409,19 @@ export class SidecarServer {
     const strictError = checkStrictKeys(frame.message)
     if (strictError) {
       this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
-      this.rejectFrameWithSubmitAnswer(
-        connection,
-        payload,
-        requestId,
-        'bad_request',
-        strictError,
-        false,
-      )
+      // F20 — the rejection is total either way; only its REPORT differs. See
+      // `isMainOriginatedMessage`: an internal frame's failure is answered to
+      // main through the log, never to a reader through an error frame.
+      if (!isMainOriginatedMessage(frame.message)) {
+        this.rejectFrameWithSubmitAnswer(
+          connection,
+          payload,
+          requestId,
+          'bad_request',
+          strictError,
+          false,
+        )
+      }
       return
     }
 
@@ -1443,7 +1448,7 @@ export class SidecarServer {
     if (
       (frame.message as { type?: unknown } | null | undefined)?.type === 'app.park'
     ) {
-      this.handlePark(connection, frame.message)
+      this.handlePark(frame.message)
       return
     }
 
@@ -1461,7 +1466,7 @@ export class SidecarServer {
     if (
       (frame.message as { type?: unknown } | null | undefined)?.type === 'peer.deliver'
     ) {
-      this.handlePeerDeliver(connection, frame.message)
+      this.handlePeerDeliver(frame.message)
       return
     }
 
@@ -2801,17 +2806,18 @@ export class SidecarServer {
    * is already visible to the gate here and aborts the park (not the turn); a
    * submit in a LATER dispatch sees `parking` and is rejected (handleSubmit).
    */
-  private handlePark(connection: Connection, rawMessage: unknown): void {
+  private handlePark(rawMessage: unknown): void {
     const parsed = appParkMessageSchema.safeParse(rawMessage)
     if (!parsed.success) {
-      // A malformed park is a boundary rejection like any other frame. Use
-      // `undefined` requestId — the field it carries is not trustworthy here.
-      this.sendError(
-        connection,
-        undefined,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid app.park',
-        false,
+      // F20 — a boundary rejection like any other frame, but reported to the
+      // side that sent it. Park is main's policy driver alone, so an error
+      // frame here would have carried `undefined` requestId to the renderer and
+      // banner-ed a reader for traffic they never caused. See
+      // `isMainOriginatedMessage`.
+      this.log(
+        `[sidecar] rejected app.park: ${
+          parsed.error.issues[0]?.message ?? 'invalid app.park'
+        }`,
       )
       return
     }
@@ -5461,7 +5467,7 @@ export class SidecarServer {
    * makes `queued_live` true rather than changing what it says. The cost is
    * at-least-once delivery, paid for by the id recognition below.
    */
-  private handlePeerDeliver(connection: Connection, message: unknown): void {
+  private handlePeerDeliver(message: unknown): void {
     // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
     // `handleSubmit`/`handlePromptRecall`/`handleHistoryLoadEarlier`, and here it
     // is the difference between main holding the message and nobody holding it.
@@ -5482,12 +5488,15 @@ export class SidecarServer {
     }
     const parsed = peerDeliverMessageSchema.safeParse(message)
     if (!parsed.success) {
-      this.sendError(
-        connection,
-        undefined,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid peer message',
-        false,
+      // F20 — logged, not `sendError`d, for the same reason the park refusal
+      // above is silent: this frame answers main, and an error frame here
+      // reaches the reader as a session error for something nobody in front of
+      // the app did. See `isMainOriginatedMessage`. The rejection itself is
+      // unchanged: nothing is queued, no ack is owed, so main keeps its copy.
+      this.log(
+        `[sidecar] rejected peer.deliver: ${
+          parsed.error.issues[0]?.message ?? 'invalid peer message'
+        }`,
       )
       return
     }
@@ -5790,6 +5799,45 @@ export class SidecarServer {
     connection.rateCount += 1
     return connection.rateCount <= MAX_FRAMES_PER_WINDOW
   }
+}
+
+/**
+ * F20 — the inbound kinds MAIN authors, and the reason it matters which side an
+ * inbound rejection is reported to.
+ *
+ * `host.result` and `peer.deliver` are HOST-REQUEST-PLANE HR5's two; `app.park`
+ * is IDLE-PARK §2's. No preload channel forwards any of them and no renderer
+ * can author one, so a rejection of one answers MAIN. `sendError`, though, is
+ * how the sidecar answers a READER: main forwards every error frame it does not
+ * itself consume, through the attachment gate and into `replayBuffer`'s
+ * retained class, which replays it on every reattach, and the renderer's
+ * `rawMessageLog` latches it into the pane's error banner until a `ready` or a
+ * transcript reset. Nothing downstream can tell the two apart, because these
+ * kinds carry no renderer correlation id and the frame therefore leaves with
+ * `requestId: undefined` — the same shape a genuine failure of something the
+ * user just did has. So the recipient of a peer message saw a red banner for
+ * internal traffic they never initiated.
+ *
+ * Correlating it back downstream would mean minting a marker on the wire and
+ * teaching every reader of an error frame to ignore it; the provenance is
+ * already known HERE, one line before `sendError` would erase it. So the
+ * rejection is recorded where it is known: a sidecar log line, which is what
+ * `handleHostResult` has always done and what the park latch already does for a
+ * `peer.deliver` it refuses.
+ *
+ * This softens nothing. The frame is still rejected in full, still enqueues
+ * nothing, and still owes no ack, so main keeps its copy, redelivers on the
+ * row's next `ready`, and its own bound (`MAX_PEER_DELIVERY_ATTEMPTS`,
+ * `app/main/peerRequestPlane.ts`) reports the refusal to the SENDING model,
+ * which is the sender's typed answer rather than a stranger's banner. Every
+ * renderer-authored kind keeps its error frame unchanged.
+ */
+const MAIN_ORIGINATED_MESSAGE_TYPES = new Set(['host.result', 'peer.deliver', 'app.park'])
+
+function isMainOriginatedMessage(message: unknown): boolean {
+  if (typeof message !== 'object' || message === null) return false
+  const type = (message as { type?: unknown }).type
+  return typeof type === 'string' && MAIN_ORIGINATED_MESSAGE_TYPES.has(type)
 }
 
 /**
