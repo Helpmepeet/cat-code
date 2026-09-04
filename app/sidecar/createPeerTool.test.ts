@@ -249,6 +249,13 @@ test('the creation guidance names this session as the return channel', async () 
   expect(named).toContain('send Alex a message')
   expect(named).toContain('the goal, what done looks like, the files in scope')
 
+  // It has to LEAD, not sit fourth in a list of things a careful instruction
+  // states. A session that left it out then read its peer in a loop waiting for
+  // an answer it had never asked for, so the sentence carries what to do
+  // instead of watching as well as what to write.
+  expect(named).toContain('has to ask for a report, or you never hear back')
+  expect(named).toContain('wait for that message instead of watching the session')
+
   // A session with no name of its own still gets usable guidance, not a
   // sentence with a hole in it.
   const unnamed = await createCreatePeerTool(requestHost, null).prompt()

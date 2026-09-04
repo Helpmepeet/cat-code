@@ -890,3 +890,34 @@ test('a malformed peer row is skipped rather than trusted', async () => {
 
   expect(result.status).toBe('no_such_peer')
 })
+
+test('the guidance says repeated reads are not how you wait for a peer', async () => {
+  // Observed in a live sitting: a session created a peer and then read it in a
+  // loop watching for it to finish. Nothing in this tool said that was wrong,
+  // and the passivity sentence made each read look free. The correction has to
+  // name both halves, the wrong shape and the right one, or a model reading
+  // only that it disturbs nobody draws the same conclusion again.
+  // Read as one run of text: where the source happens to wrap a line is not
+  // part of the contract, and the model never sees those breaks as breaks.
+  const guidance = (
+    await createReadPeerTool(listing().requestHost).prompt()
+  ).replace(/\s+/g, ' ')
+
+  expect(guidance).toContain('never opens or disturbs the other session')
+  expect(guidance).toContain('not how you wait for a peer')
+  expect(guidance).toContain('Ask it to report back, then stop')
+})
+
+test('the guidance claims the question a transcript forensics path was answering', async () => {
+  // "Which session here has touched this file, search their transcripts" went
+  // to a path that reads the same records raw, without this tool's escaping,
+  // redaction or provenance. This is the routing surface that has to win it:
+  // `prompt()` is what reaches the model (`src/utils/api.ts:209`), while
+  // `description()` is a UI label.
+  const guidance = (
+    await createReadPeerTool(listing().requestHost).prompt()
+  ).replace(/\s+/g, ' ')
+
+  expect(guidance).toContain('whether it touched a file you care about')
+  expect(guidance).toContain('rather than opening its transcript yourself')
+})

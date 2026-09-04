@@ -166,9 +166,13 @@ export function createCreatePeerTool(
       return [
         'Start another session in this workspace and give it a first instruction. It becomes a peer, not a worker of yours: it has its own tab, its own transcript and its own permissions, and the user can see it and talk to it.',
         '',
-        'The instruction you write decides whether you ever hear back, so state four things in it: the goal, what done looks like, the files in scope, and the return channel. For the return channel, say something like: ' +
+        // The ask-for-a-report line LEADS, and is a sentence of its own. As the
+        // fourth item of a four-item list it read as one more thing a careful
+        // instruction states, and a session that left it out then sat reading
+        // its peer in a loop waiting for an answer nobody had asked for.
+        'The instruction has to ask for a report, or you never hear back: ' +
           returnChannelExample +
-          '.',
+          '. Then wait for that message instead of watching the session. Say the rest plainly too: the goal, what done looks like, the files in scope.',
         '',
         'The new session starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
         '',
