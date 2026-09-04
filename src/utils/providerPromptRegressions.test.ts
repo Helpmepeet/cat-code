@@ -524,6 +524,37 @@ describe('provider and prompt regressions', () => {
     expect(claudePrompt).not.toContain('Apply_patch')
   })
 
+  test('--dump-system-prompt renders the tool-gated rules a session gets', async () => {
+    setSessionProvider('openai')
+
+    const withTools = (
+      await getSystemPrompt(
+        getTools(getEmptyToolPermissionContext()),
+        'gpt-5.6-sol',
+      )
+    ).join('\n')
+    const withoutTools = (await getSystemPrompt([], 'gpt-5.6-sol')).join('\n')
+
+    // The dump used to pass an empty tool list, so these gated rules were
+    // missing and file routing named Edit instead of Apply_patch — evals built
+    // on the dump measured a prompt no session runs.
+    expect(withTools).toContain('AGENT TOOL:')
+    expect(withTools).toContain('TASK TRACKING:')
+    expect(withTools).toContain(`File editing → ${FILE_PATCH_TOOL_NAME}`)
+    expect(withoutTools).not.toContain('AGENT TOOL:')
+    expect(withoutTools).not.toContain(`File editing → ${FILE_PATCH_TOOL_NAME}`)
+
+    // Guard the call site itself: the dump path is an entrypoint fast path
+    // with no other coverage.
+    const cliSource = await Bun.file(
+      new URL('../entrypoints/cli.tsx', import.meta.url).pathname,
+    ).text()
+    expect(cliSource).not.toContain('getSystemPrompt([], model)')
+    expect(cliSource).toContain(
+      'getSystemPrompt(getTools(getEmptyToolPermissionContext()), model)',
+    )
+  })
+
   test('restricted GPT tool sets do not leak mutation or unheld routing rules', () => {
     const restrictedSection = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
     expect(restrictedSection).not.toContain('File editing →')
