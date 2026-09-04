@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import { shouldRegisterForegroundShellTask } from '../../tasks/LocalShellTask/guards.js'
+import { getEmptyToolPermissionContext } from '../../Tool.js'
+import { FileEditTool } from '../FileEditTool/FileEditTool.js'
+import { BashTool } from './BashTool.js'
 import { getBashPrompt } from './prompt.js'
 
 describe('Bash prompt working-directory guidance', () => {
@@ -90,6 +93,42 @@ describe('Bash prompt edit-tool naming', () => {
     const claude = getBashPrompt('firstParty')
     expect(claude).toContain('Edit files: Use Edit (NOT sed/awk)')
     expect(claude).not.toContain('Apply_patch')
+  })
+
+  test('the shipped tool pool outranks the request provider', () => {
+    // getProviderFileEditTool picks by SESSION provider while this prompt
+    // renders per REQUEST provider, so a gpt-* worker inside an Anthropic
+    // session used to be told to use Apply_patch while Edit shipped.
+    const gptRequestWithEditShipped = getBashPrompt(
+      'openai',
+      new Set(['Bash', 'Edit']),
+    )
+    expect(gptRequestWithEditShipped).toContain('Edit files: Use Edit')
+    expect(gptRequestWithEditShipped).not.toContain('Edit files: Use Apply_patch')
+
+    const claudeRequestWithPatchShipped = getBashPrompt(
+      'firstParty',
+      new Set(['Bash', 'Apply_patch']),
+    )
+    expect(claudeRequestWithPatchShipped).toContain(
+      'Edit files: Use Apply_patch',
+    )
+
+    // No edit tool in the pool at all: fall back to the provider.
+    expect(getBashPrompt('openai', new Set(['Bash']))).toContain(
+      'Edit files: Use Apply_patch',
+    )
+  })
+
+  test('BashTool.prompt hands the real tool pool to getBashPrompt', async () => {
+    const prompt = await BashTool.prompt({
+      getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+      tools: [BashTool, FileEditTool],
+      agents: [],
+      provider: 'openai',
+    })
+
+    expect(prompt).toContain('Edit files: Use Edit')
   })
 })
 

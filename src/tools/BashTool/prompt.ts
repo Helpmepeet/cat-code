@@ -197,17 +197,26 @@ function getSimpleSandboxSection(): string {
   ].join('\n')
 }
 
-export function getBashPrompt(provider: APIProvider = getAPIProvider()): string {
+export function getBashPrompt(
+  provider: APIProvider = getAPIProvider(),
+  enabledToolNames?: ReadonlySet<string>,
+): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep in Claude's shell,
   // so we don't steer away from them (and Glob/Grep tools are removed).
   const embedded = hasEmbeddedSearchTools()
 
-  // The registry swaps Edit for Apply_patch on the OpenAI path
-  // (getProviderFileEditTool in ../../tools.ts), so the prompt must name the
-  // tool this provider actually ships.
-  const editToolName = isGPTPromptStyle(provider)
+  // The registry swaps Edit for Apply_patch by SESSION provider
+  // (getProviderFileEditTool in ../../tools.ts) while this prompt renders per
+  // REQUEST provider, so a gpt-* worker inside an Anthropic session was told
+  // to use Apply_patch while Edit shipped. The tool pool is the truth when the
+  // caller passes it; the provider is only the fallback.
+  const editToolName = enabledToolNames?.has(FILE_PATCH_TOOL_NAME)
     ? FILE_PATCH_TOOL_NAME
-    : FILE_EDIT_TOOL_NAME
+    : enabledToolNames?.has(FILE_EDIT_TOOL_NAME)
+      ? FILE_EDIT_TOOL_NAME
+      : isGPTPromptStyle(provider)
+        ? FILE_PATCH_TOOL_NAME
+        : FILE_EDIT_TOOL_NAME
 
   const toolPreferenceItems = [
     ...(embedded

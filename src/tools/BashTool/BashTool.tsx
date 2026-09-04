@@ -432,8 +432,8 @@ export const BashTool = buildTool({
   }) {
     return description || 'Run shell command';
   },
-  async prompt({ provider }) {
-    return getBashPrompt(provider);
+  async prompt({ provider, tools }) {
+    return getBashPrompt(provider, new Set(tools.map(tool => tool.name)));
   },
   isConcurrencySafe(input) {
     return this.isReadOnly?.(input) ?? false;
