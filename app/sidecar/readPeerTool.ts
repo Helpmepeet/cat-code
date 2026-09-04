@@ -49,6 +49,13 @@ import { z } from '../../node_modules/zod/v4'
 
 import { getOriginalCwd } from '../../src/bootstrap/state.js'
 import { buildTool, type ToolDef } from '../../src/Tool.js'
+import {
+  ADD_FILE_PREFIX,
+  DELETE_FILE_PREFIX,
+  FILE_PATCH_TOOL_NAME,
+  MOVE_TO_PREFIX,
+  UPDATE_FILE_PREFIX,
+} from '../../src/tools/FilePatchTool/constants.js'
 import { lazySchema } from '../../src/utils/lazySchema.js'
 import { jsonStringify } from '../../src/utils/slowOperations.js'
 import {
@@ -128,6 +135,14 @@ type Input = z.infer<InputSchema>
 
 export type ReadPeerStatus =
   | 'ok'
+  /**
+   * The read reached the oldest message it can open while the transcript
+   * continues before it. Distinct from `ok` because at that point, and only
+   * there, a zero result and a complete result look identical: `nextPosition`
+   * is null either way, since no position can address a message the read never
+   * opened.
+   */
+  | 'older_unread'
   | 'nothing_to_read'
   | 'no_such_peer'
   | 'unknown_position'
@@ -152,12 +167,20 @@ export type ReadPeerResult = {
   notice?: string
   range?: { entries: number; oldest: string | null; newest: string | null }
   entries?: ReadPeerEntry[]
-  /** Non-null when more remains before the oldest entry returned. */
+  /**
+   * Non-null when more remains before the oldest entry returned. Null means
+   * nothing more can be READ from here, which is not the same as nothing more
+   * exists: a transcript longer than the window that was opened ends its paging
+   * at null under the `older_unread` status.
+   */
   nextPosition?: string | null
   /**
    * True when text was cut out of what is returned. It is NOT "more remains",
    * which is what `nextPosition` is for: a read that returned 20 of 200
-   * messages whole cut nothing.
+   * messages whole cut nothing. It is also not "the transcript is longer than
+   * the window opened", which is what `older_unread` is for: folding that in
+   * set this on every page of a long peer, including tail reads that cut
+   * nothing, and a flag that is always true is a flag nobody reads.
    */
   truncated?: boolean
   /** How many values matching a known secret shape were removed. */
@@ -248,7 +271,7 @@ const blockSchema = lazySchema(() =>
 )
 
 /**
- * The ONE input field per tool that names what the call acted on. A tool call
+ * The input fields per tool that name what the call acted on. A tool call
  * rendered as its name alone makes "did anyone touch this file" unanswerable by
  * search, because the file name lives only in the input.
  *
@@ -256,41 +279,148 @@ const blockSchema = lazySchema(() =>
  * property that matters: the target of a Write or an Edit is its path, never its
  * contents, so file bodies cannot reach the reader's context through this path.
  * A tool absent from this table renders as its name alone.
+ *
+ * Every key here is a name a tool actually answers to: they are the `name:` a
+ * tool is built with, not the directory it lives in. `Write` is
+ * `FILE_WRITE_TOOL_NAME` (`src/tools/FileWriteTool/prompt.ts:7`) and `Task` is
+ * `LEGACY_AGENT_TOOL_NAME` (`src/tools/AgentTool/constants.ts:3`), while
+ * `FileWrite` and `FilePatch` were folder names and matched nothing, so a call
+ * they were meant to cover rendered bare and searched as zero.
+ *
+ * `SendToPeer` renders both of its fields. They are model-authored input from
+ * the session being read, the same class as the `Bash` command already rendered
+ * here, and a message is not a file body. Without them a sender cannot find its
+ * own outgoing messages.
  */
-const TOOL_TARGET_FIELDS: Record<string, string> = {
-  Bash: 'command',
-  Read: 'file_path',
-  Edit: 'file_path',
-  Write: 'file_path',
-  FileWrite: 'file_path',
-  FilePatch: 'file_path',
-  Grep: 'pattern',
-  Glob: 'pattern',
-  Task: 'description',
-  Agent: 'description',
+const TOOL_TARGET_FIELDS: Record<string, readonly string[]> = {
+  Bash: ['command'],
+  Read: ['file_path'],
+  Edit: ['file_path'],
+  Write: ['file_path'],
+  NotebookEdit: ['notebook_path'],
+  Grep: ['pattern'],
+  Glob: ['pattern'],
+  Task: ['description'],
+  Agent: ['description'],
+  SendToPeer: ['to', 'text'],
 }
 
 /** A target is an identifier, not a payload, so it is capped and one line. */
 const MAX_TOOL_TARGET_CHARS = 120
 
+/**
+ * A patch names N files rather than one, so its bound scales with N. Both
+ * numbers stay bounds on IDENTIFIERS: nothing a patch extractor returns is
+ * content, so the wider ceiling buys reachable paths without widening what can
+ * cross.
+ */
+const MAX_PATCH_PATHS = 8
+const MAX_PATCH_TARGET_CHARS = 480
+
 const toolInputSchema = lazySchema(() => z.record(z.string(), z.unknown()))
+
+/**
+ * `Apply_patch` (`FILE_PATCH_TOOL_NAME`) is the file-edit tool on every session
+ * whose provider is OpenAI (`src/tools.ts:214`), which here is most of them, so
+ * a map row that misses it makes "did that session touch this file" answer zero
+ * on the first ask.
+ *
+ * It cannot be a map row: its input is either the whole patch envelope as one
+ * string or a normalized `ops` array (`src/tools/FilePatchTool/types.ts`), and
+ * no single field holds the target. Rendering the envelope would move file
+ * bodies between sessions, which the read never does, so this reads the
+ * operation HEADERS and yields the paths they name.
+ */
+const PATCH_PATH_PREFIXES = [
+  UPDATE_FILE_PREFIX,
+  ADD_FILE_PREFIX,
+  DELETE_FILE_PREFIX,
+  MOVE_TO_PREFIX,
+] as const
+
+function patchPathsFromEnvelope(envelope: string): string[] {
+  const paths: string[] = []
+  for (const raw of envelope.split('\n')) {
+    // Trimmed first because the parser trims before it tests these prefixes
+    // (`normalizePatchText`, `src/tools/FilePatchTool/parser.ts:105-131`), so
+    // an indented header is still a header. A body line keeps its `+`, `-` or
+    // space through the trim and so still cannot match one.
+    const line = raw.trim()
+    const prefix = PATCH_PATH_PREFIXES.find(candidate =>
+      line.startsWith(candidate),
+    )
+    if (prefix === undefined) continue
+    const path = line.slice(prefix.length).trim()
+    if (path.length > 0 && !paths.includes(path)) paths.push(path)
+    if (paths.length >= MAX_PATCH_PATHS) break
+  }
+  return paths
+}
+
+/**
+ * Deliberately not the engine's own `operationSchema`: that one validates the
+ * hunks, so a patch that failed to apply would parse as nothing and its paths
+ * would vanish from search. Paths are all this reads, so paths are all it asks
+ * for.
+ */
+const patchOpsSchema = lazySchema(() =>
+  z.array(
+    z.object({
+      path: z.string().optional(),
+      moveTo: z.string().optional(),
+    }),
+  ),
+)
+
+function patchPaths(input: unknown): string[] {
+  const parsed = toolInputSchema().safeParse(input)
+  if (!parsed.success) return []
+  const envelope = parsed.data.input
+  if (typeof envelope === 'string') return patchPathsFromEnvelope(envelope)
+  const ops = patchOpsSchema().safeParse(parsed.data.ops)
+  if (!ops.success) return []
+  const paths: string[] = []
+  for (const op of ops.data) {
+    for (const path of [op.path, op.moveTo]) {
+      if (path === undefined || path.length === 0) continue
+      if (!paths.includes(path)) paths.push(path)
+    }
+    if (paths.length >= MAX_PATCH_PATHS) break
+  }
+  return paths.slice(0, MAX_PATCH_PATHS)
+}
+
+function targetFieldValues(name: string, input: unknown): string[] {
+  const fields = TOOL_TARGET_FIELDS[name]
+  if (fields === undefined) return []
+  const parsed = toolInputSchema().safeParse(input)
+  if (!parsed.success) return []
+  const values: string[] = []
+  for (const field of fields) {
+    const value = parsed.data[field]
+    if (typeof value === 'string' && value.length > 0) values.push(value)
+  }
+  return values
+}
 
 function toolCallTarget(name: string | undefined, input: unknown): string {
   if (name === undefined) return ''
-  const field = TOOL_TARGET_FIELDS[name]
-  if (field === undefined) return ''
-  const parsed = toolInputSchema().safeParse(input)
-  if (!parsed.success) return ''
-  const value = parsed.data[field]
-  if (typeof value !== 'string') return ''
+  const isPatch = name === FILE_PATCH_TOOL_NAME
+  const values = isPatch ? patchPaths(input) : targetFieldValues(name, input)
+  if (values.length === 0) return ''
+  const cap = isPatch ? MAX_PATCH_TARGET_CHARS : MAX_TOOL_TARGET_CHARS
   // Redaction runs BEFORE the cap, and the order is the whole point: a cut
   // inside a token leaves a prefix its pattern no longer matches, so capping
   // first would let truncation manufacture a surviving fragment out of a value
   // that would otherwise have been removed whole. `[removed]` matches no
-  // pattern, so the later pass over the entry is unaffected.
-  const flattened = removeKnownSecrets(value).text.replace(/\s+/g, ' ').trim()
-  if (flattened.length <= MAX_TOOL_TARGET_CHARS) return flattened
-  return `${flattened.slice(0, MAX_TOOL_TARGET_CHARS).trimEnd()}...`
+  // pattern, so the later pass over the entry is unaffected. The extractors
+  // above run on the far side of this, so everything they return is redacted
+  // here too.
+  const flattened = removeKnownSecrets(values.join(' '))
+    .text.replace(/\s+/g, ' ')
+    .trim()
+  if (flattened.length <= cap) return flattened
+  return `${flattened.slice(0, cap).trimEnd()}...`
 }
 
 const toolResultContentSchema = lazySchema(() =>
@@ -614,6 +744,16 @@ export function createReadPeerTool(
         maxBytes: MAX_HISTORY_LOAD_EARLIER_BYTES,
       })
 
+      /**
+       * The loader opens a bounded window at the END of the file, and says so
+       * when the file was longer than it. Messages before the oldest one loaded
+       * were never examined and no position reaches them, so every answer built
+       * from this window is an answer about part of the record. Reported as a
+       * status rather than folded into `truncated`, whose meaning is text cut
+       * from what is returned.
+       */
+      const olderUnread = display.truncated
+
       const rendered: ReadPeerEntry[] = []
       for (const message of display.messages) {
         if (message.type !== 'user' && message.type !== 'assistant') continue
@@ -629,7 +769,17 @@ export function createReadPeerTool(
           text,
         })
       }
-      if (rendered.length === 0) return nothingYet
+      if (rendered.length === 0) {
+        if (!olderUnread) return nothingYet
+        return {
+          data: {
+            sourceSession: peer.name,
+            capturedAt,
+            status: 'older_unread' as const,
+            summary: `Nothing readable is in the part of ${peer.name} this reached, and it has older messages that could not be opened.`,
+          },
+        }
+      }
 
       let scoped = rendered
       if (input.before !== undefined) {
@@ -653,8 +803,14 @@ export function createReadPeerTool(
             data: {
               sourceSession: peer.name,
               capturedAt,
-              status: 'nothing_to_read' as const,
-              summary: `That position is the oldest readable message from ${peer.name}, so there is nothing earlier to read.`,
+              // Same shape of mistake one level down: "nothing earlier" is true
+              // only when the read reached the start of the record.
+              status: olderUnread
+                ? ('older_unread' as const)
+                : ('nothing_to_read' as const),
+              summary: olderUnread
+                ? `That position is as far back as a read of ${peer.name} reaches. It has older messages that could not be opened.`
+                : `That position is the oldest readable message from ${peer.name}, so there is nothing earlier to read.`,
             },
           }
         }
@@ -702,8 +858,14 @@ export function createReadPeerTool(
       }
 
       const droppedByBudget = kept.length < cleaned.length
-      const truncated = droppedByBudget || slicedOneMessage || display.truncated
+      const truncated = droppedByBudget || slicedOneMessage
       const olderRemain = matching.length > selected.length || droppedByBudget
+      // The wall: this page reaches the oldest message that was opened, and the
+      // record continues before it. Only here do "you have seen it all" and
+      // "you have seen the newest slice" look the same to a reader, so only
+      // here does the status change. On any earlier page `nextPosition` carries
+      // the reader onward and a second signal would just be noise.
+      const reachedWall = !olderRemain && olderUnread
       const oldest = kept[0]
       const newest = kept[kept.length - 1]
       const summaryParts = [
@@ -713,6 +875,16 @@ export function createReadPeerTool(
       ]
       if (olderRemain) {
         summaryParts.push('More remains before them.')
+      }
+      // Said in the summary as well as the status because the summary is what a
+      // count sentence is read against: "Found 0 of 0" beside a bare `ok` is the
+      // confident zero this exists to stop.
+      if (reachedWall) {
+        summaryParts.push(
+          view === 'search'
+            ? `${peer.name} has older messages that could not be opened, so they were not searched.`
+            : `${peer.name} has older messages that could not be opened, so this is as far back as a read reaches.`,
+        )
       }
       // A search hit cut short may not contain the words that matched it, and a
       // summary that only counted the hit would read as a complete answer.
@@ -731,7 +903,7 @@ export function createReadPeerTool(
         data: {
           sourceSession: peer.name,
           capturedAt,
-          status: 'ok' as const,
+          status: reachedWall ? ('older_unread' as const) : ('ok' as const),
           summary: summaryParts.join(' '),
           notice: UNTRUSTED_NOTICE,
           range: {

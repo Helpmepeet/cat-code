@@ -32,7 +32,11 @@ import { join } from 'node:path'
 import { getOriginalCwd, setOriginalCwd } from '../../src/bootstrap/state.js'
 import { getProjectDir } from '../../src/utils/sessionStorage.js'
 
-import { MAX_PEER_READ_BYTES, MAX_PEER_QUERY_BYTES } from '../shared/limits.js'
+import {
+  MAX_HISTORY_LOAD_EARLIER_BYTES,
+  MAX_PEER_READ_BYTES,
+  MAX_PEER_QUERY_BYTES,
+} from '../shared/limits.js'
 import type {
   HostRequestArgs,
   HostRequestVerb,
@@ -541,6 +545,164 @@ test('a tool outside the table renders as before, and a long target is cut', asy
   expect(body.length).toBeLessThan(300)
 })
 
+test('the edit tool most sessions here run names its files, and moves none of them', async () => {
+  const workspace = isolatedWorkspace()
+  // `Apply_patch` is the file-edit tool on every OpenAI-routed session
+  // (`src/tools.ts:214`), so on most peers in this workspace it is THE edit
+  // tool. Its input is the whole patch, which is why a field name cannot reach
+  // its target and why rendering the input would move file bodies.
+  const envelope = [
+    '*** Begin Patch',
+    '*** Update File: app/sidecar/alpha.ts',
+    '@@',
+    "-const value = 'BODY-TEXT-THAT-MUST-NOT-TRAVEL'",
+    "+const value = 'BODY-TEXT-THAT-MUST-NOT-TRAVEL-EITHER'",
+    '*** Add File: docs/beta.md',
+    '+BODY-TEXT-THAT-MUST-NOT-TRAVEL',
+    // A body line shaped like a header. The parser does not read it as one and
+    // neither may this: a patch that edits a patch would otherwise put paths
+    // into the result that nobody touched.
+    '+*** Add File: never/touched.ts',
+    '*** Delete File: scripts/gamma.ts',
+    '*** End Patch',
+  ].join('\n')
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'Apply_patch',
+          input: { input: envelope },
+        },
+      ],
+    },
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  const body = tail.entries?.[0]?.text ?? ''
+
+  expect(body).toContain(
+    '[tool call: Apply_patch app/sidecar/alpha.ts docs/beta.md scripts/gamma.ts]',
+  )
+  expect(JSON.stringify(tail)).not.toContain('BODY-TEXT-THAT-MUST-NOT-TRAVEL')
+  expect(JSON.stringify(tail)).not.toContain('never/touched.ts')
+
+  const found = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'sidecar/alpha.ts',
+  })
+  expect(found.entries?.length).toBe(1)
+})
+
+test('a patch sent as operations rather than text names its files too', async () => {
+  const workspace = isolatedWorkspace()
+  // The second input shape (`src/tools/FilePatchTool/types.ts`). The hunks are
+  // deliberately not valid: a patch that failed to apply is still a record of
+  // which file a peer went at, so the paths must survive a body this tool
+  // refuses to validate.
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'Apply_patch',
+          input: {
+            ops: [
+              {
+                type: 'update',
+                path: 'app/main/delta.ts',
+                moveTo: 'app/main/epsilon.ts',
+                hunks: 'NOT-A-VALID-HUNK-LIST',
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  expect(tail.entries?.[0]?.text).toContain(
+    '[tool call: Apply_patch app/main/delta.ts app/main/epsilon.ts]',
+  )
+  expect(JSON.stringify(tail)).not.toContain('NOT-A-VALID-HUNK-LIST')
+
+  const found = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'app/main/epsilon.ts',
+  })
+  expect(found.entries?.length).toBe(1)
+})
+
+test('a notebook edit and an outgoing message are findable by what they named', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeTranscript(workspace, [
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tu1',
+          name: 'NotebookEdit',
+          input: {
+            notebook_path: 'analysis/run.ipynb',
+            new_source: 'NOTEBOOK-CELL-BODY',
+            cell_type: 'code',
+          },
+        },
+        {
+          type: 'tool_use',
+          id: 'tu2',
+          name: 'SendToPeer',
+          input: { to: 'Otter', text: 'the parser rewrite is finished' },
+        },
+        // The name of a folder, not of a tool. Nothing answers to it, so it
+        // renders bare, and a row for it made two calls look covered that were
+        // not.
+        {
+          type: 'tool_use',
+          id: 'tu3',
+          name: 'FilePatch',
+          input: { file_path: 'never/resolved.ts' },
+        },
+      ],
+    },
+  ])
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  const body = tail.entries?.[0]?.text ?? ''
+  expect(body).toContain('[tool call: NotebookEdit analysis/run.ipynb]')
+  expect(body).toContain(
+    '[tool call: SendToPeer Otter the parser rewrite is finished]',
+  )
+  expect(body).toContain('[tool call: FilePatch]')
+  expect(JSON.stringify(tail)).not.toContain('NOTEBOOK-CELL-BODY')
+
+  const notebook = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'run.ipynb',
+  })
+  expect(notebook.entries?.length).toBe(1)
+
+  // A sender that cannot find its own outgoing messages is half the complaint.
+  const sent = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: 'parser rewrite is finished',
+  })
+  expect(sent.entries?.length).toBe(1)
+})
+
 test('a secret in a tool target is removed before the cap, never fragmented by it', async () => {
   const workspace = isolatedWorkspace()
   // The key starts at character 110 of the command and runs past the 120-char
@@ -834,6 +996,79 @@ test('a position at the oldest message says there is nothing earlier, not zero m
   expect(earlier.status).toBe('nothing_to_read')
   expect(earlier.summary).toContain('nothing earlier')
   expect(earlier.entries).toBeUndefined()
+})
+
+/* ------------------------------------------------------------------------- *
+ * Reaching the end of what can be opened
+ *
+ * The loader opens the newest `MAX_HISTORY_LOAD_EARLIER_BYTES` of a transcript.
+ * These use a real file past that ceiling rather than a flag, because the thing
+ * under test is what the REAL loader reports about a real file: the marker sits
+ * in the first message, which is the one physically outside the window.
+ * ------------------------------------------------------------------------- */
+
+const OLDEST_MARKER = 'marker-only-in-the-message-past-the-wall'
+
+function writeOversizedTranscript(workspace: Workspace) {
+  return writeTranscript(workspace, [
+    text(
+      'user',
+      `${OLDEST_MARKER} ${'p'.repeat(MAX_HISTORY_LOAD_EARLIER_BYTES + 1024 * 1024)}`,
+    ),
+    text('assistant', 'inside the window'),
+    text('user', 'also inside the window'),
+  ])
+}
+
+test('a search that could not reach the whole record never answers a plain zero', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeOversizedTranscript(workspace)
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const missed = await read(fake.requestHost, {
+    peer: 'Bear',
+    view: 'search',
+    query: OLDEST_MARKER,
+  })
+
+  // The hit is real and on disk. What must never happen is the shape this had:
+  // `ok`, found none, no position to follow, which reads as "it is not there".
+  expect(missed.entries?.length ?? 0).toBe(0)
+  expect(missed.status).toBe('older_unread')
+  expect(missed.nextPosition).toBeNull()
+  expect(missed.summary).toContain('could not be opened')
+  expect(missed.summary).toContain('not searched')
+})
+
+test('a tail read that cut nothing is not reported as truncated just for being deep', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeOversizedTranscript(workspace)
+
+  const tail = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+  })
+
+  // Every page of such a peer used to carry `truncated`, including this one,
+  // where the messages come back whole. A flag that is always on is a flag
+  // nobody reads, and it is the only signal there is.
+  expect(tail.truncated).toBe(false)
+  expect(tail.status).toBe('older_unread')
+  expect(tail.summary).toContain('as far back as a read reaches')
+})
+
+test('paging back to the wall says the record continues, not that it ended', async () => {
+  const workspace = isolatedWorkspace()
+  const { engineSessionId } = writeOversizedTranscript(workspace)
+  const fake = listing(peerRow('Bear', engineSessionId))
+
+  const tail = await read(fake.requestHost, { peer: 'Bear' })
+  const oldest = tail.entries?.[0]?.id
+
+  const earlier = await read(fake.requestHost, { peer: 'Bear', before: oldest })
+
+  expect(earlier.status).toBe('older_unread')
+  expect(earlier.summary).toContain('as far back as a read of Bear reaches')
+  expect(earlier.summary).toContain('could not be opened')
 })
 
 /* ------------------------------------------------------------------------- *
