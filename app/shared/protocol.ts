@@ -677,6 +677,28 @@ export type PeerDescriptor = {
   /** From the `activity` frame. ABSENT for a row that is not live. */
   presence?: ActivityPresence
   /**
+   * What the session is RUNNING on: the resolved model id and the reasoning
+   * effort actually applied, read off the row's own `run-controls.snapshot`
+   * ({@link RunControlsSnapshot} `model.current` / `effort.current`). ABSENT for
+   * a closed row, and absent for one that has not announced yet, on the
+   * `presence` rule: a value nobody measured is not filled in.
+   *
+   * OBSERVED, never the value a `CreatePeer` asked for, because a spawn-time
+   * value is wrong three ways: a user-created session never had one, a `/model`
+   * or `/effort` change moves the session without telling main, and an
+   * unrecognised effort is dropped at the child in favour of the user's saved
+   * setting — so the asked-for value may never have been what ran. A parked row
+   * keeps its last observed value: its engine is gone, so nothing can move it
+   * while parked, and the next snapshot lands before the woken row is ready.
+   *
+   * The model id is NOT checked against a known set anywhere on this path. The
+   * engine passes unrecognised ids through so a new model works the day it
+   * ships; reporting the value is what makes a typo visible, and a typo is
+   * exactly what the reader needs to see here.
+   */
+  model?: string
+  effort?: string
+  /**
    * The creating session, when an agent created this one. `name` is null when
    * the creator's row has been reaped: ids are not reused and names are, so the
    * id is what is stored and the name is resolved at read time.

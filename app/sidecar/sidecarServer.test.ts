@@ -10223,6 +10223,56 @@ test('HR5/F6 — a host.result whose value does not match its verb is refused, n
   expect(outcome.ok ? null : outcome.error.code).toBe('internal_error')
 })
 
+test('HR5/F6 — a peers.list row carries the model and effort main observed, and still nothing else', async () => {
+  // The two fields the roster gained. They are main-stamped and free-form on
+  // purpose: no model id is checked against a known set anywhere on this path,
+  // because the engine passes an unrecognised id through so a new model works
+  // the day it ships. What the boundary still owes is that the row is a CLOSED
+  // shape, so the same call proves the strict object has not been loosened into
+  // a pass-through by the addition.
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  const pending = server.requestHost('peers.list', {})
+  const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
+    .requestId
+
+  const runningRow = {
+    ...BEAR_DESCRIPTOR,
+    model: 'a-model-that-does-not-exist-yet',
+    effort: 'high',
+  }
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      value: { peers: [runningRow] },
+    }),
+  )
+
+  expect(await pending).toEqual({ ok: true, value: { peers: [runningRow] } } as never)
+
+  const second = server.requestHost('peers.list', {})
+  const secondId = (
+    received.filter(f => f.kind === 'host.request')[1] as { requestId: string }
+  ).requestId
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId: secondId,
+      ok: true,
+      value: { peers: [{ ...runningRow, provider: 'openai' }] },
+    }),
+  )
+  const refused = await second
+  expect(refused.ok).toBe(false)
+  expect(refused.ok ? null : refused.error.code).toBe('internal_error')
+})
+
 test('HR5/F6 — a result for one verb cannot satisfy another verb schema', async () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

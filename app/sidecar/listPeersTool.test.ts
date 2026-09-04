@@ -240,6 +240,39 @@ test('narrowing rejects the fields it cannot trust', () => {
   expect(narrowPeerList({ peers: 'Bear' })).toBeNull()
 })
 
+test('a peer that says what it runs on renders it, including an id nobody recognises', () => {
+  // Deliberately NOT matched against a known model set: the engine passes an
+  // unrecognised id through so a new model works the day it ships, and a create
+  // that mistyped one produces a session that boots and then dies on its first
+  // request. Rendering the value verbatim is the only place that typo is
+  // visible before the peer goes quiet.
+  expect(
+    narrowPeerView({
+      ...liveRow,
+      model: 'gpt-5.7-nova',
+      effort: 'high',
+    }),
+  ).toMatchObject({ model: 'gpt-5.7-nova', effort: 'high' })
+  expect(
+    narrowPeerView({ ...liveRow, model: 'gtp-5.6-sol' })?.model,
+  ).toBe('gtp-5.6-sol')
+})
+
+test('a model the roster cannot use costs the row its model, never the roster the row', () => {
+  const noModel = { ...liveRow }
+  expect(narrowPeerView(noModel)).not.toHaveProperty('model')
+  // Wrong type, empty, and far longer than any model id: each is dropped and
+  // the row still lists, because a roster is more use than a field.
+  expect(narrowPeerView({ ...liveRow, model: 7 })).not.toHaveProperty('model')
+  expect(narrowPeerView({ ...liveRow, model: '' })).not.toHaveProperty('model')
+  expect(
+    narrowPeerView({ ...liveRow, model: 'x'.repeat(129), effort: 'x'.repeat(129) }),
+  ).toMatchObject({ name: 'Bear', status: 'live' })
+  expect(
+    narrowPeerView({ ...liveRow, model: 'x'.repeat(129) }),
+  ).not.toHaveProperty('model')
+})
+
 test('ListPeers projects nothing to the auto-mode classifier, deliberately', () => {
   // PEER-SESSIONS §4: read-only tools project `''` on purpose. The classifier
   // reads `''` as "no security relevance" and skips the tool, which is right

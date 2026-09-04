@@ -341,6 +341,76 @@ describe('peers.list', () => {
     expect(coral?.createdBy).toEqual({ appSessionId: 'gone-id', name: null })
   })
 
+  test('reports the model and effort a row announced, for live and parked rows only', async () => {
+    // The point of reading this off the row's own run-controls rather than off
+    // the create that asked for it: Coral was never created by an agent and so
+    // never had a spawn value, and Bear's is whatever it is running NOW.
+    const h = harness({
+      rows: [
+        row(ALEX, 'Alex'),
+        row(BEAR, 'Bear'),
+        row(CORAL, 'Coral', { shutdown: 'parked' }),
+        row(DUNE, 'Dune', { shutdown: 'clean' }),
+      ],
+      live: new Set([ALEX, BEAR]),
+    })
+    h.plane.recordRunControls(BEAR, { model: 'gpt-5.6-luna', effort: 'low' })
+    h.plane.recordRunControls(CORAL, { model: 'gpt-5.6-sol', effort: 'high' })
+    h.plane.recordRunControls(DUNE, { model: 'gpt-5.6-sol', effort: 'high' })
+
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    const peers = (h.lastResult()?.value as { peers: Array<Record<string, unknown>> }).peers
+    const find = (name: string) => peers.find(peer => peer.name === name)
+
+    expect(find('Bear')).toMatchObject({
+      status: 'live',
+      model: 'gpt-5.6-luna',
+      effort: 'low',
+    })
+    // A parked row KEEPS its value, unlike presence: its engine is gone, so
+    // nothing can move the model while it is parked, and this is the row a
+    // caller is deciding whether to wake.
+    expect(find('Coral')).toMatchObject({
+      status: 'parked',
+      model: 'gpt-5.6-sol',
+      effort: 'high',
+    })
+    // A closed row carries none, even when main heard one before it closed.
+    expect(find('Dune')).not.toHaveProperty('model')
+    expect(find('Dune')).not.toHaveProperty('effort')
+  })
+
+  test('a row that has not announced, or whose engine could not resolve one, carries no model', async () => {
+    // Absent means "nobody measured it", exactly as it does for presence. The
+    // null case is the engine's own failure to resolve, and it must not be
+    // rendered as a model called null.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+    h.plane.recordRunControls(CORAL, { model: null, effort: null })
+
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    const peers = (h.lastResult()?.value as { peers: Array<Record<string, unknown>> }).peers
+    for (const peer of peers) {
+      expect(peer).not.toHaveProperty('model')
+      expect(peer).not.toHaveProperty('effort')
+    }
+  })
+
+  test('a model change moves the row without a respawn', async () => {
+    const h = harness()
+    h.plane.recordRunControls(BEAR, { model: 'gpt-5.6-luna', effort: 'low' })
+    h.plane.recordRunControls(BEAR, { model: 'gpt-5.6-sol', effort: 'high' })
+
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    const peers = (h.lastResult()?.value as { peers: Array<Record<string, unknown>> }).peers
+    expect(peers.find(peer => peer.name === 'Bear')).toMatchObject({
+      model: 'gpt-5.6-sol',
+      effort: 'high',
+    })
+  })
+
   test('orders live before parked before closed', async () => {
     const h = harness({
       rows: [
@@ -908,6 +978,7 @@ test('a reaped row takes every per-row and per-pair store with it', async () => 
   const h = harness()
   await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r1'))
   h.plane.recordActivity(BEAR, 'running')
+  h.plane.recordRunControls(BEAR, { model: 'gpt-5.6-sol', effort: 'high' })
   expect(h.plane.pendingFor(BEAR)).toEqual(['msg-1'])
   expect(h.plane.presenceOf(BEAR)).toBe('running')
 
@@ -915,6 +986,12 @@ test('a reaped row takes every per-row and per-pair store with it', async () => 
 
   expect(h.plane.pendingFor(BEAR)).toEqual([])
   expect(h.plane.presenceOf(BEAR)).toBeUndefined()
+  // The model store is the one that survives a row going DOWN, so the reap is
+  // the only thing that clears it: a name handed out again must not inherit the
+  // previous row's model.
+  await h.plane.handleRequest(ALEX, request('peers.list', {}, 'r-list'))
+  const listed = (h.lastResult()?.value as { peers: Array<Record<string, unknown>> }).peers
+  expect(listed.find(peer => peer.name === 'Bear')).not.toHaveProperty('model')
   // The dedup window went with it, so a name handed out again does not inherit
   // the previous row's refusals.
   await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'same' }, 'r2'))

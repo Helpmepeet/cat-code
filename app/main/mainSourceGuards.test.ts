@@ -275,6 +275,30 @@ test('HR2/HR6: a host.request is consumed by main and never reaches the renderer
   expect(interceptRegion).not.toContain('deliver(')
 })
 
+test('the roster reads the run-controls fields the engine RESOLVED, not the ones it was asked for', () => {
+  // The same JOIN argument as the liveness composition below, and the same
+  // honesty about what a grep proves. Both halves are covered for real (the
+  // frame's shape in the protocol, the plane's store in
+  // `peerRequestPlane.test.ts`), and the one line that joins them is in main,
+  // which no unit test can call.
+  //
+  // It is asserted because tsc cannot: `current` and `selected` are both
+  // `string | null` on the same object, and `selected` is the user's SETTING,
+  // null whenever the session runs a provider default or a model from the
+  // environment. Wired to it, the roster would report nothing for exactly the
+  // sessions whose model was never typed into a picker, with a green battery.
+  const bridge = region(
+    'function wireRendererBridge(sup: SidecarSupervisor): void',
+    'function wireHostEvents(h: Host): void',
+  )
+  const branch = bridge.indexOf("if (frame.kind === 'run-controls.snapshot')")
+  expect(branch).toBeGreaterThanOrEqual(0)
+  const observation = bridge.slice(branch, branch + 700)
+  expect(observation).toContain('peerPlane?.recordRunControls(')
+  expect(observation).toContain('model: frame.runControls.model.current')
+  expect(observation).toContain('effort: frame.runControls.effort.current')
+})
+
 test('the peer plane is composed with the supervisor-backed liveness predicate', () => {
   // T2 — the one line that turns `mainDecisions.ts`'s predicate into the plane's
   // `isLive`. Both halves are covered for real (the predicate in

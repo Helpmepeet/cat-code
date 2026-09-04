@@ -6136,6 +6136,13 @@ const peerDescriptorSchema = z
     engineSessionId: peerIdSchema.nullable(),
     status: z.enum(['live', 'parked', 'closed']),
     presence: z.enum(ACTIVITY_PRESENCES).optional(),
+    // Main-stamped from the row's own run-controls snapshot. Bounded like every
+    // other string on this plane and deliberately NOT checked against a known
+    // model set: the engine passes unrecognised ids through so a new model works
+    // the day it ships, and a check here would reject the next one the user
+    // adopts while telling a reader nothing it cannot see for itself.
+    model: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).optional(),
+    effort: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).optional(),
     createdBy: z
       .object({ appSessionId: peerIdSchema, name: peerNameSchema.nullable() })
       .strict()

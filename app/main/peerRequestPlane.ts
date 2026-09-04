@@ -432,14 +432,30 @@ type ReadyWaiter = { resolve: (ready: boolean) => void; timer: unknown }
 /** Live → parked → closed, then most recent first (PEER-SESSIONS §3). */
 const STATUS_ORDER: Record<PeerStatus, number> = { live: 0, parked: 1, closed: 2 }
 
+/**
+ * What a row's own engine says it is running (`RunControlsSnapshot`), reduced to
+ * the two fields `peers.list` reports. Null is the engine's own "could not
+ * resolve", and never reaches a descriptor.
+ */
+export type PeerRunControls = { model: string | null; effort: string | null }
+
 export type PeerRequestPlane = {
   /** One decoded `host.request` from `sessionId`'s socket. */
   handleRequest: (sessionId: SessionId, frame: unknown) => Promise<void>
   /** The row's latest `activity`. */
   recordActivity: (sessionId: SessionId, presence: ActivityPresence) => void
+  /**
+   * The row's latest `run-controls.snapshot`, reduced to the two fields the
+   * roster reports. Main passes the engine's OWN resolved values; nulls mean the
+   * engine could not resolve one, and are stored as "unknown", not as a value.
+   */
+  recordRunControls: (sessionId: SessionId, controls: PeerRunControls) => void
   /** That row announced itself. Releases wake waiters and redelivers unacked. */
   onReady: (sessionId: SessionId) => void
-  /** The row's process ended. Presence is a live-only fact. */
+  /**
+   * The row's process ended. Presence is a live-only fact and goes; the model
+   * and effort stay, because a parked row still runs on them (`runControls`).
+   */
   onSessionDown: (sessionId: SessionId) => void
   /** The row left the registry. Every per-row and per-pair store goes with it. */
   onSessionRemoved: (sessionId: SessionId) => void
@@ -473,6 +489,15 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   const frameWindow = new Map<SessionId, number[]>()
   /** Presence, per LIVE row only (§4 step 4a). */
   const presence = new Map<SessionId, ActivityPresence>()
+  /**
+   * Model + effort, per row that has announced one this run.
+   *
+   * Unlike `presence` this SURVIVES the row's process ending: a parked row's
+   * engine is gone, so nothing can move its model while it is parked, and the
+   * value is what a caller deciding whom to wake needs. It is reported only for
+   * a row that is not closed (`describe`), and it goes with the row on reap.
+   */
+  const runControls = new Map<SessionId, PeerRunControls>()
   /** Per `(from, to)` token bucket (§4 step 3). */
   const buckets = new Map<string, Bucket>()
   /** Identical body → same sender, same recipient, inside the dedup window (§4 step 3). */
@@ -552,12 +577,19 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
             name: rowFor(creatorId)?.name ?? null,
           }
     const live = status === 'live' ? presence.get(row.appSessionId) : undefined
+    // A closed row carries no model: the reader cannot act on it, rows from an
+    // earlier launch have no observation at all, and a field present on some
+    // closed rows and absent on others reads as a difference between the
+    // sessions rather than between what main happened to see.
+    const running = status === 'closed' ? undefined : runControls.get(row.appSessionId)
     return {
       name: row.name,
       appSessionId: row.appSessionId,
       engineSessionId: row.engineSessionId,
       status,
       ...(live !== undefined ? { presence: live } : {}),
+      ...(running?.model ? { model: running.model } : {}),
+      ...(running?.effort ? { effort: running.effort } : {}),
       ...(creator !== undefined ? { createdBy: creator } : {}),
       title: row.title ?? null,
       lastActivity: row.lastMessageSentAt ?? row.lastAttachedAt,
@@ -1417,12 +1449,16 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     recordActivity: (sessionId, next) => {
       presence.set(sessionId, next)
     },
+    recordRunControls: (sessionId, controls) => {
+      runControls.set(sessionId, controls)
+    },
     onReady,
     onSessionDown: sessionId => {
       presence.delete(sessionId)
     },
     onSessionRemoved: sessionId => {
       presence.delete(sessionId)
+      runControls.delete(sessionId)
       pending.delete(sessionId)
       reservations.delete(sessionId)
       verbWindow.delete(sessionId)

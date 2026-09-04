@@ -1860,6 +1860,16 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       // not make it main's alone.
       peerPlane?.recordActivity(event.sessionId, frame.presence)
     }
+    if (frame.kind === 'run-controls.snapshot') {
+      // The roster's model/effort, from the row's OWN engine-resolved state
+      // rather than from anything a create asked for. Read here for the same
+      // reason `activity` is: it is app-owned point-in-time state, and the frame
+      // still forwards normally to the composer that asked for it.
+      peerPlane?.recordRunControls(event.sessionId, {
+        model: frame.runControls.model.current,
+        effort: frame.runControls.effort.current,
+      })
+    }
     if (isTerminalLifecycleFrame(frame)) {
       pendingAccountDeletionNotices.delete(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing

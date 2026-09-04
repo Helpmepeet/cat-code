@@ -85,6 +85,14 @@ export type PeerView = {
   name: string
   status: PeerDescriptor['status']
   presence?: PeerDescriptor['presence']
+  /**
+   * What the session runs on, when main has heard it say. Both are ABSENT for a
+   * closed row and for one that has not announced yet — the `presence` rule
+   * again — so a reader that needs the model of a peer it is about to address
+   * finds it on exactly the rows it can address.
+   */
+  model?: string
+  effort?: string
   createdBy?: string
   title: string | null
   lastActivity: string
@@ -126,6 +134,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * The longest a model id or an effort level may be here.
+ *
+ * The boundary already bounds both at the plane's general text limit, which is
+ * a size cap rather than a statement about these two fields. This is the
+ * statement: the longest id the engine offers is around thirty characters, so a
+ * value many times that is not a model id however it got here, and the row is
+ * better off without it than with a paragraph rendered where a name goes.
+ */
+const MAX_RUN_VALUE_CHARS = 128
+
+function readShortText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined
+  if (value === '' || value.length > MAX_RUN_VALUE_CHARS) return undefined
+  return value
+}
+
+/**
  * Turn one entry of a `peers.list` answer into a row, or drop it.
  *
  * `host.result.value` IS now schema-checked per verb at the trust boundary, so
@@ -139,7 +164,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function narrowPeerView(value: unknown): PeerView | null {
   if (!isRecord(value)) return null
-  const { name, status, presence, createdBy, title, lastActivity } = value
+  const { name, status, presence, model, effort, createdBy, title, lastActivity } =
+    value
   if (typeof name !== 'string' || name === '') return null
   const knownStatus = PEER_STATUSES.find(candidate => candidate === status)
   if (knownStatus === undefined) return null
@@ -147,6 +173,12 @@ export function narrowPeerView(value: unknown): PeerView | null {
     return null
   }
   const knownPresence = PRESENCES.find(candidate => candidate === presence)
+  // Free-form on purpose, and length-checked rather than matched: a model id is
+  // whatever the engine was handed, including one that ships tomorrow and one
+  // the creator mistyped. An unusable value costs the row its model, never the
+  // roster its row.
+  const runsOn = readShortText(model)
+  const runsAt = readShortText(effort)
   // A reaped creator keeps its id but loses its name, and `gone` is what
   // PEER-SESSIONS §2 says to show for it. An unreadable creator block is
   // treated the same way: the row still lists.
@@ -158,6 +190,8 @@ export function narrowPeerView(value: unknown): PeerView | null {
     name,
     status: knownStatus,
     ...(knownPresence !== undefined ? { presence: knownPresence } : {}),
+    ...(runsOn !== undefined ? { model: runsOn } : {}),
+    ...(runsAt !== undefined ? { effort: runsAt } : {}),
     ...(creator !== undefined ? { createdBy: creator } : {}),
     title: typeof title === 'string' ? title : null,
     lastActivity: new Date(lastActivity).toISOString(),
@@ -244,6 +278,14 @@ export function createListPeersTool(
         'List the other sessions in this workspace. Live sessions come first, then parked, then closed, and inside each of those groups the most recently active comes first.',
         '',
         'Each entry carries the session name, whether it is live, parked or closed, its title, when it was last active, and who created it. The list is stamped with the time it was taken, so subtract to see how long ago that was. A live session also carries what it is doing right now: running a turn, waiting for the user to answer a permission question, or idle. A live session with no such value has not reported in yet and is still starting up, which is what a session you just created looks like when the create said it did not finish starting. A session that is not live never carries one.',
+        '',
+        // The model is reported because a create can SET one and nothing could
+        // read it back, so a caller could neither route by model nor see that
+        // the id it passed was a typo the session will die on. It says what the
+        // session reported running, which is not always what its create asked
+        // for: an effort level the session did not recognise was dropped in
+        // favour of the user's own setting.
+        'A session that is live or parked also carries the model it is running and its reasoning effort, as that session last reported them. Use them to send work to a session already on the model you want it done by, and to check that a session you created on a particular model really came up on it.',
         '',
         'Use it to find out who else is working here before you message one of them, and to check whether a session you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
       ].join('\n')
