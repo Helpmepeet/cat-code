@@ -37,11 +37,25 @@ export const MAX_OPERATIONAL_LOG_AGE_MS = 14 * 24 * 60 * 60 * 1000
  * three parts, so the second pair was suppressed and a real `started` /
  * `completed` became silence. These events are bounded by actual turns rather
  * than by failure duration, so they cannot run away (OBSERVABILITY-MINIMUM §5).
+ *
+ * `peer.message.routed` fails the same key for a structural reason rather than
+ * a coincidental one. Its permitted fields are `from, to, kind, messageId,
+ * outcome` (`operationalLog.ts`), so there is no `reason` and the third segment
+ * is always empty; its `appSessionId` is deliberately always the SENDER's
+ * (`peerRequestPlane.ts`), so the second segment is fixed for a whole fan-out.
+ * Two different messages to different peers with different outcomes therefore
+ * collide, and the second one is dropped. It is bounded the same way turn
+ * lifecycle is (one line per message a model actually sent, and sends
+ * serialize), so it cannot run away either. Re-keying on the varying fields is
+ * the wrong lever: the same key serves `renderer.health.sample` and
+ * `diagnostic`, whose fields vary by construction, so widening it would retire
+ * the dedupe for the sampled events it exists for (PEER-SESSIONS §10).
  */
 const DEDUPE_EXEMPT_EVENTS: ReadonlySet<string> = new Set([
   'session.turn.started',
   'session.turn.completed',
   'session.turn.stalled',
+  'peer.message.routed',
 ])
 
 export type OperationalLogSink = {
