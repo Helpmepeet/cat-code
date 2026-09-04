@@ -214,9 +214,19 @@ message from waking, a session closed twenty minutes ago is too, and a
 terminal session from an hour ago can never be reached. So:
 
 - `ListPeers` = every registry row that carries a name AND whose cwd equals
-  the caller's, excluding the caller. Terminal sessions never have a row and
-  never appear (follows from the terminal-out ruling; recorded here so nobody
-  files it as a bug).
+  the caller's AND that is reachable, excluding the caller. Terminal sessions
+  never have a row and never appear (follows from the terminal-out ruling;
+  recorded here so nobody files it as a bug).
+  🔁 The reachability clause was AMENDED 2026-09-04, after a seam review found
+  two named rows in the operator's own workspace that `ListPeers` advertised
+  and nothing could open. Name and cwd alone admit a row the host itself would
+  refuse to restore, and the delivery path reads that refusal as "already
+  restoring", so a send to one cost the full wake timeout before failing.
+  Reachable means `isLive` OR the host's own `canResume`, which is the union
+  `listSessions` publishes. Both are needed: a live session that has never
+  been typed in has no transcript yet, because the engine writes the file on
+  the first message, and it must stay addressable. The table above was already
+  right ("live + parked + closed-restorable"); only this bullet was loose.
 - Ordered live → parked → closed, then by last activity. Each row: name,
   state, engineSessionId (null until first ready), createdBy (resolved),
   title, last activity, and a presence state. Presence is a small app-owned
