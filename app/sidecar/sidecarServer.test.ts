@@ -9837,6 +9837,25 @@ test('the creation prompt is delivered UNTAGGED, and only when main says so', ()
   expect(getCommandQueueSnapshot()[0]?.origin).toMatchObject({ kind: 'peer' })
 })
 
+test('the creation-prompt flag survives onto the origin, so the engine can frame it', () => {
+  const server = makeServer(new AppSessionController(probeAdapter()))
+  const { socket } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true })))
+
+  // Skipping the XML wrapper is only half of "not framed as peer-sent": the
+  // engine's own `wrapCommandText` keys on the ORIGIN, and with the flag
+  // dropped here it told a session whose first input this is to defer the only
+  // instruction it had. An ordinary message carries no such key.
+  expect(getCommandQueueSnapshot()[0]?.origin).toEqual({
+    kind: 'peer',
+    name: 'Alex',
+    appSessionId: 'app-alex',
+    creationPrompt: true,
+  })
+})
+
 test('HR5 — an unknown key on peer.deliver is REJECTED, not stripped, and nothing is queued', () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

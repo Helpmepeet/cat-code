@@ -45,8 +45,18 @@ export type MessageOrigin =
    * A message delivered from another named session. `appSessionId` is the
    * sender's app-side address, carried as a plain string: the engine never
    * depends on `app/`.
+   *
+   * `creationPrompt` marks the one message that is the recipient's first and
+   * only input, the instruction it was created with. Absent means an ordinary
+   * mid-turn peer message, which is the fail-closed direction: that framing
+   * deprioritizes the message against work in progress.
    */
-  | { kind: 'peer'; name: string; appSessionId: string }
+  | {
+      kind: 'peer'
+      name: string
+      appSessionId: string
+      creationPrompt?: true
+    }
 
 export type DeferredTerminalFailureV1 = {
   version: 1

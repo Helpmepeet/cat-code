@@ -5274,10 +5274,16 @@ export class SidecarServer {
       return
     }
     const delivered = parsed.data
+    // `untagged` decides BOTH halves of "not framed as peer-sent" (§5): the
+    // missing XML wrapper below, and the engine's own prose framing, which
+    // `wrapCommandText` derives from the origin alone. Carrying it here rather
+    // than only at the wrapper is what keeps the creation prompt from being
+    // announced to its recipient as an interruption to defer.
     const origin: MessageOrigin = {
       kind: 'peer',
       name: delivered.from,
       appSessionId: delivered.fromSessionId,
+      ...(delivered.untagged === true ? { creationPrompt: true as const } : {}),
     }
     enqueuePendingNotification({
       value: delivered.untagged === true

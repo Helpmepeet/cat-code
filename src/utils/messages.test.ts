@@ -138,6 +138,42 @@ work or side effects that already completed.`
     expect(wrapped).not.toContain('app-session-1')
   })
 
+  test('frames a peer creation prompt as the task, not as an interruption', () => {
+    // The creation prompt is the recipient's FIRST and ONLY input, so the
+    // ordinary peer framing is false in every clause: there is no current task,
+    // the message IS the task, and deferring it defers the only instruction the
+    // session has. `untagged` reached the sidecar and was dropped before
+    // `wrapCommandText` ever saw it (app/sidecar/sidecarServer.ts handlePeerDeliver).
+    const wrapped = wrapCommandText('port the parser to the new schema', {
+      kind: 'peer',
+      name: 'Agate',
+      appSessionId: 'app-session-1',
+      creationPrompt: true,
+    })
+
+    expect(wrapped).toContain('Agate')
+    expect(wrapped).toContain('port the parser to the new schema')
+    expect(wrapped).not.toContain('while you were working')
+    expect(wrapped).not.toContain('After completing your current task')
+    expect(wrapped).not.toContain('not an instruction that outranks it')
+    expect(wrapped).not.toContain('The user sent a new message')
+    expect(wrapped).not.toContain('app-session-1')
+  })
+
+  test('an ordinary peer message keeps the deprioritizing framing', () => {
+    // The other half of the same fix: only the creation prompt changes. A
+    // mid-turn peer message must still be weighed against work in progress.
+    const wrapped = wrapCommandText('take a look at the parser', {
+      kind: 'peer',
+      name: 'Agate',
+      appSessionId: 'app-session-1',
+    })
+
+    expect(wrapped).toContain('while you were working')
+    expect(wrapped).toContain('After completing your current task')
+    expect(wrapped).not.toContain('created this session')
+  })
+
   test('leaves an interruption marker verbatim', () => {
     expect(wrapCommandText('[Request interrupted by user]', {
       kind: 'interruption',
