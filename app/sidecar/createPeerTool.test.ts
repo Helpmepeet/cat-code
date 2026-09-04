@@ -194,7 +194,7 @@ test('a refusal by the host is an error, and names no peer', async () => {
   )
 })
 
-test('F8 — a request that went unanswered sends the caller to the session list, not back to CreatePeer', async () => {
+test('F8 — a request that went unanswered sends the caller to the peer list, not back to CreatePeer', async () => {
   // Creating is a MUTATION, and no answer is not the same fact as no session:
   // both the app and this sidecar stop waiting on a clock, while the create they
   // asked for carries on. The generic sentence for this code says only that the
@@ -210,8 +210,8 @@ test('F8 — a request that went unanswered sends the caller to the session list
 
   expect(block.is_error).toBe(true)
   const content = String(block.content)
-  expect(content).toContain('not clear whether a session was started')
-  expect(content).toContain('session list')
+  expect(content).toContain('not clear whether a peer was created')
+  expect(content).toContain('peer list')
   expect(content).not.toContain('could not be started')
 })
 
@@ -223,7 +223,7 @@ test('an unreadable answer never reports a peer that may not exist', async () =>
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-4')
 
   expect(block.is_error).toBe(true)
-  expect(String(block.content)).toContain('not clear whether a session was started')
+  expect(String(block.content)).toContain('not clear whether a peer was created')
   expect(narrowCreatedPeer({ name: 'Bear', failedStep: 'exploded' })).toEqual({
     name: 'Bear',
   })
@@ -281,12 +281,12 @@ test('the creation guidance names this session as the return channel', async () 
   // an answer it had never asked for, so the sentence carries what to do
   // instead of watching as well as what to write.
   expect(named).toContain('has to ask for a report, or you never hear back')
-  expect(named).toContain('wait for that message instead of watching the session')
+  expect(named).toContain('wait for that message instead of watching them work')
 
   // A session with no name of its own still gets usable guidance, not a
   // sentence with a hole in it.
   const unnamed = await createCreatePeerTool(requestHost, null).prompt()
-  expect(unnamed).toContain('back to the session that created you')
+  expect(unnamed).toContain('back to the peer that created you')
   expect(unnamed).not.toContain('send null')
 })
 

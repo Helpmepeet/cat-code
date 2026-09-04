@@ -180,12 +180,12 @@ test('ListPeers reports a refusal instead of an empty roster', async () => {
   const content = String(block.content)
   expect(content.trim().length).toBeGreaterThan(0)
   expect(content).not.toBe(
-    'This workspace has no other session, live, parked or closed.',
+    'This workspace has no other peer, live, parked or closed.',
   )
   expect(content).not.toContain('rate_limited')
 })
 
-test('an empty roster says no session exists, not that none is open', async () => {
+test('an empty roster says no peer exists, not that none is open', async () => {
   // A closed session still lists, so "no session is open" would be read as an
   // empty workspace by a model that had just been told closed rows appear. The
   // empty case has to deny the whole set, not the live part of it.
@@ -197,7 +197,7 @@ test('an empty roster says no session exists, not that none is open', async () =
 
   expect(block.is_error).toBeUndefined()
   expect(block.content).toBe(
-    'This workspace has no other session, live, parked or closed.',
+    'This workspace has no other peer, live, parked or closed.',
   )
 })
 
@@ -338,7 +338,7 @@ test('an ordinary call carries the whole live and parked roster and only the new
   expect(result.data.notListed).toBe(7)
   const answer = JSON.parse(String(block.content)) as { note?: string }
   expect(answer.note).toBe(
-    '7 sessions that closed earlier are not listed. Set all to true to see them.',
+    '7 peers that closed earlier are not listed. Set all to true to see them.',
   )
 })
 
@@ -388,7 +388,7 @@ test('a single left-out session is counted in the singular', async () => {
   if (!result.data.ok) throw new Error('expected a roster')
   expect(result.data.notListed).toBe(1)
   expect(String(block.content)).toContain(
-    '1 session that closed earlier is not listed. Set all to true to see it.',
+    '1 peer that closed earlier is not listed. Set all to true to see it.',
   )
 })
 

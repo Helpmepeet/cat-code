@@ -52,7 +52,7 @@ const inputSchema = lazySchema(() =>
     to: z
       .string()
       .min(1)
-      .describe('Name of the session to message. Use ListPeers for the names.'),
+      .describe('Name of the peer to message. Use ListPeers for the names.'),
     text: z
       .string()
       .min(1)
@@ -212,7 +212,7 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
         to,
         delivered: false,
         outcome: 'no_such_peer',
-        summary: `Not delivered. No session named ${to} exists in this workspace. Use ListPeers for the current names.`,
+        summary: `Not delivered. There is no peer called ${to} here. Use ListPeers for the names.`,
       }
     case 'too_large':
       return {
@@ -257,7 +257,7 @@ export function createSendToPeerTool(
 ) {
   return buildTool({
     name: SEND_TO_PEER_TOOL_NAME,
-    searchHint: 'message another named session in this workspace',
+    searchHint: 'message a peer session in this workspace by name',
     maxResultSizeChars: 10_000,
 
     get inputSchema(): InputSchema {
@@ -302,18 +302,18 @@ export function createSendToPeerTool(
     },
 
     async description() {
-      return 'Send a message to another session working in this workspace'
+      return 'Send a message to a peer in this workspace'
     },
 
     async prompt() {
       return [
-        'Send a message to another session in this workspace, by name.',
+        'Message a peer in this workspace, by name.',
         '',
         'You already have the name when you are answering a message or writing to',
-        'the session that created you. For any other name, use ListPeers first: a',
-        'name you remember from earlier may now belong to a different session.',
+        'the peer that created you. For any other name, use ListPeers first: a',
+        'name you remember from earlier may now belong to a different peer.',
         '',
-        'Every message costs the other session a turn. If it is working it reads',
+        'Every message costs that peer a turn. If it is working it reads',
         'yours at its next step, if it is idle it starts a turn, and if it is not',
         'open it is started, which holds up your own turn for up to half a minute',
         'while that happens. So send one when it would change what you or they do',

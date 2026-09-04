@@ -246,7 +246,7 @@ test('the prompt asks for the roster only when the name is not already known', a
   // reason for the remaining case stays, because a released name can be given
   // to a different session later.
   expect(prompt).toContain('answering a message')
-  expect(prompt).toContain('the session that created you')
+  expect(prompt).toContain('the peer that created you')
   expect(prompt).toContain('For any other name, use ListPeers first')
   expect(prompt).not.toContain('Use ListPeers first: names change')
 })

@@ -171,7 +171,7 @@ work or side effects that already completed.`
 
     expect(wrapped).toContain('while you were working')
     expect(wrapped).toContain('After completing your current task')
-    expect(wrapped).not.toContain('created this session')
+    expect(wrapped).not.toContain('created you')
   })
 
   test('leaves an interruption marker verbatim', () => {

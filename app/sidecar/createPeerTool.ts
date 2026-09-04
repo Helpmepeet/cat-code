@@ -40,7 +40,7 @@ const inputSchema = lazySchema(() =>
     prompt: z
       .string()
       .min(1)
-      .describe('The first instruction the new session receives'),
+      .describe('The first instruction the new peer receives'),
     model: z
       .string()
       .optional()
@@ -50,7 +50,7 @@ const inputSchema = lazySchema(() =>
       // and only later finds it dead, so the description carries the warning the
       // absent check cannot.
       .describe(
-        'Model for the new session. Defaults to the one you are on. The id is not checked, and a wrong one means the new session fails on its first turn, so leave it out unless you are sure of the id',
+        'Model for the new peer. Defaults to the one you are on. The id is not checked, and a wrong one means the new peer fails on its first turn, so leave it out unless you are sure of the id',
       ),
     effort: z
       .string()
@@ -59,7 +59,7 @@ const inputSchema = lazySchema(() =>
       // at main, then dropped at the child in favour of the user's saved setting
       // (`readSpawnEffort` in `sessionController.ts`).
       .describe(
-        'Reasoning effort for the new session. Defaults to the one you are on. A level that is not recognised is ignored, and the new session runs at whatever the user has set',
+        'Reasoning effort for the new peer. Defaults to the one you are on. A level that is not recognised is ignored, and the new peer runs at whatever the user has set',
       ),
   }),
 )
@@ -123,12 +123,12 @@ export function createCreatePeerTool(
 ) {
   const returnChannelExample =
     selfName === null
-      ? 'when finished, send a message back to the session that created you, saying what changed'
+      ? 'when finished, send a message back to the peer that created you, saying what changed'
       : `when finished, send ${selfName} a message saying what changed`
 
   return buildTool({
     name: CREATE_PEER_TOOL_NAME,
-    searchHint: 'start another session in this workspace',
+    searchHint: 'create a peer session in this workspace',
     maxResultSizeChars: 10_000,
     userFacingName: () => CREATE_PEER_TOOL_NAME,
     get inputSchema(): InputSchema {
@@ -160,11 +160,11 @@ export function createCreatePeerTool(
       }
     },
     async description() {
-      return 'Start another session in this workspace and give it a first instruction'
+      return 'Create a peer in this workspace and give it a first instruction'
     },
     async prompt() {
       return [
-        'Start another session in this workspace and give it a first instruction. It becomes a peer, not a worker of yours: it has its own tab, its own transcript and its own permissions, and the user can see it and talk to it.',
+        'Create a peer in this workspace and give it a first instruction. It is a peer, not a worker of yours: it has its own name, its own tab, its own transcript and its own permissions, and the user can see it and talk to it.',
         '',
         // The ask-for-a-report line LEADS, and is a sentence of its own. As the
         // fourth item of a four-item list it read as one more thing a careful
@@ -172,13 +172,13 @@ export function createCreatePeerTool(
         // its peer in a loop waiting for an answer nobody had asked for.
         'The instruction has to ask for a report, or you never hear back: ' +
           returnChannelExample +
-          '. Then wait for that message instead of watching the session. Say the rest plainly too: the goal, what done looks like, the files in scope.',
+          '. Then wait for that message instead of watching them work. Say the rest plainly too: the goal, what done looks like, the files in scope.',
         '',
-        'The new session starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
+        'The new peer starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
         '',
-        'Each call waits for the new session to start and take your instruction, which can hold up your own turn for the better part of a minute. Creating several in a row costs that each time.',
+        'Each call waits for the new peer to start and take your instruction, which can hold up your own turn for the better part of a minute. Creating several in a row costs that each time.',
         '',
-        'Create a session only when the user or your instructions ask for one. Never on your own judgment.',
+        'Create a peer only when the user or your instructions ask for one. Never on your own judgment.',
       ].join('\n')
     },
     async call(
@@ -222,7 +222,7 @@ export function createCreatePeerTool(
             data: {
               ok: false,
               message:
-                'The app did not answer in time, so it is not clear whether a session was started. Look at the session list before creating another one.',
+                'The app did not answer in time, so it is not clear whether a peer was created. Check the peer list before creating another one.',
             },
           }
         }
@@ -243,7 +243,7 @@ export function createCreatePeerTool(
           data: {
             ok: false,
             message:
-              'The answer to that request came back unreadable, so it is not clear whether a session was started. Check the session list before trying again.',
+              'The answer to that request came back unreadable, so it is not clear whether a peer was created. Check the peer list before trying again.',
           },
         }
       }
@@ -266,20 +266,20 @@ export function createCreatePeerTool(
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content: `Created the session ${data.name}, but it did not finish starting in time, so it does not have your instruction. Check whether it is running, then send it the instruction with SendToPeer.`,
+          content: `Created ${data.name}, but it did not finish starting in time, so it does not have your instruction. Check whether it is running, then send it the instruction with SendToPeer.`,
         }
       }
       if (data.failedStep === 'prompt') {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
-          content: `Created the session ${data.name}, but your instruction did not reach it. Send it the instruction with SendToPeer.`,
+          content: `Created ${data.name}, but your instruction did not reach it. Send it the instruction with SendToPeer.`,
         }
       }
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: `Created the session ${data.name} and sent it your instruction. It answers you by messaging you back, not by returning a result here.`,
+        content: `Created ${data.name} and sent it your instruction. It answers you by messaging you back, not by returning a result here.`,
       }
     },
     renderToolUseMessage() {

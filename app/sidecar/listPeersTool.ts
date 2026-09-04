@@ -45,7 +45,7 @@ const inputSchema = lazySchema(() =>
       .boolean()
       .optional()
       .describe(
-        'List every session, including ones that closed a while ago.',
+        'List every peer, including ones that closed a while ago.',
       ),
   }),
 )
@@ -245,7 +245,7 @@ export function createListPeersTool(
 ) {
   return buildTool({
     name: LIST_PEERS_TOOL_NAME,
-    searchHint: 'list the other sessions in this workspace',
+    searchHint: 'list the peer sessions in this workspace',
     maxResultSizeChars: 100_000,
     userFacingName: () => LIST_PEERS_TOOL_NAME,
     get inputSchema(): InputSchema {
@@ -266,7 +266,7 @@ export function createListPeersTool(
       return ''
     },
     async description() {
-      return 'List the other sessions in this workspace, live, parked or closed'
+      return 'List the peers in this workspace, live, parked or closed'
     },
     async prompt() {
       return [
@@ -275,9 +275,9 @@ export function createListPeersTool(
         // sort. Stating it as "newest first" made the first row read as the
         // most recently active session, which it is not: a parked peer that
         // finished a minute ago sits below live ones idle since morning.
-        'List the other sessions in this workspace. Live sessions come first, then parked, then closed, and inside each of those groups the most recently active comes first.',
+        'List the peers in this workspace. Live peers come first, then parked, then closed, and inside each of those groups the most recently active comes first.',
         '',
-        'Each entry carries the session name, whether it is live, parked or closed, its title, when it was last active, and who created it. The list is stamped with the time it was taken, so subtract to see how long ago that was. A live session also carries what it is doing right now: running a turn, waiting for the user to answer a permission question, or idle. A live session with no such value has not reported in yet and is still starting up, which is what a session you just created looks like when the create said it did not finish starting. A session that is not live never carries one.',
+        'Each entry carries the name, whether that peer is live, parked or closed, its title, when it was last active, and who created it. The list is stamped with the time it was taken, so subtract to see how long ago that was. A live peer also carries what it is doing right now: running a turn, waiting for the user to answer a permission question, or idle. A live peer with no such value has not reported in yet and is still starting up, which is what a peer you just created looks like when the create said it did not finish starting. A peer that is not live never carries one.',
         '',
         // The model is reported because a create can SET one and nothing could
         // read it back, so a caller could neither route by model nor see that
@@ -285,9 +285,9 @@ export function createListPeersTool(
         // session reported running, which is not always what its create asked
         // for: an effort level the session did not recognise was dropped in
         // favour of the user's own setting.
-        'A session that is live or parked also carries the model it is running and its reasoning effort, as that session last reported them. Use them to send work to a session already on the model you want it done by, and to check that a session you created on a particular model really came up on it.',
+        'A peer that is live or parked also carries the model it is running and its reasoning effort, as that peer last reported them. Use them to send work to a peer already on the model you want it done by, and to check that a peer you created on a particular model really came up on it.',
         '',
-        'Use it to find out who else is working here before you message one of them, and to check whether a session you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
+        'Use it to find out who else is working here before you message one of them, and to check whether a peer you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
       ].join('\n')
     },
     async call(input: Input): Promise<{ data: ListPeersOutput }> {
@@ -307,7 +307,7 @@ export function createListPeersTool(
         return {
           data: {
             ok: false,
-            message: 'The list of sessions came back unreadable.',
+            message: 'The list of peers came back unreadable.',
           },
         }
       }
@@ -341,7 +341,7 @@ export function createListPeersTool(
           // closed session still lists, so "no session is open" would read as
           // an empty workspace when the answer is that there has never been
           // another session here.
-          content: 'This workspace has no other session, live, parked or closed.',
+          content: 'This workspace has no other peer, live, parked or closed.',
         }
       }
       // The note is written only when rows were actually cut. A line saying
@@ -353,8 +353,8 @@ export function createListPeersTool(
           ? {
               note:
                 data.notListed === 1
-                  ? '1 session that closed earlier is not listed. Set all to true to see it.'
-                  : `${data.notListed} sessions that closed earlier are not listed. Set all to true to see them.`,
+                  ? '1 peer that closed earlier is not listed. Set all to true to see it.'
+                  : `${data.notListed} peers that closed earlier are not listed. Set all to true to see them.`,
             }
           : {}
       return {
