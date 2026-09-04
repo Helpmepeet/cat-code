@@ -235,6 +235,22 @@ test('the prompt says that messaging a closed peer holds up the sending turn', a
   expect(prompt).toContain('half a minute')
 })
 
+test('the prompt asks for the roster only when the name is not already known', async () => {
+  const prompt = await createSendToPeerTool(
+    delivering('queued_live').requestHost,
+  ).prompt()
+
+  // An unconditional "use ListPeers first" spends a call on a name the sender
+  // was just handed: the sender of a message it is answering, and the creator
+  // named in its own instructions. Both cases are exempted by name, and the
+  // reason for the remaining case stays, because a released name can be given
+  // to a different session later.
+  expect(prompt).toContain('answering a message')
+  expect(prompt).toContain('the session that created you')
+  expect(prompt).toContain('For any other name, use ListPeers first')
+  expect(prompt).not.toContain('Use ListPeers first: names change')
+})
+
 test('an outcome outside the protocol list is never read as a delivery', async () => {
   // A local check, not a boundary check: if the upstream schema and this union
   // ever fall out of step, a wrong or future string reaches this tool wearing

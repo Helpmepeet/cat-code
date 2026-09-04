@@ -309,7 +309,9 @@ export function createSendToPeerTool(
       return [
         'Send a message to another session in this workspace, by name.',
         '',
-        'Use ListPeers first: names change as sessions come and go.',
+        'You already have the name when you are answering a message or writing to',
+        'the session that created you. For any other name, use ListPeers first: a',
+        'name you remember from earlier may now belong to a different session.',
         '',
         'Every message costs the other session a turn. If it is working it reads',
         'yours at its next step, if it is idle it starts a turn, and if it is not',
