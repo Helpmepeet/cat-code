@@ -36,8 +36,39 @@ text, prefixed **DEFERRED**, so it can return without re-deriving it.
 | `activity` frame → presence in `ListPeers` | in | one outbound field; without it a creator cannot tell busy from stuck |
 | loop stop: main-derived per-pair chain within a window, `MAX_PEER_HOPS`, per-pair bucket, dedup window, pending cap | in | mechanical stop is the one thing prompt text cannot do |
 | `replyTo`, tag `id`, message table, `consumedAt`, retention | **cut** | the automatic chain made `replyTo` redundant; main keeps one chain per pair, nothing per message |
-| ack = enqueued at the sidecar; unacked on process exit → delivered after next `ready` | in | reuses the parked-row store; no engine callback, no dedup |
-| ack at `onInputPersisted`, redelivery dedup | **cut** | one duplicate row in a crash window the operator will see anyway |
+| ack = enqueued at the sidecar; unacked on process exit → delivered after next `ready` | 🔁 **REVERSED 2026-09-04** | see below |
+| ack at `onInputPersisted`, redelivery dedup | 🔁 **REINSTATED 2026-09-04** | see below |
+
+🔁 **AMENDED 2026-09-04, operator ruling, reversing the two rows above.** They
+were decided on a false comparison. Cutting the durable ack was priced at "one
+duplicate row in a crash window the operator will see anyway", which weighs a
+duplicate against a duplicate. The real alternative was **silent loss**: the
+ack released main's only copy at enqueue, queue persistence rides a 100 ms
+batch with no flush, and restore accepts only `mode === 'prompt'`, so a
+recipient killed before draining lost the message with nothing recording it,
+while the sender had been told `queued_live`. The window was widest exactly
+when the recipient was BUSY, which is the case `queued_live` exists for, and
+the user's own queued prompt survived the same kill because it is a prompt.
+
+The ruling: `queued_live` means main retains responsibility until the message
+is consumed. Loss breaks the contract that outcome asserts; a duplicate
+preserves information and is observable, and this decision had already accepted
+duplicates during crash recovery, so its own risk tolerance pointed at
+at-least-once delivery all along.
+
+Two things the build then established that the ruling did not anticipate. The
+two drain paths have DIFFERENT consumption points: busy acks at the lifecycle
+`started` signal, idle acks at `onInputPersisted` and NOT where `startTurn`
+returns, because a turn that starts and then fails re-enqueues the command, so
+acking earlier reproduces this same defect one layer down. And
+`MAX_PEER_DELIVERY_ATTEMPTS` was calibrated for an ack arriving milliseconds
+after the forward, so under the new contract it expired messages nobody had
+refused; it now resets whenever a row consumes anything, which restores its
+original meaning of a recipient that takes nothing at all.
+
+Dedupe lives in the transcript, keyed by main's own `messageId`, so it survives
+a restart for as long as the row a duplicate would double. At-least-once
+transport, effectively-once processing.
 | `peer.create`: no auto-retry; result names the peer and any failed step | in | the row is named and visible, so a model checks `ListPeers` before retrying |
 | idempotency key and cached results | **cut** | solves a retry the client never makes |
 | model and effort inherited via two spawn-env keys | in | R7, at the cost of two env keys read where `resumedModel` already is |
