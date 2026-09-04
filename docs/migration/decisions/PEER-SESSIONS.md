@@ -120,6 +120,34 @@ text, prefixed **DEFERRED**, so it can return without re-deriving it.
   first draft's "predating rows stay unnamed": that left restored old
   sessions holding tools whose every delivery needs a `from` name (HR2) and
   unable to be listed or reported back to (R2).
+- 🔁 **AMENDED 2026-09-04, after the first GUI sitting.** The paragraph above
+  is wrong in both halves, and the second half was wrong the moment it was
+  written.
+  - **The spawn path cannot be the repair, because it is unreachable.**
+    "Gains its name on its next spawn" assumes a nameless row spawns again.
+    It cannot: `peersOf` drops rows without a name, so such a row can never be
+    listed, therefore never woken, therefore never spawned. The only exit from
+    namelessness is a door namelessness closes. The fill therefore runs at
+    LAUNCH (`Host.nameUnnamedRows`, chained into the launch gate), not on the
+    spawn path.
+  - **A row can lose a name it already had.** `validateRow` rebuilds every row
+    from a closed whitelist of known fields and the launch sweep persists the
+    swept document, so ANY build predating a field deletes that field from
+    every row it loads and writes the stripped rows straight back. This is not
+    hypothetical: one launch of an Aug 30 packaged build on 2026-09-04 emptied
+    the operator's whole registry, 224 rows reduced to a single name, and
+    `ListPeers` then correctly reported an empty workspace. `createdBy` and
+    `peerWakeBlocked` went the same way; the creator link is unrecoverable.
+    Running the fill at every launch is what makes that self-healing rather
+    than permanent.
+  - **So an unnamed row is no longer "always a never-restored history row".**
+    It is a row that either predates the field or was stripped by an older
+    binary, AND fell outside `NAME_REPAIR_WINDOW_MS` (7 days, operator ruling:
+    of 224 rows, 1 day covers 15, 3 days 35, 7 days 56, 14 days 118, 30 days
+    199, and naming all 223 would have handed a model the entire archive in
+    every roster it reads). Such a row stays nameless permanently by the same
+    deadlock above. That is an accepted trade, not an oversight: it remains
+    openable from history by hand, it is simply not a peer.
 
 ### 2a. Name pool (R11), drafted 2026-09-03
 
