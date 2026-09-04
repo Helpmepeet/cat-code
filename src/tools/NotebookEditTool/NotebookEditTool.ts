@@ -419,7 +419,7 @@ export const NotebookEditTool = buildTool({
         notebook.cells.splice(cellIndex, 0, new_cell)
       } else {
         // Find the specified cell
-        const targetCell = notebook.cells[cellIndex]! // validateInput ensures cell_number is in bounds
+        const targetCell = notebook.cells[cellIndex]! // validateInput ensures cell_id resolves in bounds
         targetCell.source = new_source
         if (cell_type && cell_type !== targetCell.cell_type) {
           targetCell.cell_type = cell_type

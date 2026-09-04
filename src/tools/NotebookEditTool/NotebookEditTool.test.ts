@@ -222,3 +222,19 @@ describe('NotebookEditTool.outputSchema back-compat', () => {
     expect(parsed.success).toBe(true)
   })
 })
+
+describe('NotebookEditTool prompt matches the strict schema', () => {
+  test('describes cell_id, not the cell_number the schema rejects', async () => {
+    // The schema is strictObject with no cell_number key, so a call written to
+    // the old prose was rejected outright.
+    const prompt = await NotebookEditTool.prompt()
+    const keys = Object.keys(NotebookEditTool.inputSchema.shape)
+
+    expect(keys).toContain('cell_id')
+    expect(keys).not.toContain('cell_number')
+    expect(prompt).not.toContain('cell_number')
+    expect(prompt).toContain('Cells are addressed by cell_id')
+    expect(prompt).toContain('add a new cell after the cell with that id')
+    expect(prompt).toContain('insert also requires cell_type')
+  })
+})
