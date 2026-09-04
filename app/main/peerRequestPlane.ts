@@ -106,6 +106,20 @@ export type PeerRequestPlaneDeps = {
    */
   isReady: (appSessionId: SessionId) => boolean
   /**
+   * F6 — could a NOT-live row be reopened from its transcript? The host's own
+   * `canResume` (`app/host/host.ts:978`), which is the single predicate behind
+   * `isRestorable`, `restoreSession` and `restartSession`, injected rather than
+   * re-derived here so this plane cannot drift from what the wake would do.
+   *
+   * The plane reads RAW registry rows, not `listSessions()`, so nothing else
+   * applied it: a row whose transcript never materialized was listed as a peer
+   * and then burned the whole wake timeout on a `restoreSession` that answers
+   * `session_not_found`, which step 5 below deliberately reads as "already
+   * restoring, wait for ready". Addressable is the same union `listSessions()`
+   * publishes: live OR resumable.
+   */
+  canResume: (appSessionId: SessionId) => boolean
+  /**
    * HR4 — the host's own create path, with the peer options it already exposes.
    * Not reimplemented here: the HC4 caps and the churn rule are the host's, and
    * a second copy of either is a second thing to keep true.
@@ -282,10 +296,13 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
   // and this one admitted the key without ever comparing it. A frame from a
   // future protocol must be refused here rather than interpreted under this
   // one's field meanings.
-  if (
-    frame.protocolVersion !== undefined &&
-    frame.protocolVersion !== PROTOCOL_VERSION
-  ) {
+  //
+  // F19 — and the version is REQUIRED, not merely checked when present. The
+  // first form exempted the one frame shape that states nothing at all, which is
+  // the opposite of fail-closed. Every producer stamps it at its single outbound
+  // path (`sidecar/sidecarServer.ts` `requestHost`), so nothing legitimate omits
+  // it.
+  if (frame.protocolVersion !== PROTOCOL_VERSION) {
     return {
       ok: false,
       requestId,
@@ -551,6 +568,11 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
    * the same workspace, minus the requester itself. A row outside it is not
    * "denied", it is invisible, and naming one answers `session_not_found`, the
    * HC2 answer for an id the caller may not name.
+   *
+   * F6 — and only if it can be REACHED. A named row that is neither live nor
+   * resumable is a peer nothing can wake, so listing it advertises a session the
+   * delivery path can only fail on, slowly. `canResume` is the host's own
+   * predicate; see the dep.
    */
   function peersOf(requesterRow: PeerRegistryRow): NamedRow[] {
     return deps
@@ -559,7 +581,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         (row): row is NamedRow =>
           row.appSessionId !== requesterRow.appSessionId &&
           row.cwd === requesterRow.cwd &&
-          isNamed(row),
+          isNamed(row) &&
+          (deps.isLive(row.appSessionId) || deps.canResume(row.appSessionId)),
       )
   }
 
@@ -1120,6 +1143,14 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
     // frame to a socket that refused it. For a disconnected row that repeated
     // forever, because nothing on this path ever tried to wake it.
     const live = isReady(target.appSessionId)
+    // F13 — and the wake block asks the OTHER question. §6 refuses only a row
+    // that is "not live", meaning parked or closed; a row the user is already
+    // reopening is spawning, which is neither. Readiness answered no for it, so
+    // a peer message arriving in that window was refused `user_stopped` although
+    // this delivery initiates no restore and nobody asked for a peer wake. The
+    // two predicates stay separate on purpose: readiness decides whether to wake
+    // and wait, existence decides whether the block applies at all.
+    const exists = deps.isLive(target.appSessionId)
 
     // Every refusal is typed AND logged: §4 step 3, "nothing is dropped
     // silently". It is reported as a successful REQUEST carrying a refused
@@ -1136,8 +1167,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       return { ok: true as const, value: { messageId, outcome } }
     }
 
-    // §6 — the wake block is about REOPENING, so a live row ignores it.
-    if (!live && target.peerWakeBlocked === true) return refuse('refused:user_stopped')
+    // §6 — the wake block is about REOPENING, so an existing row ignores it.
+    if (!exists && target.peerWakeBlocked === true) return refuse('refused:user_stopped')
 
     const chain = buildHops(sessionId, target.appSessionId)
     if ('refusal' in chain) return refuse(`refused:${chain.refusal}`)

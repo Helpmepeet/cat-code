@@ -126,6 +126,7 @@ test('a host.request that crossed the real socket is accepted by the plane', asy
     rows: () => [row(sessionId, 'Bear'), row(SENDER, 'Alex')],
     isLive: () => true,
     isReady: () => true,
+    canResume: () => true,
     createSessionInWorkspace: async () => ({
       ok: false,
       error: { code: 'internal_error', message: 'not used by this probe' },

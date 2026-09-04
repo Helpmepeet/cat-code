@@ -316,6 +316,11 @@ test('the peer plane is composed with the supervisor-backed liveness predicate',
   expect(composition).toContain('isSessionLive(supervisor.listSessions(), appSessionId)')
   // Membership is the defect this replaced; it must not come back.
   expect(composition).not.toContain('listSessions().some(')
+  // F6, same reasoning one dep further along: the plane reads raw registry rows,
+  // so the roster's reachability filter is this one line. Every plane test
+  // injects its own `canResume`, so a composition wired to a constant would
+  // re-advertise transcript-less rows with a fully green battery.
+  expect(composition).toContain('canResume: appSessionId => liveHost.canResume(appSessionId)')
 })
 
 test('the plane sends through the entry point that raises no renderer error frame', () => {

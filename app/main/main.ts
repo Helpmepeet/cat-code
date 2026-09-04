@@ -3628,6 +3628,13 @@ function ensureHost(): Host {
     // rather than written to and lost.
     isReady: appSessionId =>
       supervisor !== null && isSessionReadyForFrames(supervisor.listSessions(), appSessionId),
+    // …and a row that is not live is only addressable if it could be reopened.
+    // The plane reads RAW registry rows, so the host's own restorable filter
+    // never reached it: a session opened and never typed in holds an
+    // engineSessionId pointing at a transcript the engine has not written, and
+    // the roster offered it as a peer that no wake could ever reach. Same
+    // predicate the sidebar's `restorable` flag is built from, not a second copy.
+    canResume: appSessionId => liveHost.canResume(appSessionId),
     createSessionInWorkspace: (fromAppSessionId, peer) =>
       liveHost.createSessionInWorkspace(fromAppSessionId, peer),
     restoreSession: async appSessionId => {

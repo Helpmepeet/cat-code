@@ -82,6 +82,11 @@ function harness(
     live?: Set<string>
     /** Rows whose socket can take a frame right now. Defaults to `live`. */
     ready?: Set<string>
+    /**
+     * Rows the host would refuse to restore: no transcript on disk, or a resume
+     * it already watched fail. Everything else answers `canResume` true.
+     */
+    unresumable?: Set<string>
     createResult?: PeerRequestPlaneDeps['createSessionInWorkspace']
     restoreResult?: PeerRequestPlaneDeps['restoreSession']
     forwardFails?: Set<string>
@@ -101,6 +106,7 @@ function harness(
     rows: () => rows,
     isLive: id => live.has(id),
     isReady: id => (ready ?? live).has(id),
+    canResume: id => options.unresumable?.has(id) !== true,
     createSessionInWorkspace:
       options.createResult ??
       (async () => ({ ok: false, error: { code: 'session_limit', message: 'nope' } })),
@@ -300,6 +306,57 @@ describe('HR3 scoping', () => {
     const h = harness({ rows: [row(BEAR, 'Bear')] })
     await h.plane.handleRequest(ALEX, request('peers.list'))
     expect(h.lastResult()?.error?.code).toBe('session_not_found')
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * F6 — addressable means live OR resumable
+ * ------------------------------------------------------------------------- */
+
+describe('F6 addressability', () => {
+  test('a not-live row the host would refuse to restore is invisible, and costs no wake', async () => {
+    // The common shape is a session opened and never typed in: the ready frame
+    // stamps `engineSessionId` while the engine only writes the `.jsonl` on the
+    // first message, so the row is named, closed and transcript-less for the
+    // rest of the run. Listing it promised a peer that a `SendToPeer` then spent
+    // the whole wake timeout failing to reach, because `restoreSession` answers
+    // `session_not_found` and the delivery path reads that as "already
+    // restoring, wait for ready".
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { shutdown: 'clean' })],
+      live: new Set([ALEX]),
+      unresumable: new Set([BEAR]),
+    })
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    const value = h.lastResult()?.value as { peers: Array<{ name: string }> }
+    expect(value.peers).toEqual([])
+
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }, 'req-2'),
+    )
+    expect(h.lastResult()?.error?.code).toBe('session_not_found')
+    expect(h.restored).toEqual([])
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
+  test('a LIVE row with no transcript yet is still a peer', async () => {
+    // Resumability is only the question for a row that would have to be
+    // reopened. A running session that has not written its transcript yet is
+    // reachable right now, and dropping it would hide the newest peer of all.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear')],
+      unresumable: new Set([BEAR]),
+    })
+    await h.plane.handleRequest(ALEX, request('peers.list'))
+    const value = h.lastResult()?.value as { peers: Array<{ name: string }> }
+    expect(value.peers.map(peer => peer.name)).toEqual(['Bear'])
+
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }, 'req-2'),
+    )
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
   })
 })
 
@@ -547,6 +604,31 @@ describe('peer.deliver', () => {
     })
     await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'hi' }))
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+  })
+
+  test('F13 — a peerWakeBlocked row the USER is reopening is not refused', async () => {
+    // Spawning is neither parked nor closed. The row exists, so this delivery
+    // initiates no restore, and refusing it told the sending model the operator
+    // had stopped a session the operator was in the middle of opening.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear', { peerWakeBlocked: true })],
+      live: new Set([ALEX, BEAR]),
+      ready: new Set([ALEX]),
+      // What the host answers for a row that is already spawning.
+      restoreResult: async () => ({
+        ok: false,
+        error: { code: 'session_not_found', message: 'already live' },
+      }),
+    })
+    const inflight = h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi' }),
+    )
+    await settle()
+    h.plane.onReady(BEAR)
+    await inflight
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_wake' })
+    expect(h.deliveries()).toHaveLength(1)
   })
 })
 
@@ -1174,6 +1256,17 @@ describe('F5/F7/F9/F11 — smaller fixes', () => {
       ...request('peers.list'),
       protocolVersion: 2,
     })
+    expect(h.lastResult()?.error?.code).toBe('bad_request')
+  })
+
+  test('F19 — a frame carrying NO version is refused too', async () => {
+    // Only a present-and-wrong version was checked, so the one frame shape that
+    // states nothing at all passed. Every producer stamps the field
+    // (`sidecarServer.ts` `requestHost`), so requiring it costs no caller.
+    const h = harness()
+    const frame = request('peers.list')
+    delete frame.protocolVersion
+    await h.plane.handleRequest(ALEX, frame)
     expect(h.lastResult()?.error?.code).toBe('bad_request')
   })
 
