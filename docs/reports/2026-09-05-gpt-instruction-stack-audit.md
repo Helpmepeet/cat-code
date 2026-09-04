@@ -96,3 +96,27 @@ Fix order: 1, 2, 4, 5, 6, 7, 3, 9, 10, 11, 13, then 8 and 12 (both live in
 lands), then A1. Most are wording or path changes, but 5 spans several strings
 and 3 needs the real tool pool wired into the dump path. Extend
 `src/utils/providerPromptRegressions.test.ts` and the colocated suites.
+
+## Status (2026-09-05, after fixes)
+
+Fixed on `migration`: findings 1 (`685f7290`), 2 and 7 (`8a345293`), 4
+(`85f4161c`), 5 (`75e16c63`, also the cron `durable` schema text, the rendered
+"Persisted to" result, and the missed-task notification in `cronScheduler.ts`),
+6 (`ec7ff7f9`), 3 (`b80c2065`; the dump now uses the default preset pool, still
+without MCP tools or `--allowedTools` narrowing), 9 and 10 (`6bf27848`; the
+SendMessage row is gated on `feature('UDS_INBOX')` rather than deleted), 13
+(`ef4907f2`), 11 (`a3dfadb8`; Bash now picks the edit-tool name from the enabled
+pool, request provider is the fallback), A1 (`136310c2`), plus three stale
+comments found by the sweep (`ed9eb4e4`). Each fix carries a test that fails
+before and passes after.
+
+Verification: the ten touched suites pass (113 tests, 0 fail);
+`lint:undefined-names` reports 0; `./cli-dev --version` prints
+`2.1.87-dev.20260904.t181029.sha136310c2`; the dump for `gpt-5.6-sol` emits
+AGENT TOOL, SKILLS, TASK TRACKING, file-mutation and read-before-modify rules and
+names Apply_patch. `build:dev:full` is red only at `maps:lint`, on
+`docs/maps/build-release-testing.md`, which another session has uncommitted
+(working copy stamped 2026-09-02, index expects 2026-09-04); not ours.
+
+Still open: findings 8 and 12, both in `gpt.ts`, deferred until the other
+session's uncommitted edit to that file lands.
