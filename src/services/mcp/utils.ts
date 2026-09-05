@@ -7,9 +7,13 @@ import type { Tool } from '../../Tool.js'
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js'
 import { getCwd } from '../../utils/cwd.js'
 import { getGlobalClaudeFile } from '../../utils/env.js'
-import { isSettingSourceEnabled } from '../../utils/settings/constants.js'
+import {
+  isSettingSourceEnabled,
+  type SettingSource,
+} from '../../utils/settings/constants.js'
 import {
   getSettings_DEPRECATED,
+  getSettingsForSource,
   hasSkipDangerousModePermissionPrompt,
 } from '../../utils/settings/settings.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
@@ -403,6 +407,52 @@ export function getProjectMcpServerStatus(
   }
 
   return 'pending'
+}
+
+const trustedProjectMcpApprovalSources: readonly SettingSource[] = [
+  'userSettings',
+  'localSettings',
+  'flagSettings',
+  'policySettings',
+]
+
+/**
+ * Returns project MCP approval without treating repository-authored settings
+ * or non-interactive mode as authorization.
+ */
+export function getExplicitProjectMcpServerStatus(
+  serverName: string,
+): 'approved' | 'rejected' | 'pending' {
+  const normalizedName = normalizeNameForMCP(serverName)
+  let enabled = false
+  let enableAll = false
+
+  for (const source of trustedProjectMcpApprovalSources) {
+    if (!isSettingSourceEnabled(source)) continue
+    const settings = getSettingsForSource(source)
+
+    if (
+      settings?.disabledMcpjsonServers?.some(
+        name => normalizeNameForMCP(name) === normalizedName,
+      )
+    ) {
+      return 'rejected'
+    }
+
+    if (
+      settings?.enabledMcpjsonServers?.some(
+        name => normalizeNameForMCP(name) === normalizedName,
+      )
+    ) {
+      enabled = true
+    }
+
+    if (settings?.enableAllProjectMcpServers !== undefined) {
+      enableAll = settings.enableAllProjectMcpServers
+    }
+  }
+
+  return enabled || enableAll ? 'approved' : 'pending'
 }
 
 /**

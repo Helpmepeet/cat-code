@@ -16,22 +16,40 @@ import { getChicagoCoordinateMode } from './gates.js'
 import { getComputerUseHostAdapter } from './hostAdapter.js'
 
 const APP_ENUM_TIMEOUT_MS = 1000
+type ComputerUseMcpServer = ReturnType<typeof createComputerUseMcpServer>
 
 /**
  * Enumerate installed apps, timed. Fails soft — if Spotlight is slow or
  * claude-swift throws, the tool description just omits the list. Resolution
  * happens at call time regardless; the model just doesn't get hints.
  */
-async function tryGetInstalledAppNames(): Promise<string[] | undefined> {
+async function tryGetInstalledAppNames(
+  abortSignal?: AbortSignal,
+): Promise<string[] | undefined> {
   const adapter = getComputerUseHostAdapter()
   const enumP = adapter.executor.listInstalledApps()
   let timer: ReturnType<typeof setTimeout> | undefined
+  let onAbort: (() => void) | undefined
   const timeoutP = new Promise<undefined>(resolve => {
     timer = setTimeout(resolve, APP_ENUM_TIMEOUT_MS, undefined)
   })
-  const installed = await Promise.race([enumP, timeoutP])
+  const abortP = new Promise<undefined>(resolve => {
+    if (!abortSignal) return
+    if (abortSignal.aborted) {
+      resolve(undefined)
+      return
+    }
+    onAbort = () => resolve(undefined)
+    abortSignal.addEventListener('abort', onAbort, { once: true })
+  })
+  const installed = await Promise.race([enumP, timeoutP, abortP])
     .catch(() => undefined)
-    .finally(() => clearTimeout(timer))
+    .finally(() => {
+      clearTimeout(timer)
+      if (onAbort) {
+        abortSignal?.removeEventListener('abort', onAbort)
+      }
+    })
   if (!installed) {
     // The enumeration continues in the background — swallow late rejections.
     void enumP.catch(() => {})
@@ -57,14 +75,16 @@ async function tryGetInstalledAppNames(): Promise<string[] | undefined> {
  * Real dispatch still goes through `wrapper.tsx`'s `.call()` override; this
  * server exists only to answer ListTools.
  */
-export async function createComputerUseMcpServerForCli(): Promise<
-  ReturnType<typeof createComputerUseMcpServer>
-> {
+export async function createComputerUseMcpServerForCli(options?: {
+  abortSignal?: AbortSignal
+  onServerCreated?: (server: ComputerUseMcpServer) => void
+}): Promise<ComputerUseMcpServer> {
   const adapter = getComputerUseHostAdapter()
   const coordinateMode = getChicagoCoordinateMode()
   const server = createComputerUseMcpServer(adapter, coordinateMode)
+  options?.onServerCreated?.(server)
 
-  const installedAppNames = await tryGetInstalledAppNames()
+  const installedAppNames = await tryGetInstalledAppNames(options?.abortSignal)
   const tools = buildComputerUseTools(
     adapter.executor.capabilities,
     coordinateMode,

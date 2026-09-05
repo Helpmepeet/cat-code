@@ -25,9 +25,15 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 // the module is passed through so runAgent's other imports keep working.
 const realQueryModule = await import('../../query.js')
 let queryScript: () => AsyncGenerator<Message> = async function* () {}
+// The subagent's own ToolUseContext is only observable here: runAgent builds it
+// and hands it straight to query().
+let lastQueryToolUseContext: ToolUseContext | undefined
 mock.module('../../query.js', () => ({
   ...realQueryModule,
-  query: () => queryScript(),
+  query: (params: { toolUseContext?: ToolUseContext }) => {
+    lastQueryToolUseContext = params?.toolUseContext
+    return queryScript()
+  },
 }))
 
 const { filterIncompleteToolCalls, runAgent } = await import('./runAgent.js')
@@ -368,5 +374,172 @@ describe('filterIncompleteToolCalls', () => {
 
     expect(filtered).toContain(attachment)
     expect(toolResultIdsIn(filtered)).toEqual(['a'])
+  })
+})
+
+describe('runAgent MCP generation handed to the subagent', () => {
+  let tempDir: string
+
+  const staleClient = { name: 'stale-server', type: 'pending' }
+  const liveClient = { name: 'cua-driver', type: 'connected' }
+  const liveResource = { uri: 'file://demo', name: 'demo' }
+  const baseCommand = { name: 'base-command', isMcp: false }
+  const staleMcpCommand = { name: 'stale-command', isMcp: true }
+  const staleMcpSkill = { name: 'stale-skill', loadedFrom: 'mcp' }
+  const liveMcpCommand = { name: 'live-command', isMcp: true }
+  const liveTool = { name: 'mcp__cua-driver__click' }
+  const liveSnapshot = {
+    clients: [liveClient],
+    tools: [liveTool],
+    commands: [liveMcpCommand],
+    resources: { 'cua-driver': [liveResource] },
+  } as never
+
+  beforeEach(() => {
+    resetStateForTests()
+    resetWorkerNamesForTests()
+    lastQueryToolUseContext = undefined
+    queryScript = async function* () {
+      yield createAssistantMessage({ content: 'done' })
+    }
+    tempDir = mkdtempSync(join(tmpdir(), 'run-agent-mcp-'))
+    switchSession(asSessionId('session-run-agent-mcp'), tempDir)
+  })
+
+  afterEach(() => {
+    resetWorkerNamesForTests()
+    resetStateForTests()
+  })
+
+  async function drain(
+    harness: ReturnType<typeof createAppStateHarness>,
+    parentOptions: Record<string, unknown>,
+    extra: Record<string, unknown> = {},
+  ) {
+    const toolUseContext = createParentContext(harness)
+    Object.assign(toolUseContext.options, parentOptions)
+    for await (const _message of runAgent({
+      agentDefinition: AGENT,
+      promptMessages: [],
+      toolUseContext,
+      canUseTool: (async () => ({
+        behavior: 'allow' as const,
+        updatedInput: {},
+      })) as never,
+      isAsync: false,
+      querySource: 'agent' as never,
+      availableTools: [],
+      useExactTools: true,
+      override: {
+        systemPrompt: ['fixture prompt'] as never,
+        userContext: {},
+        systemContext: {},
+      },
+      ...extra,
+    })) {
+      // drain
+    }
+    return lastQueryToolUseContext!
+  }
+
+  test('a caller-supplied snapshot wins over the parent options', async () => {
+    // AgentTool reads this snapshot after waiting for a required server, so
+    // the subagent launched in that same iteration must start from it. Falling
+    // back to options.mcpClients would hand it the turn-start clients, which
+    // is exactly the server it just finished waiting for.
+    const context = await drain(
+      createAppStateHarness(),
+      {
+        commands: [baseCommand, staleMcpCommand, staleMcpSkill],
+        mcpClients: [staleClient],
+        mcpResources: {},
+      },
+      {
+        availableTools: [liveTool],
+        mcpRuntimeSnapshot: liveSnapshot,
+      },
+    )
+
+    expect(context.options.tools).toEqual([liveTool] as never)
+    expect(context.options.commands).toEqual([
+      baseCommand,
+      liveMcpCommand,
+    ] as never)
+    expect(context.options.mcpClients).toEqual([liveClient] as never)
+    expect(context.options.mcpResources).toEqual({
+      'cua-driver': [liveResource],
+    } as never)
+  })
+
+  test('with no snapshot passed, the live source is read at launch', async () => {
+    let reads = 0
+    const context = await drain(createAppStateHarness(), {
+      commands: [baseCommand, staleMcpCommand, staleMcpSkill],
+      mcpClients: [staleClient],
+      mcpResources: {},
+      getMcpRuntimeSnapshot: () => {
+        reads++
+        return liveSnapshot
+      },
+    })
+
+    expect(reads).toBe(1)
+    expect(context.options.commands).toEqual([
+      baseCommand,
+      liveMcpCommand,
+    ] as never)
+    expect(context.options.mcpClients).toEqual([liveClient] as never)
+    expect(context.options.mcpResources).toEqual({
+      'cua-driver': [liveResource],
+    } as never)
+  })
+
+  test('an assembled runtime is passed through without another snapshot read', async () => {
+    let reads = 0
+    const context = await drain(
+      createAppStateHarness(),
+      {
+        commands: [baseCommand, staleMcpCommand, staleMcpSkill],
+        mcpClients: [staleClient],
+        mcpResources: {},
+        getMcpRuntimeSnapshot: () => {
+          reads++
+          return liveSnapshot
+        },
+      },
+      {
+        availableTools: [liveTool],
+        mcpRuntimeInputs: {
+          tools: [liveTool],
+          commands: [baseCommand, liveMcpCommand],
+          mcpClients: [liveClient],
+          mcpResources: { 'cua-driver': [liveResource] },
+        },
+      },
+    )
+
+    expect(reads).toBe(0)
+    expect(context.options.tools).toEqual([liveTool] as never)
+    expect(context.options.commands).toEqual([
+      baseCommand,
+      liveMcpCommand,
+    ] as never)
+    expect(context.options.mcpClients).toEqual([liveClient] as never)
+    expect(context.options.mcpResources).toEqual({
+      'cua-driver': [liveResource],
+    } as never)
+  })
+
+  test('a static parent still passes its own clients and resources through', async () => {
+    const parentResources = { 'stale-server': [liveResource] }
+    const context = await drain(createAppStateHarness(), {
+      commands: [baseCommand],
+      mcpClients: [staleClient],
+      mcpResources: parentResources,
+    })
+
+    expect(context.options.commands).toEqual([])
+    expect(context.options.mcpClients).toEqual([staleClient] as never)
+    expect(context.options.mcpResources).toBe(parentResources as never)
   })
 })

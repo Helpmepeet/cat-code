@@ -372,6 +372,11 @@ export type SidecarServerOptions = {
    */
   workspaceTrust?: SidecarWorkspaceTrustDomain
   /**
+   * Sidecar-local continuation after the workspace-trust domain persisted and
+   * re-read a trusted state. It carries no renderer-provided value.
+   */
+  onWorkspaceTrusted?: () => void
+  /**
    * Diagnostics read-seam (P4-14). Optional because the P1-0 probe fixture has
    * no cwd-configured engine; when absent, no `diagnostics.snapshot` frame is
    * emitted.
@@ -528,6 +533,7 @@ export class SidecarServer {
   private contextBreakdownLast: ContextBreakdownSnapshot | null = null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
+  private readonly onWorkspaceTrusted: (() => void) | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
@@ -577,6 +583,7 @@ export class SidecarServer {
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
+  private unsubscribeAgentConfigSnapshot: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
@@ -732,6 +739,7 @@ export class SidecarServer {
       this.broadcastOAuthLoginProgress(progress),
     )
     this.workspaceTrust = options.workspaceTrust ?? null
+    this.onWorkspaceTrusted = options.onWorkspaceTrusted ?? null
     this.diagnostics = options.diagnostics ?? null
     this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
@@ -858,6 +866,11 @@ export class SidecarServer {
         this.permissions.subscribeToolPermissionContext(context => {
           this.broadcastPermissionContext(context)
         })
+    }
+    if (this.agentConfig) {
+      this.unsubscribeAgentConfigSnapshot = this.agentConfig.subscribe(() => {
+        this.broadcastAgentConfigSnapshot()
+      })
     }
     if (this.goals) {
       this.unsubscribeGoalSnapshot = this.goals.subscribe(() => {
@@ -1259,6 +1272,8 @@ export class SidecarServer {
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
     this.unsubscribePermissionContext = null
+    this.unsubscribeAgentConfigSnapshot?.()
+    this.unsubscribeAgentConfigSnapshot = null
     this.unsubscribeGoalSnapshot?.()
     this.unsubscribeGoalSnapshot = null
     this.unsubscribeMemorySnapshot?.()
@@ -2950,6 +2965,21 @@ export class SidecarServer {
       ok: result.ok,
       message: result.message,
     })
+    if (
+      result.ok &&
+      result.changed &&
+      this.workspaceTrust.getSnapshot()?.trusted === true
+    ) {
+      try {
+        this.onWorkspaceTrusted?.()
+      } catch (error) {
+        this.log(
+          `[sidecar] workspace-trust MCP start skipped (${
+            error instanceof Error ? error.message : String(error)
+          })`,
+        )
+      }
+    }
     if (result.changed) {
       this.broadcastWorkspaceTrustSnapshot()
       this.scheduleBoundaryDrain()
@@ -4138,6 +4168,15 @@ export class SidecarServer {
           error instanceof Error ? error.message : String(error)
         })`,
       )
+    }
+  }
+
+  private broadcastAgentConfigSnapshot(): void {
+    if (this.connections.size === 0) {
+      return
+    }
+    for (const connection of this.connections) {
+      this.sendAgentConfigSnapshot(connection)
     }
   }
 

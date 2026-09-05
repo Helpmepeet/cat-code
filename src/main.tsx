@@ -149,7 +149,8 @@ import { registerMcpXaaIdpCommand } from 'src/commands/mcp/xaaIdpCommand.js';
 import { logPermissionContextForAnts } from 'src/services/internalLogging.js';
 import { fetchClaudeAIMcpConfigsIfEligible } from 'src/services/mcp/claudeai.js';
 import { clearServerCache } from 'src/services/mcp/client.js';
-import { areMcpConfigsAllowedWithEnterpriseMcpConfig, dedupClaudeAiMcpServers, doesEnterpriseMcpConfigExist, filterMcpServersByPolicy, getClaudeCodeMcpConfigs, getMcpServerSignature, parseMcpConfig, parseMcpConfigFromFilePath } from 'src/services/mcp/config.js';
+import { areMcpConfigsAllowedWithEnterpriseMcpConfig, dedupClaudeAiMcpServers, doesEnterpriseMcpConfigExist, filterMcpServersByPolicy, getClaudeCodeMcpConfigs, getMcpServerSignature, isMcpServerDisabled, parseMcpConfig, parseMcpConfigFromFilePath } from 'src/services/mcp/config.js';
+import { applyMcpServerStateUpdate, seedMcpServerStates } from 'src/services/mcp/mcpState.js';
 import { excludeCommandsByServer, excludeResourcesByServer } from 'src/services/mcp/utils.js';
 import { isXaaEnabled } from 'src/services/mcp/xaaIdpLogin.js';
 import { getRelevantTips } from 'src/services/tips/tipRegistry.js';
@@ -2731,36 +2732,23 @@ async function run(): Promise<CommanderCommand> {
       // Only store allowed betas (filters by allowlist and subscriber status)
       setSdkBetas(filterAllowedSdkBetas(betas));
 
-      // Print-mode MCP: per-server incremental push into headlessStore.
-      // Mirrors useManageMCPConnections — push pending first (so ToolSearch's
+      // Print-mode MCP: per-server incremental push through the shared state transition.
+      // Push pending first (so ToolSearch's
       // pending-check at ToolSearchTool.ts:334 sees them), then replace with
       // connected/failed as each server settles.
       const connectMcpBatch = (configs: Record<string, ScopedMcpServerConfig>, label: string): Promise<void> => {
         if (Object.keys(configs).length === 0) return Promise.resolve();
-        headlessStore.setState(prev => ({
-          ...prev,
-          mcp: {
-            ...prev.mcp,
-            clients: [...prev.mcp.clients, ...Object.entries(configs).map(([name, config]) => ({
-              name,
-              type: 'pending' as const,
-              config
-            }))]
-          }
-        }));
-        return getMcpToolsCommandsAndResources(({
-          client,
-          tools,
-          commands
-        }) => {
+        headlessStore.setState(prev => {
+          const mcp = seedMcpServerStates(prev.mcp, configs, isMcpServerDisabled);
+          return mcp === prev.mcp ? prev : {
+            ...prev,
+            mcp
+          };
+        });
+        return getMcpToolsCommandsAndResources(result => {
           headlessStore.setState(prev => ({
             ...prev,
-            mcp: {
-              ...prev.mcp,
-              clients: prev.mcp.clients.some(c => c.name === client.name) ? prev.mcp.clients.map(c => c.name === client.name ? client : c) : [...prev.mcp.clients, client],
-              tools: uniqBy([...prev.mcp.tools, ...tools], 'name'),
-              commands: uniqBy([...prev.mcp.commands, ...commands], 'name')
-            }
+            mcp: applyMcpServerStateUpdate(prev.mcp, result)
           }));
         }, configs).catch(err => logForDebugging(`[MCP] ${label} connect error: ${err}`));
       };
@@ -2798,10 +2786,7 @@ async function run(): Promise<CommanderCommand> {
           }
           if (suppressed.size > 0) {
             logForDebugging(`[MCP] Lazy dedup: suppressing ${suppressed.size} plugin server(s) that duplicate claude.ai connectors: ${[...suppressed].join(', ')}`);
-            // Disconnect before filtering from state. Only connected
-            // servers need cleanup — clearServerCache on a never-connected
-            // server triggers a real connect just to kill it (memoize
-            // cache-miss path, see useManageMCPConnections.ts:870).
+            // Disconnect connected clients before filtering them from state.
             for (const c of headlessStore.getState().mcp.clients) {
               if (!suppressed.has(c.name) || c.type !== 'connected') continue;
               c.client.onclose = undefined;

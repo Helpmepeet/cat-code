@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
@@ -16,18 +16,8 @@ import {
 } from '../../agent-mode/workerNames.js'
 import { render, ThemeProvider } from '../../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
+import type { McpRuntimeSnapshot, Tool, ToolUseContext } from '../../Tool.js'
 import { getBuiltInAgents } from './builtInAgents.js'
-import {
-  AgentTool,
-  buildAgentSessionStateTracking,
-  continueAgentIterator,
-  deriveSessionStateTrackingObjective,
-  finalizeFailedAgentLaunch,
-  inputSchema,
-  registerWorkerCodexLease,
-  reportableAccount,
-  resolveSystemSubagentName,
-} from './AgentTool.js'
 import type { Message } from '../../types/message.js'
 import {
   getCodexLeaseForOwner,
@@ -38,7 +28,51 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
+import { createAssistantMessage } from '../../utils/messages.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
+import type { AgentDefinition } from './loadAgentsDir.js'
+import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
+
+const realRunAgentModule = await import('./runAgent.js')
+let capturedRunAgentParams:
+  | Parameters<typeof realRunAgentModule.runAgent>[0]
+  | undefined
+mock.module('./runAgent.js', () => ({
+  ...realRunAgentModule,
+  runAgent: (params: Parameters<typeof realRunAgentModule.runAgent>[0]) => {
+    capturedRunAgentParams = params
+    return (async function* () {
+      yield createAssistantMessage({ content: 'fixture complete' })
+    })()
+  },
+}))
+
+const realSleepModule = await import('../../utils/sleep.js')
+let resolvePendingMcpPoll: (() => void) | undefined
+mock.module('../../utils/sleep.js', () => ({
+  ...realSleepModule,
+  sleep: async (...args: Parameters<typeof realSleepModule.sleep>) => {
+    const resolve = resolvePendingMcpPoll
+    if (resolve) {
+      resolvePendingMcpPoll = undefined
+      resolve()
+      return
+    }
+    await realSleepModule.sleep(...args)
+  },
+}))
+
+const {
+  AgentTool,
+  buildAgentSessionStateTracking,
+  continueAgentIterator,
+  deriveSessionStateTrackingObjective,
+  finalizeFailedAgentLaunch,
+  inputSchema,
+  registerWorkerCodexLease,
+  reportableAccount,
+  resolveSystemSubagentName,
+} = await import('./AgentTool.js')
 
 async function renderToPlainText(node: React.ReactNode): Promise<string> {
   const stdout = new PassThrough() as unknown as NodeJS.WriteStream & {
@@ -93,6 +127,8 @@ const originalSdkDisableBuiltins =
 
 afterEach(() => {
   Math.random = originalRandom
+  capturedRunAgentParams = undefined
+  resolvePendingMcpPoll = undefined
   resetWorkerNamesForTests()
   if (originalAgentMode === undefined) {
     delete process.env.CLAUDE_CODE_AGENT_MODE
@@ -138,6 +174,190 @@ describe('AgentTool effort input', () => {
       inputSchema().safeParse({ ...baseInput, effort: 'turbo' }).success,
     ).toBe(false)
   })
+})
+
+test('required MCP availability rejects an authentication pseudo-tool', async () => {
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = {
+    agentType: 'mcp-agent',
+    source: 'userSettings',
+    whenToUse: 'Use MCP',
+    requiredMcpServers: ['linear'],
+    getSystemPrompt: () => 'Use MCP',
+  } as AgentDefinition
+  const authTool = {
+    name: 'mcp__linear__authenticate',
+    mcpInfo: { serverName: 'linear', toolName: 'authenticate' },
+  } as Tool
+  const appState = {
+    ...getDefaultAppState(),
+    mcp: {
+      ...getDefaultAppState().mcp,
+      clients: [{ name: 'linear', type: 'needs-auth', config }],
+      tools: [authTool],
+    },
+  }
+  const mcpRuntimeSnapshot = {
+    clients: appState.mcp.clients,
+    tools: appState.mcp.tools,
+    commands: [],
+    resources: {},
+  }
+  const context = {
+    options: {
+      agentDefinitions: {
+        allAgents: [agent],
+        activeAgents: [agent],
+      },
+      getMcpRuntimeSnapshot: () => mcpRuntimeSnapshot,
+    },
+    getAppState: () => appState,
+  } as unknown as ToolUseContext
+
+  await expect(
+    AgentTool.call(
+      {
+        prompt: 'Use the integration',
+        description: 'Use MCP',
+        subagent_type: 'mcp-agent',
+      },
+      context,
+      undefined as never,
+      undefined as never,
+    ),
+  ).rejects.toThrow(
+    "Agent 'mcp-agent' requires MCP servers matching: linear. MCP servers with tools: none.",
+  )
+})
+
+test('waits for a required MCP server then launches the agent with its fresh snapshot', async () => {
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = {
+    agentType: 'mcp-agent',
+    source: 'userSettings',
+    whenToUse: 'Use MCP',
+    requiredMcpServers: ['fixture'],
+    getSystemPrompt: () => 'Use MCP',
+  } as AgentDefinition
+  const freshTool = {
+    name: 'mcp__fixture__lookup',
+    mcpInfo: { serverName: 'fixture', toolName: 'lookup' },
+  } as Tool
+  const staleTurnStartTool = {
+    name: 'mcp__stale__lookup',
+    mcpInfo: { serverName: 'stale', toolName: 'lookup' },
+  } as Tool
+  const freshSnapshot = {
+    clients: [
+      {
+        name: 'fixture',
+        type: 'connected',
+        config,
+        capabilities: {},
+        cleanup: async () => {},
+        client: { onclose: undefined },
+      },
+    ],
+    tools: [freshTool],
+    commands: [{ name: 'mcp__fixture__command' }],
+    resources: {
+      fixture: [{ server: 'fixture', uri: 'fixture://resource', name: 'resource' }],
+    },
+  } as unknown as McpRuntimeSnapshot
+  const turnStartClients = [{ name: 'stale', type: 'pending', config }]
+  const turnStartCommands = [{ name: 'mcp__stale__command' }]
+  const turnStartResources = {
+    stale: [{ server: 'stale', uri: 'stale://resource', name: 'stale resource' }],
+  }
+  const initialState = getDefaultAppState()
+  let appState = {
+    ...initialState,
+    mcp: {
+      ...initialState.mcp,
+      clients: [{ name: 'fixture', type: 'pending', config }],
+      tools: [],
+    },
+  }
+  let snapshotReads = 0
+  let snapshotReadAfterConnection = false
+  resolvePendingMcpPoll = () => {
+    appState = {
+      ...appState,
+      mcp: {
+        ...appState.mcp,
+        clients: freshSnapshot.clients,
+        tools: freshSnapshot.tools,
+      },
+    }
+  }
+  const context = {
+    toolUseId: 'agent-mcp-handoff',
+    abortController: new AbortController(),
+    getAppState: () => appState,
+    setAppState: (update: (previous: typeof appState) => typeof appState) => {
+      appState = update(appState)
+    },
+    options: {
+      agentDefinitions: {
+        allAgents: [agent],
+        activeAgents: [agent],
+      },
+      commands: turnStartCommands,
+      debug: false,
+      mainLoopModel: 'claude-sonnet-4-5',
+      tools: [staleTurnStartTool],
+      verbose: false,
+      thinkingConfig: { type: 'disabled' },
+      mcpClients: turnStartClients,
+      mcpResources: turnStartResources,
+      isNonInteractiveSession: true,
+      getMcpRuntimeSnapshot: () => {
+        snapshotReads += 1
+        snapshotReadAfterConnection =
+          appState.mcp.clients[0]?.type === 'connected'
+        if (!snapshotReadAfterConnection) {
+          throw new Error('AgentTool read the MCP snapshot before the required server connected')
+        }
+        return freshSnapshot
+      },
+    },
+  } as unknown as ToolUseContext
+
+  await AgentTool.call(
+    {
+      prompt: 'Use the fixture integration',
+      description: 'Use MCP',
+      subagent_type: 'mcp-agent',
+    },
+    context,
+    undefined as never,
+    undefined as never,
+  )
+
+  const invocation = capturedRunAgentParams
+  expect(snapshotReads).toBe(1)
+  expect(snapshotReadAfterConnection).toBe(true)
+  expect(invocation).toBeDefined()
+  expect(invocation?.mcpRuntimeSnapshot).toBe(freshSnapshot)
+  expect(invocation?.mcpRuntimeSnapshot?.clients).toBe(freshSnapshot.clients)
+  expect(invocation?.mcpRuntimeSnapshot?.tools).toBe(freshSnapshot.tools)
+  expect(invocation?.mcpRuntimeSnapshot?.commands).toBe(freshSnapshot.commands)
+  expect(invocation?.mcpRuntimeSnapshot?.resources).toBe(freshSnapshot.resources)
+  expect(invocation?.mcpRuntimeSnapshot?.clients).not.toBe(turnStartClients)
+  expect(invocation?.mcpRuntimeSnapshot?.commands).not.toBe(turnStartCommands)
+  expect(invocation?.mcpRuntimeSnapshot?.resources).not.toBe(turnStartResources)
+  expect(invocation?.availableTools).toContain(freshTool)
+  expect(invocation?.availableTools).not.toContain(staleTurnStartTool)
 })
 
 test('background transfer continues the same live iterator from its in-flight next result', async () => {

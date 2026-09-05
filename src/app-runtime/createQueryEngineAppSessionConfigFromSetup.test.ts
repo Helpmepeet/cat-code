@@ -86,6 +86,9 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.tools).toEqual([tool, mcpTool])
     expect(config.commands).toEqual([command, mcpCommand])
     expect(config.mcpClients).toEqual([mcpClient])
+    expect(config.mcpResources).toEqual({
+      server: [expectedMcpResource],
+    })
     expect(config.getAppState().mcp).toMatchObject({
       clients: [mcpClient],
       tools: [mcpTool],
@@ -166,5 +169,55 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.replayUserMessages).toBe(true)
     expect(config.includePartialMessages).toBe(true)
     expect(config.setSDKStatus).toBeTypeOf('function')
+  })
+  test('a live caller reads the store instead of the frozen setup overlay', () => {
+    // The lifecycle publishes into the real store. With the overlay in place,
+    // ToolSearch's pending-server check and AgentTool's required-server wait
+    // both read the empty setup arrays forever, so a server that connects
+    // mid-session stays invisible to them no matter what options.tools says.
+    const liveClient = {
+      name: 'cua-driver',
+      type: 'connected',
+    } as MCPServerConnection
+    const liveTool = { name: 'mcp__cua-driver__click' } as Tool
+    let state: AppState = {
+      ...getDefaultAppState(),
+      mcp: {
+        clients: [liveClient],
+        tools: [liveTool],
+        commands: [mcpCommand],
+        resources: { 'cua-driver': [mcpResource] },
+      },
+    } as AppState
+
+    const config = createQueryEngineAppSessionConfigFromSetup({
+      cwd: '/repo',
+      tools: [tool],
+      commands: [command],
+      mcpTools: [],
+      mcpCommands: [],
+      mcpClients: [],
+      mcpResources: {},
+      getMcpRuntimeSnapshot: () => ({
+        clients: [liveClient],
+        tools: [liveTool],
+        commands: [mcpCommand],
+        resources: { 'cua-driver': [mcpResource] },
+      }),
+      agents: [agent],
+      getAppState: () => state,
+      setAppState: update => {
+        state = update(state)
+      },
+      readFileCache: createFileStateCacheWithSizeLimit(20),
+    })
+
+    expect(config.getAppState().mcp.clients).toEqual([liveClient])
+    expect(config.getAppState().mcp.tools).toEqual([liveTool])
+    expect(config.getMcpRuntimeSnapshot).toBeTypeOf('function')
+    // The engine layers each turn's snapshot onto these, so they must stay the
+    // base pool and catalog rather than a pre-merged one.
+    expect(config.tools).toEqual([tool])
+    expect(config.commands).toEqual([command])
   })
 })
