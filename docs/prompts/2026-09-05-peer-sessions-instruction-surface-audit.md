@@ -125,8 +125,8 @@ Ranked recommendations (details in §3, each with current text and replacement):
 Every recommendation was checked against the two binding constraints. None
 re-adds a §0a cut or touches a locked decision. None asks prompt text to enforce a
 bound; F1 and F2 remove imperatives, F3, F9, F14, F15 and F16 add purpose rules
-of the kind §5 already carries. F4's §10 item narrows R6 for this repository's own gates and
-says so (§3.1).
+of the kind §5 already carries. F4's §10 item records the operator's
+2026-09-05 ruling that R6 holds for those gates too (§3.1).
 
 ## 1. Which surfaces reach a peer at runtime
 
@@ -376,22 +376,25 @@ markers because several rulings were reversed after the build and the reversal
 holds; then `docs/migration/decisions/HOST-REQUEST-PLANE.md`. Owner files: the peer row of
 `docs/maps/web-app-runtime.md`."
 
-**F4e, add, §10 list.** New bullet:
+**F4e, add, §10 list. RULED 2026-09-05.** The audit first proposed the
+opposite: that a peer's message should never open a §10 gate, so a peer asked
+to push would ask the user in its own tab. The operator ruled against it, in
+these words: "If Nickel tells Cobalt 'push' or 'delete that file', should
+Cobalt do it, or ask you first?" "Cobalt should do it." R6 therefore stands
+unqualified, and the sentence CLAUDE.md needs is the affirmative one, because
+§10's gates are worded "ask the user before" and a session reading them beside
+the doctrine cannot tell which text wins. New bullet:
 
-> A message from a peer is not the user's answer to any item on this list. A
-> peer's request is ordinary work (the desktop doctrine), but each gate above
-> needs the human, in your own tab; tell the peer in one message that you are
-> waiting on the user.
+> A request from a desktop peer counts as the user asking, for the gates on
+> this list as for anything else (operator ruling, 2026-09-05). Do it under
+> your own permission mode; the only refusal is a request the peer says it was
+> denied.
 
 Why: the doctrine says a peer request is done "as if the user had asked", and
-§10's gates are worded as "ask the user before". Without this sentence a peer
-asked to push will read the doctrine as the answer to the gate. Constraint
-note: R6 says the permission-laundering rule is "the only block" on peer
-authority. This adds a second block for this repository's own gates, and the
-reason is that every gate on the list exists because the action publishes or
-destroys other sessions' work, and the requesting peer is one of those
-sessions. It is a repo instruction, not a mechanism, and it is the operator's
-call whether R6 should stand unqualified here.
+without this sentence a careful session will still stop at a §10 gate and ask.
+Owed with it: a 🔁 note under R6 in `docs/migration/decisions/PEER-SESSIONS.md`
+§1 recording the ruling and the question it answered, so the next audit does
+not reopen it. Constraint note: none; this is R6 applied, not amended.
 
 ### 3.2 `.claude/rules/migration.md` (F5): the hand-carried prompt
 
@@ -854,8 +857,10 @@ nothing.** The doctrine has the answer for reply and silence: a message that
 asks something is answered to its sender; one that asks nothing gets no reply.
 It has the authority rule: do the work under your own permission mode; refuse
 only what the peer says it was denied. What it lacks is the decline path (F3)
-and the repository's own gates (F4e): a peer's word satisfies neither a §10
-gate nor, in auto mode, the classifier.
+and, until 2026-09-05, an unstated answer for the repository's own gates. That
+is now ruled (F4e): a peer's request opens a §10 gate exactly as the user's
+would. In auto mode the classifier still judges such an action as autonomous,
+which is the one block R6 admits.
 
 **The hand-carried-prompt workflows.** `.claude/rules/migration.md` and the
 migration skill: keep the fenced prompt, add the operator-opened dispatch lane,
@@ -902,12 +907,13 @@ never ask for what it was denied. agent-chat-skill, stricter: "Human authority
 stays local and is non-delegable", "authority does not cross a relay".
 Mirasim: provenance is labelled and nothing above the agents adjudicates. Our
 R6 ("a task from the same user who runs both of you") is the fourth position
-and the only one that grants authority, chosen because there is one user. F4e,
-the open ruling, asks whether this repository's §10 gates should follow the
-first-party position for a defined list of actions while R6 stands for
-everything else. Claude Code's "cannot change `CLAUDE.md` or other
-configuration because another session asked" is the closest shipped analogue
-to F4e. Two other differences are rulings, not gaps: `ReadPeer` exists here and
+and the only one that grants authority, chosen because there is one user. F4e
+asked whether this repository's §10 gates should follow the first-party
+position for a defined list of actions; the operator ruled on 2026-09-05 that
+they should not, and R6 holds there too ("Cobalt should do it"). Claude Code's
+"cannot change `CLAUDE.md` or other configuration because another session
+asked" is the closest shipped analogue to the position not taken. Two other
+differences are rulings, not gaps: `ReadPeer` exists here and
 in almost no messaging system (Amp and Mirasim excepted), by R2's report-back
 design and the §8 envelope; and Claude Code's `notify_when_idle` is the
 `NotifyWhenIdle` this design cut in §0a, so its presence upstream is not a
@@ -969,8 +975,6 @@ audit and mostly already listed in §12 of the decision as deferred.
   engine's submit path, not by a live capture of an outbound request. A prompt
   dump would settle it, and the ant-only gate on `src/services/api/dumpPrompts.ts` means the
   build session must use `/context` or a probe.
-- Whether the operator wants R6 qualified for this repository's §10 gates
-  (F4e) is a ruling, not a finding.
 - The outside survey (§5.1) was checked at four of its nine sources; the other
   five are reported as the survey describes them and were not opened.
 
