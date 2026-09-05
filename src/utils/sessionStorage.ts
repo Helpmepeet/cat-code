@@ -4701,6 +4701,45 @@ export async function loadTranscriptFile(
   let activeConversationRoot: UUID | null | undefined
   const activeConversationDescendants = new Set<UUID>()
 
+  // Session-scoped metadata entries. Both passes below read them — the
+  // pre-boundary metadata-only scan and the main entry walk — so the dispatch
+  // lives here once: a new metadata entry type added to only one of the two
+  // copies would load from short transcripts and silently vanish from
+  // compacted ones. Returns whether the entry was one of these types.
+  const applySessionMetadataEntry = (entry: Entry): boolean => {
+    if (entry.type === 'summary' && entry.leafUuid) {
+      summaries.set(entry.leafUuid, entry.summary)
+    } else if (entry.type === 'custom-title' && entry.sessionId) {
+      setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
+    } else if (entry.type === 'tag' && entry.sessionId) {
+      setLatestMapValue(tags, entry.sessionId, entry.tag)
+    } else if (entry.type === 'archived' && entry.sessionId) {
+      setLatestMapValue(archived, entry.sessionId, entry.archived === true)
+    } else if (entry.type === 'agent-name' && entry.sessionId) {
+      setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
+    } else if (entry.type === 'agent-color' && entry.sessionId) {
+      setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
+    } else if (entry.type === 'agent-setting' && entry.sessionId) {
+      setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
+    } else if (entry.type === 'mode' && entry.sessionId) {
+      setLatestMapValue(modes, entry.sessionId, entry.mode)
+    } else if (
+      entry.type === 'thread-goal-updated' ||
+      entry.type === 'thread-goal-cleared'
+    ) {
+      applyThreadGoalEntry(threadGoals, entry)
+    } else if (entry.type === 'worktree-state' && entry.sessionId) {
+      setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
+    } else if (entry.type === 'pr-link' && entry.sessionId) {
+      setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
+      setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
+      setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+    } else {
+      return false
+    }
+    return true
+  }
+
   try {
     // For large transcripts, avoid materializing megabytes of stale content.
     // Single forward chunked read: attribution-snapshot lines are skipped at
@@ -4817,34 +4856,7 @@ export async function loadTranscriptFile(
         Buffer.from(metadataLines.join('\n')),
       )
       for (const entry of metaEntries) {
-        if (entry.type === 'summary' && entry.leafUuid) {
-          summaries.set(entry.leafUuid, entry.summary)
-        } else if (entry.type === 'custom-title' && entry.sessionId) {
-          setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-        } else if (entry.type === 'tag' && entry.sessionId) {
-          setLatestMapValue(tags, entry.sessionId, entry.tag)
-        } else if (entry.type === 'archived' && entry.sessionId) {
-          setLatestMapValue(archived, entry.sessionId, entry.archived === true)
-        } else if (entry.type === 'agent-name' && entry.sessionId) {
-          setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-        } else if (entry.type === 'agent-color' && entry.sessionId) {
-          setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-        } else if (entry.type === 'agent-setting' && entry.sessionId) {
-          setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-        } else if (entry.type === 'mode' && entry.sessionId) {
-          setLatestMapValue(modes, entry.sessionId, entry.mode)
-        } else if (
-          entry.type === 'thread-goal-updated' ||
-          entry.type === 'thread-goal-cleared'
-        ) {
-          applyThreadGoalEntry(threadGoals, entry)
-        } else if (entry.type === 'worktree-state' && entry.sessionId) {
-          setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-        } else if (entry.type === 'pr-link' && entry.sessionId) {
-          setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-          setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-          setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
-        }
+        applySessionMetadataEntry(entry)
       }
     }
 
@@ -4917,33 +4929,8 @@ export async function loadTranscriptFile(
           parseActiveConversationTipEntry(entry) ?? undefined
         activeConversationRoot = activeConversationTip?.tipUuid
         activeConversationDescendants.clear()
-      } else if (entry.type === 'summary' && entry.leafUuid) {
-        summaries.set(entry.leafUuid, entry.summary)
-      } else if (entry.type === 'custom-title' && entry.sessionId) {
-        setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-      } else if (entry.type === 'tag' && entry.sessionId) {
-        setLatestMapValue(tags, entry.sessionId, entry.tag)
-      } else if (entry.type === 'archived' && entry.sessionId) {
-        setLatestMapValue(archived, entry.sessionId, entry.archived === true)
-      } else if (entry.type === 'agent-name' && entry.sessionId) {
-        setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-      } else if (entry.type === 'agent-color' && entry.sessionId) {
-        setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-      } else if (entry.type === 'agent-setting' && entry.sessionId) {
-        setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-      } else if (entry.type === 'mode' && entry.sessionId) {
-        setLatestMapValue(modes, entry.sessionId, entry.mode)
-      } else if (
-        entry.type === 'thread-goal-updated' ||
-        entry.type === 'thread-goal-cleared'
-      ) {
-        applyThreadGoalEntry(threadGoals, entry)
-      } else if (entry.type === 'worktree-state' && entry.sessionId) {
-        setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-      } else if (entry.type === 'pr-link' && entry.sessionId) {
-        setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-        setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-        setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+      } else if (applySessionMetadataEntry(entry)) {
+        // Handled above: session-scoped metadata shared with the pre-boundary pass.
       } else if (entry.type === 'file-history-snapshot') {
         fileHistorySnapshots.set(entry.messageId, entry)
       } else if (entry.type === 'attribution-snapshot') {

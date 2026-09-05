@@ -1781,6 +1781,25 @@ async function processCodexEvents(
   enqueueSse('ping', { type: 'ping' })
 
   let currentTextBlockStarted = false
+
+  /**
+   * Close the open text block, if there is one. Emitting the stop, advancing
+   * contentBlockIndex and clearing the flag have to happen together: seven
+   * paths close the text block, and one that skipped the index advance would
+   * misindex every content block emitted after it. Returns whether a block was
+   * actually closed, which is what the partial-stream seal reports.
+   */
+  const closeOpenTextBlock = (): boolean => {
+    if (!currentTextBlockStarted) return false
+    enqueueSse('content_block_stop', {
+      type: 'content_block_stop',
+      index: contentBlockIndex,
+    })
+    contentBlockIndex++
+    currentTextBlockStarted = false
+    return true
+  }
+
   let syntheticToolCallCounter = 0
   const openToolCallBlocks = new Map<string, OpenToolCallBlock>()
   const toolCallIdsByItemId = new Map<string, string>()
@@ -1870,18 +1889,7 @@ async function processCodexEvents(
   const openReasoningBlock = (kind: 'summary' | 'raw'): ReasoningBlockState => {
     // If a text block is open, close it so the thinking block slots in
     // at the correct ordinal position in content[].
-    if (currentTextBlockStarted) {
-      controller.enqueue(
-        encoder.encode(
-          formatSSE('content_block_stop', JSON.stringify({
-            type: 'content_block_stop',
-            index: contentBlockIndex,
-          })),
-        ),
-      )
-      contentBlockIndex++
-      currentTextBlockStarted = false
-    }
+    closeOpenTextBlock()
     const index = contentBlockIndex
     contentBlockIndex++
     const block: ReasoningBlockState = { index, kind, parts: 0, started: true }
@@ -2056,19 +2064,8 @@ async function processCodexEvents(
                 // Close any open reasoning blocks before tool blocks so
                 // ordinal positions in content[] line up.
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  emittedVisibleOutput = true
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) emittedVisibleOutput = true
+                closeOpenTextBlock()
 
                 const callId =
                   readString(item.call_id) ||
@@ -2275,19 +2272,8 @@ async function processCodexEvents(
                 }
               } else if (item?.type === 'web_search_call') {
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
 
                 noteVisibleOutput()
                 hadHostedWebSearch = true
@@ -2335,19 +2321,8 @@ async function processCodexEvents(
                     { level: 'warn' },
                   )
                 }
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
               } else if (item?.type === 'reasoning') {
                 if (firstReasoningDoneAtMs === null) {
                   firstReasoningDoneAtMs = eventObservedAtMs
@@ -2392,18 +2367,7 @@ async function processCodexEvents(
                 if (encrypted && !targetBlock) {
                   // No visible reasoning was emitted; synthesize a hidden
                   // thinking block to carry the signature for cache replay.
-                  if (currentTextBlockStarted) {
-                    controller.enqueue(
-                      encoder.encode(
-                        formatSSE('content_block_stop', JSON.stringify({
-                          type: 'content_block_stop',
-                          index: contentBlockIndex,
-                        })),
-                      ),
-                    )
-                    contentBlockIndex++
-                    currentTextBlockStarted = false
-                  }
+                  closeOpenTextBlock()
                   noteVisibleOutput({ userVisible: false })
                   controller.enqueue(
                     encoder.encode(
@@ -2530,20 +2494,7 @@ async function processCodexEvents(
         const hadOpenReasoningBlock =
           openSummaryBlock !== null || openRawBlock !== null
         closeAllOpenReasoningBlocks()
-        let sealedPartialText = false
-        if (currentTextBlockStarted) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE('content_block_stop', JSON.stringify({
-                type: 'content_block_stop',
-                index: contentBlockIndex,
-              })),
-            ),
-          )
-          contentBlockIndex++
-          currentTextBlockStarted = false
-          sealedPartialText = true
-        }
+        const sealedPartialText = closeOpenTextBlock()
         // Drain BEFORE the payload is built. `controller.error()` resets the
         // queue, so until the reader has pulled it the seal is not delivered,
         // and a payload claiming `sealedPartialText` for a chunk that never
@@ -2620,16 +2571,7 @@ async function processCodexEvents(
   }
 
   // Close any remaining open blocks
-  if (currentTextBlockStarted) {
-    controller.enqueue(
-      encoder.encode(
-        formatSSE('content_block_stop', JSON.stringify({
-          type: 'content_block_stop',
-          index: contentBlockIndex,
-        })),
-      ),
-    )
-  }
+  closeOpenTextBlock()
   for (const toolCall of openToolCallBlocks.values()) {
     closeToolCallBlock(controller, encoder, toolCall.index)
   }

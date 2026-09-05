@@ -173,6 +173,10 @@ import {
   writeSidebarWidthToStorage,
 } from './sidebarWidth.js'
 import {
+  defaultViewPreferenceStorage,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
+import {
   groupByWorkspace,
   type MergedSessionRow,
   type WorkspaceGroup,
@@ -193,23 +197,10 @@ const HIDE_DELAY = 200
  */
 const SIDEBAR_GROUP_ROW_LIMIT = 6
 
-type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
-
 /** The window's inner width, or 0 under SSR — the "no window to measure" input
  * `clampSidebarWidth` reads as "fixed bounds only". */
 function currentWindowWidth(): number {
   return typeof window === 'undefined' ? 0 : window.innerWidth
-}
-
-/** The renderer's own `localStorage`, or `null` under SSR / a locked-down
- * renderer — the `ReasoningLayoutProvider.tsx:26-33` helper, verbatim. */
-function defaultOrderStorage(): OrderStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -377,7 +368,7 @@ export function Sidebar({
   /** Where the operator's workspace order and pins are persisted. Injectable for
    * tests (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
    * renderer's own `localStorage`, and `null` disables persistence entirely. */
-  storage?: OrderStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
@@ -394,7 +385,8 @@ export function Sidebar({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
-  const orderStore = storage === undefined ? defaultOrderStorage() : storage
+  const orderStore =
+    storage === undefined ? defaultViewPreferenceStorage() : storage
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     clampSidebarWidth(
       readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
