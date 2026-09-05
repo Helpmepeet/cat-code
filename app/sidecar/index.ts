@@ -56,8 +56,10 @@ import {
 import { SidecarServer } from './sidecarServer.js'
 import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
+import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
 import type { SidecarOperationalLogger } from './operationalLogger.js'
+import { createSidecarCleanup, type SidecarCleanup } from './sidecarCleanup.js'
 
 /**
  * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose
@@ -77,6 +79,7 @@ const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
 let activeOperationalLogger: SidecarOperationalLogger | null = null
 let activeAppSessionId: string | undefined
 let activeEngineSessionId: string | undefined
+let activeSidecarCleanup: SidecarCleanup | null = null
 let fatalExitStarted = false
 
 /** Persist only a closed fatal category before the sidecar terminates. */
@@ -106,9 +109,18 @@ function exitAfterFatal(error: unknown): void {
         error instanceof Error ? error.message : 'unknown'
       }\n`,
     )
-    process.exit(isResumeBusy ? RESUME_BUSY_EXIT_CODE : RESUME_FAILED_EXIT_CODE)
+    const code = isResumeBusy ? RESUME_BUSY_EXIT_CODE : RESUME_FAILED_EXIT_CODE
+    if (activeSidecarCleanup) {
+      void activeSidecarCleanup.exit(code)
+      return
+    }
+    process.exit(code)
   }
   process.stderr.write(`[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  if (activeSidecarCleanup) {
+    void activeSidecarCleanup.exit(1)
+    return
+  }
   process.exit(1)
 }
 
@@ -217,6 +229,32 @@ async function main(): Promise<void> {
     appSessionId: args.sessionId,
     fields: { role: 'sidecar', pid: process.pid },
   })
+  let closeSocket = () => {}
+  let disposeMcpLifecycle: (() => Promise<void>) | null = null
+  const sidecarCleanup = createSidecarCleanup({
+    disposeMcpLifecycle: () => disposeMcpLifecycle?.() ?? Promise.resolve(),
+    closeSocket: () => closeSocket(),
+    releaseTranscriptLease: releaseActiveTranscriptLease,
+    onDiagnostic: diagnostic => {
+      operational.write({
+        level: 'warn',
+        event: 'diagnostic',
+        appSessionId: args.sessionId,
+        ...(activeEngineSessionId
+          ? { engineSessionId: activeEngineSessionId }
+          : {}),
+        fields: {
+          source: 'sidecar_cleanup',
+          reason: diagnostic.reason,
+          ...(diagnostic.count !== undefined
+            ? { count: diagnostic.count }
+            : {}),
+        },
+      })
+    },
+    exit: code => process.exit(code),
+  })
+  activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
@@ -330,6 +368,7 @@ async function main(): Promise<void> {
     runControls,
     sessionActions,
     contextBreakdown,
+    startMcpLifecycle,
     slashCatalog,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
@@ -344,7 +383,17 @@ async function main(): Promise<void> {
         : {}),
     ...(agentDefinitions !== undefined ? { agentDefinitions } : {}),
     ...(resumed !== undefined ? { resumedInitialState: resumed.initialState } : {}),
+    onMcpLifecycleCreated: dispose => {
+      disposeMcpLifecycle = dispose
+    },
   })
+  const mcpLifecycleStartGate = startMcpLifecycle
+    ? createSidecarMcpLifecycleStartGate({
+        isWorkspaceTrusted:
+          workspaceTrust?.getSnapshot()?.trusted === true,
+        start: startMcpLifecycle,
+      })
+    : null
 
   // F2 (decisions/RESTORE-HISTORY.md): display history is an archival prefix
   // plus the exact visible model-seed tail. The compacted seed itself stays
@@ -362,6 +411,7 @@ async function main(): Promise<void> {
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
+  const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({
     sessionId: args.sessionId,
@@ -375,6 +425,9 @@ async function main(): Promise<void> {
     ...(tasks ? { tasks } : {}),
     ...(accounts ? { accounts } : {}),
     ...(workspaceTrust ? { workspaceTrust } : {}),
+    ...(mcpLifecycleStartGate
+      ? { onWorkspaceTrusted: mcpLifecycleStartGate.onWorkspaceTrusted }
+      : {}),
     ...(diagnostics ? { diagnostics } : {}),
     ...(extensions ? { extensions } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
@@ -475,6 +528,14 @@ async function main(): Promise<void> {
       void exitCleanly(PARKED_EXIT_CODE)
     },
   })
+  closeSocket = () => {
+    server.close()
+    try {
+      require('fs').unlinkSync(args.socketPath)
+    } catch {
+      // best-effort
+    }
+  }
 
   // HOST-REQUEST-PLANE — point the peer tools at the live request client. The
   // tools were built with the session controller above, before this server
@@ -596,32 +657,8 @@ async function main(): Promise<void> {
     engineSessionId,
     fields: { pid: process.pid },
   })
+  mcpLifecycleStartGate?.onSocketReady()
 
-  // Clean the socket file on exit so a restart can re-bind the path.
-  const cleanup = () => {
-    server.close()
-    try {
-      require('fs').unlinkSync(args.socketPath)
-    } catch {
-      // best-effort
-    }
-  }
-  let cleanExitStarted = false
-  const exitCleanly = async (code: number): Promise<void> => {
-    if (cleanExitStarted) return
-    cleanExitStarted = true
-    cleanup()
-    await releaseActiveTranscriptLease().catch(error => {
-      const detail = (error instanceof Error ? error.message : String(error)).slice(
-        0,
-        512,
-      )
-      process.stderr.write(
-        `[sidecar] transcript lease release failed during clean exit: ${detail}\n`,
-      )
-    })
-    process.exit(code)
-  }
   process.on('SIGTERM', () => {
     void exitCleanly(0)
   })

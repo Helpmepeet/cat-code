@@ -233,6 +233,31 @@ test('normal startup exposes the permission-context tools to the model', async (
   expect(queryEngineConfig.tools.some(tool => tool.name === 'Bash')).toBe(true)
 })
 
+test('normal startup prepares the live MCP snapshot source and cancels URL elicitation', async () => {
+  const { appStateStore, queryEngineConfig } =
+    await createNormalSidecarQueryEngineConfig(process.cwd())
+
+  const snapshot = queryEngineConfig.getMcpRuntimeSnapshot?.()
+  expect(snapshot).toEqual({
+    clients: appStateStore.getState().mcp.clients,
+    tools: appStateStore.getState().mcp.tools,
+    commands: appStateStore.getState().mcp.commands,
+    resources: appStateStore.getState().mcp.resources,
+  })
+  expect(
+    await queryEngineConfig.handleElicitation?.(
+      'fixture',
+      {
+        mode: 'url',
+        url: 'https://example.test/authorize',
+        elicitationId: 'fixture-elicitation',
+        message: 'Authorize fixture',
+      },
+      new AbortController().signal,
+    ),
+  ).toEqual({ action: 'cancel' })
+})
+
 test('normal startup appends the desktop file-reference instruction', async () => {
   // The engine's tone section teaches the TERMINAL convention
   // (`src/constants/prompts.ts:502` — bare `file_path:line_number`, an OSC 8
@@ -505,7 +530,14 @@ Review the restored session.
 })
 
 test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
-  const { controller, permissions, goals, memory, tasks } =
+  const {
+    controller,
+    disposeMcpLifecycle,
+    permissions,
+    goals,
+    memory,
+    tasks,
+  } =
     await createSidecarSessionController({
     probe: false,
     cwd: process.cwd(),
@@ -523,10 +555,19 @@ test('normal startup constructs a real runtime-backed controller without startin
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
+  expect(disposeMcpLifecycle).not.toBeNull()
 })
 
 test('probe startup has no read domains (no engine app-state store)', async () => {
-  const { permissions, settings, agentConfig, goals, memory, tasks } =
+  const {
+    disposeMcpLifecycle,
+    permissions,
+    settings,
+    agentConfig,
+    goals,
+    memory,
+    tasks,
+  } =
     await createSidecarSessionController({
     probe: true,
     cwd: process.cwd(),
@@ -537,6 +578,7 @@ test('probe startup has no read domains (no engine app-state store)', async () =
   expect(goals).toBeNull()
   expect(memory).toBeNull()
   expect(tasks).toBeNull()
+  expect(disposeMcpLifecycle).toBeNull()
 })
 
 test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually load', async () => {

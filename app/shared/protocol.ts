@@ -2724,12 +2724,11 @@ export type OAuthLoginProgressFrame = {
  * skill prompt bodies. Proven in `extensionsDomain.test.ts`.
  *
  * Deliberate deferrals (P4-12 §0 flags — render truth, defer the rest):
- *  - **MCP live runtime is EMPTY in the desktop session today** (the
- *    `sessionController.ts` empty-mcpClients stub, flagged for an
- *    `app-runtime` extract, NOT a sidecar hand-wire — §8.1). So MCP entries are
- *    CONFIGURED servers only: connection status / tool+resource counts /
- *    reconnect+auth+enable+remove actions are unavailable until that runtime is
- *    wired, and are omitted here rather than mocked.
+ *  - MCP entries remain CONFIGURED-server metadata only. The sidecar has a live
+ *    MCP runtime, but this spawn-time frame intentionally carries no connection
+ *    status, tool/resource counts, or reconnect/auth/enable/remove actions.
+ *    Those need a separate redacted live projection or write verb and are
+ *    omitted here rather than mocked.
  *  - All WRITES (add/remove/enable-toggle/update/install) are deferred to the
  *    `SettingsUpdater`-under-lock write-seam (P3-5a/DR-2), a later session.
  *  - Plugin marketplace BROWSING is deferred (real domain exists — the

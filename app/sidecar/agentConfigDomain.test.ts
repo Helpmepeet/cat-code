@@ -25,11 +25,18 @@ import {
 import { describeToolForInspector } from '../renderer/src/toolInspectorModel.js'
 import type { ToolUseRow } from '../renderer/src/transcriptProjector.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import { createStore } from '../../src/state/store.js'
+import type { Tool } from '../../src/Tool.js'
+import type { ScopedMcpServerConfig } from '../../src/services/mcp/types.js'
 import type {
   AgentConfigSnapshotFrame,
   AgentConfigSourceId,
 } from '../shared/protocol.js'
-import { buildAgentConfigSnapshot } from './agentConfigDomain.js'
+import {
+  buildAgentConfigSnapshot,
+  createSidecarAgentConfigDomain,
+} from './agentConfigDomain.js'
 
 type AssertAssignable<T extends true> = T
 type EngineAgentSource = AgentDefinition['source']
@@ -162,6 +169,96 @@ test('builds active, overridden, and MCP availability from the real resolved age
   expect(builtInReviewer).toMatchObject({ active: false, overriddenBy: 'projectSettings' })
   expect(ticketAgent).toMatchObject({ active: true, available: false, missingMcpServers: ['jira'] })
   expect(byType.size).toBe(snapshot.definitions.length)
+})
+
+test('derives MCP availability live and notifies only when the shared result changes', () => {
+  const serverName = 'Cua Driver, Local'
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = customAgent({
+    agentType: 'desktop-driver',
+    source: 'userSettings',
+    requiredMcpServers: ['driver, local'],
+  })
+  const store = createStore(getDefaultAppState())
+  const authTool = {
+    name: 'mcp__Cua_Driver__authenticate',
+    mcpInfo: { serverName, toolName: 'authenticate' },
+  } as Tool
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      clients: [{ name: serverName, type: 'needs-auth', config }],
+      tools: [authTool],
+    },
+  }))
+  const domain = createSidecarAgentConfigDomain({
+    agentDefinitions: {
+      allAgents: [agent],
+      activeAgents: [agent],
+    } satisfies AgentDefinitionsResult,
+    appStateStore: store,
+  })
+  let notifications = 0
+  const unsubscribe = domain.subscribe(() => {
+    notifications++
+  })
+
+  expect(domain.getSnapshot()).toMatchObject({
+    availableMcpServers: [],
+    definitions: [{ available: false, missingMcpServers: ['driver, local'] }],
+  })
+
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      clients: [{
+        name: serverName,
+        type: 'connected',
+        config,
+        capabilities: {},
+        cleanup: async () => {},
+        client: {} as never,
+      }],
+    },
+  }))
+  expect(notifications).toBe(0)
+
+  const realTool = {
+    name: 'mcp__Cua_Driver__click',
+    mcpInfo: { serverName, toolName: 'click' },
+  } as Tool
+  store.setState(previous => ({
+    ...previous,
+    mcp: { ...previous.mcp, tools: [realTool] },
+  }))
+  expect(notifications).toBe(1)
+  expect(domain.getSnapshot()).toMatchObject({
+    availableMcpServers: [serverName],
+    definitions: [{ available: true, missingMcpServers: [] }],
+  })
+
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      tools: [
+        realTool,
+        {
+          name: 'mcp__Cua_Driver__scroll',
+          mcpInfo: { serverName, toolName: 'scroll' },
+        } as Tool,
+      ],
+    },
+  }))
+  expect(notifications).toBe(1)
+  unsubscribe()
 })
 
 test('agent source taxonomy and active override precedence stay synced with the engine', () => {

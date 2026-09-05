@@ -21,7 +21,10 @@ import {
 import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
 import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId, asSessionId } from '../../types/ids.js'
-import { getEmptyToolPermissionContext } from '../../Tool.js'
+import {
+  getEmptyToolPermissionContext,
+  type ToolUseContext,
+} from '../../Tool.js'
 import {
   getAgentTranscriptPath,
   getTranscriptPath,
@@ -34,6 +37,7 @@ import {
   resumeAgentBackground,
   TranscriptNotFoundError,
 } from './resumeAgent.js'
+import { FORK_AGENT } from './forkSubagent.js'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -127,6 +131,62 @@ describe('resumeAgentBackground', () => {
     expect(parentTranscript).toContain('"type":"subagent-spawned"')
     expect(parentTranscript).toContain('"toolUseId":"toolu-resume"')
     expect(parentTranscript).toContain('"agentId":"agent-resume"')
+  })
+
+  test('keeps exact parent MCP inputs when resuming a fork', async () => {
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: FORK_AGENT.agentType,
+      description: 'Continue current objective',
+    })
+    const parentTools = [{ name: 'parent-tool' }]
+    const parentCommands = [{ name: 'parent-command' }]
+    const parentClients = [{ name: 'parent-server', type: 'connected' }]
+    const parentResources = {
+      'parent-server': [{ uri: 'file://parent', name: 'parent' }],
+    }
+    const context = createToolUseContext() as unknown as ToolUseContext
+    context.renderedSystemPrompt = ['parent prompt'] as never
+    let snapshotReads = 0
+    Object.assign(context.options, {
+      tools: parentTools,
+      commands: parentCommands,
+      mcpClients: parentClients,
+      mcpResources: parentResources,
+      getMcpRuntimeSnapshot: () => {
+        snapshotReads++
+        return {
+          tools: [{ name: 'new-tool' }],
+          commands: [{ name: 'new-command' }],
+          clients: [{ name: 'new-server', type: 'connected' }],
+          resources: {},
+        } as never
+      },
+    })
+    let childContext: ToolUseContext | undefined
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream(({ toolUseContext }) => {
+          childContext = toolUseContext
+          throw new Error('stop after capturing child context')
+        })
+        await expect(stream.next()).rejects.toThrow(
+          'stop after capturing child context',
+        )
+      }) as never,
+    )
+
+    await resumeAgentBackground({
+      agentId: 'agent-resume',
+      prompt: 'continue',
+      canUseTool: (() => undefined) as never,
+      toolUseContext: context,
+    })
+
+    expect(snapshotReads).toBe(0)
+    expect(childContext?.options.tools).toBe(parentTools)
+    expect(childContext?.options.commands).toEqual(parentCommands)
+    expect(childContext?.options.mcpClients).toEqual(parentClients)
+    expect(childContext?.options.mcpResources).toEqual(parentResources)
   })
 
   test('holds lifecycle ownership until the detached background run settles, not just through setup', async () => {

@@ -1,14 +1,11 @@
-import reject from 'lodash-es/reject.js'
 import { z } from 'zod/v4'
 import { performMCPOAuthFlow } from '../../services/mcp/auth.js'
 import {
   clearMcpAuthCache,
   reconnectMcpServerImpl,
 } from '../../services/mcp/client.js'
-import {
-  buildMcpToolName,
-  getMcpPrefix,
-} from '../../services/mcp/mcpStringUtils.js'
+import { buildMcpToolName } from '../../services/mcp/mcpStringUtils.js'
+import { applyMcpServerStateUpdate } from '../../services/mcp/mcpState.js'
 import type {
   McpHTTPServerConfig,
   McpSSEServerConfig,
@@ -41,10 +38,8 @@ function getConfigUrl(config: ScopedMcpServerConfig): string | undefined {
  *
  * When called, starts performMCPOAuthFlow with skipBrowserOpen and returns
  * the authorization URL. The OAuth callback completes in the background;
- * once it fires, reconnectMcpServerImpl runs and the server's real tools
- * are swapped into appState.mcp.tools via the existing prefix-based
- * replacement (useManageMCPConnections.updateServer wipes anything matching
- * mcp__<server>__*, so this pseudo-tool is removed automatically).
+ * once it fires, reconnectMcpServerImpl runs and the shared MCP state
+ * transition swaps the server's real tools into appState.mcp.tools.
  */
 export function createMcpAuthTool(
   serverName: string,
@@ -132,32 +127,14 @@ export function createMcpAuthTool(
       )
 
       // Background continuation: once OAuth completes, reconnect and swap
-      // the real tools into appState. Prefix-based replacement removes this
-      // pseudo-tool since it shares the mcp__<server>__ prefix.
+      // the real tools into appState.
       void oauthPromise
         .then(async () => {
           clearMcpAuthCache()
           const result = await reconnectMcpServerImpl(serverName, config)
-          const prefix = getMcpPrefix(serverName)
           setAppState(prev => ({
             ...prev,
-            mcp: {
-              ...prev.mcp,
-              clients: prev.mcp.clients.map(c =>
-                c.name === serverName ? result.client : c,
-              ),
-              tools: [
-                ...reject(prev.mcp.tools, t => t.name?.startsWith(prefix)),
-                ...result.tools,
-              ],
-              commands: [
-                ...reject(prev.mcp.commands, c => c.name?.startsWith(prefix)),
-                ...result.commands,
-              ],
-              resources: result.resources
-                ? { ...prev.mcp.resources, [serverName]: result.resources }
-                : prev.mcp.resources,
-            },
+            mcp: applyMcpServerStateUpdate(prev.mcp, result),
           }))
           logMCPDebug(
             serverName,

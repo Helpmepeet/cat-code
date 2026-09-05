@@ -2029,8 +2029,24 @@ async function* queryLoop(
       queryDepth: queryTracking.depth,
     })
 
-    // Refresh tools between turns so newly-connected MCP servers become available
-    if (updatedToolUseContext.options.refreshTools) {
+    // Refresh runtime inputs between turns so newly-connected MCP servers
+    // become available. refreshMcpRuntime replaces the tools-only seam when a
+    // caller supplies it: tools, commands, clients, and resources all have to
+    // come from one MCP generation, because tool execution and subagent setup
+    // read clients and resources off options while the model sees tools.
+    if (updatedToolUseContext.options.refreshMcpRuntime) {
+      const refreshed = updatedToolUseContext.options.refreshMcpRuntime()
+      updatedToolUseContext = {
+        ...updatedToolUseContext,
+        options: {
+          ...updatedToolUseContext.options,
+          tools: refreshed.tools,
+          commands: refreshed.commands,
+          mcpClients: refreshed.mcpClients,
+          mcpResources: refreshed.mcpResources,
+        },
+      }
+    } else if (updatedToolUseContext.options.refreshTools) {
       const refreshedTools = updatedToolUseContext.options.refreshTools()
       if (refreshedTools !== updatedToolUseContext.options.tools) {
         updatedToolUseContext = {

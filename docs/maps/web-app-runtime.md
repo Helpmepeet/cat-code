@@ -1,6 +1,6 @@
 # App Runtime Routing Map
 
-Last refreshed: 2026-08-28 against `src/app-runtime/`,
+Last refreshed: 2026-09-03 against `src/app-runtime/`,
 `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `app/`, and related tests.
 
 Use this map for the Electron runtime-backed app-session path. It covers the
@@ -18,7 +18,7 @@ active desktop app stack, not older dedicated-app design docs.
 
 | Area | Inspect first | Then inspect | Routing notes |
 |---|---|---|---|
-| QueryEngine app-session setup | `src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts` | `src/services/mcp/client.ts`, `src/state/AppStateStore.ts`, `src/utils/fileStateCache.ts` | This config seam snapshots normal startup owners for runtime-backed app sessions, merges built-in plus MCP tools/commands, and clones prefetched MCP resources into app-state reads. |
+| QueryEngine app-session setup | `src/app-runtime/createQueryEngineAppSessionConfigFromSetup.ts` | `src/services/mcp/client.ts`, `src/state/AppStateStore.ts`, `src/utils/fileStateCache.ts` | This config seam snapshots normal startup owners for runtime-backed app sessions. A caller without `getMcpRuntimeSnapshot` keeps the static behavior: merged built-in plus MCP tools/commands, and cloned prefetched MCP resources overlaid onto app-state reads. A caller that supplies it gets the base tools/commands only, plus the store's own MCP state, and `QueryEngine` layers each turn's snapshot on top. |
 | Runtime-backed app session seam | `src/app-runtime/createRuntimeBackedAppSession.ts` | `src/app-runtime/createQueryEngineAppSession.ts`, `src/app-runtime/createQueryEngineSessionController.ts`, `src/app-runtime/index.ts` | The desktop sidecar uses this seam to construct its controller/session pair. The QueryEngine-backed session and controller adapter live underneath it. |
 | App session turn lifecycle | `src/app-runtime/AppSessionController.ts` | `src/app-runtime/{sessionEvents,attachThreadGoalScheduler}.ts`, `src/utils/threadGoalScheduler.ts`, `app/renderer/src/{connectionState,rawMessageLog}.ts`, `src/services/api/accountDiagnostics.ts` | `AppSessionController` owns active-turn gating, abort state, goal snapshots, permission request handoff, and emission of session events/messages. `attachThreadGoalScheduler` adapts completed turns to the shared scheduler, so desktop, headless, and terminal runtimes use one continuation policy. Its sole active-turn writer emits `turn.status` on each transition; the desktop renderer reduces that live event into `inputEnabled` rather than relying on the attach-time `app.ready` snapshot. |
 | Multi-session process isolation | `src/app-runtime/multiSessionIsolation.probe.test.ts` | `src/bootstrap/state.ts`, `src/QueryEngine.ts`, `src/utils/Shell.ts` | The probe demonstrates that controller-local permission state is isolated, but concurrent sessions in one engine process share process-global cwd and session ID. Route desktop multi-session topology through this evidence before choosing one-process versus per-session processes. |
@@ -101,6 +101,17 @@ active desktop app stack, not older dedicated-app design docs.
 - `createQueryEngineAppSessionConfigFromSetup.ts` snapshots MCP tools,
   commands, clients, and resources for the desktop sidecar. If startup data is
   missing there, inspect this seam before changing controller logic.
+- A live MCP lifecycle passes `getMcpRuntimeSnapshot` instead of static MCP
+  values. `QueryEngine` then reads one snapshot per turn and refreshes tools,
+  commands, clients, and resources together between model/tool iterations
+  (`resolveMcpRuntimeInputs` in `src/QueryEngine.ts`, the `refreshMcpRuntime`
+  seam in `src/query.ts`). The frozen setup overlay is skipped for those
+  callers so the store's real MCP state is what ToolSearch and AgentTool see.
+- The Extensions snapshot projects the lifecycle's prepared explicit-only MCP
+  configuration through `getPreparedConfiguration`; it never performs a second
+  default-policy config read. Agent Config derives available servers from the
+  same live client/tool selector as AgentTool and rebroadcasts only when that
+  derived set changes.
 - `AppSessionController` guards active turns; understand its lifecycle before
   changing desktop concurrency behavior.
 - Separate `AppSessionController` instances do not isolate the process-global

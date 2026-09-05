@@ -34,9 +34,19 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
-import type { MCPServerConnection } from './services/mcp/types.js'
+import type {
+  MCPServerConnection,
+  ServerResource,
+} from './services/mcp/types.js'
 import type { AppState } from './state/AppState.js'
-import { type Tools, type ToolUseContext, toolMatchesName } from './Tool.js'
+import {
+  type McpRuntimeInputs,
+  type McpRuntimeSnapshot,
+  type Tools,
+  type ToolUseContext,
+  toolMatchesName,
+} from './Tool.js'
+import { assembleToolPool } from './tools.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import type { Message, MessageOrigin, UserMessage } from './types/message.js'
@@ -150,6 +160,17 @@ export type QueryEngineConfig = {
   tools: Tools
   commands: Command[]
   mcpClients: MCPServerConnection[]
+  mcpResources?: Record<string, ServerResource[]>
+  /**
+   * Optional live MCP source. When supplied, `tools`, `commands`, and
+   * `mcpClients` above stop being the runtime values, while `tools` and
+   * `commands` become the static base the snapshot is layered onto: each turn
+   * reads one snapshot and assembles the tool pool, command catalog, clients,
+   * and resources from that single generation, and the query loop refreshes
+   * all four together between iterations. Callers without this keep their
+   * static values verbatim.
+   */
+  getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
   agents: AgentDefinition[]
   canUseTool: CanUseToolFn
   getAppState: () => AppState
@@ -218,6 +239,62 @@ export type ConversationRewindResult = {
  * turn within the same conversation. State (messages, file cache, usage, etc.)
  * persists across turns.
  */
+/**
+ * Resolve the MCP-dependent runtime inputs for one use.
+ *
+ * Static callers get their construction-time values back unchanged. Live
+ * callers get exactly one snapshot read, and every returned field is derived
+ * from that read — never from a second one — so the tools the model sees can
+ * never describe a server whose client or resources came from a different
+ * generation.
+ */
+export function resolveMcpRuntimeInputs(
+  config: Pick<
+    QueryEngineConfig,
+    | 'tools'
+    | 'commands'
+    | 'mcpClients'
+    | 'mcpResources'
+    | 'getMcpRuntimeSnapshot'
+    | 'getAppState'
+  >,
+): McpRuntimeInputs {
+  const {
+    tools,
+    commands,
+    mcpClients,
+    mcpResources,
+    getMcpRuntimeSnapshot,
+    getAppState,
+  } = config
+  if (!getMcpRuntimeSnapshot) {
+    return {
+      tools,
+      commands,
+      mcpClients,
+      mcpResources: mcpResources ?? {},
+    }
+  }
+  const snapshot = getMcpRuntimeSnapshot()
+  const liveMcpResources: Record<string, ServerResource[]> = {}
+  for (const [server, resources] of Object.entries(snapshot.resources)) {
+    liveMcpResources[server] = [...resources]
+  }
+  return {
+    // config.tools is the base pool, not a discardable default: SDK harnesses
+    // and tests inject tool sets that getTools() would not reproduce. Deny-rule
+    // filtering and name dedup still apply to the MCP half.
+    tools: assembleToolPool(
+      getAppState().toolPermissionContext,
+      snapshot.tools,
+      tools,
+    ),
+    commands: [...commands, ...snapshot.commands],
+    mcpClients: [...snapshot.clients],
+    mcpResources: liveMcpResources,
+  }
+}
+
 export class QueryEngine {
   private config: QueryEngineConfig
   private mutableMessages: Message[]
@@ -254,9 +331,7 @@ export class QueryEngine {
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const {
       cwd,
-      commands,
-      tools,
-      mcpClients,
+      getMcpRuntimeSnapshot,
       verbose = false,
       thinkingConfig,
       maxTurns,
@@ -281,6 +356,21 @@ export class QueryEngine {
       flushCurrentTranscriptDurably:
         flushCurrentTranscriptDurablyFn = flushCurrentTranscriptDurably,
     } = this.config
+
+    // One snapshot read for the whole turn. The query loop re-reads it
+    // between iterations through refreshMcpRuntime below; nothing inside a
+    // single iteration reads it twice.
+    const turnRuntime = resolveMcpRuntimeInputs(this.config)
+    const { tools, commands, mcpClients, mcpResources } = turnRuntime
+    const mcpRuntimeOptions: Pick<
+      ToolUseContext['options'],
+      'refreshMcpRuntime' | 'getMcpRuntimeSnapshot'
+    > = getMcpRuntimeSnapshot
+      ? {
+          refreshMcpRuntime: () => resolveMcpRuntimeInputs(this.config),
+          getMcpRuntimeSnapshot,
+        }
+      : {}
 
     this.discoveredSkillNames.clear()
     setCwd(cwd)
@@ -398,7 +488,8 @@ export class QueryEngine {
         mainLoopModel: initialMainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
-        mcpResources: {},
+        mcpResources,
+        ...mcpRuntimeOptions,
         ideInstallationStatus: null,
         isNonInteractiveSession: true,
         customSystemPrompt,
@@ -634,7 +725,8 @@ export class QueryEngine {
         mainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
-        mcpResources: {},
+        mcpResources,
+        ...mcpRuntimeOptions,
         ideInstallationStatus: null,
         isNonInteractiveSession: true,
         customSystemPrompt,

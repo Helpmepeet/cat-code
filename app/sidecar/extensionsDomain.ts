@@ -3,13 +3,14 @@
  * engine's real MCP / Plugins / Skills / Hooks config (P4-12; the read-only W4
  * domain-recipe shape, like `settingsDomain.ts` / `agentConfigDomain.ts`).
  *
- * Like settings, all four slices are spawn-time reads that freeze at
- * construction (no live subscription): MCP + plugins are async disk reads,
- * skills mirror the ALREADY-LOADED command catalog the session runs (the
- * anti-stub-context rule §8.1 — same source as `createNormalSidecarQueryEngineConfig`,
- * NOT a re-load), and hooks read the settings-resolved hook config off the same
- * app-state the runtime uses. Each slice degrades to `null` independently on a
- * read failure (with a UI-visible note) so one bad domain never blanks the rest.
+ * Like settings, all four slices freeze at construction (no live subscription):
+ * MCP projects the lifecycle's already-prepared explicit-only configuration,
+ * plugins are an async disk read, and skills mirror the ALREADY-LOADED command
+ * catalog the session runs (the anti-stub-context rule §8.1 — same source as
+ * `createNormalSidecarQueryEngineConfig`, NOT a re-load). Hooks read the
+ * settings-resolved config from the same app-state the runtime uses. Each slice
+ * degrades to `null` independently on a read failure (with a UI-visible note) so
+ * one bad domain never blanks the rest.
  *
  * Secret posture (proven in `extensionsDomain.test.ts`): the snapshot carries
  * config METADATA only — no MCP `env`/`headers` or URL credentials, no hook
@@ -17,12 +18,10 @@
  * VALUES. `secretGuard` on the outbound frame is satisfied by construction.
  *
  * Deferred (see the `protocol.ts` P4-12 header for the full §0 flag list): MCP
- * LIVE runtime state (connections/counts/actions — the empty-mcpClients stub in
- * `sessionController.ts`, an app-runtime extract not a sidecar hand-wire), all
- * WRITES, marketplace browsing, and the (unpersisted) hook last-run outcome.
+ * live-status display and actions, all WRITES, marketplace browsing, and the
+ * (unpersisted) hook last-run outcome.
  */
 
-import { getClaudeCodeMcpConfigs } from '../../src/services/mcp/config.js'
 import type { ScopedMcpServerConfig } from '../../src/services/mcp/types.js'
 import { loadAllPlugins } from '../../src/utils/plugins/pluginLoader.js'
 import { getPendingUpdatesDetails } from '../../src/utils/plugins/installedPluginsManager.js'
@@ -70,14 +69,16 @@ export function createSidecarExtensionsDomain(
 }
 
 /**
- * Async spawn-time read: MCP config + installed plugins from disk, skills from
- * the passed-in loaded catalog, hooks from the passed-in app-state. Never throws
- * — each slice is guarded so a failure logs and degrades to `null`.
+ * Async spawn-time read: prepared MCP config, installed plugins from disk,
+ * skills from the passed-in loaded catalog, and hooks from the passed-in
+ * app-state. Never throws — each slice is guarded so a failure logs and degrades
+ * to `null`.
  */
 export async function loadExtensionsSnapshot({
   commands,
   agentDefinitions,
   appState,
+  preparedMcpConfiguration,
 }: {
   /** The session's ALREADY-LOADED command catalog (skills are a subset). */
   commands: readonly Command[]
@@ -85,8 +86,10 @@ export async function loadExtensionsSnapshot({
   agentDefinitions: readonly AgentDefinition[]
   /** The runtime's app-state (hooks resolve off the same settings the engine reads). */
   appState: AppState
+  /** The lifecycle's explicit-only prepared server set. */
+  preparedMcpConfiguration: Readonly<Record<string, ScopedMcpServerConfig>>
 }): Promise<ExtensionsSnapshot> {
-  const mcp = await readMcpSlice()
+  const mcp = readMcpSlice(preparedMcpConfiguration)
   const skills = readSkillsSlice(commands)
   const plugins = await readPluginsSlice(commands, agentDefinitions)
   const hooks = readHooksSlice(appState)
@@ -96,16 +99,27 @@ export async function loadExtensionsSnapshot({
 
 /* ----------------------------- MCP ----------------------------- */
 
-async function readMcpSlice(): Promise<McpConfigEntry[] | null> {
+function readMcpSlice(
+  preparedMcpConfiguration: Readonly<
+    Record<string, ScopedMcpServerConfig>
+  >,
+): McpConfigEntry[] | null {
   try {
-    const { servers } = await getClaudeCodeMcpConfigs()
-    return Object.entries(servers)
-      .map(([name, config]) => buildMcpEntry(name, config))
-      .sort((a, b) => a.name.localeCompare(b.name))
+    return buildMcpEntries(preparedMcpConfiguration)
   } catch (error) {
     logSkip('mcp', error)
     return null
   }
+}
+
+export function buildMcpEntries(
+  preparedMcpConfiguration: Readonly<
+    Record<string, ScopedMcpServerConfig>
+  >,
+): McpConfigEntry[] {
+  return Object.entries(preparedMcpConfiguration)
+    .map(([name, config]) => buildMcpEntry(name, config))
+    .sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export function buildMcpEntry(

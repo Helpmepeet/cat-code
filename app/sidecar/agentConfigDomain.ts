@@ -6,6 +6,8 @@ import {
   type AgentMcpServerSpec,
 } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { resolveAgentOverrides } from '../../src/tools/AgentTool/agentDisplay.js'
+import type { AppStateStore } from '../../src/state/AppStateStore.js'
+import { selectAvailableMcpServerNames } from '../../src/services/mcp/mcpState.js'
 import type {
   AgentConfigDefinition,
   AgentConfigSnapshot,
@@ -14,8 +16,9 @@ import type {
 } from '../shared/protocol.js'
 
 export type SidecarAgentConfigDomain = {
-  /** Spawn-time agent definition snapshot. null when the read failed. */
-  getSnapshot(): AgentConfigSnapshot | null
+  /** Live agent definition snapshot over current MCP availability. */
+  getSnapshot(): AgentConfigSnapshot
+  subscribe(listener: () => void): () => void
 }
 
 const READ_ONLY_SCOPE_REASON =
@@ -23,18 +26,29 @@ const READ_ONLY_SCOPE_REASON =
 
 export function createSidecarAgentConfigDomain({
   agentDefinitions,
-  availableMcpServers,
+  appStateStore,
 }: {
   agentDefinitions: AgentDefinitionsResult
-  availableMcpServers: readonly string[]
+  appStateStore: AppStateStore
 }): SidecarAgentConfigDomain {
-  const snapshot = buildAgentConfigSnapshot({
-    result: agentDefinitions,
-    availableMcpServers,
-  })
+  const getAvailableMcpServers = () =>
+    selectAvailableMcpServerNames(appStateStore.getState().mcp)
+
   return {
     getSnapshot() {
-      return snapshot
+      return buildAgentConfigSnapshot({
+        result: agentDefinitions,
+        availableMcpServers: getAvailableMcpServers(),
+      })
+    },
+    subscribe(listener) {
+      let previous = JSON.stringify(getAvailableMcpServers())
+      return appStateStore.subscribe(() => {
+        const next = JSON.stringify(getAvailableMcpServers())
+        if (next === previous) return
+        previous = next
+        listener()
+      })
     },
   }
 }

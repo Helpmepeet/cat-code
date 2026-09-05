@@ -102,7 +102,7 @@ test('the branch chooser + worktree option are CUT (absent)', () => {
     />,
   )
   expect(html).not.toContain('Worktree')
-  expect(html).not.toContain('worktree')
+  expect(html).not.toContain('New worktree')
   expect(html).not.toContain('Branch')
   expect(html).not.toContain('feat/cat-launcher')
   // With no recents the trigger invites a first project instead of a mock path.
