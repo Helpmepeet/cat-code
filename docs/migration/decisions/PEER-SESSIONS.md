@@ -122,6 +122,24 @@ transport, effectively-once processing.
 - **`createdBy` is an `appSessionId`, never a name.** Names are reused after a
   reap; ids are not. Listings and the doctrine block resolve the id to a name
   at read time and show `gone` for a reaped creator.
+- 🔁 **AMENDED 2026-09-06 (operator ruling 11, audit finding F17): the SEND path
+  to a creator now checks that id too.** The bullet above protects a listing and
+  leaves the send unprotected, and that gap is reachable. A peer is told its
+  creator's NAME once, at spawn, and holds it for the life of the session; a
+  name is released when its row is reaped and may be handed out again; the reap
+  runs whenever the registry passes `MAX_REGISTRY_SESSIONS` (256), taking closed
+  rows oldest-first. So a creator that closed can have its name reissued while
+  the peer it created is still running, and that peer's next message to "Alex"
+  reaches whoever is called Alex now. 224 rows on 2026-09-04 is how close the
+  bound is. The fix keeps names as the conversational interface: the peer still
+  addresses its creator by name, and the sidecar additionally sends the creator
+  id it was spawned with (`CATCODE_SIDECAR_CREATED_BY`) whenever the name it is
+  writing to is its creator's. Main resolves the name as before and refuses when
+  the row it found is not that id (`refused:creator_reissued`,
+  HOST-REQUEST-PLANE §2 and §4 step 1a). It never redirects to the new holder,
+  and when the creator's row is gone altogether the sender is told the session
+  that created it is gone rather than being sent to the roster. The model never
+  sees an id and cannot supply one.
 - **Storage.** Additive `RegistrySession` fields `name` and `createdBy`
   (`app/host/registry.ts:94`), the `forked` / `titleUpdatedAt` precedent:
   descriptor fields, not wire frames, no `PROTOCOL_VERSION` bump. Mirrored on
