@@ -332,10 +332,16 @@ not exist in this fork (`docs/research/2026-08-19-cross-session-messaging-revers
 §3.1). Two send tools with overlapping meaning will confuse the model. The
 build must either hide that tool's peer branches in desktop sessions or make
 `SendToPeer` its name branch; which one is an implementation choice, but
-leaving both is not. The next line of that array binds `ListPeersTool` under
+leaving both is not. The next line of that array bound `ListPeersTool` under
 `feature('UDS_INBOX')` to a module that does not exist in this tree (the
-dormant port, research doc §4); it is compiled out and must not be mistaken
-for this document's `ListPeers`.
+dormant port, research doc §4). 🔁 RESOLVED 2026-09-06: that binding and the
+`uds:` / `bridge:` prompt branches are DELETED, so one `ListPeers` is left in
+the tree and `SendMessageTool`'s prompt no longer teaches addresses this fork
+has none of. The rest of the dormant port stays; `UDS_INBOX` is still read in
+ten other files and removing it is a separate engine task. The overlap itself
+is closed in text rather than by hiding the tool: the `SendToPeer` prompt now
+says peers are reached only there, and `SendMessage` reaches subagents and,
+with Agent Teams on, teammates, never a peer.
 
 ## 5. Doctrine (system-prompt text, proposed verbatim)
 
