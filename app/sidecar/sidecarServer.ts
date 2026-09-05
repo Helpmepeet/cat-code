@@ -2965,24 +2965,42 @@ export class SidecarServer {
     }
   }
 
-  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
+  /**
+   * The parse half every verb handler shares. The correlation id is read off the
+   * UNVALIDATED message first, so a rejection can still be addressed back to the
+   * request that caused it; only then does the verb's OWN schema run. Each kind
+   * keeps its own schema and its own rejection wording - what is shared here is
+   * the reporting, not the validation.
+   */
+  private parseVerbMessage<S extends z.ZodTypeAny>(
+    connection: Connection,
+    rawMessage: unknown,
+    schema: S,
+    invalidMessage: string,
+  ): z.infer<S> | null {
     const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = statsQueryMessageSchema.safeParse(rawMessage)
+    const requestId = typeof raw.requestId === 'string' ? raw.requestId : undefined
+    const parsed = schema.safeParse(rawMessage)
     if (!parsed.success) {
       this.sendError(
         connection,
         requestId,
         'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid stats query',
+        parsed.error.issues[0]?.message ?? invalidMessage,
         false,
       )
+      return null
+    }
+    return parsed.data
+  }
+
+  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
+    const parsed = this.parseVerbMessage(connection, rawMessage, statsQueryMessageSchema, 'invalid stats query')
+    if (!parsed) {
       return
     }
 
-    void this.sendUsageStatsSnapshot(connection, parsed.data.range)
+    void this.sendUsageStatsSnapshot(connection, parsed.range)
   }
 
   /**
@@ -2996,25 +3014,14 @@ export class SidecarServer {
    * crosses either direction.
    */
   private handleAccountVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = accountVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid account verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, accountVerbMessageSchema, 'invalid account verb')
+    if (!parsed) {
       return
     }
     if (!this.accounts) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'accounts domain unavailable for this session',
         false,
@@ -3025,7 +3032,7 @@ export class SidecarServer {
     // The verb is now structurally valid; the domain owns the pool-resolved
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
-    const verb = parsed.data as AccountVerbMessage
+    const verb = parsed as AccountVerbMessage
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
     void this.accounts
@@ -3116,25 +3123,14 @@ export class SidecarServer {
    * crosses either direction (trust is a boolean).
    */
   private handleWorkspaceTrustVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = workspaceTrustMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid workspace-trust verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, workspaceTrustMessageSchema, 'invalid workspace-trust verb')
+    if (!parsed) {
       return
     }
     if (!this.workspaceTrust) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'workspace-trust domain unavailable for this session',
         false,
@@ -3147,7 +3143,7 @@ export class SidecarServer {
       kind: 'workspace.trust.result',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      requestId: parsed.data.requestId,
+      requestId: parsed.requestId,
       ok: result.ok,
       message: result.message,
     })
@@ -3167,25 +3163,14 @@ export class SidecarServer {
    * renderer authors only the boolean intent; no path, no token crosses.
    */
   private handleAgentModeSet(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = agentModeSetMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid agent-mode verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, agentModeSetMessageSchema, 'invalid agent-mode verb')
+    if (!parsed) {
       return
     }
     if (!this.agentMode) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'agent-mode domain unavailable for this session',
         false,
@@ -3193,12 +3178,12 @@ export class SidecarServer {
       return
     }
 
-    const result = this.agentMode.setActive(parsed.data.active)
+    const result = this.agentMode.setActive(parsed.active)
     this.send(connection, {
       kind: 'agent-mode.set.result',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      requestId: parsed.data.requestId,
+      requestId: parsed.requestId,
       ok: result.ok,
       message: result.message,
     })
@@ -3232,25 +3217,14 @@ export class SidecarServer {
     connection: Connection,
     rawMessage: unknown,
   ): Promise<void> {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = taskControlVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid task-control verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, taskControlVerbMessageSchema, 'invalid task-control verb')
+    if (!parsed) {
       return
     }
     if (!this.taskControl) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'task-control domain unavailable for this session',
         false,
@@ -3258,7 +3232,7 @@ export class SidecarServer {
       return
     }
 
-    const verb = parsed.data as TaskControlVerbMessage
+    const verb = parsed as TaskControlVerbMessage
     const result =
       verb.type === 'task.background'
         ? await this.taskControl.background()
@@ -3330,25 +3304,14 @@ export class SidecarServer {
    * authors ONLY the value/selection; no engine object, no path, no token crosses.
    */
   private handleRunControlVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = runControlVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid run-control verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, runControlVerbMessageSchema, 'invalid run-control verb')
+    if (!parsed) {
       return
     }
     if (!this.runControls) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'run-controls domain unavailable for this session',
         false,
@@ -3356,7 +3319,7 @@ export class SidecarServer {
       return
     }
 
-    const verb = parsed.data as RunControlVerbMessage
+    const verb = parsed as RunControlVerbMessage
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':
@@ -3401,25 +3364,14 @@ export class SidecarServer {
     connection: Connection,
     rawMessage: unknown,
   ): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = sessionActionVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid session-action verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, sessionActionVerbMessageSchema, 'invalid session-action verb')
+    if (!parsed) {
       return
     }
     if (!this.sessionActions) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'session-actions domain unavailable for this session',
         false,
@@ -3427,7 +3379,7 @@ export class SidecarServer {
       return
     }
 
-    const verb: SessionActionVerbMessage = parsed.data
+    const verb: SessionActionVerbMessage = parsed
     const domain = this.sessionActions
     if (
       verb.type === 'session.editFromMessage' ||
@@ -3731,25 +3683,14 @@ export class SidecarServer {
    * frame → re-broadcast the snapshot when the bridge flag changed.
    */
   private handleRemoteSettingsVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = remoteVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid remote settings verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, remoteVerbMessageSchema, 'invalid remote settings verb')
+    if (!parsed) {
       return
     }
     if (!this.remoteSettings) {
       this.sendError(
         connection,
-        parsed.data.requestId,
+        parsed.requestId,
         'internal_error',
         'remote settings domain unavailable for this session',
         false,
@@ -3757,7 +3698,7 @@ export class SidecarServer {
       return
     }
 
-    const verb = parsed.data as RemoteVerbMessage
+    const verb = parsed as RemoteVerbMessage
     void this.remoteSettings
       .runVerb(verb)
       .then(({ verb: verbType, result, flagChanged }) => {
@@ -3799,22 +3740,11 @@ export class SidecarServer {
    * re-validated here at the trust boundary before disk is touched.
    */
   private handleSettingsVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = settingsVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid settings verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, settingsVerbMessageSchema, 'invalid settings verb')
+    if (!parsed) {
       return
     }
-    const verb = parsed.data as SettingsVerbMessage
+    const verb = parsed as SettingsVerbMessage
 
     // Per-key gate (the strict-key allowlist for the VALUE): the key must be in
     // the closed allowlist, and then either the request is a CLEAR (`value ===
