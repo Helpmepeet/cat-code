@@ -4264,32 +4264,48 @@ export class SidecarServer {
    * broadcast set or skip the subsequent history replay (review MED#2): on any
    * failure we simply skip the snapshot and let attach continue.
    */
-  private sendSettingsSnapshot(connection: Connection): void {
-    if (!this.settings) {
+  /**
+   * The shape every read-seam snapshot send shares: skip when the domain is
+   * absent or has nothing yet, clone + JSON-check through
+   * `prepareOutboundPayload`, and log-and-swallow a read that throws. The
+   * caller builds its own frame, so each kind still typechecks against the
+   * `ServerFrame` union instead of being assembled from a computed key.
+   */
+  private sendDomainSnapshot<T>(
+    connection: Connection,
+    domain: { getSnapshot: () => T } | null | undefined,
+    kind: ServerFrame['kind'],
+    build: (snapshot: NonNullable<T>) => ServerFrame,
+  ): void {
+    if (!domain) {
       return
     }
     try {
-      const raw = this.settings.getSnapshot()
+      const raw = domain.getSnapshot()
       if (!raw) {
         return
       }
-      const snapshot = this.prepareOutboundPayload(raw, 'settings.snapshot')
+      const snapshot = this.prepareOutboundPayload(raw, kind)
       if (!snapshot) {
         return
       }
-      this.send(connection, {
-        kind: 'settings.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        settings: snapshot,
-      })
+      this.send(connection, build(snapshot))
     } catch (error) {
       this.log(
-        `[sidecar] settings.snapshot send skipped (${
+        `[sidecar] ${kind} send skipped (${
           error instanceof Error ? error.message : String(error)
         })`,
       )
     }
+  }
+
+  private sendSettingsSnapshot(connection: Connection): void {
+    this.sendDomainSnapshot(connection, this.settings, 'settings.snapshot', settings => ({
+      kind: 'settings.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      settings,
+    }))
   }
 
   /** Re-publish settings only after the domain has refreshed engine-owned options. */
@@ -4315,31 +4331,12 @@ export class SidecarServer {
    * so this frame carries definition/status metadata without credential material.
    */
   private sendAgentConfigSnapshot(connection: Connection): void {
-    if (!this.agentConfig) {
-      return
-    }
-    try {
-      const raw = this.agentConfig.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'agent-config.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'agent-config.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        agents: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-config.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.agentConfig, 'agent-config.snapshot', agents => ({
+      kind: 'agent-config.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      agents,
+    }))
   }
 
   /**
@@ -4350,31 +4347,12 @@ export class SidecarServer {
    * can never strand the connection or skip the subsequent history replay.
    */
   private sendExtensionsSnapshot(connection: Connection): void {
-    if (!this.extensions) {
-      return
-    }
-    try {
-      const raw = this.extensions.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'extensions.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'extensions.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        extensions: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] extensions.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.extensions, 'extensions.snapshot', extensions => ({
+      kind: 'extensions.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      extensions,
+    }))
   }
 
   /**
@@ -4407,13 +4385,18 @@ export class SidecarServer {
     }
   }
 
-  private broadcastThreadGoalSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
+  /**
+   * Send one snapshot to every attached connection. An empty connection set is
+   * simply an empty loop, so no caller needs its own size guard.
+   */
+  private broadcastToConnections(send: (connection: Connection) => void): void {
     for (const connection of this.connections) {
-      this.sendThreadGoalSnapshot(connection)
+      send(connection)
     }
+  }
+
+  private broadcastThreadGoalSnapshot(): void {
+    this.broadcastToConnections(connection => this.sendThreadGoalSnapshot(connection))
   }
 
   /**
@@ -4421,40 +4404,16 @@ export class SidecarServer {
    * this shared path still applies clone/JSON checks, secretGuard, and size caps.
    */
   private sendMemorySnapshot(connection: Connection): void {
-    if (!this.memory) {
-      return
-    }
-    try {
-      const raw = this.memory.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'memory.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'memory.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        memory: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] memory.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.memory, 'memory.snapshot', memory => ({
+      kind: 'memory.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      memory,
+    }))
   }
 
   private broadcastMemorySnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendMemorySnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendMemorySnapshot(connection))
   }
 
   /**
@@ -4463,37 +4422,16 @@ export class SidecarServer {
    * the desktop receives display state only.
    */
   private sendTasksSnapshot(connection: Connection): void {
-    if (!this.tasks) {
-      return
-    }
-    try {
-      const raw = this.tasks.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'tasks.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'tasks.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        tasks: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] tasks.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.tasks, 'tasks.snapshot', tasks => ({
+      kind: 'tasks.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      tasks,
+    }))
   }
 
   private broadcastTasksSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendTasksSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendTasksSnapshot(connection))
   }
 
   /**
@@ -4578,40 +4516,16 @@ export class SidecarServer {
    * so a failure can never strand the attaching connection.
    */
   private sendLeaseSnapshot(connection: Connection): void {
-    if (!this.leases) {
-      return
-    }
-    try {
-      const raw = this.leases.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'lease.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'lease.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        leases: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] lease.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.leases, 'lease.snapshot', leases => ({
+      kind: 'lease.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      leases,
+    }))
   }
 
   private broadcastLeaseSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendLeaseSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendLeaseSnapshot(connection))
   }
 
   /**
@@ -4622,37 +4536,16 @@ export class SidecarServer {
    * never strand the attaching connection.
    */
   private sendRunControlsSnapshot(connection: Connection): void {
-    if (!this.runControls) {
-      return
-    }
-    try {
-      const raw = this.runControls.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'run-controls.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'run-controls.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        runControls: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] run-controls.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.runControls, 'run-controls.snapshot', runControls => ({
+      kind: 'run-controls.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      runControls,
+    }))
   }
 
   private broadcastRunControlsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendRunControlsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendRunControlsSnapshot(connection))
   }
 
   /**
@@ -5033,40 +4926,16 @@ export class SidecarServer {
    * strand the attaching connection.
    */
   private sendAccountsSnapshot(connection: Connection): void {
-    if (!this.accounts) {
-      return
-    }
-    try {
-      const raw = this.accounts.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'accounts.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'accounts.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        accounts: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] accounts.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.accounts, 'accounts.snapshot', accounts => ({
+      kind: 'accounts.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      accounts,
+    }))
   }
 
   private broadcastAccountsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendAccountsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendAccountsSnapshot(connection))
   }
 
   private async sendUsageStatsSnapshot(
@@ -5170,12 +5039,7 @@ export class SidecarServer {
    * re-broadcast after a pool-changing verb).
    */
   private broadcastWorkspaceTrustSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendWorkspaceTrustSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendWorkspaceTrustSnapshot(connection))
   }
 
   /**
@@ -5184,31 +5048,12 @@ export class SidecarServer {
    * re-broadcast (a workspace switch spawns a new sidecar at the new cwd).
    */
   private sendWorkspaceTrustSnapshot(connection: Connection): void {
-    if (!this.workspaceTrust) {
-      return
-    }
-    try {
-      const raw = this.workspaceTrust.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'workspace-trust.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'workspace-trust.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        workspaceTrust: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] workspace-trust.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.workspaceTrust, 'workspace-trust.snapshot', workspaceTrust => ({
+      kind: 'workspace-trust.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      workspaceTrust,
+    }))
   }
 
   /**
@@ -5217,31 +5062,12 @@ export class SidecarServer {
    * re-broadcast (the doctor/install checks run once at spawn).
    */
   private sendDiagnosticsSnapshot(connection: Connection): void {
-    if (!this.diagnostics) {
-      return
-    }
-    try {
-      const raw = this.diagnostics.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'diagnostics.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'diagnostics.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        diagnostics: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] diagnostics.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.diagnostics, 'diagnostics.snapshot', diagnostics => ({
+      kind: 'diagnostics.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      diagnostics,
+    }))
   }
 
   /**
@@ -5251,40 +5077,16 @@ export class SidecarServer {
    * clone/JSON checks, the outbound secret guard, and the size cap.
    */
   private sendRemoteSettingsSnapshot(connection: Connection): void {
-    if (!this.remoteSettings) {
-      return
-    }
-    try {
-      const raw = this.remoteSettings.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'remoteSettings.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'remoteSettings.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        remoteSettings: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] remoteSettings.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.remoteSettings, 'remoteSettings.snapshot', remoteSettings => ({
+      kind: 'remoteSettings.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      remoteSettings,
+    }))
   }
 
   private broadcastRemoteSettingsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendRemoteSettingsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendRemoteSettingsSnapshot(connection))
   }
 
   /**
@@ -5293,12 +5095,7 @@ export class SidecarServer {
    * reflect the persisted change without a reconnect.
    */
   private broadcastSettingsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendSettingsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendSettingsSnapshot(connection))
   }
 
   /* --------------------------------------------------------------------- *
