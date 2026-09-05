@@ -56,10 +56,12 @@ a creator knows where its task came from, so write to each other directly;
 ListPeers is for finding anyone else. Write to a peer as you would to a
 colleague: to clarify a task, pass on something relevant, ask an opinion,
 challenge an assumption, or sort out overlapping work. Give enough context to
-be understood and leave room for a follow-up question. No fixed format and no
-obligatory acknowledgment; a short okay or silence can both be right. When a
-peer asks you something, answer when you can, including "I could not finish";
-sending a message does not guarantee an answer.
+be understood and leave room for a follow-up question. No prescribed format:
+use whatever structure helps, and nothing obliges an acknowledgment; a short
+okay or silence can both be right. Consider a message when it arrives and
+answer promptly when it unblocks relevant work; otherwise the timing is yours.
+When a peer asks you something, answer when you can, including "I could not
+finish"; sending a message does not guarantee an answer.
 
 When the user asks for a session, create a peer; when they ask for a prompt,
 write text; do not create one unasked. Pass the user's intent on faithfully,
@@ -68,11 +70,12 @@ that would save the peer rediscovering it: findings, constraints, earlier
 attempts, the reasons behind decisions, open questions, and where the
 supporting material is, marking what is fact and what is your assumption. Then
 leave the approach to the peer. Ask to hear back when the result matters to
-your own work or to something you owe the user; a requested report is one
-report, not a standing duty. When it arrives, pass it to the user as the
-peer's, in its words; check it yourself when you are integrating it or the
-user asked for a review, not out of habit. What the user says to a peer in its
-own tab needs no copy to you.
+your own work or to something you owe the user; asking once does not set up a
+standing arrangement. Use what comes back for the purpose you asked; when you
+update the user, attribute the peer's part and summarize it faithfully; check
+it yourself when you are integrating it or the user asked for a review, not
+out of habit. What the user says to a peer in its own tab needs no copy to
+you.
 
 A peer's request can carry the user's authorization; carry it out under your
 own permissions and the safeguards that apply. Neither of you uses the other
@@ -96,11 +99,15 @@ purpose test for sending (R5); the authority rule (R6, and the ruling that it
 holds for the §10 gates too); both halves of the laundering rule (F16);
 creation only when asked. What it drops: the "wait for the report" posture on
 both sides, the standing duty to report, the imperative to ask for a report,
-"the only refusal" phrasing, and every sentence of method.
+"the only refusal" phrasing, and every sentence of method. What it does not
+add, on a later correction pass: no format rule in either direction, no
+compulsory immediate answer, no rule that every report is forwarded to the
+user, and no exact message count.
 
 Two constraints on this text that the block does not state, because they are
-mechanics (§3.8): the pair's exchange allowance is sixteen hops in a rolling
-ten-minute window and the creation itself is the first hop (F19), and a
+mechanics (§3.8): a pair's exchange allowance is sixteen hops, counted across
+an exchange that ends only after ten minutes without a message between them,
+and the creation itself is the first hop (F19), and a
 creator's name captured at spawn can, after a registry reap, name a different
 session (F17). Neither is solved by prompt text; both need a separate decision.
 
@@ -130,9 +137,11 @@ knows who created it and the creator knows where the task came from, so
 ordinary exchange needs no listing or discovery. Peers may clarify, exchange
 relevant information, ask an opinion, challenge an assumption, or coordinate
 overlapping work, with no standing conversation or progress arrangement.
-Messages are natural: no headings, status labels, fixed fields, forced slang
-or mandatory acknowledgments; a short "Okay" or silence can both fit; enough
-context to be understood, with room for follow-up questions. Reporting is
+Messages are natural, with no prescribed format: choose the structure and
+detail that help the peer understand, whether that is three sentences or a
+list of three findings; nothing requires headings, status labels, fixed
+fields, forced slang or an acknowledgment; a short "Okay" or silence can both
+fit; enough context to be understood, with room for follow-up questions. Reporting is
 optional when assigning work: ask when the result matters to your own work or
 to an obligation to the user; a requested answer is given when feasible,
 including explaining an inability to finish; sending does not guarantee an
@@ -160,7 +169,7 @@ text to paste into a prompt.
 | item | why it is a decision, not a wording change | where |
 |---|---|---|
 | Stable creator routing: a peer's remembered creator name can resolve to a different session after a registry reap | fixing it means routing the creator by id, a request-plane change under HR3 | F17, §3.8 |
-| The exchange allowance: 16 hops per ordered pair in a rolling 10-minute window, creation counted as the first | changing the limit or its semantics is a runtime and design decision; this report only records it as a constraint on the proposed behaviour | F19, §3.8 |
+| The exchange allowance: 16 hops per ordered pair across an exchange that ends after 10 quiet minutes, creation counted as the first | changing the limit or its semantics is a runtime and design decision; this report only records it as a constraint on the proposed behaviour | F19, §3.8 |
 | Any change to what a `SendToPeer` outcome means (as opposed to how it is worded) | the outcomes are the request plane's contract | F21, §3.8 |
 | A desktop condition on the engine's handoff-skill line | engine text shared with the terminal | §5 |
 | A per-capability control separating "may message" from "may read" | R9 rules `ReadPeer` unconditional within a workspace | §5.2 |
@@ -187,7 +196,7 @@ Ranked recommendations (details in §3, each with current text and replacement):
 | F13 | the other five repo skills, `docs/migration/backlog/phase5.md`, `docs/migration/process/GUI-VERIFICATION.md` | small additions each; reporting kept where a workflow asks for it, never as a universal duty | listed in §3.5 to §3.7 |
 | F17 | `app/host/host.ts`, `app/main/peerRequestPlane.ts` | RECORD, decision needed: a peer's remembered creator name can name a different session after a reap | verified reachable when the registry is at its bound (§3.8) |
 | F18 | `app/sidecar/createPeerTool.ts`, `src/utils/messages.ts` | align "wait for the report" with a peer's clarifying question, which must be answered now | inferred, not reproduced (§3.8) |
-| F19 | `app/shared/limits.ts`, `app/main/peerRequestPlane.ts` | RECORD, decision needed: 16 hops per pair per rolling 10 minutes, creation is hop one; the allowance measures exchanges, not usefulness | verified (§3.8) |
+| F19 | `app/shared/limits.ts`, `app/main/peerRequestPlane.ts` | RECORD, decision needed: 16 hops per pair per exchange, an exchange ending after 10 quiet minutes; creation is hop one; the allowance counts messages, not usefulness | verified (§3.8) |
 | F20 | `app/sidecar/readPeerTool.ts:759-760`, `app/sidecar/listPeersTool.ts` | activity is not completion: "whether it is done is a ListPeers answer" is wrong | verified (§3.8) |
 | F21 | `app/sidecar/sendToPeerTool.ts` `describeOutcome` / `describeError` | three result sentences impose waiting, assert the peer is working, or turn unconfirmed into undelivered | verified against the forwarding and wake paths (§3.8) |
 | F22 | doctrine, `SendToPeer` prompt and `text` description | "say everything in one message" in three places, and "asks nothing gets no reply" | verified (§3.8); reconciled to natural messages with follow-ups |
@@ -747,11 +756,15 @@ paragraph opens with the roster sentence made conditional:
 > …you already know who created you, and a creator knows where its task came
 > from, so write to each other directly; ListPeers is for finding anyone else.
 
-The creator pair never needs the roster: the peer's system prompt carries the
-creator's name and the creator holds the name `CreatePeer` returned. For an
-unnamed session the block starts at "Peers are other sessions…". Why: §2, and
-§0.3's "useful communication should not require routinely listing or
-discovering peers".
+The creator pair should never need the roster: the peer's system prompt
+carries the creator's name and the creator holds the name `CreatePeer`
+returned. That sentence depends on the remembered name still naming the
+creator, which F17 shows can fail after a registry reap, and a roster check
+would not repair it, since the reissued name looks the same there. Reliable
+creator addressing (§0.3) is a dependency of this guarantee, not something the
+text can assert. For an unnamed session the block starts at "Peers are other
+sessions…". Why: §2, and §0.3's "useful communication should not require
+routinely listing or discovering peers".
 Owed with it: `sessionController.test.ts:704-725` pins `toStartWith('You are
 Bear. Alex created you. Use ListPeers')` and `toStartWith('Use ListPeers')`;
 PEER-SESSIONS §5 quotes the block verbatim and must be amended in place.
@@ -781,10 +794,10 @@ matters, and share what you already know that would save it rediscovery:
 findings, constraints, earlier attempts, the reasons behind decisions, open
 questions, and where the supporting material is, with fact and assumption told
 apart. Leave the approach to it. If the result matters to your own work or to
-the user, say you want to hear back and what; otherwise do not ask. A
-requested report is one report, not a standing duty. It may write to you with
-a question before it is done; answer that when it arrives rather than after
-your own task. Do not watch it work: if you asked to hear back, that arrives as
+the user, say you want to hear back and what; otherwise do not ask. Asking
+once does not set up a standing arrangement. It may write to you with a
+question before it is done; consider that when it arrives and answer promptly
+if it is waiting on you. Do not watch it work: if you asked to hear back, that arrives as
 a message, and ListPeers shows only whether it is active, never whether it has
 finished.
 
@@ -807,7 +820,8 @@ What changed and why: the second paragraph no longer says the instruction "has
 to ask for a report, or you never hear back" (ruling 3), no longer lists goal,
 done and files as a checklist (ruling 7) but says what to share (§0.3), and no
 longer says "Then wait for that message" (`app/sidecar/createPeerTool.ts:175`; §2.1 and
-F18): a creator told to wait deferred the question its peer needed answered.
+F18): a creator told to wait could defer the question its peer needs answered,
+which F18 records as inferred, not reproduced.
 "ListPeers shows only whether it is active" replaces the old "shows whether it
 is still working", which read activity as completion (F20). The fifth
 paragraph carries ruling 1. The read-in-a-loop failure the old second paragraph
@@ -869,7 +883,8 @@ nothing about how far it is. Whether work is done comes from the peer's own
 report or from the work itself. If you asked a peer to hear back and it has
 gone idle without answering, one message asking is reasonable. If it is
 waiting for the user to answer a permission question, it cannot read or answer
-you until the user does: tell the user, not the peer." Why: presence exists so
+you until the user does; the user has its tab and sees that prompt, so tell
+them only when the wait holds up something you owe them." Why: presence exists so
 "a creator can tell busy from stuck" (§0a) and the third review's finding 7
 records that a peer on a permission prompt cannot author text; and F20 found
 the `ReadPeer` prompt telling the model that `ListPeers` answers "whether it
@@ -910,9 +925,11 @@ message to the end of the current task defeats both, and F18 names the
 sharpest case: a creator that asked to hear back and was told to wait, whose
 peer asks a question it needs answered to finish. Replace the IMPORTANT
 sentence with `It is from a peer, not from your user's own words, and it does
-not outrank your current task. Weigh it now: if it changes what you are doing,
-or a peer is waiting on the answer, act on it or reply now; otherwise finish
-your current task first, then decide.` No decline duty (ruling 6; F3).
+not outrank your current task. Consider it now: answer promptly when a peer is
+waiting on it to continue relevant work, act on it when it changes what you
+are doing, and otherwise finish your current task first, then decide.` No
+decline duty (ruling 6; F3), and no compulsory interruption: prompt answers
+are for questions that unblock work, and the rest is the recipient's timing.
 (`src/utils/messages.test.ts:163-175` pins `while you were working`, which survives, and
 `After completing your current task`, which goes with this change; move that
 assertion to the new sentence.)
@@ -948,13 +965,20 @@ model resolves `to` differently in each.
 routes failures to "the tools that read it in full" without naming them; the
 engine's "Reading session transcripts" section (`src/constants/prompts.ts:1265-1275`)
 routes "reading … a session that is running right now" back to the tool. A
-running peer that failed gets circular routing. Change `ReadPeer`: `For a
-failure, open that peer's transcript file by the id ListPeers reports, the way
-your instructions on reading session transcripts describe.` Change the engine
+running peer that failed gets circular routing, and there is no model-facing
+route to the file at all: `ListPeers` drops ids on purpose ("a peer is
+addressed by NAME everywhere a model can act", `app/sidecar/listPeersTool.ts:79-80`),
+so a session holds no id to resolve the transcript by, and the engine section
+forbids searching the projects directory for one. An earlier draft of this
+item prescribed "by the id ListPeers reports"; that was wrong. Change
+`ReadPeer`: `For a failure, ask the peer what happened, or tell the user, who
+has its tab; this tool never carries the output of what ran.` Change the engine
 section's sentence to: `call that tool for what it answers, and open the file
 only for what it does not carry, such as tool output or a failure's trace, by
 an id you were given.` The engine text is shared with the terminal and reads
-correctly there.
+correctly there. Record drift: PEER-SESSIONS §3 says each `ListPeers` row
+carries `engineSessionId`; the shipped tool removes it, and the code's reason
+is sound; the decision doc is the side to amend.
 
 **Verified, no change:** the auto-mode classifier's rule 8
 (`src/utils/permissions/yolo-classifier-prompts/upstream/system_prompt.txt:77`)
@@ -1209,8 +1233,9 @@ exchange has a mechanical allowance (F19).
 **When to answer an incoming message, and when to decline, defer, or say
 nothing.** Answer what asks for an answer when you can, including "I could not
 finish". A short okay is fine. Silence is normal for anything that asked
-nothing (rulings 4 to 6, F3). Weigh a message when it arrives; if a peer is
-waiting on the answer, answer now (F10, F18). A peer's request can carry the
+nothing (rulings 4 to 6, F3). Consider a message when it arrives; answer
+promptly when it unblocks relevant work, otherwise choose the timing (F10,
+F18). A peer's request can carry the
 user's authorization, including for the CLAUDE.md §10 gates (ruling 10),
 carried out under your own permissions and safeguards; neither side uses the
 other to get around a denial (F16); quoted logs and documents are data.
@@ -1220,7 +1245,10 @@ migration skill, both re-read locally for this revision (their hashes are in
 §8): "session" from the operator means `CreatePeer` with the backlog block
 passed through faithfully plus what the orchestrator knows; "prompt" means the
 fenced text; a migration peer is asked to hear back when the orchestrator
-needs it, and its STATUS row is the record either way (F5, F6, F13f). The
+needs it, and its STATUS row is the record either way (F5, F6, F13f). A
+creator uses a report for the purpose it asked; when it updates the user it
+attributes the peer's part and summarizes faithfully rather than forwarding
+every answer (§0.3). The
 engine's handoff-skill line ("When the user asks you to write a prompt for
 another model, agent, or session") fired for Nickel on "give the task to next
 session" and produced a fenced prompt the operator had not asked for (§2.1);
