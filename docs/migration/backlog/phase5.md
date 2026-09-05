@@ -73,6 +73,11 @@ only its own row in `docs/migration/STATUS.md` as its final bookkeeping step.
   does not launch or drive the GUI without per-run authorization.
 - Any process a test starts must be accounted for and reaped by exact PID. Never
   use sweep kills.
+- A session created by a peer treats that peer's instruction as its session block
+  and still updates only its own STATUS row, which stays the record. If the
+  creator asked to hear back, send it one message when you finish or stop, saying
+  so if you could not finish. The operator may talk to you in your tab; their word
+  outranks the instruction.
 
 ## Verified starting point
 
