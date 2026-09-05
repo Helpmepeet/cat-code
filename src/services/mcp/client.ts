@@ -1660,21 +1660,22 @@ export const connectToServer = memoize(
           `${transportType.toUpperCase()} connection closed after ${Math.floor(uptime / 1000)}s (${hasErrorOccurred ? 'with errors' : 'cleanly'})`,
         )
 
-        // Clear the memoization cache so next operation reconnects
         const key = getServerCacheKey(name, serverRef)
 
-        // Also clear fetch caches (keyed by server name). Reconnection
-        // creates a new connection object; without clearing, the next
-        // fetch would return stale tools/resources from the old connection.
-        fetchToolsForClient.cache.delete(name)
-        fetchResourcesForClient.cache.delete(name)
-        fetchCommandsForClient.cache.delete(name)
-        if (feature('MCP_SKILLS')) {
-          fetchMcpSkillsForClient!.cache.delete(name)
-        }
+        if (activeMcpConnectionAcquisitions.get(key)?.has(acquisition)) {
+          // Also clear fetch caches (keyed by server name). Reconnection
+          // creates a new connection object; without clearing, the next
+          // fetch would return stale tools/resources from the old connection.
+          fetchToolsForClient.cache.delete(name)
+          fetchResourcesForClient.cache.delete(name)
+          fetchCommandsForClient.cache.delete(name)
+          if (feature('MCP_SKILLS')) {
+            fetchMcpSkillsForClient!.cache.delete(name)
+          }
 
-        connectToServer.cache.delete(key)
-        logMCPDebug(name, `Cleared connection cache for reconnection`)
+          connectToServer.cache.delete(key)
+          logMCPDebug(name, `Cleared connection cache for reconnection`)
+        }
         void acquisition.dispose()
 
         if (originalOnclose) {

@@ -229,9 +229,9 @@ async function resumeAgentBackgroundLocked(
     ...appState.toolPermissionContext,
     mode: selectedAgent.permissionMode ?? 'acceptEdits',
   }
-  // One MCP generation for the resumed run: the same read backs the tool pool
-  // here and the clients and resources runAgent installs below.
-  const mcpRuntimeSnapshot = toolUseContext.options.getMcpRuntimeSnapshot?.()
+  const mcpRuntimeSnapshot = isResumedFork
+    ? undefined
+    : toolUseContext.options.getMcpRuntimeSnapshot?.()
   const workerTools = isResumedFork
     ? toolUseContext.options.tools
     : assembleToolPool(
@@ -274,6 +274,14 @@ async function resumeAgentBackgroundLocked(
       : undefined,
     availableTools: workerTools,
     mcpRuntimeSnapshot,
+    ...(isResumedFork && {
+      mcpRuntimeInputs: {
+        tools: toolUseContext.options.tools,
+        commands: toolUseContext.options.commands,
+        mcpClients: toolUseContext.options.mcpClients,
+        mcpResources: toolUseContext.options.mcpResources,
+      },
+    }),
     // Transcript already contains the parent context slice from the
     // original fork. Re-supplying it would cause duplicate tool_use IDs.
     forkContextMessages: undefined,

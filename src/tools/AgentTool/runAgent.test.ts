@@ -24,7 +24,9 @@ import type { AgentDefinition } from './loadAgentsDir.js'
 // message handling without an API call. Only query() is replaced; the rest of
 // the module is passed through so runAgent's other imports keep working.
 const realQueryModule = await import('../../query.js')
-let queryScript: () => AsyncGenerator<Message> = async function* () {}
+let queryScript: (
+  toolUseContext: ToolUseContext | undefined,
+) => AsyncGenerator<Message> = async function* () {}
 // The subagent's own ToolUseContext is only observable here: runAgent builds it
 // and hands it straight to query().
 let lastQueryToolUseContext: ToolUseContext | undefined
@@ -32,7 +34,7 @@ mock.module('../../query.js', () => ({
   ...realQueryModule,
   query: (params: { toolUseContext?: ToolUseContext }) => {
     lastQueryToolUseContext = params?.toolUseContext
-    return queryScript()
+    return queryScript(params?.toolUseContext)
   },
 }))
 
@@ -387,7 +389,10 @@ describe('runAgent MCP generation handed to the subagent', () => {
   const staleMcpCommand = { name: 'stale-command', isMcp: true }
   const staleMcpSkill = { name: 'stale-skill', loadedFrom: 'mcp' }
   const liveMcpCommand = { name: 'live-command', isMcp: true }
-  const liveTool = { name: 'mcp__cua-driver__click' }
+  const liveTool = {
+    name: 'mcp__cua-driver__click',
+    mcpInfo: { serverName: 'cua-driver', toolName: 'click' },
+  }
   const liveSnapshot = {
     clients: [liveClient],
     tools: [liveTool],
@@ -528,6 +533,77 @@ describe('runAgent MCP generation handed to the subagent', () => {
     expect(context.options.mcpResources).toEqual({
       'cua-driver': [liveResource],
     } as never)
+  })
+
+  test('refreshes each MCP runtime field together between child query iterations', async () => {
+    const replacementClient = { name: 'replacement-server', type: 'connected' }
+    const replacementTool = {
+      name: 'mcp__replacement-server__act',
+      mcpInfo: { serverName: 'replacement-server', toolName: 'act' },
+    }
+    const replacementCommand = { name: 'replacement-command', isMcp: true }
+    const replacementResource = { uri: 'file://replacement', name: 'replacement' }
+    const replacementSnapshot = {
+      clients: [replacementClient],
+      tools: [replacementTool],
+      commands: [replacementCommand],
+      resources: { 'replacement-server': [replacementResource] },
+    } as never
+    const observed: Array<{
+      tools: unknown
+      commands: unknown
+      clients: unknown
+      resources: unknown
+    }> = []
+
+    queryScript = async function* (context) {
+      if (!context) throw new Error('runAgent did not create a child context')
+      observed.push({
+        tools: context.options.tools,
+        commands: context.options.commands,
+        clients: context.options.mcpClients,
+        resources: context.options.mcpResources,
+      })
+      const refreshed = context.options.refreshMcpRuntime?.()
+      if (!refreshed) throw new Error('runAgent did not install MCP refresh')
+      Object.assign(context.options, refreshed)
+      observed.push({
+        tools: context.options.tools,
+        commands: context.options.commands,
+        clients: context.options.mcpClients,
+        resources: context.options.mcpResources,
+      })
+      yield createAssistantMessage({ content: 'done' })
+    }
+
+    await drain(
+      createAppStateHarness(),
+      {
+        commands: [baseCommand, liveMcpCommand],
+        mcpClients: [liveClient],
+        mcpResources: { 'cua-driver': [liveResource] },
+        getMcpRuntimeSnapshot: () => replacementSnapshot,
+      },
+      {
+        availableTools: [liveTool],
+        mcpRuntimeSnapshot: liveSnapshot,
+      },
+    )
+
+    expect(observed).toEqual([
+      {
+        tools: [liveTool],
+        commands: [baseCommand, liveMcpCommand],
+        clients: [liveClient],
+        resources: { 'cua-driver': [liveResource] },
+      },
+      {
+        tools: [replacementTool],
+        commands: [baseCommand, replacementCommand],
+        clients: [replacementClient],
+        resources: { 'replacement-server': [replacementResource] },
+      },
+    ])
   })
 
   test('a static parent still passes its own clients and resources through', async () => {

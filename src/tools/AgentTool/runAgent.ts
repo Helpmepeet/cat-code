@@ -834,6 +834,10 @@ async function* runAgentInCleanupScope({
           ...parentMcpRuntime.commands,
         ]
       : []
+  const parentBaseTools = availableTools.filter(tool => !tool.mcpInfo)
+  const parentBaseCommands = toolUseContext.options.commands.filter(
+    command => !command.isMcp && command.loadedFrom !== 'mcp',
+  )
 
   // Initialize agent-specific MCP servers (additive to parent's servers)
   const {
@@ -853,6 +857,39 @@ async function* runAgentInCleanupScope({
     agentMcpTools.length > 0
       ? uniqBy([...resolvedTools, ...agentMcpTools], 'name')
       : resolvedTools
+  const agentMcpClients = mergedMcpClients.slice(parentMcpClients.length)
+  const refreshMcpRuntime = () => {
+    const snapshot = toolUseContext.options.getMcpRuntimeSnapshot?.()
+    if (!snapshot) {
+      return {
+        tools: allTools,
+        commands: parentCommands,
+        mcpClients: mergedMcpClients,
+        mcpResources: parentMcpResources,
+      }
+    }
+    const refreshedTools = resolveAgentTools(
+      agentDefinition,
+      [...parentBaseTools, ...snapshot.tools],
+      isAsync,
+      agentToolEnvironment,
+    ).resolvedTools
+
+    return {
+      tools:
+        agentMcpTools.length > 0
+          ? uniqBy([...refreshedTools, ...agentMcpTools], 'name')
+          : refreshedTools,
+      commands: [...parentBaseCommands, ...snapshot.commands],
+      mcpClients: [...snapshot.clients, ...agentMcpClients],
+      mcpResources: Object.fromEntries(
+        Object.entries(snapshot.resources).map(([server, resources]) => [
+          server,
+          [...resources],
+        ]),
+      ),
+    }
+  }
 
   // Build agent-specific options
   const agentOptions: ToolUseContext['options'] = {
@@ -880,6 +917,7 @@ async function* runAgentInCleanupScope({
     mcpClients: mergedMcpClients,
     mcpResources: parentMcpResources,
     getMcpRuntimeSnapshot: toolUseContext.options.getMcpRuntimeSnapshot,
+    refreshMcpRuntime,
     agentDefinitions: toolUseContext.options.agentDefinitions,
     // Fork children (useExactTools path) need querySource on context.options
     // for the recursive-fork guard at AgentTool.tsx call() — it checks

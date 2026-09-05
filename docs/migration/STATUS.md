@@ -442,6 +442,15 @@ acceptance criterion; P4-4 is the P3 shell-fidelity true-up carry-forward.
 > `New worktree` UI label rather than an imported asset's absolute path. Hardening passed 19/19 on
 > 2026-09-04 under explicit per-run Electron authorization.
 >
+> **2026-09-05 follow-up.** Fixed three MCP-runtime regressions: an explicitly
+> disposed acquisition can no longer evict a replacement cache entry from its
+> delayed close callback; child agents now refresh tools, commands, clients,
+> and resources together between iterations; and fresh/resumed forks retain
+> exact parent tools with their matching runtime inputs. Focused MCP/Agent tests
+> passed 7/0, 17/0, 41/0, and 4/0; `bun test app/` passed 4508/0;
+> engine build, app/sidecar typechecks, renderer build, and hardening 19/19
+> passed. No renderer, protocol, or trust-boundary change.
+>
 | Session | Model | Diff | Status | Note |
 |---|---|---:|---|---|
 | **P4-0** Composer/ChatView enrichment (@-mention, paste-collapse, history) | CLAUDE (visual-design) 🖐 GUI | 7 | ✅ 2026-07-09 | Tranche A. `Chat.jsx`; submit rides existing `app.submit`; P4-1 MentionPicker; per-session history (P3-4 keying). **✅ GUI-VERIFIED 2026-07-09** (cua-driver + operator, AX-cited): @-mention + ↑/↓ history recall PASS; paste-collapse full-text-on-submit + history×paste regression PASS (operator real Cmd+V). First GUI run FAILED history recall → fixed (keydown handler moved `<input>`→`<form>`, `12ba015`). **§0 follow-ups (logged, non-blocking):** paste shows a raw `[Pasted text #N]` token in the single-`<input>` (chip/expand/submit all work — the single-input adaptation, poor fidelity); add-attachment (+) not disabled mid-turn (no-op stub); slash-coexistence needs an operator real-keystroke spot-check. **✅ CORRECTION 2026-08-09 — supersedes the old no-op attachment claim:** composer image attachment is real and image-only. A hidden image picker and clipboard-image paste share renderer-side bounded preparation/compression; one image tile is visible and removable; image-only submission works; the existing `app.submit` path carries an engine-compatible bounded image/text content-block prompt; and cold-spawn plus idle-park pending submission retain and restore the image. The sidecar remains the strict validation boundary. 🔁 Adaptation: one image at a time, not arbitrary file attachment. Evidence: focused image flow **622/0**, supervisor+sidecar boundary **220/0**, full `bun test app/` **2943/0**, renderer production build green, and engine `build:dev:full` green at `2.1.87-dev.20260809.t065904.shabf30642f`. App and sidecar typechecks show zero image-flow diagnostics but are blocked by unrelated untracked `app/shared/deliveryTrace.ts:112`; `test:hardening` was not run because it launches Electron and this session had no GUI-launch authorization. ⬜ Image-flow GUI acceptance remains pending. |

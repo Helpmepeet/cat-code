@@ -1208,9 +1208,16 @@ export const AgentTool = buildTool({
         systemPrompt: asSystemPrompt(enhancedSystemPrompt)
       } : undefined,
       availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
-      // Same generation workerTools came from, so the subagent's clients and
-      // resources cannot describe a different one.
-      mcpRuntimeSnapshot,
+      ...(isForkPath
+        ? {
+            mcpRuntimeInputs: {
+              tools: toolUseContext.options.tools,
+              commands: toolUseContext.options.commands,
+              mcpClients: toolUseContext.options.mcpClients,
+              mcpResources: toolUseContext.options.mcpResources,
+            },
+          }
+        : { mcpRuntimeSnapshot }),
       // Pass parent conversation when the fork-subagent path needs full
       // context. useExactTools inherits thinkingConfig (runAgent.ts:624).
       forkContextMessages: isForkPath ? toolUseContext.messages : undefined,

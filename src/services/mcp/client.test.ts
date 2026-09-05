@@ -372,6 +372,37 @@ describe('MCP connection acquisition ownership', () => {
     expect(result.type).toBe('failed')
   })
 
+  test('keeps a replacement cached while an explicitly disposed connection closes', async () => {
+    const config = {
+      type: 'stdio',
+      command: process.execPath,
+      args: [
+        '-e',
+        "process.on('SIGINT', () => {}); process.on('SIGTERM', () => {}); import { Server } from '@modelcontextprotocol/sdk/server/index.js'; import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'; const server = new Server({name:'fixture',version:'1.0.0'},{capabilities:{}}); await server.connect(new StdioServerTransport())",
+      ],
+      scope: 'local',
+    } satisfies ScopedMcpServerConfig
+
+    const initial = await connectToServer('overlap-stdio', config)
+    expect(initial.type).toBe('connected')
+
+    let disposalFinished = false
+    const disposal = disposeServerConnection('overlap-stdio', config).then(
+      () => {
+        disposalFinished = true
+      },
+    )
+    const replacement = await connectToServer('overlap-stdio', config)
+
+    expect(disposalFinished).toBe(false)
+    expect(replacement.type).toBe('connected')
+    expect(replacement).not.toBe(initial)
+
+    await disposal
+
+    expect(await connectToServer('overlap-stdio', config)).toBe(replacement)
+  })
+
   test('aborts a hanging headers helper before network setup', async () => {
     const config = {
       type: 'ws',
