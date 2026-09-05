@@ -21,12 +21,18 @@
  * therefore does NOT go through the CC-2 activity sort (`sidebarState.ts`),
  * which still owns every project group.
  *
- * Renderer-local persistence, the `sidebarWorkspaceOrder.ts` idiom verbatim:
+ * Renderer-local persistence through the shared codec (`viewPreference.ts`):
  * versioned JSON under a `catcode.`-prefixed key, read/written through an
- * injectable `Pick<Storage, …>`, best-effort. No protocol frame, no registry
- * field, no preload channel — a view preference with no engine meaning
+ * injectable storage, best-effort. No protocol frame, no registry field, no
+ * preload channel — a view preference with no engine meaning
  * (SECURITY-MINIMUM §2).
  */
+
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const SIDEBAR_PINNED_SESSIONS_STORAGE_KEY =
   'catcode.sidebarPinnedSessions.v1'
@@ -57,13 +63,6 @@ export type PinnedSessions = readonly string[]
 /** Which side of the hovered pinned row the dragged row would land on. */
 export type PinnedDropEdge = 'before' | 'after'
 
-type PinnedStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedPinnedSessions = {
-  version: 1
-  sessionIds: string[]
-}
-
 export function createPinnedSessions(): PinnedSessions {
   return []
 }
@@ -92,38 +91,26 @@ function normalizePinnedSessions(values: readonly unknown[]): string[] {
 }
 
 export function readPinnedSessionsFromStorage(
-  storage: PinnedStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): PinnedSessions | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(SIDEBAR_PINNED_SESSIONS_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedPinnedSessions>
-    if (value.version !== 1 || !Array.isArray(value.sessionIds)) return null
-    return normalizePinnedSessions(value.sessionIds)
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
+    'sessionIds',
+    value => (Array.isArray(value) ? normalizePinnedSessions(value) : null),
+  )
 }
 
 export function writePinnedSessionsToStorage(
-  storage: PinnedStorage | null,
+  storage: ViewPreferenceStorage | null,
   pinned: PinnedSessions,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedPinnedSessions = {
-      version: 1,
-      sessionIds: normalizePinnedSessions(pinned),
-    }
-    storage.setItem(
-      SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
-      JSON.stringify(value),
-    )
-  } catch {
-    // View persistence is best-effort; a storage failure must never affect live
-    // session state (`sidebarWorkspaceOrder.ts:133`).
-  }
+  writeViewPreference(
+    storage,
+    SIDEBAR_PINNED_SESSIONS_STORAGE_KEY,
+    'sessionIds',
+    normalizePinnedSessions(pinned),
+  )
 }
 
 export function isSessionPinned(

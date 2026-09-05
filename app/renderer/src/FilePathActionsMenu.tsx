@@ -5,7 +5,10 @@
  */
 
 import { useRef, useState, Fragment, type ReactNode } from 'react'
-import type { SessionId } from '../../shared/protocol.js'
+import type {
+  OpenWorkspaceFileTarget,
+  SessionId,
+} from '../../shared/protocol.js'
 import {
   handleMenuRovingKeyDown,
   usePopoverFocus,
@@ -31,6 +34,56 @@ function readViewport(): { width: number; height: number } {
   return typeof window === 'undefined'
     ? { width: 1280, height: 800 }
     : { width: window.innerWidth, height: window.innerHeight }
+}
+
+const CLIPBOARD_FAILURE = 'Could not write to the clipboard'
+
+/**
+ * The five open rows are one action with five destinations: each names an
+ * `openWorkspaceFile` target and the sentence shown when the file does not
+ * open. A refused open answers `false` and a broken bridge rejects; both are
+ * the same news to the user, so both paths say the same thing.
+ */
+const OPEN_TARGETS: Partial<
+  Record<FilePathActionKind, { target: OpenWorkspaceFileTarget; failure: string }>
+> = {
+  'open-default': { target: 'default', failure: 'Could not open this file' },
+  'open-vscode': {
+    target: 'vscode',
+    failure: 'Could not open this file in Visual Studio Code',
+  },
+  'open-zed': { target: 'zed', failure: 'Could not open this file in Zed' },
+  'open-cursor': { target: 'cursor', failure: 'Could not open this file in Cursor' },
+  'open-finder': { target: 'finder', failure: 'Could not reveal this file' },
+}
+
+/**
+ * What a copy row puts on the clipboard, and what the toast says once it is
+ * there — or null for a row that copies nothing. Unlike the open rows these do
+ * not reduce to a table: the flyout HOST acts as its own first child (copy the
+ * absolute path), and that path falls back to the raw one when no cwd resolved
+ * it, so its sentence has to name whichever was actually copied.
+ */
+function resolveCopyTarget(
+  kind: FilePathActionKind,
+  parts: FilePathParts,
+): { text: string; success: string } | null {
+  switch (kind) {
+    case 'copy':
+    case 'copy-absolute':
+      return {
+        text: parts.absolutePath ?? parts.rawPath,
+        success: parts.absolutePath
+          ? 'Absolute path copied to clipboard'
+          : 'Relative path copied to clipboard',
+      }
+    case 'copy-relative':
+      return { text: parts.rawPath, success: 'Relative path copied to clipboard' }
+    case 'copy-filename':
+      return { text: parts.filename, success: 'Filename copied to clipboard' }
+    default:
+      return null
+  }
 }
 
 export function FilePathActionsMenu({
@@ -66,108 +119,29 @@ export function FilePathActionsMenu({
     restoreTriggerFocus()
     onClose()
 
-    const clipboard =
-      typeof navigator !== 'undefined' ? navigator.clipboard : undefined
-
-    switch (kind) {
-      case 'copy':
-      case 'copy-absolute': {
-        const textToCopy = parts.absolutePath ?? parts.rawPath
-        if (!clipboard) {
-          toast('Could not write to the clipboard', { tone: 'warn' })
-          return
-        }
-        void clipboard
-          .writeText(textToCopy)
-          .then(() =>
-            toast(
-              parts.absolutePath
-                ? 'Absolute path copied to clipboard'
-                : 'Relative path copied to clipboard',
-              { tone: 'success' },
-            ),
-          )
-          .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
+    const copy = resolveCopyTarget(kind, parts)
+    if (copy) {
+      const clipboard =
+        typeof navigator !== 'undefined' ? navigator.clipboard : undefined
+      if (!clipboard) {
+        toast(CLIPBOARD_FAILURE, { tone: 'warn' })
         return
       }
-
-      case 'copy-relative': {
-        if (!clipboard) {
-          toast('Could not write to the clipboard', { tone: 'warn' })
-          return
-        }
-        void clipboard
-          .writeText(parts.rawPath)
-          .then(() => toast('Relative path copied to clipboard', { tone: 'success' }))
-          .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
-        return
-      }
-
-      case 'copy-filename': {
-        if (!clipboard) {
-          toast('Could not write to the clipboard', { tone: 'warn' })
-          return
-        }
-        void clipboard
-          .writeText(parts.filename)
-          .then(() => toast('Filename copied to clipboard', { tone: 'success' }))
-          .catch(() => toast('Could not write to the clipboard', { tone: 'warn' }))
-        return
-      }
-
-      case 'open-default': {
-        void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.rawPath, 'default')
-          .then(opened => {
-            if (!opened) toast('Could not open this file', { tone: 'warn' })
-          })
-          .catch(() => toast('Could not open this file', { tone: 'warn' }))
-        return
-      }
-
-      case 'open-vscode': {
-        void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.rawPath, 'vscode')
-          .then(opened => {
-            if (!opened) toast('Could not open this file in Visual Studio Code', { tone: 'warn' })
-          })
-          .catch(() => toast('Could not open this file in Visual Studio Code', { tone: 'warn' }))
-        return
-      }
-
-      case 'open-zed': {
-        void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.rawPath, 'zed')
-          .then(opened => {
-            if (!opened) toast('Could not open this file in Zed', { tone: 'warn' })
-          })
-          .catch(() => toast('Could not open this file in Zed', { tone: 'warn' }))
-        return
-      }
-
-      case 'open-cursor': {
-        void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.rawPath, 'cursor')
-          .then(opened => {
-            if (!opened) toast('Could not open this file in Cursor', { tone: 'warn' })
-          })
-          .catch(() => toast('Could not open this file in Cursor', { tone: 'warn' }))
-        return
-      }
-
-      case 'open-finder': {
-        void window.catcode
-          ?.openWorkspaceFile(sessionId, parts.rawPath, 'finder')
-          .then(opened => {
-            if (!opened) toast('Could not reveal this file', { tone: 'warn' })
-          })
-          .catch(() => toast('Could not reveal this file', { tone: 'warn' }))
-        return
-      }
-
-      default:
-        return
+      void clipboard
+        .writeText(copy.text)
+        .then(() => toast(copy.success, { tone: 'success' }))
+        .catch(() => toast(CLIPBOARD_FAILURE, { tone: 'warn' }))
+      return
     }
+
+    const open = OPEN_TARGETS[kind]
+    if (!open) return
+    void window.catcode
+      ?.openWorkspaceFile(sessionId, parts.rawPath, open.target)
+      .then(opened => {
+        if (!opened) toast(open.failure, { tone: 'warn' })
+      })
+      .catch(() => toast(open.failure, { tone: 'warn' }))
   }
 
   return (

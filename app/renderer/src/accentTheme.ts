@@ -24,6 +24,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const ACCENT_STORAGE_KEY = 'catcode.accent.v1'
 
@@ -71,13 +76,6 @@ export const ACCENT_SWATCH_CLASS: Readonly<Record<AccentKey, string>> = {
  * `:root` declaration, so this key needs no stylesheet rule of its own. */
 export const DEFAULT_ACCENT: AccentKey = 'pink'
 
-type AccentStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedAccent = {
-  version: 1
-  accent: AccentKey
-}
-
 export function isAccentKey(value: unknown): value is AccentKey {
   return (
     typeof value === 'string' && (ACCENT_KEYS as readonly string[]).includes(value)
@@ -85,32 +83,18 @@ export function isAccentKey(value: unknown): value is AccentKey {
 }
 
 export function readAccentFromStorage(
-  storage: AccentStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): AccentKey | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(ACCENT_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedAccent>
-    if (value.version !== 1 || !isAccentKey(value.accent)) return null
-    return value.accent
-  } catch {
-    return null
-  }
+  return readViewPreference(storage, ACCENT_STORAGE_KEY, 'accent', value =>
+    isAccentKey(value) ? value : null,
+  )
 }
 
 export function writeAccentToStorage(
-  storage: AccentStorage | null,
+  storage: ViewPreferenceStorage | null,
   accent: AccentKey,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedAccent = { version: 1, accent }
-    storage.setItem(ACCENT_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (codeTheme.ts:118).
-  }
+  writeViewPreference(storage, ACCENT_STORAGE_KEY, 'accent', accent)
 }
 
 export type AccentThemeContextValue = {

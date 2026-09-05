@@ -129,6 +129,7 @@ import {
   deriveMergedRowVisual,
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
+  reorderDragHandlers,
   resolveNavSelection,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
@@ -136,6 +137,7 @@ import {
   shouldShowSidebarGroupExpansionToggle,
   sidebarActivityKey,
   sortSidebarSessionRows,
+  type ReorderDrag,
 } from './sidebarState.js'
 import {
   createPinnedSessions,
@@ -415,16 +417,10 @@ export function Sidebar({
     name: string
     anchor: SessionActionsAnchor
   } | null>(null)
-  /** The in-flight header drag: the group being dragged and the one under the
-   * pointer. Only the indicator reads it; the order itself changes on drop. */
-  const [headerDrag, setHeaderDrag] = useState<{
-    from: string
-    over: string
-  } | null>(null)
-  /** The same, for a row being dragged within the Pinned section. */
-  const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
-    null,
-  )
+  /** The in-flight header drag, and the same for a row being dragged within the
+   * Pinned section (`sidebarState.ts` `ReorderDrag`). */
+  const [headerDrag, setHeaderDrag] = useState<ReorderDrag>(null)
+  const [pinDrag, setPinDrag] = useState<ReorderDrag>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -654,18 +650,7 @@ export function Sidebar({
   }
 
   const reorderHandlers: WorkspaceReorderHandlers = {
-    onDragStart: cwd => setHeaderDrag({ from: cwd, over: cwd }),
-    onDragOver: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over === cwd ? drag : { ...drag, over: cwd },
-      ),
-    // Park the indicator back on the dragged group itself (which draws none, a
-    // group cannot drop onto itself), so it is never left promising a landing
-    // spot the pointer has already left.
-    onDragLeave: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over !== cwd ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setHeaderDrag),
     onDrop: cwd => {
       if (headerDrag) {
         commitWorkspaceOrder(
@@ -680,7 +665,6 @@ export function Sidebar({
       }
       setHeaderDrag(null)
     },
-    onDragEnd: () => setHeaderDrag(null),
     onStep: (cwd, direction) => {
       const next = reduceWorkspaceOrderStepped(
         workspaceOrder,
@@ -700,15 +684,7 @@ export function Sidebar({
 
   const pinnedReorderHandlers: RowReorderHandlers = {
     mime: PINNED_SESSION_DRAG_MIME,
-    onDragStart: id => setPinDrag({ from: id, over: id }),
-    onDragOver: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over === id ? drag : { ...drag, over: id },
-      ),
-    onDragLeave: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over !== id ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setPinDrag),
     onDrop: id => {
       if (pinDrag) {
         commitPinnedSessions(
@@ -722,7 +698,6 @@ export function Sidebar({
       }
       setPinDrag(null)
     },
-    onDragEnd: () => setPinDrag(null),
     onStep: (id, direction) => {
       const next = reducePinnedSessionsStepped(
         pinnedSessions,

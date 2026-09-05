@@ -744,14 +744,7 @@ export function ModelBreakdownBars({
 }: ModelBreakdownBarsProps) {
   const items: ModelBreakdownItem[] = computeModelBreakdown(modelUsage)
 
-  if (dataState !== 'loaded') {
-    // One word, because the chart card above already carries the full message.
-    return (
-      <div className="p-4 text-center text-[12px] text-text-ghost">
-        {dataState === 'pending' ? 'Loading' : 'Unavailable'}
-      </div>
-    )
-  }
+  if (dataState !== 'loaded') return <TerseDataState dataState={dataState} />
 
   if (items.length === 0) {
     return (
@@ -854,13 +847,7 @@ export function CacheUsageBar({
   cacheHitRate,
   dataState = 'loaded',
 }: CacheUsageBarProps) {
-  if (dataState !== 'loaded') {
-    return (
-      <div className="p-4 text-center text-[12px] text-text-ghost">
-        {dataState === 'pending' ? 'Loading' : 'Unavailable'}
-      </div>
-    )
-  }
+  if (dataState !== 'loaded') return <TerseDataState dataState={dataState} />
 
   const total = cacheReadTokens + cacheWriteTokens + freshInputTokens
 

@@ -7,45 +7,32 @@
  * so a test can drive the real read/write path without touching globals.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   DEFAULT_PROSE_ARRIVAL,
   ProseArrivalContext,
   readProseArrivalFromStorage,
   writeProseArrivalToStorage,
-  type ProseArrival,
   type ProseArrivalContextValue,
 } from './proseArrival.js'
-
-type ProseArrivalStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): ProseArrivalStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function ProseArrivalProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: ProseArrivalStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [arrival, setArrivalState] = useState<ProseArrival>(
-    () => readProseArrivalFromStorage(store) ?? DEFAULT_PROSE_ARRIVAL,
-  )
-  const setArrival = useCallback(
-    (next: ProseArrival) => {
-      setArrivalState(next)
-      writeProseArrivalToStorage(store, next)
-    },
-    [store],
+  const [arrival, setArrival] = useViewPreference(
+    storage,
+    readProseArrivalFromStorage,
+    writeProseArrivalToStorage,
+    DEFAULT_PROSE_ARRIVAL,
   )
   const value = useMemo<ProseArrivalContextValue>(
     () => ({ arrival, setArrival }),

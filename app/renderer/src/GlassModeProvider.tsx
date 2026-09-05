@@ -14,7 +14,7 @@
  * `localStorage` and `document.documentElement`.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   applyGlassMode,
@@ -25,18 +25,11 @@ import {
   type GlassModeContextValue,
   type GlassRoot,
 } from './glassMode.js'
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 import { getBridge } from './bridge.js'
-
-type GlassStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): GlassStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
 
 function defaultRoot(): GlassRoot | null {
   if (typeof document === 'undefined') return null
@@ -49,20 +42,15 @@ export function GlassModeProvider({
   root,
 }: {
   children: ReactNode
-  storage?: GlassStorage | null
+  storage?: ViewPreferenceStorage | null
   root?: GlassRoot | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
   const target = root === undefined ? defaultRoot() : root
-  const [glass, setGlassState] = useState<boolean>(
-    () => readGlassFromStorage(store) ?? DEFAULT_GLASS_ENABLED,
-  )
-  const setGlass = useCallback(
-    (next: boolean) => {
-      setGlassState(next)
-      writeGlassToStorage(store, next)
-    },
-    [store],
+  const [glass, setGlass] = useViewPreference(
+    storage,
+    readGlassFromStorage,
+    writeGlassToStorage,
+    DEFAULT_GLASS_ENABLED,
   )
   // BEFORE paint, not after. A passive effect runs once the browser has already
   // painted, so a glass-on launch showed one solid frame and then flipped, and
