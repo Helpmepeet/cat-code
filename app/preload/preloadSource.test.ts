@@ -1,86 +1,95 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 
+// The channel names themselves live in `app/shared/ipcChannels.ts` so preload
+// and main send and listen on the same literals by construction. The pinned
+// literal therefore belongs to that file; the sender signature that rides it
+// stays pinned here.
+function readChannelNames(): string {
+  return readFileSync(new URL('../shared/ipcChannels.ts', import.meta.url), 'utf8')
+}
+
 test('every fixed renderer-to-main sender passes through the shared IPC guard', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const channels = readChannelNames()
 
-  expect(source).toContain("const CH_RESTART = 'catcode:restart'")
+  expect(channels).toContain("export const CH_RESTART = 'catcode:restart'")
   expect(source).toContain('restart(sessionId: SessionId): Promise<HostResult<void>>')
-  expect(source).toContain("const CH_SET_MODE = 'catcode:set-mode'")
+  expect(channels).toContain("export const CH_SET_MODE = 'catcode:set-mode'")
   expect(source).toContain(
     'setPermissionMode(sessionId: SessionId, mode: PermissionSetModeMode): void',
   )
   // C5 (P4-20) — AskUserQuestion answer sender rides its own fixed channel.
-  expect(source).toContain(
-    "const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'",
+  expect(channels).toContain(
+    "export const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'",
   )
   expect(source).toContain('answerQuestions(')
   // P4-5 — account lifecycle verb sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_ACCOUNT_VERB = 'catcode:account-verb'")
+  expect(channels).toContain("export const CH_ACCOUNT_VERB = 'catcode:account-verb'")
   expect(source).toContain(
     'accountVerb(sessionId: SessionId, verb: AccountVerbMessage): void',
   )
-  expect(source).toContain(
-    "const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
+  expect(channels).toContain(
+    "export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
   )
   expect(source).toContain('deleteAccount(verb: AccountDeleteMessage)')
   // P4-15 — workspace-trust accept verb sender rides its own fixed channel (HC3).
-  expect(source).toContain(
-    "const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'",
+  expect(channels).toContain(
+    "export const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'",
   )
   expect(source).toContain(
     'workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void',
   )
   // P4-8b — agent-mode set sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'")
+  expect(channels).toContain("export const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'")
   expect(source).toContain(
     'setAgentMode(sessionId: SessionId, active: boolean): void',
   )
   // P4-13 — RemoteSettings verb sender rides its own fixed channel (HC3).
-  expect(source).toContain(
-    "const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'",
+  expect(channels).toContain(
+    "export const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'",
   )
   expect(source).toContain(
     'remoteSettingsVerb(sessionId: SessionId, verb: RemoteVerbMessage): void',
   )
   // P4-19 — settings write verb sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_SETTINGS_VERB = 'catcode:settings-verb'")
+  expect(channels).toContain("export const CH_SETTINGS_VERB = 'catcode:settings-verb'")
   expect(source).toContain(
     'settingsVerb(sessionId: SessionId, verb: SettingsVerbMessage): void',
   )
   // P4-24c — composer run-control verb sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'")
+  expect(channels).toContain("export const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'")
   expect(source).toContain(
     'runControlVerb(sessionId: SessionId, verb: RunControlVerbMessage): void',
   )
   // P4-6b — session-action verb sender rides its own fixed channel (HC3).
-  expect(source).toContain(
-    "const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'",
+  expect(channels).toContain(
+    "export const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'",
   )
   expect(source).toContain(
     'sessionActionVerb(sessionId: SessionId, verb: SessionActionVerbMessage): void',
   )
   // Context-breakdown refresh sender rides its own fixed channel (HC3). Carries
   // only a requestId: the analysis reads engine-side state exclusively.
-  expect(source).toContain(
-    "const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'",
+  expect(channels).toContain(
+    "export const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'",
   )
   expect(source).toContain('contextBreakdownVerb(')
   // Load-earlier read sender rides its own fixed channel (HC3). Carries only a
   // requestId: the sidecar owns which transcript is read and how much of it.
-  expect(source).toContain(
-    "const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'",
+  expect(channels).toContain(
+    "export const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'",
   )
   expect(source).toContain('loadEarlierHistory(')
   // P4-8b — task-control (worker Stop/kill) verb sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'")
+  expect(channels).toContain("export const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'")
   expect(source).toContain(
     'taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void',
   )
   // SESSIONS-UNIFICATION (2026-07-20) — open-from-history sender rides its own
   // fixed channel (HC3). The renderer carries only an engine session id.
-  expect(source).toContain(
-    "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  expect(channels).toContain(
+    "export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
   expect(source).toContain('openHistorySession(')
   // 20 frame-plane senders (including the fixed metadata-only delivery ack; no
@@ -96,97 +105,129 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   // subscribe / subscribeHost register a listener and send no payload, so they do
   // NOT (and must not) call the guard.
   // Usage stats query sender rides its own fixed channel (HC3).
-  expect(source).toContain("const CH_STATS_QUERY = 'catcode:stats-query'")
+  expect(channels).toContain("export const CH_STATS_QUERY = 'catcode:stats-query'")
   expect(source).toContain('queryStats(')
   // IDLE-PARK §4(b) — the visible-pane hint is a fixed one-way sender like the
   // rest, guarded here and re-validated at main (`parseVisibleSessions`).
-  expect(source).toContain(
-    "const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
+  expect(channels).toContain(
+    "export const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'",
   )
   expect(source).toContain('reportVisibleSessions(sessionIds: SessionId[]): void')
   // The appearance sender (2026-08-27). Fixed and one-way like the rest,
   // narrowed here to the three-value choice and re-validated at main, which is
   // the boundary (`app/main/appearanceChannel.test.ts`).
-  expect(source).toContain("const CH_SET_APPEARANCE = 'catcode:set-appearance'")
+  expect(channels).toContain("export const CH_SET_APPEARANCE = 'catcode:set-appearance'")
   expect(source).toContain(
     "setAppearance(scheme: 'system' | 'light' | 'dark'): void",
   )
   // Glass mode is the other window-only, fixed sender. It carries a boolean
   // preference and main persists it so renderer-free paint gaps retain an opaque
   // background when glass is off.
-  expect(source).toContain("const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'")
+  expect(channels).toContain("export const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'")
   expect(source).toContain('setGlassMode(enabled: boolean): void')
   // PEER-SESSIONS §6 — the user's "don't let peers reopen this session" decision.
   // Fixed channel like the rest; it carries an existing session id and a boolean
   // and reaches no engine, and main re-validates both arguments.
-  expect(source).toContain(
-    "const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
+  expect(channels).toContain(
+    "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
   expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(45)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
-  expect(source).toContain("const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
+  expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
     'recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void',
   )
-  expect(source).toContain("const CH_PROMPT_FORCE = 'catcode:prompt-force'")
+  expect(channels).toContain("export const CH_PROMPT_FORCE = 'catcode:prompt-force'")
   expect(source).toContain(
     'forcePrompt(sessionId: SessionId, verb: PromptForceMessage): void',
   )
-  expect(source).toContain("const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
+  expect(channels).toContain("export const CH_DELIVERY_ACK = 'catcode:delivery-ack'")
   expect(source).toContain('deliveryAck(sessionId, sequence, deliveryAttempt, streamEpoch, traceId, stage): void')
-  expect(source).toContain("const CH_OPEN_LOGS = 'catcode:open-logs'")
-  expect(source).toContain(
-    "const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
+  expect(channels).toContain("export const CH_OPEN_LOGS = 'catcode:open-logs'")
+  expect(channels).toContain(
+    "export const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
   )
   expect(source).toContain('refreshAccountsPool(): void')
-  expect(source).toContain("const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'")
+  expect(channels).toContain("export const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'")
   expect(source).toContain("const CH_DEBUG_SHELL_STATE = 'catcode:debug:shell-state'")
   expect(source).toContain('reportDebugShellState')
   expect(source).toContain('pickDirectory(activeSessionId?: SessionId | null)')
-  expect(source).toContain(
-    "const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
+  expect(channels).toContain(
+    "export const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
   )
-  expect(source).toContain(
-    "const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
+  expect(channels).toContain(
+    "export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
   )
   expect(source).toContain('openWorkspaceFile(')
   expect(source).toContain('target?: OpenWorkspaceFileTarget')
 })
 
+// The two ends of every channel used to be two hand-copied lists of the same 47
+// literals. A one-character drift in either sent a renderer verb to a channel
+// nobody listened on, and nothing anywhere reported it: no error, no log, just a
+// dead button. Both ends now import the one list, so that drift is a compile
+// error, and this test holds the arrangement in place.
+test('preload and main ride one shared channel list, not two hand-copied ones', () => {
+  const channels = readChannelNames()
+  const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+
+  const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
+    match => match[1],
+  )
+  expect(names.length).toBe(47)
+
+  for (const source of [preload, main]) {
+    expect(source).toContain("} from '../shared/ipcChannels.js'")
+    // Nothing retypes a channel name locally. The DEV-only debug-state sender is
+    // the single exception: it stays a literal inside the preload's harness
+    // block so the packaged bundle carries no `catcode:debug:` string at all
+    // (`preloadBundle.test.ts`), and main reads it from `debugState.ts`.
+    const local = [...source.matchAll(/^const (CH_[A-Z_0-9]+) = '/gm)].map(
+      match => match[1],
+    )
+    expect(local).toEqual([])
+    for (const name of names) {
+      expect(new RegExp(`\\b${name}\\b`).test(source)).toBe(true)
+    }
+  }
+})
+
 test('control-plane senders are fixed per-method channels (HC3), no generic invoke', () => {
   const source = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const channels = readChannelNames()
 
   // The seven host/control-plane methods each ride a FIXED channel constant.
-  expect(source).toContain("const CH_HOST_CREATE = 'catcode:host:create'")
-  expect(source).toContain(
-    "const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'",
+  expect(channels).toContain("export const CH_HOST_CREATE = 'catcode:host:create'")
+  expect(channels).toContain(
+    "export const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'",
   )
-  expect(source).toContain("const CH_HOST_RESTORE = 'catcode:host:restore'")
-  expect(source).toContain("const CH_HOST_CLOSE = 'catcode:host:close'")
-  expect(source).toContain(
-    "const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
+  expect(channels).toContain("export const CH_HOST_RESTORE = 'catcode:host:restore'")
+  expect(channels).toContain("export const CH_HOST_CLOSE = 'catcode:host:close'")
+  expect(channels).toContain(
+    "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
-  expect(source).toContain("const CH_HOST_LIST = 'catcode:host:list'")
-  expect(source).toContain("const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
-  expect(source).toContain(
-    "const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'",
+  expect(channels).toContain("export const CH_HOST_LIST = 'catcode:host:list'")
+  expect(channels).toContain("export const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'")
+  expect(channels).toContain(
+    "export const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'",
   )
-  expect(source).toContain("const CH_HOST_PREVIEW = 'catcode:host:preview'")
+  expect(channels).toContain("export const CH_HOST_PREVIEW = 'catcode:host:preview'")
   // P4-35 — the file sink rides its own fixed channel (HC3). The renderer carries
   // text plus a name suggestion; main owns the destination (HC1).
-  expect(source).toContain("const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'")
-  expect(source).toContain(
-    "const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
+  expect(channels).toContain("export const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'")
+  expect(channels).toContain(
+    "export const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'",
   )
   // F2 — read-only cold-launch sessions-catalog baseline rides its own fixed channel.
-  expect(source).toContain(
-    "const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
+  expect(channels).toContain(
+    "export const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'",
   )
-  expect(source).toContain(
-    "const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
+  expect(channels).toContain(
+    "export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
-  expect(source).toContain("const CH_HOST_EVENT = 'catcode:host:event'")
+  expect(channels).toContain("export const CH_HOST_EVENT = 'catcode:host:event'")
 
   // Comments are stripped once, up front, and every scan below reads the result.
   // One comment in preload.ts QUOTES `ipcRenderer.invoke(` as prose, and the

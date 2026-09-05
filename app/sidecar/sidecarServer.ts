@@ -2891,16 +2891,8 @@ export class SidecarServer {
       return
     }
 
-    if (!this.permissions) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'permission domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const permissions = this.requireDomain(connection, parsed.data.requestId, this.permissions, 'permission')
+    if (!permissions) return
 
     // `bypassPermissions` is an escalation beyond the renderer-mediated
     // permission flow. The renderer may request it only when the trusted
@@ -2908,7 +2900,7 @@ export class SidecarServer {
     // able to grant that capability by sending this frame.
     if (
       parsed.data.mode === 'bypassPermissions' &&
-      this.permissions.getToolPermissionContext().isBypassPermissionsModeAvailable !== true
+      permissions.getToolPermissionContext().isBypassPermissionsModeAvailable !== true
     ) {
       this.sendError(
         connection,
@@ -2921,7 +2913,7 @@ export class SidecarServer {
     }
 
     try {
-      this.permissions.setMode(parsed.data.mode)
+      permissions.setMode(parsed.data.mode)
     } catch (error) {
       this.sendError(
         connection,
@@ -2962,6 +2954,25 @@ export class SidecarServer {
     return parsed.data
   }
 
+  /**
+   * The domain-presence half the same handlers share, run AFTER the verb's own
+   * schema. A null domain is one the engine did not construct for this session,
+   * so the frame was valid and there is simply nothing behind it: that is an
+   * internal_error, never a bad_request. Each caller passes its OWN domain and
+   * names it - what is shared here is the reporting, not the check.
+   */
+  private requireDomain<D>(
+    connection: Connection,
+    requestId: string | undefined,
+    domain: D | null,
+    name: string,
+  ): D | null {
+    if (domain !== null) return domain
+    const unavailable = `${name} domain unavailable for this session`
+    this.sendError(connection, requestId, 'internal_error', unavailable, false)
+    return null
+  }
+
   private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
     const parsed = this.parseVerbMessage(connection, rawMessage, statsQueryMessageSchema, 'invalid stats query')
     if (!parsed) {
@@ -2986,16 +2997,8 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.accounts) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'accounts domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const accounts = this.requireDomain(connection, parsed.requestId, this.accounts, 'accounts')
+    if (!accounts) return
 
     // The verb is now structurally valid; the domain owns the pool-resolved
     // business rules + dispatch. Errors there degrade to an ok:false result
@@ -3003,7 +3006,7 @@ export class SidecarServer {
     const verb = parsed as AccountVerbMessage
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
-    void this.accounts
+    void accounts
       .runVerb(verb)
       .then(({ verb: verbType, result, poolChanged }) => {
         this.send(connection, {
@@ -3095,18 +3098,10 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.workspaceTrust) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'workspace-trust domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const workspaceTrust = this.requireDomain(connection, parsed.requestId, this.workspaceTrust, 'workspace-trust')
+    if (!workspaceTrust) return
 
-    const result = this.workspaceTrust.acceptTrust()
+    const result = workspaceTrust.acceptTrust()
     this.send(connection, {
       kind: 'workspace.trust.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -3135,18 +3130,10 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.agentMode) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'agent-mode domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const agentMode = this.requireDomain(connection, parsed.requestId, this.agentMode, 'agent-mode')
+    if (!agentMode) return
 
-    const result = this.agentMode.setActive(parsed.active)
+    const result = agentMode.setActive(parsed.active)
     this.send(connection, {
       kind: 'agent-mode.set.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -3189,26 +3176,18 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.taskControl) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'task-control domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const taskControl = this.requireDomain(connection, parsed.requestId, this.taskControl, 'task-control')
+    if (!taskControl) return
 
     const verb = parsed as TaskControlVerbMessage
     const result =
       verb.type === 'task.background'
-        ? await this.taskControl.background()
+        ? await taskControl.background()
         : verb.type === 'task.background.one'
-          ? await this.taskControl.backgroundOne(verb.toolUseId)
+          ? await taskControl.backgroundOne(verb.toolUseId)
           : verb.type === 'task.dismiss'
             ? await this.dismissWorker(verb.taskId)
-            : await this.taskControl.stop(verb.taskId)
+            : await taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -3276,28 +3255,20 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.runControls) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'run-controls domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const runControls = this.requireDomain(connection, parsed.requestId, this.runControls, 'run-controls')
+    if (!runControls) return
 
     const verb = parsed as RunControlVerbMessage
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':
-        result = this.runControls.setModel(verb.model)
+        result = runControls.setModel(verb.model)
         break
       case 'effort.set':
-        result = this.runControls.setEffort(verb.effort)
+        result = runControls.setEffort(verb.effort)
         break
       case 'fast.set':
-        result = this.runControls.setFast(verb.active)
+        result = runControls.setFast(verb.active)
         break
     }
 
@@ -3336,19 +3307,10 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.sessionActions) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'session-actions domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const domain = this.requireDomain(connection, parsed.requestId, this.sessionActions, 'session-actions')
+    if (!domain) return
 
     const verb: SessionActionVerbMessage = parsed
-    const domain = this.sessionActions
     if (
       verb.type === 'session.editFromMessage' ||
       verb.type === 'session.branchFromMessage'
@@ -3655,19 +3617,11 @@ export class SidecarServer {
     if (!parsed) {
       return
     }
-    if (!this.remoteSettings) {
-      this.sendError(
-        connection,
-        parsed.requestId,
-        'internal_error',
-        'remote settings domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const remoteSettings = this.requireDomain(connection, parsed.requestId, this.remoteSettings, 'remote settings')
+    if (!remoteSettings) return
 
     const verb = parsed as RemoteVerbMessage
-    void this.remoteSettings
+    void remoteSettings
       .runVerb(verb)
       .then(({ verb: verbType, result, flagChanged }) => {
         this.send(connection, {
@@ -3726,20 +3680,12 @@ export class SidecarServer {
       return
     }
 
-    if (!this.settings) {
-      this.sendError(
-        connection,
-        verb.requestId,
-        'internal_error',
-        'settings domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const settings = this.requireDomain(connection, verb.requestId, this.settings, 'settings')
+    if (!settings) return
 
     let result: { ok: boolean; message: string; changed: boolean }
     try {
-      result = this.settings.runVerb(verb)
+      result = settings.runVerb(verb)
     } catch (error) {
       this.sendError(
         connection,

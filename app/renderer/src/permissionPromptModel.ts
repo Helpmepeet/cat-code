@@ -157,27 +157,6 @@ function formatRules(update: Extract<PermissionUpdate, { rules: unknown }>): str
     .join(', ')
 }
 
-export function describeSuggestion(update: PermissionUpdate): string {
-  switch (update.type) {
-    case 'addRules':
-    case 'replaceRules':
-    case 'removeRules': {
-      const rules = formatRules(update)
-      return `${update.behavior} ${rules} · ${destinationLabel(update.destination)}`
-    }
-    case 'setMode':
-      return `mode → ${permissionModeTitle(update.mode)} · ${destinationLabel(update.destination)}`
-    case 'addDirectories':
-    case 'removeDirectories':
-      return `${update.type === 'addDirectories' ? 'allow' : 'remove'} directory ${update.directories.join(', ')} · ${destinationLabel(update.destination)}`
-    default: {
-      const _exhaustive: never = update
-      void _exhaustive
-      return 'this permission change'
-    }
-  }
-}
-
 /**
  * How a non-allow rule suggestion leads its row. `behavior` is the one engine
  * enum this module used to print raw, which produced rows reading "Yes, and

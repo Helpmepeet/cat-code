@@ -8,7 +8,6 @@ import {
 import {
   buildChangeLines,
   buildPermissionOptions,
-  describeSuggestion,
   formatPermissionInput,
   permissionKeyIntent,
   permissionKeysAreLive,
@@ -697,130 +696,6 @@ test('renders a rule row per ENGINE-minted suggestion, verbatim', () => {
   expect(html).toContain('Why: rule requires confirmation')
   // The rule is a ROW in the list, numbered between Yes and the refusal.
   expect(html).toContain('>3<')
-})
-
-test('describeSuggestion renders the engine rule idiom for every update type', () => {
-  expect(
-    describeSuggestion({
-      type: 'addRules',
-      rules: [{ toolName: 'Bash', ruleContent: 'npm test:*' }, { toolName: 'Read' }],
-      behavior: 'allow',
-      destination: 'localSettings',
-    }),
-  ).toBe('allow Bash(npm test:*), Read · Project settings (local)')
-  expect(
-    describeSuggestion({
-      type: 'setMode',
-      mode: 'acceptEdits',
-      destination: 'session',
-    }),
-  ).toBe('mode → Accept edits · This session')
-  expect(
-    describeSuggestion({
-      type: 'addDirectories',
-      directories: ['/tmp/x'],
-      destination: 'session',
-    }),
-  ).toBe('allow directory /tmp/x · This session')
-})
-
-test('describeSuggestion never puts a settings-file identifier in the button text', () => {
-  // The button is user text: it used to end in the raw destination key
-  // (`localSettings`), and its unreachable arm printed a JSON blob.
-  const everyDestination = (
-    ['userSettings', 'projectSettings', 'localSettings', 'session', 'cliArg'] as const
-  ).map(destination =>
-    describeSuggestion({
-      type: 'addRules',
-      rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
-      behavior: 'allow',
-      destination,
-    }),
-  )
-  for (const text of everyDestination) {
-    expect(text).not.toContain('Settings')
-    expect(text).not.toContain('cliArg')
-    expect(text).not.toContain('{')
-  }
-  expect(everyDestination).toEqual([
-    'allow Bash(date:*) · User settings',
-    'allow Bash(date:*) · Project settings',
-    'allow Bash(date:*) · Project settings (local)',
-    'allow Bash(date:*) · This session',
-    'allow Bash(date:*) · This session',
-  ])
-  // Every engine mode reads as the name this app shows in its own mode picker.
-  const modes = (
-    ['default', 'acceptEdits', 'plan', 'dontAsk', 'bypassPermissions'] as const
-  ).map(mode => describeSuggestion({ type: 'setMode', mode, destination: 'session' }))
-  expect(modes).toEqual([
-    'mode → Ask permissions · This session',
-    'mode → Accept edits · This session',
-    'mode → Plan mode · This session',
-    "mode → Don't ask · This session",
-    'mode → Bypass permissions · This session',
-  ])
-})
-
-test('describeSuggestion covers every PermissionUpdate variant mirrored by the schema', () => {
-  // PermissionUpdate: src/types/permissions.ts:98-131; schema mirror:
-  // src/utils/permissions/PermissionUpdateSchema.ts:42-78.
-  // addRules — src/types/permissions.ts:100
-  expect(
-    describeSuggestion({
-      type: 'addRules',
-      destination: 'localSettings',
-      rules: [{ toolName: 'Bash', ruleContent: 'date:*' }],
-      behavior: 'allow',
-    }),
-  ).toBe('allow Bash(date:*) · Project settings (local)')
-
-  // replaceRules — src/types/permissions.ts:106
-  expect(
-    describeSuggestion({
-      type: 'replaceRules',
-      destination: 'projectSettings',
-      rules: [{ toolName: 'Read' }],
-      behavior: 'ask',
-    }),
-  ).toBe('ask Read · Project settings')
-
-  // removeRules — src/types/permissions.ts:112
-  expect(
-    describeSuggestion({
-      type: 'removeRules',
-      destination: 'userSettings',
-      rules: [{ toolName: 'Write', ruleContent: '/tmp/**' }],
-      behavior: 'deny',
-    }),
-  ).toBe('deny Write(/tmp/**) · User settings')
-
-  // setMode — src/types/permissions.ts:118
-  expect(
-    describeSuggestion({
-      type: 'setMode',
-      destination: 'session',
-      mode: 'acceptEdits',
-    }),
-  ).toBe('mode → Accept edits · This session')
-
-  // addDirectories — src/types/permissions.ts:123
-  expect(
-    describeSuggestion({
-      type: 'addDirectories',
-      destination: 'session',
-      directories: ['/tmp/x'],
-    }),
-  ).toBe('allow directory /tmp/x · This session')
-
-  // removeDirectories — src/types/permissions.ts:128
-  expect(
-    describeSuggestion({
-      type: 'removeDirectories',
-      destination: 'cliArg',
-      directories: ['/tmp/y', '/tmp/z'],
-    }),
-  ).toBe('remove directory /tmp/y, /tmp/z · This session')
 })
 
 test('promotes the field each tool own renderToolUseMessage promotes', () => {

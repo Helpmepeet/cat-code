@@ -211,6 +211,10 @@ export function AgentStateLabel({
  * `agentTranscriptStateWord` output in mono, toned by the same state vocabulary
  * `AgentStateLabel` uses. Pairs with a leading `AgentPip` where the host wants a
  * dot; on its own it is just the word.
+ *
+ * NOT RENDERED ANYWHERE, and kept on the same ruling as `AgentRoleDot` above:
+ * parity-ledger row plus a design-system-sync pin by name
+ * (`.design-sync/config.json` `componentSrcMap`). Not dead code to sweep.
  */
 export function AgentStateWord({ state }: { state: AgentStateKey }) {
   const tone = AGENT_STATE_TONE_CLASS[agentStateMeta(state).tone]
@@ -281,10 +285,18 @@ export function AgentActionButton({
 
 /**
  * Orchestrator-mode marker (the prototype's `OrchestratorBadge`,
- * OrchestratorMode.jsx:410-417). It rides the session TAB next to the title
- * (B1) because the chat pane deliberately has no header, and with `onToggle` it
- * IS the mode switch (M1) — the switch must stay reachable once the transcript
- * has messages, which the empty-state reflect could not do.
+ * OrchestratorMode.jsx:410-417).
+ *
+ * NOT RENDERED ANYWHERE, and kept for the same two reasons `AgentRoleDot` above
+ * is: it is this row's prototype element in the parity ledger, and it is one of
+ * the eleven exports the design-system sync pins BY NAME
+ * (`.design-sync/config.json` `componentSrcMap`). Deleting it flips a built
+ * parity row to unbuilt and breaks that sync, which is the operator's call, not
+ * a sweep item. (This comment used to say the badge "rides the session TAB next
+ * to the title (B1)" and "with `onToggle` it IS the mode switch (M1)"; the tab
+ * placement was removed on operator ruling, and what actually renders in the
+ * empty state is `OrchestratorReflect`, `WelcomeScreen.tsx:474`. Two reviews
+ * chased that stale placement claim.)
  *
  * Off + interactive collapses to the icon alone: a lit "Orchestrator" pill on a
  * session that is not in the mode would name a state the user did not choose.

@@ -3,6 +3,7 @@ import type { AgentModeWorkerItem } from '../../shared/protocol.js'
 import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
+import { Glyph } from './SessionActionIcons.js'
 import type { PermissionRequest } from './permissionState.js'
 import {
   buildPermissionOptions,
@@ -557,7 +558,7 @@ function OptionRow({
 
 /**
  * The kicker glyph for a tool family, on the house icon idiom
- * (`SessionActionIcons.tsx`): a 15px stroke glyph inheriting `currentColor`, so
+ * (`SessionActionIcons.tsx`): a stroke glyph inheriting `currentColor`, so
  * the accent on the kicker row carries it. The prototype's per-variant icon set
  * (`Permissions.jsx:32-46`) reduced to the families the preview switch knows;
  * everything else takes the shield its fallback uses.
@@ -577,58 +578,45 @@ function KickerIcon({
       // The prototype's worker glyph (`Permissions.jsx:41`): a branch, the same
       // vocabulary the orchestrator surfaces use for a delegated agent.
       return (
-        <Glyph>
+        <KickerGlyph>
           <line x1="6" y1="3" x2="6" y2="15" />
           <circle cx="18" cy="6" r="3" />
           <circle cx="6" cy="18" r="3" />
           <path d="M18 9a9 9 0 0 1-9 9" />
-        </Glyph>
+        </KickerGlyph>
       )
     case 'Filesystem':
       return (
-        <Glyph>
+        <KickerGlyph>
           <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-        </Glyph>
+        </KickerGlyph>
       )
     case 'Web access':
       return (
-        <Glyph>
+        <KickerGlyph>
           <circle cx="12" cy="12" r="10" />
           <line x1="2" y1="12" x2="22" y2="12" />
           <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
-        </Glyph>
+        </KickerGlyph>
       )
     case 'Skill':
       return (
-        <Glyph>
+        <KickerGlyph>
           <path d="M12 3l1.9 6.1L20 11l-6.1 1.9L12 19l-1.9-6.1L4 11l6.1-1.9z" />
-        </Glyph>
+        </KickerGlyph>
       )
     default:
       return (
-        <Glyph>
+        <KickerGlyph>
           <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-        </Glyph>
+        </KickerGlyph>
       )
   }
 }
 
-function Glyph({ children }: { children: ReactNode }): ReactNode {
-  return (
-    <svg
-      aria-hidden
-      fill="none"
-      height="13"
-      stroke="currentColor"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      strokeWidth="1.9"
-      viewBox="0 0 24 24"
-      width="13"
-    >
-      {children}
-    </svg>
-  )
+/** The shared stroke grammar, at the 13px this kicker row draws it. */
+function KickerGlyph({ children }: { children: ReactNode }): ReactNode {
+  return <Glyph size={13}>{children}</Glyph>
 }
 
 /**

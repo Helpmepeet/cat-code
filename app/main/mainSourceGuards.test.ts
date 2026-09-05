@@ -124,9 +124,9 @@ test('the dev app name never depends on the userData path', () => {
 })
 
 test('the account-pool refresh channel has no payload and reuses the existing driver', () => {
-  expect(source).toContain(
-    "const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'",
-  )
+  // The literal itself is declared once, in `app/shared/ipcChannels.ts`, and
+  // imported at both ends; here only the handler shape is in question.
+  expect(source).toContain('CH_REFRESH_ACCOUNTS_POOL')
   const refresh = region(
     'ipcMain.on(CH_REFRESH_ACCOUNTS_POOL',
     'ipcMain.on(CH_OPEN_LOGS',

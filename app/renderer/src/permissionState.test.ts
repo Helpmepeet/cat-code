@@ -5,7 +5,6 @@ import {
   buildDenyResponse,
   createPermissionState,
   reducePermissionState,
-  selectAdditionalWorkingDirectories,
   selectLastPermissionMode,
   selectPermissionContext,
   selectPermissionQueue,
@@ -655,32 +654,6 @@ test('C3 — a reattach ready frame keeps the last snapshot until the next one l
   })
 
   expect(selectPermissionContext(state, 'session-1')).toEqual(CONTEXT_SNAPSHOT)
-})
-
-test('P4-14 — selectAdditionalWorkingDirectories reads the C3 context, [] before the first frame', () => {
-  let state = reducePermissionState(createPermissionState(), {
-    type: 'frame',
-    frame: readyFrame([], 'session-1'),
-  })
-  expect(selectAdditionalWorkingDirectories(state, 'session-1')).toEqual([])
-  expect(selectAdditionalWorkingDirectories(state, null)).toEqual([])
-
-  const withDirs = {
-    ...CONTEXT_SNAPSHOT,
-    additionalWorkingDirectories: [{ path: '/repo/other', source: 'cliArg' }],
-  }
-  state = reducePermissionState(state, {
-    type: 'frame',
-    frame: {
-      kind: 'permission.context',
-      protocolVersion: 1,
-      sessionId: 'session-1',
-      context: withDirs,
-    },
-  })
-  expect(selectAdditionalWorkingDirectories(state, 'session-1')).toEqual([
-    { path: '/repo/other', source: 'cliArg' },
-  ])
 })
 
 test('C1 — buildAllowResponse carries a suggestion SELECTION, never rule objects', () => {

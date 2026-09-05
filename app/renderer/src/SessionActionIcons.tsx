@@ -12,6 +12,11 @@
  * three verbs are a recorded §0 CUT (`sessionActions.ts:34-38`, no local engine
  * backing), so a glyph for them would be dead code for an unreachable row.
  *
+ * `Glyph` itself is exported for the same reason: it is the house stroke grammar,
+ * and a surface that redeclares it drifts away from this set silently. Glyphs
+ * drawn on that grammar by more than one surface live here too even when they are
+ * not menu verbs, which is why {@link ActionWarningIcon} sits alongside the verbs.
+ *
  * Components-only module: the renderer's Fast Refresh boundary (CLAUDE.md §3)
  * forbids a non-component export here, so the kind→glyph dispatch is the
  * `SessionActionIcon` component rather than an exported record.
@@ -237,8 +242,27 @@ export function ActionCloseIcon(): ReactNode {
   )
 }
 
-/** The one stroke/size grammar every glyph above shares (`SessionActions.jsx:12`). */
-function Glyph({
+/**
+ * The warning triangle the banner stack, the composer's auto-compact chip and the
+ * destructive settings dialog all draw. `size` is required because those surfaces
+ * ask for it at four different sizes and a default would hide the disagreement
+ * behind a call site that looks like it accepted one.
+ */
+export function ActionWarningIcon({ size }: { size: number }): ReactNode {
+  return (
+    <Glyph size={size} strokeWidth="2">
+      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+      <line x1="12" y1="9" x2="12" y2="13" />
+      <line x1="12" y1="17" x2="12.01" y2="17" />
+    </Glyph>
+  )
+}
+
+/**
+ * The one stroke/size grammar every glyph above shares (`SessionActions.jsx:12`),
+ * and the permission prompt's kicker glyph with them.
+ */
+export function Glyph({
   children,
   strokeWidth = '1.9',
   size = 15,

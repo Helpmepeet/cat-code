@@ -388,7 +388,7 @@ export class FrameReplayBuffer {
     // and only reaches `message_stop` later (`src/services/api/claude.ts`), while
     // the renderer's projector opens a stream on `message_start`, needs that id
     // for every later delta, and closes it on `message_stop`
-    // (`app/renderer/src/transcriptProjector.ts` `projectBatchStreamEvent`).
+    // (`app/renderer/src/transcriptProjector.ts` `projectStreamEvent`).
     // Compacting at the first `assistant` would therefore strip the
     // `message_start` a SECOND block's deltas require after a reload, and the
     // second block would stream into nothing. So the boundary is the stream's
