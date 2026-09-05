@@ -35,10 +35,22 @@ import type {
   UsageStatsDailyActivityItem,
   UsageStatsDailyModelTokens,
   UsageStatsModelUsageItem,
-  UsageStatsRange,
   UsageStatsSnapshot,
 } from './protocol.js'
 import { MAX_TEXT_FIELD_CHARS } from './limits.js'
+import {
+  isBoolean,
+  isFiniteNumber,
+  isNumber,
+  isNumberOrNull,
+  isRecord,
+  isString,
+  isStringOrNull,
+  isUnknownArray,
+  narrowExact,
+  oneOf,
+  optional,
+} from './narrow.js'
 
 export const ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION = 1
 
@@ -102,38 +114,26 @@ export type AccountsPoolWorkerResult =
 export function parseAccountDeleteMessage(
   value: unknown,
 ): AccountDeleteMessage | null {
-  if (!isRecord(value)) return null
-  if (!hasExactKeys(value, ['type', 'requestId', 'accountId', 'confirm'])) {
-    return null
-  }
-  if (value.type !== 'account.delete' || value.confirm !== true) return null
-  if (!isBoundedText(value.requestId) || !isBoundedText(value.accountId)) return null
-  return {
-    type: 'account.delete',
-    requestId: value.requestId,
-    accountId: value.accountId,
-    confirm: true,
-  }
+  return narrowExact(value, {
+    type: oneOf(['account.delete'] as const),
+    requestId: isBoundedText,
+    accountId: isBoundedText,
+    confirm: oneOf([true] as const),
+  })
 }
 
 export function parseAccountsPoolWorkerDeleteRequest(
   value: unknown,
 ): AccountsPoolWorkerDeleteRequest | null {
-  if (!isRecord(value)) return null
-  if (!hasExactKeys(value, ['type', 'version', 'verb'])) return null
-  if (
-    value.type !== 'account-delete' ||
-    value.version !== ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
-  ) {
-    return null
-  }
-  const verb = parseAccountDeleteMessage(value.verb)
+  const request = narrowExact(value, {
+    type: oneOf(['account-delete'] as const),
+    version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+    verb: isRecord,
+  })
+  if (!request) return null
+  const verb = parseAccountDeleteMessage(request.verb)
   if (!verb) return null
-  return {
-    type: 'account-delete',
-    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-    verb,
-  }
+  return { ...request, verb }
 }
 
 /**
@@ -181,67 +181,47 @@ export function parseAccountsPoolWorkerResult(
   if (!isRecord(value)) return null
   if (value.version !== ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION) return null
   if (value.type === 'account-delete') {
-    if (
-      !hasExactKeys(value, [
-        'type',
-        'version',
-        'requestId',
-        'verb',
-        'ok',
-        'message',
-        'pool',
-      ])
-    ) {
-      return null
-    }
-    if (
-      !isBoundedText(value.requestId) ||
-      value.verb !== 'account.delete' ||
-      typeof value.ok !== 'boolean' ||
-      !isBoundedText(value.message)
-    ) {
-      return null
-    }
-    const pool = parseAccountsSnapshot(value.pool)
+    const deletion = narrowExact(value, {
+      type: oneOf(['account-delete'] as const),
+      version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+      requestId: isBoundedText,
+      verb: oneOf(['account.delete'] as const),
+      ok: isBoolean,
+      message: isBoundedText,
+      pool: isRecord,
+    })
+    if (!deletion) return null
+    const pool = parseAccountsSnapshot(deletion.pool)
     if (!pool) return null
-    return {
-      type: 'account-delete',
-      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-      requestId: value.requestId,
-      verb: 'account.delete',
-      ok: value.ok,
-      message: value.message,
-      pool,
-    }
+    return { ...deletion, pool }
   }
   if (value.type === 'failure') {
-    if (!hasExactKeys(value, ['type', 'version', 'reason'])) return null
-    if (value.reason !== 'internal') return null
-    return {
-      type: 'failure',
-      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
-      reason: 'internal',
-    }
+    return narrowExact(value, {
+      type: oneOf(['failure'] as const),
+      version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+      reason: oneOf(['internal'] as const),
+    })
   }
   if (value.type !== 'pool') return null
-  // `usageStats` is optional (see the field's doc): accept the record with OR
-  // without it, but no OTHER key — the closed-vocabulary gate stands. A PRESENT
-  // malformed value is malformed child output and fails the WHOLE record.
-  if (
-    !hasExactKeys(value, ['type', 'version', 'pool', 'usageStats']) &&
-    !hasExactKeys(value, ['type', 'version', 'pool'])
-  ) {
-    return null
-  }
-  const pool = parseAccountsSnapshot(value.pool)
+  const record = narrowExact(value, {
+    type: oneOf(['pool'] as const),
+    version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+    pool: isRecord,
+    // `usageStats` is optional (see the field's doc): accept the record with OR
+    // without it, but no OTHER key — the closed-vocabulary gate stands. A PRESENT
+    // malformed value is malformed child output and fails the WHOLE record.
+    usageStats: optional(isRecord),
+  })
+  if (!record) return null
+  const pool = parseAccountsSnapshot(record.pool)
   if (!pool) return null
   const result: AccountsPoolWorkerResult = {
     type: 'pool',
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
     pool,
   }
-  if (value.usageStats !== undefined) {
-    const usageStats = parseUsageStatsByRange(value.usageStats)
+  if (record.usageStats !== undefined) {
+    const usageStats = parseUsageStatsByRange(record.usageStats)
     if (!usageStats) return null
     result.usageStats = usageStats
   }
@@ -255,10 +235,10 @@ export function parseAccountsPoolWorkerResult(
  * renderer keys by and would never re-check.
  */
 export function parseUsageStatsByRange(value: unknown): UsageStatsByRange | null {
-  if (!isRecord(value)) return null
-  if (!hasExactKeys(value, ['7d', '30d'])) return null
-  const sevenDay = parseUsageStatsSnapshot(value['7d'])
-  const thirtyDay = parseUsageStatsSnapshot(value['30d'])
+  const ranges = narrowExact(value, { '7d': isRecord, '30d': isRecord })
+  if (!ranges) return null
+  const sevenDay = parseUsageStatsSnapshot(ranges['7d'])
+  const thirtyDay = parseUsageStatsSnapshot(ranges['30d'])
   if (!sevenDay || !thirtyDay) return null
   if (sevenDay.range !== '7d' || thirtyDay.range !== '30d') return null
   return { '7d': sevenDay, '30d': thirtyDay }
@@ -272,74 +252,46 @@ export function parseUsageStatsByRange(value: unknown): UsageStatsByRange | null
  * through would poison every chart axis it divides.
  */
 export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | null {
-  if (!isRecord(value)) return null
-  if (
-    !hasExactKeys(value, [
-      'range',
-      'totalTokens',
-      'dailyModelTokens',
-      'modelUsage',
-      'dailyActivity',
-      'cacheHitRate',
-      'cacheReadTokens',
-      'cacheWriteTokens',
-      'freshInputTokens',
-      'totalSessions',
-      'totalMessages',
-      'activeDays',
-    ])
-  ) {
-    return null
-  }
-  const range = value.range
-  if (!isUsageStatsRange(range)) return null
-  if (!isFiniteNumber(value.totalTokens)) return null
-  if (!isFiniteNumber(value.cacheHitRate)) return null
-  if (!isFiniteNumber(value.cacheReadTokens)) return null
-  if (!isFiniteNumber(value.cacheWriteTokens)) return null
-  if (!isFiniteNumber(value.freshInputTokens)) return null
-  if (!isFiniteNumber(value.totalSessions)) return null
-  if (!isFiniteNumber(value.totalMessages)) return null
-  if (!isFiniteNumber(value.activeDays)) return null
+  const snapshot = narrowExact(value, {
+    range: oneOf(['7d', '30d'] as const),
+    totalTokens: isFiniteNumber,
+    dailyModelTokens: isUnknownArray,
+    modelUsage: isRecord,
+    dailyActivity: isUnknownArray,
+    cacheHitRate: isFiniteNumber,
+    cacheReadTokens: isFiniteNumber,
+    cacheWriteTokens: isFiniteNumber,
+    freshInputTokens: isFiniteNumber,
+    totalSessions: isFiniteNumber,
+    totalMessages: isFiniteNumber,
+    activeDays: isFiniteNumber,
+  })
+  if (!snapshot) return null
 
-  if (!Array.isArray(value.dailyModelTokens)) return null
   const dailyModelTokens: UsageStatsDailyModelTokens[] = []
-  for (const candidate of value.dailyModelTokens) {
-    if (!isRecord(candidate)) return null
-    if (!hasExactKeys(candidate, ['date', 'tokensByModel'])) return null
-    if (typeof candidate.date !== 'string') return null
-    const tokensByModel = parseNumberMap(candidate.tokensByModel)
-    if (!tokensByModel) return null
-    dailyModelTokens.push({ date: candidate.date, tokensByModel })
-  }
-
-  if (!Array.isArray(value.dailyActivity)) return null
-  const dailyActivity: UsageStatsDailyActivityItem[] = []
-  for (const candidate of value.dailyActivity) {
-    if (!isRecord(candidate)) return null
-    if (
-      !hasExactKeys(candidate, [
-        'date',
-        'messageCount',
-        'sessionCount',
-        'toolCallCount',
-      ])
-    ) {
-      return null
-    }
-    if (typeof candidate.date !== 'string') return null
-    if (!isFiniteNumber(candidate.messageCount)) return null
-    if (!isFiniteNumber(candidate.sessionCount)) return null
-    if (!isFiniteNumber(candidate.toolCallCount)) return null
-    dailyActivity.push({
-      date: candidate.date,
-      messageCount: candidate.messageCount,
-      sessionCount: candidate.sessionCount,
-      toolCallCount: candidate.toolCallCount,
+  for (const candidate of snapshot.dailyModelTokens) {
+    const row = narrowExact(candidate, {
+      date: isString,
+      tokensByModel: isRecord,
     })
+    if (!row) return null
+    const tokensByModel = parseNumberMap(row.tokensByModel)
+    if (!tokensByModel) return null
+    dailyModelTokens.push({ date: row.date, tokensByModel })
   }
 
-  if (!isRecord(value.modelUsage)) return null
+  const dailyActivity: UsageStatsDailyActivityItem[] = []
+  for (const candidate of snapshot.dailyActivity) {
+    const row = narrowExact(candidate, {
+      date: isString,
+      messageCount: isFiniteNumber,
+      sessionCount: isFiniteNumber,
+      toolCallCount: isFiniteNumber,
+    })
+    if (!row) return null
+    dailyActivity.push(row)
+  }
+
   // `Object.create(null)`, not `{}`: model names come from transcript files, and
   // a key of `__proto__` survives `JSON.parse` as an enumerable own property.
   // Assigning it into an object literal invokes the prototype SETTER, so the row
@@ -349,46 +301,18 @@ export function parseUsageStatsSnapshot(value: unknown): UsageStatsSnapshot | nu
   // has to guarantee.
   const modelUsage: Record<string, UsageStatsModelUsageItem> =
     Object.create(null)
-  for (const [model, candidate] of Object.entries(value.modelUsage)) {
-    if (!isRecord(candidate)) return null
-    if (
-      !hasExactKeys(candidate, [
-        'inputTokens',
-        'outputTokens',
-        'cacheCreationInputTokens',
-        'cacheReadInputTokens',
-      ])
-    ) {
-      return null
-    }
-    if (!isFiniteNumber(candidate.inputTokens)) return null
-    if (!isFiniteNumber(candidate.outputTokens)) return null
-    if (!isFiniteNumber(candidate.cacheCreationInputTokens)) return null
-    if (!isFiniteNumber(candidate.cacheReadInputTokens)) return null
-    modelUsage[model] = {
-      inputTokens: candidate.inputTokens,
-      outputTokens: candidate.outputTokens,
-      cacheCreationInputTokens: candidate.cacheCreationInputTokens,
-      cacheReadInputTokens: candidate.cacheReadInputTokens,
-    }
+  for (const [model, candidate] of Object.entries(snapshot.modelUsage)) {
+    const row = narrowExact(candidate, {
+      inputTokens: isFiniteNumber,
+      outputTokens: isFiniteNumber,
+      cacheCreationInputTokens: isFiniteNumber,
+      cacheReadInputTokens: isFiniteNumber,
+    })
+    if (!row) return null
+    modelUsage[model] = row
   }
 
-  // Field-by-field so the return is a real `UsageStatsSnapshot`, no `as` on the
-  // untrusted worker output (each read above narrowed its field).
-  return {
-    range,
-    totalTokens: value.totalTokens,
-    dailyModelTokens,
-    modelUsage,
-    dailyActivity,
-    cacheHitRate: value.cacheHitRate,
-    cacheReadTokens: value.cacheReadTokens,
-    cacheWriteTokens: value.cacheWriteTokens,
-    freshInputTokens: value.freshInputTokens,
-    totalSessions: value.totalSessions,
-    totalMessages: value.totalMessages,
-    activeDays: value.activeDays,
-  }
+  return { ...snapshot, dailyModelTokens, modelUsage, dailyActivity }
 }
 
 function parseNumberMap(value: unknown): Record<string, number> | null {
@@ -402,230 +326,82 @@ function parseNumberMap(value: unknown): Record<string, number> | null {
   return out
 }
 
-function isUsageStatsRange(value: unknown): value is UsageStatsRange {
-  return value === '7d' || value === '30d'
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
-}
-
 /**
  * Fail-closed `AccountsSnapshot` validator. Exported so the boundary is the ONE
  * place the untrusted snapshot shape is narrowed; a single malformed row fails
  * the whole snapshot.
  */
 export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
-  if (!isRecord(value)) return null
-  const base = [
-    'accounts',
-    'activeAccountId',
-    'readyCount',
-    'poolCount',
-    'initialized',
-    'anthropicAccounts',
-    'anthropicActiveAccountId',
-    'anthropicReadyCount',
-    'anthropicPoolCount',
-    'anthropicInitialized',
-    'anthropicRouteAvailable',
-  ] as const
-  // `anthropicSubscriptionActive` is optional on the protocol type: accept the
-  // record with OR without it, but no OTHER key — the closed-vocabulary gate
-  // stands. A PRESENT non-boolean is malformed child output.
-  if (
-    !hasExactKeys(value, [...base, 'anthropicSubscriptionActive']) &&
-    !hasExactKeys(value, base)
-  ) {
-    return null
-  }
-  if (!isStringOrNull(value.activeAccountId)) return null
-  if (typeof value.readyCount !== 'number') return null
-  if (typeof value.poolCount !== 'number') return null
-  if (typeof value.initialized !== 'boolean') return null
-  if (!isStringOrNull(value.anthropicActiveAccountId)) return null
-  if (typeof value.anthropicReadyCount !== 'number') return null
-  if (typeof value.anthropicPoolCount !== 'number') return null
-  if (typeof value.anthropicInitialized !== 'boolean') return null
-  if (typeof value.anthropicRouteAvailable !== 'boolean') return null
-  if (
-    value.anthropicSubscriptionActive !== undefined &&
-    typeof value.anthropicSubscriptionActive !== 'boolean'
-  ) {
-    return null
-  }
-  if (!Array.isArray(value.accounts)) return null
-  if (!Array.isArray(value.anthropicAccounts)) return null
+  const snapshot = narrowExact(value, {
+    accounts: isUnknownArray,
+    activeAccountId: isStringOrNull,
+    readyCount: isNumber,
+    poolCount: isNumber,
+    initialized: isBoolean,
+    anthropicAccounts: isUnknownArray,
+    anthropicActiveAccountId: isStringOrNull,
+    anthropicReadyCount: isNumber,
+    anthropicPoolCount: isNumber,
+    anthropicInitialized: isBoolean,
+    anthropicRouteAvailable: isBoolean,
+    // `anthropicSubscriptionActive` is optional on the protocol type: accept the
+    // record with OR without it, but no OTHER key — the closed-vocabulary gate
+    // stands. A PRESENT non-boolean is malformed child output.
+    anthropicSubscriptionActive: optional(isBoolean),
+  })
+  if (!snapshot) return null
 
   const accounts: AccountStatus[] = []
-  for (const candidate of value.accounts) {
+  for (const candidate of snapshot.accounts) {
     const account = parseAccountStatus(candidate)
     if (!account) return null
     accounts.push(account)
   }
   const anthropicAccounts: AnthropicAccountStatus[] = []
-  for (const candidate of value.anthropicAccounts) {
+  for (const candidate of snapshot.anthropicAccounts) {
     const account = parseAnthropicAccountStatus(candidate)
     if (!account) return null
     anthropicAccounts.push(account)
   }
 
-  const snapshot: AccountsSnapshot = {
-    accounts,
-    activeAccountId: value.activeAccountId,
-    readyCount: value.readyCount,
-    poolCount: value.poolCount,
-    initialized: value.initialized,
-    anthropicAccounts,
-    anthropicActiveAccountId: value.anthropicActiveAccountId,
-    anthropicReadyCount: value.anthropicReadyCount,
-    anthropicPoolCount: value.anthropicPoolCount,
-    anthropicInitialized: value.anthropicInitialized,
-    anthropicRouteAvailable: value.anthropicRouteAvailable,
-  }
-  if (value.anthropicSubscriptionActive !== undefined) {
-    snapshot.anthropicSubscriptionActive = value.anthropicSubscriptionActive
-  }
-  return snapshot
+  return { ...snapshot, accounts, anthropicAccounts }
 }
 
 function parseAccountStatus(value: unknown): AccountStatus | null {
-  if (!isRecord(value)) return null
-  const baseKeys = [
-    'id',
-    'alias',
-    'status',
-    'statusReason',
-    'availability',
-    'availabilityLabel',
-    'isDefault',
-    'hasVaultProfile',
-    'source',
-    'usagePrimary',
-    'usageWeekly',
-    'usageLimitReached',
-    'usageResetAt',
-    'lastRefreshIso',
-    'lastError',
-    'planType',
-    'switchable',
-  ] as const
-  if (
-    !hasExactKeys(value, baseKeys) &&
-    !hasExactKeys(value, [...baseKeys, 'usageWeeklyResetAt'])
-  ) {
-    return null
-  }
-  if (typeof value.id !== 'string') return null
-  if (!isStringOrNull(value.alias)) return null
-  const status = value.status
-  if (
-    !(
-      status === 'healthy' ||
-      status === 'dead' ||
-      status === 'capped' ||
-      status === 'quarantined'
-    )
-  ) {
-    return null
-  }
-  if (!isStringOrNull(value.statusReason)) return null
-  const availability = value.availability
-  if (
-    !(
-      availability === 'available' ||
-      availability === 'warned' ||
-      availability === 'blocked'
-    )
-  ) {
-    return null
-  }
-  if (typeof value.availabilityLabel !== 'string') return null
-  if (typeof value.isDefault !== 'boolean') return null
-  if (typeof value.hasVaultProfile !== 'boolean') return null
-  const source = value.source
-  if (!(source === 'vault' || source === 'config')) return null
-  if (!isNumberOrNull(value.usagePrimary)) return null
-  if (!isNumberOrNull(value.usageWeekly)) return null
-  if (typeof value.usageLimitReached !== 'boolean') return null
-  if (!isNumberOrNull(value.usageResetAt)) return null
-  const usageWeeklyResetAt = value.usageWeeklyResetAt
-  if (
-    usageWeeklyResetAt !== undefined &&
-    !isNumberOrNull(usageWeeklyResetAt)
-  ) {
-    return null
-  }
-  if (!isStringOrNull(value.lastRefreshIso)) return null
-  if (!isStringOrNull(value.lastError)) return null
-  if (!isStringOrNull(value.planType)) return null
-  if (typeof value.switchable !== 'boolean') return null
-  // Field-by-field so the return is a real `AccountStatus`, no `as` on the
-  // untrusted worker output (each read above narrowed its field).
-  return {
-    id: value.id,
-    alias: value.alias,
-    status,
-    statusReason: value.statusReason,
-    availability,
-    availabilityLabel: value.availabilityLabel,
-    isDefault: value.isDefault,
-    hasVaultProfile: value.hasVaultProfile,
-    source,
-    usagePrimary: value.usagePrimary,
-    usageWeekly: value.usageWeekly,
-    usageLimitReached: value.usageLimitReached,
-    usageResetAt: value.usageResetAt,
-    ...(usageWeeklyResetAt !== undefined ? { usageWeeklyResetAt } : {}),
-    lastRefreshIso: value.lastRefreshIso,
-    lastError: value.lastError,
-    planType: value.planType,
-    switchable: value.switchable,
-  }
+  return narrowExact(value, {
+    id: isString,
+    alias: isStringOrNull,
+    status: oneOf(['healthy', 'dead', 'capped', 'quarantined'] as const),
+    statusReason: isStringOrNull,
+    availability: oneOf(['available', 'warned', 'blocked'] as const),
+    availabilityLabel: isString,
+    isDefault: isBoolean,
+    hasVaultProfile: isBoolean,
+    source: oneOf(['vault', 'config'] as const),
+    usagePrimary: isNumberOrNull,
+    usageWeekly: isNumberOrNull,
+    usageLimitReached: isBoolean,
+    usageResetAt: isNumberOrNull,
+    usageWeeklyResetAt: optional(isNumberOrNull),
+    lastRefreshIso: isStringOrNull,
+    lastError: isStringOrNull,
+    planType: isStringOrNull,
+    switchable: isBoolean,
+  })
 }
 
 function parseAnthropicAccountStatus(
   value: unknown,
 ): AnthropicAccountStatus | null {
-  if (!isRecord(value)) return null
-  if (
-    !hasExactKeys(value, [
-      'id',
-      'alias',
-      'email',
-      'status',
-      'isDefault',
-      'hasVaultProfile',
-      'subscriptionType',
-    ])
-  ) {
-    return null
-  }
-  if (typeof value.id !== 'string') return null
-  if (!isStringOrNull(value.alias)) return null
-  if (typeof value.email !== 'string') return null
-  const status = value.status
-  if (!(status === 'healthy' || status === 'dead')) return null
-  if (typeof value.isDefault !== 'boolean') return null
-  if (typeof value.hasVaultProfile !== 'boolean') return null
-  if (!isStringOrNull(value.subscriptionType)) return null
-  return {
-    id: value.id,
-    alias: value.alias,
-    email: value.email,
-    status,
-    isDefault: value.isDefault,
-    hasVaultProfile: value.hasVaultProfile,
-    subscriptionType: value.subscriptionType,
-  }
-}
-
-function isStringOrNull(value: unknown): value is string | null {
-  return typeof value === 'string' || value === null
-}
-
-function isNumberOrNull(value: unknown): value is number | null {
-  return typeof value === 'number' || value === null
+  return narrowExact(value, {
+    id: isString,
+    alias: isStringOrNull,
+    email: isString,
+    status: oneOf(['healthy', 'dead'] as const),
+    isDefault: isBoolean,
+    hasVaultProfile: isBoolean,
+    subscriptionType: isStringOrNull,
+  })
 }
 
 function isBoundedText(value: unknown): value is string {
@@ -634,18 +410,4 @@ function isBoundedText(value: unknown): value is string {
     value.length > 0 &&
     value.length <= MAX_TEXT_FIELD_CHARS
   )
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function hasExactKeys(
-  value: unknown,
-  expected: readonly string[],
-): value is Record<string, unknown> {
-  if (!isRecord(value)) return false
-  const actual = Object.keys(value).sort()
-  const wanted = [...expected].sort()
-  return actual.length === wanted.length && actual.every((key, i) => key === wanted[i])
 }

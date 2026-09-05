@@ -928,26 +928,18 @@ export class SessionRegistry {
     appSessionId: string,
     input: { enginePid?: number; socketPath?: string },
   ): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setAdvisoryRuntime: no row for ${appSessionId}`)
-      return
-    }
-    row.enginePid = input.enginePid
-    row.socketPath = input.socketPath
-    await this.persist()
+    await this.mutate('setAdvisoryRuntime', appSessionId, row => {
+      row.enginePid = input.enginePid
+      row.socketPath = input.socketPath
+    })
   }
 
   /** Fill `engineSessionId` on the ready frame (the two-id bridge, §2/§4.5). */
   async fillEngineSessionId(appSessionId: string, engineSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] fillEngineSessionId: no row for ${appSessionId}`)
-      return
-    }
-    row.engineSessionId = engineSessionId
-    row.lastAttachedAt = Date.now()
-    await this.persist()
+    await this.mutate('fillEngineSessionId', appSessionId, row => {
+      row.engineSessionId = engineSessionId
+      row.lastAttachedAt = Date.now()
+    })
   }
 
   /**
@@ -956,14 +948,10 @@ export class SessionRegistry {
    * from a newer engine-transcript rename (see `titleUpdatedAt` above).
    */
   async setTitle(appSessionId: string, title: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setTitle: no row for ${appSessionId}`)
-      return
-    }
-    row.title = title
-    row.titleUpdatedAt = Date.now()
-    await this.persist()
+    await this.mutate('setTitle', appSessionId, row => {
+      row.title = title
+      row.titleUpdatedAt = Date.now()
+    })
   }
 
   /**
@@ -976,18 +964,13 @@ export class SessionRegistry {
    * would leave a diff that `rowsEqual` reports as a change forever.
    */
   async setPeerWakeBlocked(appSessionId: string, blocked: boolean): Promise<boolean> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setPeerWakeBlocked: no row for ${appSessionId}`)
-      return false
-    }
-    if (blocked) {
-      row.peerWakeBlocked = true
-    } else {
-      delete row.peerWakeBlocked
-    }
-    await this.persist()
-    return true
+    return this.mutate('setPeerWakeBlocked', appSessionId, row => {
+      if (blocked) {
+        row.peerWakeBlocked = true
+      } else {
+        delete row.peerWakeBlocked
+      }
+    })
   }
 
   /**
@@ -1009,13 +992,9 @@ export class SessionRegistry {
 
   /** Heartbeat `lastAttachedAt` on attach (§4.5). */
   async touchAttached(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] touchAttached: no row for ${appSessionId}`)
-      return
-    }
-    row.lastAttachedAt = Date.now()
-    await this.persist()
+    await this.mutate('touchAttached', appSessionId, row => {
+      row.lastAttachedAt = Date.now()
+    })
   }
 
   /**
@@ -1027,13 +1006,9 @@ export class SessionRegistry {
    * a live (non-replay) turn-end frame.
    */
   async markMessageSent(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markMessageSent: no row for ${appSessionId}`)
-      return
-    }
-    row.lastMessageSentAt = Date.now()
-    await this.persist()
+    await this.mutate('markMessageSent', appSessionId, row => {
+      row.lastMessageSentAt = Date.now()
+    })
   }
 
   /**
@@ -1045,14 +1020,10 @@ export class SessionRegistry {
    * Advisory runtime fields are retained for restore-time prior-writer checks.
    */
   async markCrashed(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markCrashed: no row for ${appSessionId}`)
-      return
-    }
-    if (row.shutdown !== null) return
-    row.shutdown = 'crashed'
-    await this.persist()
+    await this.mutate('markCrashed', appSessionId, row => {
+      if (row.shutdown !== null) return false
+      row.shutdown = 'crashed'
+    })
   }
 
   /**
@@ -1066,14 +1037,10 @@ export class SessionRegistry {
    * `'crashed'` on the next disk read (`normalizeShutdown`).
    */
   async markParked(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markParked: no row for ${appSessionId}`)
-      return
-    }
-    if (row.shutdown !== null) return
-    row.shutdown = 'parked'
-    await this.persist()
+    await this.mutate('markParked', appSessionId, row => {
+      if (row.shutdown !== null) return false
+      row.shutdown = 'parked'
+    })
   }
 
   /**
@@ -1082,13 +1049,32 @@ export class SessionRegistry {
    * so restore can refuse if the old writer did not actually die.
    */
   async markClean(appSessionId: string): Promise<void> {
+    await this.mutate('markClean', appSessionId, row => {
+      row.shutdown = 'clean'
+    })
+  }
+
+  /**
+   * The find / log-if-missing / persist ladder every single-row mutator above
+   * repeats. `apply` returns false for a change the row does not need persisted
+   * (the already-terminal early-outs in `markCrashed` and `markParked`);
+   * anything else persists. The resolved boolean answers "was there a row",
+   * which is what `setPeerWakeBlocked`'s caller turns into `session_not_found`
+   * (HC2) rather than persisting nothing and reporting success.
+   */
+  private async mutate(
+    label: string,
+    appSessionId: string,
+    apply: (row: RegistrySession) => boolean | void,
+  ): Promise<boolean> {
     const row = this.find(appSessionId)
     if (!row) {
-      this.log(`[registry] markClean: no row for ${appSessionId}`)
-      return
+      this.log(`[registry] ${label}: no row for ${appSessionId}`)
+      return false
     }
-    row.shutdown = 'clean'
+    if (apply(row) === false) return true
     await this.persist()
+    return true
   }
 
   private find(appSessionId: string): RegistrySession | undefined {

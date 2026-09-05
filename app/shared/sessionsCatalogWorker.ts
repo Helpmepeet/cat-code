@@ -19,6 +19,19 @@ import type {
   SessionCatalogEntry,
   SessionsCatalogSnapshot,
 } from './protocol.js'
+import {
+  isBoolean,
+  isNumber,
+  isNumberOrNull,
+  isRecord,
+  isString,
+  isStringOrNull,
+  isUnknownArray,
+  narrowExact,
+  narrowOpen,
+  oneOf,
+  optional,
+} from './narrow.js'
 
 export const SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION = 1
 
@@ -61,23 +74,23 @@ export function parseSessionsCatalogWorkerResult(
   if (!isRecord(value)) return null
   if (value.version !== SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION) return null
   if (value.type === 'failure') {
-    if (!hasExactKeys(value, ['type', 'version', 'reason'])) return null
-    if (value.reason !== 'internal') return null
-    return {
-      type: 'failure',
-      version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
-      reason: 'internal',
-    }
+    const failure = narrowExact(value, {
+      type: oneOf(['failure'] as const),
+      version: oneOf([SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION] as const),
+      reason: oneOf(['internal'] as const),
+    })
+    return failure
   }
   if (value.type !== 'catalog') return null
-  if (!hasExactKeys(value, ['type', 'version', 'catalog'])) return null
-  const catalog = parseSessionsCatalogSnapshot(value.catalog)
+  const record = narrowExact(value, {
+    type: oneOf(['catalog'] as const),
+    version: oneOf([SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION] as const),
+    catalog: isRecord,
+  })
+  if (!record) return null
+  const catalog = parseSessionsCatalogSnapshot(record.catalog)
   if (!catalog) return null
-  return {
-    type: 'catalog',
-    version: SESSIONS_CATALOG_WORKER_BOUNDARY_VERSION,
-    catalog,
-  }
+  return { ...record, catalog }
 }
 
 /**
@@ -88,105 +101,67 @@ export function parseSessionsCatalogWorkerResult(
 export function parseSessionsCatalogSnapshot(
   value: unknown,
 ): SessionsCatalogSnapshot | null {
-  if (!isRecord(value)) return null
-  // `capturedAtMs` is additive (the terminal-rename title-precedence fix): accept
-  // the record with OR without it, but no OTHER key — the closed-vocabulary gate
-  // stands. Absent ⇒ 0 (unknown age ⇒ never outranks a registry title).
-  if (
-    !hasExactKeys(value, ['entries', 'truncated', 'capturedAtMs']) &&
-    !hasExactKeys(value, ['entries', 'truncated'])
-  ) {
-    return null
-  }
-  if (!Array.isArray(value.entries)) return null
-  if (typeof value.truncated !== 'boolean') return null
-  if (value.capturedAtMs !== undefined && typeof value.capturedAtMs !== 'number') {
-    return null
-  }
-  const capturedAtMs = value.capturedAtMs === undefined ? 0 : value.capturedAtMs
+  const snapshot = narrowExact(value, {
+    entries: isUnknownArray,
+    truncated: isBoolean,
+    // `capturedAtMs` is additive (the terminal-rename title-precedence fix):
+    // accept the record with OR without it, but no OTHER key — the
+    // closed-vocabulary gate stands. Absent ⇒ 0 (unknown age ⇒ never outranks a
+    // registry title).
+    capturedAtMs: optional(isNumber),
+  })
+  if (!snapshot) return null
   const entries: SessionCatalogEntry[] = []
-  for (const candidate of value.entries) {
-    const entry = parseEntry(candidate)
+  for (const candidate of snapshot.entries) {
+    const entry = parseSessionCatalogEntry(candidate)
     if (!entry) return null
     entries.push(entry)
   }
-  return { entries, truncated: value.truncated, capturedAtMs }
-}
-
-function parseEntry(value: unknown): SessionCatalogEntry | null {
-  if (!isRecord(value)) return null
-  if (typeof value.sessionId !== 'string') return null
-  if (value.forked !== undefined && typeof value.forked !== 'boolean') return null
-  const forked = value.forked === true
-  if (value.isInteractive !== undefined && typeof value.isInteractive !== 'boolean') {
-    return null
-  }
-  const isInteractive = value.isInteractive
-  if (typeof value.cwd !== 'string') return null
-  // Additive field (bug-sweep #1): tolerate a record from a worker build predating
-  // it (default `true` = assume-exists, never wrongly hide); a PRESENT non-boolean
-  // is malformed child output → fail the whole record like every other field.
-  if (value.cwdExists !== undefined && typeof value.cwdExists !== 'boolean') return null
-  const cwdExists = value.cwdExists === undefined ? true : value.cwdExists
-  if (!isStringOrNull(value.title)) return null
-  // Additive (terminal-rename title precedence): absent ⇒ null, i.e. this entry
-  // can never outrank the registry title — the pre-fix behavior. A PRESENT
-  // non-string/non-null is malformed child output → fail the whole record.
-  if (value.transcriptTitle !== undefined && !isStringOrNull(value.transcriptTitle)) {
-    return null
-  }
-  const transcriptTitle =
-    value.transcriptTitle === undefined ? null : value.transcriptTitle
-  if (typeof value.modifiedAtMs !== 'number') return null
-  if (typeof value.createdAtMs !== 'number') return null
-  if (typeof value.messageCount !== 'number') return null
-  if (!isStringOrNull(value.gitBranch)) return null
-  if (!isStringOrNull(value.tag)) return null
-  const mode = value.mode
-  if (
-    !(mode === 'agent' || mode === 'coordinator' || mode === 'normal' || mode === null)
-  ) {
-    return null
-  }
-  if (!isStringOrNull(value.agentSetting)) return null
-  if (!(typeof value.prNumber === 'number' || value.prNumber === null)) return null
-  if (!isStringOrNull(value.prRepository)) return null
-  // Field-by-field so the return is a real `SessionCatalogEntry`, no `as` on the
-  // untrusted worker output (each read above narrowed its field).
   return {
-    sessionId: value.sessionId,
-    forked,
-    isInteractive,
-    cwd: value.cwd,
-    cwdExists,
-    title: value.title,
-    transcriptTitle,
-    modifiedAtMs: value.modifiedAtMs,
-    createdAtMs: value.createdAtMs,
-    messageCount: value.messageCount,
-    gitBranch: value.gitBranch,
-    tag: value.tag,
-    mode,
-    agentSetting: value.agentSetting,
-    prNumber: value.prNumber,
-    prRepository: value.prRepository,
+    entries,
+    truncated: snapshot.truncated,
+    capturedAtMs: snapshot.capturedAtMs ?? 0,
   }
 }
 
-function isStringOrNull(value: unknown): value is string | null {
-  return typeof value === 'string' || value === null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function hasExactKeys(
+/**
+ * Fail-closed `SessionCatalogEntry` validator. Deliberately `narrowOpen`: an
+ * entry has never carried a closed-vocabulary gate, so a row from a worker build
+ * that has since gained a field still reads.
+ */
+export function parseSessionCatalogEntry(
   value: unknown,
-  expected: readonly string[],
-): value is Record<string, unknown> {
-  if (!isRecord(value)) return false
-  const actual = Object.keys(value).sort()
-  const wanted = [...expected].sort()
-  return actual.length === wanted.length && actual.every((key, i) => key === wanted[i])
+): SessionCatalogEntry | null {
+  const entry = narrowOpen(value, {
+    sessionId: isString,
+    cwd: isString,
+    title: isStringOrNull,
+    modifiedAtMs: isNumber,
+    createdAtMs: isNumber,
+    messageCount: isNumber,
+    gitBranch: isStringOrNull,
+    tag: isStringOrNull,
+    mode: oneOf(['agent', 'coordinator', 'normal', null] as const),
+    agentSetting: isStringOrNull,
+    prNumber: isNumberOrNull,
+    prRepository: isStringOrNull,
+    // The four additive fields below: absent ⇒ the documented pre-field default,
+    // but a PRESENT wrong-typed value is malformed child output → fail the whole
+    // record like every other field.
+    forked: optional(isBoolean),
+    isInteractive: optional(isBoolean),
+    // Additive (bug-sweep #1): default `true` = assume-exists, never wrongly hide.
+    cwdExists: optional(isBoolean),
+    // Additive (terminal-rename title precedence): absent ⇒ null, i.e. this entry
+    // can never outrank the registry title — the pre-fix behavior.
+    transcriptTitle: optional(isStringOrNull),
+  })
+  if (!entry) return null
+  return {
+    ...entry,
+    forked: entry.forked === true,
+    isInteractive: entry.isInteractive,
+    cwdExists: entry.cwdExists ?? true,
+    transcriptTitle: entry.transcriptTitle ?? null,
+  }
 }

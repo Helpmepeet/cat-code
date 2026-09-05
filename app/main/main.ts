@@ -131,21 +131,23 @@ import {
 } from './transcriptBackfill.js'
 import { MAX_TRANSCRIPT_BACKFILL_SESSIONS } from '../shared/transcriptBackfill.js'
 import {
-  createSessionsCatalogDriver,
+  SESSIONS_CATALOG_REFRESH_INTERVAL_MS,
   runSessionsCatalogWorker,
-  type SessionsCatalogDriver,
 } from './sessionsCatalogRunner.js'
+import {
+  createSingleFlightDriver,
+  type SingleFlightDriver,
+} from './singleFlightDriver.js'
 import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   parseAccountDeleteMessage,
   type AccountsPoolWorkerDeleteResult,
 } from '../shared/accountsPoolWorker.js'
 import {
+  ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolPublicationGate,
-  createAccountsPoolDriver,
   runAccountsPoolWorker,
   runCarriesUsageStats,
-  type AccountsPoolDriver,
 } from './accountsPoolRunner.js'
 import {
   createIdleParkDriver,
@@ -185,39 +187,17 @@ import {
   SETTINGS_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
-  type AccountVerbMessage,
   type AccountResultFrame,
-  type AccountVerbType,
   type AskUserQuestionAnswerMessage,
   type PermissionSetModeMode,
-  type RemoteVerbMessage,
-  type RemoteVerbType,
-  type PromptForceMessage,
-  type PromptForceVerbType,
-  type PromptRecallMessage,
-  type PromptRecallVerbType,
-  type RunControlVerbMessage,
-  type RunControlVerbType,
   type ServerFrame,
-  type SessionActionVerbMessage,
-  type SessionActionVerbType,
-  type ContextBreakdownVerbType,
-  type ContextBreakdownVerbMessage,
-  type HistoryLoadEarlierVerbType,
-  type HistoryLoadEarlierMessage,
   type ErrorFrame,
   type SessionId,
   type SubmitPrompt,
   type SessionsCatalogSnapshot,
-  type SettingsVerbMessage,
-  type SettingsVerbType,
-  type TaskControlVerbMessage,
-  type TaskControlVerbType,
   type SidecarClientMessage,
   type StatsQueryMessage,
   type TranscriptCache,
-  type WorkspaceTrustMessage,
-  type WorkspaceTrustVerbType,
 } from '../shared/protocol.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -678,7 +658,7 @@ const startupTimers = createStartupTimers({
  * snapshot to the renderer as a read-only `sessions-catalog` host event. Null
  * until armed; re-armable after a window-all-closed/reactivate cycle.
  */
-let sessionsCatalogDriver: SessionsCatalogDriver | null = null
+let sessionsCatalogDriver: SingleFlightDriver | null = null
 
 /**
  * Accounts owner (`decisions/ACCOUNTS-OWNERSHIP.md`): the account pool is
@@ -687,7 +667,7 @@ let sessionsCatalogDriver: SessionsCatalogDriver | null = null
  * accepted redacted snapshot as a read-only `accounts-pool` host event. Same
  * lifecycle as `sessionsCatalogDriver`.
  */
-let accountsPoolDriver: AccountsPoolDriver | null = null
+let accountsPoolDriver: SingleFlightDriver | null = null
 let accountDeleteInFlight = false
 let accountDeleteAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
@@ -963,7 +943,9 @@ function startSessionsCatalogRefresh(): void {
   if (sessionsCatalogDriver) return
   const abort = new AbortController()
   sessionsCatalogAbort = abort
-  sessionsCatalogDriver = createSessionsCatalogDriver({
+  sessionsCatalogDriver = createSingleFlightDriver({
+    intervalMs: SESSIONS_CATALOG_REFRESH_INTERVAL_MS,
+    logLabel: 'catalog-runner',
     run: () => {
       const onWorkerLifecycle = createWorkerLifecycleLogger('sessions-catalog')
       return runSessionsCatalogWorker({
@@ -1005,7 +987,9 @@ function startAccountsPoolRefresh(): void {
   // Nth one (see `USAGE_STATS_EVERY_N_RUNS`). Run 0 always carries it, so the
   // Accounts page is populated at launch rather than up to 5 minutes later.
   let runIndex = 0
-  accountsPoolDriver = createAccountsPoolDriver({
+  accountsPoolDriver = createSingleFlightDriver({
+    intervalMs: ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
+    logLabel: 'accounts-runner',
     run: () => {
       if (accountDeleteInFlight) return Promise.resolve()
       const generation = accountsPoolPublicationGate.beginRead()
@@ -1042,6 +1026,16 @@ function startAccountsPoolRefresh(): void {
 /**
  * Re-read the pool now because a sign-in just wrote to the vault. No-op before
  * the driver is armed (the first run is already pending) and after it stops.
+ *
+ * WHY THIS EXISTS. The Accounts page and the account-health bar both read the
+ * host-plane pool (`selectGlobalAccountsSnapshot`, `accountsState.ts:261`),
+ * which prefers this worker's snapshot over any session's. A sidecar that
+ * re-broadcasts `accounts.snapshot` on OAuth success therefore cannot move
+ * either surface, so without this a finished sign-in left the dead row dead and
+ * the danger bar up for up to a full interval, which reads as the sign-in
+ * having failed. Only for events that change the pool itself; the timer covers
+ * everything else, and calling this on renderer activity would turn a 60 s
+ * cadence into a per-interaction engine boot.
  */
 function refreshAccountsPoolNow(): void {
   accountsPoolDriver?.refreshNow()
@@ -1943,6 +1937,58 @@ function sendHostEvent(event: HostEvent): void {
 }
 
 /**
+ * The verb channels main relays VERBATIM: the renderer sends `{sessionId, verb}`
+ * and main forwards `verb` unchanged once its `type` is in that channel's closed
+ * list. This table IS that part of the IPC surface; adding a row widens it and
+ * removing one silently breaks a renderer verb.
+ *
+ * Light UX coercion only. The SIDECAR is the trust boundary and fully
+ * re-validates each of these (Zod schema plus that domain's own rules, noted per
+ * row below); dropping a frame whose `type` is not in the list is fail-closed
+ * housekeeping, so main never forwards a message guaranteed to be rejected. The
+ * only other field these verbs carry is a `requestId` the renderer authors for
+ * result correlation, which is a UX field rather than a security one and which
+ * the sidecar bounds structurally.
+ *
+ * Handlers that do more than relay stay hand-written below: CH_SUBMIT resolves
+ * attachment tokens, CH_SET_MODE and CH_AGENT_MODE_SET mint the requestId in
+ * main, CH_STATS_QUERY checks a second field, CH_PERMISSION and
+ * CH_ANSWER_QUESTIONS carry engine-minted ids.
+ */
+const RELAYED_VERB_CHANNELS: ReadonlyArray<
+  readonly [channel: string, verbTypes: readonly string[]]
+> = [
+  // P4-5 — sidecar re-validates schema + pool-resolved business rules.
+  [CH_ACCOUNT_VERB, ACCOUNT_VERB_TYPES],
+  // P4-15 — sidecar re-validates schema + the engine's trust persist for its OWN
+  // cwd. HC1: no path crosses, the verb carries only a `requestId`.
+  [CH_WORKSPACE_TRUST_VERB, WORKSPACE_TRUST_VERB_TYPES],
+  // P4-24c — sidecar re-validates schema + the engine's own setter.
+  [CH_RUN_CONTROL_VERB, RUN_CONTROL_VERB_TYPES],
+  [CH_PROMPT_FORCE, PROMPT_FORCE_VERB_TYPES],
+  // D1b — the sidecar decides for itself what is recallable. The verb carries no
+  // target, so there is no other field to coerce.
+  [CH_PROMPT_RECALL, PROMPT_RECALL_VERB_TYPES],
+  // decisions/HISTORY-LOAD-EARLIER.md — the sidecar re-validates against a closed
+  // key allowlist and decides for itself which file it reads and how much of it.
+  // The frame's one main-authored field, `viewAnchorUuid`, is stamped in
+  // `forward` rather than here, so it cannot be missed by a second route into
+  // the verb — see the comment there.
+  [CH_HISTORY_LOAD_EARLIER, HISTORY_LOAD_EARLIER_VERB_TYPES],
+  // The analysis takes no renderer input beyond the request itself.
+  [CH_CONTEXT_BREAKDOWN_VERB, CONTEXT_BREAKDOWN_VERB_TYPES],
+  // P4-6b — sidecar re-validates schema + the engine's own op.
+  [CH_SESSION_ACTION_VERB, SESSION_ACTION_VERB_TYPES],
+  // P4-8b — the engine's own `stopTask` re-resolves the id against the live store.
+  [CH_TASK_CONTROL_VERB, TASK_CONTROL_VERB_TYPES],
+  // P4-13 — sidecar re-validates schema + live-state re-derivation.
+  [CH_REMOTE_SETTINGS_VERB, REMOTE_VERB_TYPES],
+  // P4-19 — sidecar re-validates schema + EDITABLE_SETTINGS allowlist + per-key
+  // value-type check + a SettingsUpdater-under-lock write.
+  [CH_SETTINGS_VERB, SETTINGS_VERB_TYPES],
+]
+
+/**
  * Register the renderer→supervisor IPC handlers ONCE. They read the module-level
  * `supervisor`, so they keep working across a host rebuild (F5) without
  * double-registering listeners on `ipcMain`.
@@ -2064,46 +2110,17 @@ function registerIpcHandlers(): void {
     },
   )
 
-  ipcMain.on(
-    CH_ACCOUNT_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
+  // One handler per relayed verb channel (`RELAYED_VERB_CHANNELS`). The channel
+  // decides which closed `type` list applies; nothing else about the frame
+  // differs, so nothing else is written eleven times.
+  for (const [channel, verbTypes] of RELAYED_VERB_CHANNELS) {
+    ipcMain.on(channel, (_e, arg: { sessionId: SessionId; verb: unknown }) => {
       if (typeof arg?.sessionId !== 'string') return
-      // P4-5 — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (schema + pool-resolved business rules). Drop any
-      // frame whose `type` is not an account verb fail-closed, rather than
-      // forwarding a message guaranteed to be rejected. The renderer authors the
-      // `requestId` for result correlation (a UX field, not a security one; the
-      // sidecar bounds it structurally).
       const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !ACCOUNT_VERB_TYPES.includes(verb.type as AccountVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as AccountVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_WORKSPACE_TRUST_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-15 — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (Zod schema + engine trust persist for its OWN cwd).
-      // Drop any frame whose `type` is not the workspace-trust verb fail-closed,
-      // rather than forwarding a message guaranteed to be rejected. HC1: no path
-      // crosses — the verb carries only a `requestId`.
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !WORKSPACE_TRUST_VERB_TYPES.includes(verb.type as WorkspaceTrustVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as WorkspaceTrustMessage)
-    },
-  )
+      if (typeof verb?.type !== 'string' || !verbTypes.includes(verb.type)) return
+      forward(arg.sessionId, arg.verb as SidecarClientMessage)
+    })
+  }
 
   ipcMain.on(
     CH_AGENT_MODE_SET,
@@ -2120,190 +2137,6 @@ function registerIpcHandlers(): void {
         requestId: generateRequestId(),
         active: arg.active,
       })
-    },
-  )
-
-  ipcMain.on(
-    CH_RUN_CONTROL_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-24c — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (Zod schema + the engine's own setter). Drop any frame
-      // whose `type` is not a run-control verb fail-closed, rather than forwarding a
-      // message guaranteed to be rejected. The renderer authors the `requestId` for
-      // result correlation (a UX field, not a security one; the sidecar bounds it).
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !RUN_CONTROL_VERB_TYPES.includes(verb.type as RunControlVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as RunControlVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_PROMPT_FORCE,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !PROMPT_FORCE_VERB_TYPES.includes(verb.type as PromptForceVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as PromptForceMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_PROMPT_RECALL,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // D1b — light UX coercion only; the SIDECAR is the trust boundary and fully
-      // re-validates (Zod schema), then decides for itself what is recallable.
-      // Drop any frame whose `type` is not the recall verb fail-closed. There is
-      // no other field to coerce: the verb carries no target, only the renderer's
-      // `requestId` for result correlation (a UX field, not a security one).
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !PROMPT_RECALL_VERB_TYPES.includes(verb.type as PromptRecallVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as PromptRecallMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_HISTORY_LOAD_EARLIER,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md) — light UX
-      // coercion only; the SIDECAR is the trust boundary and fully re-validates
-      // (Zod schema + closed key allowlist), then decides for itself which file
-      // it reads and how much of it. Drop any frame whose `type` is not the
-      // load-earlier verb fail-closed. There is no other field to coerce here:
-      // the verb carries no target and no extent, only the renderer's
-      // `requestId` for result correlation (a UX field, not a security one).
-      // The frame's one main-authored field, `viewAnchorUuid`, is stamped in
-      // `forward` rather than here, so it cannot be missed by a second route
-      // into the verb — see the comment there.
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !HISTORY_LOAD_EARLIER_VERB_TYPES.includes(
-          verb.type as HistoryLoadEarlierVerbType,
-        )
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as HistoryLoadEarlierMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_CONTEXT_BREAKDOWN_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // Light UX coercion only; the SIDECAR is the trust boundary and fully
-      // re-validates. Drop any frame whose `type` is not the breakdown request
-      // fail-closed. The renderer authors the `requestId` for correlation (a UX
-      // field, not a security one; the sidecar bounds it), and there is no other
-      // field to coerce — the analysis takes no renderer input.
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !CONTEXT_BREAKDOWN_VERB_TYPES.includes(
-          verb.type as ContextBreakdownVerbType,
-        )
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as ContextBreakdownVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_SESSION_ACTION_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-6b — light UX coercion only; the SIDECAR is the trust boundary and fully
-      // re-validates (Zod schema + the engine's own op). Drop any frame whose `type`
-      // is not a session-action verb fail-closed, rather than forwarding a message
-      // guaranteed to be rejected. The renderer authors the `requestId` for result
-      // correlation (a UX field, not a security one; the sidecar bounds it).
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !SESSION_ACTION_VERB_TYPES.includes(verb.type as SessionActionVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as SessionActionVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_TASK_CONTROL_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-8b — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (Zod schema + the engine's own `stopTask` re-resolving
-      // the id against the live store). Drop any frame whose `type` is not the
-      // task-control verb fail-closed, rather than forwarding a message guaranteed
-      // to be rejected. The renderer authors the `requestId` for result correlation
-      // (a UX field, not a security one; the sidecar bounds it structurally).
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !TASK_CONTROL_VERB_TYPES.includes(verb.type as TaskControlVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as TaskControlVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_REMOTE_SETTINGS_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-13 — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (schema + live-state re-derivation). Drop any frame
-      // whose `type` is not a RemoteSettings verb fail-closed, rather than
-      // forwarding a message guaranteed to be rejected.
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !REMOTE_VERB_TYPES.includes(verb.type as RemoteVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as RemoteVerbMessage)
-    },
-  )
-
-  ipcMain.on(
-    CH_SETTINGS_VERB,
-    (_e, arg: { sessionId: SessionId; verb: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-19 — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (Zod schema + EDITABLE_SETTINGS allowlist + per-key
-      // value-type check + SettingsUpdater-under-lock write). Drop any frame
-      // whose `type` is not a settings verb fail-closed, rather than forwarding a
-      // message guaranteed to be rejected.
-      const verb = arg.verb as { type?: unknown } | null | undefined
-      if (
-        typeof verb?.type !== 'string' ||
-        !SETTINGS_VERB_TYPES.includes(verb.type as SettingsVerbType)
-      ) {
-        return
-      }
-      forward(arg.sessionId, arg.verb as SettingsVerbMessage)
     },
   )
 

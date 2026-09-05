@@ -6,18 +6,18 @@
  * whatever the operator had arranged.
  *
  * Stored beside the other main-owned bounded state under the desktop config
- * directory, the `glassPreference.ts` idiom verbatim: one small versioned JSON
- * file, written temp-then-rename so a crash mid-write cannot leave a half file,
- * and read fail-open. A window that cannot be positioned from a saved value must
- * still open at the defaults; geometry is never worth blocking launch for.
+ * directory, through the shared `preferenceFile.ts` idiom: one small versioned
+ * JSON file, written temp-then-rename so a crash mid-write cannot leave a half
+ * file, and read fail-open. A window that cannot be positioned from a saved
+ * value must still open at the defaults; geometry is never worth blocking
+ * launch for.
  *
  * The clamp is the part that matters and it is pure, so it is tested directly:
  * bounds saved on a display that is no longer attached would otherwise place the
  * window entirely off-screen, where it cannot be reached or moved back.
  */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { readPreferenceFile, writePreferenceFile } from './preferenceFile.js'
 
 const WINDOW_BOUNDS_FILE = 'window-bounds.json'
 
@@ -41,17 +41,10 @@ function isFiniteInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }
 
-/**
- * The saved bounds, or null when there are none to apply. Null covers a first
- * launch, an unreadable directory, a truncated or hand-edited file, and a
- * version this build does not understand: every one of them means "open at the
- * defaults", never "fail".
- */
+/** The saved bounds, or null when there are none to apply (fail open). */
 export function readWindowBounds(userDataDir: string): WindowBounds | null {
-  try {
-    const value = JSON.parse(
-      readFileSync(join(userDataDir, WINDOW_BOUNDS_FILE), 'utf8'),
-    ) as Partial<PersistedWindowBounds>
+  return readPreferenceFile(userDataDir, WINDOW_BOUNDS_FILE, raw => {
+    const value = raw as Partial<PersistedWindowBounds>
     if (value.version !== 1) return null
     if (
       !isFiniteInteger(value.x) ||
@@ -68,45 +61,31 @@ export function readWindowBounds(userDataDir: string): WindowBounds | null {
       width: Math.round(value.width),
       height: Math.round(value.height),
     }
-  } catch {
-    return null
-  }
+  })
 }
 
 export function writeWindowBounds(
   userDataDir: string,
   bounds: WindowBounds,
 ): void {
-  try {
-    if (
-      !isFiniteInteger(bounds.x) ||
-      !isFiniteInteger(bounds.y) ||
-      !isFiniteInteger(bounds.width) ||
-      !isFiniteInteger(bounds.height) ||
-      bounds.width <= 0 ||
-      bounds.height <= 0
-    ) {
-      return
-    }
-    mkdirSync(userDataDir, { recursive: true })
-    const target = join(userDataDir, WINDOW_BOUNDS_FILE)
-    const temporary = `${target}.${process.pid}.tmp`
-    const value: PersistedWindowBounds = {
-      version: 1,
-      x: Math.round(bounds.x),
-      y: Math.round(bounds.y),
-      width: Math.round(bounds.width),
-      height: Math.round(bounds.height),
-    }
-    writeFileSync(temporary, `${JSON.stringify(value)}\n`, {
-      encoding: 'utf8',
-      mode: 0o600,
-    })
-    renameSync(temporary, target)
-  } catch {
-    // Remembering the window must never make the window unusable when
-    // user-data storage fails (`glassPreference.ts`).
+  if (
+    !isFiniteInteger(bounds.x) ||
+    !isFiniteInteger(bounds.y) ||
+    !isFiniteInteger(bounds.width) ||
+    !isFiniteInteger(bounds.height) ||
+    bounds.width <= 0 ||
+    bounds.height <= 0
+  ) {
+    return
   }
+  const value: PersistedWindowBounds = {
+    version: 1,
+    x: Math.round(bounds.x),
+    y: Math.round(bounds.y),
+    width: Math.round(bounds.width),
+    height: Math.round(bounds.height),
+  }
+  writePreferenceFile(userDataDir, WINDOW_BOUNDS_FILE, value)
 }
 
 /**
