@@ -25,6 +25,7 @@ This file is intentionally:
 | Change final prompt assembly before model invocation | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/services/api/claude.ts` |
 | Change output-style prompt content | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts` |
 | Change subagent or coordinator prompt behavior | `src/coordinator/coordinatorMode.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/ResumeAgentTool/prompt.ts`, `src/tools/AgentTool/built-in/*.ts` |
+| Change desktop-only prompt text (file-reference addendum, peer doctrine, peer tool prompts) | `app/sidecar/desktopSystemPrompt.ts` | `app/sidecar/{createPeer,sendToPeer,listPeers,readPeer}Tool.ts`, `app/sidecar/sessionController.ts`. Desktop only; the terminal never sees this text. `docs/migration/decisions/PEER-SESSIONS.md` §5 and §8 quote it verbatim and are amended with it. |
 
 ## Start Here
 
@@ -284,6 +285,16 @@ These are not `src/` files, but they are first-class instruction inputs to the s
 | `~/.cat-code/agents/*.md` | `src/tools/AgentTool/loadAgentsDir.ts` | User custom agent system prompts |
 | `~/.cat-code/session-memory/config/prompt.md` | `src/services/SessionMemory/prompts.ts` | Override for session-memory update prompt |
 | `~/.cat-code/magic-docs/prompt.md` | `src/services/MagicDocs/prompts.ts` | Override for Magic Docs update prompt |
+| `.cat-code/skills/*/SKILL.md` | `src/skills/loadSkillsDir.ts` | Project skills. This is the ONLY project skills directory a Cat Code session loads; `.claude/skills/` reaches Claude Code sessions only |
+| `~/.cat-code/skills/*/SKILL.md` | `src/skills/loadSkillsDir.ts` | User-global skills |
+
+## Permission-Decision Prompts
+
+The auto-mode classifier carries its own prompt, separate from the assistant's.
+
+| Source | Loaded by | Notes |
+|---|---|---|
+| `src/utils/permissions/yolo-classifier-prompts/` | `src/utils/permissions/` | The auto-mode classifier's own prompt. Its rule 8 keys on the `<cross-session-message>` tag and is the only engine-side rule about peer authority |
 
 ## Common Mistakes
 
@@ -425,6 +436,7 @@ These are model-driven prompt surfaces that are not the main assistant system pr
 | `src/utils/claudeInChrome/prompt.ts` | Browser-automation instruction text for Claude-in-Chrome flows |
 | `src/utils/ultraplan/prompt.txt` | Minimal ultraplan planning prompt |
 | `src/buddy/prompt.ts` | Companion/buddy instruction attachment text |
+| `src/utils/messages.ts` `wrapCommandText` | The model-facing framing of every injected origin: peer, teammate, channel, coordinator, task-notification. Applied only when a queued command becomes a mid-turn attachment; an idle recipient's turn is started with the raw value |
 
 ## Important Prompt Adjacent Files
 

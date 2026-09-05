@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-08-26
+Last refreshed: 2026-09-06
 
 ## Purpose
 
@@ -38,8 +38,10 @@ Read in this order for most prompt or instruction work:
 | Change final provider placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, `src/services/api/codex-fetch-adapter.ts`, `src/utils/providerPromptRegressions.test.ts` | OpenAI keeps volatile `gitStatus` and `cacheBreaker` in developer context instead of user input messages. Claude-style providers append system context and prepend user context. |
 | Change subagent prompt behavior | `src/tools/AgentTool/runAgent.ts` | `src/tools/AgentTool/prompt.ts`, `src/tools/AgentTool/builtInAgents.ts`, `src/tools/AgentTool/loadAgentsDir.ts`, `src/agent-mode/rolePrompts.ts` | `runAgent.ts` builds the agent prompt, injects Agent Mode addenda, adds env details, and may trim inherited context. |
 | Change output styles | `src/constants/outputStyles.ts` | `src/outputStyles/loadOutputStylesDir.ts`, `src/utils/plugins/loadPluginOutputStyles.ts`, `.claude/output-styles/*.md`, `~/.cat-code/output-styles/*.md` | Output style text is injected by `src/constants/prompts.ts`. |
-| Change tool descriptions | `src/tools/*/prompt.ts` | `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. `src/tools/BashTool/prompt.ts` also owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
+| Change tool descriptions | `src/tools/*/prompt.ts` | `src/constants/promptStyles/gpt.ts`, `src/tools.ts`, `src/utils/api.ts`, `src/utils/providerPromptRegressions.test.ts` | Tool prompt files are model-visible instruction surfaces even when the main system prompt is unchanged. GPT's prompt style owns the cross-tool distinction: bounded whole-file reads favor FileRead, targeted reads/searches may use Bash, and local mutations require the dedicated edit/write tool plus a diff check for command-driven mutation. `src/tools/BashTool/prompt.ts` also owns model-facing git/commit guidance, shell failure handling, sandbox retry wording, background execution, and sleep/polling guidance. |
 | Change skill-loading guidance | `src/tools/SkillTool/prompt.ts` | `src/tools/SkillTool/SkillTool.ts`, `src/tools.ts`, `src/constants/prompts.ts` | The skill tool prompt requires matching skills to be loaded before a response, but avoids reinjecting instructions already visible in the same conversation; use the tool again only when those instructions are no longer available in context. |
+| Change desktop-only prompt text (file-reference addendum, peer doctrine, peer tool prompts) | `app/sidecar/desktopSystemPrompt.ts` | `app/sidecar/{createPeer,sendToPeer,listPeers,readPeer}Tool.ts`, `app/sidecar/sessionController.ts` | Desktop-only. The addendum and doctrine are appended last via `appendSystemPrompt`; the four peer tool prompts are appended after `getTools`, and the terminal never sees any of it. `docs/migration/decisions/PEER-SESSIONS.md` §5 and §8 quote this text verbatim and are amended with it. |
+| Change auto-mode permission-decision prompts | `src/utils/permissions/yolo-classifier-prompts/` | `src/utils/permissions/`, `src/constants/corePolicy.ts` | The auto-mode classifier's own prompt. Its rule 8 keys on the `<cross-session-message>` tag and is the only engine-side rule about peer authority. |
 | Inspect emitted prompts | `src/services/api/dumpPrompts.ts` | `src/query.ts`, `src/services/api/claude.ts`, `/context` command paths | Ant-user dumps write under `~/.cat-code/dump-prompts/<session-or-agent-id>.jsonl` as init, system_update, message, and response entries. |
 | Render a prompt for a dev-full evaluation | `src/entrypoints/cli.tsx` | `scripts/build.ts`, `src/constants/prompts.ts`, `src/utils/model/model.ts`, `src/bootstrap/state.ts` | A `dev-full` build includes the gated `--dump-system-prompt` fast path. It renders and exits; use `--model` plus explicit `--provider` when the desired prompt family differs from persisted startup provider state. |
 
@@ -90,6 +92,7 @@ src/services/api/claude.ts
 | MCP instructions | `src/constants/prompts.ts` | prompt section or delta attachment | If MCP instruction delta is enabled, prompt text is not recomputed in the normal section. |
 | Output style | `src/constants/prompts.ts` | dynamic system-prompt section | Loaded from built-in, user/project, or plugin output-style sources. |
 | Scratchpad instructions | `src/constants/prompts.ts` | dynamic system-prompt section | Present only when scratchpad support is enabled. |
+| Injected-origin framing (`wrapCommandText`) | `src/utils/messages.ts` | mid-turn attachment text | The model-facing framing of every injected origin: peer, teammate, channel, coordinator, task-notification. Applied only when a queued command becomes a mid-turn attachment; an idle recipient's turn is started with the raw value, so the peer creation-prompt arm is read by no model today. |
 
 ## Instruction And Recalled-Memory Discovery
 
@@ -128,7 +131,7 @@ Watch these trims before debugging "missing" instructions in a worker:
 - Explore and Plan agents drop inherited `gitStatus`; they can run git commands when they need fresh state.
 - Built-in agents can receive extra Agent Mode prompt injections.
 - Fork children that use exact tools preserve more parent context to maximize cache compatibility.
-- The default Agent-tool guidance says to work inline unless delegation has a clear structural advantage: parallel work, context isolation, or an explicitly requested independent review; routine self-review must stay in the main thread.
+- The default and GPT Agent-tool guidance keeps the assigned request in the current thread unless a bounded subtask has a concrete delegation reason. Review, audit, cold-review, and verification wording names a method, not permission to hand off the request; an independent reviewer needs an explicit user request.
 
 ## Tests And Validation
 
@@ -170,4 +173,5 @@ For emitted-prompt inspection, use prompt dumps when available:
 - Do not treat a single subagent as a neutral pass-through. The default and GPT prompt styles both require a concrete reason delegation beats doing that work in the current thread.
 - Do not reach for `src/services/api/dumpPrompts.ts` without setting `USER_TYPE=ant`. Every entry point returns early otherwise, so the rows above that point at prompt dumps describe an ant-only path. `/context` is the only inspection surface live by default.
 - Do not assume `--dump-system-prompt` exists in every build. `scripts/build.ts` enables `DUMP_SYSTEM_PROMPT` only for the `dev-full` feature set; when inspecting a non-GPT model, pass `--provider` explicitly or the persisted startup provider can select the wrong prompt style.
+- Do not assume the repo's `.claude/skills/` load into a Cat Code session. Project skills come from `.cat-code/skills/` only (`src/skills/loadSkillsDir.ts`); `.claude/` is honoured for `CLAUDE.md` and `rules/*.md` alone (`src/utils/claudemd.ts:915-939`).
 - Do not assume a prompt difference from upstream is Cat Code's doing. Roughly half of the prompt-system differences audited on 2026-08-10 were upstream changes made after the fork. Check [`../reports/2026-08-10-cat-code-upstream-divergence-ledger.md`](../reports/2026-08-10-cat-code-upstream-divergence-ledger.md) before re-syncing anything toward upstream, especially the instruction-authority wrapper in `src/utils/claudemd.ts` and the input-keyed section cache, which are deliberate.
