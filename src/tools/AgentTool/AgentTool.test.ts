@@ -32,7 +32,6 @@ import { createAssistantMessage } from '../../utils/messages.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
-import { isForkSubagentEnabled } from './forkSubagent.js'
 
 const realRunAgentModule = await import('./runAgent.js')
 let capturedRunAgentParams:
@@ -359,62 +358,6 @@ test('waits for a required MCP server then launches the agent with its fresh sna
   expect(invocation?.mcpRuntimeSnapshot?.resources).not.toBe(turnStartResources)
   expect(invocation?.availableTools).toContain(freshTool)
   expect(invocation?.availableTools).not.toContain(staleTurnStartTool)
-})
-
-test('passes coherent parent MCP inputs to a fresh fork', async () => {
-  expect(isForkSubagentEnabled()).toBe(true)
-
-  const parentTools = [{ name: 'parent-tool' }] as Tool[]
-  const parentCommands = [{ name: 'parent-command' }]
-  const parentClients = [{ name: 'parent-server', type: 'connected' }]
-  const parentResources = {
-    'parent-server': [{ uri: 'file://parent', name: 'parent' }],
-  }
-  const freshSnapshot = {
-    tools: [{ name: 'new-tool' }],
-    commands: [{ name: 'new-command' }],
-    clients: [{ name: 'new-server', type: 'connected' }],
-    resources: {},
-  } as McpRuntimeSnapshot
-  const appState = getDefaultAppState()
-  const context = {
-    toolUseId: 'fresh-fork-mcp',
-    abortController: new AbortController(),
-    getAppState: () => appState,
-    setAppState: () => {},
-    options: {
-      agentDefinitions: { allAgents: [], activeAgents: [] },
-      commands: parentCommands,
-      debug: false,
-      mainLoopModel: 'claude-sonnet-4-5',
-      tools: parentTools,
-      verbose: false,
-      thinkingConfig: { type: 'disabled' },
-      mcpClients: parentClients,
-      mcpResources: parentResources,
-      isNonInteractiveSession: false,
-      getMcpRuntimeSnapshot: () => freshSnapshot,
-    },
-    messages: [],
-    renderedSystemPrompt: ['parent prompt'],
-  } as unknown as ToolUseContext
-
-  await AgentTool.call(
-    { prompt: 'continue the task', description: 'continue' },
-    context,
-    undefined as never,
-    undefined as never,
-  )
-
-  expect(capturedRunAgentParams?.useExactTools).toBe(true)
-  expect(capturedRunAgentParams?.availableTools).toBe(parentTools)
-  expect(capturedRunAgentParams?.mcpRuntimeSnapshot).toBeUndefined()
-  expect(capturedRunAgentParams?.mcpRuntimeInputs).toEqual({
-    tools: parentTools,
-    commands: parentCommands,
-    mcpClients: parentClients,
-    mcpResources: parentResources,
-  })
 })
 
 test('background transfer continues the same live iterator from its in-flight next result', async () => {

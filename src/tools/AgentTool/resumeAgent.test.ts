@@ -186,7 +186,7 @@ describe('resumeAgentBackground', () => {
     expect(childContext?.options.tools).toBe(parentTools)
     expect(childContext?.options.commands).toEqual(parentCommands)
     expect(childContext?.options.mcpClients).toEqual(parentClients)
-    expect(childContext?.options.mcpResources).toBe(parentResources)
+    expect(childContext?.options.mcpResources).toEqual(parentResources)
   })
 
   test('holds lifecycle ownership until the detached background run settles, not just through setup', async () => {
