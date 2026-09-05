@@ -93,7 +93,7 @@ test('a live recipient is reported as delivered, with the name in the summary', 
     text: 'the build is green',
   })
 
-  expect(result.delivered).toBe(true)
+  expect(result.delivery).toBe('delivered')
   expect(result.outcome).toBe('delivered')
   expect(result.summary).toContain('Bear')
   expect(fake.calls).toEqual([
@@ -107,7 +107,7 @@ test('a woken recipient is delivered too, and says so distinctly', async () => {
     text: 'hello',
   })
 
-  expect(result.delivered).toBe(true)
+  expect(result.delivery).toBe('delivered')
   expect(result.outcome).toBe('delivered_on_start')
 })
 
@@ -121,7 +121,7 @@ test('every refusal reason is rendered, and none of them reads as delivered', as
       text: 'hello',
     })
 
-    expect(result.delivered).toBe(false)
+    expect(result.delivery).toBe('not_delivered')
     expect(result.outcome).not.toBe('delivered')
     expect(result.outcome).not.toBe('delivered_on_start')
     // Every reason needs its OWN wording: one shared "it did not work" leaves
@@ -145,15 +145,18 @@ test('a live peer that refused the hand-off is not reported as unwakeable', asyn
     text: 'hello',
   })
 
-  expect(failedOnALivePeer.delivered).toBe(false)
+  expect(failedOnALivePeer.delivery).toBe('not_delivered')
   expect(failedOnALivePeer.outcome).toBe('peer_did_not_take_it')
   // The distinction IS the behaviour: reporting a live peer as one that never
-  // started sends the model looking for a session that is sitting right there,
-  // and stops it waiting on work that peer may still be doing.
+  // started sends the model looking for a session that is sitting right there.
   expect(failedOnALivePeer.outcome).not.toBe(failedToWake.outcome)
   expect(failedOnALivePeer.summary).not.toBe(failedToWake.summary)
-  expect(failedOnALivePeer.summary).toContain('running')
+  expect(failedOnALivePeer.summary).toContain('open but did not take the message')
   expect(failedOnALivePeer.summary).not.toContain('starting')
+  // What the refusal establishes is that the socket would not take the frame,
+  // and nothing about what that peer is doing, so the sentence may not assert
+  // it is still working or oblige the sender to send again.
+  expect(failedOnALivePeer.summary).not.toContain('still working')
 })
 
 test('a name the caller may not address comes back as no such peer, not an error', async () => {
@@ -162,21 +165,47 @@ test('a name the caller may not address comes back as no such peer, not an error
     { to: 'Ghost', text: 'hello' },
   )
 
-  expect(result.delivered).toBe(false)
+  expect(result.delivery).toBe('not_delivered')
   expect(result.outcome).toBe('no_such_peer')
   expect(result.summary).toContain('Ghost')
   expect(result.summary).toContain('ListPeers')
 })
 
-test('a timeout is reported as not delivered rather than assumed sent', async () => {
+test('a timeout is reported as unconfirmed, neither delivered nor disproven', async () => {
   const result = await send(
     failing({ code: 'timeout', message: 'no answer' }).requestHost,
     { to: 'Bear', text: 'hello' },
   )
 
-  expect(result.delivered).toBe(false)
+  // Ruling 13. The request timed out while main may still be waking the peer
+  // and holding this message for delivery after `ready`, so calling it not
+  // delivered states a fact nobody has. A boolean could not carry that, which
+  // is why the field is three-valued.
+  expect(result.delivery).toBe('unconfirmed')
   expect(result.outcome).toBe('send_failed')
-  expect(result.summary).toContain('not delivered')
+  expect(result.summary).toContain('not known whether this reached Bear')
+  expect(result.summary).not.toContain('treat it as not delivered')
+  // And the recovery is not a resend of the same text, which would arrive
+  // twice if the first one lands after all.
+  expect(result.summary).toContain('ask Bear whether it got it')
+})
+
+test('a refusal is a confirmed non-delivery, distinct from an unconfirmed one', async () => {
+  // The two halves of ruling 13 that a boolean collapsed into one value: main
+  // ANSWERED here, and its answer was a refusal, so non-delivery is known.
+  for (const reason of PEER_DELIVER_REFUSAL_REASONS) {
+    const refused = await send(delivering(`refused:${reason}`).requestHost, {
+      to: 'Bear',
+      text: 'hello',
+    })
+    expect(refused.delivery).toBe('not_delivered')
+  }
+
+  const unanswered = await send(
+    failing({ code: 'timeout', message: 'no answer' }).requestHost,
+    { to: 'Bear', text: 'hello' },
+  )
+  expect(unanswered.delivery).toBe('unconfirmed')
 })
 
 test('a rate refusal from the plane is still reported as not delivered', async () => {
@@ -185,7 +214,7 @@ test('a rate refusal from the plane is still reported as not delivered', async (
     { to: 'Bear', text: 'hello' },
   )
 
-  expect(result.delivered).toBe(false)
+  expect(result.delivery).toBe('not_delivered')
   expect(result.outcome).toBe('too_many_messages')
 })
 
@@ -251,6 +280,43 @@ test('the prompt asks for the roster only when the name is not already known', a
   expect(prompt).not.toContain('Use ListPeers first: names change')
 })
 
+test('the argument descriptions do not send the model to the roster', async () => {
+  const tool = createSendToPeerTool(delivering('queued_live').requestHost)
+  const shape = tool.inputSchema.shape
+
+  // A model composing a call reads these at the moment it writes the field, and
+  // the imperative here beat the prose above it: sessions listed peers before
+  // every send, including sends to the peer that created them. The advice
+  // survives where it applies, in the `no_such_peer` result.
+  expect(shape.to.description).toBe('Name of the peer to message.')
+  expect(shape.text.description).toBe('What to say.')
+
+  const notFound = await send(
+    failing({ code: 'session_not_found', message: 'no row' }).requestHost,
+    { to: 'Ghost', text: 'hello' },
+  )
+  expect(notFound.summary).toContain('Use ListPeers for the names.')
+})
+
+test('the prompt allows a follow-up question and points peers away from SendMessage', async () => {
+  const prompt = await createSendToPeerTool(
+    delivering('queued_live').requestHost,
+  ).prompt()
+
+  // "Say everything you need in one message" stood in three places and
+  // discouraged the clarifying exchange a peer relationship runs on. The cost
+  // of a turn is still stated; the single-message rule is not.
+  expect(prompt).toContain('a follow-up question is fine')
+  expect(prompt).toContain('do not send several where one would do')
+  expect(prompt).not.toContain('Say everything you need in one message')
+
+  // `SendMessage` is in the desktop tool list too and calls itself "Send a
+  // message to another agent", so the two overlap at exactly the point where
+  // the model resolves `to`.
+  expect(prompt).toContain('Peers are reached only here')
+  expect(prompt).toContain('never a peer')
+})
+
 test('an outcome outside the protocol list is never read as a delivery', async () => {
   // A local check, not a boundary check: if the upstream schema and this union
   // ever fall out of step, a wrong or future string reaches this tool wearing
@@ -265,8 +331,11 @@ test('an outcome outside the protocol list is never read as a delivery', async (
   })
   const result = await send(fake.requestHost, { to: 'Bear', text: 'hello' })
 
-  expect(result.delivered).toBe(false)
+  // Nor as a confirmed non-delivery: an answer this tool cannot read says
+  // nothing either way, and the sentence has to admit that.
+  expect(result.delivery).toBe('unconfirmed')
   expect(result.outcome).toBe('send_failed')
+  expect(result.summary).not.toContain('treat it as not delivered')
 })
 
 test('text over the byte cap is refused without routing anything', async () => {
@@ -276,7 +345,7 @@ test('text over the byte cap is refused without routing anything', async () => {
   const text = 'é'.repeat(MAX_PEER_TEXT_BYTES)
   const result = await send(fake.requestHost, { to: 'Bear', text })
 
-  expect(result.delivered).toBe(false)
+  expect(result.delivery).toBe('not_delivered')
   expect(result.outcome).toBe('text_too_large')
   expect(fake.calls).toEqual([])
 })
@@ -286,7 +355,7 @@ test('text exactly at the byte cap is still sent whole', async () => {
   const text = 'x'.repeat(MAX_PEER_TEXT_BYTES)
   const result = await send(fake.requestHost, { to: 'Bear', text })
 
-  expect(result.delivered).toBe(true)
+  expect(result.delivery).toBe('delivered')
   const sent = fake.calls[0]?.args
   expect(sent).toEqual({ to: 'Bear', text })
 })
@@ -311,7 +380,7 @@ test('a full queue is described as messages waiting, not as the peer being full'
     text: 'hello',
   })
 
-  expect(result.delivered).toBe(false)
+  expect(result.delivery).toBe('not_delivered')
   expect(result.outcome).toBe('peer_queue_full')
   // The cap counts messages the app is still holding for that peer. The peer
   // takes each one the moment it is handed over, so nothing here may claim a

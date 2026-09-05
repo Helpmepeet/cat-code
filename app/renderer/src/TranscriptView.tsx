@@ -42,9 +42,16 @@ import {
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
-import type { SessionCreationSeam } from './shellState.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import {
+  PEER_BUBBLE_CLASS,
+  PEER_TONE_CLASS,
+  isPeerSpeechCall,
+  peerActivityText,
+  peerToolPresentation,
+  type PeerToolPresentation,
+} from './peerSurfaces.js'
 import {
   renderMarkdownTree,
   type MarkdownComponents,
@@ -321,7 +328,6 @@ export const TranscriptView = memo(function TranscriptView({
   loadEarlierPending,
   loadEarlierFailure,
   onLoadEarlier,
-  creationSeam,
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
@@ -361,14 +367,6 @@ export const TranscriptView = memo(function TranscriptView({
    * process is gone) still shows the boundary row, and has nothing to ask.
    */
   onLoadEarlier?: () => void
-  /**
-   * "Bear · created by Alex" — the provenance row a session created by another
-   * session opens with (PEER-SESSIONS §6). Resolved by the caller from the
-   * roster (`selectCreationSeam`), because the creator is stored as an id and
-   * the name it resolves to is only true at read time. Absent for a session the
-   * user opened, which is every session until a peer creates one.
-   */
-  creationSeam?: SessionCreationSeam | null
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
   /** Present only for an ordinary live pane. */
@@ -397,7 +395,6 @@ export const TranscriptView = memo(function TranscriptView({
       loadEarlierPending={loadEarlierPending ?? false}
       loadEarlierFailure={loadEarlierFailure ?? null}
       onLoadEarlier={onLoadEarlier}
-      creationSeam={creationSeam ?? null}
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
       onMessageAction={onMessageAction}
@@ -420,7 +417,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending = false,
   loadEarlierFailure = null,
   onLoadEarlier,
-  creationSeam = null,
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
@@ -443,8 +439,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   loadEarlierPending?: boolean
   loadEarlierFailure?: string | null
   onLoadEarlier?: () => void
-  /** See `TranscriptView`'s prop of the same name. */
-  creationSeam?: SessionCreationSeam | null
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
   onMessageAction?: MessageActionHandler
@@ -581,19 +575,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
         className="mx-auto flex w-full max-w-[var(--transcript-width)] flex-col gap-2.5 px-8 pt-6"
         data-card-style={cardStyle}
       >
-        {/* The provenance row a created session opens with (PEER-SESSIONS §6).
-          * Neutral, and glyphless: an accent hairline is this app's live/active
-          * signal, and where a session came from is neither. It carries no
-          * `data-row-key` on purpose, the way `CompactingSeam` at the foot of
-          * this column does not: the scroll memory anchors on transcript ROWS,
-          * and this is a fixed header that is always at the top. */}
-        {creationSeam ? (
-          <Seam
-            tone="neutral"
-            label={creationSeam.label}
-            detail={creationSeam.detail}
-          />
-        ) : null}
         {items.map(item => {
           // The wrapper publishes the row's identity to the pane's scroll memory
           // (`transcriptScrollMemory.ts`): the reading position is remembered as
@@ -2067,10 +2048,11 @@ const STATE_STYLE: Record<
  * How much of a peer argument the one-line slot is allowed to carry.
  *
  * The slot itself is a single truncated line, so CSS already cuts anything too
- * wide for the window. This cap is about the string, not the pixels: a peer
- * message is capped at `MAX_PEER_TEXT_BYTES`, not at a headline length, so a
- * whole essay would otherwise be collapsed onto one line and handed to the DOM
- * for every card on screen.
+ * wide for the window. This cap is about the string, not the pixels: a create
+ * prompt and a read query are bounded by nothing in their schemas, so a whole
+ * essay would otherwise be collapsed onto one line and handed to the DOM for
+ * every card on screen. It no longer sees a peer MESSAGE: a send is drawn as
+ * speech and shows its text in full.
  */
 const PEER_TARGET_MAX_CHARS = 160
 
@@ -2087,59 +2069,107 @@ function peerTargetFragment(value: string): string {
 }
 
 /**
- * The peer tools, keyed by NAME rather than by family.
+ * A peer call's target, split so the NAME can read as a name.
  *
- * They have no family of their own, so they arrive here as `other` and the
- * switch below would print the tool's own name into the slot where Bash puts
- * its command: the operator saw a bare `SendToPeer` and had to open the card to
- * learn anything. Giving them a family instead would change the card's mark,
- * word and hue, which is a redesign this is not.
- *
- * The grammar is the one `agent-control` already uses, extended by what the
- * call is about: verb, who, then the words that say which call this is. Every
- * value comes from `row.input`, which is what THIS session sent, so no text
- * from another session reaches the header on any of these paths.
+ * The verb is no longer in here: it moved to the mark (`peerToolPresentation`),
+ * so repeating it would print the same thing twice in two registers, which is
+ * what the `• TOOL message Basalt: …` fallback did. Every value comes from
+ * `row.input`, which is what THIS session sent, so no text from another session
+ * reaches the header on any of these paths.
  */
-function derivePeerTarget(
+type PeerTargetParts = {
+  /** The peer this call is about, when the call names one before it runs. */
+  name: string | null
+  /** The one argument worth a header slot. */
+  detail: string | null
+  /** A search query is mono the way `grep`'s pattern is; prose is not. */
+  detailMono: boolean
+}
+
+function derivePeerTargetParts(
   toolName: string,
   str: (key: string) => string | null,
-): string | null {
+  input: Record<string, unknown>,
+): PeerTargetParts | null {
   switch (toolName) {
     // `SEND_TO_PEER_TOOL_NAME`/`READ_PEER_TOOL_NAME`/`CREATE_PEER_TOOL_NAME`
     // (`app/sidecar/sendToPeerTool.ts:48`, `readPeerTool.ts:71`,
     // `createPeerTool.ts:36`); the argument keys are those files' own schemas.
     case 'SendToPeer': {
+      // Only reached if the speech row is somehow bypassed; a send is drawn as
+      // speech, not as a card (`PeerSpeechRow`).
       const to = str('to')
-      if (to === null) return null
-      const text = str('text')
-      return text === null
-        ? `message ${to}`
-        : `message ${to}: ${peerTargetFragment(text)}`
+      return to === null ? null : { name: to, detail: null, detailMono: false }
     }
     case 'ReadPeer': {
-      const peer = str('peer')
+      // A call missing its required field still projects before the tool
+      // validates it. Returning null here would hand the slot back to the
+      // family fallback, which is `row.toolName` — the raw identifier this
+      // whole treatment exists to keep off the screen.
+      const peer = str('peer') ?? 'a peer'
       if (peer === null) return null
-      // Only a SEARCH has words worth showing, and a query is now the whole of
-      // what makes a read one: with it, only the turns containing it come back;
-      // without it, the most recent turns do. A whitespace-only query is
-      // absent to the tool, so it is absent here too.
+      // A query is the whole of what makes a read a search since the tool
+      // returns turns (`readPeerTool.ts` input schema; `view` and `limit` were
+      // removed 2026-09-05). A whitespace-only query is absent to the tool, so
+      // it is absent here too.
       const query = str('query')?.trim() || null
-      return query === null
-        ? `read ${peer}`
-        : `read ${peer}: ${peerTargetFragment(query)}`
+      return {
+        name: peer,
+        // Capped like every other peer argument: `query` is bounded by nothing
+        // in the tool's schema (`readPeerTool.ts` `z.string().optional()`), and
+        // this value also reaches the agent activity line through `deriveTarget`.
+        detail: query === null ? null : peerTargetFragment(query),
+        detailMono: query !== null,
+      }
     }
     case 'CreatePeer': {
       // No name to show: the peer is named by main and the name comes back in
       // the result, so at this point the instruction is all there is.
       const prompt = str('prompt')
-      return prompt === null ? null : `new session: ${peerTargetFragment(prompt)}`
+      return {
+        name: null,
+        detail: prompt === null ? 'a new session' : peerTargetFragment(prompt),
+        detailMono: false,
+      }
     }
-    // `ListPeers` takes one optional `all`, which only widens how much of the
-    // roster is rendered, so there is nothing here the tool's own name does not
-    // already say.
+    case 'ListPeers':
+      // The one optional flag widens the roster to closed rows
+      // (`listPeersTool.ts:44`), which is the only thing the call can vary.
+      return {
+        name: null,
+        detail: input['all'] === true ? 'every peer' : 'open peers',
+        detailMono: false,
+      }
     default:
       return null
   }
+}
+
+/** The name reads as a name, the argument as an argument. */
+function PeerTargetLine({ parts }: { parts: PeerTargetParts }) {
+  return (
+    <>
+      {parts.name === null ? null : (
+        <span className="font-medium text-text-primary">{parts.name}</span>
+      )}
+      {parts.name !== null && parts.detail !== null ? (
+        <span className="text-text-ghost"> · </span>
+      ) : null}
+      {parts.detail === null ? null : (
+        <span
+          className={`text-text-muted ${parts.detailMono ? 'font-mono' : ''}`}
+        >
+          {parts.detail}
+        </span>
+      )}
+    </>
+  )
+}
+
+/** The same parts as one line, for `target` and anything reading it as text. */
+function peerTargetText(parts: PeerTargetParts): string {
+  if (parts.name === null) return parts.detail ?? ''
+  return parts.detail === null ? parts.name : `${parts.name} · ${parts.detail}`
 }
 
 /** Family-specific one-line target framing derived from the REAL tool input. */
@@ -2152,8 +2182,8 @@ function deriveTarget(
     const value = input[key]
     return typeof value === 'string' && value.length > 0 ? value : null
   }
-  const peerTarget = derivePeerTarget(row.toolName, str)
-  if (peerTarget !== null) return peerTarget
+  const peerParts = derivePeerTargetParts(row.toolName, str, input)
+  if (peerParts !== null) return peerTargetText(peerParts)
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
@@ -2274,6 +2304,9 @@ function ToolCardShell({
   collapsedExtra,
   defaultExpanded,
   expansionKey,
+  presentation,
+  tone,
+  targetNode,
   children,
 }: {
   family: ToolFamily
@@ -2298,13 +2331,36 @@ function ToolCardShell({
    * for a shell with no single tool behind it, which then remembers per instance.
    */
   expansionKey?: string | null
+  /**
+   * Replaces the family's mark and word, keeping everything else. The peer
+   * tools are the only caller: they have no family of their own, so they arrive
+   * as `other` and would draw the `•`/`Tool` fallback — which said nothing, and
+   * pushed the verb into the mono slot where Bash puts its command. Their mark
+   * says which OPERATION it is and their tone is the peer colour
+   * (`peerSurfaces.ts`), so the peer hue is the whole of what separates a peer
+   * read from a file read.
+   */
+  presentation?: PeerToolPresentation
+  tone?: string
+  /**
+   * Replaces the rendered target and drops the mono face with it. Mono is right
+   * for a path or a command; a peer target is a NAME plus a short argument, and
+   * this is what lets the name read as a name. `target` stays the plain string
+   * so the hover swap and the file-path menu keep working off one value.
+   */
+  targetNode?: ReactNode
   children?: ReactNode
 }) {
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
     defaultExpanded ?? false,
   )
-  const fam = FAMILY_STYLE[family]
+  const base = FAMILY_STYLE[family]
+  const fam = {
+    mark: presentation?.mark ?? base.mark,
+    word: presentation?.word ?? base.word,
+    color: tone ?? base.color,
+  }
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
   const { style } = useContext(ToolCardStyleContext)
@@ -2326,9 +2382,9 @@ function ToolCardShell({
           {fam.word}
         </span>
         <span
-          className={`min-w-0 flex-1 truncate font-mono text-xs text-text-primary ${
-            targetFilePath ? 'hover:text-accent-soft' : ''
-          }`}
+          className={`min-w-0 flex-1 truncate text-xs text-text-primary ${
+            targetNode === undefined ? 'font-mono' : 'font-sans'
+          } ${targetFilePath ? 'hover:text-accent-soft' : ''}`}
           title={targetFilePath ? 'Right-click for file actions' : undefined}
           onContextMenu={
             targetFilePath
@@ -2344,7 +2400,9 @@ function ToolCardShell({
               : undefined
           }
         >
-          {targetHover === undefined ? (
+          {targetNode !== undefined ? (
+            targetNode
+          ) : targetHover === undefined ? (
             target
           ) : (
             <>
@@ -2402,10 +2460,32 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
   const targetFilePath =
     filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId }
+  // A send is speech, not a card. Ahead of the cancelled branch because the
+  // shape does not change when the call was stopped: the row still says who
+  // this session was talking to and what it said.
+  if (isPeerSpeechCall(row.toolName)) return <PeerSpeechRow row={row} />
+  const peerPresentation = peerToolPresentation(row.toolName, row.input)
+  const peerParts =
+    peerPresentation === null
+      ? null
+      : derivePeerTargetParts(
+          row.toolName,
+          key => {
+            const value = row.input[key]
+            return typeof value === 'string' && value.length > 0 ? value : null
+          },
+          row.input,
+        )
+  const peerTone = peerPresentation === null ? undefined : PEER_TONE_CLASS
+  const peerTargetNode =
+    peerParts === null ? undefined : <PeerTargetLine parts={peerParts} />
   if (row.status === 'cancelled') {
     return (
       <ToolCardShell
         family={row.toolFamily}
+        presentation={peerPresentation ?? undefined}
+        tone={peerTone}
+        targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
         status={row.status}
@@ -2444,6 +2524,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
     <div className="w-full">
       <ToolCardShell
         family={row.toolFamily}
+        presentation={peerPresentation ?? undefined}
+        tone={peerTone}
+        targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
         status={row.status}
@@ -2469,6 +2552,121 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
           <NestedRowList className="flex flex-col gap-2" rows={row.children} />
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * What became of a send, read from the tool's OWN result rather than from the
+ * row status.
+ *
+ * THREE VALUES, NOT TWO. The tool reports confirmed delivery, confirmed
+ * non-delivery and unconfirmed delivery as distinct facts: a request that timed
+ * out may still be delivered once the peer finishes starting, so `unconfirmed`
+ * is neither a success nor a failure and must not be drawn as either.
+ *
+ * THE ROW STATUS CANNOT ANSWER THIS. `SendToPeer` never throws and never sets
+ * `is_error`: every refusal returns `{delivery, outcome, summary}` as ordinary
+ * result data, deliberately, so a refusal does not reach the model as a bug in
+ * its own call (`app/sidecar/sendToPeerTool.ts` `describeError`, and the
+ * `mapToolResultToToolResultBlockParam` that emits no `is_error`). The
+ * projector derives status from that field alone, so all thirteen outcomes
+ * — `no_such_peer`, `blocked_by_user`, `loop_stopped`, `peer_queue_full` and
+ * the rest — arrive as `success`. Keying the row off `status === 'error'` drew
+ * every one of them as delivered.
+ *
+ * Null when there is no result yet, or when the result is not the shape this
+ * tool documents: an unreadable result must not be reported as a failure.
+ */
+function peerSendDelivery(
+  row: ToolUseNestedRow,
+): 'delivered' | 'not_delivered' | 'unconfirmed' | null {
+  const content = row.result?.content
+  if (typeof content !== 'string' || content.length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const value = (parsed as Record<string, unknown>)['delivery']
+    return value === 'delivered' ||
+      value === 'not_delivered' ||
+      value === 'unconfirmed'
+      ? value
+      : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `SendToPeer`, drawn as speech rather than as a tool card (operator,
+ * 2026-09-05). It is this session talking to another one, so it takes a quote
+ * mark, the recipient, and the message as prose.
+ *
+ * NOT a mirrored user bubble: that was considered and rejected, because an
+ * outgoing peer message is the assistant's action, not the user's, and the
+ * right side of this column is where things that ARRIVE go. And no arrow: `←`
+ * is CHANNEL_ARROW (`src/constants/figures.ts:21`), still owned by the channel
+ * row, so an arrow here would name the wrong sender.
+ *
+ * The mark sits in the same 16px column every family mark uses, so the target
+ * column still lines up with the cards above and below it.
+ *
+ * EVERY STATE BUT ARRIVAL IS DRAWN, because this row replaced a card that had a
+ * status dot and losing it would draw an in-flight or stopped message as one
+ * that arrived. The tool's own failure summaries are written for the MODEL
+ * ("try once more later", `describeOutcome`), so the reason is not printed at
+ * the user; the row says the one thing the user needs.
+ *
+ * Only `not delivered` is danger-toned. `not confirmed` means the app never
+ * said either way and the message may still arrive, so it takes the same
+ * subtle tone as `sending`: drawing an open question in red reports a failure
+ * nobody established.
+ */
+function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
+  const to = typeof row.input['to'] === 'string' ? row.input['to'] : null
+  const text = typeof row.input['text'] === 'string' ? row.input['text'] : ''
+  const delivery = peerSendDelivery(row)
+  const failed = delivery === 'not_delivered'
+  const state =
+    row.status === 'cancelled'
+      ? 'stopped'
+      : failed
+        ? 'not delivered'
+        : delivery === 'unconfirmed'
+          ? 'not confirmed'
+          : delivery === null && row.result == null
+            ? 'sending'
+            : null
+  return (
+    <div className="flex w-full gap-2.5">
+      <span
+        className={`w-4 shrink-0 text-center text-[17px] leading-[1.35] ${
+          failed
+            ? 'text-tone-danger'
+            : state === null
+              ? PEER_TONE_CLASS
+              : 'text-text-ghost'
+        }`}
+        aria-hidden
+      >
+        &ldquo;
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className={`text-[11px] ${PEER_TONE_CLASS}`}>
+          {to ?? 'Peer'}
+          {state === null ? null : (
+            <span
+              className={failed ? 'text-tone-danger' : 'text-text-subtle/70'}
+            >
+              {' · '}
+              {state}
+            </span>
+          )}
+        </div>
+        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
+          {text}
+        </div>
+      </div>
     </div>
   )
 }
@@ -3015,6 +3213,12 @@ function agentActivityOf(row: ToolUseNestedRow): string | null {
   for (let index = row.children.length - 1; index >= 0; index -= 1) {
     const child = row.children[index]
     if (child === undefined || child.kind !== 'tool-use') continue
+    // Peer tools carry their verb in a mark the activity line does not have, so
+    // they supply a whole phrase and skip the prefix below — which would
+    // otherwise print their raw PascalCase names at the user (§7), and print
+    // `ListPeers` twice now that the call has a target of its own.
+    const peerActivity = peerActivityText(child.toolName, child.input)
+    if (peerActivity !== null) return peerActivity
     const target = agentActivityTarget(child)
     // `agentActivityTarget` falls back to the tool's OWN name for several families, and
     // already spells MCP as `server › tool`. Prefixing either prints the name
@@ -5383,15 +5587,11 @@ function AgentCompletionBody({
  *    come from the engine's own canonical description of each kind in
  *    `wrapCommandText` (`src/utils/messages.ts:5681,5686`) — the one exhaustive
  *    per-kind statement in the engine. §0 flag: 🔁 adapted(no TUI precedent).
- *  - `peer` — `←`, the sending session's own name, and the row's one accent
- *    moved off the glyph onto that name (`emphasizeSender`). A peer message is
- *    the fifth injected origin and takes this same row rather than a bubble
- *    (PEER-SESSIONS §6); it is the only kind whose sender is a session the user
- *    named, so the name is the part that has to read as a sender. A peer row
- *    that arrived with no usable name keeps the ghost glyph but drops back to
- *    the muted heading: the emphasis exists to separate a NAME from body text,
- *    and "Peer message" is not a name, so emphasising it would make a degraded
- *    row louder than a correctly attributed one.
+ *  - `peer` — NOT drawn here at all. A peer message is a message, not a
+ *    notice, so it leaves for `PeerMessageBubble` at the top of this function
+ *    (operator, 2026-09-05). It used to take this shape with `←` and an
+ *    emphasised sender; both are gone, and `←` stays with `channel`, which owns
+ *    it (`CHANNEL_ARROW`, `src/constants/figures.ts:21`).
  *  - anything else — a kind minted by a newer engine: neutral "Injected
  *    message" heading, row still rendered (display degrades, never drops).
  */
@@ -5404,13 +5604,17 @@ function InjectedTurnBox({
   label: string | null
   content: string
 }) {
+  // A peer message is the one injected origin that is a MESSAGE rather than a
+  // notice, so it leaves this shape entirely (operator, 2026-09-05).
+  if (injectedKind === 'peer') {
+    return <PeerMessageBubble label={label} content={content} />
+  }
   const style = INJECTED_TURN_STYLE[injectedKind] ?? INJECTED_TURN_FALLBACK
   return (
     <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
       <span
         className={
-          'text-[12px] leading-5 ' +
-          (style.emphasizeSender ? 'text-text-ghost' : 'text-accent')
+'text-[12px] leading-5 text-accent'
         }
         aria-hidden
       >
@@ -5419,12 +5623,7 @@ function InjectedTurnBox({
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs">
           <span
-            className={
-              'font-medium ' +
-              (style.emphasizeSender && label !== null
-                ? 'text-text-primary'
-                : 'text-text-muted')
-            }
+className="font-medium text-text-muted"
           >
             {label === null ? style.heading : `${style.prefix}${label}`}
           </span>
@@ -5437,41 +5636,65 @@ function InjectedTurnBox({
   )
 }
 
+/**
+ * A message from another session, drawn as the USER bubble in another voice
+ * (operator, 2026-09-05): right-aligned, flush with the user's own right edge,
+ * the same geometry, and `UserBubble`'s own recipe — `border-accent/20` over
+ * `bg-accent/10` — with the peer colour in place of the accent.
+ *
+ * RIGHT, not left, and that is the argument for the whole shape: the right of
+ * this column is what ARRIVES and drives a turn. The user's prompts are there;
+ * a peer's message arrives the same way. It used to sit left among the tool
+ * cards, which said it was something this session did.
+ *
+ * No glyph. The `←` it used to carry is CHANNEL_ARROW
+ * (`src/constants/figures.ts:21`), still owned by the channel row, so keeping
+ * it here would name the wrong sender.
+ *
+ * A row that arrived with no usable name degrades to a NEUTRAL surface, not a
+ * quieter peer one: the colour marks the peer namespace and an unattributed
+ * message has no name to be in it.
+ */
+function PeerMessageBubble({
+  label,
+  content,
+}: {
+  label: string | null
+  content: string
+}) {
+  return (
+    <div className="flex flex-col items-end">
+      <span
+        className={`mb-1 pr-1 text-[11px] ${
+          label === null ? 'text-text-subtle/70' : PEER_TONE_CLASS
+        }`}
+      >
+        {label ?? 'Peer message'}
+      </span>
+      <div
+        className={`max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br px-4 py-2.5 text-sm leading-relaxed text-text-primary ${
+          label === null
+            ? 'border border-shell-seam bg-white/[0.05]'
+            : PEER_BUBBLE_CLASS
+        }`}
+      >
+        {content}
+      </div>
+    </div>
+  )
+}
+
 type InjectedTurnStyle = {
   glyph: string
   /** Heading when the origin names no sender. */
   heading: string
   /** Prefix in front of a named sender (`@` for a teammate, '' for a channel). */
   prefix: string
-  /**
-   * Move the row's one accent off the decorative glyph and onto the sender:
-   * label at `text-text-primary`, glyph dropped to `text-text-ghost`. Set ONLY
-   * by `peer`, and optional precisely so the four older kinds keep the shared
-   * `text-accent` glyph / `text-text-muted` label they have always had.
-   *
-   * It exists because in the default shape the sender and the body are both
-   * `text-text-muted` at the same size, so a peer's name reads as the message's
-   * first line rather than as who sent it (operator ruling, 2026-09-03).
-   *
-   * The LABEL half is additionally conditioned on there actually being a label
-   * (operator ruling, 2026-09-03): a row falls back to `heading` only when the
-   * origin carried no usable name, which is a degraded row, and display that
-   * degrades should get quieter rather than louder. The GLYPH half is keyed on
-   * this flag alone — a peer row is still a peer row, and the accent must not
-   * come back on the arrow.
-   */
-  emphasizeSender?: boolean
 }
 
 const INJECTED_TURN_STYLE: Record<string, InjectedTurnStyle> = {
   channel: { glyph: '←', heading: 'Channel message', prefix: '' },
   teammate: { glyph: '@', heading: 'Teammate', prefix: '@' },
-  peer: {
-    glyph: '←',
-    heading: 'Peer message',
-    prefix: '',
-    emphasizeSender: true,
-  },
   coordinator: {
     glyph: '⤷',
     heading: 'Coordinator',

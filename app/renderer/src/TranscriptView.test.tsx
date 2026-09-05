@@ -1590,9 +1590,15 @@ test('the activity line keeps the command when the model wrote no description', 
   expect(html).not.toContain('Bash git status')
 })
 
-test('a SendToPeer card says who was messaged AND what was sent', () => {
-  // The operator's complaint: the header read `SendToPeer` and nothing else, so
-  // the only way to learn what went out was to open the card.
+/**
+ * The four peer tools used to fall into the `other` family and draw `• Tool`,
+ * with the verb pushed into the mono slot where Bash puts its command, so the
+ * header said the same thing twice in two registers and `ListPeers` printed its
+ * own PascalCase name at the user. They now carry an OPERATION mark in the peer
+ * colour (operator, 2026-09-05), and the verb lives in the mark rather than in
+ * the words.
+ */
+test('a send is drawn as speech, not as a tool card', () => {
   const html = render(
     toolRow({
       toolName: 'SendToPeer',
@@ -1604,62 +1610,235 @@ test('a SendToPeer card says who was messaged AND what was sent', () => {
       status: 'success',
     }),
   )
-  expect(html).toContain('message Bear')
-  expect(html).toContain('The sidecar rejects the frame. Can you check the schema?')
-  // The tool's own name is no longer what occupies the slot. (The row key still
-  // carries it; that is the test helper's id, not anything on screen.)
+  // The recipient and the whole message, as prose rather than truncated into a
+  // one-line slot: this row is the message, so nothing about it is a summary.
+  expect(html).toContain('Bear')
+  expect(html).toContain('The sidecar rejects the frame.')
+  expect(html).toContain('Can you check the schema?')
+  expect(html).toContain('\u201c')
+  // None of the tool-card furniture, and never the tool's own name.
   expect(html).not.toContain('>SendToPeer<')
+  expect(html).not.toContain('message Bear')
+  expect(html).not.toContain('>Tool<')
+  // No arrow: `←` is CHANNEL_ARROW and channel still owns it.
+  expect(html).not.toContain('→')
+  expect(html).not.toContain('←')
 })
 
-test('a long peer message is cut in the header, and a short one is not marked as cut', () => {
-  const long = render(
+/**
+ * THE ROW STATUS CANNOT CARRY THIS. `SendToPeer` never throws and never sets
+ * `is_error` (`app/sidecar/sendToPeerTool.ts:203-206`, and the result mapper at
+ * `:365`), so every one of its thirteen outcomes projects as `success`. The
+ * first cut of this row keyed failure off `status === 'error'`, which no real
+ * send ever reaches, so every refusal drew as delivered. This test uses the
+ * REAL result shape rather than a hand-set status, which is the whole point:
+ * the version it replaced passed while proving nothing.
+ */
+test('a refused send says so, read from the result rather than the row status', () => {
+  const refused = render(
     toolRow({
       toolName: 'SendToPeer',
       toolFamily: 'other',
-      input: { to: 'Bear', text: 'x'.repeat(400) },
+      input: { to: 'Bear', text: 'ping' },
+      // Exactly what the tool returns for `session_not_found`: ordinary result
+      // data, status `success`, `delivery: 'not_delivered'`.
       status: 'success',
+      result: {
+        isError: false,
+        diff: null,
+        content: JSON.stringify({
+          to: 'Bear',
+          delivery: 'not_delivered',
+          outcome: 'no_such_peer',
+          summary:
+            'Not delivered. There is no peer called Bear here. Check the peer list and send again.',
+        }),
+      },
     }),
   )
-  expect(long).toContain(`${'x'.repeat(160)}…`)
-  expect(long).not.toContain('x'.repeat(161))
+  expect(refused).toContain('not delivered')
+  expect(refused).toContain('text-tone-danger')
+  // The summary is written FOR THE MODEL ("send again"). Telling the user to
+  // retry something the model does is the failure this assertion prevents.
+  expect(refused).not.toContain('send again')
+  expect(refused).not.toContain('no_such_peer')
 
-  const short = render(
+  const delivered = render(
     toolRow({
       toolName: 'SendToPeer',
       toolFamily: 'other',
       input: { to: 'Bear', text: 'ping' },
       status: 'success',
+      result: {
+        isError: false,
+        diff: null,
+        content: JSON.stringify({
+          to: 'Bear',
+          delivery: 'delivered',
+          outcome: 'delivered',
+          summary: 'Delivered.',
+        }),
+      },
+      id: 'ok',
     }),
   )
-  expect(short).toContain('message Bear: ping')
-  expect(short).not.toContain('…')
+  expect(delivered).not.toContain('not delivered')
 })
 
-test('a ReadPeer card names the peer, and its query only when it really searched', () => {
+/**
+ * The third fact. A request that timed out may still be delivered once the peer
+ * finishes starting, so the tool reports `unconfirmed` rather than picking a
+ * side, and the row must not turn an open question into a failure: the words
+ * say `not confirmed` and the tone is the subtle one `sending` uses, never the
+ * danger tone `not delivered` gets.
+ */
+test('an unconfirmed send is drawn as unconfirmed, not as a failure', () => {
+  const unconfirmed = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'success',
+      result: {
+        isError: false,
+        diff: null,
+        content: JSON.stringify({
+          to: 'Bear',
+          delivery: 'unconfirmed',
+          outcome: 'send_failed',
+          summary:
+            'Not confirmed. The app did not answer in time, so it is not known whether this reached Bear; it may still arrive when Bear is running. If it matters, ask Bear whether it got it, rather than sending the same text again.',
+        }),
+      },
+      id: 'unconfirmed',
+    }),
+  )
+  expect(unconfirmed).toContain('not confirmed')
+  expect(unconfirmed).not.toContain('not delivered')
+  expect(unconfirmed).not.toContain('text-tone-danger')
+  // The summary is the model's, not the user's: no retry advice on the page.
+  expect(unconfirmed).not.toContain('ask Bear whether it got it')
+})
+
+/**
+ * The guarantee the reader is written around: a result whose shape this row
+ * does not recognise is NOT a failure. It draws as an ordinary delivered send,
+ * with no state word at all, because the alternative is telling the user a
+ * message failed on the strength of an unparsed string.
+ */
+test('an unreadable send result renders as delivered with no state word', () => {
+  for (const [id, content] of [
+    ['not-json', 'delivered'],
+    ['wrong-shape', JSON.stringify({ to: 'Bear', delivered: false })],
+    ['unknown-value', JSON.stringify({ to: 'Bear', delivery: 'maybe' })],
+  ] as const) {
+    const html = render(
+      toolRow({
+        toolName: 'SendToPeer',
+        toolFamily: 'other',
+        input: { to: 'Bear', text: 'ping' },
+        status: 'success',
+        result: { isError: false, diff: null, content },
+        id,
+      }),
+    )
+    expect(html).not.toContain('not delivered')
+    expect(html).not.toContain('not confirmed')
+    expect(html).not.toContain('sending')
+    expect(html).not.toContain('text-tone-danger')
+  }
+})
+
+test('a send in flight and a stopped send do not read as delivered', () => {
+  const sending = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'pending',
+    }),
+  )
+  expect(sending).toContain('sending')
+
+  const stopped = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'cancelled',
+      id: 'stopped',
+    }),
+  )
+  expect(stopped).toContain('stopped')
+})
+
+/**
+ * The activity line has no mark column, so a peer call must carry its verb in
+ * words. Prefixing `child.toolName` put `SendToPeer`/`ReadPeer`/`ListPeers` in
+ * front of the user verbatim (§7), and printed `ListPeers` twice once the call
+ * gained a target of its own.
+ */
+test('a worker running peer tools never shows their raw names', () => {
+  for (const input of [
+    { toolName: 'SendToPeer', input: { to: 'Bear', text: 'hi' }, says: 'messaging Bear' },
+    { toolName: 'ReadPeer', input: { peer: 'Bear' }, says: 'reading Bear' },
+    {
+      toolName: 'ReadPeer',
+      input: { peer: 'Bear', query: 'schema' },
+      says: 'searching Bear',
+    },
+    { toolName: 'CreatePeer', input: { prompt: 'go' }, says: 'starting a session' },
+    { toolName: 'ListPeers', input: {}, says: 'listing open peers' },
+  ]) {
+    const html = render(
+      toolRow({
+        toolName: 'Task',
+        toolFamily: 'agent',
+        input: { description: 'peer work' },
+        status: 'pending',
+        id: input.toolName + String(input.says),
+        children: [
+          toolRow({
+            toolName: input.toolName,
+            toolFamily: 'other',
+            input: input.input,
+            status: 'success',
+            id: `child-${input.toolName}-${input.says}`,
+          }),
+        ],
+      }),
+    )
+    expect(html).toContain(input.says)
+    expect(html).not.toContain(`>${input.toolName}`)
+  }
+})
+
+test('a peer read names the peer, and marks a search only when it really searched', () => {
   const tail = render(
     toolRow({
       toolName: 'ReadPeer',
       toolFamily: 'other',
-      // No query, so this is a tail read and there is nothing to quote.
+      // No query, so this is a plain read and there is nothing to quote.
       input: { peer: 'Bear', maxBytes: 32768 },
       status: 'success',
     }),
   )
-  expect(tail).toContain('read Bear')
-  expect(tail).not.toContain('read Bear:')
+  expect(tail).toContain('Bear')
+  expect(tail).toContain('≡')
+  expect(tail).not.toContain('⌕')
 
   const blank = render(
     toolRow({
       toolName: 'ReadPeer',
       toolFamily: 'other',
-      // Whitespace is absent to the tool, so it reads as a tail here as well.
+      // Whitespace is absent to the tool, so it is absent here as well.
       input: { peer: 'Bear', query: '   ' },
       status: 'success',
       id: 'blank',
     }),
   )
-  expect(blank).toContain('read Bear')
-  expect(blank).not.toContain('read Bear:')
+  expect(blank).toContain('≡')
+  expect(blank).not.toContain('⌕')
 
   const search = render(
     toolRow({
@@ -1670,10 +1849,16 @@ test('a ReadPeer card names the peer, and its query only when it really searched
       id: 'search',
     }),
   )
-  expect(search).toContain('read Bear: schema')
+  // The grep family's mark, because a search is what it is; the peer colour is
+  // the whole of what separates it from a search of a file.
+  expect(search).toContain('⌕')
+  expect(search).toContain('schema')
+  expect(search).toContain('text-peer')
+  // The verb is in the mark now, so it is not also in the words.
+  expect(search).not.toContain('read Bear')
 })
 
-test('a CreatePeer card shows the instruction, because the new name does not exist yet', () => {
+test('a create shows the instruction, because the new name does not exist yet', () => {
   const html = render(
     toolRow({
       toolName: 'CreatePeer',
@@ -1682,18 +1867,59 @@ test('a CreatePeer card shows the instruction, because the new name does not exi
       status: 'success',
     }),
   )
-  expect(html).toContain('new session: Audit the permission boundary tests')
+  expect(html).toContain('Audit the permission boundary tests')
+  expect(html).toContain('+')
   expect(html).not.toContain('>CreatePeer<')
+  expect(html).not.toContain('new session:')
 })
 
-test('a ListPeers card keeps the tool name, because the call carries no arguments', () => {
-  // Nothing is invented for it: its input schema is empty, so there is no fact
-  // to put in the slot that the name does not already give.
-  const html = render(
-    toolRow({ toolName: 'ListPeers', toolFamily: 'other', status: 'success' }),
+test('a roster listing says what it listed instead of its own tool name', () => {
+  const open = render(
+    toolRow({ toolName: 'ListPeers', toolFamily: 'other', input: {}, status: 'success' }),
   )
-  expect(html).toContain('ListPeers')
+  expect(open).toContain('open peers')
+  // The defect this replaces: a raw PascalCase identifier reaching the user.
+  // Scoped to rendered text, since the row key still carries the tool name and
+  // that is the test helper's id, not anything on screen.
+  expect(open).not.toContain('>ListPeers<')
+
+  const all = render(
+    toolRow({
+      toolName: 'ListPeers',
+      toolFamily: 'other',
+      input: { all: true },
+      status: 'success',
+      id: 'all',
+    }),
+  )
+  expect(all).toContain('every peer')
 })
+
+test('a long create instruction is cut in the header, a short one is not', () => {
+  const long = render(
+    toolRow({
+      toolName: 'CreatePeer',
+      toolFamily: 'other',
+      input: { prompt: 'x'.repeat(400) },
+      status: 'success',
+    }),
+  )
+  expect(long).toContain(`${'x'.repeat(160)}…`)
+  expect(long).not.toContain('x'.repeat(161))
+
+  const short = render(
+    toolRow({
+      toolName: 'CreatePeer',
+      toolFamily: 'other',
+      input: { prompt: 'ping' },
+      status: 'success',
+      id: 'short',
+    }),
+  )
+  expect(short).toContain('ping')
+  expect(short).not.toContain('…')
+})
+
 
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
   const html = render(
@@ -2507,14 +2733,14 @@ test('an injected turn renders system-side — never in the operator user column
 })
 
 /**
- * PEER-SESSIONS §6 — the peer row is the fifth injected turn and takes the same
- * grammar, with ONE difference the shared shape could not express: in the
- * default row the sender label and the body are both `text-text-muted` at the
- * same size, so a peer's name reads as the message's first line rather than as
- * who sent it. The row's one accent therefore moves off the decorative glyph
- * (dropped to `text-text-ghost`) and onto the name (`text-text-primary`).
+ * A peer message is drawn as the USER bubble in another voice (operator,
+ * 2026-09-05): right-aligned, flush with the user's own right edge, the same
+ * geometry, and `UserBubble`'s recipe with the peer colour in place of the
+ * accent. Right rather than left is the load-bearing half: the right of this
+ * column is what ARRIVES and drives a turn, and a peer's message arrives the
+ * same way the user's does. It used to sit left among the tool cards.
  */
-test('a peer turn names its sender, and the row accent sits on the name not the glyph', () => {
+test('a peer message is a right-aligned bubble in the peer colour, not a notice row', () => {
   const html = render({
     ...blockSource,
     id: 's:m:0:injected-peer',
@@ -2527,16 +2753,21 @@ test('a peer turn names its sender, and the row accent sits on the name not the 
 
   expect(html).toContain('ran the migration, all green')
   expect(html).toContain('Bear')
-  // The name carries the emphasis; the arrow gives its colour up for it.
-  expect(html).toContain('font-medium text-text-primary')
-  expect(html).toContain('text-[12px] leading-5 text-text-ghost')
-  expect(html).not.toContain('text-[12px] leading-5 text-accent')
-  // Still an injected row, never the operator's bubble.
-  expect(html).not.toContain('justify-end')
+  // The user bubble's own geometry, on the same side, at the same edge.
+  expect(html).toContain('items-end')
+  expect(html).toContain('rounded-2xl rounded-br')
+  expect(html).toContain('max-w-[82%]')
+  // Its recipe, in the peer colour rather than the accent. Never the accent
+  // itself: that is the user's own voice and this is not the user.
+  expect(html).toContain('border-peer/20')
+  expect(html).toContain('bg-peer/10')
   expect(html).not.toContain('bg-accent/10')
+  // The arrow is gone. `←` is CHANNEL_ARROW and channel still owns it, so
+  // keeping it here would name the wrong sender.
+  expect(html).not.toContain('←')
 
-  // A peer claim with no usable name falls back to a neutral heading rather
-  // than drawing an anonymous row that looks like it lost its sender.
+  // A peer claim with no usable name has no name to put the colour on, so the
+  // surface degrades to NEUTRAL rather than to a quieter peer one.
   const unnamed = render({
     ...blockSource,
     id: 's:m:0:injected-peer-unnamed',
@@ -2548,17 +2779,8 @@ test('a peer turn names its sender, and the row accent sits on the name not the 
   })
   expect(unnamed).toContain('Peer message')
   expect(unnamed).not.toContain('>peer<')
-
-  // …and it is QUIETER than a named row, not louder (operator ruling
-  // 2026-09-03). The emphasis exists to separate a sender NAME from body text;
-  // a generic heading is not a name, and a row only reaches this heading
-  // because `origin.name` was missing or empty off the wire, which is exactly
-  // the degraded case the renderer's display posture says to soften.
-  expect(unnamed).toContain('font-medium text-text-muted')
-  expect(unnamed).not.toContain('text-text-primary')
-  // The GLYPH still gives its accent up: a peer row is still a peer row.
-  expect(unnamed).toContain('text-[12px] leading-5 text-text-ghost')
-  expect(unnamed).not.toContain('text-[12px] leading-5 text-accent')
+  expect(unnamed).not.toContain('border-peer/20')
+  expect(unnamed).toContain('border-shell-seam')
 })
 
 /**
@@ -2630,38 +2852,34 @@ test.each([
 })
 
 /**
- * PEER-SESSIONS §6 — the created-session seam. It opens the transcript and is
- * derived by the renderer, so the row's only job here is to draw what it is
- * handed through the shared centered-divider grammar rather than as a sentence.
+ * The creation seam is GONE (operator, 2026-09-05). A created session's first
+ * row already IS a peer message from its creator, carrying that creator's name,
+ * so the seam above it named the same session twice. This is the assertion that
+ * fails if one is reintroduced: the transcript opens with the message, and
+ * nothing announces the session to itself.
  */
-test('a created session opens with one provenance seam, above its first row', () => {
+test('a created session opens with its creator\'s message and no seam above it', () => {
   const html = renderToStaticMarkup(
     <TranscriptRowsView
       rows={[
         {
           ...blockSource,
-          id: 's:m:0:user-text',
-          kind: 'user-text',
-          role: 'user',
-          content: 'first message',
+          id: 's:m:0:injected',
+          kind: 'injected-turn',
+          injectedKind: 'peer',
+          label: 'Alex',
+          content: 'Pick up the parser branch and keep going.',
           isReplay: false,
         },
       ]}
-      creationSeam={{ label: 'Bear', detail: 'created by Alex' }}
     />,
   )
 
-  expect(html).toContain('Bear')
-  expect(html).toContain('created by Alex')
-  // The component's own label/detail split supplies the middot: one seam row,
-  // not a hand-built sentence.
-  expect(html).toContain('· created by Alex')
-  // Above the first transcript row.
-  expect(html.indexOf('Bear')).toBeLessThan(html.indexOf('first message'))
-  // Neutral, and glyphless: an accent hairline is the live/active signal here
-  // and provenance is not that.
-  expect(html).toContain('bg-shell-seam')
-  expect(html).not.toContain('bg-accent/20')
+  expect(html).toContain('Alex')
+  expect(html).toContain('Pick up the parser branch')
+  // The seam's own wording, in either state, is what must not come back.
+  expect(html).not.toContain('created by')
+  expect(html).not.toContain('a session that is gone')
 })
 
 test('a session the user opened themselves shows no provenance seam', () => {

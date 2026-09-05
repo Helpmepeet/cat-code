@@ -287,7 +287,11 @@ export function createListPeersTool(
         // favour of the user's own setting.
         'A peer that is live or parked also carries the model it is running and its reasoning effort, as that peer last reported them. Use them to send work to a peer already on the model you want it done by, and to check that a peer you created on a particular model really came up on it.',
         '',
-        'Use it to find out who else is working here before you message one of them, and to check whether a peer you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody.',
+        // Presence exists so a creator can tell busy from stuck (§0a), and
+        // nothing said what its states do NOT establish. The `ReadPeer` prompt
+        // was routing "is it done" here, which this tool cannot answer: it
+        // reports activity, and a peer can go idle having failed.
+        "Use it to find out who else is working here before you message one of them, and to check whether a peer you are waiting on is still working or has gone quiet. It reads nothing from disk and disturbs nobody. What it shows is activity, never outcome: idle, parked or closed says a peer is not running, not that its task succeeded, and running says nothing about how far it is. Whether work is done comes from the peer's own report or from the work itself. If you asked a peer to hear back and it has gone idle without answering, one message asking is reasonable. If it is waiting for the user to answer a permission question, it cannot read or answer you until the user does; the user has its tab and sees that prompt, so tell them only when the wait holds up something you owe them.",
       ].join('\n')
     },
     async call(input: Input): Promise<{ data: ListPeersOutput }> {

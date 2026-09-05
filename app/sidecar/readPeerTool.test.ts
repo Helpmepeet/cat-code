@@ -1412,9 +1412,21 @@ test('the guidance claims the question this tool answers and routes away the one
   expect(guidance).toContain(
     'what it was asked, what it said back, and which files and commands it touched',
   )
-  expect(guidance).toContain('Whether it is done is a ListPeers answer')
+  // ACTIVITY is the ListPeers answer, not completion: that tool reports whether
+  // a peer is running, and a peer can go idle having failed.
+  expect(guidance).toContain('Whether it is still active is a ListPeers answer')
+  expect(guidance).toContain(
+    'whether it is done comes from its own report or from the work itself',
+  )
+  expect(guidance).not.toContain('Whether it is done is a ListPeers answer')
   expect(guidance).toContain('answered by asking the peer, not by reading it')
   expect(guidance).toContain(
     'Finding out why something failed is not a job for this tool',
+  )
+  // And the failure route names the two places that can answer. The old
+  // "tools that read it in full" named none, and no model-facing route to the
+  // transcript file exists: ListPeers drops the ids that would resolve one.
+  expect(guidance).toContain(
+    'ask the peer what happened, or tell the user, who has its tab',
   )
 })

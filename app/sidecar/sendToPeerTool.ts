@@ -49,14 +49,14 @@ export const SEND_TO_PEER_TOOL_NAME = 'SendToPeer'
 
 const inputSchema = lazySchema(() =>
   z.strictObject({
-    to: z
-      .string()
-      .min(1)
-      .describe('Name of the peer to message. Use ListPeers for the names.'),
-    text: z
-      .string()
-      .min(1)
-      .describe('What to say. Say everything you need in this one message.'),
+    // No "use ListPeers for the names" here. A model composing a call reads the
+    // argument description at the moment it writes `to`, and the imperative won
+    // over the prose above it: sessions listed peers before every send,
+    // including sends to the peer that created them, whose name they already
+    // had. The `no_such_peer` result keeps the sentence, which is the moment the
+    // advice applies.
+    to: z.string().min(1).describe('Name of the peer to message.'),
+    text: z.string().min(1).describe('What to say.'),
   }),
 )
 
@@ -83,9 +83,20 @@ export type SendToPeerOutcome =
   | 'text_too_large'
   | 'send_failed'
 
+/**
+ * THREE facts, not two (ruling 13, 2026-09-06). A boolean cannot carry this
+ * one: a request that times out at `HOST_REQUEST_TIMEOUT_MS` may still be
+ * delivered afterwards, because main can still be waking the peer and holds the
+ * message for delivery once it reports `ready`. Reporting that as `false` told
+ * the sender a message had not arrived when nobody knew, and reporting it as
+ * `true` would be worse. `unconfirmed` is the honest third value, and the wire
+ * outcomes (`PeerDeliverOutcome`) are untouched by it.
+ */
+export type SendToPeerDelivery = 'delivered' | 'not_delivered' | 'unconfirmed'
+
 export type SendToPeerResult = {
   to: string
-  delivered: boolean
+  delivery: SendToPeerDelivery
   outcome: SendToPeerOutcome
   summary: string
 }
@@ -119,28 +130,28 @@ function describeOutcome(
     case 'queued_live':
       return {
         to,
-        delivered: true,
+        delivery: 'delivered',
         outcome: 'delivered',
         summary: `Delivered to ${to}. It is already working, so it reads this at its next step.`,
       }
     case 'queued_wake':
       return {
         to,
-        delivered: true,
+        delivery: 'delivered',
         outcome: 'delivered_on_start',
         summary: `Delivered to ${to}. It was not open, so it is starting up and reads this once it is running.`,
       }
     case 'refused:user_stopped':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'blocked_by_user',
         summary: `Not delivered. ${to} is closed and the user has turned off reopening it. Ask the user to open it, or carry on without it.`,
       }
     case 'refused:hop_loop':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'loop_stopped',
         // TEMPORAL, and it has to read that way. The chain this is measured
         // against is only kept for a few minutes past its last hop, so a model
@@ -151,14 +162,14 @@ function describeOutcome(
     case 'refused:hop_runaway':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'chain_too_long',
         summary: `Not delivered. The back and forth with ${to} has run too long. Finish the work yourself, or write the user what is still open.`,
       }
     case 'refused:rate':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'too_many_messages',
         // Seconds, not the minute the session-wide allowance is counted over:
         // this bucket is per recipient and refills continuously, so the two
@@ -168,34 +179,40 @@ function describeOutcome(
     case 'refused:duplicate':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'already_sent',
-        summary: `Not delivered. The same text went to ${to} a moment ago, so it already has it. Wait for a reply instead of sending again.`,
+        // It does NOT say the peer has the text: the earlier send is what the
+        // duplicate window saw, and whether THAT one was delivered is not known
+        // here. Nor does it impose waiting for a reply the original may never
+        // have asked for.
+        summary: `Not sent. The same text went to ${to} within the last half minute, so this copy was dropped; the earlier one stands. Carry on; if you need something different said, say it differently.`,
       }
     case 'refused:queue_full':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'peer_queue_full',
         summary: `Not delivered. Too many messages are already waiting to be handed to ${to}. Wait until those have gone through, then send again.`,
       }
     case 'refused:wake_failed':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'peer_did_not_start',
         summary: `Not delivered. ${to} did not finish starting, so nothing reached it. Check the peer list before trying again.`,
       }
     // Deliberately NOT worded as a wake failure. The peer was already running:
     // saying it could not be started would send the model looking for a session
-    // that is sitting right there, and it would stop waiting on work that peer
-    // may still be doing.
+    // that is sitting right there. What is actually known is narrower than the
+    // old wording claimed: `forwarded()` answering false means the socket
+    // refused the frame, so the row was ready and nothing else about what that
+    // peer is doing is established.
     case 'refused:delivery_failed':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'peer_did_not_take_it',
-        summary: `Not delivered. ${to} is running but did not take the message. It is still working, so wait and send again rather than treating it as gone.`,
+        summary: `Not delivered. ${to} is open but did not take the message just now. Nothing reached it. You can try once more later or carry on without it.`,
       }
   }
 }
@@ -210,14 +227,14 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
     case 'session_not_found':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'no_such_peer',
         summary: `Not delivered. There is no peer called ${to} here. Use ListPeers for the names.`,
       }
     case 'too_large':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'text_too_large',
         summary: `Not sent. The message is bigger than one message can carry. Send a shorter one, or split it in two.`,
       }
@@ -228,16 +245,21 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
     case 'rate_limited':
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'too_many_messages',
         summary: `Not delivered. ${describeHostRequestError(error)}`,
       }
+    // The ONE unconfirmed case. The request timed out at
+    // `HOST_REQUEST_TIMEOUT_MS` while main may still be waking the peer and
+    // holding this message for delivery once it reports `ready`, so delivery is
+    // unknown, not disproven, and `ListPeers` cannot say whether this message
+    // arrived.
     case 'timeout':
       return {
         to,
-        delivered: false,
+        delivery: 'unconfirmed',
         outcome: 'send_failed',
-        summary: `Not confirmed. The message was not acknowledged in time, so treat it as not delivered. Check the peer list before sending again.`,
+        summary: `Not confirmed. The app did not answer in time, so it is not known whether this reached ${to}; it may still arrive when ${to} is running. If it matters, ask ${to} whether it got it, rather than sending the same text again.`,
       }
     default:
       // Everything else borrows the plane's own one-sentence wording, with the
@@ -245,7 +267,7 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
       // "did they get it", not on which code came back.
       return {
         to,
-        delivered: false,
+        delivery: 'not_delivered',
         outcome: 'send_failed',
         summary: `Not delivered. ${describeHostRequestError(error)}`,
       }
@@ -319,7 +341,11 @@ export function createSendToPeerTool(
         'while that happens. So send one when it would change what you or they do',
         'next: you need something only they know, you finished something they are',
         'waiting on, or you are about to touch something they are working on. Say',
-        'everything you need in one message.',
+        'what you need clearly; a follow-up question is fine, and a message costs',
+        'the recipient a turn, so do not send several where one would do.',
+        '',
+        'Peers are reached only here; SendMessage reaches subagents you started',
+        'and, with Agent Teams on, teammates, never a peer.',
         '',
         'The result says what actually happened. If it says the message was not',
         'delivered, it was not delivered: do not carry on as if they have it.',
@@ -335,7 +361,7 @@ export function createSendToPeerTool(
         return {
           data: {
             to,
-            delivered: false,
+            delivery: 'not_delivered',
             outcome: 'text_too_large' as const,
             summary: `Not sent. The message is bigger than one message can carry. Send a shorter one, or split it in two.`,
           },
@@ -347,15 +373,16 @@ export function createSendToPeerTool(
         return { data: describeError(to, answer.error) }
       }
       // Checked, not trusted: see `DELIVER_OUTCOMES`. An outcome outside the
-      // closed list is reported as an unconfirmed send, never as a delivery.
+      // closed list is reported as an unconfirmed send, never as a delivery,
+      // and never as a non-delivery either: nothing here knows which it was.
       const outcome = DELIVER_OUTCOMES.get(String(answer.value.outcome))
       if (outcome === undefined) {
         return {
           data: {
             to,
-            delivered: false,
+            delivery: 'unconfirmed' as const,
             outcome: 'send_failed' as const,
-            summary: `Not confirmed. The app did not say what happened to this message, so treat it as not delivered.`,
+            summary: `Not confirmed. The app did not say what happened to this message, so it is not known whether it reached ${to}.`,
           },
         }
       }

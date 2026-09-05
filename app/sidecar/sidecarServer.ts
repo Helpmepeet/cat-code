@@ -5164,9 +5164,15 @@ export class SidecarServer {
     }
     // `untagged` decides BOTH halves of "not framed as peer-sent" (§5): the
     // missing XML wrapper below, and the engine's own prose framing, which
-    // `wrapCommandText` derives from the origin alone. Carrying it here rather
-    // than only at the wrapper is what keeps the creation prompt from being
-    // announced to its recipient as an interruption to defer.
+    // `wrapCommandText` derives from the origin alone.
+    //
+    // That prose framing exists for the BUSY path only. It is applied when a
+    // queued command becomes a mid-turn attachment (`src/utils/messages.ts`),
+    // and an idle recipient's turn is started with the raw value instead (the
+    // drain below submits `command.value`). A creation prompt always lands on a
+    // fresh, idle session, so the framing never applies to it, and the flag
+    // carried here is what keeps the `creationPrompt` shape correct wherever
+    // the framing IS reached.
     const origin: MessageOrigin = {
       kind: 'peer',
       name: delivered.from,

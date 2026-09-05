@@ -90,7 +90,7 @@ test('a created peer inherits the model and effort its creator is on right now',
   // leaves both absent here.
   setMainLoopModelOverride('claude-haiku-4-5-20251001')
   const { requestHost, asked } = requester({ name: 'Bear' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   await tool.call({ prompt: 'Review the parser' }, contextWithEffort('high'))
 
@@ -111,7 +111,7 @@ test('a resumed creator makes a peer on the transcript model, with no model choi
   setMainLoopModelOverride(undefined)
   initializeSidecarModelProvider('claude-haiku-4-5-20251001')
   const { requestHost, asked } = requester({ name: 'Onyx' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   await tool.call({ prompt: 'Carry on' }, contextWithEffort(undefined))
 
@@ -124,7 +124,7 @@ test('a resumed creator makes a peer on the transcript model, with no model choi
 test('an explicit model and effort outrank the creator’s own', async () => {
   setMainLoopModelOverride('claude-haiku-4-5-20251001')
   const { requestHost, asked } = requester({ name: 'Jasper' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   await tool.call(
     { prompt: 'Do the thing', model: 'gpt-5.6-luna', effort: 'low' },
@@ -150,7 +150,7 @@ test('a peer whose prompt did not land is reported as created, not as a failure'
   // at once, and a plain failure would teach it the wrong one: the session
   // exists, and it does not have the instruction.
   const { requestHost } = requester({ name: 'Pyrite', failedStep: 'prompt' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-1')
@@ -163,7 +163,7 @@ test('a peer whose prompt did not land is reported as created, not as a failure'
 
 test('a peer that never finished starting is reported with its name', async () => {
   const { requestHost } = requester({ name: 'Galena', failedStep: 'ready' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-2')
@@ -175,7 +175,7 @@ test('a peer that never finished starting is reported with its name', async () =
 
 test('a refusal by the host is an error, and names no peer', async () => {
   const { requestHost } = requester('refused')
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-3')
@@ -203,7 +203,7 @@ test('F8 — a request that went unanswered sends the caller to the peer list, n
   // sessions. So the one recovery that is safe whichever way it went is named
   // here, and creating again is not it.
   const { requestHost } = requester('unanswered')
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-6')
@@ -217,7 +217,7 @@ test('F8 — a request that went unanswered sends the caller to the peer list, n
 
 test('an unreadable answer never reports a peer that may not exist', async () => {
   const { requestHost } = requester({ appSessionId: 'a1' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-4')
@@ -233,7 +233,7 @@ test('an unreadable answer never reports a peer that may not exist', async () =>
 
 test('an over-long instruction is refused here and never sent', async () => {
   const { requestHost, asked } = requester({ name: 'Slag' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const result = await tool.call(
     { prompt: 'x'.repeat(MAX_PEER_TEXT_BYTES + 1) },
@@ -253,7 +253,7 @@ test('CreatePeer projects its prompt and overrides to the auto-mode classifier',
   // "ordinary permission gate" R8 relies on would not run at all. This is the
   // CreatePeer half of the classifier test HOST-REQUEST-PLANE §6 names.
   const { requestHost } = requester({ name: 'Bear' })
-  const tool = createCreatePeerTool(requestHost, 'Alex')
+  const tool = createCreatePeerTool(requestHost)
 
   const projected = tool.toAutoClassifierInput({
     prompt: 'delete every file under src and force push',
@@ -268,26 +268,37 @@ test('CreatePeer projects its prompt and overrides to the auto-mode classifier',
   expect(tool.isReadOnly()).toBe(false)
 })
 
-test('the creation guidance names this session as the return channel', async () => {
-  // PEER-SESSIONS §4: the description carries the one piece of guidance that
-  // decides whether a peer ever reports back.
+test('the creation guidance says what to share and makes hearing back a choice', async () => {
+  // PEER-SESSIONS §4: the description carries the guidance that decides what a
+  // creator puts in the instruction, and whether it asks to hear back at all.
   const { requestHost } = requester({ name: 'Bear' })
-  const named = await createCreatePeerTool(requestHost, 'Alex').prompt()
-  expect(named).toContain('send Alex a message')
-  expect(named).toContain('the goal, what done looks like, the files in scope')
+  const prompt = await createCreatePeerTool(requestHost).prompt()
 
-  // It has to LEAD, not sit fourth in a list of things a careful instruction
-  // states. A session that left it out then read its peer in a loop waiting for
-  // an answer it had never asked for, so the sentence carries what to do
-  // instead of watching as well as what to write.
-  expect(named).toContain('has to ask for a report, or you never hear back')
-  expect(named).toContain('wait for that message instead of watching them work')
+  // Share what the peer cannot get for itself, and stop there: no goal/done/
+  // files checklist, because the peer has the workspace and its own judgment.
+  expect(prompt).toContain(
+    'share what you already know that would save it rediscovery',
+  )
+  expect(prompt).toContain('Leave the approach to it.')
+  expect(prompt).not.toContain('the goal, what done looks like, the files in scope')
 
-  // A session with no name of its own still gets usable guidance, not a
-  // sentence with a hole in it.
-  const unnamed = await createCreatePeerTool(requestHost, null).prompt()
-  expect(unnamed).toContain('back to the peer that created you')
-  expect(unnamed).not.toContain('send null')
+  // Reporting is asked for, not owed, and asking once is not a standing
+  // arrangement (rulings 3 to 5).
+  expect(prompt).toContain(
+    'say you want to hear back and what; otherwise do not ask',
+  )
+  expect(prompt).toContain('Asking once does not set up a standing arrangement.')
+  expect(prompt).not.toContain('has to ask for a report, or you never hear back')
+
+  // A creator told to WAIT deferred the clarifying question its peer needed
+  // answered, so the waiting posture is gone and the question is named.
+  expect(prompt).toContain('answer promptly if it is waiting on you')
+  expect(prompt).not.toContain('wait for that message instead of watching them work')
+
+  // Activity is not completion (F20).
+  expect(prompt).toContain(
+    'ListPeers shows only whether it is active, never whether it has finished',
+  )
 })
 
 test('the creation guidance says the call blocks, so a fan-out is a priced choice', async () => {
@@ -297,7 +308,7 @@ test('the creation guidance says the call blocks, so a fan-out is a priced choic
   // most of a minute. Nothing else on this tool says so, and a model planning
   // four creations was committing minutes of its own turn blind.
   const { requestHost } = requester({ name: 'Bear' })
-  const prompt = await createCreatePeerTool(requestHost, 'Alex').prompt()
+  const prompt = await createCreatePeerTool(requestHost).prompt()
 
   expect(prompt).toContain('the better part of a minute')
   expect(prompt).toContain('Creating several in a row')
@@ -311,7 +322,7 @@ test('the model and effort fields say what an unrecognised value does', () => {
   // caller does: a wrong model kills the new session on its first turn, while an
   // unrecognised effort is dropped and the session simply runs at the user's
   // own setting.
-  const shape = createCreatePeerTool(requester({ name: 'Bear' }).requestHost, 'Alex')
+  const shape = createCreatePeerTool(requester({ name: 'Bear' }).requestHost)
     .inputSchema.shape
 
   expect(shape.model.description).toContain('not checked')

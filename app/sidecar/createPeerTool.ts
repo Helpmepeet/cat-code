@@ -28,7 +28,6 @@ import { getMainLoopModel } from '../../src/utils/model/model.js'
 import { MAX_PEER_TEXT_BYTES } from '../shared/limits.js'
 import {
   describeHostRequestError,
-  readPeerIdentity,
   requestPeerHost,
   type PeerHostRequester,
 } from './peerHostRequester.js'
@@ -118,14 +117,7 @@ export function narrowCreatedPeer(
 
 export function createCreatePeerTool(
   requestHost: PeerHostRequester = requestPeerHost,
-  /** This session's own name, used only to write the return channel example. */
-  selfName: string | null = readPeerIdentity().name,
 ) {
-  const returnChannelExample =
-    selfName === null
-      ? 'when finished, send a message back to the peer that created you, saying what changed'
-      : `when finished, send ${selfName} a message saying what changed`
-
   return buildTool({
     name: CREATE_PEER_TOOL_NAME,
     searchHint: 'create a peer session in this workspace',
@@ -164,21 +156,20 @@ export function createCreatePeerTool(
     },
     async prompt() {
       return [
-        'Create a peer in this workspace and give it a first instruction. It is a peer, not a worker of yours: it has its own name, its own tab, its own transcript and its own permissions, and the user can see it and talk to it.',
+        'Create a peer in this workspace and give it a first instruction. It is a peer, not a worker of yours: it has its own name, its own tab, its own transcript and its own permissions, and the user can see it and talk to it. When the user asks for a session, this is what they mean.',
         '',
-        // The ask-for-a-report line LEADS, and is a sentence of its own. As the
-        // fourth item of a four-item list it read as one more thing a careful
-        // instruction states, and a session that left it out then sat reading
-        // its peer in a loop waiting for an answer nobody had asked for.
-        'The instruction has to ask for a report, or you never hear back: ' +
-          returnChannelExample +
-          '. Then wait for that message instead of watching them work. Say the rest plainly too: the goal, what done looks like, the files in scope.',
+        // What to SHARE, not a checklist of fields to fill: the peer has the
+        // workspace and its own instruction files, so the only thing it cannot
+        // get for itself is what this session already found. The old version
+        // demanded a report and told the creator to wait for it, which left a
+        // creator deferring the clarifying question its peer needed answered.
+        "Give it the user's intent faithfully, quoting exactly where the wording matters, and share what you already know that would save it rediscovery: findings, constraints, earlier attempts, the reasons behind decisions, open questions, and where the supporting material is, with fact and assumption told apart. Leave the approach to it. If the result matters to your own work or to the user, say you want to hear back and what; otherwise do not ask. Asking once does not set up a standing arrangement. It may write to you with a question before it is done; consider that when it arrives and answer promptly if it is waiting on you. Do not watch it work: if you asked to hear back, that arrives as a message, and ListPeers shows only whether it is active, never whether it has finished.",
         '',
         'The new peer starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
         '',
         'Each call waits for the new peer to start and take your instruction, which can hold up your own turn for the better part of a minute. Creating several in a row costs that each time.',
         '',
-        'Create a peer only when the user or your instructions ask for one. Never on your own judgment.',
+        'Create a peer only when the user or your instructions ask for one, never on your own judgment. When the user asks for a prompt instead, write the prompt and create nothing.',
       ].join('\n')
     },
     async call(
@@ -279,7 +270,7 @@ export function createCreatePeerTool(
       return {
         tool_use_id: toolUseID,
         type: 'tool_result',
-        content: `Created ${data.name} and sent it your instruction. It answers you by messaging you back, not by returning a result here.`,
+        content: `Created ${data.name} and sent it your instruction. It works in its own tab; if you asked to hear back, that arrives as a message, not here.`,
       }
     },
     renderToolUseMessage() {

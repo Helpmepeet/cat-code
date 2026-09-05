@@ -101,7 +101,10 @@ const inputSchema = lazySchema(() =>
     peer: z
       .string()
       .min(1)
-      .describe('Name of the peer to read. Use ListPeers for the names.'),
+      // The roster imperative is gone from here on purpose: a model reads this
+      // as it writes the field, and it spent a call on a name it already had.
+      // The `no_such_peer` result keeps the advice, where it applies.
+      .describe('Name of the peer to read.'),
     before: z
       .string()
       .optional()
@@ -755,17 +758,24 @@ export function createReadPeerTool(
         'only the turns containing a word or a path.',
         '',
         // The two questions this tool is repeatedly reached for and answers
-        // worse than the tool that owns them.
-        'Two nearby questions belong elsewhere. Whether it is done is a',
-        'ListPeers answer and costs nothing. Telling you when it is done is',
-        'answered by asking the peer, not by reading it.',
+        // worse than the tool that owns them. "Whether it is done" was routed
+        // to ListPeers, which cannot answer it: that tool reports activity, and
+        // a peer can go idle having failed.
+        'Two nearby questions belong elsewhere. Whether it is still active is a',
+        'ListPeers answer and costs nothing; whether it is done comes from its',
+        'own report or from the work itself, never from its status. Telling you',
+        'when it is done is answered by asking the peer, not by reading it.',
         '',
         // Named plainly, because the alternative is not obvious and a model
         // that does not know it exists reaches for this tool instead.
+        // The old routing sent a failure to "the tools that read it in full"
+        // without naming them, and there is no model-facing route to the file:
+        // ListPeers drops ids on purpose, so a session holds none to resolve a
+        // transcript by. The two routes that exist are the peer and the user.
         'Finding out why something failed is not a job for this tool. It gives',
-        'you what was said and what was touched, never the output of what ran.',
-        "For a failure, work from that peer's own record with the tools that",
-        'read it in full.',
+        'you what was said and what was touched. For a failure, ask the peer',
+        'what happened, or tell the user, who has its tab; this tool never',
+        'carries the output of what ran.',
         '',
         // The passivity guarantee, immediately followed by the thing it was
         // being read as licence for. A session that had created a peer sat

@@ -201,6 +201,29 @@ test('an empty roster says no peer exists, not that none is open', async () => {
   )
 })
 
+test('the guidance says presence is activity and never an outcome', async () => {
+  // Presence exists so a creator can tell busy from stuck, and nothing said
+  // what its states do NOT establish. The `ReadPeer` prompt was routing
+  // "whether it is done" here, which this tool cannot answer: a peer can go
+  // idle having failed, and a running one says nothing about how far it is.
+  const { requestHost } = requesterReturning(() => ({ peers: [] }))
+  const guidance = (await createListPeersTool(requestHost).prompt()).replace(
+    /\s+/g,
+    ' ',
+  )
+
+  expect(guidance).toContain('What it shows is activity, never outcome')
+  expect(guidance).toContain(
+    "Whether work is done comes from the peer's own report or from the work itself",
+  )
+  // A peer stopped on a permission question cannot answer until the user does,
+  // and the user is already looking at that prompt in its tab.
+  expect(guidance).toContain('it cannot read or answer you until the user does')
+  expect(guidance).toContain(
+    'tell them only when the wait holds up something you owe them',
+  )
+})
+
 test('a malformed row is dropped and the rest of the roster still lists', async () => {
   // Display degrades gracefully: whatever reaches the narrowing, one bad row
   // must cost that row and not the whole answer.

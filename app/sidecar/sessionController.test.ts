@@ -704,25 +704,34 @@ test('a spawn model decides the provider, exactly as a resumed one does', () => 
 test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or says neither', () => {
   const both = buildPeerDoctrine({ name: 'Bear', createdByName: 'Alex' })
   expect(both).toStartWith(
-    'You are Bear. Alex created you. Use ListPeers',
+    'You are Bear. Alex created you.\n\nPeers are other sessions of the same user',
   )
 
   // A user-created session omits the creator sentence (§5). It must not gain a
   // sentence about a creator that does not exist.
   const userCreated = buildPeerDoctrine({ name: 'Bear', createdByName: null })
   expect(userCreated).toStartWith(
-    'You are Bear. Use ListPeers',
+    'You are Bear.\n\nPeers are other sessions of the same user',
   )
-  expect(userCreated).not.toContain('created you')
+  // The guideline paragraph says "who created you" to every session, so what
+  // must be absent is the identity SENTENCE, not the words.
+  expect(userCreated.split('\n\n')[0]).toBe('You are Bear.')
 
   // No name at all: no name sentence, rather than a sentence with a hole in it.
+  // The block then opens on the guideline itself, with no empty first line.
   const unnamed = buildPeerDoctrine({ name: null, createdByName: null })
-  expect(unnamed).toStartWith('Use ListPeers')
+  expect(unnamed).toStartWith(
+    'Peers are other sessions of the same user in this workspace',
+  )
   expect(unnamed).not.toContain('You are ')
-  // The rest of the doctrine still applies: an unnamed session can still list
-  // and still create.
-  expect(unnamed).toContain('Do not send status nobody asked for.')
-  expect(unnamed).toContain('Never create one on your own judgment.')
+  // The rest of the doctrine still applies: an unnamed session still gets the
+  // whole guideline, including the create-only-when-asked rule.
+  expect(unnamed).toContain(
+    'nothing obliges an acknowledgment; a short okay or silence can both be right',
+  )
+  expect(unnamed).toContain(
+    'when they ask for a prompt, write text; do not create one unasked',
+  )
 
   // Paragraph breaks only. The decision document's hard wraps are its own
   // 80-column layout, not part of the text, and a sentence broken mid-clause is
