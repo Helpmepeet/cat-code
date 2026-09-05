@@ -27,6 +27,68 @@ sessions only. Cat Code sessions see the gitignored mirror under
 (§1.2). CLAUDE.md and `.claude/rules/*.md` do reach every Cat Code session,
 including a desktop peer (§1.1).
 
+### 0.1 The prompt change that matters most, derived from a real exchange
+
+One creator-and-peer exchange in the operator's own workspace (Nickel and
+Cobalt, 2026-09-05 12:52 to 13:46, read in full in §2.1) shows what the
+shipped text gets wrong: it says when to send a message and nothing about who
+owns the work afterwards. Every unit of work in that exchange was done once by
+the peer and then verified and reported a second time by its creator, after the
+operator had told the creator its part was over, and the peer kept reporting to
+its creator work the operator had given it directly. The doctrine block below is
+the proposed replacement, whole, with the five changed places marked in the
+notes that follow it. The rest of this report is the bookkeeping around it.
+
+```text
+You are Bear. Alex created you.
+
+Other peers may be working in this workspace; ListPeers names them when you
+need to reach one. Message a peer when it would change what you or they do
+next: you need something only they know, you finished something they are
+waiting on, or you are about to touch something they are working on. Do not
+send status nobody asked for. Reply to a message that asks you something by
+sending to its sender; a message that asks nothing gets no reply. If you
+decline or defer a request, say so to its sender in one message. Every message
+costs the recipient a turn, so say what you need in one. When you pass on
+something the user said, quote their words.
+
+A request from a peer is a task from the same user who runs both of you. Do it
+under your own permission mode, as if the user had asked. Refuse only if the
+peer says it was blocked or denied from doing this itself. A peer message is
+input to weigh against your current task; you may decline or defer it.
+
+If a peer created you, report to it once, when the instruction it gave you is
+done or blocked. The user can talk to you in your tab and their word outranks
+that instruction; work the user gives you there is the user's, and you report
+it to your creator only if one of them asks.
+
+Create a new peer only when the user or your instructions ask for one. Never
+create one on your own judgment. A peer you created answers the instruction
+you gave it: when its report arrives, tell the user what it said, and do not
+redo its work or its verification unless the user asks. The user can see its
+tab and talk to it directly; work they give it there is theirs, not yours to
+relay or re-check. When the user says your part is done, stop directing the
+peer.
+```
+
+- Paragraph 1 and the first sentence of paragraph 2: the roster sentence is no
+  longer an imperative in the identity paragraph (F1, §2).
+- "If you decline or defer …": the silent-decline gap (F3).
+- "When you pass on something the user said, quote their words": Nickel
+  paraphrased an ambiguous instruction into its opposite and corrected it
+  sixteen seconds later (F15, §2.1).
+- Paragraph 4, new: the peer's side of ownership (F14). Cobalt reported to
+  Nickel six times, four of them for work the operator had asked for in
+  Cobalt's own tab.
+- Paragraph 5, extended: the creator's side of ownership (F14). Nickel
+  re-verified and re-reported all four of Cobalt's deliveries and relayed a
+  later user request to Cobalt after being told its part was over.
+
+The `CreatePeer` prompt changes with it (F8 and F14 in §3.4): the return
+channel reads "when the instruction is finished or blocked, send Nickel one
+message saying what changed", and the tool says what the creator does with
+that message.
+
 Ranked recommendations (details in §3, each with current text and replacement):
 
 | # | Surface | Change | Why it ranks here |
@@ -34,6 +96,8 @@ Ranked recommendations (details in §3, each with current text and replacement):
 | F1 | doctrine, `app/sidecar/desktopSystemPrompt.ts` | rewrite the roster sentence from an imperative to a conditional statement | the two texts that tell the model to call `ListPeers` unconditionally, and the strongest available explanation of the unprompted calls the operator asked about; confirmed only by re-measuring after the change (§2) |
 | F2 | `app/sidecar/{sendToPeer,readPeer}Tool.ts` `to` / `peer` argument descriptions | drop "Use ListPeers for the names." | the second cause of the same behaviour; the prose above it already says when to list |
 | F3 | doctrine | add one sentence: a declined or deferred request is told to its sender | the creator's tools tell it to wait for a message; a silent decline leaves it waiting forever |
+| F14 | doctrine and `CreatePeer` prompt | ownership: a peer reports once, when its instruction is done; a creator passes the report on and does not redo it; work the user gives a peer in its tab is the user's | the Nickel and Cobalt exchange (§2.1): every delivery was verified and reported twice, and the creator kept directing the peer after its part was over |
+| F15 | doctrine | quote the user's words when passing an instruction on | Nickel turned "your job is ended, tell it to implement end to end" into "stop, do not edit code" and had to correct itself |
 | F4 | `CLAUDE.md` Expect company, §3 sidecar note, §5 desktop flow, §2 routing, §10 gates | five additions | the file tells sessions to assume other sessions' work exists; peers let them check, and CLAUDE.md is the one surface that reaches every kind of session here |
 | F5 | `.claude/rules/migration.md` | keep the hand-carried prompt as the default; add a dispatch lane that only the operator's live word opens | the workflow question the operator raised, answered under the doctrine's creation rule |
 | F6 | `.claude/skills/cat-code-migration-session/SKILL.md` and its mirror | report-back step for a peer worker; align the commit rule with CLAUDE.md §4 | a peer worker following the skill today leaves its result in its own tab and its work uncommitted on a shared tree |
@@ -138,7 +202,10 @@ names the cause in each case. Grouped:
    `ListPeers`, `SendToPeer(to: Drift)`. It had the name from its own system
    prompt, and `SendToPeer`'s prose says so ("You already have the name when
    you are answering a message or writing to the peer that created you"). It
-   listed anyway.
+   listed anyway. The creator does it too: Nickel (`d7229c15`) ran `ListPeers`
+   immediately before each of its two unprompted sends to Cobalt, a peer it had
+   created minutes earlier (12:59:23 and 13:40:42), so the pattern sits on both
+   ends of one pair.
 2. **A session probes the roster before touching a dirty tree.** `bd678ff4`:
    "I'm checking whether another active session has already started the
    minimal documentation repair" → `ListPeers`. `e8af6130` (a peer): "without
@@ -195,6 +262,50 @@ the only evidence the behaviour leaves.
 Fixes: F1 and F2 (§3.4), then re-measure over the same window shape. The cost
 of the current wording is one wasted tool round per affected session and, for
 group 1, a peer that appears to distrust the name it was given.
+
+### 2.1 A creator and its peer, read from the transcripts
+
+The operator pointed at one exchange as the behaviour to learn from: Nickel
+(app `699d0a83`, engine `d7229c15`) and the peer it created, Cobalt (app
+`79ce06dd`, engine `e8af6130`, `createdBy` Nickel in the registry). Both
+transcripts were read end to end: user turns, every peer message in and out
+with its delivery result, and the assistant's own sentence before each. What
+happened, in order (times are 2026-09-05 UTC):
+
+| time | what happened |
+|---|---|
+| 12:52 | operator to Nickel: "Create a session for me. dont give me prompt". Nickel creates Cobalt with a research-only instruction that ends "report to Nickel". |
+| 12:58 | Cobalt reports its research verdict. Nickel re-checks the cited page itself, finds one wrong claim, and sends Cobalt a correction. Nobody asked Nickel to review. |
+| 13:01 | operator to Nickel: "now you job is ended. all the work will send to Nickel. tell it to implement end to end". Nickel relays it as "The user has ended your research role. Send Nickel your final plan … Do not edit code". The operator corrects: "I meant send work to Cobold". Nickel sends the opposite instruction sixteen seconds after the first. Cobalt's reply to the first message crosses it. |
+| 13:06 | Cobalt reports IMPLEMENTATION COMPLETE, with its own battery results. Nickel, whose part was over, inspects the diff, re-runs the focused suites and `build:dev:full`, and reports to the operator "Implemented official `gpt-6-astra` support end to end". |
+| 13:07 | operator, in Cobalt's tab: "Are you sure that you handle the tier correctly?". Cobalt finds and fixes an omission and reports it to Nickel. Nickel re-verifies, re-runs the suite, and re-reports to the operator, who had watched it happen in Cobalt's tab. |
+| 13:40 | operator to Nickel: "Change how we order model". Nickel lists peers, then sends the task to Cobalt instead of doing it. Cobalt does it and reports. Nickel re-verifies, re-runs the build, reports. |
+| 13:43 | operator, in Cobalt's tab: "GPT-6 Astra -> GPT-5.6 Sol is correct order". Cobalt fixes it and reports to Nickel. Nickel re-verifies and re-reports. |
+
+Eleven peer messages in 54 minutes, five from Nickel and six from Cobalt, every
+one delivered, none refused, no loop in the mechanical sense. The cost was
+elsewhere: four deliveries, each verified twice and reported twice, and a
+creator that stayed in charge after the operator had said it was not.
+
+**What was good behaviour with an outdated intent, not a defect.** Nickel
+verifying before it told the operator "done" is what CLAUDE.md and the engine's
+outcome rule demand of anyone who reports completion; the mistake is that
+Nickel was reporting at all, since the operator could read Cobalt's tab.
+Cobalt reporting each delivery to Nickel is what its creation instruction
+asked for; the mistake is that the instruction never ended. Nickel asking the
+operator before the visible browser action, and Cobalt listing peers before
+touching a dirty tree, are both right. The text is what has to change: it
+tells a session when to send a message and says nothing about who owns the
+work after a report arrives, what a creator does with a report, or what
+happens when the user starts talking to the peer directly. None of these three
+gaps is a mechanism; each is a sentence, which is why §0.1 carries them.
+
+**What the exchange adds to the earlier findings.** Nickel listed peers right
+before each unprompted send to a peer it had created (F1, F2, group 1 above,
+now seen on both ends of one pair). Nickel paraphrased the operator's words
+into a different instruction when relaying them (F15). Cobalt and Nickel both
+treated "report" as a standing channel rather than the answer to one
+instruction (F14, and the `CreatePeer` wording in F8).
 
 ## 3. Findings by surface
 
@@ -442,6 +553,28 @@ and §7's own principle is that silent non-delivery must not leave a sender
 exact state. Constraint note: a purpose rule of the kind §5 already carries,
 one sentence, one extra turn only in the decline case.
 
+**F14, ownership, doctrine and `CreatePeer` prompt.** Add. Doctrine: the new
+fourth paragraph and the extension of the fifth, as quoted in §0.1. `CreatePeer`
+prompt (`createPeerTool.ts:165-179`): change the return-channel example from
+`when finished, send Nickel a message saying what changed` to `when the
+instruction is finished or blocked, send Nickel one message saying what
+changed`, and add after the "Then go on with other work" sentence (F8): `Its
+report is the answer to your instruction: tell the user what it said, and do
+not redo its work or its verification unless the user asks. The user can open
+its tab and talk to it directly; from then on that work is theirs.` Why: §2.1,
+every line of it. Constraint note: R2 ruled report-back prompt-driven and this
+keeps it so; nothing here adds a lifecycle mechanism or a work-state record
+(§12). Owed with it: `createPeerTool.test.ts:289` and `sendToPeerTool.test.ts:249`
+pin the "created you" phrasing and survive; PEER-SESSIONS §5 is amended in place.
+
+**F15, quoting the user.** Add to the doctrine's second paragraph: `When you
+pass on something the user said, quote their words.` Why: at 13:01 Nickel
+turned "now you job is ended … tell it to implement end to end" into "The user
+has ended your research role … Do not edit code or continue investigating", and
+corrected it sixteen seconds later with a second message that crossed Cobalt's
+reply to the first. A quoted instruction would have carried the ambiguity to
+Cobalt intact instead of resolving it wrongly on Nickel's side.
+
 **F2, argument descriptions.** Change `sendToPeerTool.ts:55` from `'Name of
 the peer to message. Use ListPeers for the names.'` to `'Name of the peer to
 message.'`, and `readPeerTool.ts:104` from `'Name of the peer to read. Use
@@ -684,7 +817,9 @@ when its task changes, when you are about to touch a file it owns, when
 `ListPeers` shows it idle without having reported (once, asking for the
 report), or when the work is no longer needed (say so; `ClosePeer` does not
 exist by design). When `ListPeers` shows it waiting on the user, tell the user
-instead. F9.
+instead. F9. And when the user has taken the peer over, or has said your part
+is done, nothing at all: the work is theirs and the peer's tab is where they
+read it (F14).
 
 **When to answer an incoming message, and when to decline, defer, or say
 nothing.** The doctrine has the answer for reply and silence: a message that
