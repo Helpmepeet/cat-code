@@ -540,6 +540,40 @@ function getOwnedTranscriptPath(): string | null {
 }
 
 /**
+ * Shared body of the diagnostic appenders below: resolve the owning transcript,
+ * stamp the standard `system` envelope, append, and swallow any failure.
+ *
+ * The lease assertion runs OUTSIDE the try on purpose, so a lease violation
+ * still throws to the caller instead of disappearing into the best-effort
+ * catch. `agentId` picks the agent-owned transcript when the record belongs to
+ * a subagent; a null path means nothing owns a transcript, so nothing is
+ * written (a diagnostic must never mint an orphan transcript).
+ */
+function appendSystemDiagnostic(
+  subtype: string,
+  entry: Record<string, unknown>,
+  options?: { agentId?: AgentId; includeSessionId?: boolean },
+): void {
+  assertActiveTranscriptLease(getSessionId())
+  try {
+    const transcriptPath = options?.agentId
+      ? getOwnedAgentTranscriptPath(options.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype,
+      ...(options?.includeSessionId ? { sessionId: getSessionId() } : {}),
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
  * Append a codex_request_start diagnostic entry to the current session JSONL.
  *
  * The start-side counterpart of `recordCodexSendPath` /
@@ -571,20 +605,7 @@ export function recordCodexRequestStart(entry: {
   account_id_prefix: string | null
   model: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_request_start',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_request_start', entry)
 }
 
 /**
@@ -615,20 +636,7 @@ export function recordCodexSendPath(entry: {
   input_tokens?: number
   route_headers?: Record<string, string>
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_send_path',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_send_path', entry)
 }
 
 /**
@@ -665,20 +673,7 @@ export function recordCodexStreamSurface(entry: {
   error_name?: string
   fallback_error_name?: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_stream_surface',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_stream_surface', entry)
 }
 
 /**
@@ -830,23 +825,10 @@ export function recordPromptCacheBreak(entry: {
   newEffortValue: string
   triggeringCommand?: string | null
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'prompt_cache_break',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('prompt_cache_break', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 /**
@@ -894,23 +876,10 @@ export function recordPostTurnStall(entry: {
   query_source: string
   agentId?: AgentId
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'post_turn_stall',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('post_turn_stall', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 export type RemoteAgentMetadata = {

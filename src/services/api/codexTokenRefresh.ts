@@ -6,8 +6,8 @@
  * Refresh tokens rotate — the old one becomes invalid after each use.
  */
 
-import { readFileSync, writeFileSync, renameSync, unlinkSync, readdirSync, existsSync, openSync, closeSync, fsyncSync } from 'fs'
-import { join, dirname, basename } from 'path'
+import { readFileSync, readdirSync, existsSync } from 'fs'
+import { join, dirname } from 'path'
 import { createHash, randomUUID } from 'crypto'
 import {
   CODEX_CLIENT_ID,
@@ -19,6 +19,7 @@ import { logForDebugging } from '../../utils/debug.js'
 import { getInitialSettings } from '../../utils/settings/settings.js'
 import { registerCleanup } from '../../utils/cleanupRegistry.js'
 import { lock } from '../../utils/lockfile.js'
+import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 import { extractCodexAccountId } from '../oauth/codex-client.js'
 import {
   appendAccount,
@@ -999,43 +1000,14 @@ export async function persistNextQuarantineProbe(
   }
 }
 
+/**
+ * Vault writes go through the shared durable writer, the same one
+ * codexAccountPool uses on these files, so both writers agree on temp naming,
+ * fsync-before-rename and the best-effort directory fsync.
+ */
 function atomicWriteJson(filePath: string, data: unknown): void {
-  const dir = dirname(filePath)
-  const tmpPath = join(dir, `.${basename(filePath)}.${process.pid}.${Date.now()}.tmp`)
-  const json = `${JSON.stringify(data, null, 2)}\n`
-
-  // Fix 8: close fd before unlinking on the error path so the OS can release
-  // the file handle on platforms that require it (Windows, some Linux configs).
-  let fd: number | undefined
-  try {
-    fd = openSync(tmpPath, 'w', 0o600)
-    writeFileSync(fd, json, 'utf8')
-    fsyncSync(fd)
-    closeSync(fd)
-    fd = undefined
-  } catch (err) {
-    if (fd !== undefined) {
-      try { closeSync(fd) } catch {}
-      fd = undefined
-    }
-    try { unlinkSync(tmpPath) } catch {}
-    throw err
-  } finally {
-    // Emergency guard in case an unexpected error leaves fd open.
-    if (fd !== undefined) {
-      try { closeSync(fd) } catch {}
-    }
-  }
-
-  renameSync(tmpPath, filePath)
-
-  let dirFd: number | undefined
-  try {
-    dirFd = openSync(dir, 'r')
-    fsyncSync(dirFd)
-  } catch {
-    // some OSes don't allow openSync(dir)
-  } finally {
-    if (dirFd !== undefined) closeSync(dirFd)
-  }
+  writeFileAtomicDurableSync(filePath, JSON.stringify(data, null, 2) + '\n', {
+    encoding: 'utf-8',
+    mode: 0o600,
+  })
 }

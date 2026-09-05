@@ -39,6 +39,10 @@ import {
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
 } from './codex-websocket-transport.js'
+import {
+  CODEX_ACCOUNT_LIMIT_ERROR_CODES,
+  isCodexAuthErrorCode,
+} from './codexErrorCodes.js'
 import { notifyStaleResponseIdRetry } from './promptCacheBreakDetection.js'
 import {
   recordCodexRequestStart,
@@ -378,28 +382,6 @@ export class CodexResponseFailedError extends Error {
   }
 }
 
-const CODEX_ACCOUNT_LIMIT_ERROR_CODES = new Set([
-  'usage_limit_reached',
-  'rate_limit_exceeded',
-  'quota_exceeded',
-  'insufficient_quota',
-  'usage_not_included',
-])
-
-// Structured auth-failure codes (mirrors CODEX_ACCOUNT_LIMIT_ERROR_CODES for the
-// revoked-auth path). Substring text matching (codexErrorTextIndicatesRevokedAuth)
-// missed `token_invalidated` — the server code emitted when a token is superseded
-// by a re-login — so a 401 bypassed CodexAccountAuthError and all of withRetry's
-// auth recovery. Structured-code match is authoritative; text stays as a fallback.
-// The WS transport keeps its own local mirror (isAuthTokenRejection) because it
-// cannot import this module (the adapter imports the transport). Keep in sync.
-const CODEX_ACCOUNT_AUTH_ERROR_CODES = new Set([
-  'token_invalidated',
-  'token_expired',
-  'token_revoked',
-  'invalid_token',
-])
-
 /**
  * Text of a Codex message content part, or undefined when the part carries none.
  * Narrows on the part type: a `refusal` part is not assistant prose and must not
@@ -478,8 +460,8 @@ function codexHttpAuthStatus(
 }
 
 function codexHttpHeadersIndicateRevokedAuth(headers: Headers): boolean {
-  const code = headers.get('x-openai-ide-error-code')?.trim().toLowerCase()
-  return code !== undefined && CODEX_ACCOUNT_AUTH_ERROR_CODES.has(code)
+  const code = headers.get('x-openai-ide-error-code')?.trim()
+  return code !== undefined && isCodexAuthErrorCode(code)
 }
 
 function classifyCodexHttpAccountError(
@@ -543,7 +525,7 @@ function codexResponseFailureIndicatesAccountCap(
 function codexResponseFailureIndicatesRevokedAuth(
   failure: CodexResponseFailure,
 ): boolean {
-  return CODEX_ACCOUNT_AUTH_ERROR_CODES.has(failure.code.toLowerCase())
+  return isCodexAuthErrorCode(failure.code)
 }
 
 function createCodexResponseFailedError(

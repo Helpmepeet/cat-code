@@ -355,11 +355,15 @@ describe('system prompt section cache keying', () => {
 describe('language section caching contract', () => {
   test('language stays out of the section key so it applies to new sessions only', () => {
     // H2 ruling: keying language would silently turn "applies next session"
-    // into a live mid-session switch. Both prompt builds must opt out.
+    // into a live mid-session switch. Both prompt builds must opt out, and
+    // they now share one registration in buildDynamicPromptSections, so a
+    // second registration would mean the duplication came back.
+    const registrations = promptsSource.match(/systemPromptSection\(\s*'language',/g)
+    expect(registrations?.length).toBe(1)
     const optOuts = promptsSource.match(
       /systemPromptSection\(\s*'language',\s*NO_SECTION_INPUTS\s*,/g,
     )
-    expect(optOuts?.length).toBe(2)
+    expect(optOuts?.length).toBe(1)
   })
 })
 

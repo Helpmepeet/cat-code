@@ -574,6 +574,146 @@ function outputStyleKeyInput(
   return { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt }
 }
 
+/**
+ * The dynamic (registry-managed) half of the system prompt. Both assemblies
+ * below register the same sections, keyed and ordered identically, so they live
+ * here once: getSystemPrompt adds two feature-gated entries via
+ * `includeFeatureGatedSections`, and Agent Mode's assembly takes the rest
+ * unchanged.
+ */
+function buildDynamicPromptSections({
+  gpt,
+  isAgentMode,
+  model,
+  provider,
+  additionalWorkingDirectories,
+  mcpClients,
+  enabledTools,
+  skillToolCommands,
+  outputStyleConfig,
+  settings,
+  includeFeatureGatedSections,
+}: {
+  gpt: boolean
+  isAgentMode: boolean
+  model: string
+  provider?: APIProvider
+  additionalWorkingDirectories?: string[]
+  mcpClients?: MCPServerConnection[]
+  enabledTools: Set<string>
+  skillToolCommands: Awaited<ReturnType<typeof getSkillToolCommands>>
+  outputStyleConfig: OutputStyleConfig | null
+  settings: ReturnType<typeof getInitialSettings>
+  includeFeatureGatedSections: boolean
+}) {
+  return [
+    systemPromptSection(
+      'session_guidance',
+      {
+        gpt,
+        agentMode: isAgentMode,
+        tools: toolNamesKeyInput(enabledTools),
+        skills: skillNamesKeyInput(skillToolCommands),
+      },
+      () =>
+        gpt
+          ? isAgentMode
+            ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
+            : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
+          : isAgentMode
+            ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
+            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+    ),
+    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
+    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
+      getAntModelOverrideSection(),
+    ),
+    // env_info_simple and frc predate this fork, so their key sets were derived
+    // by tracing consumers rather than by assumption: computeSimpleEnvInfo and
+    // getFunctionResultClearingSection have no caller outside this file, and
+    // nothing reads the section cache by name (resolveSystemPromptSections is
+    // the only reader). Everything else those computes touch is either
+    // model-derived, a memoized process fact, or cwd/worktree state that the
+    // clearSystemPromptSections() sites already cover.
+    systemPromptSection(
+      'env_info_simple',
+      { model, additionalWorkingDirectories },
+      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
+    ),
+    // CONTRACT: language is read once per session. The picker writes the
+    // setting immediately (components/LanguagePicker.tsx, applied at
+    // components/Settings/Config.tsx), but this section keeps the value read at
+    // the first prompt build, so a change takes effect on the next /clear,
+    // /compact, or restart. Those are the paths a user reaches for; the full
+    // set that calls clearSystemPromptSections() also includes worktree
+    // enter/exit and session restore. (/clear reaches it indirectly, through
+    // clearSessionCaches -> runPostCompactCleanup.)
+    //
+    // That is why NO_SECTION_INPUTS is deliberate here rather than an omission:
+    // keying on settings.language would make the change apply mid-session and
+    // silently replace the contract. Change the contract on purpose, or not at
+    // all.
+    systemPromptSection('language', NO_SECTION_INPUTS, () =>
+      getLanguageSection(settings.language),
+    ),
+    systemPromptSection(
+      'output_style',
+      outputStyleKeyInput(outputStyleConfig),
+      () => getOutputStyleSection(outputStyleConfig),
+    ),
+    // When delta enabled, instructions are announced via persisted
+    // mcp_instructions_delta attachments (attachments.ts) instead of this
+    // per-turn recompute, which busts the prompt cache on late MCP connect.
+    // Gate check inside compute (not selecting between section variants)
+    // so a mid-session gate flip doesn't read a stale cached value.
+    DANGEROUS_uncachedSystemPromptSection(
+      'mcp_instructions',
+      () =>
+        isMcpInstructionsDeltaEnabled()
+          ? null
+          : getMcpInstructionsSection(mcpClients),
+      'MCP servers connect/disconnect between turns',
+    ),
+    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
+      getScratchpadInstructions(),
+    ),
+    systemPromptSection('frc', { model }, () =>
+      getFunctionResultClearingSection(model),
+    ),
+    systemPromptSection(
+      'summarize_tool_results',
+      NO_SECTION_INPUTS,
+      () => SUMMARIZE_TOOL_RESULTS_SECTION,
+    ),
+    ...(includeFeatureGatedSections && feature('TOKEN_BUDGET')
+      ? [
+          // Cached unconditionally — the "When the user specifies..." phrasing
+          // makes it a no-op with no budget active. Was DANGEROUS_uncached
+          // (toggled on getCurrentTurnTokenBudget()), busting ~20K tokens per
+          // budget flip. Not moved to a tail attachment: first-response and
+          // budget-continuation paths don't see attachments (#21577).
+          systemPromptSection(
+            'token_budget',
+            NO_SECTION_INPUTS,
+            () =>
+              'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target, but do not trade correctness for output volume. If the task is impossible, contradictory, or blocked, say so plainly and use the remaining budget on honest diagnosis, decomposition, or next steps rather than forced progress. The target is a hard minimum. If you stop early, the system will automatically continue you.',
+          ),
+        ]
+      : []),
+    ...(includeFeatureGatedSections &&
+    (feature('KAIROS') || feature('KAIROS_BRIEF'))
+      ? [systemPromptSection('brief', NO_SECTION_INPUTS, () => getBriefSection())]
+      : []),
+    systemPromptSection(
+      'session_transcripts',
+      // Keyed: the section names Grep/Glob or shell find/grep depending on the
+      // embedded-search build, and under-keying would serve the wrong one.
+      { embeddedSearch: hasEmbeddedSearchTools() },
+      () => getSessionTranscriptsSection(),
+    ),
+  ]
+}
+
 export async function getAgentModeSystemPromptSections(
   tools: Tools,
   model: string,
@@ -596,67 +736,19 @@ export async function getAgentModeSystemPromptSections(
   const settings = getInitialSettings()
   const enabledTools = new Set(tools.map(_ => _.name))
 
-  const dynamicSections = [
-    systemPromptSection(
-      'session_guidance',
-      {
-        gpt,
-        agentMode: true,
-        tools: toolNamesKeyInput(enabledTools),
-        skills: skillNamesKeyInput(skillToolCommands),
-      },
-      () =>
-        gpt
-          ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-          : getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
-    ),
-    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
-    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
-      getAntModelOverrideSection(),
-    ),
-    systemPromptSection(
-      'env_info_simple',
-      { model, additionalWorkingDirectories },
-      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
-    ),
-    // Not keyed on settings.language: language is read once per session and a
-    // change takes effect on the next /clear, /compact, or restart. The full
-    // contract is stated at the matching registration in getSystemPrompt.
-    systemPromptSection('language', NO_SECTION_INPUTS, () =>
-      getLanguageSection(settings.language),
-    ),
-    systemPromptSection(
-      'output_style',
-      outputStyleKeyInput(outputStyleConfig),
-      () => getOutputStyleSection(outputStyleConfig),
-    ),
-    DANGEROUS_uncachedSystemPromptSection(
-      'mcp_instructions',
-      () =>
-        isMcpInstructionsDeltaEnabled()
-          ? null
-          : getMcpInstructionsSection(mcpClients),
-      'MCP servers connect/disconnect between turns',
-    ),
-    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
-      getScratchpadInstructions(),
-    ),
-    systemPromptSection('frc', { model }, () =>
-      getFunctionResultClearingSection(model),
-    ),
-    systemPromptSection(
-      'summarize_tool_results',
-      NO_SECTION_INPUTS,
-      () => SUMMARIZE_TOOL_RESULTS_SECTION,
-    ),
-    systemPromptSection(
-      'session_transcripts',
-      // Keyed: the section names Grep/Glob or shell find/grep depending on the
-      // embedded-search build, and under-keying would serve the wrong one.
-      { embeddedSearch: hasEmbeddedSearchTools() },
-      () => getSessionTranscriptsSection(),
-    ),
-  ]
+  const dynamicSections = buildDynamicPromptSections({
+    gpt,
+    isAgentMode: true,
+    model,
+    provider,
+    additionalWorkingDirectories,
+    mcpClients,
+    enabledTools,
+    skillToolCommands,
+    outputStyleConfig,
+    settings,
+    includeFeatureGatedSections: false,
+  })
 
   const resolvedDynamicSections = await resolveSystemPromptSections(dynamicSections)
 
@@ -792,111 +884,19 @@ export async function getSystemPrompt(
 
   const isAgentMode = isAgentModePromptActive()
 
-  const dynamicSections = [
-    systemPromptSection(
-      'session_guidance',
-      {
-        gpt,
-        agentMode: isAgentMode,
-        tools: toolNamesKeyInput(enabledTools),
-        skills: skillNamesKeyInput(skillToolCommands),
-      },
-      () =>
-        gpt
-          ? isAgentMode
-            ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-            : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
-          : isAgentMode
-            ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
-            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
-    ),
-    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
-    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
-      getAntModelOverrideSection(),
-    ),
-    // env_info_simple and frc predate this fork, so their key sets were derived
-    // by tracing consumers rather than by assumption: computeSimpleEnvInfo and
-    // getFunctionResultClearingSection have no caller outside this file, and
-    // nothing reads the section cache by name (resolveSystemPromptSections is
-    // the only reader). Everything else those computes touch is either
-    // model-derived, a memoized process fact, or cwd/worktree state that the
-    // clearSystemPromptSections() sites already cover.
-    systemPromptSection(
-      'env_info_simple',
-      { model, additionalWorkingDirectories },
-      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
-    ),
-    // CONTRACT: language is read once per session. The picker writes the
-    // setting immediately (components/LanguagePicker.tsx, applied at
-    // components/Settings/Config.tsx), but this section keeps the value read at
-    // the first prompt build, so a change takes effect on the next /clear,
-    // /compact, or restart. Those are the paths a user reaches for; the full
-    // set that calls clearSystemPromptSections() also includes worktree
-    // enter/exit and session restore. (/clear reaches it indirectly, through
-    // clearSessionCaches -> runPostCompactCleanup.)
-    //
-    // That is why NO_SECTION_INPUTS is deliberate here rather than an omission:
-    // keying on settings.language would make the change apply mid-session and
-    // silently replace the contract. Change the contract on purpose, or not at
-    // all.
-    systemPromptSection('language', NO_SECTION_INPUTS, () =>
-      getLanguageSection(settings.language),
-    ),
-    systemPromptSection(
-      'output_style',
-      outputStyleKeyInput(outputStyleConfig),
-      () => getOutputStyleSection(outputStyleConfig),
-    ),
-    // When delta enabled, instructions are announced via persisted
-    // mcp_instructions_delta attachments (attachments.ts) instead of this
-    // per-turn recompute, which busts the prompt cache on late MCP connect.
-    // Gate check inside compute (not selecting between section variants)
-    // so a mid-session gate flip doesn't read a stale cached value.
-    DANGEROUS_uncachedSystemPromptSection(
-      'mcp_instructions',
-      () =>
-        isMcpInstructionsDeltaEnabled()
-          ? null
-          : getMcpInstructionsSection(mcpClients),
-      'MCP servers connect/disconnect between turns',
-    ),
-    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
-      getScratchpadInstructions(),
-    ),
-    systemPromptSection('frc', { model }, () =>
-      getFunctionResultClearingSection(model),
-    ),
-    systemPromptSection(
-      'summarize_tool_results',
-      NO_SECTION_INPUTS,
-      () => SUMMARIZE_TOOL_RESULTS_SECTION,
-    ),
-    ...(feature('TOKEN_BUDGET')
-      ? [
-          // Cached unconditionally — the "When the user specifies..." phrasing
-          // makes it a no-op with no budget active. Was DANGEROUS_uncached
-          // (toggled on getCurrentTurnTokenBudget()), busting ~20K tokens per
-          // budget flip. Not moved to a tail attachment: first-response and
-          // budget-continuation paths don't see attachments (#21577).
-          systemPromptSection(
-            'token_budget',
-            NO_SECTION_INPUTS,
-            () =>
-              'When the user specifies a token target (e.g., "+500k", "spend 2M tokens", "use 1B tokens"), your output token count will be shown each turn. Keep working until you approach the target, but do not trade correctness for output volume. If the task is impossible, contradictory, or blocked, say so plainly and use the remaining budget on honest diagnosis, decomposition, or next steps rather than forced progress. The target is a hard minimum. If you stop early, the system will automatically continue you.',
-          ),
-        ]
-      : []),
-    ...(feature('KAIROS') || feature('KAIROS_BRIEF')
-      ? [systemPromptSection('brief', NO_SECTION_INPUTS, () => getBriefSection())]
-      : []),
-    systemPromptSection(
-      'session_transcripts',
-      // Keyed: the section names Grep/Glob or shell find/grep depending on the
-      // embedded-search build, and under-keying would serve the wrong one.
-      { embeddedSearch: hasEmbeddedSearchTools() },
-      () => getSessionTranscriptsSection(),
-    ),
-  ]
+  const dynamicSections = buildDynamicPromptSections({
+    gpt,
+    isAgentMode,
+    model,
+    provider,
+    additionalWorkingDirectories,
+    mcpClients,
+    enabledTools,
+    skillToolCommands,
+    outputStyleConfig,
+    settings,
+    includeFeatureGatedSections: true,
+  })
 
   const resolvedDynamicSections =
     await resolveSystemPromptSections(dynamicSections)

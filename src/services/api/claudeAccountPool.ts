@@ -16,9 +16,8 @@ import { homedir } from 'os'
 import { logForDebugging } from '../../utils/debug.js'
 import { getSecureStorage } from '../../utils/secureStorage/index.js'
 import { saveGlobalConfig, getGlobalConfig } from '../../utils/config.js'
-import { getErrnoCode } from '../../utils/errors.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
-import { lockSync } from '../../utils/lockfile.js'
+import { acquireMutationLockSync } from '../../utils/lockfile.js'
 // storeOAuthAccountInfo is intentionally NOT used here because it drops
 // organizationName/organizationRole/workspaceRole. syncClaudeAccountToStorage
 // writes oauthAccount directly to GlobalConfig instead.
@@ -62,42 +61,10 @@ const DEFAULT_VAULT_PATH = join(homedir(), 'claude-vault')
 const VAULT_LOCK_WAIT_MS = 10_000
 
 function acquireVaultMutationLockSync(filePath: string): () => void {
-  const deadline = Date.now() + VAULT_LOCK_WAIT_MS
-  for (;;) {
-    try {
-      const release = lockSync(filePath, {
-        realpath: false,
-        stale: 120_000,
-        update: 30_000,
-        onCompromised: error => {
-          logForDebugging(
-            `[claude-pool] Vault lock compromised: ${error.message}`,
-            { level: 'error' },
-          )
-        },
-      })
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        try {
-          release()
-        } catch (error) {
-          if (getErrnoCode(error) !== 'ERELEASED') throw error
-        }
-      }
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !('code' in error) ||
-        error.code !== 'ELOCKED' ||
-        Date.now() >= deadline
-      ) {
-        throw error
-      }
-      Bun.sleepSync(20)
-    }
-  }
+  return acquireMutationLockSync(filePath, {
+    label: '[claude-pool] Vault',
+    waitMs: VAULT_LOCK_WAIT_MS,
+  })
 }
 
 // ── Singleton state ────────────────────────────────────────────────────────

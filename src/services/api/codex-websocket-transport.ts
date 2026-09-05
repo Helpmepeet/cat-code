@@ -15,6 +15,7 @@ import type { IncomingMessage } from 'http'
 import WSNode from 'ws'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { logForDebugging, TURN_LOCK_STALL_PREFIX } from '../../utils/debug.js'
+import { isCodexAuthErrorCode } from './codexErrorCodes.js'
 
 // Optional callback invoked when a stale previous_response_id is detected and
 // the turn is retried as a full send. Registered by the fetch adapter so that
@@ -958,21 +959,6 @@ function isUsageLimitRejection(code: string, message: string): boolean {
   )
 }
 
-// Local mirror of the adapter's CODEX_ACCOUNT_AUTH_ERROR_CODES: this module
-// cannot import the adapter (the adapter imports it), so — exactly as
-// isUsageLimitRejection mirrors the adapter's cap detection — the WS `type:error`
-// auth codes are matched here and normalized to CodexAccountAuthError adapter-side.
-// Keep this list in sync with CODEX_ACCOUNT_AUTH_ERROR_CODES.
-function isAuthTokenRejection(code: string): boolean {
-  const normalized = code.toLowerCase()
-  return (
-    normalized === 'token_invalidated' ||
-    normalized === 'token_expired' ||
-    normalized === 'token_revoked' ||
-    normalized === 'invalid_token'
-  )
-}
-
 export async function* streamTurnViaWebSocket(
   conversationId: string,
   codexBody: Record<string, unknown>,
@@ -1188,7 +1174,7 @@ async function* _streamTurnAttempt(
         return
       }
 
-      if (isAuthTokenRejection(code)) {
+      if (isCodexAuthErrorCode(code)) {
         // Revoked/superseded token surfaced over WS. Normalized to
         // CodexAccountAuthError adapter-side so withRetry runs auth recovery.
         enqueue({ error: new CodexWebSocketAuthError(msg) })

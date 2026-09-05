@@ -16,7 +16,6 @@ import { EMPTY_USAGE } from '../../services/api/emptyUsage.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from '../../services/analytics/metadata.js'
 import { getCacheControl } from '../../services/api/claude.js'
 import { parsePromptTooLongTokenCounts } from '../../services/api/errors.js'
-import { getDefaultMaxRetries } from '../../services/api/withRetry.js'
 import type { Tool, ToolPermissionContext, Tools } from '../../Tool.js'
 import type { Message, UserMessage } from '../../types/message.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../../tools/AskUserQuestionTool/prompt.js'
@@ -36,15 +35,10 @@ import { errorMessage } from '../errors.js'
 import { lazySchema } from '../lazySchema.js'
 import { extractTextContent } from '../messages.js'
 import { resolveAntModel } from '../model/antModels.js'
-import { getMainLoopModel } from '../model/model.js'
 import { getAutoModeConfig } from '../settings/settings.js'
 import { sideQuery } from '../sideQuery.js'
 import { jsonStringify } from '../slowOperations.js'
 import { tokenCountWithEstimation } from '../tokens.js'
-import {
-  getBashPromptAllowDescriptions,
-  getBashPromptDenyDescriptions,
-} from './bashClassifier.js'
 import {
   extractAutoModeRuleEntries,
   extractAutoModeRuleIds,
@@ -85,22 +79,6 @@ function txtRequire(mod: string | { default: string }): string {
   return typeof mod === 'string' ? mod : mod.default
 }
 
-const BASE_PROMPT: string = feature('TRANSCRIPT_CLASSIFIER')
-  ? txtRequire(require('./yolo-classifier-prompts/auto_mode_system_prompt.txt'))
-  : ''
-
-// External template is loaded separately so it's available for
-// `claude auto-mode defaults` even in ant builds. Ant builds use
-// permissions_anthropic.txt at runtime but should dump external defaults.
-const EXTERNAL_PERMISSIONS_TEMPLATE: string = feature('TRANSCRIPT_CLASSIFIER')
-  ? txtRequire(require('./yolo-classifier-prompts/permissions_external.txt'))
-  : ''
-
-const ANTHROPIC_PERMISSIONS_TEMPLATE: string =
-  feature('TRANSCRIPT_CLASSIFIER') && process.env.USER_TYPE === 'ant'
-    ? txtRequire(require('./yolo-classifier-prompts/permissions_anthropic.txt'))
-    : ''
-
 // Vendored verbatim from upstream Claude Code 2.1.223; see
 // yolo-classifier-prompts/upstream/SOURCE.json for provenance and hashes.
 // Module 1 carries the classification process; module 2 carries the rule
@@ -121,22 +99,10 @@ function getAutoModeRuleIds(): ReadonlySet<string> {
   return cachedRuleIds
 }
 
-function isUsingExternalPermissions(): boolean {
-  if (process.env.USER_TYPE !== 'ant') return true
-  const config = getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_auto_mode_config',
-    {} as AutoModeConfig,
-  )
-  return config?.forceExternalPermissions === true
-}
-
 /**
  * Shape of the settings.autoMode config — the four classifier prompt sections a
  * user can customize. Required-field variant (empty arrays when absent) for
  * JSON output; settings.ts uses the optional-field variant.
- *
- * `hard_deny` is only consumed by the ported upstream prompt
- * (AUTO_MODE_UPSTREAM_PORT); the legacy template has no hard tier.
  */
 export type AutoModeRules = {
   allow: string[]
@@ -146,46 +112,32 @@ export type AutoModeRules = {
 }
 
 /**
- * Parses the external permissions template into the settings.autoMode schema
- * shape. The external template wraps each section's defaults in
- * <user_*_to_replace> tags (user settings REPLACE these defaults), so the
- * captured tag contents ARE the defaults. Bullet items are single-line in the
- * template; each line starting with `- ` becomes one array entry.
- * Used by `claude auto-mode defaults`. Always returns external defaults,
- * never the Anthropic-internal template.
+ * Parses the shipped permissions template into the settings.autoMode schema
+ * shape. The template wraps each section's defaults in <user_*_to_replace>
+ * tags (user settings REPLACE these defaults), so the captured tag contents
+ * ARE the defaults. Used by `claude auto-mode defaults`: the vendored
+ * inventory IS the shipped default, so reporting anything else here would tell
+ * the operator the classifier enforces something other than what it enforces.
  */
 export function getDefaultExternalAutoModeRules(): AutoModeRules {
-  // With the port on, the vendored inventory IS the shipped default, and it has
-  // a hard tier. Reporting the legacy template here would tell the operator the
-  // classifier enforces something other than what it enforces.
-  if (feature('AUTO_MODE_UPSTREAM_PORT')) {
-    // Upstream rules are multi-line with nested sub-bullets, so the legacy
-    // one-line-per-bullet reader miscounts them.
-    const entries = (tag: string): string[] =>
-      extractAutoModeRuleEntries(UPSTREAM_PERMISSIONS_TEMPLATE, tag)
-    return {
-      allow: entries('user_allow_rules_to_replace'),
-      soft_deny: entries('user_soft_deny_rules_to_replace'),
-      hard_deny: entries('user_hard_deny_rules_to_replace'),
-      environment: extractTaggedBullets(
-        'user_environment_to_replace',
-        UPSTREAM_PERMISSIONS_TEMPLATE,
-      ),
-    }
-  }
+  // Upstream rules are multi-line with nested sub-bullets, so the
+  // one-line-per-bullet reader below miscounts them.
+  const entries = (tag: string): string[] =>
+    extractAutoModeRuleEntries(UPSTREAM_PERMISSIONS_TEMPLATE, tag)
   return {
-    allow: extractTaggedBullets('user_allow_rules_to_replace'),
-    soft_deny: extractTaggedBullets('user_deny_rules_to_replace'),
-    // The legacy template has no hard tier; an empty list is the truth here.
-    hard_deny: [],
-    environment: extractTaggedBullets('user_environment_to_replace'),
+    allow: entries('user_allow_rules_to_replace'),
+    soft_deny: entries('user_soft_deny_rules_to_replace'),
+    hard_deny: entries('user_hard_deny_rules_to_replace'),
+    environment: extractTaggedBullets(
+      'user_environment_to_replace',
+      UPSTREAM_PERMISSIONS_TEMPLATE,
+    ),
   }
 }
 
-function extractTaggedBullets(
-  tagName: string,
-  template: string = EXTERNAL_PERMISSIONS_TEMPLATE,
-): string[] {
+// Bullet items are single-line in the template; each line starting with `- `
+// becomes one array entry.
+function extractTaggedBullets(tagName: string, template: string): string[] {
   const match = template.match(
     new RegExp(`<${tagName}>([\\s\\S]*?)</${tagName}>`),
   )
@@ -195,30 +147,6 @@ function extractTaggedBullets(
     .map(line => line.trim())
     .filter(line => line.startsWith('- '))
     .map(line => line.slice(2))
-}
-
-/**
- * Returns the full external classifier system prompt with default rules (no user
- * overrides). Used by `claude auto-mode critique` to show the model how the
- * classifier sees its instructions.
- */
-export function buildDefaultExternalSystemPrompt(): string {
-  return BASE_PROMPT.replace(
-    '<permissions_template>',
-    () => EXTERNAL_PERMISSIONS_TEMPLATE,
-  )
-    .replace(
-      /<user_allow_rules_to_replace>([\s\S]*?)<\/user_allow_rules_to_replace>/,
-      (_m, defaults: string) => defaults,
-    )
-    .replace(
-      /<user_deny_rules_to_replace>([\s\S]*?)<\/user_deny_rules_to_replace>/,
-      (_m, defaults: string) => defaults,
-    )
-    .replace(
-      /<user_environment_to_replace>([\s\S]*?)<\/user_environment_to_replace>/,
-      (_m, defaults: string) => defaults,
-    )
 }
 
 function getAutoModeDumpDir(): string {
@@ -443,39 +371,7 @@ function buildPortedYoloClassifierToolSchema(): BetaToolUnion {
   }
 }
 
-const LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA: BetaToolUnion = {
-  type: 'custom',
-  name: YOLO_CLASSIFIER_TOOL_NAME,
-  description: 'Report the security classification result for the agent action',
-  input_schema: {
-    type: 'object',
-    properties: {
-      thinking: { type: 'string', description: 'Brief step-by-step reasoning.' },
-      shouldBlock: {
-        type: 'boolean',
-        description:
-          'Whether the action should be blocked (true) or allowed (false)',
-      },
-      reason: {
-        type: 'string',
-        description: 'Brief explanation of the classification decision',
-      },
-    },
-    required: ['thinking', 'shouldBlock', 'reason'],
-  },
-}
-
-export function getYoloClassifierToolSchema(
-  useUpstreamPort: boolean,
-): BetaToolUnion {
-  return useUpstreamPort
-    ? buildPortedYoloClassifierToolSchema()
-    : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
-}
-
-export const YOLO_CLASSIFIER_TOOL_SCHEMA = feature('AUTO_MODE_UPSTREAM_PORT')
-  ? buildPortedYoloClassifierToolSchema()
-  : LEGACY_YOLO_CLASSIFIER_TOOL_SCHEMA
+export const YOLO_CLASSIFIER_TOOL_SCHEMA = buildPortedYoloClassifierToolSchema()
 
 type TranscriptBlock =
   | { type: 'text'; text: string }
@@ -882,14 +778,10 @@ export function buildAutoModePrefixMessages(
  */
 export function buildAutoModeRequestPrefix(
   context: ToolPermissionContext,
-  includeSettingsDenyRules?: boolean,
 ): Anthropic.MessageParam[] {
-  const include =
-    includeSettingsDenyRules ??
-    (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
   return buildAutoModePrefixMessages(
     buildClaudeMdMessage(),
-    include ? buildSettingsDenyRulesMessage(context) : null,
+    buildSettingsDenyRulesMessage(context),
   )
 }
 
@@ -934,73 +826,7 @@ function buildUpstreamSystemPrompt(): string {
 }
 
 export function buildAutoModeCritiqueSystemPrompt(): string {
-  return feature('AUTO_MODE_UPSTREAM_PORT')
-    ? buildUpstreamSystemPrompt()
-    : buildDefaultExternalSystemPrompt()
-}
-
-export async function buildYoloSystemPrompt(
-  context: ToolPermissionContext,
-): Promise<string> {
-  if (feature('AUTO_MODE_UPSTREAM_PORT')) return buildUpstreamSystemPrompt()
-
-  const usingExternal = isUsingExternalPermissions()
-  const systemPrompt = BASE_PROMPT.replace('<permissions_template>', () =>
-    usingExternal
-      ? EXTERNAL_PERMISSIONS_TEMPLATE
-      : ANTHROPIC_PERMISSIONS_TEMPLATE,
-  )
-
-  const autoMode = getAutoModeConfig()
-  const includeBashPromptRules = feature('BASH_CLASSIFIER')
-    ? !usingExternal
-    : false
-  const includePowerShellGuidance = feature('POWERSHELL_AUTO_MODE')
-    ? !usingExternal
-    : false
-  const allowDescriptions = [
-    ...(includeBashPromptRules ? getBashPromptAllowDescriptions(context) : []),
-    ...(autoMode?.allow ?? []),
-  ]
-  const denyDescriptions = [
-    ...(includeBashPromptRules ? getBashPromptDenyDescriptions(context) : []),
-    ...(includePowerShellGuidance ? POWERSHELL_DENY_GUIDANCE : []),
-    ...(autoMode?.soft_deny ?? []),
-  ]
-
-  // Legacy path only. All three sections use the same
-  // <foo_to_replace>...</foo_to_replace> delimiter pattern. The external
-  // template wraps its defaults inside the tags, so user-provided values
-  // REPLACE the defaults entirely. The anthropic template keeps its defaults
-  // outside the tags and uses an empty tag pair at the end of each section, so
-  // user-provided values are strictly ADDITIVE.
-  //
-  // The ported path does neither: it splices on an explicit `$defaults`
-  // sentinel, so extending the shipped rules is a choice rather than a
-  // property of which template happened to load. See autoModeDefaultsSplice.ts.
-  const userAllow = allowDescriptions.length
-    ? allowDescriptions.map(d => `- ${d}`).join('\n')
-    : undefined
-  const userDeny = denyDescriptions.length
-    ? denyDescriptions.map(d => `- ${d}`).join('\n')
-    : undefined
-  const userEnvironment = autoMode?.environment?.length
-    ? autoMode.environment.map(e => `- ${e}`).join('\n')
-    : undefined
-
-  return systemPrompt
-    .replace(
-      /<user_allow_rules_to_replace>([\s\S]*?)<\/user_allow_rules_to_replace>/,
-      (_m, defaults: string) => userAllow ?? defaults,
-    )
-    .replace(
-      /<user_deny_rules_to_replace>([\s\S]*?)<\/user_deny_rules_to_replace>/,
-      (_m, defaults: string) => userDeny ?? defaults,
-    )
-    .replace(
-      /<user_environment_to_replace>([\s\S]*?)<\/user_environment_to_replace>/,
-      (_m, defaults: string) => userEnvironment ?? defaults,
-    )
+  return buildUpstreamSystemPrompt()
 }
 
 /**
@@ -1196,7 +1022,7 @@ function isClassifierFallbackErrorText(message: string): boolean {
  *
  * On API errors, returns shouldBlock: true with unavailable: true so callers
  * can distinguish "classifier actively blocked" from "classifier couldn't respond".
- * Transient errors (429, 500) are retried by sideQuery internally (see getDefaultMaxRetries).
+ * Transient errors (429, 500) are handled by the provider ladder in requestStage.
  *
  * @param messages - The conversation history
  * @param action - The action being evaluated (tool name + input)
@@ -1205,7 +1031,6 @@ function isClassifierFallbackErrorText(message: string): boolean {
  * @param signal - Abort signal
  */
 type ClassifierOverrides = {
-  upstreamPortEnabled?: boolean
   sideQuery?: typeof sideQuery
 }
 
@@ -1233,9 +1058,6 @@ async function classifyYoloActionWithOverrides(
   signal: AbortSignal,
   overrides?: ClassifierOverrides,
 ): Promise<YoloClassifierResult> {
-  const upstreamPortEnabled =
-    overrides?.upstreamPortEnabled ??
-    (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
   const runSideQuery = overrides?.sideQuery ?? sideQuery
   const lookup = buildToolLookup(tools)
   const actionCompact = toCompact(action, lookup)
@@ -1249,13 +1071,10 @@ async function classifyYoloActionWithOverrides(
     }
   }
 
-  const systemPrompt = await buildYoloSystemPrompt(context)
+  const systemPrompt = buildUpstreamSystemPrompt()
   const transcriptEntries = buildTranscriptEntries(messages)
   const metaLines = await buildActionMetaLines(action.autoModeMeta)
-  const prefixMessages = buildAutoModeRequestPrefix(
-    context,
-    upstreamPortEnabled,
-  )
+  const prefixMessages = buildAutoModeRequestPrefix(context)
 
   let toolCallsLength = actionCompact.length
   let userPromptsLength = 0
@@ -1331,7 +1150,7 @@ async function classifyYoloActionWithOverrides(
     cache_control: cacheControl,
   })
 
-  const configuredMaxRetries = getClassifierMaxRetries(upstreamPortEnabled)
+  const configuredMaxRetries = getClassifierMaxRetries()
   const classifierRequests: unknown[] = []
 
   type StageName = 'fast' | 'thinking'
@@ -1355,18 +1174,16 @@ async function classifyYoloActionWithOverrides(
       }
 
   const requestStage = async (stage: StageName): Promise<StageRequestResult> => {
-    let model = getClassifierModel(upstreamPortEnabled)
-    const gatedAttempts = upstreamPortEnabled
-      ? getAutoModeClassifierAttempts(
-          model,
-          configuredMaxRetries,
-          (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
-        )
-      : null
+    let model = getClassifierModel()
+    const gatedAttempts = getAutoModeClassifierAttempts(
+      model,
+      configuredMaxRetries,
+      (await import('../model/providers.js')).getConfiguredAnthropicProvider(),
+    )
     let attemptIndex = 0
     let attemptsMade = 0
-    let provider = gatedAttempts?.[0]?.provider
-    if (gatedAttempts?.[0]) model = gatedAttempts[0].model
+    let provider = gatedAttempts[0]?.provider
+    if (gatedAttempts[0]) model = gatedAttempts[0].model
     const attemptedAttempts: string[] = []
 
     for (;;) {
@@ -1400,33 +1217,25 @@ async function classifyYoloActionWithOverrides(
         tools: [
           isFast
             ? STAGE1_YOLO_CLASSIFIER_TOOL_SCHEMA
-            : getYoloClassifierToolSchema(upstreamPortEnabled),
+            : buildPortedYoloClassifierToolSchema(),
         ],
         tool_choice: {
           type: 'tool' as const,
           name: YOLO_CLASSIFIER_TOOL_NAME,
         },
-        maxRetries: gatedAttempts ? 0 : getDefaultMaxRetries(),
+        // The provider ladder below owns retries, so sideQuery must not add
+        // its own on top of them.
+        maxRetries: 0,
         signal,
         querySource: 'auto_mode' as const,
       }
-      const requestIndex = upstreamPortEnabled && stage === 'thinking' ? 1 : 0
+      const requestIndex = stage === 'thinking' ? 1 : 0
       classifierRequests[requestIndex] = sideQueryOpts
-      if (upstreamPortEnabled) {
-        setLastClassifierRequests([...classifierRequests])
-      }
+      setLastClassifierRequests([...classifierRequests])
       const start = Date.now()
       try {
         const result = await runSideQuery(sideQueryOpts)
-        if (!upstreamPortEnabled) {
-          setLastClassifierRequests([sideQueryOpts])
-        }
-        void maybeDumpAutoMode(
-          sideQueryOpts,
-          result,
-          start,
-          upstreamPortEnabled ? `stage-${stage}` : undefined,
-        )
+        void maybeDumpAutoMode(sideQueryOpts, result, start, `stage-${stage}`)
         return {
           ok: true,
           result,
@@ -1448,13 +1257,7 @@ async function classifyYoloActionWithOverrides(
           }
         }
         const tooLong = detectPromptTooLong(error)
-        const fallbackModel = tooLong
-          ? undefined
-          : gatedAttempts
-            ? undefined
-            : getClassifierFallbackModel(model, error)
         if (
-          gatedAttempts &&
           !tooLong &&
           attemptsMade < configuredMaxRetries + 1 &&
           isClassifierAttemptFallbackError(error, provider)
@@ -1486,18 +1289,6 @@ async function classifyYoloActionWithOverrides(
             continue
           }
         }
-        if (fallbackModel) {
-          logForDebugging(
-            `Auto mode classifier model ${model} unavailable, retrying with ${fallbackModel}: ${errorMessage(error)}`,
-            { level: 'warn' },
-          )
-          logAutoModeOutcome('fallback', model, {
-            classifierType: stage,
-            failureKind: 'classifier_model_unavailable',
-          })
-          model = fallbackModel
-          continue
-        }
         return {
           ok: false,
           error,
@@ -1527,7 +1318,7 @@ async function classifyYoloActionWithOverrides(
         model: failed.model,
         unavailable: true,
         autoModeOutcome: 'interrupted',
-        ...(upstreamPortEnabled && { stage }),
+        stage,
       }
     }
     logForDebugging(`Auto mode classifier error: ${errorMessage(failed.error)}`, {
@@ -1573,79 +1364,76 @@ async function classifyYoloActionWithOverrides(
       autoModeOutcome: 'automode-unavailable',
       transcriptTooLong: Boolean(failed.tooLong),
       errorDumpPath,
-      ...(upstreamPortEnabled && { stage }),
+      stage,
     }
   }
 
-  let stage1:
-    | Extract<StageRequestResult, { ok: true }>
-    | undefined
-  if (upstreamPortEnabled) {
-    const fast = await requestStage('fast')
-    if (!fast.ok) return failedStageResult(fast, 'fast')
-    stage1 = fast
-    const toolUseBlock = extractToolUseBlock(
-      fast.result.content,
-      YOLO_CLASSIFIER_TOOL_NAME,
-    )
-    const parsed = toolUseBlock
-      ? parseClassifierResponse(toolUseBlock, stage1ClassifierResponseSchema())
-      : null
-    const stage1Telemetry = {
-      stage: 'fast' as const,
-      usage: fast.usage,
-      durationMs: fast.durationMs,
-      promptLengths,
-      stage1Usage: fast.usage,
-      stage1DurationMs: fast.durationMs,
-      stage1RequestId: extractRequestId(fast.result),
-      stage1MsgId: fast.result.id,
-    }
-    if (!parsed) {
-      logForDebugging('Auto mode classifier: Invalid stage 1 response', {
-        level: 'warn',
-      })
-      logAutoModeOutcome('parse_failure', fast.model, {
-        classifierType: 'fast',
-        failureKind: toolUseBlock ? 'invalid_schema' : 'no_tool_use',
-        provider: fast.provider,
-      })
-      return {
-        shouldBlock: true,
-        reason: 'Invalid classifier response - blocking for safety',
-        model: fast.model,
-        autoModeOutcome: 'automode-parsing-error',
-        ...stage1Telemetry,
-      }
-    }
-    logAutoModeOutcome('success', fast.model, {
-      classifierType: 'fast',
-      durationMs: fast.durationMs,
-      provider: fast.provider,
-      mainLoopTokens,
-      classifierInputTokens:
-        fast.usage.inputTokens +
-        fast.usage.cacheReadInputTokens +
-        fast.usage.cacheCreationInputTokens,
-      classifierTokensEst: Math.round(
-        (systemPrompt.length + STAGE1_PROMPT_SUFFIX.length + userPrompt.length) /
-          4,
-      ),
+  const fast = await requestStage('fast')
+  if (!fast.ok) return failedStageResult(fast, 'fast')
+  const stage1 = fast
+  const stage1ToolUseBlock = extractToolUseBlock(
+    fast.result.content,
+    YOLO_CLASSIFIER_TOOL_NAME,
+  )
+  const stage1Parsed = stage1ToolUseBlock
+    ? parseClassifierResponse(
+        stage1ToolUseBlock,
+        stage1ClassifierResponseSchema(),
+      )
+    : null
+  const stage1Telemetry = {
+    stage: 'fast' as const,
+    usage: fast.usage,
+    durationMs: fast.durationMs,
+    promptLengths,
+    stage1Usage: fast.usage,
+    stage1DurationMs: fast.durationMs,
+    stage1RequestId: extractRequestId(fast.result),
+    stage1MsgId: fast.result.id,
+  }
+  if (!stage1Parsed) {
+    logForDebugging('Auto mode classifier: Invalid stage 1 response', {
+      level: 'warn',
     })
-    if (!parsed.shouldBlock) {
-      return {
-        shouldBlock: false,
-        reason: 'No block rule could apply',
-        model: fast.model,
-        ...stage1Telemetry,
-      }
+    logAutoModeOutcome('parse_failure', fast.model, {
+      classifierType: 'fast',
+      failureKind: stage1ToolUseBlock ? 'invalid_schema' : 'no_tool_use',
+      provider: fast.provider,
+    })
+    return {
+      shouldBlock: true,
+      reason: 'Invalid classifier response - blocking for safety',
+      model: fast.model,
+      autoModeOutcome: 'automode-parsing-error',
+      ...stage1Telemetry,
+    }
+  }
+  logAutoModeOutcome('success', fast.model, {
+    classifierType: 'fast',
+    durationMs: fast.durationMs,
+    provider: fast.provider,
+    mainLoopTokens,
+    classifierInputTokens:
+      fast.usage.inputTokens +
+      fast.usage.cacheReadInputTokens +
+      fast.usage.cacheCreationInputTokens,
+    classifierTokensEst: Math.round(
+      (systemPrompt.length + STAGE1_PROMPT_SUFFIX.length + userPrompt.length) /
+        4,
+    ),
+  })
+  if (!stage1Parsed.shouldBlock) {
+    return {
+      shouldBlock: false,
+      reason: 'No block rule could apply',
+      model: fast.model,
+      ...stage1Telemetry,
     }
   }
 
   const adjudication = await requestStage('thinking')
   if (!adjudication.ok) {
     const failure = await failedStageResult(adjudication, 'thinking')
-    if (!stage1) return failure
     return {
       ...failure,
       stage: 'thinking',
@@ -1660,8 +1448,6 @@ async function classifyYoloActionWithOverrides(
   }
 
   const { result, model, provider, durationMs, usage } = adjudication
-  const stage1RequestId = extractRequestId(result)
-  const stage1MsgId = result.id
 
   // Actual total input tokens the classifier API consumed (uncached + cache)
   const classifierInputTokens =
@@ -1686,28 +1472,26 @@ async function classifyYoloActionWithOverrides(
     result.content,
     YOLO_CLASSIFIER_TOOL_NAME,
   )
-  const parseFailureTelemetry = stage1
-    ? {
-        stage: 'thinking' as const,
-        usage: combineUsage(stage1.usage, usage),
-        durationMs: stage1.durationMs + durationMs,
-        stage1Usage: stage1.usage,
-        stage1DurationMs: stage1.durationMs,
-        stage1RequestId: extractRequestId(stage1.result),
-        stage1MsgId: stage1.result.id,
-        stage2Usage: usage,
-        stage2DurationMs: durationMs,
-        stage2RequestId: extractRequestId(result),
-        stage2MsgId: result.id,
-      }
-    : { usage, durationMs, stage1RequestId, stage1MsgId }
+  const stageTelemetry = {
+    stage: 'thinking' as const,
+    usage: combineUsage(stage1.usage, usage),
+    durationMs: stage1.durationMs + durationMs,
+    stage1Usage: stage1.usage,
+    stage1DurationMs: stage1.durationMs,
+    stage1RequestId: extractRequestId(stage1.result),
+    stage1MsgId: stage1.result.id,
+    stage2Usage: usage,
+    stage2DurationMs: durationMs,
+    stage2RequestId: extractRequestId(result),
+    stage2MsgId: result.id,
+  }
 
   if (!toolUseBlock) {
     logForDebugging('Auto mode classifier: No tool use block found', {
       level: 'warn',
     })
     logAutoModeOutcome('parse_failure', model, {
-      classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+      classifierType: 'thinking',
       failureKind: 'no_tool_use',
       provider,
     })
@@ -1717,7 +1501,7 @@ async function classifyYoloActionWithOverrides(
       model,
       autoModeOutcome: 'automode-parsing-error',
       promptLengths,
-      ...parseFailureTelemetry,
+      ...stageTelemetry,
     }
   }
 
@@ -1731,7 +1515,7 @@ async function classifyYoloActionWithOverrides(
       level: 'warn',
     })
     logAutoModeOutcome('parse_failure', model, {
-      classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+      classifierType: 'thinking',
       failureKind: 'invalid_schema',
       provider,
     })
@@ -1741,14 +1525,11 @@ async function classifyYoloActionWithOverrides(
       model,
       autoModeOutcome: 'automode-parsing-error',
       promptLengths,
-      ...parseFailureTelemetry,
+      ...stageTelemetry,
     }
   }
 
-  if (
-    upstreamPortEnabled &&
-    !isAutoModeVerdictCategoryValid(parsed.shouldBlock, toolUseBlock.input)
-  ) {
+  if (!isAutoModeVerdictCategoryValid(parsed.shouldBlock, toolUseBlock.input)) {
     logForDebugging(
       'Auto mode classifier: allow verdict included a category',
       { level: 'warn' },
@@ -1764,7 +1545,7 @@ async function classifyYoloActionWithOverrides(
       model,
       autoModeOutcome: 'automode-parsing-error',
       promptLengths,
-      ...parseFailureTelemetry,
+      ...stageTelemetry,
     }
   }
 
@@ -1772,17 +1553,11 @@ async function classifyYoloActionWithOverrides(
   // label cannot fail and cannot alter shouldBlock. A malformed category
   // is absent, and an unrecognized name drops the label and keeps the
   // verdict.
-  const resolvedCategory = upstreamPortEnabled
-    ? resolveAutoModeCategory(
-        readRawAutoModeCategory(toolUseBlock.input),
-        getAutoModeRuleIds(),
-      )
-    : { category: undefined }
-  if (
-    upstreamPortEnabled &&
-    parsed.shouldBlock &&
-    resolvedCategory.category === undefined
-  ) {
+  const resolvedCategory = resolveAutoModeCategory(
+    readRawAutoModeCategory(toolUseBlock.input),
+    getAutoModeRuleIds(),
+  )
+  if (parsed.shouldBlock && resolvedCategory.category === undefined) {
     logForDebugging(
       'Auto mode classifier: dropped missing or invalid block category',
       { level: 'warn' },
@@ -1795,27 +1570,13 @@ async function classifyYoloActionWithOverrides(
     category: resolvedCategory.category,
     model,
     promptLengths,
-    ...(stage1
-      ? {
-          stage: 'thinking' as const,
-          usage: combineUsage(stage1.usage, usage),
-          durationMs: stage1.durationMs + durationMs,
-          stage1Usage: stage1.usage,
-          stage1DurationMs: stage1.durationMs,
-          stage1RequestId: extractRequestId(stage1.result),
-          stage1MsgId: stage1.result.id,
-          stage2Usage: usage,
-          stage2DurationMs: durationMs,
-          stage2RequestId: extractRequestId(result),
-          stage2MsgId: result.id,
-        }
-      : { usage, durationMs, stage1RequestId, stage1MsgId }),
+    ...stageTelemetry,
   }
   // Context-delta telemetry: chart classifierInputTokens / mainLoopTokens
   // in Datadog. Expect ~0.6-0.8 steady state; alert on p95 > 1.0 (means
   // classifier is bigger than main loop — auto-compact won't save us).
   logAutoModeOutcome('success', model, {
-    classifierType: upstreamPortEnabled ? 'thinking' : undefined,
+    classifierType: 'thinking',
     durationMs,
     provider,
     category: resolvedCategory.category?.id,
@@ -1851,11 +1612,6 @@ export const _forTest = {
 type AutoModeConfig = {
   model?: string
   /**
-   * Ant builds normally use permissions_anthropic.txt; when true, use
-   * permissions_external.txt instead (dogfood the external template).
-   */
-  forceExternalPermissions?: boolean
-  /**
    * Gate the JSONL transcript format ({"Bash":"ls"} vs `Bash ls`).
    * When false or unset, use the plain text transcript projection.
    */
@@ -1864,49 +1620,28 @@ type AutoModeConfig = {
 
 /**
  * Get the model for the classifier.
- * Ant-only env var takes precedence, then GrowthBook JSON config override,
- * then the main loop model.
+ * The env var takes precedence, then the settings.autoMode override.
  */
-function getClassifierModel(upstreamPortOverride?: boolean): string {
-  const upstreamPortEnabled =
-    upstreamPortOverride ?? (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
-  if (upstreamPortEnabled) {
-    const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
-    if (envModel) return envModel
-    // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
-    // because Anthropic access is its reliable path; here it is the opposite —
-    // Codex is always available and Anthropic access is intermittent. Defaulting
-    // to sonnet puts an unreachable provider first on the ladder, so every
-    // permission decision would open by failing an attempt it cannot complete.
-    // Bedrock and Vertex are not deployment targets for this fork.
-    //
-    // Luna specifically, per the operator: at maximum reasoning effort it is the
-    // Sonnet-class equivalent upstream uses for this job. Sol/Terra/Luna is an
-    // availability chain for routing past transient rate limits (see the
-    // fallback-status comment below), NOT a capability ladder — the head of it
-    // carries no implication of being the strongest.
-    return getAutoModeConfig()?.model ?? 'gpt-5.6-luna'
-  }
-  if (process.env.USER_TYPE === 'ant') {
-    const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
-    if (envModel) return envModel
-  }
-  const config = getFeatureValue_CACHED_MAY_BE_STALE(
-    'tengu_auto_mode_config',
-    {} as AutoModeConfig,
-  )
-  if (config?.model) {
-    return config.model
-  }
-  return getMainLoopModel()
+function getClassifierModel(): string {
+  const envModel = process.env.CLAUDE_CODE_AUTO_MODE_MODEL
+  if (envModel) return envModel
+  // Codex-first, deliberately. Upstream defaults to a Sonnet-class classifier
+  // because Anthropic access is its reliable path; here it is the opposite —
+  // Codex is always available and Anthropic access is intermittent. Defaulting
+  // to sonnet puts an unreachable provider first on the ladder, so every
+  // permission decision would open by failing an attempt it cannot complete.
+  // Bedrock and Vertex are not deployment targets for this fork.
+  //
+  // Luna specifically, per the operator: at maximum reasoning effort it is the
+  // Sonnet-class equivalent upstream uses for this job. Sol/Terra/Luna is an
+  // availability chain for routing past transient rate limits (see the
+  // fallback-status comment below), NOT a capability ladder — the head of it
+  // carries no implication of being the strongest.
+  return getAutoModeConfig()?.model ?? 'gpt-5.6-luna'
 }
 
-function getClassifierMaxRetries(upstreamPortOverride?: boolean): number {
-  const upstreamPortEnabled =
-    upstreamPortOverride ?? (feature('AUTO_MODE_UPSTREAM_PORT') ? true : false)
-  return upstreamPortEnabled
-    ? (getAutoModeConfig()?.maxRetries ?? 4)
-    : getDefaultMaxRetries()
+function getClassifierMaxRetries(): number {
+  return getAutoModeConfig()?.maxRetries ?? 4
 }
 
 export function isProviderAuthenticationErrorForTest(
@@ -1967,27 +1702,6 @@ function isJsonlTranscriptEnabled(): boolean {
   )
   return config?.jsonlTranscript === true
 }
-
-/**
- * PowerShell-specific deny guidance for the classifier. Appended to the
- * deny list in buildYoloSystemPrompt when PowerShell auto mode is active.
- * Maps PS idioms to the existing BLOCK categories so the classifier
- * recognizes `iex (iwr ...)` as "Code from External", `Remove-Item
- * -Recurse -Force` as "Irreversible Local Destruction", etc.
- *
- * Guarded at definition for DCE — with external:false, the string content
- * is absent from external builds (same pattern as the .txt requires above).
- */
-const POWERSHELL_DENY_GUIDANCE: readonly string[] = feature(
-  'POWERSHELL_AUTO_MODE',
-)
-  ? [
-      'PowerShell Download-and-Execute: `iex (iwr ...)`, `Invoke-Expression (Invoke-WebRequest ...)`, `Invoke-Expression (New-Object Net.WebClient).DownloadString(...)`, and any pipeline feeding remote content into `Invoke-Expression`/`iex` fall under "Code from External" — same as `curl | bash`.',
-      'PowerShell Irreversible Destruction: `Remove-Item -Recurse -Force`, `rm -r -fo`, `Clear-Content`, and `Set-Content` truncation of pre-existing files fall under "Irreversible Local Destruction" — same as `rm -rf` and `> file`.',
-      'PowerShell Persistence: modifying `$PROFILE` (any of the four profile paths), `Register-ScheduledTask`, `New-Service`, writing to registry Run keys (`HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run` or the HKLM equivalent), and WMI event subscriptions fall under "Unauthorized Persistence" — same as `.bashrc` edits and cron jobs.',
-      'PowerShell Elevation: `Start-Process -Verb RunAs`, `-ExecutionPolicy Bypass`, and disabling AMSI/Defender (`Set-MpPreference -DisableRealtimeMonitoring`) fall under "Security Weaken".',
-    ]
-  : []
 
 type AutoModeOutcome =
   | 'success'
