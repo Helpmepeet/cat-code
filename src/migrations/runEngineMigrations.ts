@@ -15,7 +15,6 @@ import {
 import { migrateAutoUpdatesToSettings } from './migrateAutoUpdatesToSettings.js'
 import { migrateBypassPermissionsAcceptedToSettings } from './migrateBypassPermissionsAcceptedToSettings.js'
 import { migrateEnableAllProjectMcpServersToSettings } from './migrateEnableAllProjectMcpServersToSettings.js'
-import { migrateFennecToOpus } from './migrateFennecToOpus.js'
 import { migrateLegacyOpusToCurrent } from './migrateLegacyOpusToCurrent.js'
 import { migrateOpusToOpus1m } from './migrateOpusToOpus1m.js'
 import { migrateReplBridgeEnabledToRemoteControlAtStartup } from './migrateReplBridgeEnabledToRemoteControlAtStartup.js'
@@ -90,9 +89,6 @@ function runVersionedMigrations(): Error | null {
   migrateReplBridgeEnabledToRemoteControlAtStartup()
   if (feature('TRANSCRIPT_CLASSIFIER')) {
     resetAutoModeOptInForDefaultOffer()
-  }
-  if ("external" === 'ant') {
-    migrateFennecToOpus()
   }
   return null
 }
