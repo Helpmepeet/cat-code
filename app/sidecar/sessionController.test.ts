@@ -14,13 +14,20 @@ import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
 import { clearCommandMemoizationCaches, isHeadlessSafeCommand } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
-import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
+import {
+  buildDesktopSystemPrompt,
+  buildPeerDoctrine,
+  DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+} from './desktopSystemPrompt.js'
+import { readPeerIdentity } from './peerHostRequester.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
   initializeSidecarModelProvider,
   loadAgentDefinitionsForRuntime,
   loadSidecarToolPermissionContext,
+  readSpawnEffort,
+  readSpawnModel,
   selectResumedProviderModel,
 } from './sessionController.js'
 
@@ -260,7 +267,9 @@ test('normal startup appends the desktop file-reference instruction', async () =
     process.cwd(),
   )
 
-  expect(queryEngineConfig.appendSystemPrompt).toBe(
+  // The addendum now leads a longer appended prompt (the peer doctrine follows
+  // it), so this asserts it is carried and still first, not that it is alone.
+  expect(queryEngineConfig.appendSystemPrompt).toStartWith(
     DESKTOP_SYSTEM_PROMPT_ADDENDUM,
   )
   expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
@@ -641,4 +650,151 @@ test('PERMISSION-BOUNDARY §3 — managed bypass policy disables the mode, legac
     resetSettingsCache()
     rmSync(configDir, { recursive: true, force: true })
   }
+})
+
+test('PEER-SESSIONS §4 — a desktop session carries the peer tools the terminal never sees', async () => {
+  // The unwired-feature check (CLAUDE.md §8 rule 7). The tools exist only
+  // because this list appends them after the engine's own; if that append is
+  // dropped, the tools compile, their tests pass, and no model can call them.
+  const { queryEngineConfig, tools } = await createNormalSidecarQueryEngineConfig(
+    process.cwd(),
+  )
+
+  const names = queryEngineConfig.tools.map(tool => tool.name)
+  // All FOUR, not just the pair a given session happened to build. A tool that
+  // is exported but never appended here compiles, passes its own tests, and is
+  // unreachable by any model: that is the failure this test exists for, and it
+  // has to be able to see every tool the feature ships.
+  expect(names).toContain('ListPeers')
+  expect(names).toContain('CreatePeer')
+  expect(names).toContain('SendToPeer')
+  expect(names).toContain('ReadPeer')
+  // Appended, not substituted: the engine's own tools are still there.
+  expect(names).toContain('Bash')
+  // The same array the session-actions export and the context breakdown read,
+  // so those describe one session rather than two.
+  expect(tools.map(tool => tool.name)).toEqual(names)
+})
+
+test('the spawn run defaults treat an empty env value as absent, never as a value', () => {
+  // The contract the supervisor states on `SpawnConfig`: all five peer keys are
+  // written on EVERY spawn, empty when the host had no value, because a key
+  // merely left unset would be inherited from main's own environment. A reader
+  // that tests for presence starts the session on the empty-string model.
+  expect(readSpawnModel({ CATCODE_SIDECAR_MODEL: '' })).toBeUndefined()
+  expect(readSpawnModel({})).toBeUndefined()
+  expect(readSpawnModel({ CATCODE_SIDECAR_MODEL: 'gpt-5.6-luna' })).toBe(
+    'gpt-5.6-luna',
+  )
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: '' })).toBeUndefined()
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: 'high' })).toBe('high')
+  // An unrecognised value degrades to the user's saved effort rather than
+  // failing the boot or reaching the engine as a level it does not know.
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: 'whatever' })).toBeUndefined()
+})
+
+test('a created peer boots on the spawn model, and a resumed session keeps its own', () => {
+  // PEER-SESSIONS R7 / HOST-REQUEST-PLANE §5. Precedence, top down: a resumed
+  // transcript's model, then the spawn model, then the saved setting. The first
+  // two are mutually exclusive in practice (main sends run defaults only on the
+  // create spawn, never on a restart), so the order records which one owns the
+  // choice rather than resolving a live tie.
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  try {
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+    expect(
+      initializeSidecarModelProvider(undefined, 'claude-haiku-4-5-20251001'),
+    ).toBe('claude-haiku-4-5-20251001')
+    expect(getMainLoopModelOverride()).toBe('claude-haiku-4-5-20251001')
+
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+    expect(
+      initializeSidecarModelProvider('claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'),
+    ).toBe('claude-sonnet-4-5-20250929')
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('a spawn model decides the provider, exactly as a resumed one does', () => {
+  // A model chosen for THIS session is a provider-selection event. Without
+  // that, a peer created on a Claude model inside an OpenAI-flagged environment
+  // would boot pointed at the wrong provider.
+  const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  try {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+
+    initializeSidecarModelProvider(undefined, 'claude-haiku-4-5-20251001')
+
+    expect(getSessionProvider()).toBe('firstParty')
+  } finally {
+    if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
+    else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or says neither', () => {
+  const both = buildPeerDoctrine({ name: 'Bear', createdByName: 'Alex' })
+  expect(both).toStartWith(
+    'You are Bear. Alex created you. Use ListPeers',
+  )
+
+  // A user-created session omits the creator sentence (§5). It must not gain a
+  // sentence about a creator that does not exist.
+  const userCreated = buildPeerDoctrine({ name: 'Bear', createdByName: null })
+  expect(userCreated).toStartWith(
+    'You are Bear. Use ListPeers',
+  )
+  expect(userCreated).not.toContain('created you')
+
+  // No name at all: no name sentence, rather than a sentence with a hole in it.
+  const unnamed = buildPeerDoctrine({ name: null, createdByName: null })
+  expect(unnamed).toStartWith('Use ListPeers')
+  expect(unnamed).not.toContain('You are ')
+  // The rest of the doctrine still applies: an unnamed session can still list
+  // and still create.
+  expect(unnamed).toContain('Do not send status nobody asked for.')
+  expect(unnamed).toContain('Never create one on your own judgment.')
+
+  // Paragraph breaks only. The decision document's hard wraps are its own
+  // 80-column layout, not part of the text, and a sentence broken mid-clause is
+  // not what the appended prompt should carry.
+  for (const paragraph of both.split('\n\n')) {
+    expect(paragraph).not.toContain('\n')
+  }
+})
+
+test('the doctrine is assembled from the spawn env, empty strings and all', () => {
+  // The only source it can have: the appended prompt is fixed when the
+  // controller is built, before there is a socket to ask main anything on.
+  expect(readPeerIdentity({})).toEqual({ name: null, createdByName: null })
+  expect(
+    readPeerIdentity({
+      CATCODE_SIDECAR_NAME: '',
+      CATCODE_SIDECAR_CREATED_BY_NAME: '',
+    }),
+  ).toEqual({ name: null, createdByName: null })
+  expect(
+    readPeerIdentity({
+      CATCODE_SIDECAR_NAME: 'Bear',
+      CATCODE_SIDECAR_CREATED_BY_NAME: 'Alex',
+    }),
+  ).toEqual({ name: 'Bear', createdByName: 'Alex' })
+
+  const prompt = buildDesktopSystemPrompt({
+    name: 'Bear',
+    createdByName: 'Alex',
+  })
+  expect(prompt).toStartWith(DESKTOP_SYSTEM_PROMPT_ADDENDUM)
+  expect(prompt).toContain('You are Bear.')
 })

@@ -120,6 +120,75 @@ describe('restored history projection', () => {
     expect(merged).toEqual({ history: seed, truncated: true })
   })
 
+  /**
+   * The persisted shape, copied from a live transcript. A busy recipient's turn
+   * drains a peer message itself and folds it into this attachment; the engine
+   * writes no user entry for it, so the attachment is everything that survives.
+   */
+  function peerAttachment(
+    attachment: Record<string, unknown>,
+  ): Parameters<typeof projectResumedHistory>[0][number] {
+    return {
+      type: 'attachment',
+      uuid: '00000000-0000-4000-8000-000000000902',
+      timestamp: '2026-09-04T09:50:18.201Z',
+      attachment: {
+        type: 'queued_command',
+        prompt: '<cross-session-message from="Pestle">\nconclude it\n</cross-session-message>',
+        commandMode: 'task-notification',
+        ...attachment,
+      },
+    }
+  }
+
+  test('rebuilds the row of a peer message a busy session received', () => {
+    const projected = projectResumedHistory([
+      peerAttachment({
+        source_uuid: '00000000-0000-4000-8000-000000000903',
+        origin: { kind: 'peer', name: 'Pestle', appSessionId: 'app-pestle' },
+      }),
+    ])
+
+    expect(projected).toHaveLength(1)
+    expect(projected[0]).toMatchObject({
+      type: 'user',
+      message: {
+        role: 'user',
+        content:
+          '<cross-session-message from="Pestle">\nconclude it\n</cross-session-message>',
+      },
+      // The uuid the live frame carried, so a reload lands on the same row
+      // rather than minting a second identity for one message.
+      uuid: '00000000-0000-4000-8000-000000000903',
+      timestamp: '2026-09-04T09:50:18.201Z',
+      origin: { kind: 'peer', name: 'Pestle' },
+    })
+  })
+
+  test('falls back to the attachment uuid for a message written before the fix', () => {
+    const projected = projectResumedHistory([
+      peerAttachment({ origin: { kind: 'peer', name: 'Pestle' } }),
+    ])
+
+    expect(projected).toHaveLength(1)
+    expect(projected[0]).toMatchObject({
+      uuid: '00000000-0000-4000-8000-000000000902',
+      origin: { kind: 'peer', name: 'Pestle' },
+    })
+  })
+
+  test('leaves every other drained command as the bookkeeping it has always been', () => {
+    // A worker result rides the same drain and the same attachment type. The
+    // transcript has never shown it, and rebuilding rows for it would invent
+    // history rather than restore it.
+    expect(
+      projectResumedHistory([
+        peerAttachment({ origin: { kind: 'task-notification', taskId: 'w-1' } }),
+      ]),
+    ).toEqual([])
+    expect(projectResumedHistory([peerAttachment({})])).toEqual([])
+  })
+
   test('fails closed when normalization removes the entire visible seed', () => {
     const merged = mergeDisplayHistoryWithSeed(
       [createAssistantMessage({ content: 'raw divergent tail' })],

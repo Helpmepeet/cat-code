@@ -580,8 +580,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // POWERSHELL_AUTO_MODE (ant-only build flag) is on. When disabled, this
       // guard keeps PS out of the classifier and skips the acceptEdits
       // fast-path below. When enabled, PS flows through to the classifier like
-      // Bash — the classifier prompt gets POWERSHELL_DENY_GUIDANCE appended so
-      // it recognizes `iex (iwr ...)` as download-and-execute, etc.
+      // Bash, judged by the same vendored rule inventory.
       // Note: this runs inside the behavior === 'ask' branch, so allow rules
       // that fire earlier (step 2b toolAlwaysAllowedRule, PS prefix allow)
       // return before reaching here. Allow-rule protection is handled by

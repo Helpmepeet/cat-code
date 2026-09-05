@@ -15,6 +15,10 @@ import {
   writeWorkspaceOrderToStorage,
   type WorkspaceOrder,
 } from './sidebarWorkspaceOrder.js'
+import {
+  memoryStorage as storage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 // The sidebar's workspace-group reorder is a pure module by necessity: the
 // renderer suite is SSR-only (`renderToStaticMarkup`), so no drag, pointer
@@ -28,15 +32,6 @@ function groups(...cwds: string[]): { cwd: string }[] {
 
 function cwdsOf(list: readonly { cwd: string }[]): string[] {
   return list.map(group => group.cwd)
-}
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    raw: store,
-  }
 }
 
 // ── selectOrderedWorkspaceGroups ─────────────────────────────────────────────
@@ -240,7 +235,7 @@ test('an order round-trips through storage (the restart path)', () => {
   const store = storage()
   writeWorkspaceOrderToStorage(store, ['/c', '/a', '/b'])
   expect(readWorkspaceOrderFromStorage(store)).toEqual(['/c', '/a', '/b'])
-  expect(store.raw.get(SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY)).toBe(
+  expect(store.map.get(SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, cwds: ['/c', '/a', '/b'] }),
   )
 })
@@ -304,14 +299,7 @@ test('persistence is capped so the kept-forever order cannot grow without bound'
 })
 
 test('a throwing storage never breaks the reorder (best-effort persistence)', () => {
-  const hostile = {
-    getItem: () => {
-      throw new Error('denied')
-    },
-    setItem: () => {
-      throw new Error('denied')
-    },
-  }
+  const hostile = throwingStorage()
   expect(readWorkspaceOrderFromStorage(hostile)).toBeNull()
   expect(() => writeWorkspaceOrderToStorage(hostile, ['/a'])).not.toThrow()
 })

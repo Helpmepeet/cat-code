@@ -1,3 +1,24 @@
+/**
+ * The App suite: `renderToStaticMarkup` renders, plus source-text wiring
+ * tripwires for the joins no rendered tree can reach.
+ *
+ * This FILE never registers a DOM. `domTestHarness.ts` is opt-in per file on
+ * purpose (registering happy-dom for everyone would flip the
+ * `typeof window === 'undefined'` branches these SSR renders are written
+ * against), so anything needing a real keydown, a focus move, or an effect
+ * lives in a `*.dom.test.*` sibling: App.dom.test.tsx for the two keyboards App
+ * owns, composerPaste.dom.test.ts for the paste and drop boundary,
+ * paneStructure.dom.test.ts for containment.
+ *
+ * What stays here is what no mounted tree reaches. `App` itself reads
+ * `window.catcode` from its first effect, so mounting it would mean standing up
+ * a whole fake preload bridge. Each tripwire below therefore asserts a CALL
+ * SITE, and names the module that proves the decision behind it.
+ *
+ * House rules for the ones that read source text: anchor slices on CODE, never
+ * on a comment, and assert on identifiers rather than on indentation
+ * (whitespace-normalise both sides when the claim really is about nesting).
+ */
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -32,6 +53,12 @@ import {
   FACE_FILL_COUNT,
 } from './agentFace.js'
 import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
+import {
+  MENTION_LISTBOX_ID,
+  mentionOptionId,
+  SLASH_COMMAND_LISTBOX_ID,
+  slashCommandOptionId,
+} from './composerTypeaheadA11y.js'
 import { OrchestratorRoster } from './OrchestratorRoster.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import {
@@ -186,9 +213,9 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
 
 test('PL-A wiring tripwire: the startup preload and restore call the parts they claim to', () => {
   // LAYER HONESTY: this is a WIRING tripwire, not behaviour. App owns hooks and
-  // effects, and the renderer suite is SSR-only (no DOM — see
-  // AccountsPage.test.tsx), so App cannot be mounted and none of these effects
-  // can be executed here. It therefore only asserts things source text can
+  // effects, and this file never registers a DOM (see the header), so App
+  // cannot be mounted and none of these effects can be executed here. It
+  // therefore only asserts things source text can
   // actually decide: that a named call site exists, and the exact shape of a
   // nesting. It CANNOT tell whether the effect ever mounts, and the earlier
   // version of this test claimed it could — asserting the two schedulers appear
@@ -200,7 +227,7 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
     'if (!hostSnapshotReady || startupPreloadStartedRef.current) return',
   )
   const preloadEnd = source.indexOf(
-    '\n  }, [hostSnapshotReady, queueTranscriptPreload])',
+    '}, [hostSnapshotReady, queueTranscriptPreload])',
     preloadStart,
   )
   expect(preloadStart).toBeGreaterThan(-1)
@@ -210,16 +237,17 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   const admissionEnd = source.indexOf('\n\n  useEffect(() => {', admissionStart)
   const admissionBody = source.slice(admissionStart, admissionEnd)
   const restoreStart = source.indexOf('const performRestore = useCallback(')
-  const restoreEnd = source.indexOf('\n  function submitSession(', restoreStart)
+  const restoreEnd = source.indexOf('function submitSession(', restoreStart)
   const restoreBody = source.slice(restoreStart, restoreEnd)
 
   expect(source).toContain(
     'onRestore={sessionId => void performRestore(sessionId)}',
   )
   // The paint yield is a frame THEN a timer: the exact nesting, not two loose
-  // mentions that a reversed pair would satisfy just as well.
-  expect(preloadBody).toContain(
-    'window.requestAnimationFrame(() => {\n      timer = window.setTimeout(() => {',
+  // mentions that a reversed pair would satisfy just as well. Whitespace is
+  // normalised first, so the claim is the nesting and not the indent depth.
+  expect(preloadBody.replace(/\s+/g, ' ')).toContain(
+    'window.requestAnimationFrame(() => { timer = window.setTimeout(() => {',
   )
   expect(preloadBody).toContain('queueTranscriptPreload(descriptors)')
   expect(preloadBody).not.toContain("dispatchShell({ type: 'preview-open'")
@@ -252,13 +280,13 @@ test('PL-A wiring tripwire: the startup preload and restore call the parts they 
   expect(source).toContain(
     'lazyRestoreClaimsRef.current.delete(sessionId)',
   )
-  expect(source).toContain(
-    "type: 'preview-reset',\n          sessionId: event.appSessionId",
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    "type: 'preview-reset', sessionId: event.appSessionId",
   )
 })
 
 test('parked tabs keep their live transcript when a cache is admitted', () => {
-  // The renderer suite is SSR-only, so the state matrix is exercised in
+  // This file is SSR-only, so the state matrix is exercised in
   // previewTranscriptState.test.ts. This pins App to that behavioral selector.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('const workspacePanels:')
@@ -282,7 +310,7 @@ test('wiring tripwire: the usage popover asks no engine that is not there', () =
   // pane raised "This session is no longer available" over a perfectly good
   // cached transcript, and any prompt parked in the composer was released.
   //
-  // LAYER HONESTY: the renderer suite is SSR-only, so no popover can be opened
+  // LAYER HONESTY: this file is SSR-only, so no popover can be opened
   // and no handler fired. This asserts the CALL SITE gate, which is the thing
   // that was missing. The slice is anchored on code, never on a comment.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -328,7 +356,7 @@ test('wiring tripwire: the usage range toggle asks no session anything', () => {
   // fixed this — the session can die between the check and the send — so the
   // gate is the absence of the call, which is what this pins.
   //
-  // LAYER HONESTY: the renderer suite is SSR-only, so no toggle can be clicked.
+  // LAYER HONESTY: this file is SSR-only, so no toggle can be clicked.
   // This asserts the call site.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('  const handleStatsRangeChange = useCallback')
@@ -392,7 +420,7 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   // pure function (`resolveSessionOpenRoute`, covered behaviourally in
   // sessionsCatalogState.test.ts) and both call sites go through it.
   //
-  // LAYER HONESTY: same limits as the PL-A tripwire above — the renderer suite is
+  // LAYER HONESTY: same limits as the PL-A tripwire above: this file is
   // SSR-only, so this asserts the CALL SITE, which is exactly what regressed. The
   // slice is anchored on code, never on a comment.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -411,7 +439,7 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   // two entry points cannot drift apart again.
   expect(source).toContain('onOpenRow={openCatalogRow}')
   const routeStart = source.indexOf('const openCatalogRow = useCallback(')
-  const routeEnd = source.indexOf('\n  function submitSession(', routeStart)
+  const routeEnd = source.indexOf('function submitSession(', routeStart)
   expect(routeStart).toBeGreaterThan(-1)
   const routeBody = source.slice(routeStart, routeEnd)
   expect(routeBody).toContain('resolveSessionOpenRoute(row)')
@@ -487,7 +515,7 @@ test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history
   // disabled rendering without this wiring produces a row that looks live and
   // does nothing, which is why the guard and the route land together.
   //
-  // LAYER HONESTY: SSR-only suite, so this asserts the CALL SITE (the P4-29
+  // LAYER HONESTY: SSR-only file, so this asserts the CALL SITE (the P4-29
   // tripwire's precedent above). The route decision itself is covered
   // behaviourally in sessionsCatalogState.test.ts.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -498,7 +526,7 @@ test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history
 
   const recentStart = source.indexOf('const openRecentWorkspace = useCallback(')
   expect(recentStart).toBeGreaterThan(-1)
-  const recentEnd = source.indexOf('\n  function submitSession(', recentStart)
+  const recentEnd = source.indexOf('function submitSession(', recentStart)
   const recentBody = source.slice(recentStart, recentEnd)
   expect(recentBody).toContain('applyOpenRoute(resolveRecentOpenRoute(recent))')
 
@@ -518,7 +546,7 @@ test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the p
   // visit: Escape out of a rename, open a session, come back, and the editor
   // reopens by itself. The guard therefore has to live in App, above the mount.
   //
-  // LAYER HONESTY: SSR-only suite, so this asserts the disarm EXISTS and is
+  // LAYER HONESTY: SSR-only file, so this asserts the disarm EXISTS and is
   // keyed on leaving the view. The reopen itself is an operator GUI step.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
@@ -542,6 +570,43 @@ test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the p
   expect(echoBody).not.toContain('setSessionsTagEcho({ sessionIds:')
 })
 
+test('PEER-SESSIONS §6 wiring tripwire: the peer-reopen row toggles, and writes nothing locally', () => {
+  // Two things the resolver and the menu cannot see, and both are how this
+  // control would quietly become a lie:
+  //
+  //   1. It must send the OPPOSITE of the state it rendered. A dispatch that
+  //      always sent `true` would be a one-way switch with a check on it, and
+  //      the user could never clear a decision only they are allowed to clear.
+  //   2. It must not write the new state locally. The row is durable host state;
+  //      an optimistic local write would tick the box for a call that failed and
+  //      leave the menu disagreeing with what a relaunch will show.
+  //
+  // LAYER HONESTY: SSR-only file, so this is a source assertion over the
+  // dispatch arm, not a click. The resolved row's state and the rendered check
+  // are covered for real next door (`sessionActions.test.ts`,
+  // `SessionActionsMenu.test.tsx`).
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  const armStart = source.indexOf("else if (kind === 'peer-wake-blocked')")
+  expect(armStart).toBeGreaterThan(-1)
+  const armEnd = source.indexOf("else if (kind === 'open')", armStart)
+  expect(armEnd).toBeGreaterThan(armStart)
+  const arm = source.slice(armStart, armEnd)
+  expect(arm).toContain('setPeerWakeBlocked(')
+  expect(arm).toContain('targetRow.peerWakeBlocked !== true')
+
+  const handlerStart = source.indexOf('const setPeerWakeBlocked = useCallback(')
+  expect(handlerStart).toBeGreaterThan(-1)
+  const handlerEnd = source.indexOf('const restartTab = useCallback(', handlerStart)
+  expect(handlerEnd).toBeGreaterThan(handlerStart)
+  const handler = source.slice(handlerStart, handlerEnd)
+  expect(handler).toContain('getBridge().setPeerWakeBlocked(sessionId, blocked)')
+  expect(handler).toContain('if (!result.ok) setShellError(hostErrorMessage(result.error))')
+  // No local echo of the new state: the row re-renders from the host update.
+  expect(handler).not.toContain('setSessionCatalogRows')
+  expect(handler).not.toContain('peerWakeBlocked:')
+})
+
 test('P4-29 wiring tripwire: the Sessions-page write boundary gets the same hasEngine input as the ⋯ menu', () => {
   // The defect this pins: `isWritableSessionRow` (`sessionsPageState.ts`) checked
   // only `row.live`, which stays true for a host row whose supervisor record has
@@ -552,7 +617,7 @@ test('P4-29 wiring tripwire: the Sessions-page write boundary gets the same hasE
   // `connectionHasEngine(selectConnection(connection, id).status)` expression
   // into `<SessionsPage hasEngine=...>`, so both write surfaces agree.
   //
-  // LAYER HONESTY: SSR-only suite, so this asserts the CALL SITE, which is
+  // LAYER HONESTY: SSR-only file, so this asserts the CALL SITE, which is
   // exactly what regressed. The predicate itself is covered behaviourally in
   // sessionsPageState.test.ts ("a LIVE row whose frame plane reports no engine
   // is NOT writable").
@@ -1216,41 +1281,8 @@ test('the waiting-message row is written once and used at both call sites', () =
   expect(source.match(/<QueuedRow/g) ?? []).toHaveLength(2)
 })
 
-test('D1b: ↑ takes waiting messages back before it walks history, and Escape still interrupts', () => {
-  // The keyboard path cannot be exercised here (the renderer suite is SSR-only,
-  // so no keydown is ever dispatched), and the ORDER is the whole behavior: a ↑
-  // that reached `navigateHistory` first would swap the draft for a history
-  // entry while messages sat waiting, and the take-back would be unreachable
-  // from the keyboard. Comments are stripped before asserting, so rewriting the
-  // prose above the branch cannot disarm this.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const start = source.indexOf(
-    "    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {",
-  )
-  expect(start).toBeGreaterThan(-1)
-  const body = source
-    .slice(start)
-    .split('\n')
-    .filter(line => !line.trim().startsWith('//'))
-    .join('\n')
-
-  const recall = body.indexOf('shouldRecallWaitingMessages(')
-  const history = body.indexOf('navigateHistory(')
-  expect(recall).toBeGreaterThan(-1)
-  expect(history).toBeGreaterThan(-1)
-  expect(recall).toBeLessThan(history)
-  // It fires the caller's handler, not a second recall path of its own.
-  expect(body).toContain('onRecallQueuedPrompts?.()')
-
-  // Escape is NOT this key. In the terminal a running turn takes Escape as the
-  // interrupt and leaves the queue alone (`useCancelRequest.ts` `handleCancel`,
-  // priority 1); the composer keeps that split.
-  const escape = source.indexOf("if (event.key === 'Escape' && generating) {")
-  expect(escape).toBeGreaterThan(-1)
-  expect(
-    source.slice(escape, source.indexOf('\n    }', escape)),
-  ).toContain('stopTurn()')
-})
+// D1b — ↑ takes waiting messages back before it walks history, and Escape still
+// interrupts. Both are real keydowns on a mounted pane now, in App.dom.test.tsx.
 
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
@@ -1401,9 +1433,9 @@ test('composer read-only and placeholder decisions cover every session state', (
 })
 
 test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through App', () => {
-  // LAYER HONESTY: the app/ renderer suite is SSR-only (no DOM — see
-  // AccountsPage.test.tsx), so React effects never run here and the drain
-  // cannot be executed. The DECISIONS it is built from are executable and
+  // LAYER HONESTY: this file never registers a DOM (see the header), so React
+  // effects never run here and the drain cannot be executed. The DECISIONS it
+  // is built from are executable and
   // covered in composerState.test.ts; this pins the App-side join those pure
   // functions are wired into, and fails if a refactor unhooks one of them.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -1413,6 +1445,10 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
     source.indexOf('\n  }', source.indexOf('// CC-16 drain', submitStart)),
   )
 
+  // Whitespace-normalised throughout: these say which branch runs which call,
+  // never how the call happens to be wrapped or indented.
+  const flatSubmit = submitBody.replace(/\s+/g, ' ')
+
   // The submit decision is the pure one, not a re-derived local condition.
   expect(submitBody).toContain('const action = planSessionSubmit({')
   expect(submitBody).toContain(
@@ -1420,25 +1456,25 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   // Park, and retire the draft exactly like a real send (so nothing is left
   // half-submitted), then return WITHOUT touching the bridge.
-  expect(submitBody).toContain(
-    "if (action.type === 'hold') {\n      setPendingSubmits(prev =>\n        reducePendingSubmitHeld(prev, sessionId, {\n          text,\n          images,\n          file,\n          showQueuedRow: action.showQueuedRow,\n        }),\n      )\n      retireDraft()",
+  expect(flatSubmit).toContain(
+    "if (action.type === 'hold') { setPendingSubmits(prev => reducePendingSubmitHeld(prev, sessionId, { text, images, file, showQueuedRow: action.showQueuedRow, }), ) retireDraft()",
   )
   // The drain rides the EXISTING app.submit — no new frame kind or channel.
   expect(submitBody).toContain(
     'const outcome = resolvePendingSubmit(selectConnection(connection, sessionId))',
   )
   expect(submitBody).toContain("if (outcome === 'wait') continue")
-  expect(submitBody).toContain("if (outcome === 'release') {\n        releasePendingSubmit(sessionId)")
+  expect(flatSubmit).toContain("if (outcome === 'release') { releasePendingSubmit(sessionId)")
   expect(submitBody).toContain(
     'buildSubmitPrompt(pending.text, pending.images ?? [])',
   )
   // IDLE-PARK (CC-28) — the arm that makes a reclaimed engine invisible. Nothing
   // is spawning and no turn will end for a parked session, so without this the
   // held prompt would wait forever. It is pinned here for the same reason as its
-  // siblings: this effect cannot be executed by an SSR suite, so unhooking
+  // siblings: no mounted pane reaches this effect, so unhooking
   // `restoreParkedSession` would otherwise go green everywhere.
-  expect(submitBody).toContain(
-    "if (outcome === 'restore') {\n        restoreParkedSession(sessionId)",
+  expect(flatSubmit).toContain(
+    "if (outcome === 'restore') { restoreParkedSession(sessionId)",
   )
 
   // A failed spawn releases the parked text back into the composer on every
@@ -1963,19 +1999,22 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
 })
 
 test('the picker routes images through byte attachment while other files stay opaque', () => {
+  // The paste and picker halves are driven end to end in composerPaste.dom.test.ts
+  // ("an image paste is prevented from entering the text draft", "a picker image
+  // uses the same byte-attachment path as paste"), which stubs the real
+  // `pickAttachmentFile` and reads the attached bytes back. What no mounted pane
+  // can decide is what App does with the result, and that a second, non-byte
+  // route has not reappeared beside it.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-  expect(source).toContain('const files = Array.from(event.clipboardData.files)')
-  expect(source).toContain('const image = files.find')
-  expect(source).toContain("if (image) {\n      void attachImage(image)")
-  expect(source).toContain('getBridge().pickAttachmentFile(activeSessionId)')
-  expect(source).toContain("if (selection.kind === 'image')")
-  expect(source).toContain('new File([bytes], selection.name')
-  expect(source).toContain('fileAttachmentToken: file.token')
-  expect(source).not.toContain('imageInputRef')
   expect(source).toContain(
     'reduceImageAttachmentAdded(prev, sessionId, attachment)',
   )
+  // A non-image selection crosses as an opaque token, never as a path.
+  expect(source).toContain('fileAttachmentToken: file.token')
+  // No hidden `<input type="file">`: the picker is the host's, so the renderer
+  // never sees a filesystem path (HC1).
+  expect(source).not.toContain('imageInputRef')
 })
 
 test('debug export explicitly marks lossy raw-message retention', () => {
@@ -2682,74 +2721,27 @@ test('a live pane with no turns yet names the selected model and sizes the donut
   expect(terra).not.toContain((200_000).toLocaleString())
 })
 
-test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused control and to a dedicated flow', () => {
-  // LAYER HONESTY: these defects live in a `document` keydown listener and in
-  // focus behaviour. The renderer suite is SSR-only (no DOM — see
-  // AccountsPage.test.tsx), so no test in this package can press a key or move
-  // focus. This asserts only what source text can decide. The guard itself is an
-  // executable predicate (`permissionKeysAreLive`, unit-tested in
-  // PermissionPrompt.test.tsx); a DOM harness is still flagged in the report.
-  //
-  // The listener MOVED into the card (2026-08-07). It was App state plus an App
-  // listener, which made a mouse hover over a row re-render the whole shell to
-  // move one border. Every guard survived the move, and three became structural
-  // rather than conditional — see the doc-comment on the effect.
+test('FIX-5 keyboard tripwire: the permission shortcuts answer the request App means to answer', () => {
+  // The card's own half of FIX-5 — the focused-control guard, the one-answer
+  // guard, and every owner in `FOCUSED_KEY_OWNER_SELECTOR` — is pressed for
+  // real in App.dom.test.tsx now, so the source greps that stood in for it are
+  // gone. What is left is the App side: which request the card is handed, and
+  // which surfaces may hand it one. App reads `window.catcode` from its first
+  // effect, so it cannot be mounted here and this stays source text.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const card = readFileSync(
     new URL('./PermissionPrompt.tsx', import.meta.url),
     'utf8',
   )
-  const effectStart = card.indexOf('    if (!keyboardTarget) return')
-  const effectEnd = card.indexOf(
-    "document.addEventListener('keydown', onKeyDown)",
-    effectStart,
-  )
-  expect(effectStart).toBeGreaterThan(-1)
-  expect(effectEnd).toBeGreaterThan(effectStart)
-  const effectBody = card.slice(effectStart, effectEnd)
-
-  // A tag-name test let Enter on the card's own Deny button bubble to document
-  // and be answered as an ALLOW, because preventDefault() suppressed the
-  // browser's Enter → click. The guard must cover any control that acts on the
-  // key itself, buttons above all.
-  expect(effectBody).not.toContain("target.tagName === 'INPUT'")
-  expect(effectBody).toContain('if (!permissionKeysAreLive(event.target)) return')
-  // One answer per request: the rows are disabled in flight, and the keyboard
-  // must not fire a second decision before the resolve lands.
-  expect(effectBody).toContain('if (submitted) return')
-  // Only the card the shortcuts act on may register a listener at all. This is
-  // what replaces App's explicit dedicated-flow and activeView guards: a card
-  // that is not the target never attaches, and the card only mounts under chat.
-  expect(effectBody).toContain('if (!keyboardTarget) return')
-
-  const model = readFileSync(
-    new URL('./permissionPromptModel.ts', import.meta.url),
-    'utf8',
-  )
-  expect(model).toContain('const FOCUSED_KEY_OWNER_SELECTOR =')
-  const selectorStart = model.indexOf('const FOCUSED_KEY_OWNER_SELECTOR =')
-  const selector = model.slice(selectorStart, model.indexOf('\n\n', selectorStart))
-  for (const owner of [
-    'button',
-    'input',
-    'textarea',
-    '[role="menuitem"]',
-    '[role="menuitemradio"]',
-    // Load-bearing for the marker: the card's own section carries this role, so
-    // without the host exemption, focusing the card kills every key.
-    '[role="alertdialog"]',
-  ]) {
-    expect(selector).toContain(owner)
-  }
 
   // The card that takes focus, shows a cursor, hosts the keys and now OWNS the
   // listener must be exactly the request App means to answer. One value decides
   // all four, so a card can never claim keys that act on something else.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  expect(source).toContain(
-    'const permissionKeyTargetRequestId =\n' +
-      '    pendingPermission && !dedicatedFlowOwnsKeyboard\n' +
-      '      ? pendingPermission.requestId\n' +
-      '      : null',
+  // Whitespace-normalised on both sides: the claim is which expression decides
+  // the target, not how deeply the ternary happens to be indented.
+  const flat = source.replace(/\s+/g, ' ')
+  expect(flat).toContain(
+    'const permissionKeyTargetRequestId = pendingPermission && !dedicatedFlowOwnsKeyboard ? pendingPermission.requestId : null',
   )
   const queueStart = source.indexOf('<PermissionQueue')
   const queueBody = source.slice(queueStart, source.indexOf('/>', queueStart))
@@ -2758,12 +2750,8 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
   )
   // Split workspace: one queue per pane, and only the active pane's card may
   // take the keyboard.
-  expect(source).toContain(
-    'permissionKeyTargetRequestId={\n' +
-      '\t              sessionId === activeSessionId\n' +
-      '\t                ? permissionKeyTargetRequestId\n' +
-      '\t                : null\n' +
-      '\t            }',
+  expect(flat).toContain(
+    'permissionKeyTargetRequestId={ sessionId === activeSessionId ? permissionKeyTargetRequestId : null }',
   )
   // A dedicated flow (AskQuestionFlow / PlanPanel) registers its own `window`
   // listener. Propagation is target → document → window, so a permission
@@ -2809,7 +2797,7 @@ test('FIX-5 keyboard tripwire: the permission shortcuts yield to a focused contr
 
 test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page and the caret read the right source', () => {
   // LAYER HONESTY: each of these lives inside App's render/effect body, which
-  // this SSR-only suite cannot mount or feed. Source text can decide which
+  // this SSR-only file cannot mount or feed. Source text can decide which
   // selector a call site reads and whether a prop is passed at all, which is
   // exactly what these four defects were; it cannot prove the resulting UI.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -2861,7 +2849,7 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
 
 /**
  * PEER-SESSIONS §6 — the two peer surfaces App itself owns. Both live in the
- * pane's render body, which this SSR-only suite never reaches, so their logic is
+ * pane's render body, which this SSR-only file never reaches, so their logic is
  * tested where it lives (`composerState.ts`, `shellState.ts`) and the CALL SITE
  * is pinned here by source text. Without this a revert that kept the helper but
  * put the old literal back at the call site would break nothing.
@@ -2895,7 +2883,7 @@ test('the composer prompt and the provenance seam are wired to their selectors',
  * model" is now the only place a per-session model is printed from App's render
  * body. The sidebar half is asserted GONE rather than deleted quietly, so a
  * later change cannot reintroduce the frozen-value bug on a surface this test no
- * longer watches. The call site is unreachable from this SSR-only suite; source
+ * longer watches. The call site is unreachable from this SSR-only file; source
  * text can still decide which selector it reads.
  */
 test('the model a session displays comes from the live run-controls seam', () => {
@@ -2953,57 +2941,50 @@ test('the new-tab gesture inherits the current workspace on every surface', () =
   expect(app).toContain('onOpenFolder={() => void newSession()}')
 })
 
-/**
- * Three composer behaviours a contentEditable does NOT inherit from the
- * textarea it replaced. None is reachable from an SSR render: they live in a
- * keydown branch, a DOM listener, and a drop handler. Pinned structurally so a
- * later edit cannot quietly hand any of them back to the browser's default,
- * which is exactly how each one broke the first time.
- */
-test('the composer authors newlines, drops, and pill removal itself', () => {
-  const app = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const field = readFileSync(
-    new URL('./ComposerInput.tsx', import.meta.url),
-    'utf8',
-  )
-
-  // (1) A modified Enter writes "\n" into the DRAFT. Left to the browser, a
-  // contentEditable answers Alt/Meta+Enter with a block container rather than
-  // the <br> the serializer reads, so the line break rendered once and then
-  // vanished from the draft.
-  const enterBranch = app.slice(app.indexOf("if (event.key === 'Enter') {"))
-  expect(enterBranch).toContain('event.shiftKey || event.altKey || event.metaKey')
-  expect(enterBranch.slice(0, enterBranch.indexOf('requestSubmit'))).toContain(
-    '\\n${prompt.slice(end)}',
-  )
-
-  // (2) A pill's remove listener is attached once and survives every keystroke
-  // after it, so it must read the CURRENT callback and pastes, never the render
-  // that built it. A captured draft would undo everything typed since the paste.
-  expect(field).toContain('onRemovePasteRef.current = onRemovePaste')
-  expect(field).toContain('pastesRef.current = pastes')
-  const removeStart = field.indexOf('onRemove: node =>')
-  expect(removeStart).toBeGreaterThan(-1)
-  const removeListener = field.slice(removeStart, removeStart + 1200)
-  expect(removeListener).toContain('onRemovePasteRef.current(')
-  expect(removeListener).toContain('pastesRef.current.find(')
-
-  // (3) A drop is normalized like a paste. The native drop would put links,
-  // images, and styled nodes into a field whose draft is a plain string.
-  expect(field).toContain('const handleDrop =')
-  const dropHandler = field.slice(field.indexOf('const handleDrop ='))
-  expect(dropHandler.slice(0, 800)).toContain('event.preventDefault()')
-  expect(dropHandler.slice(0, 800)).toContain("event.dataTransfer.getData('text')")
-})
+// Three composer behaviours a contentEditable does NOT inherit from the
+// textarea it replaced: the modified-Enter newline and the paste pill's remove
+// button are pressed for real in App.dom.test.tsx, and the drop handler is
+// driven end to end in composerPaste.dom.test.ts.
 
 test('the composer connects its focused textbox to the active slash or mention option', () => {
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('const composerTypeahead = slashOpen')
-  expect(source).toContain('listboxId: SLASH_COMMAND_LISTBOX_ID')
-  expect(source).toContain('activeOptionId: slashCommandOptionId(slashIndex)')
-  expect(source).toContain('listboxId: MENTION_LISTBOX_ID')
-  expect(source).toContain('activeOptionId: mentionOptionId(mentionIndex)')
-  expect(source).toContain('typeahead={composerTypeahead}')
+  // Both listbox bindings are pure functions of the draft, so the pane can be
+  // rendered into each state and the real attributes read back off the field.
+  const base = idleSessionPaneProps()
+  /** Just the composer field's own opening tag, so no sibling can satisfy these. */
+  const fieldAttributes = (html: string): string => {
+    const at = html.indexOf('role="textbox"')
+    expect(at).toBeGreaterThan(-1)
+    return html.slice(html.lastIndexOf('<div', at), html.indexOf('>', at) + 1)
+  }
+
+  const slash = fieldAttributes(
+    renderToStaticMarkup(
+      <SessionPane
+        {...base}
+        prompt="/he"
+        slashCatalog={[{ name: 'help', description: 'Show help' }]}
+      />,
+    ),
+  )
+  expect(slash).toContain('aria-expanded="true"')
+  expect(slash).toContain(`aria-controls="${SLASH_COMMAND_LISTBOX_ID}"`)
+  expect(slash).toContain(`aria-activedescendant="${slashCommandOptionId(0)}"`)
+
+  const mention = fieldAttributes(
+    renderToStaticMarkup(
+      <SessionPane {...base} prompt="@va" mentionItems={[{ label: 'vale' }]} />,
+    ),
+  )
+  expect(mention).toContain(`aria-controls="${MENTION_LISTBOX_ID}"`)
+  expect(mention).toContain(`aria-activedescendant="${mentionOptionId(0)}"`)
+
+  // Nothing open: the field must not point at a listbox that is not rendered.
+  const plain = fieldAttributes(
+    renderToStaticMarkup(<SessionPane {...base} prompt="ordinary text" />),
+  )
+  expect(plain).toContain('aria-expanded="false"')
+  expect(plain).not.toContain('aria-controls=')
+  expect(plain).not.toContain('aria-activedescendant=')
 })
 
 test('SettingsShell receives the active session binding from the merged roster', () => {
@@ -3051,13 +3032,13 @@ test('P4-50: a cold start renders no account-health bar', () => {
 })
 
 test('P4-54: shell lifecycle failures persist until the dismiss control clears them', () => {
-  // App cannot be mounted in this SSR-only suite, so this pins only the
+  // App cannot be mounted in this SSR-only file, so this pins only the
   // lifecycle wiring source text can prove: all seven operation paths still
   // replace the current failure, no success path clears it, and the rendered
   // bar owns the sole explicit clear.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const operationsStart = source.indexOf('  const newSession = useCallback(')
-  const operationsEnd = source.indexOf('\n  function submitSession(', operationsStart)
+  const operationsEnd = source.indexOf('function submitSession(', operationsStart)
   expect(operationsStart).toBeGreaterThan(-1)
   expect(operationsEnd).toBeGreaterThan(operationsStart)
   const operations = source.slice(operationsStart, operationsEnd)
@@ -3090,7 +3071,7 @@ test('P4-54: shell lifecycle failures persist until the dismiss control clears t
 
 test('P4-55: initial roster reads and launcher retries share one truthful hydrate path', () => {
   // The async state machine and snapshot/live-event merge are exercised in
-  // rosterBootstrap.test.ts. This SSR-only suite pins the App wiring around it:
+  // rosterBootstrap.test.ts. This SSR-only file pins the App wiring around it:
   // mount and Retry both call one callback, and only its successful snapshot
   // marks the bootstrap ready.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
@@ -3107,7 +3088,9 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
     'listSessions: () => getBridge().listSessions()',
   )
   expect(hydrateBody).toContain("dispatchRosterBootstrap({ type: 'read-failed' })")
-  expect(hydrateBody).toContain("dispatchShell({\n          type: 'hydrate'")
+  expect(hydrateBody.replace(/\s+/g, ' ')).toContain(
+    "dispatchShell({ type: 'hydrate'",
+  )
   expect(hydrateBody).toContain(
     "dispatchRosterBootstrap({ type: 'read-succeeded' })",
   )
@@ -3119,7 +3102,7 @@ test('P4-55: initial roster reads and launcher retries share one truthful hydrat
 })
 
 test('New chat ignores repeated clicks while its fresh session is being created', () => {
-  // The renderer suite is SSR-only, so it cannot mount App and dispatch clicks.
+  // This file is SSR-only, so it cannot mount App and dispatch clicks.
   // This pins the re-entrancy guard at the caller that starts the host spawn.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const newChatStart = source.indexOf('  const newChat = useCallback(async () => {')
@@ -3132,8 +3115,8 @@ test('New chat ignores repeated clicks while its fresh session is being created'
   expect(newChatBody).toContain('newChatInFlightRef.current = true')
   expect(newChatBody).toContain('await newSessionInWorkspace(repId)')
   expect(newChatBody).toContain('await newSession()')
-  expect(newChatBody).toContain(
-    'finally {\n      newChatInFlightRef.current = false',
+  expect(newChatBody.replace(/\s+/g, ' ')).toContain(
+    'finally { newChatInFlightRef.current = false',
   )
 })
 
@@ -3166,7 +3149,7 @@ test('each App commit increments the health payload counter before delivery ackn
 
 
 test('D5 wiring tripwire: a refused submit is retained at send and restored from the frame stream', () => {
-  // LAYER HONESTY: the renderer suite is SSR-only, so App cannot be mounted, no
+  // LAYER HONESTY: this file is SSR-only, so App cannot be mounted, no
   // frame can be delivered and no composer can be refilled. The decision logic
   // lives in `classifySubmitOutcomeFrame` and is exercised in
   // composerState.test.ts; what only source can decide is that the three call
@@ -3230,7 +3213,9 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // same batch restoring the same copy twice, and it is why this function takes
   // a `RetainedSubmit` instead of reaching into the ref.
   expect(restoreBody).not.toContain('selectRetainedSubmit(')
-  expect(source).toContain('const restoreRefusedSubmit = useCallback((\n    sessionId: SessionId,\n    retained: RetainedSubmit,\n  ) => {')
+  expect(source.replace(/\s+/g, ' ')).toContain(
+    'const restoreRefusedSubmit = useCallback(( sessionId: SessionId, retained: RetainedSubmit, ) => {',
+  )
 
   // And the removal is committed BEFORE anything is restored from it. Reversed,
   // a restore could run against state that still holds the answered copy.
@@ -3339,7 +3324,7 @@ test('load-earlier wiring tripwire: only an engaged pane can ask, and only its o
 })
 
 test('CC-84 wiring tripwire: the docked roster click carries its worker id into the tasks dialog', () => {
-  // LAYER HONESTY: this suite is SSR-only, so no click can be dispatched here
+  // LAYER HONESTY: this file is SSR-only, so no click can be dispatched here
   // and no effect runs. What it CAN decide is the shape the bug had: the roster
   // callback is typed `(agentId?: string) => void`, so the broken
   // `() => setTasksOpen(true)` typechecked perfectly and silently discarded the
@@ -3356,23 +3341,14 @@ test('CC-84 wiring tripwire: the docked roster click carries its worker id into 
   expect(source).not.toContain('onOpenTasks={() => setTasksOpen(true)}')
 })
 
-test('CC-84 wiring tripwire: a dropped image reaches the existing attach path', () => {
-  // Same layer honesty as above: SSR cannot dispatch a drop. This only asserts
-  // the field is handed the pane's own `attachImage` — the byte-based path ⌘V
-  // and the picker already use — rather than a second, path-authoring one.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-
-  expect(source).toContain('onAttachImageFile={file => void attachImage(file)}')
-  // `attachImage` reads BYTES (prepareImageAttachment). The renderer never turns
-  // a dropped file into a filesystem path for the engine to read (HC1), and the
-  // only other file source it has is the same picker.
-  expect(source).toContain('onAttachImage(await prepareImageAttachment(file))')
-})
+// CC-84 — a dropped image reaches the same byte-based attach path ⌘V and the
+// picker use, and a dropped non-image reaches nothing: both are real drops on a
+// mounted pane in composerPaste.dom.test.ts.
 
 test('CC-84 wiring tripwire: composer drafts are seeded from and written back to storage', () => {
   // LAYER HONESTY: the read/write/cap/degrade behaviour is exercised for real in
   // promptDraftPersistence.test.ts. App cannot be mounted here (it needs the
-  // preload bridge, and this suite is SSR), so what only the source can decide is
+  // preload bridge, and this file is SSR), so what only the source can decide is
   // that the state is SEEDED from storage rather than from `{}` — the shape the
   // bug had, and one that typechecks either way.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')

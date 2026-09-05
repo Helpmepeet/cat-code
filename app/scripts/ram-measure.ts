@@ -35,21 +35,10 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { parseArgs } from './ramInstrument.js'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const PROBE = join(here, 'ram-probe.ts')
-
-function parseArgs(argv: string[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a.startsWith('--')) {
-      const key = a.slice(2)
-      const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true'
-      out[key] = val
-    }
-  }
-  return out
-}
 
 type Cond = {
   name: string

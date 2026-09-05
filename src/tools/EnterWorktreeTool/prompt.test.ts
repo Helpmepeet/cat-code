@@ -10,4 +10,13 @@ describe('EnterWorktree prompt', () => {
     expect(prompt).toContain('Agent Mode')
     expect(prompt).toContain('Do not ask the user to remember the worktree path or branch')
   })
+
+  test('names the directory worktree.ts actually creates', () => {
+    // The prompt said `.claude/worktrees/`; worktreesDir() joins
+    // `.cat-code/worktrees`.
+    const prompt = getEnterWorktreeToolPrompt()
+
+    expect(prompt).toContain('.cat-code/worktrees/')
+    expect(prompt).not.toContain('.claude/worktrees/')
+  })
 })

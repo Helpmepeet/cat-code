@@ -47,6 +47,7 @@ import type {
   RemoteVerbMessage,
   SettingsSnapshot,
 } from '../../shared/protocol.js'
+import type { EditableSettingPane } from '../../shared/settingsEditable.js'
 import {
   ACCENT_KEYS,
   ACCENT_LABELS,
@@ -537,32 +538,25 @@ function ScopeBody({
   // `layer` is non-null for the user and project scopes (settingsScope.ts).
   const writeLayer = layer ?? 'userSettings'
   const noEngineNote = settingsNoEngineNote(projectName)
+  // Every engine-key pane below takes the same seven props and differs only in
+  // which pane it draws, so the item switch names the pane and nothing else.
+  const settingsPane = (pane: EditableSettingPane) => (
+    <SettingsPane
+      engine={engine}
+      layer={writeLayer}
+      noEngineNote={noEngineNote}
+      onWrite={onSettingWrite}
+      pane={pane}
+      sessionOpen={sessionOpen}
+      snapshot={snapshot}
+    />
+  )
 
   switch (item) {
     case 'general':
-      return (
-        <SettingsPane
-          engine={engine}
-          layer={writeLayer}
-          noEngineNote={noEngineNote}
-          onWrite={onSettingWrite}
-          pane="general"
-          sessionOpen={sessionOpen}
-          snapshot={snapshot}
-        />
-      )
+      return settingsPane('general')
     case 'model':
-      return (
-        <SettingsPane
-          engine={engine}
-          layer={writeLayer}
-          noEngineNote={noEngineNote}
-          onWrite={onSettingWrite}
-          pane="model"
-          sessionOpen={sessionOpen}
-          snapshot={snapshot}
-        />
-      )
+      return settingsPane('model')
     case 'permissions':
       return (
         <PermissionsPane
@@ -575,42 +569,16 @@ function ScopeBody({
     case 'interface':
       return (
         <>
-          <SettingsPane
-            engine={engine}
-            layer={writeLayer}
-            noEngineNote={noEngineNote}
-            onWrite={onSettingWrite}
-            pane="theme"
-            sessionOpen={sessionOpen}
-            snapshot={snapshot}
-          />
+          {settingsPane('theme')}
           {scope === 'user' ? <KeybindingsRow /> : null}
         </>
       )
     case 'privacy':
-      return (
-        <SettingsPane
-          engine={engine}
-          layer={writeLayer}
-          noEngineNote={noEngineNote}
-          onWrite={onSettingWrite}
-          pane="privacy"
-          sessionOpen={sessionOpen}
-          snapshot={snapshot}
-        />
-      )
+      return settingsPane('privacy')
     case 'memory':
       return (
         <>
-          <SettingsPane
-            engine={engine}
-            layer={writeLayer}
-            noEngineNote={noEngineNote}
-            onWrite={onSettingWrite}
-            pane="memory"
-            sessionOpen={sessionOpen}
-            snapshot={snapshot}
-          />
+          {settingsPane('memory')}
           <MemoryPage snapshot={memorySnapshot} />
         </>
       )

@@ -28,7 +28,7 @@
  * `window.matchMedia` and the preload bridge.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   applyAppearance,
@@ -42,9 +42,11 @@ import {
   type ColorSchemeContextValue,
   type ColorSchemeKey,
 } from './colorScheme.js'
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 import { getBridge } from './bridge.js'
-
-type ColorSchemeStorage = Pick<Storage, 'getItem' | 'setItem'>
 
 /** The one query this needs, narrowed so a test can supply a fake without a DOM.
  * `addEventListener` is the modern half of `MediaQueryList`; nothing in this
@@ -53,15 +55,6 @@ export type SchemeMediaQuery = {
   matches: boolean
   addEventListener: (type: 'change', listener: () => void) => void
   removeEventListener: (type: 'change', listener: () => void) => void
-}
-
-function defaultStorage(): ColorSchemeStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 function defaultRoot(): AppearanceRoot | null {
@@ -90,12 +83,11 @@ export function ColorSchemeProvider({
   onScheme,
 }: {
   children: ReactNode
-  storage?: ColorSchemeStorage | null
+  storage?: ViewPreferenceStorage | null
   root?: AppearanceRoot | null
   media?: SchemeMediaQuery | null
   onScheme?: (scheme: ColorSchemeKey) => void
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
   const target = root === undefined ? defaultRoot() : root
   // `defaultMedia()` mints a NEW `MediaQueryList` on every call, so calling it in
   // the render body would give `query` a fresh identity each render and make the
@@ -105,21 +97,16 @@ export function ColorSchemeProvider({
   const query = media === undefined ? defaultQuery : media
   const notify = onScheme ?? notifyMain
 
-  const [scheme, setSchemeState] = useState<ColorSchemeKey>(
-    () => readColorSchemeFromStorage(store) ?? DEFAULT_COLOR_SCHEME,
+  const [scheme, setScheme] = useViewPreference(
+    storage,
+    readColorSchemeFromStorage,
+    writeColorSchemeToStorage,
+    DEFAULT_COLOR_SCHEME,
   )
   // Seeded from the query rather than defaulted, so the very first paint is
   // already correct on a light system instead of flashing dark and correcting.
   const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(
     () => query?.matches ?? true,
-  )
-
-  const setScheme = useCallback(
-    (next: ColorSchemeKey) => {
-      setSchemeState(next)
-      writeColorSchemeToStorage(store, next)
-    },
-    [store],
   )
 
   useEffect(() => {

@@ -32,6 +32,7 @@ import {
   ColorSchemeContext,
   type ColorSchemeKey,
 } from './colorScheme.js'
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 let harness: DomTestHarness
 
@@ -47,15 +48,6 @@ afterEach(async () => {
 afterAll(async () => {
   await harness.teardown()
 })
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    store,
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
 
 /** A real subscription, not a stub: `emit` is what an OS light/dark flip looks
  * like to the provider. */
@@ -281,7 +273,7 @@ test('choosing from Settings stamps the document, persists, and notifies main', 
     setScheme?.('light')
   })
   expect(stamp()).toBe('light')
-  expect(store.store.get(COLOR_SCHEME_STORAGE_KEY)).toBe(
+  expect(store.map.get(COLOR_SCHEME_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, scheme: 'light' }),
   )
   expect(seen).toEqual(['system', 'light'])

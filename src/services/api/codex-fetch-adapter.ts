@@ -39,6 +39,10 @@ import {
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
 } from './codex-websocket-transport.js'
+import {
+  CODEX_ACCOUNT_LIMIT_ERROR_CODES,
+  isCodexAuthErrorCode,
+} from './codexErrorCodes.js'
 import { notifyStaleResponseIdRetry } from './promptCacheBreakDetection.js'
 import {
   recordCodexRequestStart,
@@ -378,28 +382,6 @@ export class CodexResponseFailedError extends Error {
   }
 }
 
-const CODEX_ACCOUNT_LIMIT_ERROR_CODES = new Set([
-  'usage_limit_reached',
-  'rate_limit_exceeded',
-  'quota_exceeded',
-  'insufficient_quota',
-  'usage_not_included',
-])
-
-// Structured auth-failure codes (mirrors CODEX_ACCOUNT_LIMIT_ERROR_CODES for the
-// revoked-auth path). Substring text matching (codexErrorTextIndicatesRevokedAuth)
-// missed `token_invalidated` — the server code emitted when a token is superseded
-// by a re-login — so a 401 bypassed CodexAccountAuthError and all of withRetry's
-// auth recovery. Structured-code match is authoritative; text stays as a fallback.
-// The WS transport keeps its own local mirror (isAuthTokenRejection) because it
-// cannot import this module (the adapter imports the transport). Keep in sync.
-const CODEX_ACCOUNT_AUTH_ERROR_CODES = new Set([
-  'token_invalidated',
-  'token_expired',
-  'token_revoked',
-  'invalid_token',
-])
-
 /**
  * Text of a Codex message content part, or undefined when the part carries none.
  * Narrows on the part type: a `refusal` part is not assistant prose and must not
@@ -478,8 +460,8 @@ function codexHttpAuthStatus(
 }
 
 function codexHttpHeadersIndicateRevokedAuth(headers: Headers): boolean {
-  const code = headers.get('x-openai-ide-error-code')?.trim().toLowerCase()
-  return code !== undefined && CODEX_ACCOUNT_AUTH_ERROR_CODES.has(code)
+  const code = headers.get('x-openai-ide-error-code')?.trim()
+  return code !== undefined && isCodexAuthErrorCode(code)
 }
 
 function classifyCodexHttpAccountError(
@@ -543,7 +525,7 @@ function codexResponseFailureIndicatesAccountCap(
 function codexResponseFailureIndicatesRevokedAuth(
   failure: CodexResponseFailure,
 ): boolean {
-  return CODEX_ACCOUNT_AUTH_ERROR_CODES.has(failure.code.toLowerCase())
+  return isCodexAuthErrorCode(failure.code)
 }
 
 function createCodexResponseFailedError(
@@ -1799,6 +1781,25 @@ async function processCodexEvents(
   enqueueSse('ping', { type: 'ping' })
 
   let currentTextBlockStarted = false
+
+  /**
+   * Close the open text block, if there is one. Emitting the stop, advancing
+   * contentBlockIndex and clearing the flag have to happen together: seven
+   * paths close the text block, and one that skipped the index advance would
+   * misindex every content block emitted after it. Returns whether a block was
+   * actually closed, which is what the partial-stream seal reports.
+   */
+  const closeOpenTextBlock = (): boolean => {
+    if (!currentTextBlockStarted) return false
+    enqueueSse('content_block_stop', {
+      type: 'content_block_stop',
+      index: contentBlockIndex,
+    })
+    contentBlockIndex++
+    currentTextBlockStarted = false
+    return true
+  }
+
   let syntheticToolCallCounter = 0
   const openToolCallBlocks = new Map<string, OpenToolCallBlock>()
   const toolCallIdsByItemId = new Map<string, string>()
@@ -1888,18 +1889,7 @@ async function processCodexEvents(
   const openReasoningBlock = (kind: 'summary' | 'raw'): ReasoningBlockState => {
     // If a text block is open, close it so the thinking block slots in
     // at the correct ordinal position in content[].
-    if (currentTextBlockStarted) {
-      controller.enqueue(
-        encoder.encode(
-          formatSSE('content_block_stop', JSON.stringify({
-            type: 'content_block_stop',
-            index: contentBlockIndex,
-          })),
-        ),
-      )
-      contentBlockIndex++
-      currentTextBlockStarted = false
-    }
+    closeOpenTextBlock()
     const index = contentBlockIndex
     contentBlockIndex++
     const block: ReasoningBlockState = { index, kind, parts: 0, started: true }
@@ -2074,19 +2064,8 @@ async function processCodexEvents(
                 // Close any open reasoning blocks before tool blocks so
                 // ordinal positions in content[] line up.
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  emittedVisibleOutput = true
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) emittedVisibleOutput = true
+                closeOpenTextBlock()
 
                 const callId =
                   readString(item.call_id) ||
@@ -2293,19 +2272,8 @@ async function processCodexEvents(
                 }
               } else if (item?.type === 'web_search_call') {
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
 
                 noteVisibleOutput()
                 hadHostedWebSearch = true
@@ -2353,19 +2321,8 @@ async function processCodexEvents(
                     { level: 'warn' },
                   )
                 }
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
               } else if (item?.type === 'reasoning') {
                 if (firstReasoningDoneAtMs === null) {
                   firstReasoningDoneAtMs = eventObservedAtMs
@@ -2410,18 +2367,7 @@ async function processCodexEvents(
                 if (encrypted && !targetBlock) {
                   // No visible reasoning was emitted; synthesize a hidden
                   // thinking block to carry the signature for cache replay.
-                  if (currentTextBlockStarted) {
-                    controller.enqueue(
-                      encoder.encode(
-                        formatSSE('content_block_stop', JSON.stringify({
-                          type: 'content_block_stop',
-                          index: contentBlockIndex,
-                        })),
-                      ),
-                    )
-                    contentBlockIndex++
-                    currentTextBlockStarted = false
-                  }
+                  closeOpenTextBlock()
                   noteVisibleOutput({ userVisible: false })
                   controller.enqueue(
                     encoder.encode(
@@ -2548,20 +2494,7 @@ async function processCodexEvents(
         const hadOpenReasoningBlock =
           openSummaryBlock !== null || openRawBlock !== null
         closeAllOpenReasoningBlocks()
-        let sealedPartialText = false
-        if (currentTextBlockStarted) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE('content_block_stop', JSON.stringify({
-                type: 'content_block_stop',
-                index: contentBlockIndex,
-              })),
-            ),
-          )
-          contentBlockIndex++
-          currentTextBlockStarted = false
-          sealedPartialText = true
-        }
+        const sealedPartialText = closeOpenTextBlock()
         // Drain BEFORE the payload is built. `controller.error()` resets the
         // queue, so until the reader has pulled it the seal is not delivered,
         // and a payload claiming `sealedPartialText` for a chunk that never
@@ -2638,16 +2571,7 @@ async function processCodexEvents(
   }
 
   // Close any remaining open blocks
-  if (currentTextBlockStarted) {
-    controller.enqueue(
-      encoder.encode(
-        formatSSE('content_block_stop', JSON.stringify({
-          type: 'content_block_stop',
-          index: contentBlockIndex,
-        })),
-      ),
-    )
-  }
+  closeOpenTextBlock()
   for (const toolCall of openToolCallBlocks.values()) {
     closeToolCallBlock(controller, encoder, toolCall.index)
   }
@@ -4023,25 +3947,25 @@ export function createCodexFetch(
           throw accountError
         }
       }
-      // Model-not-found over HTTP is a transport-cohort limitation, not a terminal
-      // error: the ChatGPT/Codex HTTP channel refuses some models (e.g. gpt-5.6-luna)
-      // that the WebSocket channel serves. Only STREAMING requests have a WebSocket
-      // path in this adapter, so only they can recover — clear this
-      // (conversation, account) sticky flag and surface a retryable error so
-      // withRetry re-attempts over WebSocket. Non-streaming requests have no WS path
-      // here; throwing "retry over WS" for them would loop, so they fall through to
-      // the plain 404 response below (unchanged behavior).
+      // ANY 404 on the streaming HTTP path is treated as a transport-cohort
+      // problem and retried over WebSocket. The response body is deliberately
+      // not consulted because an outage can return 404 with an empty body.
+      // Only STREAMING requests have a WebSocket path in this adapter, so only
+      // they can recover: clear this (conversation, account) sticky flag and
+      // surface a retryable error so withRetry re-attempts over WebSocket.
+      // Non-streaming requests have no WS path here; throwing "retry over WS"
+      // for them would loop, so they fall through to the plain 404 response
+      // below (unchanged behavior).
       // See docs/codex/2026-07-12-bug-luna-sticky-http-fallback-404.md.
       if (
         isStreamingAnthropicRequest &&
-        codexResponse.status === 404 &&
-        /model not found/i.test(errorText)
+        codexResponse.status === 404
       ) {
         clearStickyHttpFallback(conversationId, currentAccountId)
         throw new APIConnectionError({
           message:
             `Codex HTTP channel does not serve model ${codexModel} ` +
-            `(404 Model not found); retrying over WebSocket`,
+            `(404); retrying over WebSocket`,
         })
       }
       const errorBody = {

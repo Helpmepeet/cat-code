@@ -26,6 +26,7 @@ import { isDeferredTool } from '../ToolSearchTool/prompt.js'
 import * as resumeAgentModule from '../AgentTool/resumeAgent.js'
 import * as resolveAgentTargetModule from '../AgentTool/resolveAgentTarget.js'
 import { SendMessageTool } from './SendMessageTool.js'
+import { getPrompt as getSendMessagePrompt } from './prompt.js'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -1111,5 +1112,32 @@ describe('SendMessageTool deterministic routing and truthful delivery', () => {
         'No outstanding shutdown request',
       )
     })
+  })
+})
+
+describe('SendMessage prompt capability lists', () => {
+  const originalUserType = process.env.USER_TYPE
+  const originalTeams = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+  afterEach(() => {
+    if (originalUserType === undefined) delete process.env.USER_TYPE
+    else process.env.USER_TYPE = originalUserType
+    if (originalTeams === undefined)
+      delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+    else process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = originalTeams
+  })
+
+  test('does not promise cross-session messaging that UDS_INBOX gates', () => {
+    delete process.env.USER_TYPE
+    delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+
+    const prompt = getSendMessagePrompt()
+
+    // The line sat under "Requires Agent Teams", but the capability is gated
+    // by UDS_INBOX, which is not in the build list — turning teams on never
+    // provided it.
+    expect(prompt).toContain('Requires Agent Teams:')
+    expect(prompt).toContain('- structured protocol messages')
+    expect(prompt).not.toContain('cross-session UDS or bridge messages')
   })
 })

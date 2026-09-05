@@ -112,6 +112,9 @@ function baseRow(overrides: Partial<RegistrySession>): RegistrySession {
     ...(overrides.enginePid !== undefined ? { enginePid: overrides.enginePid } : {}),
     ...(overrides.socketPath !== undefined ? { socketPath: overrides.socketPath } : {}),
     ...(overrides.restartCount !== undefined ? { restartCount: overrides.restartCount } : {}),
+    ...(overrides.peerWakeBlocked !== undefined
+      ? { peerWakeBlocked: overrides.peerWakeBlocked }
+      : {}),
   }
 }
 
@@ -366,13 +369,22 @@ test('reap drops a clean row that never acquired an engineSessionId (§9-A5)', a
   expect(logs.some(l => l.includes('never acquired content'))).toBe(true)
 })
 
-test('a crashed row with null engineSessionId is KEPT (only clean+null is reaped)', async () => {
+test('a crashed row that never acquired an engineSessionId is reaped, not kept forever', async () => {
+  // A session whose process died before its first ready frame leaves this row:
+  // named, crashed, and holding an address for content that was never written.
+  // It has no transcript, so `hasTranscript` is false, so the host's
+  // `isRestorable` refuses it and it reaches NO surface — not the sidebar, not
+  // the palette, not the peer roster — while every open path refuses it too.
+  // The old rule reaped only `clean` + null, so this shape accumulated for the
+  // life of the file: 13 of them in the operator's registry on 2026-09-04.
   const storageDir = tempDir()
   const registryPath = join(storageDir, 'registry.json')
+  writeTranscript(storageDir, 'engine-real')
 
-  // shutdown: null + enginePid gone → sweep marks it crashed; null engineSessionId
-  // must NOT then reap it (only shutdown:"clean" + null is the §9-A5 rule).
+  // shutdown: null + enginePid gone → the sweep marks it crashed first, which is
+  // the state that used to survive the reap.
   seed(registryPath, [
+    baseRow({ appSessionId: 'app-real', engineSessionId: 'engine-real', shutdown: 'clean' }),
     baseRow({
       appSessionId: 'app-crashed-empty',
       engineSessionId: null,
@@ -380,14 +392,28 @@ test('a crashed row with null engineSessionId is KEPT (only clean+null is reaped
       enginePid: 2,
       socketPath: join(storageDir, 'gone.sock'),
     }),
+    // A park before the first turn is the same dead end by a different route.
+    // It arrives here as `crashed`: reading a `parked` row at launch means the
+    // app died while it was parked, which `normalizeShutdown` calls a crash.
+    baseRow({
+      appSessionId: 'app-parked-empty',
+      engineSessionId: null,
+      shutdown: 'parked',
+    }),
   ])
 
-  const { registry } = makeRegistry({ storageDir, isProcessAlive: () => false })
+  const { registry, logs } = makeRegistry({ storageDir, isProcessAlive: () => false })
   const restorable = await registry.launch()
 
-  const row = restorable.find(r => r.appSessionId === 'app-crashed-empty')
-  expect(row).toBeDefined()
-  expect(row!.shutdown).toBe('crashed')
+  expect(restorable.map(r => r.appSessionId)).toEqual(['app-real'])
+  expect(
+    logs.filter(l => l.includes('row with no engineSessionId')).length,
+  ).toBe(2)
+  // …and it is gone from the FILE, not just from this run's memory.
+  const persisted = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    sessions: { appSessionId: string }[]
+  }
+  expect(persisted.sessions.map(r => r.appSessionId)).toEqual(['app-real'])
 })
 
 test('reap enforces MAX_REGISTRY_SESSIONS, dropping oldest terminal rows first', async () => {
@@ -576,6 +602,97 @@ test('IDLE-PARK — a parked row is EXCLUDED from the over-bound reap (an open t
   expect(doc.sessions.find(r => r.appSessionId === 'app-parked')?.shutdown).toBe('parked')
   // …and an older-than-nothing-but-parked CLEAN row was the one reaped instead.
   expect(doc.sessions.some(r => r.appSessionId === 'app-clean-1')).toBe(false)
+})
+
+test('PEER-SESSIONS §6 — the over-bound reap discards a wake-blocked row LAST', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // The blocked row is the OLDEST of all, so the plain oldest-first order would
+  // pick it first. It carries the one field on a row that is the USER's standing
+  // decision rather than an allocator artifact, and the transcript it protects
+  // outlives the row — so reaping it silently turns a recorded "no" into a "yes"
+  // the next time the operator opens that transcript by hand.
+  writeTranscript(storageDir, 'engine-blocked')
+  const rows: RegistrySession[] = [
+    baseRow({
+      appSessionId: 'app-blocked',
+      engineSessionId: 'engine-blocked',
+      shutdown: 'clean',
+      peerWakeBlocked: true,
+      lastAttachedAt: 1_700_000_000_000,
+    }),
+  ]
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS - 1; i++) {
+    writeTranscript(storageDir, `engine-clean-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-clean-${i}`,
+        engineSessionId: `engine-clean-${i}`,
+        shutdown: 'clean',
+        lastAttachedAt: 1_700_000_100_000 + i, // all NEWER than the blocked row
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-new-live',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  // The blocked row survived, block intact…
+  expect(doc.sessions.find(r => r.appSessionId === 'app-blocked')?.peerWakeBlocked).toBe(
+    true,
+  )
+  // …and the oldest UNBLOCKED terminal row went instead.
+  expect(doc.sessions.some(r => r.appSessionId === 'app-clean-0')).toBe(false)
+})
+
+test('PEER-SESSIONS §6 — a registry of only wake-blocked rows still enforces the bound', async () => {
+  const storageDir = tempDir()
+  const registryPath = join(storageDir, 'registry.json')
+
+  // Last, not exempt. An exemption would leak into `atBoundWithNothingReapable`
+  // — the SAME predicate HR4 uses to refuse `peer.create` — so a user who
+  // blocked enough rows would find peer creation refused by a row-menu toggle.
+  const rows: RegistrySession[] = []
+  for (let i = 0; i < MAX_REGISTRY_SESSIONS; i++) {
+    writeTranscript(storageDir, `engine-blocked-${i}`)
+    rows.push(
+      baseRow({
+        appSessionId: `app-blocked-${i}`,
+        engineSessionId: `engine-blocked-${i}`,
+        shutdown: 'clean',
+        peerWakeBlocked: true,
+        lastAttachedAt: 1_700_000_000_000 + i, // app-blocked-0 is the oldest
+      }),
+    )
+  }
+  seed(registryPath, rows)
+
+  const { registry } = makeRegistry({ storageDir })
+  await registry.launch()
+  expect(registry.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  // Blocked rows stay REAPABLE, so the churn refusal reads them as it always did.
+  expect(registry.atBoundWithNothingReapable()).toBe(false)
+
+  await registry.upsertOnSpawn({
+    appSessionId: 'app-new-live',
+    cwd: '/Users/pt/cat-code',
+    enginePid: 4242,
+  })
+
+  const doc = readDoc(registryPath)
+  expect(doc.sessions.length).toBe(MAX_REGISTRY_SESSIONS)
+  expect(doc.sessions.some(r => r.appSessionId === 'app-blocked-0')).toBe(false)
 })
 
 test("IDLE-PARK — a persisted 'parked' shutdown normalises to 'crashed' on disk read", async () => {
@@ -925,6 +1042,10 @@ test('titleUpdatedAt stamps on a real title change and NOT on a restore replay',
 test('a fresh row created WITH a title stamps titleUpdatedAt, and it survives a reload', async () => {
   const { registry, registryPath, storageDir } = makeRegistry()
   await registry.upsertOnSpawn({ appSessionId: 'app-1', cwd: '/a', title: 'Seeded at open' })
+  // The row has to reach the reload with content behind it: a row that never
+  // acquired an engineSessionId is reaped at launch whatever its title says.
+  await registry.fillEngineSessionId('app-1', 'engine-1')
+  writeTranscript(storageDir, 'engine-1')
   const stamped = readDoc(registryPath).sessions[0]!.titleUpdatedAt
   expect(typeof stamped).toBe('number')
 

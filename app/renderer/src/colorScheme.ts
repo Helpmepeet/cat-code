@@ -45,6 +45,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const COLOR_SCHEME_STORAGE_KEY = 'catcode.appearance.v1'
 
@@ -78,13 +83,6 @@ export const APPEARANCE_ATTRIBUTE = 'data-appearance'
 /** The media query that answers `system`, and that `themeSource` also drives. */
 export const DARK_SCHEME_QUERY = '(prefers-color-scheme: dark)'
 
-type ColorSchemeStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedColorScheme = {
-  version: 1
-  scheme: ColorSchemeKey
-}
-
 export function isColorSchemeKey(value: unknown): value is ColorSchemeKey {
   return (
     typeof value === 'string' &&
@@ -93,32 +91,18 @@ export function isColorSchemeKey(value: unknown): value is ColorSchemeKey {
 }
 
 export function readColorSchemeFromStorage(
-  storage: ColorSchemeStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): ColorSchemeKey | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(COLOR_SCHEME_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedColorScheme>
-    if (value.version !== 1 || !isColorSchemeKey(value.scheme)) return null
-    return value.scheme
-  } catch {
-    return null
-  }
+  return readViewPreference(storage, COLOR_SCHEME_STORAGE_KEY, 'scheme', value =>
+    isColorSchemeKey(value) ? value : null,
+  )
 }
 
 export function writeColorSchemeToStorage(
-  storage: ColorSchemeStorage | null,
+  storage: ViewPreferenceStorage | null,
   scheme: ColorSchemeKey,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedColorScheme = { version: 1, scheme }
-    storage.setItem(COLOR_SCHEME_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (codeTheme.ts:118).
-  }
+  writeViewPreference(storage, COLOR_SCHEME_STORAGE_KEY, 'scheme', scheme)
 }
 
 /**

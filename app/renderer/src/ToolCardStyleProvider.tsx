@@ -7,45 +7,32 @@
  * so a test can drive the real read/write path without touching globals.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   DEFAULT_TOOL_CARD_STYLE,
   ToolCardStyleContext,
   readToolCardStyleFromStorage,
   writeToolCardStyleToStorage,
-  type ToolCardStyle,
   type ToolCardStyleContextValue,
 } from './toolCardStyle.js'
-
-type ToolCardStyleStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): ToolCardStyleStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function ToolCardStyleProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: ToolCardStyleStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [style, setStyleState] = useState<ToolCardStyle>(
-    () => readToolCardStyleFromStorage(store) ?? DEFAULT_TOOL_CARD_STYLE,
-  )
-  const setStyle = useCallback(
-    (next: ToolCardStyle) => {
-      setStyleState(next)
-      writeToolCardStyleToStorage(store, next)
-    },
-    [store],
+  const [style, setStyle] = useViewPreference(
+    storage,
+    readToolCardStyleFromStorage,
+    writeToolCardStyleToStorage,
+    DEFAULT_TOOL_CARD_STYLE,
   )
   const value = useMemo<ToolCardStyleContextValue>(
     () => ({ style, setStyle }),

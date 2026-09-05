@@ -186,6 +186,39 @@ test('the saturated-queue report attributes its drops by record type', async () 
   expect(parseOperationalRecord(suppressed)).not.toBeNull()
 })
 
+test('turn lifecycle survives a saturated queue', async () => {
+  const { readFd, fd } = openSaturatingPipe('cat-code-sidecar-operational-turn-')
+  const logger = createSidecarOperationalLogger({ launchId: 'launch', processInstanceId: 'sidecar', fd })
+
+  for (let index = 0; index < 2000; index++) {
+    logger.write({ level: 'info', event: 'diagnostic', fields: { source: 'sidecar', category: 'probe' } })
+  }
+  // `info`, so these were `sample` class and shed with the filler. They are the
+  // only durable account of what a turn did, and a failed turn is logged at
+  // `info` too, so losing them under pressure loses the failure itself.
+  for (let index = 0; index < 4; index++) {
+    logger.write({ level: 'info', event: 'session.turn.started', fields: {} })
+    logger.write({ level: 'info', event: 'session.turn.completed', fields: { durationMs: index, reason: 'failed' } })
+  }
+
+  const records = await drainUntilSuppressed(readFd)
+  closeSync(readFd)
+
+  const received = new Map<string, number>()
+  for (const record of records) {
+    if (record.recordKind === 'delivery.trace' || record.event === 'log.suppressed') continue
+    received.set(record.event, (received.get(record.event) ?? 0) + 1)
+  }
+  expect(received.get('session.turn.started')).toBe(4)
+  expect(received.get('session.turn.completed')).toBe(4)
+
+  const suppressed = records.find(record => record.event === 'log.suppressed')
+  expect(suppressed).toBeDefined()
+  const histogram = parseHistogram(suppressed!.fields.category)
+  expect(histogram.get('session.turn.started')).toBeUndefined()
+  expect(histogram.get('session.turn.completed')).toBeUndefined()
+})
+
 test('the saturated-queue report caps its buckets and leads with the largest', async () => {
   const { readFd, fd } = openSaturatingPipe('cat-code-sidecar-operational-cap-')
   const logger = createSidecarOperationalLogger({ launchId: 'launch', processInstanceId: 'sidecar', fd })

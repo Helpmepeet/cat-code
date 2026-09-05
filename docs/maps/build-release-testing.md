@@ -110,7 +110,6 @@ the same cross-process-locked sequence.
 | Opus to Opus 1M merge | `src/migrations/migrateOpusToOpus1m.ts` | Eligible merged-Opus users with user settings `model: "opus"` move to `opus[1m]` or default unset. |
 | Bridge config rename | `src/migrations/migrateReplBridgeEnabledToRemoteControlAtStartup.ts` | Copies old global `replBridgeEnabled` to `remoteControlAtStartup` only when new key is unset. |
 | Auto-mode prompt reset | `src/migrations/resetAutoModeOptInForDefaultOffer.ts` | Feature-gated by `TRANSCRIPT_CLASSIFIER`; clears old skip prompt only for enabled auto-mode users not defaulting to auto. |
-| Fennec to Opus | `src/migrations/migrateFennecToOpus.ts` | Ant-only in source intent, but current external build dead-code condition means it does not run in normal external builds. |
 | Upstream/fork data copy | `src/migrations/migrateFromUpstreamClaude.ts` | Shared `init()` awaits this copy-only migration before enabling configs. Its destination check and copy run under a lock beside the destination directory. |
 
 ## Release Notes

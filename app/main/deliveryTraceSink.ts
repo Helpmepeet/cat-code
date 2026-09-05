@@ -1,11 +1,13 @@
 /** Private, bounded, metadata-only delivery tracing with anomaly accounting. */
 
-import {
-  chmodSync, closeSync, fstatSync, mkdirSync, openSync, readdirSync,
-  statSync, symlinkSync, unlinkSync, writeSync,
-} from 'node:fs'
+import { chmodSync, closeSync, fstatSync, openSync, writeSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import {
+  ensurePrivateDirectory,
+  retainJsonlFiles,
+  updateLatestSymlink,
+} from './jsonlRetention.js'
 import {
   deliveryAnomalyScope,
   deliveryObservationKind,
@@ -254,14 +256,21 @@ function createLane({
 
   const ensureOpen = (): boolean => {
     try {
-      mkdirSync(directory, { recursive: true, mode: 0o700 })
-      chmodSync(directory, 0o700)
+      ensurePrivateDirectory(directory)
       if (fd === null) {
         file = join(directory, `${prefix}${launchId}-${now().getTime()}.jsonl`)
         fd = openSync(file, 'a', 0o600)
         chmodSync(file, 0o600)
-        updateLatest(directory, latestName, file)
-        retain(directory, prefix, now().getTime(), maxTotalBytes, maxFiles, maxAgeMs, file)
+        updateLatestSymlink(directory, latestName, file)
+        retainJsonlFiles({
+          directory,
+          prefix,
+          current: now().getTime(),
+          maxTotalBytes,
+          maxFiles,
+          maxAgeMs,
+          activeFile: file,
+        })
       }
       return true
     } catch {
@@ -990,35 +999,4 @@ export function deliveryMessageKindOfFrame(frame: ServerFrame): DeliveryMessageK
   if (frame.kind !== 'event' || frame.event.type !== 'message') return undefined
   const messageKind = frame.event.message.type
   return isDeliveryMessageKind(messageKind) ? messageKind : undefined
-}
-
-function updateLatest(directory: string, latestName: string, activeFile: string): void {
-  const latest = join(directory, latestName)
-  try { unlinkSync(latest) } catch {}
-  try { symlinkSync(activeFile, latest) } catch {}
-}
-
-/**
- * Retention is per lane: the pattern is anchored on the caller's own prefix, so
- * pressure on the per-frame files can never reach a rollup file and the reverse.
- */
-function retain(directory: string, prefix: string, current: number, maxTotalBytes: number, maxFiles: number, maxAgeMs: number, activeFile: string): void {
-  const pattern = new RegExp(`^${prefix}[A-Za-z0-9-]+-\\d+\\.jsonl$`)
-  const files = readdirSync(directory)
-    .filter(name => pattern.test(name))
-    .map(name => ({ path: join(directory, name), stat: statSync(join(directory, name)) }))
-    .sort((a, b) => a.stat.mtimeMs - b.stat.mtimeMs)
-  let total = files.reduce((sum, item) => sum + item.stat.size, 0)
-  let count = files.length
-  for (const item of files) {
-    try { chmodSync(item.path, 0o600) } catch {}
-    if (item.path === activeFile) continue
-    if (item.stat.mtimeMs < current - maxAgeMs || count > maxFiles || total > maxTotalBytes) {
-      try {
-        unlinkSync(item.path)
-        count--
-        total -= item.stat.size
-      } catch {}
-    }
-  }
 }

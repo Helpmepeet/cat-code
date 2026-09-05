@@ -45,6 +45,7 @@ import { initializeSidecarRuntime } from './initializeRuntime.js'
 import {
   createSidecarSessionController,
   loadAgentDefinitionsForRuntime,
+  readSpawnModel,
 } from './sessionController.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 import {
@@ -53,6 +54,7 @@ import {
   SidecarResumeError,
 } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
+import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
 import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
@@ -331,11 +333,13 @@ async function main(): Promise<void> {
   let startupHookMessages: Message[] | undefined
   if (!args.probeOnAttach && resumed === undefined) {
     // The exact value this session's model resolution selects moments from now:
-    // `initializeSidecarModelProvider` reads `getUserSpecifiedModelSetting()`
-    // for a non-resumed session (`app/sidecar/sessionController.ts:231`). It
-    // deliberately does not resolve a default, so when the user has chosen no
-    // model there is none to report and the field stays absent.
-    const specifiedModel = getUserSpecifiedModelSetting()
+    // `initializeSidecarModelProvider` takes the spawn model first and falls
+    // back to `getUserSpecifiedModelSetting()` for a non-resumed session, so a
+    // created peer reports the model it will actually run on rather than the
+    // saved default (PEER-SESSIONS R7). It deliberately does not resolve a
+    // default, so when the user has chosen no model there is none to report and
+    // the field stays absent.
+    const specifiedModel = readSpawnModel() ?? getUserSpecifiedModelSetting()
     const hookMessages = await processSessionStartHooks('startup', {
       ...(typeof specifiedModel === 'string' ? { model: specifiedModel } : {}),
     })
@@ -532,6 +536,12 @@ async function main(): Promise<void> {
       // best-effort
     }
   }
+
+  // HOST-REQUEST-PLANE — point the peer tools at the live request client. The
+  // tools were built with the session controller above, before this server
+  // existed, so they resolve a requester per call rather than holding one; this
+  // is where the one that exists is published.
+  setPeerHostRequester((verb, args) => server.requestHost(verb, args))
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a
   // socket FILE, not a listening TCP port — no network surface added).

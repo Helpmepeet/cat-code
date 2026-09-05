@@ -23,6 +23,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const PROSE_ARRIVAL_STORAGE_KEY = 'catcode.proseArrival.v1'
 
@@ -93,10 +98,6 @@ export const PROSE_ARRIVAL_WORD_STAGGER_MS: Readonly<
  */
 export const MAX_PROSE_ARRIVAL_STAGGER_MS = 400
 
-type PersistedProseArrival = { version: 1; arrival: ProseArrival }
-
-type ProseArrivalStorage = Pick<Storage, 'getItem' | 'setItem'>
-
 export type ProseArrivalContextValue = {
   arrival: ProseArrival
   setArrival: (next: ProseArrival) => void
@@ -108,30 +109,19 @@ export const ProseArrivalContext = createContext<ProseArrivalContextValue>({
 })
 
 export function readProseArrivalFromStorage(
-  storage: ProseArrivalStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): ProseArrival | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(PROSE_ARRIVAL_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedProseArrival>
-    if (value.version !== 1) return null
-    return isProseArrival(value.arrival) ? value.arrival : null
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    PROSE_ARRIVAL_STORAGE_KEY,
+    'arrival',
+    value => (isProseArrival(value) ? value : null),
+  )
 }
 
 export function writeProseArrivalToStorage(
-  storage: ProseArrivalStorage | null,
+  storage: ViewPreferenceStorage | null,
   arrival: ProseArrival,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedProseArrival = { version: 1, arrival }
-    storage.setItem(PROSE_ARRIVAL_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect live session state (`toolCardStyle.ts`, `workspaceLayout.ts:88`).
-  }
+  writeViewPreference(storage, PROSE_ARRIVAL_STORAGE_KEY, 'arrival', arrival)
 }

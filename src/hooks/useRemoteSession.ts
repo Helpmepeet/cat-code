@@ -4,14 +4,10 @@ import { BoundedUUIDSet } from '../bridge/bridgeMessaging.js'
 import type { ToolUseConfirm } from '../components/permissions/PermissionRequest.js'
 import type { SpinnerMode } from '../components/Spinner/types.js'
 import {
-  type RemotePermissionResponse,
   type RemoteSessionConfig,
   RemoteSessionManager,
 } from '../remote/RemoteSessionManager.js'
-import {
-  createSyntheticAssistantMessage,
-  createToolStub,
-} from '../remote/remotePermissionBridge.js'
+import { buildRemoteToolUseConfirm } from '../remote/remotePermissionBridge.js'
 import {
   convertSDKMessage,
   isSessionEndMessage,
@@ -19,9 +15,7 @@ import {
 import { useSetAppState } from '../state/AppState.js'
 import type { AppState } from '../state/AppStateStore.js'
 import type { Tool } from '../Tool.js'
-import { findToolByName } from '../Tool.js'
 import type { Message as MessageType } from '../types/message.js'
-import type { PermissionAskDecision } from '../types/permissions.js'
 import { logForDebugging } from '../utils/debug.js'
 import { truncateToWidth } from '../utils/format.js'
 import {
@@ -333,73 +327,15 @@ export function useRemoteSession({
           `[useRemoteSession] Permission request for tool: ${request.tool_name}`,
         )
 
-        // Look up the Tool object by name, or create a stub for unknown tools
-        const tool =
-          findToolByName(toolsRef.current, request.tool_name) ??
-          createToolStub(request.tool_name)
-
-        const syntheticMessage = createSyntheticAssistantMessage(
+        const toolUseConfirm = buildRemoteToolUseConfirm({
           request,
           requestId,
-        )
-
-        const permissionResult: PermissionAskDecision = {
-          behavior: 'ask',
-          message:
-            request.description ?? `${request.tool_name} requires permission`,
-          suggestions: request.permission_suggestions,
-          blockedPath: request.blocked_path,
-        }
-
-        const toolUseConfirm: ToolUseConfirm = {
-          assistantMessage: syntheticMessage,
-          tool,
-          description:
-            request.description ?? `${request.tool_name} requires permission`,
-          input: request.input,
-          toolUseContext: {} as ToolUseConfirm['toolUseContext'],
-          toolUseID: request.tool_use_id,
-          permissionResult,
-          permissionPromptStartTimeMs: Date.now(),
-          onUserInteraction() {
-            // No-op for remote — classifier runs on the container
-          },
-          onAbort() {
-            const response: RemotePermissionResponse = {
-              behavior: 'deny',
-              message: 'User aborted',
-            }
-            manager.respondToPermissionRequest(requestId, response)
-            setToolUseConfirmQueue(queue =>
-              queue.filter(item => item.toolUseID !== request.tool_use_id),
-            )
-          },
-          onAllow(updatedInput, _permissionUpdates, _feedback) {
-            const response: RemotePermissionResponse = {
-              behavior: 'allow',
-              updatedInput,
-            }
-            manager.respondToPermissionRequest(requestId, response)
-            setToolUseConfirmQueue(queue =>
-              queue.filter(item => item.toolUseID !== request.tool_use_id),
-            )
-            // Resume loading indicator after approving
-            setIsLoading(true)
-          },
-          onReject(feedback?: string) {
-            const response: RemotePermissionResponse = {
-              behavior: 'deny',
-              message: feedback ?? 'User denied permission',
-            }
-            manager.respondToPermissionRequest(requestId, response)
-            setToolUseConfirmQueue(queue =>
-              queue.filter(item => item.toolUseID !== request.tool_use_id),
-            )
-          },
-          async recheckPermission() {
-            // No-op for remote — permission state is on the container
-          },
-        }
+          tools: toolsRef.current,
+          respond: (id, response) =>
+            manager.respondToPermissionRequest(id, response),
+          setIsLoading,
+          setToolUseConfirmQueue,
+        })
 
         setToolUseConfirmQueue(queue => [...queue, toolUseConfirm])
         // Pause loading indicator while waiting for permission

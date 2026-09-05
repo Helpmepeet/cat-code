@@ -585,9 +585,13 @@ export type HistoryLoadEarlierMessage = {
  * The CLOSED verb allowlist (HR1). Three are the model-facing verbs of HRP §2;
  * `peer.ack` is the fourth and is not model-facing at all.
  *
- * `peer.ack` exists because HRP §4 step 6 rules "ack = enqueued" and makes main
- * hold a routed message until the recipient sidecar says it took it — but names
- * no transport for the ack itself. The two candidates were a new OUTBOUND frame
+ * `peer.ack` exists because HRP §4 step 6 makes main hold a routed message until
+ * the recipient sidecar says it took it — but names no transport for the ack
+ * itself. (Step 6's "ack = enqueued" was reruled to "ack = consumed" on
+ * 2026-09-04: an enqueue is not a hand-off, so acking there lost the message
+ * whenever the recipient died before its turn read it. The verb and its payload
+ * are unchanged; only the moment the sidecar sends it moved, which is why this
+ * needed no wire change at all.) The two candidates were a new OUTBOUND frame
  * kind (which §5's change list does not list, and which would put a third
  * app-owned kind on the wire for one boolean) and this: an existing frame, an
  * existing handler, one more entry in a list main already closes. It carries no
@@ -630,8 +634,13 @@ export const HOST_REQUEST_ERROR_CODES = [
   /** Main failed in a way the caller cannot act on. */
   'internal_error',
   /**
-   * SIDECAR-minted, not main's: no `host.result` arrived inside
-   * `HOST_REQUEST_TIMEOUT_MS`. It is in this union rather than a second one so a
+   * Minted on BOTH sides for the same fact, that a call did not answer in
+   * time: by the sidecar when no `host.result` arrives inside
+   * `HOST_REQUEST_TIMEOUT_MS`, and by main when a host call it made outlives
+   * `PEER_HOST_CALL_TIMEOUT_MS`. Main used to report its own timeout as
+   * `spawn_failed`, which said the work had not happened when the truth was
+   * that it had not answered, and the work then often completed. It is in this
+   * union rather than a second one so a
    * caller pattern-matches ONE closed set; the requesting side never hangs, and
    * a timeout on `peer.create` deliberately does not auto-retry — the row is
    * named and visible from the moment it is persisted, so the answer is to look
@@ -677,6 +686,32 @@ export type PeerDescriptor = {
   /** From the `activity` frame. ABSENT for a row that is not live. */
   presence?: ActivityPresence
   /**
+   * What the session is RUNNING on: the resolved model id and the reasoning
+   * effort actually applied, read off the row's own `run-controls.snapshot`
+   * ({@link RunControlsSnapshot} `model.current` / `effort.current`). ABSENT for
+   * a closed row, and absent for one that has not announced yet, on the
+   * `presence` rule: a value nobody measured is not filled in.
+   *
+   * OBSERVED, never the value a `CreatePeer` asked for, because a spawn-time
+   * value is wrong three ways: a user-created session never had one, a `/model`
+   * or `/effort` change moves the session without telling main, and an
+   * unrecognised effort is dropped at the child in favour of the user's saved
+   * setting — so the asked-for value may never have been what ran. A parked row
+   * keeps its last observed value: its engine is gone, so nothing can move it
+   * while parked. On the way back it is briefly the PREVIOUS process's value: a
+   * restoring row counts as live while it spawns, and the sidecar sends `ready`
+   * before it sends the run-controls snapshot, so a `peers.list` timed into that
+   * gap reads a value the new process has not confirmed. One synchronous frame
+   * dispatch wide, and only a concurrent list can observe it.
+   *
+   * The model id is NOT checked against a known set anywhere on this path. The
+   * engine passes unrecognised ids through so a new model works the day it
+   * ships; reporting the value is what makes a typo visible, and a typo is
+   * exactly what the reader needs to see here.
+   */
+  model?: string
+  effort?: string
+  /**
    * The creating session, when an agent created this one. `name` is null when
    * the creator's row has been reaped: ids are not reused and names are, so the
    * id is what is stored and the name is resolved at read time.
@@ -695,6 +730,15 @@ export const PEER_DELIVER_REFUSAL_REASONS = [
   'duplicate',
   'queue_full',
   'wake_failed',
+  /**
+   * The recipient was ALREADY AWAKE and the hand-off to its process failed
+   * anyway. Distinct from `wake_failed` on purpose: that one means a parked row
+   * could not be brought back, and reporting it for a live peer tells the
+   * sending model its peer is unreachable when the peer is sitting there
+   * running. Not in §4 step 6's original list; the decision doc needs the
+   * addition recorded.
+   */
+  'delivery_failed',
 ] as const
 
 export type PeerDeliverRefusalReason =
@@ -765,10 +809,18 @@ export type HostResultMessage = {
  *
  * Every field is MAIN-STAMPED. `from` and `fromSessionId` are the requester's
  * identity as main read it off the connection (HR2), never anything the sending
- * sidecar wrote; `hops` is derived by main from its own per-pair record, so a
- * compromised sidecar cannot launder a loop by shortening a chain it never held;
- * `messageId` is minted by main and is what the ack and the operational-log line
- * are keyed on. The recipient sidecar treats all of it as DATA.
+ * sidecar wrote; `messageId` is minted by main and is what the ack and the
+ * operational-log line are keyed on. The recipient sidecar treats all of it as
+ * DATA.
+ *
+ * There is deliberately NO hop chain on this frame. An earlier revision carried
+ * one so a recipient could show where a message came through, and nothing ever
+ * read it: it crossed the trust boundary, was validated, and was dropped. HR5's
+ * whole posture is the smallest inbound surface that does the job, and a field
+ * with no consumer is surface for nothing. The chain stays entirely main-side,
+ * where the loop stop lives (§4 step 2) and where a compromised sidecar cannot
+ * reach it — which it could not anyway, since main derived it rather than
+ * reading it, but a field that does not exist cannot be argued about later.
  *
  * The only field carrying model-authored content is `text`, and it is bounded by
  * `MAX_PEER_TEXT_BYTES` at main and re-bounded at the sidecar.
@@ -780,8 +832,6 @@ export type PeerDeliverMessage = {
   from: string
   fromSessionId: SessionId
   text: string
-  /** appSessionIds of every sender in this chain, oldest first. */
-  hops: SessionId[]
   /**
    * Deliver the text WITHOUT the `<cross-session-message>` wrapper.
    *
@@ -4138,6 +4188,22 @@ export type CatCodeBridge = {
   previewSession(appSessionId: SessionId): Promise<TranscriptCache | null>
   /** Graceful close; the row is kept restorable. */
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /**
+   * PEER-SESSIONS §6 — set or clear this session's "do not let peers reopen me"
+   * standing decision, the user's ONE control over the ruling that a peer
+   * message may wake a closed session. HC3 fixed sender, modelled on
+   * `closeSession`: a session id and a boolean, nothing else. The renderer
+   * authors no path and no rule, and only the user can clear it — no peer, and
+   * no reopen, does.
+   *
+   * Durable host state, so it survives close, park, restore and relaunch, and an
+   * unknown id answers `session_not_found` (HC2) rather than reporting a success
+   * that persisted nothing.
+   */
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>>
   /** Snapshot of live ∪ restorable sessions. */
   listSessions(): Promise<SessionDescriptor[]>
   /**

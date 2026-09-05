@@ -39,6 +39,7 @@ import {
   type SessionActionsAnchor,
 } from './sessionActions.js'
 import {
+  ActionCheckIcon,
   ActionChevronIcon,
   SessionActionIcon,
 } from './SessionActionIcons.js'
@@ -338,10 +339,17 @@ function MenuRow({
       </div>
     )
   }
+  // A toggle row is a `menuitemcheckbox` carrying its own state, not a verb that
+  // fires and forgets: the check is the only place a persisted decision the user
+  // alone can clear (PEER-SESSIONS §6) becomes visible again after the menu that
+  // set it closed. `aria-checked` is what carries that to a screen reader, since
+  // the tick itself is a decorative glyph.
+  const toggle = item.checked !== undefined
   return (
     <button
       type="button"
-      role="menuitem"
+      role={toggle ? 'menuitemcheckbox' : 'menuitem'}
+      {...(toggle ? { 'aria-checked': item.checked === true } : {})}
       onClick={onAction}
       className={
         'flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-[12.5px] transition-colors ' +
@@ -354,6 +362,11 @@ function MenuRow({
         <SessionActionIcon kind={item.kind} />
       </span>
       <span className="flex-1 truncate">{item.label}</span>
+      {item.checked === true ? (
+        <span className="flex shrink-0 text-accent">
+          <ActionCheckIcon />
+        </span>
+      ) : null}
     </button>
   )
 }

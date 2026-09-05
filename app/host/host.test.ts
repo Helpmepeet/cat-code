@@ -10,12 +10,19 @@
  */
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
-import { SessionRegistry } from './registry.js'
+import { NAME_REPAIR_WINDOW_MS, SessionRegistry } from './registry.js'
 import { PEER_NAME_POOL } from './peerNames.js'
 import { Host, type CwdValidation } from './host.js'
 import type { SessionId } from '../shared/protocol.js'
@@ -976,6 +983,50 @@ test('restoreSession re-spawns a clean row with its cwd + engineSessionId (resum
   expect(h.registry.findSession(appSessionId)?.shutdown).toBeNull()
 })
 
+test('a session stranded on a lost connection is refused with a code that does not mean "wait"', async () => {
+  // `reportSocketLoss` settles a lost socket to `disconnected` and schedules no
+  // reconnection, so the only exits are a kill or an explicit restart in place.
+  // Restore cannot take either: it refuses the row, and it used to refuse it as
+  // `session_not_found`, the same code it returns while a spawn is genuinely in
+  // flight. The peer plane reads that code as "already restoring, wait for
+  // ready", so every message to a stranded session sat through the whole wake
+  // timeout holding one of the recipient's delivery slots, then failed anyway.
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
+  const { appSessionId } = created.value
+  writeTranscript(h.storageDir, 'engine-stranded')
+  h.supervisor.emitReady(appSessionId, 'engine-stranded')
+  await settle(
+    () => h.registry.findSession(appSessionId)?.engineSessionId === 'engine-stranded',
+  )
+  // Everything else about the row is healthy: it has content and could be
+  // resumed. Only the transport is gone.
+  expect(h.host.canResume(appSessionId)).toBe(true)
+
+  h.supervisor.setStatus(appSessionId, 'disconnected')
+  const stranded = await h.host.restoreSession(appSessionId)
+
+  expect(stranded.ok).toBe(false)
+  if (stranded.ok) return
+  expect(stranded.error.code).toBe('session_unreachable')
+  expect(stranded.error.code).not.toBe('session_not_found')
+  // Refused, not recovered: the child is left alone. A restore that killed a
+  // stranded engine to respawn it would be doing the user's restart for them,
+  // without being asked, to a process that may still be mid-turn.
+  expect(h.supervisor.records.has(appSessionId)).toBe(true)
+  expect(h.supervisor.records.get(appSessionId)?.status).toBe('disconnected')
+
+  // A spawn genuinely in flight keeps the old answer, because there waiting for
+  // the row's next ready IS the right advice.
+  const spawning = await h.host.createSession({ cwd: h.cwd })
+  if (!spawning.ok) throw new Error(`create failed: ${spawning.error.code}`)
+  const inFlight = await h.host.restoreSession(spawning.value.appSessionId)
+  expect(inFlight.ok).toBe(false)
+  if (inFlight.ok) return
+  expect(inFlight.error.code).toBe('session_not_found')
+})
+
 test('a failed RESTORE spawn keeps the row as a restore-offer (SF-2), a failed CREATE spawn removes it', async () => {
   const h = makeHost()
   // Seed a restorable clean row with a transcript (a real offer).
@@ -1407,6 +1458,51 @@ test('registry_unavailable: a failing registry write does not kill the session',
   expect(registry.lastWriteFailed).toBe(true)
   // The degradation is observable (the host surfaced registry_unavailable).
   expect(logs.some(l => l.includes('registry_unavailable'))).toBe(true)
+})
+
+test('setPeerWakeBlocked reports a failed write instead of claiming the block was saved', async () => {
+  // The counterpart to the test above, and the reason both exist. There the
+  // degrade-not-die posture is right: the session spawned, it works, and the
+  // caller has a live tab whatever the file did. Here there is no liveness to
+  // protect and durability is the whole promise ("survives close, park, restore
+  // and relaunch"), so an ok result meant the user set the block, saw the menu
+  // agree, and found it gone at the next launch.
+  //
+  // The write fails for real: no stubbed writer, no injected lock. The document
+  // on disk is replaced by a directory at the same path, so the merge read
+  // inside `persist()` throws EISDIR — one of the five failures `persist()`
+  // swallows, and the one a stub would be least likely to imitate.
+  const h = makeHost()
+  const created = await h.host.createSession({ cwd: h.cwd })
+  if (!created.ok) throw new Error(`create failed: ${created.error.code}`)
+  const { appSessionId } = created.value
+  await settle(() => existsSync(h.registry.filePath))
+
+  const lastPersisted = JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as {
+    sessions: { appSessionId: string; peerWakeBlocked?: boolean }[]
+  }
+  expect(lastPersisted.sessions.some(r => r.peerWakeBlocked === true)).toBe(false)
+
+  rmSync(h.registry.filePath)
+  mkdirSync(h.registry.filePath)
+
+  h.events.length = 0
+  const blocked = await h.host.setPeerWakeBlocked(appSessionId, true)
+
+  expect(blocked.ok).toBe(false)
+  if (blocked.ok) return
+  expect(blocked.error.code).toBe('registry_unavailable')
+  expect(h.registry.lastWriteFailed).toBe(true)
+
+  // Narrowed, not inverted: the block IS in force for this run, and the menu is
+  // told so. Rolling the row back on a write failure would leave the control
+  // doing nothing at all, which is worse than losing it at the next launch.
+  expect(h.registry.findSession(appSessionId)?.peerWakeBlocked).toBe(true)
+  const published = h.events
+    .filter(e => e.type === 'session-status')
+    .map(e => (e as { session: { appSessionId: string; peerWakeBlocked?: boolean } }).session)
+    .filter(session => session.appSessionId === appSessionId)
+  expect(published.at(-1)?.peerWakeBlocked).toBe(true)
 })
 
 /* ------------------------------------------------------------------------- *
@@ -2019,6 +2115,20 @@ test('IDLE-PARK — an ordinary quit marks PARKED rows clean, so the next launch
   await settle(() => h.registry.findSession(parkedId)?.shutdown === 'parked')
   await settle(() => h.registry.findSession(crashedId)?.shutdown === 'crashed')
 
+  // Wait for the FILE, not just the in-memory doc. Every write point mutates
+  // the row and then persists, so `findSession` reports the new value while the
+  // write behind it is still in flight — and the relaunch below reads the file.
+  // Without this the two rows reached it in whatever order the pending persists
+  // happened to settle, and one that arrived still holding `engineSessionId:
+  // null` is a row the launch reap is entitled to drop.
+  await settle(() =>
+    (
+      JSON.parse(readFileSync(h.registry.filePath, 'utf8')) as {
+        sessions: { engineSessionId: string | null }[]
+      }
+    ).sessions.every(row => row.engineSessionId !== null),
+  )
+
   // The quit. A park is a reclaim the host chose, so an ordinary quit that finds
   // one is an ordinary quit — the parked row ends clean. A real crash is still
   // never relabelled.
@@ -2030,7 +2140,15 @@ test('IDLE-PARK — an ordinary quit marks PARKED rows clean, so the next launch
   // the parked row was still `'parked'` on disk and `normalizeShutdown` turned
   // it into `'crashed'`, so a session nothing had happened to came back
   // dead-toned in the sidebar, the Sessions page and the palette.
-  const next = new SessionRegistry({ storageDir: h.storageDir, log: () => {} })
+  const next = new SessionRegistry({
+    storageDir: h.storageDir,
+    log: () => {},
+    // The same hermetic resolution the harness uses. With the real one both
+    // rows point at transcripts that do not exist under this temp dir, and the
+    // launch reap drops them before the assertions below can look.
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(h.storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
   await next.launch()
   expect(next.findSession(parkedId)?.shutdown).toBe('clean')
   expect(next.findSession(crashedId)?.shutdown).toBe('crashed')
@@ -2256,6 +2374,149 @@ test('every created session is named, the name reaches the spawn config, and a r
   if (!restored.ok) throw new Error(`restore failed: ${restored.error.code}`)
   expect(restored.value.name).toBe(name!)
   expect(h.supervisor.records.get(appSessionId)?.name).toBe(name!)
+})
+
+test('a launch renames the recently-active rows a build without the field stripped, and leaves the rest', async () => {
+  // The registry exactly as a build that predates `name` leaves it. `validateRow`
+  // is a closed whitelist, so such a build drops the field from every row it
+  // loads and writes the stripped document back at its own launch — one run of a
+  // stale packaged app un-names a fully named registry. These are `clean` rows
+  // with transcripts: the closed history rows `peersOf`
+  // (`app/main/peerRequestPlane.ts`) drops for having no name, which is what
+  // makes the loss permanent — a row nobody can list is a row nobody can wake,
+  // and only a spawn would have given it a name back.
+  //
+  // The repair is bounded by `NAME_REPAIR_WINDOW_MS` on `lastAttachedAt`, so this
+  // pins THREE outcomes, one per row shape below. The stale row is the one a
+  // future reader will read as a bug: it is not one. A registry stripped at 224
+  // rows would otherwise hand a model a 223-name roster, and the window trades
+  // the archive's addressability for one a model can actually read.
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'project')
+  mkdirSync(cwd, { recursive: true })
+  const registryPath = join(storageDir, 'registry.json')
+
+  const day = 24 * 60 * 60 * 1000
+  const now = Date.now()
+  // Ages straddle the window rather than sitting on it: a row one hour inside is
+  // as much a pass as one a minute inside, and a test that hugs the boundary
+  // fails on clock skew instead of on behaviour.
+  const rows = [
+    { id: randomUUID(), age: 1 * day, name: undefined },
+    { id: randomUUID(), age: NAME_REPAIR_WINDOW_MS - 6 * 60 * 60 * 1000, name: undefined },
+    { id: randomUUID(), age: NAME_REPAIR_WINDOW_MS + 3 * day, name: undefined },
+    // Named, and far outside the window: proves the write-once rule is about the
+    // field being present, not about the row being recent enough to touch.
+    { id: randomUUID(), age: 90 * day, name: 'Kept' },
+  ]
+  const [freshest, insideEdge, stale, alreadyNamed] = rows
+  const repaired = [freshest!.id, insideEdge!.id]
+  rows.forEach((_row, index) => writeTranscript(storageDir, `engine-strip-${index}`))
+  writeFileSync(
+    registryPath,
+    `${JSON.stringify(
+      {
+        registryVersion: 1,
+        hostPid: process.pid,
+        updatedAt: now,
+        sessions: rows.map((row, index) => ({
+          appSessionId: row.id,
+          engineSessionId: `engine-strip-${index}`,
+          cwd,
+          forked: false,
+          createdAt: now - row.age,
+          lastAttachedAt: now - row.age,
+          lastMessageSentAt: null,
+          shutdown: 'clean',
+          ...(row.name === undefined ? {} : { name: row.name }),
+        })),
+      },
+      null,
+      2,
+    )}\n`,
+  )
+
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (candidate: string): CwdValidation =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+    launched: registry.launch(),
+  })
+
+  await settle(() =>
+    repaired.every(
+      id =>
+        host.listSessions().find(session => session.appSessionId === id)?.name != null,
+    ),
+  )
+  // The stale row is asserted as a NEGATIVE, so give the fill every chance to
+  // reach it first — otherwise this passes because the repair had not run yet.
+  await drain()
+
+  const named = new Map(
+    host.listSessions().map(session => [session.appSessionId, session.name]),
+  )
+  expect(named.size).toBe(rows.length)
+
+  // (1) Inside the window: repaired.
+  for (const id of repaired) {
+    expect(typeof named.get(id as SessionId)).toBe('string')
+    expect(named.get(id as SessionId)!.length).toBeGreaterThan(0)
+  }
+  // Uniqueness is the point of a name: the allocator must widen its reserved set
+  // as it goes, not hand the same pool entry to every row it repairs.
+  expect(new Set(repaired.map(id => named.get(id as SessionId))).size).toBe(
+    repaired.length,
+  )
+
+  // (2) Outside the window: left nameless, ON PURPOSE. This row is now outside
+  // the peer world for good — it cannot be listed, so it cannot be woken, so it
+  // never spawns and never earns a name later. It stays openable from history.
+  expect(named.get(stale!.id as SessionId)).toBeNull()
+
+  // (3) Already named: untouched regardless of age.
+  expect(named.get(alreadyNamed!.id as SessionId)).toBe('Kept')
+
+  // …and it reached DISK. The in-memory row is what the previous test asserted,
+  // and the in-memory row is exactly what survives a quit only if it is written.
+  const persisted = JSON.parse(readFileSync(registryPath, 'utf8')) as {
+    sessions: Array<{ appSessionId: string; name?: string }>
+  }
+  const onDisk = new Map(persisted.sessions.map(row => [row.appSessionId, row.name]))
+  for (const id of repaired) {
+    expect(onDisk.get(id)).toBe(named.get(id as SessionId)!)
+  }
+  expect(onDisk.get(stale!.id)).toBeUndefined()
+  expect(onDisk.get(alreadyNamed!.id)).toBe('Kept')
+
+  // Idempotent: a second launch over the repaired file renames nothing, and does
+  // not reconsider the stale row either — the window is not a retry schedule.
+  const relaunched = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+  })
+  const second = new Host({
+    supervisor: new FakeSupervisor() as never,
+    registry: relaunched,
+    validateCwd: (candidate: string): CwdValidation =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+    launched: relaunched.launch(),
+  })
+  await settle(() => second.listSessions().length === rows.length)
+  await drain()
+  for (const session of second.listSessions()) {
+    expect(session.name).toBe(named.get(session.appSessionId)!)
+  }
 })
 
 test('allocation consults the names on registry rows, not just the cursor', async () => {

@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import {
   atomicWriteJson0600,
   createDevPickerBypass,
@@ -18,19 +19,7 @@ function tempDir(): string {
 }
 
 function descriptor(input: Partial<SessionDescriptor> & { appSessionId: string; cwd: string }): SessionDescriptor {
-  return {
-    engineSessionId: null,
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
-    createdAt: 1,
-    lastAttachedAt: 1,
-    lastMessageSentAt: null,
-    ...input,
-  }
+  return sessionDescriptorFixture({ createdAt: 1, lastAttachedAt: 1, ...input })
 }
 
 test('dev cwd allowlist is resolved once, frozen, and cycles through validated dirs', () => {

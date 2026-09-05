@@ -77,6 +77,7 @@ import {
 import { suppressCompactWarning } from './compactWarningState.js'
 import { groupMessagesByApiRound } from './grouping.js'
 import { runPostCompactCleanup } from './postCompactCleanup.js'
+import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactPrompt,
   getCompactUserSummaryMessage,
@@ -538,6 +539,7 @@ export async function reactiveCompactOnPromptTooLong(
         toAgentModeCompactState(sessionState),
       ),
       isCompactSummary: true,
+      summarizedRelayedInput: summarizedRelayedInput(summarized),
       isVisibleInTranscriptOnly: true,
     }),
   ]

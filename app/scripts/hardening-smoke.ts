@@ -254,6 +254,12 @@ async function runProductionHardeningSmoke(
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
       'restoreSession',
+      // PEER-SESSIONS §6 — the user's standing "don't let peers reopen this
+      // session" decision (HC3 fixed sender). Id plus a boolean: the renderer
+      // names an existing row and authors no rule, no path and no peer, main
+      // re-validates both arguments, and the host re-checks the id (HC2). It
+      // reaches no engine, so it adds no engine vocabulary.
+      'setPeerWakeBlocked',
       // 2026-08-13 — open a transcript-cited file in the OS handler. The renderer
       // DOES name a path here, so main is the boundary and re-validates it whole
       // (`app/main/openWorkspaceFile.ts`): closed key set, 4,096-char cap, NUL

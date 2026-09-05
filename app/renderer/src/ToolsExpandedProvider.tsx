@@ -7,7 +7,7 @@
  * so a test can drive the real read/write path without touching globals.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   DEFAULT_TOOLS_EXPANDED,
@@ -16,35 +16,23 @@ import {
   writeToolsExpandedToStorage,
   type ToolsExpandedContextValue,
 } from './toolsExpanded.js'
-
-type ToolsExpandedStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): ToolsExpandedStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function ToolsExpandedProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: ToolsExpandedStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [expanded, setExpandedState] = useState<boolean>(
-    () => readToolsExpandedFromStorage(store) ?? DEFAULT_TOOLS_EXPANDED,
-  )
-  const setExpanded = useCallback(
-    (next: boolean) => {
-      setExpandedState(next)
-      writeToolsExpandedToStorage(store, next)
-    },
-    [store],
+  const [expanded, setExpanded] = useViewPreference(
+    storage,
+    readToolsExpandedFromStorage,
+    writeToolsExpandedToStorage,
+    DEFAULT_TOOLS_EXPANDED,
   )
   const value = useMemo<ToolsExpandedContextValue>(
     () => ({ expanded, setExpanded }),

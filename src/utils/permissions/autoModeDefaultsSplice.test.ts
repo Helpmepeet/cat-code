@@ -21,6 +21,7 @@ import {
   spliceAutoModeDefaultsList,
   transformUpstreamRuntimePrompt,
 } from './autoModeDefaultsSplice.js'
+import { SUMMARIZED_RELAY_PREFIX } from './classifierShared.js'
 
 const UPSTREAM_DIR = join(
   import.meta.dir,
@@ -129,13 +130,24 @@ describe('autoModeSectionDropsDefaults', () => {
 })
 
 describe('assembleUpstreamSystemPrompt', () => {
-  test('inlines the rule inventory and empties the unshipped slot', () => {
+  test('inlines the rule inventory and fills the fork-local slot', () => {
     const out = assembleUpstreamSystemPrompt(BASE, PERMISSIONS, undefined)
     expect(out).toContain('<cc_automode_permissions>')
     expect(out).not.toContain('<permissions_template>')
     expect(out).not.toContain('<cross_session_messages_rule>')
     // A wrapper around ordinary prose, not a slot: it must survive.
     expect(out).toContain('<cc_automode_session_rules>')
+  })
+
+  test('teaches the classifier the marker the transcript actually carries', () => {
+    const out = assembleUpstreamSystemPrompt(BASE, PERMISSIONS, undefined)
+    // The prefix is written by buildTranscriptEntries; a rule describing any
+    // other string would be a rule about nothing.
+    expect(out).toContain(SUMMARIZED_RELAY_PREFIX.trim())
+    // It lands inside rule 8's paragraph, not after the session-rules wrapper.
+    expect(out.indexOf(SUMMARIZED_RELAY_PREFIX.trim())).toBeLessThan(
+      out.indexOf('</cc_automode_session_rules>'),
+    )
   })
 
   test('carries every shipped rule when the user configured nothing', () => {
@@ -193,6 +205,9 @@ describe('assembleUpstreamSystemPrompt', () => {
       createHash('sha256')
         .update(out)
         .digest('hex'),
-    ).toBe('910bae0fcd640e212d71572bb9ed2737ddc84c86e8daaf027fbdf1497d113598')
+    // Pinned over the assembled prompt, which now includes the fork-local
+    // <cross_session_messages_rule> text. Re-pin only for a deliberate wording
+    // change; an unexplained move means the vendored template drifted.
+    ).toBe('2361b9f5d022c91a8c21942f4ea70e27ba08dcb11ae056aa20f96d9f3479f570')
   })
 })

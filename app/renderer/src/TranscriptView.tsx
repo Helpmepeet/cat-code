@@ -2063,6 +2063,85 @@ const STATE_STYLE: Record<
   },
 }
 
+/**
+ * How much of a peer argument the one-line slot is allowed to carry.
+ *
+ * The slot itself is a single truncated line, so CSS already cuts anything too
+ * wide for the window. This cap is about the string, not the pixels: a peer
+ * message is capped at `MAX_PEER_TEXT_BYTES`, not at a headline length, so a
+ * whole essay would otherwise be collapsed onto one line and handed to the DOM
+ * for every card on screen.
+ */
+const PEER_TARGET_MAX_CHARS = 160
+
+/**
+ * One line of a peer argument, whitespace collapsed so a multi-line body reads
+ * as a sentence rather than as its first word. The marker is added ONLY when
+ * this cut something, so a short message is never made to look abridged.
+ */
+function peerTargetFragment(value: string): string {
+  const oneLine = value.replace(/\s+/g, ' ').trim()
+  return oneLine.length > PEER_TARGET_MAX_CHARS
+    ? `${oneLine.slice(0, PEER_TARGET_MAX_CHARS)}…`
+    : oneLine
+}
+
+/**
+ * The peer tools, keyed by NAME rather than by family.
+ *
+ * They have no family of their own, so they arrive here as `other` and the
+ * switch below would print the tool's own name into the slot where Bash puts
+ * its command: the operator saw a bare `SendToPeer` and had to open the card to
+ * learn anything. Giving them a family instead would change the card's mark,
+ * word and hue, which is a redesign this is not.
+ *
+ * The grammar is the one `agent-control` already uses, extended by what the
+ * call is about: verb, who, then the words that say which call this is. Every
+ * value comes from `row.input`, which is what THIS session sent, so no text
+ * from another session reaches the header on any of these paths.
+ */
+function derivePeerTarget(
+  toolName: string,
+  str: (key: string) => string | null,
+): string | null {
+  switch (toolName) {
+    // `SEND_TO_PEER_TOOL_NAME`/`READ_PEER_TOOL_NAME`/`CREATE_PEER_TOOL_NAME`
+    // (`app/sidecar/sendToPeerTool.ts:48`, `readPeerTool.ts:71`,
+    // `createPeerTool.ts:36`); the argument keys are those files' own schemas.
+    case 'SendToPeer': {
+      const to = str('to')
+      if (to === null) return null
+      const text = str('text')
+      return text === null
+        ? `message ${to}`
+        : `message ${to}: ${peerTargetFragment(text)}`
+    }
+    case 'ReadPeer': {
+      const peer = str('peer')
+      if (peer === null) return null
+      // Only a SEARCH has words worth showing, and a query is now the whole of
+      // what makes a read one: with it, only the turns containing it come back;
+      // without it, the most recent turns do. A whitespace-only query is
+      // absent to the tool, so it is absent here too.
+      const query = str('query')?.trim() || null
+      return query === null
+        ? `read ${peer}`
+        : `read ${peer}: ${peerTargetFragment(query)}`
+    }
+    case 'CreatePeer': {
+      // No name to show: the peer is named by main and the name comes back in
+      // the result, so at this point the instruction is all there is.
+      const prompt = str('prompt')
+      return prompt === null ? null : `new session: ${peerTargetFragment(prompt)}`
+    }
+    // `ListPeers` takes one optional `all`, which only widens how much of the
+    // roster is rendered, so there is nothing here the tool's own name does not
+    // already say.
+    default:
+      return null
+  }
+}
+
 /** Family-specific one-line target framing derived from the REAL tool input. */
 function deriveTarget(
   row: ToolUseNestedRow,
@@ -2073,6 +2152,8 @@ function deriveTarget(
     const value = input[key]
     return typeof value === 'string' && value.length > 0 ? value : null
   }
+  const peerTarget = derivePeerTarget(row.toolName, str)
+  if (peerTarget !== null) return peerTarget
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
@@ -5118,6 +5199,7 @@ function SystemNoticeBox({
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
+    | 'provider_error'
   content: string
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
@@ -5136,12 +5218,14 @@ function SystemNoticeBox({
 const NOTICE_STYLE: Record<
   | 'api_retry'
   | 'local_command_output'
-  | 'account_diagnostic',
+  | 'account_diagnostic'
+  | 'provider_error',
   { glyph: string; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
+  provider_error: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
 

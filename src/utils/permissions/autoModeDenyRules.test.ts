@@ -184,12 +184,11 @@ describe('buildSettingsDenyRulesMessage', () => {
 
 /**
  * G3's mandated live-path coverage: the prefix the classifier request actually
- * carries, with the deny-rule branch forced on.
+ * carries.
  *
- * Feature gates compile to `false` under `bun test`, so without the injectable
- * flag this branch is unexecutable and the only available assertion would be
- * against source text — the class of test that twice failed to notice a
- * malformed prompt and an inverted effort setting.
+ * Asserting against the assembled prefix rather than against source text is
+ * the point — source-text assertions twice failed to notice a malformed prompt
+ * and an inverted effort setting.
  */
 describe('buildAutoModeRequestPrefix (live path)', () => {
   const originalApiKey = process.env.ANTHROPIC_API_KEY
@@ -204,23 +203,12 @@ describe('buildAutoModeRequestPrefix (live path)', () => {
   const textOf = (m: { content: unknown }): string =>
     (m.content as { text: string }[])[0]!.text
 
-  test('omits the deny block entirely when the port is off', () => {
-    const prefix = buildAutoModeRequestPrefix(
-      contextWith({ userSettings: ['Edit(a.ts)'] }),
-      false,
-    )
-    expect(prefix.every(m => !textOf(m).includes('<settings_deny_rules>'))).toBe(
-      true,
-    )
-  })
-
   test('a Write denial reaches the classifier so a Bash redirection route can be caught', () => {
     // The permission system already blocks the direct Write. This seam is the
     // only thing that can catch `echo … > src/secrets.ts` achieving the same
     // effect, and it can only do that if the rule is in the request.
     const prefix = buildAutoModeRequestPrefix(
       contextWith({ userSettings: ['Write(src/secrets.ts)'] }),
-      true,
     )
     const deny = prefix.find(m => textOf(m).includes('<settings_deny_rules>'))!
     expect(deny).toBeDefined()
@@ -231,7 +219,6 @@ describe('buildAutoModeRequestPrefix (live path)', () => {
   test('a Bash denial reaches the classifier so a scripting-tool route can be caught', () => {
     const prefix = buildAutoModeRequestPrefix(
       contextWith({ userSettings: ['Bash(curl:*)'] }),
-      true,
     )
     const deny = prefix.find(m => textOf(m).includes('<settings_deny_rules>'))!
     expect(textOf(deny)).toContain('Bash(curl:*)')
@@ -242,7 +229,6 @@ describe('buildAutoModeRequestPrefix (live path)', () => {
     // within the prefix is what decides whether the rules precede the action.
     const prefix = buildAutoModeRequestPrefix(
       contextWith({ userSettings: ['Write(src/secrets.ts)'] }),
-      true,
     )
     const denyIndex = prefix.findIndex(m =>
       textOf(m).includes('<settings_deny_rules>'),

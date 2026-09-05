@@ -10,7 +10,10 @@ import {
   projectContextBreakdown,
   type ContextBreakdownInput,
 } from './contextBreakdownDomain.js'
-import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
+import {
+  buildDesktopSystemPrompt,
+  DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+} from './desktopSystemPrompt.js'
 import type { ContextBreakdownSnapshot } from '../shared/protocol.js'
 
 /**
@@ -180,24 +183,45 @@ mock.module('../../src/utils/analyzeContext.js', () => ({
   },
 }))
 
-describe('createRealContextBreakdownExecutor — desktop system-prompt addendum', () => {
-  test('feeds the desktop appendSystemPrompt addendum into analyzeContextUsage, so countSystemTokens measures it', async () => {
-    capturedToolUseContext = undefined
-    const executor = createRealContextBreakdownExecutor({
-      tools: [] as unknown as Tools,
-      agentDefinitions: { activeAgents: [], allAgents: [] } as AgentDefinitionsResult,
-      getToolPermissionContext: () => getDefaultAppState().toolPermissionContext,
-      getMainLoopModel: () => 'gpt-5.6-luna',
-    })
+describe('createRealContextBreakdownExecutor — desktop system prompt', () => {
+  // The breakdown must measure the WHOLE assembled prompt the controller hands
+  // the QueryEngine, not one clause of it. Both sides are derived from
+  // `buildDesktopSystemPrompt` here, so this cannot pass while they drift; the
+  // addendum comparison below is what proves the assembled prompt is strictly
+  // larger, i.e. that the equality above is not two names for one constant.
+  test('feeds the same assembled desktop prompt the controller does, peer doctrine included', async () => {
+    const priorName = process.env.CATCODE_SIDECAR_NAME
+    const priorCreatedBy = process.env.CATCODE_SIDECAR_CREATED_BY_NAME
+    process.env.CATCODE_SIDECAR_NAME = 'Amber'
+    process.env.CATCODE_SIDECAR_CREATED_BY_NAME = 'Basalt'
+    try {
+      capturedToolUseContext = undefined
+      const executor = createRealContextBreakdownExecutor({
+        tools: [] as unknown as Tools,
+        agentDefinitions: { activeAgents: [], allAgents: [] } as AgentDefinitionsResult,
+        getToolPermissionContext: () => getDefaultAppState().toolPermissionContext,
+        getMainLoopModel: () => 'gpt-5.6-luna',
+      })
 
-    const result = await executor.analyze()
+      const result = await executor.analyze()
 
-    expect(result).not.toBeNull()
-    const toolUseContext = capturedToolUseContext as
-      | Pick<ToolUseContext, 'options'>
-      | undefined
-    expect(toolUseContext?.options.appendSystemPrompt).toBe(
-      DESKTOP_SYSTEM_PROMPT_ADDENDUM,
-    )
+      expect(result).not.toBeNull()
+      const toolUseContext = capturedToolUseContext as
+        | Pick<ToolUseContext, 'options'>
+        | undefined
+      const measured = toolUseContext?.options.appendSystemPrompt
+      const assembled = buildDesktopSystemPrompt()
+      expect(measured).toBe(assembled)
+      expect(assembled.length).toBeGreaterThan(
+        DESKTOP_SYSTEM_PROMPT_ADDENDUM.length,
+      )
+      expect(measured).toContain('You are Amber.')
+      expect(measured).toContain('Basalt created you.')
+    } finally {
+      if (priorName === undefined) delete process.env.CATCODE_SIDECAR_NAME
+      else process.env.CATCODE_SIDECAR_NAME = priorName
+      if (priorCreatedBy === undefined) delete process.env.CATCODE_SIDECAR_CREATED_BY_NAME
+      else process.env.CATCODE_SIDECAR_CREATED_BY_NAME = priorCreatedBy
+    }
   })
 })

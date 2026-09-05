@@ -5,7 +5,7 @@ import { prepareHumanPromptAgainstDeferredContinuation, takeDeferredContinuation
 import { logEvent } from 'src/services/analytics/index.js'
 import type { AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS } from 'src/services/analytics/metadata.js'
 import { type Command, getCommandName, isCommandEnabled, meetsAvailabilityRequirement } from '../commands.js'
-import { selectableUserMessagesFilter } from '../components/MessageSelector.js'
+import { replayableUserMessagesFilter } from '../components/MessageSelector.js'
 import type { SpinnerMode } from '../components/Spinner/types.js'
 import type { QuerySource } from '../constants/querySource.js'
 import { expandPastedTextRefs, parseReferences } from '../history.js'
@@ -611,7 +611,7 @@ async function executeUserInput(params: ExecuteUserInputParams): Promise<void> {
       queryCheckpoint('query_process_user_input_end')
       if (fileHistoryEnabled()) {
         queryCheckpoint('query_file_history_snapshot_start')
-        newMessages.filter(selectableUserMessagesFilter).forEach(message => {
+        newMessages.filter(replayableUserMessagesFilter).forEach(message => {
           void fileHistoryMakeSnapshot(
             (updater: (prev: FileHistoryState) => FileHistoryState) => {
               setAppState(prev => ({

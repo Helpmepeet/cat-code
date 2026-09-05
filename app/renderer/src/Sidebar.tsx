@@ -129,6 +129,7 @@ import {
   deriveMergedRowVisual,
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
+  reorderDragHandlers,
   resolveNavSelection,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
@@ -136,6 +137,7 @@ import {
   shouldShowSidebarGroupExpansionToggle,
   sidebarActivityKey,
   sortSidebarSessionRows,
+  type ReorderDrag,
 } from './sidebarState.js'
 import {
   createPinnedSessions,
@@ -171,6 +173,10 @@ import {
   writeSidebarWidthToStorage,
 } from './sidebarWidth.js'
 import {
+  defaultViewPreferenceStorage,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
+import {
   groupByWorkspace,
   type MergedSessionRow,
   type WorkspaceGroup,
@@ -191,23 +197,10 @@ const HIDE_DELAY = 200
  */
 const SIDEBAR_GROUP_ROW_LIMIT = 6
 
-type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
-
 /** The window's inner width, or 0 under SSR — the "no window to measure" input
  * `clampSidebarWidth` reads as "fixed bounds only". */
 function currentWindowWidth(): number {
   return typeof window === 'undefined' ? 0 : window.innerWidth
-}
-
-/** The renderer's own `localStorage`, or `null` under SSR / a locked-down
- * renderer — the `ReasoningLayoutProvider.tsx:26-33` helper, verbatim. */
-function defaultOrderStorage(): OrderStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -375,7 +368,7 @@ export function Sidebar({
   /** Where the operator's workspace order and pins are persisted. Injectable for
    * tests (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
    * renderer's own `localStorage`, and `null` disables persistence entirely. */
-  storage?: OrderStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
@@ -392,7 +385,8 @@ export function Sidebar({
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
-  const orderStore = storage === undefined ? defaultOrderStorage() : storage
+  const orderStore =
+    storage === undefined ? defaultViewPreferenceStorage() : storage
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     clampSidebarWidth(
       readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
@@ -415,16 +409,10 @@ export function Sidebar({
     name: string
     anchor: SessionActionsAnchor
   } | null>(null)
-  /** The in-flight header drag: the group being dragged and the one under the
-   * pointer. Only the indicator reads it; the order itself changes on drop. */
-  const [headerDrag, setHeaderDrag] = useState<{
-    from: string
-    over: string
-  } | null>(null)
-  /** The same, for a row being dragged within the Pinned section. */
-  const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
-    null,
-  )
+  /** The in-flight header drag, and the same for a row being dragged within the
+   * Pinned section (`sidebarState.ts` `ReorderDrag`). */
+  const [headerDrag, setHeaderDrag] = useState<ReorderDrag>(null)
+  const [pinDrag, setPinDrag] = useState<ReorderDrag>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -654,18 +642,7 @@ export function Sidebar({
   }
 
   const reorderHandlers: WorkspaceReorderHandlers = {
-    onDragStart: cwd => setHeaderDrag({ from: cwd, over: cwd }),
-    onDragOver: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over === cwd ? drag : { ...drag, over: cwd },
-      ),
-    // Park the indicator back on the dragged group itself (which draws none, a
-    // group cannot drop onto itself), so it is never left promising a landing
-    // spot the pointer has already left.
-    onDragLeave: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over !== cwd ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setHeaderDrag),
     onDrop: cwd => {
       if (headerDrag) {
         commitWorkspaceOrder(
@@ -680,7 +657,6 @@ export function Sidebar({
       }
       setHeaderDrag(null)
     },
-    onDragEnd: () => setHeaderDrag(null),
     onStep: (cwd, direction) => {
       const next = reduceWorkspaceOrderStepped(
         workspaceOrder,
@@ -700,15 +676,7 @@ export function Sidebar({
 
   const pinnedReorderHandlers: RowReorderHandlers = {
     mime: PINNED_SESSION_DRAG_MIME,
-    onDragStart: id => setPinDrag({ from: id, over: id }),
-    onDragOver: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over === id ? drag : { ...drag, over: id },
-      ),
-    onDragLeave: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over !== id ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setPinDrag),
     onDrop: id => {
       if (pinDrag) {
         commitPinnedSessions(
@@ -722,7 +690,6 @@ export function Sidebar({
       }
       setPinDrag(null)
     },
-    onDragEnd: () => setPinDrag(null),
     onStep: (id, direction) => {
       const next = reducePinnedSessionsStepped(
         pinnedSessions,

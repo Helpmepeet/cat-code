@@ -24,10 +24,9 @@ import {
 import { logForDebugging } from '../../utils/debug.js'
 import { clearCodexOAuthTokens, getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
-import { getErrnoCode } from '../../utils/errors.js'
 import { resetUserCache } from '../../utils/user.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
-import { lockSync } from '../../utils/lockfile.js'
+import { acquireMutationLockSync } from '../../utils/lockfile.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -97,42 +96,10 @@ const CODEX_NOOTP_CONFIG = join(homedir(), '.codex-nootp', 'config.toml')
 const VAULT_LOCK_WAIT_MS = 10_000
 
 function acquireVaultMutationLockSync(filePath: string): () => void {
-  const deadline = Date.now() + VAULT_LOCK_WAIT_MS
-  for (;;) {
-    try {
-      const release = lockSync(filePath, {
-        realpath: false,
-        stale: 120_000,
-        update: 30_000,
-        onCompromised: error => {
-          logForDebugging(
-            `[codex-pool] Vault lock compromised: ${error.message}`,
-            { level: 'error' },
-          )
-        },
-      })
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        try {
-          release()
-        } catch (error) {
-          if (getErrnoCode(error) !== 'ERELEASED') throw error
-        }
-      }
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !('code' in error) ||
-        error.code !== 'ELOCKED' ||
-        Date.now() >= deadline
-      ) {
-        throw error
-      }
-      Bun.sleepSync(20)
-    }
-  }
+  return acquireMutationLockSync(filePath, {
+    label: '[codex-pool] Vault',
+    waitMs: VAULT_LOCK_WAIT_MS,
+  })
 }
 
 // ── Singleton state ────────────────────────────────────────────────────────

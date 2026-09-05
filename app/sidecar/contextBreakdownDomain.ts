@@ -41,7 +41,7 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import { getMessagesAfterCompactBoundary } from '../../src/utils/messages.js'
 import { microcompactMessages } from '../../src/services/compact/microCompact.js'
-import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
+import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
 
 /**
  * Categories `analyzeContextUsage` appends that describe UNUSED window rather
@@ -86,7 +86,7 @@ export function createRealContextBreakdownExecutor(deps: {
       // fire-once `suppressNextSkillListing` latch, and copies plan + file history
       // to disk (`src/utils/conversationRecovery.ts:603-626`). Firing those from a
       // read-only popover in the LIVE process would change what the model sees.
-      // `transcriptBackfillWorker.ts:39-42` sets `CLAUDE_CODE_SIMPLE=1` purely to
+      // `transcriptBackfillWorker.ts:46-50` sets `CLAUDE_CODE_SIMPLE=1` purely to
       // neuter the hook branch for this same call; the live sidecar is not bare,
       // so that mitigation is unavailable here. These three are the loader half of
       // that function's own string-source branch (`:578-590`), with none of the tail.
@@ -117,17 +117,20 @@ export function createRealContextBreakdownExecutor(deps: {
         // declares the full `Pick<ToolUseContext, 'options'>`
         // (`context-noninteractive.ts:73` stubs the same three for the same
         // reason). `mcpClients` stays `[]` and there is still no
-        // `customSystemPrompt` in the sidecar's engine config
-        // (`sessionController.ts:346`), but `appendSystemPrompt` is no longer
-        // empty: `sessionController.ts:414` sets it to
-        // `DESKTOP_SYSTEM_PROMPT_ADDENDUM`, and `analyzeContext.ts:1071` feeds
-        // it into `buildEffectiveSystemPrompt`, whose output is what
-        // `countSystemTokens` measures. Passing `undefined` here would
-        // undercount system tokens by the addendum's length.
+        // `customSystemPrompt` in the sidecar's engine config, but
+        // `appendSystemPrompt` is not empty: the controller sets it to
+        // `buildDesktopSystemPrompt()` (`sessionController.ts`), and
+        // `analyzeContext.ts:1071` feeds it into `buildEffectiveSystemPrompt`,
+        // whose output is what `countSystemTokens` measures. This calls that
+        // same builder rather than restating part of it: naming the addendum
+        // alone was a second expression of the prompt, and it drifted the moment
+        // the peer doctrine was appended, reporting 275 of 1254 characters for a
+        // named session with a creator. Anything less than the assembled prompt
+        // undercounts system tokens by exactly what it leaves out.
         {
           options: {
             mcpClients: [],
-            appendSystemPrompt: DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+            appendSystemPrompt: buildDesktopSystemPrompt(),
           },
         } as unknown as Pick<ToolUseContext, 'options'>,
         undefined, // mainThreadAgentDefinition

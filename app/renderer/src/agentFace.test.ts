@@ -65,6 +65,11 @@ function silhouette(axes: FaceAxes): string {
   return JSON.stringify(faceRects(axes))
 }
 
+/** The seven axes as one readable line, for pinning a face by value. */
+function axesKeyOf(axes: FaceAxes): string {
+  return `${axes.ear}|${axes.fill}|${axes.width}|${axes.chin}|${axes.mouth}|${axes.mark}|${axes.head}`
+}
+
 /** The identity draw as one cell per byte, so two faces can be compared by distance. */
 function maskOf(axes: FaceAxes): Uint8Array {
   const mask = new Uint8Array(81)
@@ -257,6 +262,45 @@ describe('telling two workers apart', () => {
       const key = silhouette(registry.faceFor(`crowd-${index}`).axes)
       expect(seen.has(key)).toBe(false)
       seen.add(key)
+    }
+  })
+
+  test('the dedupe walk hands out the same faces it always has', () => {
+    // Every property above is satisfied by MANY different assignments, so none of
+    // them notices the dedupe ladder being re-ordered or an axis rotating through
+    // a different value list. This pins the answers themselves: one registry, one
+    // fixed registration order, and the face each of these names ends up wearing.
+    // The picks span the whole ladder — `deckard` and `worker-20` move on mouth,
+    // `worker-7`/`worker-13`/`worker-25` on chin, `worker-35`/`worker-47` on
+    // width, `worker-40`/`worker-58` on ear, `worker-59` on fill — plus `Wren`
+    // and `Ledger`, which the walk never touches, as controls.
+    const PINNED: Record<string, [string, number]> = {
+      Wren: ['tuft|notch|wide|fringe|smile|brow|square', 4],
+      Ledger: ['tall|deep|narrow|round|slit|brow|rounded', 0],
+      deckard: ['pointy|solid|wide|flat|none|temple|square', 3],
+      'worker-6': ['tall|notch|narrow|round|smile|cheek|rounded', 2],
+      'worker-7': ['pointy|solid|wide|round|smile|brow|square', 1],
+      'worker-13': ['pointy|solid|narrow|fringe|slit|chindot|rounded', 2],
+      'worker-20': ['folded|deep|narrow|round|none|none|rounded', 8],
+      'worker-25': ['folded|deep|wide|pointed|none|chindot|square', 1],
+      'worker-35': ['tall|solid|wide|pointed|slit|none|rounded', 2],
+      'worker-40': ['outer|deep|narrow|pointed|slit|cheek|rounded', 8],
+      'worker-47': ['folded|solid|narrow|fringe|none|none|square', 3],
+      'worker-58': ['pointy|deep|wide|fringe|none|chindot|square', 5],
+      'worker-59': ['outer|deep|narrow|round|omega|none|rounded', 6],
+    }
+    const order = [
+      'scout', 'deckard', 'Wren', 'Ledger', 'Beacon', 'Drift', 'Quill', 'Ash', 'Nim', 'Odo',
+      ...Array.from({ length: 60 }, (_unused, index) => `worker-${index}`),
+    ]
+    const registry = createAgentFaceRegistry()
+    const drawn = new Map<string, [string, number]>()
+    for (const name of order) {
+      const identity = registry.faceFor(name)
+      drawn.set(name, [axesKeyOf(identity.axes), identity.fill])
+    }
+    for (const [name, expected] of Object.entries(PINNED)) {
+      expect(drawn.get(name)).toEqual(expected)
     }
   })
 })

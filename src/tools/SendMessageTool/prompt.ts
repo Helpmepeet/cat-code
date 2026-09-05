@@ -7,6 +7,12 @@ export const DESCRIPTION = 'Send a message to another agent'
 
 export function getPrompt(): string {
   if (!isAgentSwarmsEnabled()) {
+    // Cross-session targets are gated by UDS_INBOX, not by Agent Teams, and
+    // UDS_INBOX is not in the build list — so without this guard the list
+    // promised a capability that turning teams on does not provide.
+    const crossSessionRow = feature('UDS_INBOX')
+      ? '\n- cross-session UDS or bridge messages'
+      : ''
     return `
 # SendMessage
 
@@ -27,8 +33,7 @@ Requires Agent Teams:
 
 - broadcast with \`"*"\`
 - teammate mailbox fallback by arbitrary teammate name
-- structured protocol messages
-- cross-session UDS or bridge messages
+- structured protocol messages${crossSessionRow}
 `.trim()
   }
 

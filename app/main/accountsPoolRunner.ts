@@ -1,5 +1,5 @@
 /**
- * Main-owned accounts-pool worker runner + interval driver (accounts owner —
+ * Main-owned accounts-pool worker runner (accounts owner —
  * `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`). This module contains no
  * Electron imports and is unit-testable. It is the accounts sibling of
  * `sessionsCatalogRunner`: it spawns exactly ONE serialized engine-graph worker,
@@ -8,21 +8,14 @@
  * Ordinary runs deliver a pool snapshot; the explicit one-shot delete mode writes
  * one validated request to stdin and delivers its outcome plus the fresh pool.
  *
- * It is deliberately self-contained rather than importing the catalog runner's
- * driver: the two are siblings in the same way `runTranscriptBackfill` and the
- * catalog runner are siblings, and coupling the accounts poll to the catalog
- * module would make one surface's refactor silently break the other.
- *
- * The driver is single-flight + fixed-cadence, with the same reasoning the
- * catalog driver documents: it never spawns a second worker while one is in
- * flight, but anchors the next run to when the current one STARTED, so the
- * refresh period stays exactly `intervalMs` instead of growing with run
- * duration. A failed run keeps the last good pool: it simply does not call
+ * The spawn/framing/teardown mechanism lives in `ndjsonWorker.ts` and the
+ * refresh cadence in `singleFlightDriver.ts`; what stays here is the pool's own
+ * record policy. A failed run keeps the last good pool: it simply does not call
  * `onPool`, so main emits no host event and the renderer's retained snapshot
  * survives.
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { spawn } from 'node:child_process'
 
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type { AccountsSnapshot, UsageStatsByRange } from '../shared/protocol.js'
@@ -33,6 +26,7 @@ import {
   type AccountsPoolWorkerDeleteResult,
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
+import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 
 /**
  * Default cadence. Longer than the catalog's 30 s because usage headroom is
@@ -99,7 +93,13 @@ export function createAccountsPoolPublicationGate(): AccountsPoolPublicationGate
 export function runCarriesUsageStats(runIndex: number): boolean {
   return runIndex % USAGE_STATS_EVERY_N_RUNS === 0
 }
-const MAX_ACCOUNTS_STDERR_BYTES = 64 * 1024
+
+/**
+ * An unanswered SIGTERM becomes a SIGKILL after this long. Unique to this
+ * runner: a destructive account-delete worker must not outlive Electron
+ * teardown.
+ */
+const ACCOUNTS_FORCE_KILL_AFTER_MS = 2_000
 
 export type AccountsPoolRunOptions = {
   command: string
@@ -134,13 +134,6 @@ export type AccountsPoolRunOptions = {
   log?: (line: string) => void
 }
 
-export type WorkerProcessLifecycle = Readonly<{
-  phase: 'started' | 'exited'
-  pid: number
-  code?: number | null
-  signal?: NodeJS.Signals | null
-}>
-
 export type AccountsPoolRunOutcome = 'delivered' | 'failure' | 'empty'
 
 /**
@@ -153,166 +146,84 @@ export type AccountsPoolRunOutcome = 'delivered' | 'failure' | 'empty'
 export async function runAccountsPoolWorker(
   options: AccountsPoolRunOptions,
 ): Promise<AccountsPoolRunOutcome> {
-  const spawnWorker = options.spawnWorker ?? spawn
-  const child = spawnWorker(options.command, options.args, {
-    cwd: options.cwd,
-    env: {
-      ...process.env,
-      ...options.env,
-      // Defense in depth with the worker's own pre-import assignment + --bare
-      // argv: SessionStart hooks must stay suppressed even if one gate drifts.
-      CLAUDE_CODE_SIMPLE: '1',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }) as ChildProcessWithoutNullStreams
-  options.onWorkerLifecycle?.({ phase: 'started', pid: child.pid ?? 0 })
-
   let outcome: AccountsPoolRunOutcome = 'empty'
   let recordSeen = false
-  let pending = Buffer.alloc(0)
-  let stderr = Buffer.alloc(0)
-  let timedOut = false
-  let aborted = false
   let protocolError: string | null = null
-  let stdinError: unknown = null
   const accepted: { value: AccountsPoolWorkerResult | null } = {
     value: null,
   }
-  let childClosed = false
-  let forceKillTimer: ReturnType<typeof setTimeout> | null = null
 
-  const terminate = (force = false) => {
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill(force ? 'SIGKILL' : 'SIGTERM')
-    }
-    if (force) return
-    if (forceKillTimer === null) {
-      forceKillTimer = setTimeout(() => {
-        if (!childClosed) child.kill('SIGKILL')
-      }, 2_000)
-      forceKillTimer.unref?.()
-    }
-  }
-  const timeout = setTimeout(() => {
-    timedOut = true
-    terminate()
-  }, options.timeoutMs ?? ACCOUNTS_POOL_WORKER_TIMEOUT_MS)
-  const onAbort = () => {
-    aborted = true
-    terminate(options.forceKillOnAbort === true)
-  }
-  options.signal?.addEventListener('abort', onAbort, { once: true })
-
-  child.stderr.on('data', chunk => {
-    if (stderr.byteLength >= MAX_ACCOUNTS_STDERR_BYTES) return
-    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    stderr = Buffer.concat([
-      stderr,
-      next.subarray(0, MAX_ACCOUNTS_STDERR_BYTES - stderr.byteLength),
-    ])
-  })
-
-  child.stdout.on('data', chunk => {
-    if (protocolError) return
-    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    pending = Buffer.concat([pending, next])
-    while (true) {
-      const newline = pending.indexOf(0x0a)
-      if (newline < 0) break
-      const line = pending.subarray(0, newline)
-      pending = pending.subarray(newline + 1)
-      if (line.byteLength === 0) continue
-      if (line.byteLength > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
+  const { code, signal, aborted, timedOut, stdinError, trailingBytes } =
+    await runNdjsonWorker({
+      command: options.command,
+      args: options.args,
+      cwd: options.cwd,
+      env: options.env,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? ACCOUNTS_POOL_WORKER_TIMEOUT_MS,
+      spawnWorker: options.spawnWorker,
+      maxRecordBytes: MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
+      input: options.input ? `${JSON.stringify(options.input)}\n` : undefined,
+      forceKillOnAbort: options.forceKillOnAbort,
+      escalateKillAfterMs: ACCOUNTS_FORCE_KILL_AFTER_MS,
+      onWorkerLifecycle: options.onWorkerLifecycle,
+      log: options.log,
+      onOversizeRecord: () => {
         protocolError = 'accounts worker record exceeds size limit'
-        terminate()
-        return
-      }
-      if (recordSeen) {
-        // The worker emits EXACTLY one result record; a second is a protocol
-        // violation (fail closed, never silently accept extra output).
-        protocolError = 'accounts worker emitted more than one record'
-        terminate()
-        return
-      }
-      let raw: unknown
-      try {
-        raw = JSON.parse(line.toString('utf8'))
-      } catch {
-        protocolError = 'accounts worker record is not valid JSON'
-        terminate()
-        return
-      }
-      const result = parseAccountsPoolWorkerResult(raw)
-      if (!result || !scanForSecrets(result).ok) {
-        protocolError = 'accounts worker record failed validation'
-        terminate()
-        return
-      }
-      recordSeen = true
-      if (result.type === 'failure') {
+      },
+      onRecord: line => {
+        if (recordSeen) {
+          // The worker emits EXACTLY one result record; a second is a protocol
+          // violation (fail closed, never silently accept extra output).
+          protocolError = 'accounts worker emitted more than one record'
+          return 'stop'
+        }
+        let raw: unknown
+        try {
+          raw = JSON.parse(line.toString('utf8'))
+        } catch {
+          protocolError = 'accounts worker record is not valid JSON'
+          return 'stop'
+        }
+        const result = parseAccountsPoolWorkerResult(raw)
+        if (!result || !scanForSecrets(result).ok) {
+          protocolError = 'accounts worker record failed validation'
+          return 'stop'
+        }
+        recordSeen = true
+        if (result.type === 'failure') {
+          accepted.value = result
+          outcome = 'failure'
+          return 'continue'
+        }
+        if (result.type === 'account-delete') {
+          if (!options.input || !options.onAccountDelete) {
+            protocolError = 'unexpected accounts worker delete result'
+            return 'stop'
+          }
+          if (result.requestId !== options.input.verb.requestId) {
+            protocolError = 'accounts worker delete result requestId mismatch'
+            return 'stop'
+          }
+          if (
+            result.ok &&
+            result.pool.accounts.some(
+              account => account.id === options.input!.verb.accountId,
+            )
+          ) {
+            protocolError = 'accounts worker successful delete retained target account'
+            return 'stop'
+          }
+        } else if (options.input || !options.onPool) {
+          protocolError = 'unexpected accounts worker pool result'
+          return 'stop'
+        }
         accepted.value = result
-        outcome = 'failure'
-        continue
-      }
-      if (result.type === 'account-delete') {
-        if (!options.input || !options.onAccountDelete) {
-          protocolError = 'unexpected accounts worker delete result'
-          terminate()
-          return
-        }
-        if (result.requestId !== options.input.verb.requestId) {
-          protocolError = 'accounts worker delete result requestId mismatch'
-          terminate()
-          return
-        }
-        if (
-          result.ok &&
-          result.pool.accounts.some(
-            account => account.id === options.input!.verb.accountId,
-          )
-        ) {
-          protocolError = 'accounts worker successful delete retained target account'
-          terminate()
-          return
-        }
-      } else if (options.input || !options.onPool) {
-        protocolError = 'unexpected accounts worker pool result'
-        terminate()
-        return
-      }
-      accepted.value = result
-      outcome = 'delivered'
-    }
-    if (pending.byteLength > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
-      protocolError = 'accounts worker record exceeds size limit'
-      terminate()
-    }
-  })
+        outcome = 'delivered'
+        return 'continue'
+      },
+    })
 
-  const onStdinError = (error: unknown) => {
-    stdinError = error
-    terminate()
-  }
-  child.stdin.on('error', onStdinError)
-  const closed = waitForClose(child)
-  let code: number | null
-  let signal: NodeJS.Signals | null
-  try {
-    child.stdin.end(
-      options.input ? `${JSON.stringify(options.input)}\n` : undefined,
-    )
-    ;({ code, signal } = await closed)
-    childClosed = true
-    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
-  } finally {
-    clearTimeout(timeout)
-    if (forceKillTimer !== null) clearTimeout(forceKillTimer)
-    options.signal?.removeEventListener('abort', onAbort)
-    child.stdin.removeListener('error', onStdinError)
-  }
-
-  const diagnostics = stderr.toString('utf8').trim()
-  if (diagnostics) options.log?.(diagnostics)
   if (aborted) throw new Error('accounts worker aborted')
   if (timedOut) throw new Error('accounts worker timed out')
   if (stdinError !== null) {
@@ -324,7 +235,7 @@ export async function runAccountsPoolWorker(
       `accounts worker failed (code=${String(code)} signal=${String(signal)})`,
     )
   }
-  if (pending.byteLength !== 0 || !recordSeen) {
+  if (trailingBytes !== 0 || !recordSeen) {
     throw new Error('accounts worker ended without a valid result record')
   }
   const acceptedResult = accepted.value
@@ -345,144 +256,4 @@ export async function runAccountsPoolWorker(
     }
   }
   return outcome
-}
-
-function waitForClose(
-  child: ChildProcessWithoutNullStreams,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject)
-    // `close` (not `exit`) is the guarantee that stdio drained, so the final
-    // record cannot race completion validation.
-    child.once('close', (code, signal) => resolve({ code, signal }))
-  })
-}
-
-export type AccountsPoolDriver = {
-  /** Run once now (respecting single-flight), then keep refreshing on the timer. */
-  start(): void
-  /**
-   * Run out of band because a KNOWN pool mutation just landed, and re-anchor the
-   * cadence to it. Only for events that change the pool itself (a completed
-   * sign-in); the timer covers everything else, and calling this on renderer
-   * activity would turn a 60 s cadence into a per-interaction engine boot.
-   *
-   * WHY THIS EXISTS. The Accounts page and the account-health bar both read the
-   * host-plane pool (`selectGlobalAccountsSnapshot`, `accountsState.ts:261`),
-   * which prefers this worker's snapshot over any session's. A sidecar that
-   * re-broadcasts `accounts.snapshot` on OAuth success therefore cannot move
-   * either surface, so without this a finished sign-in left the dead row dead
-   * and the danger bar up for up to a full interval, which reads as the sign-in
-   * having failed.
-   */
-  refreshNow(): void
-  /** Stop the timer and prevent any further scheduled runs. */
-  stop(): void
-}
-
-/**
- * Single-flight, fixed-cadence driver. `run()` performs ONE pool run (spawn +
- * deliver). At most one run is ever in flight — the next is only SCHEDULED once
- * the current settles — while the next run is anchored to the current run's
- * START, so the period stays `intervalMs` rather than `intervalMs + runDuration`.
- * A run that overruns the interval schedules the next immediately (delay 0),
- * still serialized behind the in-flight guard. A rejected `run()` is logged and
- * swallowed: the timer keeps ticking and the renderer keeps its last good pool.
- */
-export function createAccountsPoolDriver(deps: {
-  run: () => Promise<unknown>
-  intervalMs?: number
-  log?: (line: string) => void
-  setTimer?: (cb: () => void, ms: number) => ReturnType<typeof setTimeout>
-  clearTimer?: (handle: ReturnType<typeof setTimeout>) => void
-  /** Injected only so tests can drive the cadence math on a virtual clock. */
-  now?: () => number
-}): AccountsPoolDriver {
-  const intervalMs = deps.intervalMs ?? ACCOUNTS_POOL_REFRESH_INTERVAL_MS
-  const setTimer = deps.setTimer ?? ((cb, ms) => setTimeout(cb, ms))
-  const clearTimer = deps.clearTimer ?? (handle => clearTimeout(handle))
-  const now = deps.now ?? (() => Date.now())
-
-  let inFlight = false
-  let stopped = false
-  let timer: ReturnType<typeof setTimeout> | null = null
-  /**
-   * An out-of-band refresh that arrived mid-run. The in-flight run started
-   * BEFORE the mutation it is meant to observe, so finishing it proves nothing
-   * and dropping the request the way an ordinary tick is dropped would put the
-   * caller back on the full interval. One re-run is enough however many arrive.
-   */
-  let rerunRequested = false
-
-  const clearPendingTimer = () => {
-    if (timer !== null) {
-      clearTimer(timer)
-      timer = null
-    }
-  }
-
-  const schedule = (startedAt: number) => {
-    if (stopped) return
-    // The invariant belongs to the function that arms the timer, not to its
-    // callers: assigning over a live handle leaves the old one armed and forks a
-    // second self-rescheduling chain, permanently doubling the worker spawn rate.
-    clearPendingTimer()
-    const delay = Math.max(0, intervalMs - (now() - startedAt))
-    timer = setTimer(() => {
-      timer = null
-      void tick()
-    }, delay)
-    timer.unref?.()
-  }
-
-  const tick = async () => {
-    // Single-flight: never a second worker while one is in flight. A tick that
-    // arrives mid-run is dropped; the running tick reschedules on completion.
-    if (inFlight || stopped) return
-    inFlight = true
-    const startedAt = now()
-    try {
-      await deps.run()
-    } catch (error) {
-      deps.log?.(
-        `[accounts-runner] refresh failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      )
-    } finally {
-      inFlight = false
-      if (rerunRequested && !stopped) {
-        rerunRequested = false
-        void tick()
-      } else {
-        schedule(startedAt)
-      }
-    }
-  }
-
-  return {
-    start() {
-      if (stopped) return
-      // Trigger one run immediately (cold launch: the page must not sit empty),
-      // then self-reschedule from its completion.
-      void tick()
-    },
-    refreshNow() {
-      if (stopped) return
-      if (inFlight) {
-        rerunRequested = true
-        return
-      }
-      // `schedule()` clears the handle itself, so this is not what keeps the
-      // chain single. It saves the pending callback from firing a tick that the
-      // in-flight guard would drop anyway, one interval from now.
-      clearPendingTimer()
-      void tick()
-    },
-    stop() {
-      rerunRequested = false
-      stopped = true
-      clearPendingTimer()
-    },
-  }
 }

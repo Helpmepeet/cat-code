@@ -176,7 +176,10 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 1. Main resolves `to` (a name) against the registry, HR3-scoped. No row →
    `session_not_found`.
 2. Main builds the inbound `peer.deliver` frame: `{ from: <requester name>,
-   fromSessionId, messageId, text, hops: [...appSessionIds] }`. **The sidecar
+   fromSessionId, messageId, text }`. 🔁 The frame carried a `hops` array until
+   2026-09-03; it was required, validated at the sidecar and read by nothing, so
+   the chain is now entirely main-side and the inbound surface is that much
+   smaller (HR5). **The sidecar
    never sends a chain, and there is no `replyTo`:** main keeps, per
    `(from, to)` pair, the chain of the last message it delivered in that
    direction, for `PEER_CHAIN_WINDOW_MS` (PEER-SESSIONS §7). A send inherits
@@ -190,6 +193,36 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    (`hop_runaway`). A self-send is a loop of one. With one trusted router
    deriving the chain there is no need for the upstream blinded-token variant,
    and a compromised sidecar cannot shorten a chain it never held.
+
+   **🔁 AMENDED AGAIN 2026-09-03: how the chain is KEYED, which the first
+   amendment did not settle.** The chain was keyed by recipient alone, so a
+   session had ONE chain shared across every conversation it was in. Two
+   exploits followed, both demonstrated by execution rather than argued: any
+   third peer sending one message reset an ongoing pair's hop counter, so
+   `hop_runaway` was escapable on demand and forever; and a refused hop wrote
+   its chain onto an uninvolved session's key, refusing that session's next
+   send for the whole window, which a prompt-injected peer triggers with one
+   message it never needs delivered.
+
+   Strict ordered-pair keying was proposed as the fix and is WRONG, recorded
+   here because it is the obvious repair and it silently removes ring
+   detection. In a ring `A→B→C→A` no pair is ever bidirectional, so the record
+   for the direction being sent is never populated, every hop inherits an empty
+   chain, `hops` stays length one forever, and BOTH guards become unreachable
+   — leaving only the token bucket, which is a rate limit and not a stop.
+
+   What ships: records are kept per `(recipient, sender)` pair, and a send
+   inherits the LONGEST non-expired chain among the records delivering to the
+   requester, while a REFUSAL record is inherited only by its own pair. That
+   split is the whole point. Cross-pair inheritance is what makes a ring
+   visible; ambient cross-pair WRITES are what made the two exploits possible.
+   A third party's short chain cannot beat a live long one because inheritance
+   is longest rather than most recent, and a refusal is evidence about one pair
+   only. Accepted cost: a ring is refused at the same edge on every lap rather
+   than being killed outright, because the refusing record is pair-local.
+   Killing it outright requires refusals to be visible across pairs, which is
+   the second exploit. A throttled ring was taken over an uninvolved session
+   being silenced by a message nobody delivered.
 
    **🔁 AMENDED 2026-09-03 during the build.** The original sentence read
    "rejects a send whose chain already contains the recipient", with no
@@ -233,8 +266,12 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    creation prompt: the sidecar passes `generateTitle: true` for a
    `peer`-origin request on a session whose title is unset, so a created peer
    gets a title from its first turn like any session.
-4a. **DEFERRED (cut in PEER-SESSIONS §0a; kept as the verified sketch for a
-   turn-free `notify` kind if it is ever wanted).** Recipient live, `kind:
+4a. **PARTLY DEFERRED. 🔁 Read this before filing `activity` as out of scope:**
+   the `notify` kind and its held-notice machinery were cut (PEER-SESSIONS
+   §0a) and the sketch below is kept only in case a turn-free kind is ever
+   wanted, but the **`activity` frame described near the end of this step
+   SURVIVED the cut and is built** — §0a keeps it in, and presence in
+   `peers.list` depends on it. Everything about `notify` below is DEFERRED.** Recipient live, `kind:
    'notify'`: **the engine queue cannot carry a turn-free message.** The sidecar's boundary drains ignore priority and start
    a turn for anything they dequeue (`isDeliverableParentPrompt` /
    `isDeliverableParentTaskNotification`, `sidecarServer.ts:5285-5296`; the
@@ -291,7 +328,10 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 6. The `host.result` reports what happened: `queued_live`, `queued_wake`,
    `refused:<reason>` (reasons include
    `user_stopped`, `hop_loop`, `hop_runaway`, `rate`, `duplicate`,
-   `queue_full`, `wake_failed`), plus the main-minted `messageId`. The sending
+   `queue_full`, `wake_failed`, and 🔁 `delivery_failed`, ADDED 2026-09-03
+   during the build: the recipient was already AWAKE and the hand-off to its
+   process failed anyway, which `wake_failed` misreported as a peer that could
+   not be brought back), plus the main-minted `messageId`. The sending
    model sees this in its tool result, so it never reasons from a false
    belief that a peer heard it. **Ack = enqueued.** The recipient sidecar
    acks a `messageId` when it has enqueued it into the engine command queue.
@@ -309,7 +349,10 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 
 | plane | change |
 |---|---|
-| `app/shared/protocol.ts` | outbound: `HostRequestFrame`, `ActivityFrame` in `ServerFramePayload` (`activity` is `sticky` in `FRAME_RETENTION`, `replayBuffer.ts:146`); inbound: `HostResultFrame` + `PeerDeliverFrame`; doc comments cite this file. No version bump (additive). |
+| `app/shared/protocol.ts` | outbound: `HostRequestFrame`, `ActivityFrame` in `ServerFramePayload` (`activity` is `sticky` in `FRAME_RETENTION`, `replayBuffer.ts:146`); inbound: `HostResultFrame` + `PeerDeliverFrame` (🔁 built as
+`HostResultMessage` / `PeerDeliverMessage`, which is the more correct name:
+they are `SidecarClientMessage` variants, not frames, and the envelope is
+added by `supervisor.send`); doc comments cite this file. No version bump (additive). |
 | `app/supervisor/supervisor.ts` | decode `host.request` like any outbound frame; no routing change (identity by `record.sessionId`); five additive spawn-env keys `CATCODE_SIDECAR_NAME`, `CATCODE_SIDECAR_CREATED_BY` (id), `CATCODE_SIDECAR_CREATED_BY_NAME`, `CATCODE_SIDECAR_MODEL`, `CATCODE_SIDECAR_EFFORT` beside `CATCODE_SIDECAR_CWD` (`:355-359`), threaded through the per-spawn `SpawnConfig` (`:138`). |
 | `app/main/main.ts` / `mainDecisions.ts` | Electron-free handler: verb allowlist + schema + size/rate (HR1) + HR3 scoping + channel guards, calling `Host` methods; result forwarded through the existing `forward(sessionId, …)`; per-row presence from `activity`; per-pair last chain inside the window; the pending store (messages not yet acked, delivered after the row's next `ready`); the deliver-after-ready state machine (§4 step 5). All in-memory: they die with the window like everything else (SESSION-LIFETIME L1) and are cleared on reap. |
 | `app/host/host.ts`, `app/host/registry.ts`, new `app/host/peerNames.ts` | additive row fields `name`, `createdBy` (an `appSessionId`), `peerWakeBlocked` (boolean, default false, additive parse/merge like `forked`; survives close, park, restore and relaunch; disappears with the row on reap); the spawn path accepts `name`/`createdBy` and allocates `name` when a reused row lacks one; the churn rule (HR4); the name picker (PEER-SESSIONS §2). `SessionDescriptor` (`hostApi.ts:79`) gains `name` and `peerWakeBlocked` so the sidebar row and its menu render from state, not from a write-only toggle. |

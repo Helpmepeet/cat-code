@@ -18,6 +18,8 @@ import {
   WORKSPACE_ORDER_DRAG_MIME,
   type WorkspaceDropEdge,
 } from './sidebarWorkspaceOrder.js'
+/** A seeded storage stub, so a pin exists before the first render. */
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
 // SESSIONS-UNIFICATION). It collapses to the rail by default under
@@ -582,15 +584,6 @@ test('the expanded sidebar exposes separate collapse and resize controls', () =>
  * `renderToStaticMarkup`). Ordering/pin LOGIC is proven in
  * `sidebarPinnedSessions.test.ts`; what follows is the DOM wiring over it.
  * --------------------------------------------------------------------------- */
-
-/** A seeded storage stub, so a pin exists before the first render. */
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
 
 function pinning(...sessionIds: string[]) {
   return storage({

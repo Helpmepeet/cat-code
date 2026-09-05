@@ -25,6 +25,7 @@ import {
   type DonutView,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
+import { ActionWarningIcon } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
 import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
 import type {
@@ -909,7 +910,7 @@ export function ContextUsagePanel({
             title="Clear conversation history but keep a summary in context"
             className={`flex w-full items-center gap-2 border-t px-3.5 py-[9px] text-left text-[11.5px] font-medium transition-colors ${t.text} ${t.softBorder} ${ESCALATED_ACTION_TINT[escalated]}`}
           >
-            <WarningTriangle size={12} />
+            <ActionWarningIcon size={12} />
             <span className="flex-1">Running low, compact now</span>
           </button>
         )
@@ -938,28 +939,6 @@ function CompactIcon() {
       <path d="M20 10h-6V4" />
       <path d="M14 10l7-7" />
       <path d="M3 21l7-7" />
-    </svg>
-  )
-}
-
-/** The warning triangle, at the two sizes the prototype draws it (Surfaces.jsx:436
- * face 14px, `:452` popover header 13px). */
-function WarningTriangle({ size }: { size: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   )
 }
@@ -1008,7 +987,7 @@ function TokenWarningChip({
         onClick={() => setOpen(value => !value)}
         className="animate-token-warn-in flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
       >
-        <WarningTriangle size={14} />
+        <ActionWarningIcon size={14} />
       </button>
       {open ? (
         <div
@@ -1018,7 +997,7 @@ function TokenWarningChip({
         >
           <div className="mb-1.5 flex items-center gap-[7px]">
             <span className="inline-flex text-tone-warn">
-              <WarningTriangle size={13} />
+              <ActionWarningIcon size={13} />
             </span>
             <span className="text-[12.5px] font-semibold text-text-primary">
               {summary}

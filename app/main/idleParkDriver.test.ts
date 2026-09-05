@@ -6,6 +6,7 @@
 
 import { expect, test } from 'bun:test'
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import {
   createIdleParkDriver as createIdleParkDriverWithDeps,
   MAX_LIVE_ENGINES,
@@ -25,20 +26,11 @@ function createIdleParkDriver(
 function desc(
   over: Partial<SessionDescriptor> & { appSessionId: string },
 ): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     engineSessionId: `engine-${over.appSessionId}`,
     cwd: '/tmp',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
     ...over,
-  }
+  })
 }
 
 test('cap — parks the least-recently-active live sessions beyond MAX_LIVE_ENGINES, keeps the top-K recent', () => {

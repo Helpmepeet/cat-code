@@ -110,6 +110,47 @@ describe('Agent tool prompt in Agent Mode', () => {
     expect(topLevel).toContain('SendMessage does not cancel it')
   })
 
+  test('does not claim background is required for parallel spawns on GPT', async () => {
+    // AgentTool.isConcurrencySafe() is true and toolOrchestration runs a
+    // concurrency-safe block as one concurrent batch, so foreground agents
+    // emitted in the same turn already run in parallel.
+    for (const provider of ['openai', 'anthropic'] as const) {
+      const prompt = await getPrompt(
+        getBuiltInAgents(),
+        false,
+        undefined,
+        provider,
+        false,
+      )
+
+      expect(prompt).toContain('**Foreground vs background**')
+      expect(prompt).not.toContain('REQUIRED for true parallel execution')
+      expect(prompt).not.toContain('each with run_in_background: true')
+      expect(prompt).toContain(
+        `send a single message with multiple ${'Agent'} tool use content blocks. For example`,
+      )
+    }
+  })
+
+  test('routes the "class Foo" example to a content searcher, not Glob', async () => {
+    for (const provider of ['openai', 'anthropic'] as const) {
+      const prompt = await getPrompt(
+        getBuiltInAgents(),
+        false,
+        undefined,
+        provider,
+        false,
+      )
+
+      expect(prompt).toContain(
+        'searching for a specific class definition like "class Foo", use the Grep tool',
+      )
+      expect(prompt).not.toContain(
+        'searching for a specific class definition like "class Foo", use the Glob tool',
+      )
+    }
+  })
+
   test('gates Agent Mode worker control guidance by caller capabilities', async () => {
     const restricted = await getPrompt(
       getBuiltInAgents(),

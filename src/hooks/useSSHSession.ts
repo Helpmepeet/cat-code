@@ -13,10 +13,7 @@ import type * as React from 'react'
 import { randomUUID } from 'crypto'
 import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { ToolUseConfirm } from '../components/permissions/PermissionRequest.js'
-import {
-  createSyntheticAssistantMessage,
-  createToolStub,
-} from '../remote/remotePermissionBridge.js'
+import { buildRemoteToolUseConfirm } from '../remote/remotePermissionBridge.js'
 import {
   convertSDKMessage,
   isSessionEndMessage,
@@ -24,9 +21,7 @@ import {
 import type { SSHSession } from '../ssh/createSSHSession.js'
 import type { SSHSessionManager } from '../ssh/SSHSessionManager.js'
 import type { Tool } from '../Tool.js'
-import { findToolByName } from '../Tool.js'
 import type { Message as MessageType } from '../types/message.js'
-import type { PermissionAskDecision } from '../types/permissions.js'
 import { logForDebugging } from '../utils/debug.js'
 import { gracefulShutdown } from '../utils/gracefulShutdown.js'
 import type { RemoteMessageContent } from '../utils/teleport/api.js'
@@ -94,64 +89,15 @@ export function useSSHSession({
           `[useSSHSession] permission request: ${request.tool_name}`,
         )
 
-        const tool =
-          findToolByName(toolsRef.current, request.tool_name) ??
-          createToolStub(request.tool_name)
-
-        const syntheticMessage = createSyntheticAssistantMessage(
+        const toolUseConfirm = buildRemoteToolUseConfirm({
           request,
           requestId,
-        )
-
-        const permissionResult: PermissionAskDecision = {
-          behavior: 'ask',
-          message:
-            request.description ?? `${request.tool_name} requires permission`,
-          suggestions: request.permission_suggestions,
-          blockedPath: request.blocked_path,
-        }
-
-        const toolUseConfirm: ToolUseConfirm = {
-          assistantMessage: syntheticMessage,
-          tool,
-          description:
-            request.description ?? `${request.tool_name} requires permission`,
-          input: request.input,
-          toolUseContext: {} as ToolUseConfirm['toolUseContext'],
-          toolUseID: request.tool_use_id,
-          permissionResult,
-          permissionPromptStartTimeMs: Date.now(),
-          onUserInteraction() {},
-          onAbort() {
-            manager.respondToPermissionRequest(requestId, {
-              behavior: 'deny',
-              message: 'User aborted',
-            })
-            setToolUseConfirmQueue(q =>
-              q.filter(i => i.toolUseID !== request.tool_use_id),
-            )
-          },
-          onAllow(updatedInput) {
-            manager.respondToPermissionRequest(requestId, {
-              behavior: 'allow',
-              updatedInput,
-            })
-            setToolUseConfirmQueue(q =>
-              q.filter(i => i.toolUseID !== request.tool_use_id),
-            )
-            setIsLoading(true)
-          },
-          onReject(feedback) {
-            manager.respondToPermissionRequest(requestId, {
-              behavior: 'deny',
-              message: feedback ?? 'User denied permission',
-            })
-            setToolUseConfirmQueue(q =>
-              q.filter(i => i.toolUseID !== request.tool_use_id),
-            )
-          },
-          async recheckPermission() {},
-        }
+          tools: toolsRef.current,
+          respond: (id, response) =>
+            manager.respondToPermissionRequest(id, response),
+          setIsLoading,
+          setToolUseConfirmQueue,
+        })
 
         setToolUseConfirmQueue(q => [...q, toolUseConfirm])
         setIsLoading(false)

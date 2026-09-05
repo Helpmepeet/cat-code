@@ -3,7 +3,10 @@ import { createQueryEngineAppSessionConfigFromSetup } from '../../src/app-runtim
 import { createQueryEngineSessionController } from '../../src/app-runtime/createQueryEngineSessionController.js'
 import { createRuntimeBackedAppSession } from '../../src/app-runtime/createRuntimeBackedAppSession.js'
 import { getDefaultAppState, type AppState } from '../../src/state/AppStateStore.js'
-import { getInitialEffortSetting } from '../../src/utils/effort.js'
+import {
+  getInitialEffortSetting,
+  type EffortLevel,
+} from '../../src/utils/effort.js'
 import {
   getModelEnvOverride,
   getUserSpecifiedModelSetting,
@@ -52,7 +55,14 @@ import {
 } from '../../src/utils/fileStateCache.js'
 import type { Message } from '../../src/types/message.js'
 import { SYNTHETIC_MODEL } from '../../src/utils/messages.js'
-import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
+import { buildDesktopSystemPrompt } from './desktopSystemPrompt.js'
+import { createListPeersTool } from './listPeersTool.js'
+import {
+  createCreatePeerTool,
+  inheritedEffort,
+} from './createPeerTool.js'
+import { createSendToPeerTool } from './sendToPeerTool.js'
+import { createReadPeerTool } from './readPeerTool.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -222,17 +232,53 @@ export async function loadAgentDefinitionsForRuntime(
 }
 
 /**
+ * The model a created session starts on (PEER-SESSIONS R7), from the spawn env.
+ *
+ * **The absent value is the EMPTY STRING, not an unset key**: main writes all
+ * five peer keys on every spawn precisely so an unset one cannot be inherited
+ * from main's own environment (`SpawnConfig` in `app/supervisor/supervisor.ts`).
+ * Testing for presence would start a session on the empty-string model.
+ */
+export function readSpawnModel(
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const model = env.CATCODE_SIDECAR_MODEL
+  return model === undefined || model === '' ? undefined : model
+}
+
+/**
+ * The reasoning effort a created session starts on, from the spawn env. Same
+ * empty-string contract as the model above. An unrecognised value degrades to
+ * the user's own saved effort rather than failing the boot, and only the named
+ * levels travel (see `inheritedEffort`).
+ */
+export function readSpawnEffort(
+  env: Record<string, string | undefined> = process.env,
+): EffortLevel | undefined {
+  return inheritedEffort(env.CATCODE_SIDECAR_EFFORT)
+}
+
+/**
  * Seed the desktop sidecar's process-local model/provider state using the same
  * explicit-vs-implicit startup rule as the CLI. A sidecar is one process per
  * session, so these bootstrap globals are correctly session-scoped.
  */
 export function initializeSidecarModelProvider(
   resumedModel?: string,
+  spawnModel?: string,
 ): ModelSetting {
   // A resumed conversation owns its prior model choice. The transcript's latest
   // assistant message contains the provider-returned model id, so prefer it over
   // today's global/settings default when reconstructing this session.
-  const specifiedModel = resumedModel ?? getUserSpecifiedModelSetting()
+  //
+  // A created peer has no prior choice of its own, and the model its creator was
+  // on rides the spawn env (PEER-SESSIONS R7). It sits BELOW a resumed model and
+  // ABOVE the saved setting: the two upper terms cannot both be present today
+  // (main sends the run defaults only on the create spawn, never on a restart,
+  // `app/host/host.ts` restore/restart paths), so the order is a statement of
+  // which one owns the choice rather than a live tie-break.
+  const specifiedModel =
+    resumedModel ?? spawnModel ?? getUserSpecifiedModelSetting()
   const selectedModel = specifiedModel ?? null
   const implicitProvider = getEnvAPIProvider()
   // Avoid resolving the Anthropic default here: credential-less desktop startup
@@ -253,8 +299,14 @@ export function initializeSidecarModelProvider(
   // (`src/utils/model/providers.ts:175`) — required, since request routing
   // sends every `gpt-*` id to OpenAI regardless of the session provider and the
   // provider-shaped tool set is chosen from this result.
+  //
+  // A spawn-env model counts as explicit for the same reason a resumed one
+  // does: it was chosen for THIS session, so it must decide the provider rather
+  // than let a saved setting or a `CLAUDE_CODE_USE_*` flag decide for it.
   const hasExplicitStartupModel =
-    resumedModel !== undefined || getModelEnvOverride() !== undefined
+    resumedModel !== undefined ||
+    spawnModel !== undefined ||
+    getModelEnvOverride() !== undefined
 
   setInitialMainLoopModel(selectedModel)
   setMainLoopModelOverride(selectedModel)
@@ -304,7 +356,10 @@ export async function createNormalSidecarQueryEngineConfig(
   const resumedModel = initialMessages
     ? selectResumedProviderModel(initialMessages)
     : undefined
-  const initialModelSetting = initializeSidecarModelProvider(resumedModel)
+  const initialModelSetting = initializeSidecarModelProvider(
+    resumedModel,
+    readSpawnModel(),
+  )
   const toolPermissionContext = await loadSidecarToolPermissionContext()
   const appStateStore = createStore({
     ...getDefaultAppState(),
@@ -323,9 +378,23 @@ export async function createNormalSidecarQueryEngineConfig(
     // reads `appState.effortValue` per request (`query.ts:744`). undefined when
     // no effort is set (→ provider default), which the diagnostics snapshot
     // reports as null rather than a fabricated label.
-    effortValue: getInitialEffortSetting(),
+    // A created session starts on its creator's effort when one travelled in
+    // the spawn env (PEER-SESSIONS R7); every other session keeps the saved
+    // setting above.
+    effortValue: readSpawnEffort() ?? getInitialEffortSetting(),
   })
-  const tools = getTools(appStateStore.getState().toolPermissionContext)
+  // PEER-SESSIONS §4 — the peer tools are appended AFTER the engine's own list,
+  // here in the sidecar, which is what keeps them out of the terminal: nothing
+  // in `getTools` knows about them. They are built through the engine's own
+  // `buildTool`, so they carry the same defaults and the same permission path
+  // every other tool does.
+  const tools = [
+    ...getTools(appStateStore.getState().toolPermissionContext),
+    createListPeersTool(),
+    createCreatePeerTool(),
+    createSendToPeerTool(),
+    createReadPeerTool(),
+  ]
 
   // Load the REAL command catalog for this cwd, mirroring the non-interactive
   // CLI path (`cli/print.ts:1783` / `main.tsx:2069` both pass `getCommands(cwd)`
@@ -430,7 +499,7 @@ export async function createNormalSidecarQueryEngineConfig(
         readFileCache: createFileStateCacheWithSizeLimit(
           READ_FILE_STATE_CACHE_SIZE,
         ),
-        appendSystemPrompt: DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+        appendSystemPrompt: buildDesktopSystemPrompt(),
         handleElicitation: async () => ({ action: 'cancel' }),
       }),
       // F1 (host-plane review 2026-07-05): seed the resumed transcript into the
@@ -600,7 +669,15 @@ export async function createSidecarSessionController({
         submitMessage(prompt, options) {
           return createProbeAdapter().runTurn({
             prompt,
-            options: { uuid: options?.uuid, isMeta: options?.isMeta },
+            // `onInputPersisted` rides through because callers act on it: the
+            // durable-acceptance latch and a peer message's consumption ack
+            // both wait for it. Dropping it here made the probe session look
+            // like an engine that never accepts anything.
+            options: {
+              uuid: options?.uuid,
+              isMeta: options?.isMeta,
+              onInputPersisted: options?.onInputPersisted,
+            },
             signal: new AbortController().signal,
             onPermissionRequest: async () => ({
               behavior: 'deny',

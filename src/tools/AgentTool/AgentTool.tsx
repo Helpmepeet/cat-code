@@ -814,7 +814,6 @@ export const AgentTool = buildTool({
           prompt,
           description,
           team_name: teamName,
-          use_splitpane: true,
           plan_mode_required: spawnMode === 'plan',
           model: model ?? agentDef?.model,
           agent_type: subagent_type,

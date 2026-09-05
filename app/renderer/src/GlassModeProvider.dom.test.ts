@@ -29,6 +29,7 @@ import {
   GLASS_STORAGE_KEY,
   GlassModeContext,
 } from './glassMode.js'
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 let harness: DomTestHarness
 
@@ -45,15 +46,6 @@ afterEach(async () => {
 afterAll(async () => {
   await harness.teardown()
 })
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    store,
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
 
 function installGlassBridge(setGlassMode: (enabled: boolean) => void): void {
   Object.defineProperty(window, 'catcode', {
@@ -153,7 +145,7 @@ test('flipping the preference stamps the document and persists it', async () => 
   expect(harness.document.documentElement.getAttribute(GLASS_ATTRIBUTE)).toBe(
     GLASS_ATTRIBUTE_ON,
   )
-  expect(store.store.get(GLASS_STORAGE_KEY)).toBe(
+  expect(store.map.get(GLASS_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, enabled: true }),
   )
 
@@ -161,7 +153,7 @@ test('flipping the preference stamps the document and persists it', async () => 
     setGlass?.(false)
   })
   expect(harness.document.documentElement.hasAttribute(GLASS_ATTRIBUTE)).toBe(false)
-  expect(store.store.get(GLASS_STORAGE_KEY)).toBe(
+  expect(store.map.get(GLASS_STORAGE_KEY)).toBe(
     JSON.stringify({ version: 1, enabled: false }),
   )
   expect(synced).toEqual([false, true, false])

@@ -17,45 +17,32 @@
  * touching globals; it defaults to the renderer's own `localStorage`.
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   AccentThemeContext,
   DEFAULT_ACCENT,
   readAccentFromStorage,
   writeAccentToStorage,
-  type AccentKey,
   type AccentThemeContextValue,
 } from './accentTheme.js'
-
-type AccentStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): AccentStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function AccentThemeProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: AccentStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [accent, setAccentState] = useState<AccentKey>(
-    () => readAccentFromStorage(store) ?? DEFAULT_ACCENT,
-  )
-  const setAccent = useCallback(
-    (next: AccentKey) => {
-      setAccentState(next)
-      writeAccentToStorage(store, next)
-    },
-    [store],
+  const [accent, setAccent] = useViewPreference(
+    storage,
+    readAccentFromStorage,
+    writeAccentToStorage,
+    DEFAULT_ACCENT,
   )
   const value = useMemo<AccentThemeContextValue>(
     () => ({ accent, setAccent }),

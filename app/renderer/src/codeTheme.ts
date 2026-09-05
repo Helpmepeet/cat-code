@@ -6,9 +6,9 @@
  * is the TERMINAL palette (`src/utils/config.ts:197`, `src/utils/theme.ts:92-104`)
  * and its `getSyntaxTheme` machinery emits ANSI escapes
  * (`src/native-ts/color-diff/index.ts:970-977`), not CSS, so there is nothing to
- * reuse and no seam to add. Persisted exactly like the reasoning-layout
- * preference (`reasoningLayout.ts:41-112`): versioned JSON in the renderer's own
- * storage, best-effort.
+ * reuse and no seam to add. Persisted like every other renderer-local view
+ * preference, through the shared codec in `viewPreference.ts`: versioned JSON in
+ * the renderer's own storage, best-effort.
  *
  * THE COLORS ARE NOT HERE. Themes swap by CSS alone: `CodeThemeProvider` puts
  * `data-code-theme` on a wrapper and `theme.css` carries one `[data-code-theme]`
@@ -49,6 +49,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const CODE_THEME_STORAGE_KEY = 'catcode.codeTheme.v1'
 
@@ -77,13 +82,6 @@ export const CODE_THEME_LABELS: Readonly<Record<CodeThemeKey, string>> = {
  * `theme.css`, so this key needs no stylesheet of its own. */
 export const DEFAULT_CODE_THEME: CodeThemeKey = 'dracula'
 
-type CodeThemeStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedCodeTheme = {
-  version: 1
-  theme: CodeThemeKey
-}
-
 export function isCodeThemeKey(value: unknown): value is CodeThemeKey {
   return (
     typeof value === 'string' &&
@@ -92,32 +90,18 @@ export function isCodeThemeKey(value: unknown): value is CodeThemeKey {
 }
 
 export function readCodeThemeFromStorage(
-  storage: CodeThemeStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): CodeThemeKey | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(CODE_THEME_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedCodeTheme>
-    if (value.version !== 1 || !isCodeThemeKey(value.theme)) return null
-    return value.theme
-  } catch {
-    return null
-  }
+  return readViewPreference(storage, CODE_THEME_STORAGE_KEY, 'theme', value =>
+    isCodeThemeKey(value) ? value : null,
+  )
 }
 
 export function writeCodeThemeToStorage(
-  storage: CodeThemeStorage | null,
+  storage: ViewPreferenceStorage | null,
   theme: CodeThemeKey,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedCodeTheme = { version: 1, theme }
-    storage.setItem(CODE_THEME_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (reasoningLayout.ts:109).
-  }
+  writeViewPreference(storage, CODE_THEME_STORAGE_KEY, 'theme', theme)
 }
 
 export type CodeThemeContextValue = {

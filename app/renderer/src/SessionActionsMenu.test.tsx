@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
+import { MENU_ITEM_SELECTOR } from './overlayFocus.js'
 import { resolveSessionActions } from './sessionActions.js'
 import {
   SessionActionsMenu,
@@ -158,6 +159,34 @@ test('cut verbs never render (no Tag/Archive/Delete)', () => {
 test('history-only row: Open is disabled, not a clickable button label', () => {
   const html = render(false, row({ appSessionId: null, inRegistry: false, live: false, status: 'history' }))
   expect(html).toContain('came from terminal history')
+})
+
+test('PEER-SESSIONS §6: the peer-reopen row renders as a checkable item that shows its state', () => {
+  // A durable decision only the user can clear has to be READABLE after the menu
+  // that set it closed. Rendering it as a plain verb row would leave the user no
+  // way to tell a session that refuses peer wake-ups from one that does not.
+  const off = render(true, row({ peerWakeBlocked: false }))
+  expect(off).toContain('Don’t let peers reopen')
+  expect(off).toContain('role="menuitemcheckbox"')
+  expect(off).toContain('aria-checked="false"')
+
+  const on = render(true, row({ peerWakeBlocked: true }))
+  expect(on).toContain('aria-checked="true"')
+  // The tick only exists in the checked render, and the label never changes.
+  expect(on).toContain('20 6 9 17 4 12')
+  expect(off).not.toContain('20 6 9 17 4 12')
+  expect(on).toContain('Don’t let peers reopen')
+})
+
+test('PEER-SESSIONS §6: the peer-reopen row is arrow-key reachable like every other row', () => {
+  // `menuitemcheckbox` is a role this menu's roving key handler had never seen.
+  // The row renders as a real <button>, so Tab reaches it either way; only
+  // MENU_ITEM_SELECTOR decides whether the ARROW keys do, and a row the arrows
+  // skip reads as dead to anyone driving the menu from the keyboard.
+  expect(render(true)).toContain('<button type="button" role="menuitemcheckbox"')
+  expect(MENU_ITEM_SELECTOR).toContain(
+    'button[role="menuitemcheckbox"]:not([disabled])',
+  )
 })
 
 test('SessionRenamePopover prefills the input with the current title', () => {

@@ -23,25 +23,17 @@ import {
   runStartupTranscriptPreload,
   selectStartupPreloadCandidates,
 } from './sessionPreload.js'
+import { sessionDescriptor } from './sessionDescriptorFixture.js'
 
+/** Every preload candidate is an exited, restorable row: that is what a startup
+ * preload is FOR. */
 function descriptor(id: string, lastAttachedAt: number): SessionDescriptor {
-  return {
-    appSessionId: id,
-    engineSessionId: `engine-${id}`,
-    cwd: `/tmp/${id}`,
-    title: null,
-    forked: false,
-    name: null,
-    createdBy: null,
-    peerWakeBlocked: false,
-    titleUpdatedAt: null,
+  return sessionDescriptor(id, {
     status: 'exited',
     restorable: true,
-    parked: false,
     createdAt: lastAttachedAt,
     lastAttachedAt,
-    lastMessageSentAt: null,
-  }
+  })
 }
 
 function cache(id: string, body = `cached ${id}`): TranscriptCache {

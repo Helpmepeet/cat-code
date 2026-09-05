@@ -3,6 +3,7 @@ import type { ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { SessionDescriptor } from '../../shared/hostApi.js'
 import type { ConnectionSnapshot } from './connectionState.js'
+import { sessionDescriptor } from './sessionDescriptorFixture.js'
 import { WorkspaceLayout, type WorkspacePanelView } from './WorkspacePanels.js'
 import type { WorkspaceLayoutState } from './workspaceLayout.js'
 
@@ -135,24 +136,15 @@ test('panel content wrapper is a bounded flex column so SessionPane can scroll',
   expect(html).toContain('"flex min-h-0 flex-1 flex-col overflow-hidden"')
 })
 
+/** A titled pane, in a workspace named after that title: these suites group
+ * panes BY cwd, so the two travel together. */
 function descriptor(id: string, title: string): SessionDescriptor {
-  return {
-    appSessionId: id,
-    engineSessionId: `engine-${id}`,
+  return sessionDescriptor(id, {
     cwd: `/tmp/${title.toLowerCase()}`,
     title,
-    forked: false,
-    name: null,
-    createdBy: null,
-    peerWakeBlocked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
-    lastMessageSentAt: null,
-  }
+  })
 }
 
 function panel(

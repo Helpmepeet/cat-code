@@ -72,6 +72,32 @@ export const REGISTRY_VERSION = 1 as const
 export const MAX_REGISTRY_SESSIONS = 256
 
 /**
+ * How far back `fillMissingNames` reaches when it repairs rows that lost their
+ * `name` (PEER-SESSIONS §2). Measured by `lastAttachedAt` — the same field
+ * `enforceBound` reaps on, so "recent" means one thing in this file.
+ *
+ * This bounds a REPAIR, not the naming rule. Rows written from here on are named
+ * at spawn by `upsertOnSpawn`, and names are write-once, so the named set only
+ * grows; the window exists solely because one launch of a build predating the
+ * field can strip a whole registry at once, and the repair that follows should
+ * not hand a model back the entire archive.
+ *
+ * Sized at 7 days off the operator's real registry (2026-09-04, 224 rows, 223 of
+ * them stripped): 1 day covers 15 rows, 3 days 35, 7 days 56, 14 days 118, 30
+ * days 199. Seven days is the last step where the addressable roster stays
+ * something a model can read in a `ListPeers` result rather than a wall of
+ * history.
+ *
+ * The cost is accepted, not overlooked: a stripped row OLDER than this stays
+ * nameless forever. `peersOf` (`app/main/peerRequestPlane.ts:521`) drops rows
+ * without a name, so such a row can never be listed, therefore never woken,
+ * therefore never spawned, therefore never named on the spawn path. That is the
+ * intended trade — those rows remain openable from history by hand, they are
+ * simply not peers.
+ */
+export const NAME_REPAIR_WINDOW_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
  * How a session ended, from the host's point of view (§3).
  *
  * `'parked'` is the IDLE-PARK (decisions/IDLE-PARK.md §2/§8) in-memory-only
@@ -121,9 +147,12 @@ export type RegistrySession = {
   /**
    * [D] The session's peer NAME (PEER-SESSIONS §2) — short, pool-allocated, and
    * unique across the registry, so a model can address "Bear" instead of a UUID.
-   * Absent only on a row written before the field existed AND never re-spawned
-   * since: the spawn path allocates one when it is missing, so every LIVE row
-   * has a name and an unnamed row is always a never-restored history row.
+   * Every LIVE row has one: the spawn path allocates when it is missing.
+   *
+   * Absent on a row that lost the field to a build predating it (`validateRow`
+   * is a closed whitelist) and was last attached longer ago than
+   * `NAME_REPAIR_WINDOW_MS`, which is where the launch repair stops. Such a row
+   * keeps no name for the rest of its life — deliberately: see the constant.
    *
    * NOT the title: `title` is display text the user or the engine may rewrite at
    * any time (`titleUpdatedAt` above), while the name is minted once and only
@@ -602,17 +631,39 @@ export class SessionRegistry {
   }
 
   /**
-   * (3) Reap: drop rows whose transcript is gone, `shutdown:"clean"` rows that
-   * never acquired an `engineSessionId` (§9-A5 — an address that never got
-   * content is not restorable), and — for the bound — the oldest terminal
-   * (`shutdown != null`) rows over `MAX_REGISTRY_SESSIONS`.
+   * (3) Reap: drop rows whose transcript is gone, TERMINAL rows that never
+   * acquired an `engineSessionId` (an address that never got content is not
+   * restorable), and — for the bound — the oldest terminal (`shutdown != null`)
+   * rows over `MAX_REGISTRY_SESSIONS`.
+   *
+   * The null-`engineSessionId` rule used to read `shutdown === 'clean'`, so a
+   * row whose process died before its first ready frame was kept forever: it
+   * has no transcript, so `hasTranscript` is false, so `canResume` is false, so
+   * the host's `isRestorable` refuses it and it never reaches `listSessions` —
+   * invisible in the sidebar, in the palette, in the peer roster, and refused by
+   * every open path there is. The operator's file held 13 of them. What produces
+   * them is ordinary: a `src/**` or `app/sidecar/**` edit kills every new
+   * session an open dev app starts (CLAUDE.md §3), and each one leaves a row.
+   *
+   * This does not reverse HOST-REQUEST-PLANE §2's ruling that a peer create
+   * whose ready or prompt step failed KEEPS its row. That ruling turns on the
+   * row being "a real session the operator can see", and it holds for the whole
+   * run in which the failure happened, because this pass runs only from
+   * `launch()`. By the next launch there is no tab to dangle and nothing left
+   * to see: what remains is an address for content that was never written.
+   * `'parked'` is included for the same reason it is exempt from the BOUND reap
+   * and not from this one: the exemption exists because a parked row is an open
+   * tab, and at launch there are no tabs. (A parked row read at launch has
+   * already been normalized to `'crashed'` — §8 — so this is about intent, not
+   * an extra case.) The `shutdown !== null` guard is a safety net rather than a
+   * live branch: `sweepOrphans` runs first and settles every row.
    */
   private reap(): void {
-    // Drop missing-transcript rows and null-engineSessionId clean rows.
+    // Drop missing-transcript rows and null-engineSessionId terminal rows.
     this.doc.sessions = this.doc.sessions.filter(row => {
-      if (row.shutdown === 'clean' && row.engineSessionId === null) {
+      if (row.shutdown !== null && row.engineSessionId === null) {
         this.log(
-          `[registry] reaped clean row with no engineSessionId (${row.appSessionId}): ` +
+          `[registry] reaped ${row.shutdown} row with no engineSessionId (${row.appSessionId}): ` +
             'never acquired content, not restorable',
         )
         return false
@@ -641,13 +692,44 @@ export class SessionRegistry {
    * are never reaped; only `shutdown != null` rows are eligible, oldest
    * (`lastAttachedAt`) first — matches §3. Returns the reaped ids so a
    * runtime caller can emit `session-removed` for them (F5).
+   *
+   * **What a reap costs the peer plane, and why that is the ruling.** Dropping
+   * a row does not drop its transcript, so the conversation comes back through
+   * the catalog and can be reopened by hand — as a NEW row, with a new
+   * `appSessionId`, a newly allocated `name`, and no `createdBy`. That is not a
+   * bug to repair: PEER-SESSIONS §2 rules that a name is released on reap and
+   * may be handed out again, which is only sound because identity is
+   * row-scoped. Restoring a former name at reopen would have to reclaim a word
+   * another live session may already be answering to. What the user reads as
+   * the session's identity — its title — is preserved independently, by the
+   * catalog-seeded `title` on the reopen path (`app/main/openHistorySession.ts`),
+   * so the conversation keeps its label and only its peer address is new.
+   *
+   * **`peerWakeBlocked` is the exception, and it is why the sort is not plain
+   * oldest-first.** Every other field here is machine-minted. That one is the
+   * user's own standing answer about a conversation they can still see, and the
+   * reap is the only thing that clears it without them (`setPeerWakeBlocked` is
+   * reachable only from the sidebar row menu). Losing it silently converts a
+   * recorded "no" into a "yes" at the moment the operator reopens the
+   * transcript, so blocked rows sort LAST and are discarded only when nothing
+   * else can satisfy the bound.
+   *
+   * Last, deliberately NOT exempt. `isReapableForBound` is shared with
+   * `atBoundWithNothingReapable`, the HR4 predicate that refuses `peer.create`
+   * when the registry is full with nothing to remove; excluding blocked rows
+   * there would let a row-menu toggle, repeated, refuse peer creation outright.
+   * The ordering keeps the bound and the churn rule exactly as they were.
    */
   private enforceBound(): string[] {
     if (this.doc.sessions.length <= MAX_REGISTRY_SESSIONS) return []
 
     const terminal = this.doc.sessions
       .filter(isReapableForBound)
-      .sort((a, b) => a.lastAttachedAt - b.lastAttachedAt)
+      .sort(
+        (a, b) =>
+          Number(a.peerWakeBlocked === true) - Number(b.peerWakeBlocked === true) ||
+          a.lastAttachedAt - b.lastAttachedAt,
+      )
     const removeCount = this.doc.sessions.length - MAX_REGISTRY_SESSIONS
     const doomedRows = terminal.slice(0, removeCount)
     const doomed = new Set(doomedRows.map(r => r.appSessionId))
@@ -792,6 +874,51 @@ export class SessionRegistry {
   }
 
   /**
+   * Give every RECENTLY-ACTIVE row that has no `name` one, in a SINGLE persist
+   * (PEER-SESSIONS §2 — "every session is named"). Recent = attached within
+   * `NAME_REPAIR_WINDOW_MS`. Returns the ids it named; when there is nothing to
+   * name it writes nothing.
+   *
+   * WRITE-ONCE, exactly like the `name` handling in `upsertOnSpawn`: a row that
+   * already carries a name is never renamed — at any age — so this is safe to
+   * run at every launch. `allocate` is the HOST's picker, because allocation
+   * policy belongs to the one process that sees every row (§2). It is called
+   * once per row and AFTER the previous name is already on `this.doc`, so a
+   * picker that reserves against the current rows widens its reserved set with
+   * each assignment and cannot hand out a duplicate.
+   *
+   * Why a launch-time fill and not the next spawn (`upsertOnSpawn`): §2 assumed
+   * an unnamed row is "a never-restored history row that cannot be a caller",
+   * but a nameless row cannot be reached at all. `peersOf`
+   * (`app/main/peerRequestPlane.ts:521`) drops rows without a name, so a closed
+   * row cannot be listed, therefore cannot be woken, therefore never spawns
+   * again — the only exit from namelessness is a door namelessness closes. And
+   * `validateRow` below is a closed whitelist, so ANY build that predates a
+   * field silently drops it from every row it loads and writes back: one launch
+   * of a stale packaged app un-names the whole registry. This write repairs
+   * both, and repairs them again after the next such launch.
+   *
+   * That same reasoning is why the window is a REPAIR bound and not a rule about
+   * naming: it can only ever leave rows unnamed, never un-name one, and rows
+   * created from here on are named at spawn regardless of it. A row it skips is
+   * out of the peer world permanently, by the deliberate choice recorded on the
+   * constant — not because a later pass will get to it.
+   */
+  async fillMissingNames(allocate: () => string): Promise<string[]> {
+    const cutoff = Date.now() - NAME_REPAIR_WINDOW_MS
+    const named: string[] = []
+    for (const row of this.doc.sessions) {
+      if (row.name !== undefined) continue
+      if (row.lastAttachedAt < cutoff) continue
+      row.name = allocate()
+      named.push(row.appSessionId)
+    }
+    if (named.length === 0) return named
+    await this.persist()
+    return named
+  }
+
+  /**
    * Refresh only the advisory runtime hints for a live row (F4): the child's
    * pid + socketPath once the spawn returned. Never touches `restartCount`,
    * `lastAttachedAt`, or shutdown state — those belong to the §4.5 write
@@ -801,26 +928,18 @@ export class SessionRegistry {
     appSessionId: string,
     input: { enginePid?: number; socketPath?: string },
   ): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setAdvisoryRuntime: no row for ${appSessionId}`)
-      return
-    }
-    row.enginePid = input.enginePid
-    row.socketPath = input.socketPath
-    await this.persist()
+    await this.mutate('setAdvisoryRuntime', appSessionId, row => {
+      row.enginePid = input.enginePid
+      row.socketPath = input.socketPath
+    })
   }
 
   /** Fill `engineSessionId` on the ready frame (the two-id bridge, §2/§4.5). */
   async fillEngineSessionId(appSessionId: string, engineSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] fillEngineSessionId: no row for ${appSessionId}`)
-      return
-    }
-    row.engineSessionId = engineSessionId
-    row.lastAttachedAt = Date.now()
-    await this.persist()
+    await this.mutate('fillEngineSessionId', appSessionId, row => {
+      row.engineSessionId = engineSessionId
+      row.lastAttachedAt = Date.now()
+    })
   }
 
   /**
@@ -829,14 +948,10 @@ export class SessionRegistry {
    * from a newer engine-transcript rename (see `titleUpdatedAt` above).
    */
   async setTitle(appSessionId: string, title: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setTitle: no row for ${appSessionId}`)
-      return
-    }
-    row.title = title
-    row.titleUpdatedAt = Date.now()
-    await this.persist()
+    await this.mutate('setTitle', appSessionId, row => {
+      row.title = title
+      row.titleUpdatedAt = Date.now()
+    })
   }
 
   /**
@@ -849,18 +964,13 @@ export class SessionRegistry {
    * would leave a diff that `rowsEqual` reports as a change forever.
    */
   async setPeerWakeBlocked(appSessionId: string, blocked: boolean): Promise<boolean> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] setPeerWakeBlocked: no row for ${appSessionId}`)
-      return false
-    }
-    if (blocked) {
-      row.peerWakeBlocked = true
-    } else {
-      delete row.peerWakeBlocked
-    }
-    await this.persist()
-    return true
+    return this.mutate('setPeerWakeBlocked', appSessionId, row => {
+      if (blocked) {
+        row.peerWakeBlocked = true
+      } else {
+        delete row.peerWakeBlocked
+      }
+    })
   }
 
   /**
@@ -882,13 +992,9 @@ export class SessionRegistry {
 
   /** Heartbeat `lastAttachedAt` on attach (§4.5). */
   async touchAttached(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] touchAttached: no row for ${appSessionId}`)
-      return
-    }
-    row.lastAttachedAt = Date.now()
-    await this.persist()
+    await this.mutate('touchAttached', appSessionId, row => {
+      row.lastAttachedAt = Date.now()
+    })
   }
 
   /**
@@ -900,13 +1006,9 @@ export class SessionRegistry {
    * a live (non-replay) turn-end frame.
    */
   async markMessageSent(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markMessageSent: no row for ${appSessionId}`)
-      return
-    }
-    row.lastMessageSentAt = Date.now()
-    await this.persist()
+    await this.mutate('markMessageSent', appSessionId, row => {
+      row.lastMessageSentAt = Date.now()
+    })
   }
 
   /**
@@ -918,14 +1020,10 @@ export class SessionRegistry {
    * Advisory runtime fields are retained for restore-time prior-writer checks.
    */
   async markCrashed(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markCrashed: no row for ${appSessionId}`)
-      return
-    }
-    if (row.shutdown !== null) return
-    row.shutdown = 'crashed'
-    await this.persist()
+    await this.mutate('markCrashed', appSessionId, row => {
+      if (row.shutdown !== null) return false
+      row.shutdown = 'crashed'
+    })
   }
 
   /**
@@ -939,14 +1037,10 @@ export class SessionRegistry {
    * `'crashed'` on the next disk read (`normalizeShutdown`).
    */
   async markParked(appSessionId: string): Promise<void> {
-    const row = this.find(appSessionId)
-    if (!row) {
-      this.log(`[registry] markParked: no row for ${appSessionId}`)
-      return
-    }
-    if (row.shutdown !== null) return
-    row.shutdown = 'parked'
-    await this.persist()
+    await this.mutate('markParked', appSessionId, row => {
+      if (row.shutdown !== null) return false
+      row.shutdown = 'parked'
+    })
   }
 
   /**
@@ -955,13 +1049,32 @@ export class SessionRegistry {
    * so restore can refuse if the old writer did not actually die.
    */
   async markClean(appSessionId: string): Promise<void> {
+    await this.mutate('markClean', appSessionId, row => {
+      row.shutdown = 'clean'
+    })
+  }
+
+  /**
+   * The find / log-if-missing / persist ladder every single-row mutator above
+   * repeats. `apply` returns false for a change the row does not need persisted
+   * (the already-terminal early-outs in `markCrashed` and `markParked`);
+   * anything else persists. The resolved boolean answers "was there a row",
+   * which is what `setPeerWakeBlocked`'s caller turns into `session_not_found`
+   * (HC2) rather than persisting nothing and reporting success.
+   */
+  private async mutate(
+    label: string,
+    appSessionId: string,
+    apply: (row: RegistrySession) => boolean | void,
+  ): Promise<boolean> {
     const row = this.find(appSessionId)
     if (!row) {
-      this.log(`[registry] markClean: no row for ${appSessionId}`)
-      return
+      this.log(`[registry] ${label}: no row for ${appSessionId}`)
+      return false
     }
-    row.shutdown = 'clean'
+    if (apply(row) === false) return true
     await this.persist()
+    return true
   }
 
   private find(appSessionId: string): RegistrySession | undefined {
@@ -1364,7 +1477,13 @@ function validateRow(candidate: unknown): RegistrySession | null {
   }
   if (typeof candidate.title === 'string') row.title = candidate.title
   // PEER-SESSIONS §2 — additive migration, the `forked` treatment: a row written
-  // before peer names existed simply has none, and the next spawn allocates one.
+  // before peer names existed simply has none, and `fillMissingNames` gives it
+  // one at the next launch — if it was attached inside `NAME_REPAIR_WINDOW_MS`;
+  // older rows deliberately stay nameless. NOTE this reconstruction is a closed
+  // WHITELIST in both directions: a build that predates a field drops it from every row it
+  // loads and writes the stripped row back, so a field added here is not durable
+  // against an older binary the user can still launch. That is why the name fill
+  // runs at every launch and not only on a row's next spawn.
   if (typeof candidate.name === 'string') row.name = candidate.name
   if (typeof candidate.createdBy === 'string') row.createdBy = candidate.createdBy
   // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a

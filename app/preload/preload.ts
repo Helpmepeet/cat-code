@@ -52,43 +52,64 @@ import type {
 } from '../shared/hostApi.js'
 import type { DebugRendererSnapshot } from '../shared/debugState.js'
 import { MAX_SAVE_TEXT_BYTES } from '../shared/limits.js'
+// The fixed internal channel names. The renderer never sees or supplies these,
+// and this import list is exactly the set this bridge may touch. The names
+// themselves live in `../shared/ipcChannels.ts` so main listens on the same
+// literals by construction rather than by hand-copying them.
+import {
+  CH_SUBMIT,
+  CH_ABORT,
+  CH_PERMISSION,
+  CH_ANSWER_QUESTIONS,
+  CH_SET_MODE,
+  CH_ACCOUNT_VERB,
+  CH_WORKSPACE_TRUST_VERB,
+  CH_AGENT_MODE_SET,
+  CH_TASK_CONTROL_VERB,
+  CH_RUN_CONTROL_VERB,
+  CH_PROMPT_FORCE,
+  CH_PROMPT_RECALL,
+  CH_CONTEXT_BREAKDOWN_VERB,
+  CH_HISTORY_LOAD_EARLIER,
+  CH_SESSION_ACTION_VERB,
+  CH_REMOTE_SETTINGS_VERB,
+  CH_SETTINGS_VERB,
+  CH_STATS_QUERY,
+  CH_PING,
+  CH_RESTART,
+  CH_SERVER_FRAME,
+  CH_RENDERER_READY,
+  CH_DELIVERY_ACK,
+  CH_RENDERER_FAULT,
+  CH_SET_APPEARANCE,
+  CH_SET_GLASS_MODE,
+  CH_OPEN_LOGS,
+  CH_SAVE_DIAGNOSTICS,
+  CH_DELIVERY_HEALTH_PROBE,
+  CH_DELIVERY_HEALTH_RESPONSE,
+  CH_REFRESH_ACCOUNTS_POOL,
+  // Control plane (HC3 — fixed, per-method senders).
+  CH_HOST_CREATE,
+  CH_HOST_CREATE_IN_WORKSPACE,
+  CH_HOST_RESTORE,
+  CH_HOST_CLOSE,
+  CH_HOST_SET_PEER_WAKE_BLOCKED,
+  CH_HOST_LIST,
+  CH_HOST_PICK_DIR,
+  CH_HOST_PICK_ATTACHMENT_FILE,
+  CH_HOST_PREVIEW,
+  CH_HOST_SESSIONS_CATALOG,
+  CH_HOST_OPEN_HISTORY,
+  CH_HOST_SAVE_TEXT,
+  CH_HOST_OPEN_WORKSPACE_FILE,
+  CH_HOST_ACCOUNT_DELETE,
+  CH_HOST_EVENT,
+  CH_HOST_VISIBLE_SESSIONS,
+} from '../shared/ipcChannels.js'
 import { createRendererIpcGuard } from './rendererIpcGuard.js'
 import { DeliveryAckQueue } from './deliveryAckQueue.js'
 
 declare const __CATCODE_DEV_HARNESS__: boolean
-
-// Fixed internal channel names. The renderer never sees or supplies these.
-const CH_SUBMIT = 'catcode:submit'
-const CH_ABORT = 'catcode:abort'
-const CH_PERMISSION = 'catcode:permission'
-const CH_ANSWER_QUESTIONS = 'catcode:answer-questions'
-const CH_SET_MODE = 'catcode:set-mode'
-const CH_ACCOUNT_VERB = 'catcode:account-verb'
-const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'
-const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'
-const CH_TASK_CONTROL_VERB = 'catcode:task-control-verb'
-const CH_RUN_CONTROL_VERB = 'catcode:run-control-verb'
-const CH_PROMPT_FORCE = 'catcode:prompt-force'
-const CH_PROMPT_RECALL = 'catcode:prompt-recall'
-const CH_CONTEXT_BREAKDOWN_VERB = 'catcode:context-breakdown-verb'
-const CH_HISTORY_LOAD_EARLIER = 'catcode:history-load-earlier'
-const CH_SESSION_ACTION_VERB = 'catcode:session-action-verb'
-const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'
-const CH_SETTINGS_VERB = 'catcode:settings-verb'
-const CH_STATS_QUERY = 'catcode:stats-query'
-const CH_PING = 'catcode:ping'
-const CH_RESTART = 'catcode:restart'
-const CH_SERVER_FRAME = 'catcode:server-frame'
-const CH_RENDERER_READY = 'catcode:renderer-ready'
-const CH_DELIVERY_ACK = 'catcode:delivery-ack'
-const CH_RENDERER_FAULT = 'catcode:renderer-fault'
-const CH_SET_APPEARANCE = 'catcode:set-appearance'
-const CH_SET_GLASS_MODE = 'catcode:set-glass-mode'
-const CH_OPEN_LOGS = 'catcode:open-logs'
-const CH_SAVE_DIAGNOSTICS = 'catcode:save-diagnostics'
-const CH_DELIVERY_HEALTH_PROBE = 'catcode:delivery-health-probe'
-const CH_DELIVERY_HEALTH_RESPONSE = 'catcode:delivery-health-response'
-const CH_REFRESH_ACCOUNTS_POOL = 'catcode:refresh-accounts-pool'
 
 // A document reload must never acknowledge work from its predecessor.
 const deliveryDocumentId = crypto.randomUUID()
@@ -207,23 +228,6 @@ ipcRenderer.on(CH_DELIVERY_HEALTH_PROBE, () => {
     // nothing beyond one sample.
   }
 })
-
-// Control-plane channels (HC3 — fixed, per-method; must match main.ts).
-const CH_HOST_CREATE = 'catcode:host:create'
-const CH_HOST_CREATE_IN_WORKSPACE = 'catcode:host:create-in-workspace'
-const CH_HOST_RESTORE = 'catcode:host:restore'
-const CH_HOST_CLOSE = 'catcode:host:close'
-const CH_HOST_LIST = 'catcode:host:list'
-const CH_HOST_PICK_DIR = 'catcode:host:pick-directory'
-const CH_HOST_PICK_ATTACHMENT_FILE = 'catcode:host:pick-attachment-file'
-const CH_HOST_PREVIEW = 'catcode:host:preview'
-const CH_HOST_SESSIONS_CATALOG = 'catcode:host:sessions-catalog'
-const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'
-const CH_HOST_SAVE_TEXT = 'catcode:host:save-text'
-const CH_HOST_OPEN_WORKSPACE_FILE = 'catcode:host:open-workspace-file'
-const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'
-const CH_HOST_EVENT = 'catcode:host:event'
-const CH_HOST_VISIBLE_SESSIONS = 'catcode:host:visible-sessions'
 
 const bridge: CatCodeBridge = {
   submit(sessionId: SessionId, prompt: SubmitPrompt, options?: SubmitOptions): void {
@@ -567,6 +571,26 @@ const bridge: CatCodeBridge = {
   closeSession(appSessionId: SessionId): Promise<HostResult<void>> {
     sendGuard.assertAllowed({ appSessionId })
     return ipcRenderer.invoke(CH_HOST_CLOSE, appSessionId) as Promise<
+      HostResult<void>
+    >
+  },
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>> {
+    // PEER-SESSIONS §6 — the user's "don't let peers reopen this" decision.
+    // Id-only + a boolean, the same posture as closeSession: the renderer names
+    // an EXISTING row and authors no rule, no path and no peer. Main re-validates
+    // and the host re-checks the id against its own rows (HC2), because the
+    // preload runs in the renderer's process and is never the boundary.
+    sendGuard.assertAllowed({ appSessionId, blocked })
+    // `preloadSource.test.ts` scrapes `ipcRenderer.invoke(` for the channel
+    // constant that follows it, and cross-checks that scrape against an
+    // independent count of the call sites. A channel argument it cannot read (a
+    // helper call, a cast, a literal) now FAILS that guard instead of vanishing
+    // from it, so no sender can hide from the proof that none rides a
+    // renderer-supplied channel name.
+    return ipcRenderer.invoke(CH_HOST_SET_PEER_WAKE_BLOCKED, appSessionId, blocked) as Promise<
       HostResult<void>
     >
   },

@@ -11,9 +11,15 @@ function preloadSource(): string {
   return readFileSync(new URL('../preload/preload.ts', import.meta.url), 'utf8')
 }
 
+function channelsSource(): string {
+  return readFileSync(new URL('../shared/ipcChannels.ts', import.meta.url), 'utf8')
+}
+
 test('the glass preference sender is fixed, guarded, and declared on both sides', () => {
-  expect(mainSource()).toContain(`const CH_SET_GLASS_MODE = ${CHANNEL}`)
-  expect(preloadSource()).toContain(`const CH_SET_GLASS_MODE = ${CHANNEL}`)
+  // One declaration, imported at both ends, so the two cannot drift apart.
+  expect(channelsSource()).toContain(`export const CH_SET_GLASS_MODE = ${CHANNEL}`)
+  expect(mainSource()).toContain('CH_SET_GLASS_MODE')
+  expect(preloadSource()).toContain('CH_SET_GLASS_MODE')
   expect(preloadSource()).toContain('setGlassMode(enabled: boolean): void')
   expect(preloadSource()).toContain('sendGuard.assertAllowed({ enabled })')
   expect(preloadSource()).toContain('ipcRenderer.send(CH_SET_GLASS_MODE, enabled)')

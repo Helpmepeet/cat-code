@@ -4,14 +4,7 @@ import { ReasoningLayoutProvider } from './ReasoningLayoutProvider.js'
 import { REASONING_LAYOUT_STORAGE_KEY } from './reasoningLayout.js'
 import { TranscriptRowsView } from './TranscriptView.js'
 import type { NestedTranscriptRow } from './transcriptProjector.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 const REASONING_ROW: NestedTranscriptRow = {
   sessionId: 's',

@@ -255,14 +255,75 @@ export const RESUME_BUSY_EXIT_CODE = 6
 export const MAX_HOST_REQUEST_BYTES = MAX_FRAME_BYTES
 
 /**
- * HR1 — main's own per-session rate cap on `host.request`, all verbs together.
- * A sliding window like `MAX_FRAMES_PER_WINDOW`, but a far longer one: these are
- * deliberate model actions (list, create, send), not UI traffic, so the honest
- * bound is "a minute's worth of tool calls", not a per-second burst.
+ * HR1 — main's own per-session rate cap on the MODEL'S host requests, all
+ * model-facing verbs together. A sliding window like `MAX_FRAMES_PER_WINDOW`,
+ * but a far longer one: these are deliberate model actions (list, create, send),
+ * not UI traffic, so the honest bound is "a minute's worth of tool calls", not a
+ * per-second burst.
+ *
+ * `peer.ack` is deliberately NOT counted here. An ack is main-induced
+ * bookkeeping — main routes a message, the recipient must ack it — so charging
+ * it to the recipient's allowance lets senders spend a session's budget for it:
+ * one sender at the pair bucket's sustained rate eats roughly two thirds of this
+ * window, and a handful of senders starve the target off the plane entirely,
+ * unable to list, create or send on its own behalf. Acks ride
+ * `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` below, which bounds them as FRAMES
+ * without letting anyone else spend the model's allowance.
  */
 export const MAX_HOST_REQUESTS_PER_WINDOW = 60
-/** The window `MAX_HOST_REQUESTS_PER_WINDOW` is counted over. */
+/** The window both host-request rate caps are counted over. */
 export const HOST_REQUEST_WINDOW_MS = 60_000
+
+/**
+ * HR1 / A6 — the flood bound on host-request FRAMES, charged before anything is
+ * parsed or serialized.
+ *
+ * `MAX_HOST_REQUESTS_PER_WINDOW` above bounds only what survives validation, so
+ * on its own it bounds nothing that matters: an invalid or unknown-verb request
+ * is answered and returns before any budget is touched, and each one costs main
+ * a `JSON.stringify` on a payload the channel bounds only at its 32 MiB sanity
+ * cap. A6 is precisely "a compromised sidecar floods main with requests", and
+ * the flood shape that reaches main cheapest is the one that never validates.
+ *
+ * So this is charged FIRST, on every frame, valid or not, ack or not. Sized to
+ * clear legitimate traffic with room to spare: the model's own 60, plus the acks
+ * for a full `MAX_PENDING_PEER_MESSAGES` backlog, plus redelivery after a
+ * restore, is comfortably under it.
+ */
+export const MAX_HOST_REQUEST_FRAMES_PER_WINDOW = 240
+
+/**
+ * Max chars of any single free-form host-request ARG that is not a message body
+ * (a peer name, a model id, an effort, a correlation id). Bodies are bounded by
+ * `MAX_PEER_TEXT_BYTES` instead.
+ *
+ * Here rather than in the handler because PEER-SESSIONS §7 asks for every new
+ * constant to live in this file, "named here so a later change is a visible
+ * diff" — a bound that sits inside the module it bounds is exactly the one that
+ * moves without anyone noticing.
+ */
+export const MAX_HOST_REQUEST_ARG_CHARS = 256
+
+/**
+ * How many times main will re-send one held peer message before giving up on it.
+ *
+ * The redelivery in `onReady` exists for a recipient that died before acking
+ * (§4 step 6), and it had no counter: a message the recipient REJECTS rather
+ * than drops is re-sent on every subsequent ready, forever, holding one of the
+ * `MAX_PENDING_PEER_MESSAGES` slots for the life of the window. A rejection is
+ * not supposed to be reachable — the frame is main-built and schema-valid by
+ * construction — which is exactly why the loop needs a bound: an unreachable
+ * state that becomes reachable must degrade to a logged drop, not to a
+ * permanent retry against a recipient that has already refused it twice.
+ *
+ * What one attempt MEANS changed when the ack moved to consumption
+ * (2026-09-04): a wake that ends unacked is now the ordinary shape of a process
+ * that died before its turn reached the message, not evidence of a rejection.
+ * So `handlePeerAck` clears the count on every ack the row sends, and this
+ * bounds wakes during which the row consumed NOTHING. The number stays 3
+ * because that is still the shape of a recipient that refuses everything.
+ */
+export const MAX_PEER_DELIVERY_ATTEMPTS = 3
 
 /**
  * The longest a chain of peer messages may grow before main refuses it
@@ -309,6 +370,41 @@ export const PEER_CHAIN_WINDOW_MS = 10 * 60_000
  * multibyte text cannot advertise a size the frame cannot carry.
  */
 export const MAX_PEER_TEXT_BYTES = 64 * 1024
+
+/**
+ * `ReadPeer`'s own byte budget for what it hands back (PEER-SESSIONS §7, §8).
+ *
+ * A THIRD bound again, and for the same reason the two above are separate: this
+ * one does not protect a frame or a queue, it protects the READER'S CONTEXT. The
+ * whole design premise of §8 is that reading a peer's transcript whole is the
+ * failure mode, so the tool always answers within a budget and says so rather
+ * than returning everything it found.
+ *
+ * The default is what an unparameterised call gets; the max is the ceiling on
+ * what the model may ask for. Both are measured on the FINAL text, after
+ * redaction and control-text escaping, so the number bounds what is actually
+ * spent. `maxBytes` outside the range is CLAMPED into it and never an error
+ * (§7 table: "the tool clamps, never errors"), because a model that guesses a
+ * bound should get a bounded read, not a refusal it has to learn to avoid.
+ *
+ * RAISED 2026-09-05, when the read's unit became a TURN and `limit` was
+ * removed, leaving this the only count bound there is. A median peer session is
+ * 5 turns, and the proposed shape built against two real peers measured 24,089
+ * and 17,272 bytes for exactly that: 16 KiB returned a median peer in pieces.
+ * Cost is not what bounds this. A peer runs at 372,000 tokens (Codex) or
+ * 1,000,000 (a frontier Claude model) of context (`src/utils/context.ts`), so
+ * 32 KiB is roughly 2.5% of the smaller window, and half an answer costs a
+ * second call plus the wrong conclusion drawn from the first.
+ */
+export const PEER_READ_DEFAULT_BYTES = 32 * 1024
+export const MAX_PEER_READ_BYTES = 128 * 1024
+
+/**
+ * Max UTF-8 BYTES of a `ReadPeer` search query. Small on purpose: it is a
+ * substring to look for inside one named peer's transcript, not a document. It
+ * bounds the only free text this read-only tool accepts.
+ */
+export const MAX_PEER_QUERY_BYTES = 512
 
 /**
  * How long main waits for a woken row's `ready` frame before answering

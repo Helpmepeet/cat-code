@@ -10,7 +10,7 @@
  * the same best-effort store the workspace layout uses (`workspaceLayout.ts`).
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   DEFAULT_REASONING_LAYOUT,
@@ -18,37 +18,24 @@ import {
   readReasoningLayoutFromStorage,
   writeReasoningLayoutToStorage,
   type ReasoningLayoutContextValue,
-  type ReasoningLayoutMode,
 } from './reasoningLayout.js'
-
-type LayoutStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): LayoutStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function ReasoningLayoutProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: LayoutStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [mode, setModeState] = useState<ReasoningLayoutMode>(
-    () => readReasoningLayoutFromStorage(store) ?? DEFAULT_REASONING_LAYOUT,
-  )
-  const setMode = useCallback(
-    (next: ReasoningLayoutMode) => {
-      setModeState(next)
-      writeReasoningLayoutToStorage(store, next)
-    },
-    [store],
+  const [mode, setMode] = useViewPreference(
+    storage,
+    readReasoningLayoutFromStorage,
+    writeReasoningLayoutToStorage,
+    DEFAULT_REASONING_LAYOUT,
   )
   const value = useMemo<ReasoningLayoutContextValue>(
     () => ({ mode, setMode }),

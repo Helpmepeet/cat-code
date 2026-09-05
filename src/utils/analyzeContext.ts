@@ -1,4 +1,3 @@
-import { feature } from 'bun:bundle'
 import type { Anthropic } from '@anthropic-ai/sdk'
 import {
   getAgentModeSystemPromptSections,
@@ -1239,24 +1238,9 @@ export async function analyzeContextUsage(
   // Reserved space after messages (not counted in actualUsage shown to user).
   // Reactive prefix compaction does NOT skip this: it changes which compaction
   // runs at the autocompact threshold, not whether the threshold fires, so the
-  // reserved buffer stays real. Context-collapse (marble_origami) does skip it
-  // — collapse owns the threshold ladder and autocompact is suppressed in
-  // shouldAutoCompact, so the 33k buffer shown here would be a lie.
+  // reserved buffer stays real.
   let reservedTokens = 0
-  let skipReservedBuffer = false
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const { isContextCollapseEnabled } =
-      require('../services/contextCollapse/index.js') as typeof import('../services/contextCollapse/index.js')
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    if (isContextCollapseEnabled()) {
-      skipReservedBuffer = true
-    }
-  }
-  if (skipReservedBuffer) {
-    // No buffer category pushed — collapse manages headroom itself and doesn't
-    // need a visible reservation in the grid.
-  } else if (isAutoCompact && autoCompactThreshold !== undefined) {
+  if (isAutoCompact && autoCompactThreshold !== undefined) {
     // Autocompact buffer (from effective context)
     reservedTokens = contextWindow - autoCompactThreshold
     cats.push({

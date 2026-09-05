@@ -5,18 +5,15 @@ import {
   readToolsExpandedFromStorage,
   writeToolsExpandedToStorage,
 } from './toolsExpanded.js'
+import {
+  memoryStorage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
-function store(initial?: string) {
-  const map = new Map<string, string>()
-  if (initial !== undefined) map.set(TOOLS_EXPANDED_STORAGE_KEY, initial)
-  return {
-    map,
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      map.set(key, value)
-    },
-  }
-}
+const store = (initial?: string) =>
+  memoryStorage(
+    initial === undefined ? {} : { [TOOLS_EXPANDED_STORAGE_KEY]: initial },
+  )
 
 test('the shipped default is the prototype default: tool cards start closed', () => {
   expect(DEFAULT_TOOLS_EXPANDED).toBe(false)
@@ -46,14 +43,7 @@ test('a foreign, damaged or future-versioned payload is ignored, never guessed',
 test('an absent or throwing store degrades quietly, never breaking the session', () => {
   expect(readToolsExpandedFromStorage(null)).toBeNull()
   expect(() => writeToolsExpandedToStorage(null, true)).not.toThrow()
-  const hostile = {
-    getItem: () => {
-      throw new Error('denied')
-    },
-    setItem: () => {
-      throw new Error('denied')
-    },
-  }
+  const hostile = throwingStorage()
   expect(readToolsExpandedFromStorage(hostile)).toBeNull()
   expect(() => writeToolsExpandedToStorage(hostile, true)).not.toThrow()
 })

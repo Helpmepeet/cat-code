@@ -264,6 +264,20 @@ describe('prompt steers the model to targeted ranges', () => {
     expect(prompt).toContain(OFFSET_INSTRUCTION_TARGETED)
     expect(prompt).not.toContain('recommended to read the whole file')
   })
+
+  test('the offset and limit parameter text agrees with that prompt', () => {
+    // These two descriptions used to say "only provide if the file is too
+    // large to read at once", which told the model the opposite of both
+    // OFFSET_INSTRUCTION_TARGETED and the system prompt's READ DISCIPLINE.
+    const shape = FileReadTool.inputSchema.shape
+    const offset = shape.offset.description ?? ''
+    const limit = shape.limit.description ?? ''
+
+    expect(offset).not.toContain('Only provide if the file is too large')
+    expect(limit).not.toContain('Only provide if the file is too large')
+    expect(offset).toContain('when you already know which part of the file')
+    expect(limit).toContain('when you already know how much of the file')
+  })
 })
 
 describe('suggestedRetryLimit', () => {

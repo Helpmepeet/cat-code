@@ -197,17 +197,26 @@ function getSimpleSandboxSection(): string {
   ].join('\n')
 }
 
-export function getBashPrompt(provider: APIProvider = getAPIProvider()): string {
+export function getBashPrompt(
+  provider: APIProvider = getAPIProvider(),
+  enabledToolNames?: ReadonlySet<string>,
+): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep in Claude's shell,
   // so we don't steer away from them (and Glob/Grep tools are removed).
   const embedded = hasEmbeddedSearchTools()
 
-  // The registry swaps Edit for Apply_patch on the OpenAI path
-  // (getProviderFileEditTool in ../../tools.ts), so the prompt must name the
-  // tool this provider actually ships.
-  const editToolName = isGPTPromptStyle(provider)
+  // The registry swaps Edit for Apply_patch by SESSION provider
+  // (getProviderFileEditTool in ../../tools.ts) while this prompt renders per
+  // REQUEST provider, so a gpt-* worker inside an Anthropic session was told
+  // to use Apply_patch while Edit shipped. The tool pool is the truth when the
+  // caller passes it; the provider is only the fallback.
+  const editToolName = enabledToolNames?.has(FILE_PATCH_TOOL_NAME)
     ? FILE_PATCH_TOOL_NAME
-    : FILE_EDIT_TOOL_NAME
+    : enabledToolNames?.has(FILE_EDIT_TOOL_NAME)
+      ? FILE_EDIT_TOOL_NAME
+      : isGPTPromptStyle(provider)
+        ? FILE_PATCH_TOOL_NAME
+        : FILE_EDIT_TOOL_NAME
 
   const toolPreferenceItems = [
     ...(embedded
@@ -260,7 +269,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   ]
   const backgroundNote = getBackgroundUsageNote()
   const workingDirectoryNote =
-    "The main session's working directory persists between commands, but shell state does not. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
+    "The main session's working directory persists between commands and is used by later tools. A foreground Bash command updates it to the command's final `pwd`, but shell state does not persist. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',

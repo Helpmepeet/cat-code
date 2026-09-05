@@ -21,15 +21,16 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const TOOLS_EXPANDED_STORAGE_KEY = 'catcode.toolsExpanded.v1'
 
 /** The prototype's own default (`AppV2.jsx:43`): closed. */
 export const DEFAULT_TOOLS_EXPANDED = false
-
-type PersistedToolsExpanded = { version: 1; expanded: boolean }
-
-type ToolsExpandedStorage = Pick<Storage, 'getItem' | 'setItem'>
 
 export type ToolsExpandedContextValue = {
   expanded: boolean
@@ -42,30 +43,19 @@ export const ToolsExpandedContext = createContext<ToolsExpandedContextValue>({
 })
 
 export function readToolsExpandedFromStorage(
-  storage: ToolsExpandedStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): boolean | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(TOOLS_EXPANDED_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedToolsExpanded>
-    if (value.version !== 1 || typeof value.expanded !== 'boolean') return null
-    return value.expanded
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    TOOLS_EXPANDED_STORAGE_KEY,
+    'expanded',
+    value => (typeof value === 'boolean' ? value : null),
+  )
 }
 
 export function writeToolsExpandedToStorage(
-  storage: ToolsExpandedStorage | null,
+  storage: ViewPreferenceStorage | null,
   expanded: boolean,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedToolsExpanded = { version: 1, expanded }
-    storage.setItem(TOOLS_EXPANDED_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect live session state (`reasoningLayout.ts`, `workspaceLayout.ts:88`).
-  }
+  writeViewPreference(storage, TOOLS_EXPANDED_STORAGE_KEY, 'expanded', expanded)
 }

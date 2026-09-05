@@ -540,6 +540,40 @@ function getOwnedTranscriptPath(): string | null {
 }
 
 /**
+ * Shared body of the diagnostic appenders below: resolve the owning transcript,
+ * stamp the standard `system` envelope, append, and swallow any failure.
+ *
+ * The lease assertion runs OUTSIDE the try on purpose, so a lease violation
+ * still throws to the caller instead of disappearing into the best-effort
+ * catch. `agentId` picks the agent-owned transcript when the record belongs to
+ * a subagent; a null path means nothing owns a transcript, so nothing is
+ * written (a diagnostic must never mint an orphan transcript).
+ */
+function appendSystemDiagnostic(
+  subtype: string,
+  entry: Record<string, unknown>,
+  options?: { agentId?: AgentId; includeSessionId?: boolean },
+): void {
+  assertActiveTranscriptLease(getSessionId())
+  try {
+    const transcriptPath = options?.agentId
+      ? getOwnedAgentTranscriptPath(options.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype,
+      ...(options?.includeSessionId ? { sessionId: getSessionId() } : {}),
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
  * Append a codex_request_start diagnostic entry to the current session JSONL.
  *
  * The start-side counterpart of `recordCodexSendPath` /
@@ -571,20 +605,7 @@ export function recordCodexRequestStart(entry: {
   account_id_prefix: string | null
   model: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_request_start',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_request_start', entry)
 }
 
 /**
@@ -615,20 +636,7 @@ export function recordCodexSendPath(entry: {
   input_tokens?: number
   route_headers?: Record<string, string>
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_send_path',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_send_path', entry)
 }
 
 /**
@@ -665,20 +673,7 @@ export function recordCodexStreamSurface(entry: {
   error_name?: string
   fallback_error_name?: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_stream_surface',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_stream_surface', entry)
 }
 
 /**
@@ -830,23 +825,10 @@ export function recordPromptCacheBreak(entry: {
   newEffortValue: string
   triggeringCommand?: string | null
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'prompt_cache_break',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('prompt_cache_break', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 /**
@@ -894,23 +876,10 @@ export function recordPostTurnStall(entry: {
   query_source: string
   agentId?: AgentId
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'post_turn_stall',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('post_turn_stall', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 export type RemoteAgentMetadata = {
@@ -4732,6 +4701,45 @@ export async function loadTranscriptFile(
   let activeConversationRoot: UUID | null | undefined
   const activeConversationDescendants = new Set<UUID>()
 
+  // Session-scoped metadata entries. Both passes below read them — the
+  // pre-boundary metadata-only scan and the main entry walk — so the dispatch
+  // lives here once: a new metadata entry type added to only one of the two
+  // copies would load from short transcripts and silently vanish from
+  // compacted ones. Returns whether the entry was one of these types.
+  const applySessionMetadataEntry = (entry: Entry): boolean => {
+    if (entry.type === 'summary' && entry.leafUuid) {
+      summaries.set(entry.leafUuid, entry.summary)
+    } else if (entry.type === 'custom-title' && entry.sessionId) {
+      setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
+    } else if (entry.type === 'tag' && entry.sessionId) {
+      setLatestMapValue(tags, entry.sessionId, entry.tag)
+    } else if (entry.type === 'archived' && entry.sessionId) {
+      setLatestMapValue(archived, entry.sessionId, entry.archived === true)
+    } else if (entry.type === 'agent-name' && entry.sessionId) {
+      setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
+    } else if (entry.type === 'agent-color' && entry.sessionId) {
+      setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
+    } else if (entry.type === 'agent-setting' && entry.sessionId) {
+      setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
+    } else if (entry.type === 'mode' && entry.sessionId) {
+      setLatestMapValue(modes, entry.sessionId, entry.mode)
+    } else if (
+      entry.type === 'thread-goal-updated' ||
+      entry.type === 'thread-goal-cleared'
+    ) {
+      applyThreadGoalEntry(threadGoals, entry)
+    } else if (entry.type === 'worktree-state' && entry.sessionId) {
+      setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
+    } else if (entry.type === 'pr-link' && entry.sessionId) {
+      setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
+      setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
+      setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+    } else {
+      return false
+    }
+    return true
+  }
+
   try {
     // For large transcripts, avoid materializing megabytes of stale content.
     // Single forward chunked read: attribution-snapshot lines are skipped at
@@ -4848,34 +4856,7 @@ export async function loadTranscriptFile(
         Buffer.from(metadataLines.join('\n')),
       )
       for (const entry of metaEntries) {
-        if (entry.type === 'summary' && entry.leafUuid) {
-          summaries.set(entry.leafUuid, entry.summary)
-        } else if (entry.type === 'custom-title' && entry.sessionId) {
-          setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-        } else if (entry.type === 'tag' && entry.sessionId) {
-          setLatestMapValue(tags, entry.sessionId, entry.tag)
-        } else if (entry.type === 'archived' && entry.sessionId) {
-          setLatestMapValue(archived, entry.sessionId, entry.archived === true)
-        } else if (entry.type === 'agent-name' && entry.sessionId) {
-          setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-        } else if (entry.type === 'agent-color' && entry.sessionId) {
-          setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-        } else if (entry.type === 'agent-setting' && entry.sessionId) {
-          setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-        } else if (entry.type === 'mode' && entry.sessionId) {
-          setLatestMapValue(modes, entry.sessionId, entry.mode)
-        } else if (
-          entry.type === 'thread-goal-updated' ||
-          entry.type === 'thread-goal-cleared'
-        ) {
-          applyThreadGoalEntry(threadGoals, entry)
-        } else if (entry.type === 'worktree-state' && entry.sessionId) {
-          setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-        } else if (entry.type === 'pr-link' && entry.sessionId) {
-          setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-          setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-          setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
-        }
+        applySessionMetadataEntry(entry)
       }
     }
 
@@ -4948,33 +4929,8 @@ export async function loadTranscriptFile(
           parseActiveConversationTipEntry(entry) ?? undefined
         activeConversationRoot = activeConversationTip?.tipUuid
         activeConversationDescendants.clear()
-      } else if (entry.type === 'summary' && entry.leafUuid) {
-        summaries.set(entry.leafUuid, entry.summary)
-      } else if (entry.type === 'custom-title' && entry.sessionId) {
-        setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-      } else if (entry.type === 'tag' && entry.sessionId) {
-        setLatestMapValue(tags, entry.sessionId, entry.tag)
-      } else if (entry.type === 'archived' && entry.sessionId) {
-        setLatestMapValue(archived, entry.sessionId, entry.archived === true)
-      } else if (entry.type === 'agent-name' && entry.sessionId) {
-        setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-      } else if (entry.type === 'agent-color' && entry.sessionId) {
-        setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-      } else if (entry.type === 'agent-setting' && entry.sessionId) {
-        setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-      } else if (entry.type === 'mode' && entry.sessionId) {
-        setLatestMapValue(modes, entry.sessionId, entry.mode)
-      } else if (
-        entry.type === 'thread-goal-updated' ||
-        entry.type === 'thread-goal-cleared'
-      ) {
-        applyThreadGoalEntry(threadGoals, entry)
-      } else if (entry.type === 'worktree-state' && entry.sessionId) {
-        setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-      } else if (entry.type === 'pr-link' && entry.sessionId) {
-        setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-        setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-        setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+      } else if (applySessionMetadataEntry(entry)) {
+        // Handled above: session-scoped metadata shared with the pre-boundary pass.
       } else if (entry.type === 'file-history-snapshot') {
         fileHistorySnapshots.set(entry.messageId, entry)
       } else if (entry.type === 'attribution-snapshot') {

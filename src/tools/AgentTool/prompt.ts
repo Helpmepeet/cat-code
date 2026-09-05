@@ -6,6 +6,7 @@ import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
+import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
@@ -369,12 +370,12 @@ ${agentModeWorkerControlGuidance}`
   const fileSearchHint = embedded
     ? '`find` via the Bash tool'
     : `the ${GLOB_TOOL_NAME} tool`
-  // The "class Foo" example is about content search. Non-embedded stays Glob
-  // (original intent: find-the-file-containing). Embedded gets grep because
-  // find -name doesn't look at file contents.
+  // The "class Foo" example is a content search, so both paths point at a
+  // content searcher: embedded builds have no dedicated Grep tool and use grep
+  // via Bash; everywhere else uses the Grep tool. Glob matches file names only.
   const contentSearchHint = embedded
     ? '`grep` via the Bash tool'
-    : `the ${GLOB_TOOL_NAME} tool`
+    : `the ${GREP_TOOL_NAME} tool`
   const whenNotToUseSection = forkEnabled
     ? ''
     : isGPTPromptStyle
@@ -414,7 +415,7 @@ ${usageHeader}
     !forkEnabled
       ? `
 - You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
+- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.`
       : ''
   }
 ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.${canSendMessage ? ` ${SEND_MESSAGE_TOOL_NAME} does not cancel it.` : ''}\n` : ''}- ${
@@ -425,7 +426,7 @@ ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME
 - The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks${isGPTPromptStyle ? ', each with run_in_background: true' : ''}. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls${isGPTPromptStyle ? ', each with run_in_background: true' : ''}.
+- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${
     process.env.USER_TYPE === 'ant'
       ? `\n- You can set \`isolation: "remote"\` to run the agent in a remote CCR environment. This is always a background task; you'll be notified when it completes. Use for long-running tasks that need a fresh sandbox.`

@@ -1590,6 +1590,111 @@ test('the activity line keeps the command when the model wrote no description', 
   expect(html).not.toContain('Bash git status')
 })
 
+test('a SendToPeer card says who was messaged AND what was sent', () => {
+  // The operator's complaint: the header read `SendToPeer` and nothing else, so
+  // the only way to learn what went out was to open the card.
+  const html = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: {
+        to: 'Bear',
+        text: 'The sidecar rejects the frame.\nCan you check the schema?',
+      },
+      status: 'success',
+    }),
+  )
+  expect(html).toContain('message Bear')
+  expect(html).toContain('The sidecar rejects the frame. Can you check the schema?')
+  // The tool's own name is no longer what occupies the slot. (The row key still
+  // carries it; that is the test helper's id, not anything on screen.)
+  expect(html).not.toContain('>SendToPeer<')
+})
+
+test('a long peer message is cut in the header, and a short one is not marked as cut', () => {
+  const long = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'x'.repeat(400) },
+      status: 'success',
+    }),
+  )
+  expect(long).toContain(`${'x'.repeat(160)}…`)
+  expect(long).not.toContain('x'.repeat(161))
+
+  const short = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'success',
+    }),
+  )
+  expect(short).toContain('message Bear: ping')
+  expect(short).not.toContain('…')
+})
+
+test('a ReadPeer card names the peer, and its query only when it really searched', () => {
+  const tail = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      // No query, so this is a tail read and there is nothing to quote.
+      input: { peer: 'Bear', maxBytes: 32768 },
+      status: 'success',
+    }),
+  )
+  expect(tail).toContain('read Bear')
+  expect(tail).not.toContain('read Bear:')
+
+  const blank = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      // Whitespace is absent to the tool, so it reads as a tail here as well.
+      input: { peer: 'Bear', query: '   ' },
+      status: 'success',
+      id: 'blank',
+    }),
+  )
+  expect(blank).toContain('read Bear')
+  expect(blank).not.toContain('read Bear:')
+
+  const search = render(
+    toolRow({
+      toolName: 'ReadPeer',
+      toolFamily: 'other',
+      input: { peer: 'Bear', query: 'schema' },
+      status: 'success',
+      id: 'search',
+    }),
+  )
+  expect(search).toContain('read Bear: schema')
+})
+
+test('a CreatePeer card shows the instruction, because the new name does not exist yet', () => {
+  const html = render(
+    toolRow({
+      toolName: 'CreatePeer',
+      toolFamily: 'other',
+      input: { prompt: 'Audit the permission boundary tests', model: 'gpt-5.6-luna' },
+      status: 'success',
+    }),
+  )
+  expect(html).toContain('new session: Audit the permission boundary tests')
+  expect(html).not.toContain('>CreatePeer<')
+})
+
+test('a ListPeers card keeps the tool name, because the call carries no arguments', () => {
+  // Nothing is invented for it: its input schema is empty, so there is no fact
+  // to put in the slot that the name does not already give.
+  const html = render(
+    toolRow({ toolName: 'ListPeers', toolFamily: 'other', status: 'success' }),
+  )
+  expect(html).toContain('ListPeers')
+})
+
 test('a finished Agent card digests TOOL CALLS, never the prose rows mixed in', () => {
   const html = render(
     agentRow('owner', { subagent_type: 'Explore', description: 'investigate' }, 'success', [
@@ -2454,6 +2559,44 @@ test('a peer turn names its sender, and the row accent sits on the name not the 
   // The GLYPH still gives its accent up: a peer row is still a peer row.
   expect(unnamed).toContain('text-[12px] leading-5 text-text-ghost')
   expect(unnamed).not.toContain('text-[12px] leading-5 text-accent')
+})
+
+/**
+ * From the delivered frame to the drawn row: the model-facing envelope the
+ * sidecar wraps a peer message in (`wrapCrossSessionMessage`) must not reach
+ * the screen. Driven through `projectServerFrame` rather than a hand-built row,
+ * because the strip lives in the projector and a row literal would prove
+ * nothing about it (operator sitting, 2026-09-04).
+ */
+test('a delivered peer message draws its body, not the envelope around it', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, inspectorReady('peer-1'))
+  state = projectServerFrame(
+    state,
+    inspectorMessage(
+      'peer-1',
+      // Parsed JSON, exactly as the socket delivers it.
+      JSON.parse(
+        JSON.stringify({
+          type: 'user',
+          message: {
+            role: 'user',
+            content:
+              '<cross-session-message from="Stope">\nran the migration, all green\n</cross-session-message>',
+          },
+          parent_tool_use_id: null,
+          uuid: '00000000-0000-4000-8000-0000000d0003',
+          origin: { kind: 'peer', name: 'Stope' },
+        }),
+      ) as SDKMessage,
+    ),
+  )
+  const row = selectNestedTranscriptRows(state, 'peer-1')[0]
+  if (row?.kind !== 'injected-turn') throw new Error('expected a projected injected-turn row')
+  const html = render(row)
+  expect(html).toContain('ran the migration, all green')
+  expect(html).toContain('Stope')
+  expect(html).not.toContain('cross-session-message')
 })
 
 /**

@@ -25,12 +25,18 @@
  * restoring or opening a session cannot move a group; only an explicit
  * drag/keyboard reorder can.
  *
- * Renderer-local persistence, exactly the `reasoningLayout.ts` idiom: versioned
- * JSON under a `catcode.`-prefixed key, read/written through an injectable
- * `Pick<Storage, …>`, best-effort (a storage failure never touches live session
+ * Renderer-local persistence through the shared codec (`viewPreference.ts`):
+ * versioned JSON under a `catcode.`-prefixed key, read/written through an
+ * injectable storage, best-effort (a storage failure never touches live session
  * state). No protocol frame, no host/registry field, no preload channel — this
  * is a view preference with no engine meaning (SECURITY-MINIMUM §2).
  */
+
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY =
   'catcode.sidebarWorkspaceOrder.v1'
@@ -57,13 +63,6 @@ export type WorkspaceOrder = readonly string[]
 
 /** Which side of the hovered group the dragged group would land on. */
 export type WorkspaceDropEdge = 'before' | 'after'
-
-type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedWorkspaceOrder = {
-  version: 1
-  cwds: string[]
-}
 
 export function createWorkspaceOrder(): WorkspaceOrder {
   return []
@@ -101,38 +100,26 @@ function normalizeWorkspaceOrder(values: readonly unknown[]): string[] {
 }
 
 export function readWorkspaceOrderFromStorage(
-  storage: OrderStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): WorkspaceOrder | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedWorkspaceOrder>
-    if (value.version !== 1 || !Array.isArray(value.cwds)) return null
-    return normalizeWorkspaceOrder(value.cwds)
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY,
+    'cwds',
+    value => (Array.isArray(value) ? normalizeWorkspaceOrder(value) : null),
+  )
 }
 
 export function writeWorkspaceOrderToStorage(
-  storage: OrderStorage | null,
+  storage: ViewPreferenceStorage | null,
   order: WorkspaceOrder,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedWorkspaceOrder = {
-      version: 1,
-      cwds: normalizeWorkspaceOrder(order),
-    }
-    storage.setItem(
-      SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY,
-      JSON.stringify(value),
-    )
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (`workspaceLayout.ts:88`).
-  }
+  writeViewPreference(
+    storage,
+    SIDEBAR_WORKSPACE_ORDER_STORAGE_KEY,
+    'cwds',
+    normalizeWorkspaceOrder(order),
+  )
 }
 
 /**

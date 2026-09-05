@@ -8,11 +8,11 @@
  * in the window that the engine has never seen and cannot replay. Quitting with
  * a half-written prompt lost it the same way.
  *
- * Renderer-local persistence, the `sidebarWorkspaceOrder.ts` idiom verbatim:
+ * Renderer-local persistence through the shared codec (`viewPreference.ts`):
  * versioned JSON under a `catcode.`-prefixed key, read and written through an
- * injectable `Pick<Storage, …>`, best-effort. A draft is text the user typed and
- * has not sent; it has no engine meaning until they do, so it stays on this side
- * of the wire — no protocol frame, no registry field, no preload channel
+ * injectable storage, best-effort. A draft is text the user typed and has not
+ * sent; it has no engine meaning until they do, so it stays on this side of the
+ * wire — no protocol frame, no registry field, no preload channel
  * (SECURITY-MINIMUM §2).
  *
  * Keyed by `SessionId` exactly like the in-memory state, so a restored draft
@@ -22,6 +22,11 @@
  */
 
 import type { PromptDraftState } from './appModel.js'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const PROMPT_DRAFTS_STORAGE_KEY = 'catcode.promptDrafts.v1'
 
@@ -38,13 +43,6 @@ export const PROMPT_DRAFTS_STORAGE_KEY = 'catcode.promptDrafts.v1'
  */
 export const MAX_PERSISTED_PROMPT_DRAFTS = 32
 export const MAX_PERSISTED_PROMPT_DRAFT_CHARS = 20_000
-
-type PromptDraftStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedPromptDrafts = {
-  version: 1
-  drafts: Record<string, string>
-}
 
 /**
  * Storage-boundary normalization: string values only, blanks dropped (an empty
@@ -75,39 +73,33 @@ function normalizePromptDrafts(value: unknown): Record<string, string> {
   return out
 }
 
+/**
+ * Unreadable storage (a private window, a thumbnail capture, a corrupt value)
+ * degrades to "no saved drafts", never to a failed mount. A version-1 record
+ * whose `drafts` is not an object normalizes to the empty set rather than to
+ * null, so a damaged half is dropped without discarding the record.
+ */
 export function readPromptDraftsFromStorage(
-  storage: PromptDraftStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): PromptDraftState | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(PROMPT_DRAFTS_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedPromptDrafts>
-    if (value.version !== 1) return null
-    return normalizePromptDrafts(value.drafts) as PromptDraftState
-  } catch {
-    // Unreadable storage (a private window, a thumbnail capture, a corrupt
-    // value) degrades to "no saved drafts", never to a failed mount.
-    return null
-  }
+  return readViewPreference(
+    storage,
+    PROMPT_DRAFTS_STORAGE_KEY,
+    'drafts',
+    value => normalizePromptDrafts(value) as PromptDraftState,
+  )
 }
 
 export function writePromptDraftsToStorage(
-  storage: PromptDraftStorage | null,
+  storage: ViewPreferenceStorage | null,
   drafts: PromptDraftState,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedPromptDrafts = {
-      version: 1,
-      drafts: normalizePromptDrafts(drafts),
-    }
-    storage.setItem(PROMPT_DRAFTS_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // View persistence is best-effort; a storage failure (quota, a locked-down
-    // window) must never affect live session state
-    // (`sidebarWorkspaceOrder.ts`).
-  }
+  writeViewPreference(
+    storage,
+    PROMPT_DRAFTS_STORAGE_KEY,
+    'drafts',
+    normalizePromptDrafts(drafts),
+  )
 }
 
 /**

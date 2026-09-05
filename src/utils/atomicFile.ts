@@ -77,26 +77,47 @@ function syncDirectoryBestEffortSync(directory: string): void {
   }
 }
 
-export async function writeFileAtomicDurable(
+/**
+ * Write `content` to a fresh temp file beside (or in `options.tempDirectory`
+ * next to) the destination and fsync it, returning the staged path for the
+ * caller to publish.
+ *
+ * Every durable writer below shares this half: the data must be on disk before
+ * the name is published, or a crash between the two leaves the destination
+ * pointing at a partial file. On failure nothing is left behind, so a caller
+ * that never reaches publication has nothing to clean up.
+ */
+async function stageTempFile(
   filePath: string,
   content: string | Uint8Array,
-  options: AtomicWriteOptions = {},
-): Promise<void> {
+  options: AtomicWriteOptions,
+): Promise<string> {
   const tempDirectory = options.tempDirectory ?? dirname(filePath)
   await mkdir(tempDirectory, { recursive: true })
   const tempPath = tempPathFor(filePath, tempDirectory)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, {
-      encoding: options.encoding,
-    })
+    await handle.writeFile(content, { encoding: options.encoding })
     await handle.sync()
     await handle.close()
-    handle = undefined
-    await rename(tempPath, filePath)
+    return tempPath
   } catch (error) {
     await handle?.close().catch(() => {})
+    await unlink(tempPath).catch(() => {})
+    throw error
+  }
+}
+
+export async function writeFileAtomicDurable(
+  filePath: string,
+  content: string | Uint8Array,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
+  const tempPath = await stageTempFile(filePath, content, options)
+  try {
+    await rename(tempPath, filePath)
+  } catch (error) {
     await unlink(tempPath).catch(() => {})
     throw error
   }
@@ -108,18 +129,8 @@ export async function writeFileAtomicDurableIfAbsent(
   content: string | Uint8Array,
   options: AtomicWriteOptions = {},
 ): Promise<boolean> {
-  const tempDirectory = options.tempDirectory ?? dirname(filePath)
-  await mkdir(tempDirectory, { recursive: true })
-  const tempPath = tempPathFor(filePath, tempDirectory)
-  let handle: Awaited<ReturnType<typeof open>> | undefined
+  const tempPath = await stageTempFile(filePath, content, options)
   try {
-    handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, {
-      encoding: options.encoding,
-    })
-    await handle.sync()
-    await handle.close()
-    handle = undefined
     try {
       await link(tempPath, filePath)
     } catch (error) {
@@ -135,7 +146,7 @@ export async function writeFileAtomicDurableIfAbsent(
     await syncDirectoryBestEffort(dirname(filePath))
     return true
   } finally {
-    await handle?.close().catch(() => {})
+    // link() leaves the temp under a second name, so it always needs removing.
     await unlink(tempPath).catch(() => {})
   }
 }
@@ -153,17 +164,8 @@ export async function writeFileAtomicDurableIfContentMatches(
   content: string,
   options: AtomicWriteOptions = {},
 ): Promise<'written' | 'conflict'> {
-  const tempDirectory = options.tempDirectory ?? dirname(filePath)
-  await mkdir(tempDirectory, { recursive: true })
-  const tempPath = tempPathFor(filePath, tempDirectory)
-  let handle: Awaited<ReturnType<typeof open>> | undefined
+  const tempPath = await stageTempFile(filePath, content, options)
   try {
-    handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, { encoding: options.encoding })
-    await handle.sync()
-    await handle.close()
-    handle = undefined
-
     // This is a compare-then-rename operation, not a general filesystem CAS.
     // Callers must hold the shared mutation lock when they need to serialize
     // against other engine writers. The comparison still preserves a local
@@ -188,7 +190,7 @@ export async function writeFileAtomicDurableIfContentMatches(
     await syncDirectoryBestEffort(dirname(filePath))
     return 'written'
   } finally {
-    await handle?.close().catch(() => {})
+    // A no-op after a successful rename; removes the staged file on conflict.
     await unlink(tempPath).catch(() => {})
   }
 }

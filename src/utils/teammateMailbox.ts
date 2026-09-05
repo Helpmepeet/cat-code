@@ -1108,37 +1108,26 @@ export function writeToMailbox(
 }
 
 /**
- * Marks only the supplied message IDs as read, leaving all others (including
- * unknown IDs, which are harmless no-ops) untouched. This is the exact-ID
- * counterpart to `markMessagesAsRead`/`markMessagesAsReadByPredicate` for
- * callers that have a `TeamPrincipal` and know precisely which envelopes they
- * finished processing.
+ * Shared lock/read/rewrite skeleton behind every inbox mutator below: take the
+ * inbox lock, re-read the messages under it so the latest state wins, hand them
+ * to `transform`, and write the result back pruned. `transform` returns `null`
+ * when there is nothing to write. A missing inbox returns silently; any other
+ * failure is logged and swallowed so a mailbox update never crashes a turn.
  */
-export async function acknowledgeMailboxMessages(args: {
-  recipient: TeamPrincipal
-  teamName: string
-  messageIds: readonly string[]
-}): Promise<void> {
-  const { recipient, teamName, messageIds } = args
-  if (messageIds.length === 0) return
-  const idSet = new Set(messageIds)
-  const inboxPath = getInboxPath(recipient.name, teamName)
-  const lockFilePath = `${inboxPath}.lock`
-
+async function updateMailboxUnderLock(
+  inboxPath: string,
+  readMessages: () => Promise<TeammateMessage[]>,
+  transform: (messages: TeammateMessage[]) => TeammateMessage[] | null,
+): Promise<void> {
   let release: (() => Promise<void>) | undefined
   try {
     release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
+      lockfilePath: `${inboxPath}.lock`,
       ...LOCK_OPTIONS,
     })
 
-    // Strict read: a transiently-malformed mailbox must bail (caught below),
-    // never be silently truncated to `[]` and rewritten — the same data-loss
-    // guard the write path uses (see readMailboxStrict's doc comment).
-    const messages = await readMailboxStrict(recipient.name, inboxPath)
-    const updated = messages.map(m =>
-      m.messageId && idSet.has(m.messageId) ? { ...m, read: true } : m,
-    )
+    const updated = transform(await readMessages())
+    if (updated === null) return
 
     await writeMailboxAtomically(inboxPath, pruneReadMessages(updated))
   } catch (error) {
@@ -1157,6 +1146,36 @@ export async function acknowledgeMailboxMessages(args: {
 }
 
 /**
+ * Marks only the supplied message IDs as read, leaving all others (including
+ * unknown IDs, which are harmless no-ops) untouched. This is the exact-ID
+ * counterpart to `markMessagesAsRead`/`markMessagesAsReadByPredicate` for
+ * callers that have a `TeamPrincipal` and know precisely which envelopes they
+ * finished processing.
+ */
+export async function acknowledgeMailboxMessages(args: {
+  recipient: TeamPrincipal
+  teamName: string
+  messageIds: readonly string[]
+}): Promise<void> {
+  const { recipient, teamName, messageIds } = args
+  if (messageIds.length === 0) return
+  const idSet = new Set(messageIds)
+  const inboxPath = getInboxPath(recipient.name, teamName)
+
+  await updateMailboxUnderLock(
+    inboxPath,
+    // Strict read: a transiently-malformed mailbox must bail (caught by the
+    // helper), never be silently truncated to `[]` and rewritten — the same
+    // data-loss guard the write path uses (see readMailboxStrict's doc comment).
+    () => readMailboxStrict(recipient.name, inboxPath),
+    messages =>
+      messages.map(m =>
+        m.messageId && idSet.has(m.messageId) ? { ...m, read: true } : m,
+      ),
+  )
+}
+
+/**
  * Mark a specific message in a teammate's inbox as read by index
  * Uses file locking to prevent race conditions
  * @param agentName - The agent name to mark message as read for
@@ -1168,71 +1187,17 @@ export async function markMessageAsReadByIndex(
   teamName: string | undefined,
   messageIndex: number,
 ): Promise<void> {
-  const inboxPath = getInboxPath(agentName, teamName)
-  logForDebugging(
-    `[TeammateMailbox] markMessageAsReadByIndex called: agentName=${agentName}, teamName=${teamName}, index=${messageIndex}, path=${inboxPath}`,
+  await updateMailboxUnderLock(
+    getInboxPath(agentName, teamName),
+    () => readMailbox(agentName, teamName),
+    messages => {
+      if (messageIndex < 0 || messageIndex >= messages.length) return null
+      const message = messages[messageIndex]
+      if (!message || message.read) return null
+      messages[messageIndex] = { ...message, read: true }
+      return messages
+    },
   )
-
-  const lockFilePath = `${inboxPath}.lock`
-
-  let release: (() => Promise<void>) | undefined
-  try {
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: acquiring lock...`,
-    )
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-    logForDebugging(`[TeammateMailbox] markMessageAsReadByIndex: lock acquired`)
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailbox(agentName, teamName)
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: read ${messages.length} messages after lock`,
-    )
-
-    if (messageIndex < 0 || messageIndex >= messages.length) {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: index ${messageIndex} out of bounds (${messages.length} messages)`,
-      )
-      return
-    }
-
-    const message = messages[messageIndex]
-    if (!message || message.read) {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: message already read or missing`,
-      )
-      return
-    }
-
-    messages[messageIndex] = { ...message, read: true }
-
-    await writeMailboxAtomically(inboxPath, pruneReadMessages(messages))
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex: marked message at index ${messageIndex} as read`,
-    )
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: file does not exist at ${inboxPath}`,
-      )
-      return
-    }
-    logForDebugging(
-      `[TeammateMailbox] markMessageAsReadByIndex FAILED for ${agentName}: ${error}`,
-    )
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-      logForDebugging(
-        `[TeammateMailbox] markMessageAsReadByIndex: lock released`,
-      )
-    }
-  }
 }
 
 /**
@@ -1245,65 +1210,16 @@ export async function markMessagesAsRead(
   agentName: string,
   teamName?: string,
 ): Promise<void> {
-  const inboxPath = getInboxPath(agentName, teamName)
-  logForDebugging(
-    `[TeammateMailbox] markMessagesAsRead called: agentName=${agentName}, teamName=${teamName}, path=${inboxPath}`,
+  await updateMailboxUnderLock(
+    getInboxPath(agentName, teamName),
+    () => readMailbox(agentName, teamName),
+    messages => {
+      if (messages.length === 0) return null
+      // messages comes from jsonParse — fresh, unshared objects safe to mutate
+      for (const m of messages) m.read = true
+      return messages
+    },
   )
-
-  const lockFilePath = `${inboxPath}.lock`
-
-  let release: (() => Promise<void>) | undefined
-  try {
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: acquiring lock...`)
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-    logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock acquired`)
-
-    // Re-read messages after acquiring lock to get the latest state
-    const messages = await readMailbox(agentName, teamName)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: read ${messages.length} messages after lock`,
-    )
-
-    if (messages.length === 0) {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: no messages to mark`,
-      )
-      return
-    }
-
-    const unreadCount = count(messages, m => !m.read)
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: ${unreadCount} unread of ${messages.length} total`,
-    )
-
-    // messages comes from jsonParse — fresh, unshared objects safe to mutate
-    for (const m of messages) m.read = true
-
-    await writeMailboxAtomically(inboxPath, pruneReadMessages(messages))
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead: WROTE ${unreadCount} message(s) as read to ${inboxPath}`,
-    )
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      logForDebugging(
-        `[TeammateMailbox] markMessagesAsRead: file does not exist at ${inboxPath}`,
-      )
-      return
-    }
-    logForDebugging(
-      `[TeammateMailbox] markMessagesAsRead FAILED for ${agentName}: ${error}`,
-    )
-    logError(error)
-  } finally {
-    if (release) {
-      await release()
-      logForDebugging(`[TeammateMailbox] markMessagesAsRead: lock released`)
-    }
-  }
 }
 
 /**
@@ -1404,20 +1320,54 @@ export function createIdleNotification(
 }
 
 /**
+ * Shared body of every schema-backed `is*` guard below: parse the text, run it
+ * through the message's zod schema, and return `null` for anything that is not
+ * valid JSON or does not match.
+ */
+function parseMailboxMessage<S extends z.ZodTypeAny>(
+  schema: () => S,
+  messageText: string,
+): z.infer<S> | null {
+  try {
+    const result = schema().safeParse(jsonParse(messageText))
+    if (result.success) return result.data
+  } catch {
+    // Not JSON
+  }
+  return null
+}
+
+/**
+ * Shared body of the `is*` guards that predate their schemas: they only check
+ * the `type` discriminant and cast, so a message with the right `type` but the
+ * wrong field shape still passes. Kept distinct from `parseMailboxMessage` on
+ * purpose, tightening these to full validation would change what they accept.
+ */
+function castMailboxMessageByType<T>(
+  messageText: string,
+  type: string,
+): T | null {
+  try {
+    const parsed = jsonParse(messageText)
+    if (parsed && parsed.type === type) {
+      return parsed as T
+    }
+  } catch {
+    // Not JSON or not a message of this type
+  }
+  return null
+}
+
+/**
  * Checks if a message text contains an idle notification
  */
 export function isIdleNotification(
   messageText: string,
 ): IdleNotificationMessage | null {
-  try {
-    const parsed = jsonParse(messageText)
-    if (parsed && parsed.type === 'idle_notification') {
-      return parsed as IdleNotificationMessage
-    }
-  } catch {
-    // Not JSON or not a valid idle notification
-  }
-  return null
+  return castMailboxMessageByType<IdleNotificationMessage>(
+    messageText,
+    'idle_notification',
+  )
 }
 
 /**
@@ -1525,37 +1475,15 @@ export function createPermissionResponseMessage(params: {
 }
 
 /**
- * Checks if a message text contains a permission request
- */
-export function isPermissionRequest(
-  messageText: string,
-): PermissionRequestMessage | null {
-  try {
-    const parsed = jsonParse(messageText)
-    if (parsed && parsed.type === 'permission_request') {
-      return parsed as PermissionRequestMessage
-    }
-  } catch {
-    // Not JSON or not a valid permission request
-  }
-  return null
-}
-
-/**
  * Checks if a message text contains a permission response
  */
 export function isPermissionResponse(
   messageText: string,
 ): PermissionResponseMessage | null {
-  try {
-    const parsed = jsonParse(messageText)
-    if (parsed && parsed.type === 'permission_response') {
-      return parsed as PermissionResponseMessage
-    }
-  } catch {
-    // Not JSON or not a valid permission response
-  }
-  return null
+  return castMailboxMessageByType<PermissionResponseMessage>(
+    messageText,
+    'permission_response',
+  )
 }
 
 /**
@@ -1634,37 +1562,15 @@ export function createSandboxPermissionResponseMessage(params: {
 }
 
 /**
- * Checks if a message text contains a sandbox permission request
- */
-export function isSandboxPermissionRequest(
-  messageText: string,
-): SandboxPermissionRequestMessage | null {
-  try {
-    const parsed = jsonParse(messageText)
-    if (parsed && parsed.type === 'sandbox_permission_request') {
-      return parsed as SandboxPermissionRequestMessage
-    }
-  } catch {
-    // Not JSON or not a valid sandbox permission request
-  }
-  return null
-}
-
-/**
  * Checks if a message text contains a sandbox permission response
  */
 export function isSandboxPermissionResponse(
   messageText: string,
 ): SandboxPermissionResponseMessage | null {
-  try {
-    const parsed = jsonParse(messageText)
-    if (parsed && parsed.type === 'sandbox_permission_response') {
-      return parsed as SandboxPermissionResponseMessage
-    }
-  } catch {
-    // Not JSON or not a valid sandbox permission response
-  }
-  return null
+  return castMailboxMessageByType<SandboxPermissionResponseMessage>(
+    messageText,
+    'sandbox_permission_response',
+  )
 }
 
 /**
@@ -1905,15 +1811,7 @@ export async function sendShutdownRequestToMailbox(
 export function isShutdownRequest(
   messageText: string,
 ): ShutdownRequestMessage | null {
-  try {
-    const result = ShutdownRequestMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(ShutdownRequestMessageSchema, messageText)
 }
 
 /**
@@ -1922,15 +1820,7 @@ export function isShutdownRequest(
 export function isPlanApprovalRequest(
   messageText: string,
 ): PlanApprovalRequestMessage | null {
-  try {
-    const result = PlanApprovalRequestMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(PlanApprovalRequestMessageSchema, messageText)
 }
 
 /**
@@ -1939,15 +1829,7 @@ export function isPlanApprovalRequest(
 export function isShutdownApproved(
   messageText: string,
 ): ShutdownApprovedMessage | null {
-  try {
-    const result = ShutdownApprovedMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(ShutdownApprovedMessageSchema, messageText)
 }
 
 /**
@@ -1956,15 +1838,7 @@ export function isShutdownApproved(
 export function isShutdownRejected(
   messageText: string,
 ): ShutdownRejectedMessage | null {
-  try {
-    const result = ShutdownRejectedMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(ShutdownRejectedMessageSchema, messageText)
 }
 
 /**
@@ -1973,15 +1847,7 @@ export function isShutdownRejected(
 export function isPlanApprovalResponse(
   messageText: string,
 ): PlanApprovalResponseMessage | null {
-  try {
-    const result = PlanApprovalResponseMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(PlanApprovalResponseMessageSchema, messageText)
 }
 
 /**
@@ -2027,15 +1893,7 @@ export function createTaskAssignmentMessage(params: {
 export function isTaskAssignment(
   messageText: string,
 ): TaskAssignmentMessage | null {
-  try {
-    const result = TaskAssignmentMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
+  return parseMailboxMessage(TaskAssignmentMessageSchema, messageText)
 }
 
 /**
@@ -2066,23 +1924,6 @@ export type TeamPermissionUpdateMessage = z.infer<
 >
 
 /**
- * Checks if a message text contains a team permission update
- */
-export function isTeamPermissionUpdate(
-  messageText: string,
-): TeamPermissionUpdateMessage | null {
-  try {
-    const result = TeamPermissionUpdateMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (result.success) return result.data
-  } catch {
-    // Not JSON
-  }
-  return null
-}
-
-/**
  * Mode set request message sent from leader to teammate via mailbox
  * Uses SDK PermissionModeSchema for validated mode values
  */
@@ -2110,25 +1951,6 @@ export function createModeSetRequestMessage(params: {
     mode: params.mode as ModeSetRequestMessage['mode'],
     from: params.from,
   }
-}
-
-/**
- * Checks if a message text contains a mode set request
- */
-export function isModeSetRequest(
-  messageText: string,
-): ModeSetRequestMessage | null {
-  try {
-    const parsed = ModeSetRequestMessageSchema().safeParse(
-      jsonParse(messageText),
-    )
-    if (parsed.success) {
-      return parsed.data
-    }
-  } catch {
-    // Not JSON or not a valid mode set request
-  }
-  return null
 }
 
 /**
@@ -2401,42 +2223,16 @@ export async function markMessagesAsReadByPredicate(
   predicate: (msg: TeammateMessage) => boolean,
   teamName?: string,
 ): Promise<void> {
-  const inboxPath = getInboxPath(agentName, teamName)
-
-  const lockFilePath = `${inboxPath}.lock`
-  let release: (() => Promise<void>) | undefined
-
-  try {
-    release = await lockfile.lock(inboxPath, {
-      lockfilePath: lockFilePath,
-      ...LOCK_OPTIONS,
-    })
-
-    const messages = await readMailbox(agentName, teamName)
-    if (messages.length === 0) {
-      return
-    }
-
-    const updatedMessages = messages.map(m =>
-      !m.read && predicate(m) ? { ...m, read: true } : m,
-    )
-
-    await writeMailboxAtomically(inboxPath, pruneReadMessages(updatedMessages))
-  } catch (error) {
-    const code = getErrnoCode(error)
-    if (code === 'ENOENT') {
-      return
-    }
-    logError(error)
-  } finally {
-    if (release) {
-      try {
-        await release()
-      } catch {
-        // Lock may have already been released
-      }
-    }
-  }
+  await updateMailboxUnderLock(
+    getInboxPath(agentName, teamName),
+    () => readMailbox(agentName, teamName),
+    messages => {
+      if (messages.length === 0) return null
+      return messages.map(m =>
+        !m.read && predicate(m) ? { ...m, read: true } : m,
+      )
+    },
+  )
 }
 
 /**

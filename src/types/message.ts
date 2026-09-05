@@ -45,8 +45,18 @@ export type MessageOrigin =
    * A message delivered from another named session. `appSessionId` is the
    * sender's app-side address, carried as a plain string: the engine never
    * depends on `app/`.
+   *
+   * `creationPrompt` marks the one message that is the recipient's first and
+   * only input, the instruction it was created with. Absent means an ordinary
+   * mid-turn peer message, which is the fail-closed direction: that framing
+   * deprioritizes the message against work in progress.
    */
-  | { kind: 'peer'; name: string; appSessionId: string }
+  | {
+      kind: 'peer'
+      name: string
+      appSessionId: string
+      creationPrompt?: true
+    }
 
 export type DeferredTerminalFailureV1 = {
   version: 1
@@ -75,6 +85,21 @@ export type UserMessage = {
   isVisibleInTranscriptOnly?: true
   isVirtual?: true
   isCompactSummary?: true
+  /**
+   * Set on a compact summary when at least one message it summarizes was
+   * relayed on someone else's behalf (a peer session, a teammate, a task
+   * notification) rather than typed by this session's user.
+   *
+   * A summary is one user-role message standing in for many, so per-message
+   * attribution does not survive the boundary; this records only that some of
+   * the summarized input was relayed. It exists because `origin` is dropped by
+   * summarization and the textual `<cross-session-message>` wrapper is rewritten
+   * by the model that writes the summary — so without this, a peer's request can
+   * re-enter the conversation as the user's own stated intent.
+   *
+   * Read by the auto-mode classifier (`buildTranscriptEntries`).
+   */
+  summarizedRelayedInput?: true
   summarizeMetadata?: {
     messagesSummarized: number
     userContext?: string

@@ -22,12 +22,18 @@
  * the picker would look broken. Any real work in a hidden project brings it
  * back, which is also the honest answer to "where did my session go".
  *
- * Renderer-local persistence, the `sidebarPinnedSessions.ts` idiom verbatim:
+ * Renderer-local persistence through the shared codec (`viewPreference.ts`):
  * versioned JSON under a `catcode.`-prefixed key, read/written through an
- * injectable `Pick<Storage, …>`, best-effort. No protocol frame, no registry
- * field, no preload channel — a view preference with no engine meaning
+ * injectable storage, best-effort. No protocol frame, no registry field, no
+ * preload channel — a view preference with no engine meaning
  * (SECURITY-MINIMUM §2).
  */
+
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY =
   'catcode.sidebarHiddenWorkspaces.v1'
@@ -49,13 +55,6 @@ export type HiddenWorkspace = {
 
 /** Hidden projects, most-recently-hidden first. */
 export type HiddenWorkspaces = readonly HiddenWorkspace[]
-
-type HiddenStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedHiddenWorkspaces = {
-  version: 1
-  workspaces: HiddenWorkspace[]
-}
 
 export function createHiddenWorkspaces(): HiddenWorkspaces {
   return []
@@ -102,38 +101,26 @@ function normalizeHiddenWorkspaces(
 }
 
 export function readHiddenWorkspacesFromStorage(
-  storage: HiddenStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): HiddenWorkspaces | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedHiddenWorkspaces>
-    if (value.version !== 1 || !Array.isArray(value.workspaces)) return null
-    return normalizeHiddenWorkspaces(value.workspaces)
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY,
+    'workspaces',
+    value => (Array.isArray(value) ? normalizeHiddenWorkspaces(value) : null),
+  )
 }
 
 export function writeHiddenWorkspacesToStorage(
-  storage: HiddenStorage | null,
+  storage: ViewPreferenceStorage | null,
   hidden: HiddenWorkspaces,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedHiddenWorkspaces = {
-      version: 1,
-      workspaces: normalizeHiddenWorkspaces(hidden),
-    }
-    storage.setItem(
-      SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY,
-      JSON.stringify(value),
-    )
-  } catch {
-    // View persistence is best-effort; a storage failure must never affect live
-    // session state (`sidebarWorkspaceOrder.ts:133`).
-  }
+  writeViewPreference(
+    storage,
+    SIDEBAR_HIDDEN_WORKSPACES_STORAGE_KEY,
+    'workspaces',
+    normalizeHiddenWorkspaces(hidden),
+  )
 }
 
 /**

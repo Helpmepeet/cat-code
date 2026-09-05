@@ -2,14 +2,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { CodeThemeProvider } from './CodeThemeProvider.js'
 import { CODE_THEME_STORAGE_KEY } from './codeTheme.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 function render(store: Parameters<typeof CodeThemeProvider>[0]['storage']) {
   return renderToStaticMarkup(

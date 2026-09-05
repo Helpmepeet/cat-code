@@ -417,6 +417,7 @@ export type SystemNoticeRow = FrameRowSource & {
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
+    | 'provider_error'
   content: string
 }
 
@@ -1271,145 +1272,25 @@ export function displayItemKey(item: TranscriptDisplayItem): string {
   return item.kind === 'single' ? item.row.id : item.id
 }
 
-/** Reducer over addressed server frames; unknown sessions are rejected. */
+/**
+ * Reducer over addressed server frames; unknown sessions are rejected.
+ *
+ * Live delivery projects one frame at a time and replay hands over whole
+ * batches, but both run the SAME transaction below, so a frame projects
+ * identically whichever way it arrives.
+ */
 export function projectServerFrame(
   state: TranscriptState,
   frame: ServerFrame,
 ): TranscriptState {
-  if (isAppReadyFrame(frame)) {
-    const session = createTranscriptSessionState()
-    return {
-      ...state,
-      sessions: {
-        ...state.sessions,
-        // Ready starts an attach sequence whose history replay replaces retained
-        // newer rows after the sidecar's non-transcript snapshots.
-        [frame.sessionId]: session,
-      },
-    }
-  }
-
-  if (frame.kind === 'transcript.reset') {
-    return resetTranscriptSession(state, frame.sessionId)
-  }
-
-  if (frame.kind === 'error') {
-    // The only error frames this store reads. Every other one is a live
-    // failure the error line owns, and projecting it as transcript would put a
-    // transient condition into permanent history.
-    if (
-      frame.requestId !== REPLAY_BUFFER_TRUNCATION_REQUEST_ID &&
-      frame.requestId !== HISTORY_REPLAY_TRUNCATION_REQUEST_ID
-    ) {
-      return state
-    }
-    const session = state.sessions[frame.sessionId]
-    // Unknown session: same rule as every other frame here. The boundary always
-    // follows a `ready` on both producers, and inventing a session from an
-    // error frame would resurrect one the pane just removed.
-    if (!session) return state
-    // Latches. A pane that received a boundary once cannot become complete by
-    // receiving more frames; only a reset (the preview-to-live handover) clears
-    // it, and the replay that follows re-states it if it is still true.
-    if (session.historyTruncated) return state
-    return {
-      ...state,
-      sessions: {
-        ...state.sessions,
-        [frame.sessionId]: { ...session, historyTruncated: true },
-      },
-    }
-  }
-
-  if (frame.kind === 'generated-image-preview') {
-    const session = state.sessions[frame.sessionId]
-    if (!session) return state
-    const preview = { mediaType: frame.mediaType, data: frame.data }
-    const result = session.toolResultsByUseId[frame.toolUseId]
-    return {
-      ...state,
-      sessions: {
-        ...state.sessions,
-        [frame.sessionId]: {
-          ...session,
-          generatedImagePreviewsByUseId: {
-            ...session.generatedImagePreviewsByUseId,
-            [frame.toolUseId]: preview,
-          },
-          toolResultsByUseId: result?.generatedImage
-            ? {
-                ...session.toolResultsByUseId,
-                [frame.toolUseId]: {
-                  ...result,
-                  generatedImage: { ...result.generatedImage, preview },
-                },
-              }
-            : session.toolResultsByUseId,
-        },
-      },
-    }
-  }
-
-  if (frame.kind === 'history.loadEarlier.result') {
-    const session = state.sessions[frame.sessionId]
-    if (!session) return state
-    // B4: `complete` is the documented signal that the boundary row goes away
-    // (protocol.ts), and the row is synthesized from this flag alone. Gated on
-    // `ok` too because a refusal learned nothing: leaving the boundary standing
-    // is the recoverable direction (press again), removing it is not.
-    const complete = frame.ok === true && frame.complete === true
-    // B1: this frame closes the batch. The next recovery reaches FURTHER back,
-    // so it must start at the head again rather than continue beneath the rows
-    // this one inserted.
-    if (!complete && session.recoveryInsertAt === null) return state
-    return {
-      ...state,
-      sessions: {
-        ...state.sessions,
-        [frame.sessionId]: {
-          ...session,
-          recoveryInsertAt: null,
-          historyTruncated: complete ? false : session.historyTruncated,
-        },
-      },
-    }
-  }
-
-  if (frame.kind !== 'event') return state
-  const session = state.sessions[frame.sessionId]
-  if (!session) return state
-  if (frame.event.type !== 'message') return state
-
-  // B1: the head-insertion cursor is derived from THIS frame, every time. An
-  // ordinary frame always projects with it null and therefore cannot reach the
-  // insertion branch in `appendFrameRows`/`upsertFrameRows` — including when it
-  // follows a recovery batch whose closing result never arrived because the
-  // connection dropped. A recovered frame continues the open batch, or opens
-  // one at the head.
-  const recoveryInsertAt =
-    frame.recovered === true ? (session.recoveryInsertAt ?? 0) : null
-  const source =
-    recoveryInsertAt === session.recoveryInsertAt
-      ? session
-      : { ...session, recoveryInsertAt }
-
-  const projected = projectMessage(frame.sessionId, source, frame.event.message)
-  // Compared against what was HANDED to `projectMessage`: a frame that
-  // projected nothing must stay a total no-op, and the cursor above is
-  // re-derived on the next frame anyway.
-  if (projected === source) return state
-  return {
-    ...state,
-    sessions: { ...state.sessions, [frame.sessionId]: projected },
-  }
+  return projectServerFrames(state, [frame])
 }
 
 /**
- * Replay-only projection transaction.
- *
- * `projectServerFrame` remains the authoritative single-frame reducer. This
- * transaction mirrors its ordered behavior in private per-session drafts, then
- * publishes each changed session once at delivery completion.
+ * Ordered projection transaction. Frames fold into private per-session drafts;
+ * each changed session is published once, at delivery completion. A delivery
+ * that changed nothing returns the SAME state object, so the read-time slice
+ * caches downstream survive it.
  */
 export function projectServerFrames(
   state: TranscriptState,
@@ -1417,22 +1298,34 @@ export function projectServerFrames(
 ): TranscriptState {
   if (frames.length === 0) return state
 
-  const drafts = new Map<SessionId, BatchSessionDraft>()
+  const drafts = new Map<SessionId, SessionDraft>()
   for (const frame of frames) {
     if (isAppReadyFrame(frame)) {
-      drafts.set(frame.sessionId, createBatchReadyDraft(frame.sessionId))
+      // Ready starts an attach sequence whose history replay replaces retained
+      // newer rows after the sidecar's non-transcript snapshots.
+      drafts.set(frame.sessionId, createReadyDraft(frame.sessionId))
       continue
     }
     if (frame.kind === 'transcript.reset') {
       const current = drafts.get(frame.sessionId)?.session ??
         state.sessions[frame.sessionId]
       if (!current) continue
-      drafts.set(frame.sessionId, createBatchResetDraft(frame.sessionId, current))
+      drafts.set(frame.sessionId, createResetDraft(frame.sessionId, current))
       continue
     }
-    const draft = getBatchSessionDraft(drafts, state, frame.sessionId)
+    // Unknown session: the rule for every frame kind below. The boundary always
+    // follows a `ready` on both producers, and inventing a session from a later
+    // frame would resurrect one the pane just removed.
+    const draft = getSessionDraft(drafts, state, frame.sessionId)
     if (!draft) continue
     if (frame.kind === 'error') {
+      // The only error frames this store reads. Every other one is a live
+      // failure the error line owns, and projecting it as transcript would put a
+      // transient condition into permanent history.
+      //
+      // Latches. A pane that received a boundary once cannot become complete by
+      // receiving more frames; only a reset (the preview-to-live handover)
+      // clears it, and the replay that follows re-states it if it is still true.
       if (
         (frame.requestId === REPLAY_BUFFER_TRUNCATION_REQUEST_ID ||
           frame.requestId === HISTORY_REPLAY_TRUNCATION_REQUEST_ID) &&
@@ -1444,11 +1337,18 @@ export function projectServerFrames(
       continue
     }
     if (frame.kind === 'generated-image-preview') {
-      projectBatchImagePreview(draft, frame)
+      projectImagePreviewFrame(draft, frame)
       continue
     }
     if (frame.kind === 'history.loadEarlier.result') {
+      // B4: `complete` is the documented signal that the boundary row goes away
+      // (protocol.ts), and the row is synthesized from this flag alone. Gated on
+      // `ok` too because a refusal learned nothing: leaving the boundary standing
+      // is the recoverable direction (press again), removing it is not.
       const complete = frame.ok === true && frame.complete === true
+      // B1: this frame closes the batch. The next recovery reaches FURTHER back,
+      // so it must start at the head again rather than continue beneath the rows
+      // this one inserted.
       if (complete || draft.session.recoveryInsertAt !== null) {
         draft.session.recoveryInsertAt = null
         if (complete) draft.session.historyTruncated = false
@@ -1458,11 +1358,17 @@ export function projectServerFrames(
     }
     if (frame.kind !== 'event' || frame.event.type !== 'message') continue
 
+    // B1: the head-insertion cursor is derived from THIS frame, every time. An
+    // ordinary frame always projects with it null and therefore cannot reach the
+    // insertion branch in `appendFrameRows`/`upsertFrameRows` — including when it
+    // follows a recovery batch whose closing result never arrived because the
+    // connection dropped. A recovered frame continues the open batch, or opens
+    // one at the head.
     const previousRecoveryInsertAt = draft.session.recoveryInsertAt
     const recoveryInsertAt =
       frame.recovered === true ? (draft.session.recoveryInsertAt ?? 0) : null
     if (
-      projectBatchMessage(
+      projectMessage(
         draft,
         frame.event.message,
         recoveryInsertAt,
@@ -1484,7 +1390,7 @@ export function projectServerFrames(
   return { ...state, sessions }
 }
 
-type BatchSessionDraft = {
+type SessionDraft = {
   sessionId: SessionId
   session: TranscriptSessionState
   changed: boolean
@@ -1497,14 +1403,13 @@ type BatchSessionDraft = {
   generatedImagePreviewsOwned: boolean
   agentCompletionsOwned: boolean
   hiddenFrameIdsOwned: boolean
-  slashCommandsOwned: boolean
   rowIndexes: Map<string, number> | null
 }
 
-function createBatchSessionDraft(
+function createSessionDraft(
   sessionId: SessionId,
   session: TranscriptSessionState,
-): BatchSessionDraft {
+): SessionDraft {
   return {
     sessionId,
     session: { ...session },
@@ -1518,13 +1423,12 @@ function createBatchSessionDraft(
     generatedImagePreviewsOwned: false,
     agentCompletionsOwned: false,
     hiddenFrameIdsOwned: false,
-    slashCommandsOwned: false,
     rowIndexes: null,
   }
 }
 
-function createBatchReadyDraft(sessionId: SessionId): BatchSessionDraft {
-  const draft = createBatchSessionDraft(sessionId, createTranscriptSessionState())
+function createReadyDraft(sessionId: SessionId): SessionDraft {
+  const draft = createSessionDraft(sessionId, createTranscriptSessionState())
   draft.changed = true
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true
@@ -1535,19 +1439,18 @@ function createBatchReadyDraft(sessionId: SessionId): BatchSessionDraft {
   draft.generatedImagePreviewsOwned = true
   draft.agentCompletionsOwned = true
   draft.hiddenFrameIdsOwned = true
-  draft.slashCommandsOwned = true
   return draft
 }
 
-function createBatchResetDraft(
+function createResetDraft(
   sessionId: SessionId,
   session: TranscriptSessionState,
-): BatchSessionDraft {
+): SessionDraft {
   const reset = resetTranscriptSession(
     { sessions: { [sessionId]: session } },
     sessionId,
   )
-  const draft = createBatchSessionDraft(sessionId, reset.sessions[sessionId]!)
+  const draft = createSessionDraft(sessionId, reset.sessions[sessionId]!)
   draft.changed = true
   draft.rowsOwned = true
   draft.seenFrameIdsOwned = true
@@ -1558,43 +1461,42 @@ function createBatchResetDraft(
   draft.generatedImagePreviewsOwned = true
   draft.agentCompletionsOwned = true
   draft.hiddenFrameIdsOwned = true
-  draft.slashCommandsOwned = true
   return draft
 }
 
-function getBatchSessionDraft(
-  drafts: Map<SessionId, BatchSessionDraft>,
+function getSessionDraft(
+  drafts: Map<SessionId, SessionDraft>,
   state: TranscriptState,
   sessionId: SessionId,
-): BatchSessionDraft | null {
+): SessionDraft | null {
   const existing = drafts.get(sessionId)
   if (existing) return existing
   const session = state.sessions[sessionId]
   if (!session) return null
-  const draft = createBatchSessionDraft(sessionId, session)
+  const draft = createSessionDraft(sessionId, session)
   drafts.set(sessionId, draft)
   return draft
 }
 
-function ensureBatchRows(draft: BatchSessionDraft): void {
+function ensureOwnedRows(draft: SessionDraft): void {
   if (draft.rowsOwned) return
   draft.session.rows = [...draft.session.rows]
   draft.rowsOwned = true
 }
 
-function ensureBatchSeenFrameIds(draft: BatchSessionDraft): void {
+function ensureOwnedSeenFrameIds(draft: SessionDraft): void {
   if (draft.seenFrameIdsOwned) return
   draft.session.seenFrameIds = { ...draft.session.seenFrameIds }
   draft.seenFrameIdsOwned = true
 }
 
-function ensureBatchStreamingBlocks(draft: BatchSessionDraft): void {
+function ensureOwnedStreamingBlocks(draft: SessionDraft): void {
   if (draft.streamingTextBlocksOwned) return
   draft.session.streamingTextBlocks = { ...draft.session.streamingTextBlocks }
   draft.streamingTextBlocksOwned = true
 }
 
-function ensureBatchStreamingThinkingBlocks(draft: BatchSessionDraft): void {
+function ensureOwnedStreamingThinkingBlocks(draft: SessionDraft): void {
   if (draft.streamingThinkingBlocksOwned) return
   draft.session.streamingThinkingBlocks = {
     ...draft.session.streamingThinkingBlocks,
@@ -1602,7 +1504,7 @@ function ensureBatchStreamingThinkingBlocks(draft: BatchSessionDraft): void {
   draft.streamingThinkingBlocksOwned = true
 }
 
-function ensureBatchNextBlockIndexes(draft: BatchSessionDraft): void {
+function ensureOwnedNextBlockIndexes(draft: SessionDraft): void {
   if (draft.nextBlockIndexByMessageIdOwned) return
   draft.session.nextBlockIndexByMessageId = {
     ...draft.session.nextBlockIndexByMessageId,
@@ -1610,13 +1512,13 @@ function ensureBatchNextBlockIndexes(draft: BatchSessionDraft): void {
   draft.nextBlockIndexByMessageIdOwned = true
 }
 
-function ensureBatchToolResults(draft: BatchSessionDraft): void {
+function ensureOwnedToolResults(draft: SessionDraft): void {
   if (draft.toolResultsByUseIdOwned) return
   draft.session.toolResultsByUseId = { ...draft.session.toolResultsByUseId }
   draft.toolResultsByUseIdOwned = true
 }
 
-function ensureBatchImagePreviews(draft: BatchSessionDraft): void {
+function ensureOwnedImagePreviews(draft: SessionDraft): void {
   if (draft.generatedImagePreviewsOwned) return
   draft.session.generatedImagePreviewsByUseId = {
     ...draft.session.generatedImagePreviewsByUseId,
@@ -1624,7 +1526,7 @@ function ensureBatchImagePreviews(draft: BatchSessionDraft): void {
   draft.generatedImagePreviewsOwned = true
 }
 
-function ensureBatchAgentCompletions(draft: BatchSessionDraft): void {
+function ensureOwnedAgentCompletions(draft: SessionDraft): void {
   if (draft.agentCompletionsOwned) return
   draft.session.agentCompletionsByToolUseId = {
     ...draft.session.agentCompletionsByToolUseId,
@@ -1632,13 +1534,13 @@ function ensureBatchAgentCompletions(draft: BatchSessionDraft): void {
   draft.agentCompletionsOwned = true
 }
 
-function ensureBatchHiddenFrameIds(draft: BatchSessionDraft): void {
+function ensureOwnedHiddenFrameIds(draft: SessionDraft): void {
   if (draft.hiddenFrameIdsOwned) return
   draft.session.hiddenFrameIds = { ...draft.session.hiddenFrameIds }
   draft.hiddenFrameIdsOwned = true
 }
 
-function batchRowIndexes(draft: BatchSessionDraft): Map<string, number> {
+function draftRowIndexes(draft: SessionDraft): Map<string, number> {
   if (draft.rowIndexes) return draft.rowIndexes
   const indexes = new Map<string, number>()
   for (let index = 0; index < draft.session.rows.length; index += 1) {
@@ -1648,21 +1550,39 @@ function batchRowIndexes(draft: BatchSessionDraft): Map<string, number> {
   return indexes
 }
 
-function markBatchFrameSeen(draft: BatchSessionDraft, frameId: string): void {
-  ensureBatchSeenFrameIds(draft)
+function markFrameSeen(draft: SessionDraft, frameId: string): void {
+  ensureOwnedSeenFrameIds(draft)
   draft.session.seenFrameIds[frameId] = true
 }
 
-function appendBatchRows(
-  draft: BatchSessionDraft,
+/**
+ * Where a frame's rows go (B1, decisions/HISTORY-LOAD-EARLIER.md).
+ *
+ * `recoveryInsertAt` is non-null for a recovered frame ONLY — `projectServerFrames`
+ * re-derives it per frame and forces it back to null for anything else — so an
+ * ordinary frame cannot reach the insertion below and always appends.
+ *
+ * Insertion places one recovered frame's rows ABOVE the conversation they
+ * precede. Nothing existing is rewritten: the rows on either side of the cut are
+ * the same objects in the same order, so the read-time caches keyed on a row (the
+ * nested-row wrapper, the orphan group) still hit for every one of them. Only the
+ * session slice is new, which is exactly what the WeakMap caches keyed on the
+ * SLICE (`nestedRowsCache` / `revealedNestedRowsCache`) need in order to
+ * recompute — and recomputing is required here, because the boundary row is
+ * synthesized above `rows[0]` and `rows[0]` has just changed. The cursor advances
+ * by what was inserted, so the next frame of the same batch lands after this one
+ * and the batch keeps its own oldest-first order.
+ */
+function appendFrameRows(
+  draft: SessionDraft,
   frameId: string,
   rows: TranscriptRow[],
   recoveryInsertAt: number | null,
 ): boolean {
   if (draft.session.seenFrameIds[frameId] || rows.length === 0) return false
-  ensureBatchRows(draft)
-  markBatchFrameSeen(draft, frameId)
-  const indexes = batchRowIndexes(draft)
+  ensureOwnedRows(draft)
+  markFrameSeen(draft, frameId)
+  const indexes = draftRowIndexes(draft)
   if (recoveryInsertAt === null) {
     const start = draft.session.rows.length
     draft.session.rows.push(...rows)
@@ -1679,14 +1599,20 @@ function appendBatchRows(
   return true
 }
 
-function upsertBatchRows(
-  draft: BatchSessionDraft,
+/**
+ * The assistant path's placement, answering the same question `appendFrameRows`
+ * answers for every other path. Kept separate because this path upserts: a row
+ * whose id is already present is a finalized stream and must stay where it
+ * stands, on both placements. Only rows new to the list take the B1 branch.
+ */
+function upsertFrameRows(
+  draft: SessionDraft,
   rows: TranscriptRow[],
   recoveryInsertAt: number | null,
 ): number {
   if (rows.length === 0) return 0
-  ensureBatchRows(draft)
-  const indexes = batchRowIndexes(draft)
+  ensureOwnedRows(draft)
+  const indexes = draftRowIndexes(draft)
   const added: TranscriptRow[] = []
   for (const row of rows) {
     const index = indexes.get(row.id)
@@ -1710,12 +1636,12 @@ function upsertBatchRows(
   return added.length
 }
 
-function upsertBatchStreamingRow(
-  draft: BatchSessionDraft,
+function upsertStreamingRow(
+  draft: SessionDraft,
   replacement: AssistantTextRow | ThinkingRow,
 ): void {
-  ensureBatchRows(draft)
-  const indexes = batchRowIndexes(draft)
+  ensureOwnedRows(draft)
+  const indexes = draftRowIndexes(draft)
   const index = indexes.get(replacement.id)
   if (index === undefined) {
     indexes.set(replacement.id, draft.session.rows.length)
@@ -1728,16 +1654,16 @@ function upsertBatchStreamingRow(
   }
 }
 
-function projectBatchImagePreview(
-  draft: BatchSessionDraft,
+function projectImagePreviewFrame(
+  draft: SessionDraft,
   frame: Extract<ServerFrame, { kind: 'generated-image-preview' }>,
 ): void {
-  ensureBatchImagePreviews(draft)
+  ensureOwnedImagePreviews(draft)
   const preview = { mediaType: frame.mediaType, data: frame.data }
   draft.session.generatedImagePreviewsByUseId[frame.toolUseId] = preview
   const result = draft.session.toolResultsByUseId[frame.toolUseId]
   if (result?.generatedImage) {
-    ensureBatchToolResults(draft)
+    ensureOwnedToolResults(draft)
     draft.session.toolResultsByUseId[frame.toolUseId] = {
       ...result,
       generatedImage: { ...result.generatedImage, preview },
@@ -1746,43 +1672,133 @@ function projectBatchImagePreview(
   draft.changed = true
 }
 
-function projectBatchMessage(
-  draft: BatchSessionDraft,
+/**
+ * Full-union dispatch (P2-0). Every other variant is an explicit, documented
+ * no-op returning `false`, which leaves the draft untouched and therefore
+ * republishes nothing (the fixture tests assert that reference-equality).
+ * Variants = switch cases to extend: later sessions turn a documented no-op
+ * into a projection by replacing its `return false`.
+ */
+function projectMessage(
+  draft: SessionDraft,
   message: SDKMessage,
   recoveryInsertAt: number | null,
 ): boolean {
   switch (message.type) {
     case 'assistant':
-      return projectBatchAssistant(draft, message, recoveryInsertAt)
+      return projectAssistantFrame(draft, message, recoveryInsertAt)
+
     case 'stream_event':
-      return projectBatchStreamEvent(draft, message)
+      // Droppable garnish (S1 spec §3): deltas may project live preview rows,
+      // but full assistant frames and the result boundary remain authoritative.
+      return projectStreamEvent(draft, message)
+
     case 'user':
-      return projectBatchUser(draft, message, recoveryInsertAt)
+      // User frames may carry both visible P2-1 content and P2-2 tool_result
+      // blocks; `projectUserFrame` folds correlation itself, AFTER its dedupe
+      // check, so a replayed frame stays a total no-op (same ordering as the
+      // assistant path).
+      return projectUserFrame(draft, message, recoveryInsertAt)
+
     case 'result':
-      return projectBatchResult(draft, message, recoveryInsertAt)
+      // Result is the only turn-end marker: `projectResultFrame` prunes orphan
+      // previews before projecting the authoritative P2-1 boundary row. A turn
+      // cannot end with a compaction still running, and an aborted one never
+      // reaches the engine's own clear, so the turn boundary is the backstop.
+      return projectResultFrame(draft, message, recoveryInsertAt)
+
     case 'system':
-      return projectBatchSystem(draft, message, recoveryInsertAt)
+      return projectSystemFrame(draft, message, recoveryInsertAt)
+
     case 'tool_progress':
+      // P2-2 scope: live activity on the correlated tool card
+      // (engine-throttled, `src/utils/queryHelpers.ts` tool_progress yield).
+      return false
+
     case 'tool_use_summary':
+      // P2-2 scope: summary chip over `preceding_tool_use_ids` correlation
+      // (`src/QueryEngine.ts` tool_use_summary yield).
+      return false
+
     case 'status':
+      // Type-only at this seam: no `type:'status'` mint site exists in src/
+      // (the runtime schema models status as system/subtype:'status'
+      // instead — see sdkMessageFixtures.ts header). Tolerated no-op.
+      return false
+
     case 'assistant_error':
+      // Never minted as a top-level message in src/ — the populated shape is
+      // the `error` FIELD on assistant/api_retry frames, which P2-1's
+      // ApiErrorRow reads. Tolerated no-op if it ever arrives top-level.
+      return false
+
     case 'permission_denial':
+      // Type-only member (no mint site in src/). The live permission flow is
+      // the control channel (`permission.requested`/`permission.resolved`
+      // AppSessionEvents) — P2-4 domain state, NOT the transcript projector
+      // (§5 layer-3 separation). Denial summaries also arrive on
+      // `result.permission_denials`.
+      return false
+
     case 'auth_status':
+      // Minted only on the SDK stdout path (`src/cli/print.ts`), never at the
+      // in-proc app seam today. W4 Accounts domain if that changes.
+      return false
+
     case 'rate_limit_event':
+      // SDK stdout path only (`src/cli/print.ts`). INVENTORY W3 marks a
+      // standalone RateLimitRow stale — folded into API-error/notice
+      // handling (P2-1) if the seam ever emits it.
+      return false
+
     case 'prompt_suggestion':
+      // SDK stdout path only (`src/cli/print.ts`, promptSuggestions opt-in).
+      // Composer surface (Phase 4), not a transcript row.
+      return false
+
     case 'streamlined_text':
     case 'streamlined_tool_use_summary':
+      // Streamlined-mode transform applied only by `src/cli/print.ts`
+      // (`src/utils/streamlinedTransform.ts`); replaces assistant frames on
+      // that path. The app seam receives the originals, so no mapping here.
       return false
+
     default: {
+      // Compile-time exhaustiveness tripwire: if the SDKMessage union grows a
+      // member, this assignment errors until it gets an explicit case above.
       const _exhaustive: never = message
       void _exhaustive
+      // Runtime tolerance: wire frames may outrun the pinned engine types
+      // (schema drift). An unknown variant is a no-op, never a crash.
       return false
     }
   }
 }
 
-function foldBatchToolResultBlocks(
-  draft: BatchSessionDraft,
+/**
+ * Scans a content-block array for any `*_tool_result` shape and folds each
+ * into `toolResultsByUseId`, keyed by its own `tool_use_id` — the single
+ * correlation mechanism for BOTH client tool round-trips (`tool_result` on a
+ * `user` frame) and server-executed tools whose result rides inline on the
+ * SAME assistant message as their `*_tool_use` block (no-op if none found).
+ * S1/queryHelpers.ts §203-218: `tool_result` content blocks ride `user`
+ * messages, and `content` is `string | ContentBlockParam[]` — a plain string
+ * prompt has nothing to correlate. `toolUseResult` (the companion raw engine
+ * output, read alongside the block for FileEditTool diff extraction) rides the
+ * SAME `user` SDKMessage the content block is on (`queryHelpers.ts:213-215`)
+ * and is a SINGLE field shared across every matching block found — safe because
+ * the engine mints one `user` message per individual tool result, even for
+ * parallel tool calls: `query.ts:1439-1455` (`for await (const update of
+ * toolUpdates) { yield update.message }`) yields ONE message per completed
+ * tool, and the error/interrupt path (`query.ts:133-159`
+ * `yieldMissingToolResultBlocks`) does the same — never a batch of several
+ * `tool_result` blocks sharing one `toolUseResult`. Re-delivery of an
+ * already-correlated id is idempotent (last-write, and in practice the
+ * engine sends each result once) — folding is cheap and never mutates a
+ * `ToolUseRow`, only this map.
+ */
+function foldToolResultBlocks(
+  draft: SessionDraft,
   content: unknown[],
   toolUseResult?: unknown,
   toolResultStatus?: unknown,
@@ -1802,7 +1818,7 @@ function foldBatchToolResultBlocks(
       toolResultStatus === 'cancelled',
     )
     const preview = draft.session.generatedImagePreviewsByUseId[toolUseId]
-    ensureBatchToolResults(draft)
+    ensureOwnedToolResults(draft)
     draft.session.toolResultsByUseId[toolUseId] =
       preview && projection.generatedImage
         ? {
@@ -1815,20 +1831,58 @@ function foldBatchToolResultBlocks(
   return changed
 }
 
-function projectBatchAssistant(
-  draft: BatchSessionDraft,
+function projectAssistantFrame(
+  draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'assistant' }>,
   recoveryInsertAt: number | null,
 ): boolean {
+  // The type claims `message.message.content` exists, but that claim is about
+  // a process on the far side of a socket — harden before dereferencing.
   const body: unknown = message.message
   if (!isRecord(body) || !Array.isArray(body.content)) return false
   const frameId = nonEmptyString(message.uuid)
+  // Dedupe BEFORE folding results: a replayed duplicate frame must be a
+  // total no-op, including its result-correlation side effect.
   if (frameId && draft.session.seenFrameIds[frameId]) return false
 
-  let changed = foldBatchToolResultBlocks(draft, body.content)
+  // Server-executed tool families (server_tool_use, mcp_tool_use, web_fetch,
+  // code execution, …) can carry their OWN result block in the SAME
+  // assistant message's content array — there is no client round-trip, so no
+  // separate `user` tool_result frame ever arrives for them
+  // (`src/utils/messages.ts:1306-1328` documents the engine treating an
+  // unresolved one as orphaned/errored, confirming results ride inline).
+  // Fold any such result blocks into the correlation map alongside the
+  // `user`-frame path so both shapes resolve the same ToolCard.
+  let changed = foldToolResultBlocks(draft, body.content)
+  // The engine authors this text for the user, so it is surfaced as a notice
+  // rather than dropped.
   if (typeof message.error === 'string') {
-    if (frameId) markBatchFrameSeen(draft, frameId)
-    return true
+    const text = body.content
+      .filter((block): block is { type: 'text'; text: string } =>
+        isRecord(block) && block.type === 'text' && typeof block.text === 'string',
+      )
+      .map(block => block.text)
+      .join('\n')
+    if (text.length === 0) {
+      if (frameId) markFrameSeen(draft, frameId)
+      return true
+    }
+    // Frame ids key both row identity and replay dedupe, so a constant would
+    // collide: the first notice would mark the key seen and silently swallow
+    // every later provider error. Derive one the way the block path does.
+    const messageIdForNotice = nonEmptyString(body.id)
+    const noticeFrameId =
+      frameId ?? (messageIdForNotice && `${messageIdForNotice}:provider_error`)
+    // No usable id: nothing is appended and nothing is marked seen, so the only
+    // state this frame may leave behind is the fold above.
+    if (!noticeFrameId) return changed
+    return appendSystemNotice(
+      draft,
+      noticeFrameId,
+      'provider_error',
+      text,
+      recoveryInsertAt,
+    ) || changed
   }
   const messageId = nonEmptyString(body.id) ?? frameId
   if (!messageId) return changed
@@ -1866,27 +1920,38 @@ function projectBatchAssistant(
     if (!('messageId' in row) || !('blockIndex' in row)) continue
     const key = streamBlockKey(row.messageId, row.blockIndex)
     if (draft.session.streamingTextBlocks[key]) {
-      ensureBatchStreamingBlocks(draft)
+      ensureOwnedStreamingBlocks(draft)
       delete draft.session.streamingTextBlocks[key]
     }
     if (draft.session.streamingThinkingBlocks[key]) {
-      ensureBatchStreamingThinkingBlocks(draft)
+      ensureOwnedStreamingThinkingBlocks(draft)
       delete draft.session.streamingThinkingBlocks[key]
     }
   }
-  upsertBatchRows(draft, rows, recoveryInsertAt)
-  ensureBatchNextBlockIndexes(draft)
+  upsertFrameRows(draft, rows, recoveryInsertAt)
+  ensureOwnedNextBlockIndexes(draft)
   draft.session.nextBlockIndexByMessageId[messageId] = Math.max(
     fallbackIndex,
     ...blockIndexes.map(blockIndex => blockIndex + 1),
   )
-  if (frameId) markBatchFrameSeen(draft, frameId)
+  if (frameId) markFrameSeen(draft, frameId)
   changed = true
   return changed
 }
 
-function projectBatchStreamEvent(
-  draft: BatchSessionDraft,
+/**
+ * Grouping-position tracker over the six nested stream event types (S1 spec
+ * §2: message_start / content_block_start / content_block_delta /
+ * content_block_stop / message_delta / message_stop). Only the three that
+ * carry grouping position or text/thinking deltas are read; the rest are
+ * documented no-ops here. Per-message stop_reason/usage (message_delta) is
+ * read from the stream/result layer — never projected from assistant frames
+ * (S1 §4 trap).
+ * Unknown event types (e.g. citations_delta, connector_text_delta, future
+ * additions) fall through as tolerated no-ops.
+ */
+function projectStreamEvent(
+  draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'stream_event' }>,
 ): boolean {
   const event = isRecord(message.event) ? message.event : null
@@ -1908,7 +1973,7 @@ function projectBatchStreamEvent(
     draft.session.currentStreamBlockIndex = event.index
     if (block?.type === 'text') {
       if (!draft.session.streamingTextBlocks[key]) {
-        ensureBatchStreamingBlocks(draft)
+        ensureOwnedStreamingBlocks(draft)
         draft.session.streamingTextBlocks[key] = {
           messageId: draft.session.currentStreamMessageId,
           blockIndex: event.index,
@@ -1926,7 +1991,7 @@ function projectBatchStreamEvent(
             : undefined
       const existing = draft.session.streamingThinkingBlocks[key]
       if (!existing || (existing.reasoningKind === undefined && reasoningKind)) {
-        ensureBatchStreamingThinkingBlocks(draft)
+        ensureOwnedStreamingThinkingBlocks(draft)
         draft.session.streamingThinkingBlocks[key] = existing
           ? { ...existing, reasoningKind }
           : {
@@ -1939,7 +2004,7 @@ function projectBatchStreamEvent(
       return true
     }
     if (draft.session.streamingTextBlocks[key]) {
-      ensureBatchStreamingBlocks(draft)
+      ensureOwnedStreamingBlocks(draft)
       delete draft.session.streamingTextBlocks[key]
     }
     return true
@@ -1958,10 +2023,10 @@ function projectBatchStreamEvent(
         content: '',
       }
       const nextBlock = { ...existing, content: existing.content + delta.text }
-      ensureBatchStreamingBlocks(draft)
+      ensureOwnedStreamingBlocks(draft)
       draft.session.streamingTextBlocks[key] = nextBlock
       draft.session.currentStreamBlockIndex = event.index
-      upsertBatchStreamingRow(
+      upsertStreamingRow(
         draft,
         createStreamingTextRow(draft.sessionId, nextBlock),
       )
@@ -1977,10 +2042,10 @@ function projectBatchStreamEvent(
         ...existing,
         content: existing.content + delta.thinking,
       }
-      ensureBatchStreamingThinkingBlocks(draft)
+      ensureOwnedStreamingThinkingBlocks(draft)
       draft.session.streamingThinkingBlocks[key] = nextBlock
       draft.session.currentStreamBlockIndex = event.index
-      upsertBatchStreamingRow(
+      upsertStreamingRow(
         draft,
         createStreamingThinkingRow(draft.sessionId, nextBlock),
       )
@@ -1996,23 +2061,45 @@ function projectBatchStreamEvent(
   return false
 }
 
-function projectBatchUser(
-  draft: BatchSessionDraft,
+function projectUserFrame(
+  draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'user' }>,
   recoveryInsertAt: number | null,
 ): boolean {
   const frameId = nonEmptyString(message.uuid)
+  // Dedupe BEFORE folding results, exactly as the assistant path does: a
+  // replayed duplicate frame must be a total no-op, including its
+  // result-correlation side effect. Re-folding mints a fresh
+  // ToolResultProjection per id, which makes every read clone its tool-use rows
+  // and drops the nested-row/display-item caches — a whole-transcript
+  // re-render for a frame that changed nothing.
   if (frameId && draft.session.seenFrameIds[frameId]) return false
+  // Fold correlation next, ahead of every early return below: a tool_result-only
+  // frame projects no visible row, and `isSynthetic` is `isMeta ||
+  // isVisibleInTranscriptOnly` on a mapper that attaches `tool_use_result` to
+  // that same frame (`src/utils/messages/mappers.ts:200-206`), so neither shape
+  // may lose its result.
   const body: unknown = message.message
   let changed =
     isRecord(body) && Array.isArray(body.content)
-      ? foldBatchToolResultBlocks(
+      ? foldToolResultBlocks(
           draft,
           body.content,
           message.tool_use_result,
           message.tool_result_status,
         )
       : false
+  // P4-36 — the hidden tier is RETAINED, not discarded. This used to be
+  // `if (message.isSynthetic === true) return` before any row was projected,
+  // which threw the row away and left the reveal control with nothing to
+  // reveal. The frame now walks the SAME projection path as any other user
+  // frame and its rows land in `rows` in arrival order; only `hiddenFrameIds`
+  // records the tier, and every read decides whether to show it. Nothing moved
+  // above the fold, so the ordering that comment protects is unchanged: dedupe
+  // still gates the fold, the fold still runs before any early return, and a
+  // hidden frame that appends rows now ALSO marks `seenFrameIds` (via
+  // `appendFrameRows`), so its replay is a total no-op instead of re-folding a
+  // correlation it already did.
   if (!frameId || !isRecord(body)) return changed
   const rawContent = body.content
   const blocks: unknown[] =
@@ -2028,9 +2115,13 @@ function projectBatchUser(
   if (message.timestamp !== undefined && timestamp === null) return changed
   const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
   const agentName = normalizeAgentName(message.agent_name)
+  // Message-level provenance: `origin` describes the whole turn, so every text
+  // block in it is attributed the same way (image blocks stay image rows).
   const origin = projectMessageOrigin(message.origin)
   if (origin?.kind === 'interruption') {
-    return appendBatchRows(draft, frameId, [{
+    // The body is model-facing interruption protocol, not operator prose. Its
+    // explicit, persisted origin is the durable display fact for live and replay.
+    return appendFrameRows(draft, frameId, [{
       id: frameRowId(draft.sessionId, frameId, 'turn_stopped'),
       sessionId: draft.sessionId,
       frameId,
@@ -2052,24 +2143,41 @@ function projectBatchUser(
     })
     return row === null ? [] : [row]
   })
+  // Tool-result-only frames still changed correlation state above. Mark them
+  // seen even though they add no visible row, otherwise replay re-folds the
+  // same result and invalidates every transcript read cache.
   if (rows.length === 0) {
-    markBatchFrameSeen(draft, frameId)
+    markFrameSeen(draft, frameId)
     return true
   }
-  if (origin?.kind === 'task-notification' &&
-    origin.toolUseId !== null && origin.completion !== null) {
-    ensureBatchAgentCompletions(draft)
-    draft.session.agentCompletionsByToolUseId[origin.toolUseId] = origin.completion
-  }
-  const appended = appendBatchRows(draft, frameId, rows, recoveryInsertAt)
+  recordAgentCompletion(draft, origin)
+  const appended = appendFrameRows(draft, frameId, rows, recoveryInsertAt)
   if (message.isSynthetic === true && appended) {
-    ensureBatchHiddenFrameIds(draft)
+    ensureOwnedHiddenFrameIds(draft)
     draft.session.hiddenFrameIds[frameId] = true
   }
   return appended || changed
 }
 
-function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
+/**
+ * Retain structured completion facts by `tool_use_id`. Original background
+ * launch cards do not consume them; ResumeAgent uses them to populate the
+ * resumed run's independent result card. A duplicate id is overwritten by the
+ * later turn (the engine notifies once per task, guarded by the `notified` flag
+ * at `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
+ */
+function recordAgentCompletion(
+  draft: SessionDraft,
+  origin: InjectedOrigin | null,
+): void {
+  if (origin === null || origin.kind !== 'task-notification') return
+  const { toolUseId, completion } = origin
+  if (toolUseId === null || completion === null) return
+  ensureOwnedAgentCompletions(draft)
+  draft.session.agentCompletionsByToolUseId[toolUseId] = completion
+}
+
+function finalizeStreamingTurn(draft: SessionDraft): boolean {
   const hasStreamingRows = draft.session.rows.some(
     isStreamingProjectionRow,
   )
@@ -2079,8 +2187,11 @@ function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
     Object.keys(draft.session.streamingTextBlocks).length > 0 ||
     Object.keys(draft.session.streamingThinkingBlocks).length > 0
   if (!hasStreamingRows && !hasStreamingState) return false
+  // A terminal result can arrive before a stopped assistant block's full frame.
+  // Keep its finalized projected content rather than deleting the only
+  // assistant response the transcript received.
   if (hasStreamingRows) {
-    ensureBatchRows(draft)
+    ensureOwnedRows(draft)
     for (let index = 0; index < draft.session.rows.length; index += 1) {
       const row = draft.session.rows[index]!
       if (isStreamingProjectionRow(row)) {
@@ -2092,19 +2203,19 @@ function finalizeBatchStreamingTurn(draft: BatchSessionDraft): boolean {
   }
   draft.session.currentStreamMessageId = null
   draft.session.currentStreamBlockIndex = null
-  ensureBatchStreamingBlocks(draft)
+  ensureOwnedStreamingBlocks(draft)
   draft.session.streamingTextBlocks = {}
-  ensureBatchStreamingThinkingBlocks(draft)
+  ensureOwnedStreamingThinkingBlocks(draft)
   draft.session.streamingThinkingBlocks = {}
   return true
 }
 
-function projectBatchResult(
-  draft: BatchSessionDraft,
+function projectResultFrame(
+  draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'result' }>,
   recoveryInsertAt: number | null,
 ): boolean {
-  let changed = finalizeBatchStreamingTurn(draft)
+  let changed = finalizeStreamingTurn(draft)
   if (draft.session.compacting) {
     draft.session.compacting = false
     changed = true
@@ -2120,14 +2231,18 @@ function projectBatchResult(
   if (result === null || errors === null || durationMs === null || totalCostUsd === null) {
     return changed
   }
+  // A current engine writes an origin-tagged interruption user frame before its
+  // result. That durable marker is the one transcript seam; the result is a
+  // live lifecycle byproduct and would otherwise duplicate it. Legacy emitters
+  // without the origin retain their existing interrupted result seam.
   if (
     subtype === 'interrupted' &&
     draft.session.rows.some(row => row.kind === 'turn-stopped')
   ) {
-    markBatchFrameSeen(draft, frameId)
+    markFrameSeen(draft, frameId)
     return true
   }
-  return appendBatchRows(draft, frameId, [{
+  return appendFrameRows(draft, frameId, [{
     id: frameRowId(draft.sessionId, frameId, 'result'),
     sessionId: draft.sessionId,
     frameId,
@@ -2141,8 +2256,8 @@ function projectBatchResult(
   }], recoveryInsertAt) || changed
 }
 
-function projectBatchSystem(
-  draft: BatchSessionDraft,
+function projectSystemFrame(
+  draft: SessionDraft,
   message: Extract<SDKMessage, { type: 'system' }>,
   recoveryInsertAt: number | null,
 ): boolean {
@@ -2155,12 +2270,26 @@ function projectBatchSystem(
       const tools = stringArray(message.tools)
       const permissionMode = nonEmptyString(message.permissionMode)
       if (!cwd || !model || !tools || !permissionMode) return false
-      markBatchFrameSeen(draft, frameId)
+      // P4-23 (operator, 2026-07-09): the visible ✦ "Session started" banner row
+      // was removed — Claude/ChatGPT show no such banner. The `case 'init'` still
+      // runs and STILL captures the P3-7 slash-command catalog (this frame does
+      // double duty); it just emits NO transcript row now.
+      //
+      // The slash catalog rides the SAME init frame (no new wire vocabulary):
+      // `slash_commands` is the user-invocable command names the sidecar's real
+      // catalog produced (P3-7). Tolerate its absence — a session whose sidecar
+      // catalog degraded to `[]` still captures a valid (empty) catalog. Mark
+      // the frame seen so a replayed init is idempotent (the row list is no
+      // longer written, so `appendFrameRows` is not the dedupe path anymore).
+      markFrameSeen(draft, frameId)
       draft.session.slashCommands = stringArray(message.slash_commands) ?? []
-      draft.slashCommandsOwned = true
       return true
     }
     case 'status':
+      // The engine's compaction signal. Not a row: `compact_boundary` is the
+      // durable record, and this only says a summarization call is in flight.
+      // Leaves the draft untouched when nothing moved, so the 30s keep-alive
+      // re-emits do not bust the row-slice caches downstream.
       if (draft.session.compacting === (message.status === 'compacting')) return false
       draft.session.compacting = message.status === 'compacting'
       return true
@@ -2171,10 +2300,11 @@ function projectBatchSystem(
         (metadata.trigger !== 'manual' && metadata.trigger !== 'auto') ||
         typeof metadata.pre_tokens !== 'number'
       ) return false
-      // Same rule as the single-frame path: a recovered boundary is history
-      // replay, not the live compaction finishing.
+      // A recovered boundary is history replay, not the live compaction
+      // finishing: only clear `compacting` for a live frame (a non-null
+      // `recoveryInsertAt` means this frame is recovered).
       if (recoveryInsertAt === null) draft.session.compacting = false
-      return appendBatchRows(draft, frameId, [{
+      return appendFrameRows(draft, frameId, [{
         id: frameRowId(draft.sessionId, frameId, 'compact-boundary'),
         sessionId: draft.sessionId,
         frameId,
@@ -2187,29 +2317,29 @@ function projectBatchSystem(
       const text = retryNoticeText(message.error)
       return text === null
         ? false
-        : appendBatchSystemNotice(draft, frameId, 'api_retry', text, recoveryInsertAt)
+        : appendSystemNotice(draft, frameId, 'api_retry', text, recoveryInsertAt)
     }
     case 'local_command_output':
       return typeof message.content === 'string'
-        ? appendBatchSystemNotice(draft, frameId, 'local_command_output', message.content, recoveryInsertAt)
+        ? appendSystemNotice(draft, frameId, 'local_command_output', message.content, recoveryInsertAt)
         : false
     case 'cat_code_account_diagnostic':
       return typeof message.user_message === 'string'
-        ? appendBatchSystemNotice(draft, frameId, 'account_diagnostic', message.user_message, recoveryInsertAt)
+        ? appendSystemNotice(draft, frameId, 'account_diagnostic', message.user_message, recoveryInsertAt)
         : false
     default:
       return false
   }
 }
 
-function appendBatchSystemNotice(
-  draft: BatchSessionDraft,
+function appendSystemNotice(
+  draft: SessionDraft,
   frameId: string,
   noticeType: SystemNoticeRow['noticeType'],
   content: string,
   recoveryInsertAt: number | null,
 ): boolean {
-  return appendBatchRows(draft, frameId, [{
+  return appendFrameRows(draft, frameId, [{
     id: frameRowId(draft.sessionId, frameId, noticeType),
     sessionId: draft.sessionId,
     frameId,
@@ -2217,667 +2347,6 @@ function appendBatchSystemNotice(
     noticeType,
     content,
   }], recoveryInsertAt)
-}
-
-/**
- * Full-union dispatch (P2-0). Two variants project today (`assistant` rows,
- * `stream_event` position tracking); every other variant is an explicit,
- * documented no-op returning `state` unchanged (reference-equal — the fixture
- * tests assert that). Variants = switch cases to extend: later sessions turn a
- * documented no-op into a projection by replacing its `return state`.
- */
-function projectMessage(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: SDKMessage,
-): TranscriptSessionState {
-  switch (message.type) {
-    case 'assistant':
-      return projectAssistantFrame(sessionId, state, message)
-
-    case 'stream_event':
-      // Droppable garnish (S1 spec §3): deltas may project live preview rows,
-      // but full assistant frames and the result boundary remain authoritative.
-      return projectStreamEvent(sessionId, state, message)
-
-    case 'user':
-      // User frames may carry both visible P2-1 content and P2-2 tool_result
-      // blocks; `projectUserFrame` folds correlation itself, AFTER its dedupe
-      // check, so a replayed frame stays a total no-op (same ordering as the
-      // assistant path).
-      return projectUserFrame(sessionId, state, message)
-
-    case 'result':
-      // Result is the only turn-end marker: prune orphan previews before
-      // projecting the authoritative P2-1 boundary row. A turn cannot end with
-      // a compaction still running, and an aborted one never reaches the
-      // engine's own clear, so the turn boundary is the backstop.
-      return projectResultFrame(
-        sessionId,
-        clearCompacting(finalizeStreamingTurn(state)),
-        message,
-      )
-
-    case 'system':
-      return projectSystemFrame(sessionId, state, message)
-
-    case 'tool_progress':
-      // P2-2 scope: live activity on the correlated tool card
-      // (engine-throttled, `src/utils/queryHelpers.ts` tool_progress yield).
-      return state
-
-    case 'tool_use_summary':
-      // P2-2 scope: summary chip over `preceding_tool_use_ids` correlation
-      // (`src/QueryEngine.ts` tool_use_summary yield).
-      return state
-
-    case 'status':
-      // Type-only at this seam: no `type:'status'` mint site exists in src/
-      // (the runtime schema models status as system/subtype:'status'
-      // instead — see sdkMessageFixtures.ts header). Tolerated no-op.
-      return state
-
-    case 'assistant_error':
-      // Never minted as a top-level message in src/ — the populated shape is
-      // the `error` FIELD on assistant/api_retry frames, which P2-1's
-      // ApiErrorRow reads. Tolerated no-op if it ever arrives top-level.
-      return state
-
-    case 'permission_denial':
-      // Type-only member (no mint site in src/). The live permission flow is
-      // the control channel (`permission.requested`/`permission.resolved`
-      // AppSessionEvents) — P2-4 domain state, NOT the transcript projector
-      // (§5 layer-3 separation). Denial summaries also arrive on
-      // `result.permission_denials`.
-      return state
-
-    case 'auth_status':
-      // Minted only on the SDK stdout path (`src/cli/print.ts`), never at the
-      // in-proc app seam today. W4 Accounts domain if that changes.
-      return state
-
-    case 'rate_limit_event':
-      // SDK stdout path only (`src/cli/print.ts`). INVENTORY W3 marks a
-      // standalone RateLimitRow stale — folded into API-error/notice
-      // handling (P2-1) if the seam ever emits it.
-      return state
-
-    case 'prompt_suggestion':
-      // SDK stdout path only (`src/cli/print.ts`, promptSuggestions opt-in).
-      // Composer surface (Phase 4), not a transcript row.
-      return state
-
-    case 'streamlined_text':
-    case 'streamlined_tool_use_summary':
-      // Streamlined-mode transform applied only by `src/cli/print.ts`
-      // (`src/utils/streamlinedTransform.ts`); replaces assistant frames on
-      // that path. The app seam receives the originals, so no mapping here.
-      return state
-
-    default: {
-      // Compile-time exhaustiveness tripwire: if the SDKMessage union grows a
-      // member, this assignment errors until it gets an explicit case above.
-      const _exhaustive: never = message
-      void _exhaustive
-      // Runtime tolerance: wire frames may outrun the pinned engine types
-      // (schema drift). An unknown variant is a no-op, never a crash.
-      return state
-    }
-  }
-}
-
-function projectAssistantFrame(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'assistant' }>,
-): TranscriptSessionState {
-  // The type claims `message.message.content` exists, but that claim is about
-  // a process on the far side of a socket — harden before dereferencing.
-  const body: unknown = message.message
-  if (!isRecord(body) || !Array.isArray(body.content)) return state
-
-  const frameId =
-    typeof message.uuid === 'string' && message.uuid.length > 0
-      ? message.uuid
-      : null
-  // Dedupe BEFORE folding results: a replayed duplicate frame must be a
-  // total no-op, including its result-correlation side effect.
-  if (frameId && state.seenFrameIds[frameId]) return state
-
-  // Server-executed tool families (server_tool_use, mcp_tool_use, web_fetch,
-  // code execution, …) can carry their OWN result block in the SAME
-  // assistant message's content array — there is no client round-trip, so no
-  // separate `user` tool_result frame ever arrives for them
-  // (`src/utils/messages.ts:1306-1328` documents the engine treating an
-  // unresolved one as orphaned/errored, confirming results ride inline).
-  // Fold any such result blocks into the correlation map alongside the
-  // `user`-frame path so both shapes resolve the same ToolCard.
-  state = foldToolResultBlocks(state, body.content)
-
-  // Typed assistant error codes classify provider failure. Their content is not
-  // safe assistant prose; the terminal result renders the curated explanation.
-  if (typeof message.error === 'string') {
-    return {
-      ...state,
-      seenFrameIds: frameId
-        ? { ...state.seenFrameIds, [frameId]: true }
-        : state.seenFrameIds,
-    }
-  }
-
-  const messageId =
-    typeof body.id === 'string' && body.id.length > 0 ? body.id : frameId
-  if (!messageId) return state
-
-  const parentToolUseId =
-    typeof message.parent_tool_use_id === 'string' &&
-    message.parent_tool_use_id.length > 0
-      ? message.parent_tool_use_id
-      : null
-  const agentName = normalizeAgentName(message.agent_name)
-  const model = nonEmptyString(body.model)
-
-  const fallbackIndex = state.nextBlockIndexByMessageId[messageId] ?? 0
-  const firstBlockIndex =
-    state.currentStreamMessageId === messageId &&
-    state.currentStreamBlockIndex !== null
-      ? state.currentStreamBlockIndex
-      : fallbackIndex
-  const blockIndexes = body.content.map((block, localIndex) =>
-    streamingThinkingBlockIndex(
-      messageId,
-      block,
-      state.streamingThinkingBlocks,
-    ) ?? (firstBlockIndex + localIndex),
-  )
-  const stableFrameId =
-    frameId ?? `${messageId}:block-${blockIndexes[0] ?? firstBlockIndex}`
-  const rows = body.content.flatMap((block, localIndex) => {
-    const blockIndex = blockIndexes[localIndex]!
-    const row = projectAssistantContentBlock(block, {
-      sessionId,
-      messageId,
-      frameId: stableFrameId,
-      blockIndex,
-      parentToolUseId,
-      ...(agentName ? { agentName } : {}),
-      ...(model !== null ? { model } : {}),
-    })
-    return row === null ? [] : [row]
-  })
-  const nextBlockIndex = Math.max(
-    fallbackIndex,
-    ...blockIndexes.map(blockIndex => blockIndex + 1),
-  )
-  const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
-  const nextStreamingThinkingBlocks = { ...state.streamingThinkingBlocks }
-  for (const row of rows) {
-    if ('messageId' in row && 'blockIndex' in row) {
-      const key = streamBlockKey(row.messageId, row.blockIndex)
-      delete nextStreamingTextBlocks[key]
-      delete nextStreamingThinkingBlocks[key]
-    }
-  }
-  const streamingTextBlocks =
-    Object.keys(nextStreamingTextBlocks).length ===
-    Object.keys(state.streamingTextBlocks).length
-      ? state.streamingTextBlocks
-      : nextStreamingTextBlocks
-  const streamingThinkingBlocks =
-    Object.keys(nextStreamingThinkingBlocks).length ===
-    Object.keys(state.streamingThinkingBlocks).length
-      ? state.streamingThinkingBlocks
-      : nextStreamingThinkingBlocks
-
-  const placed = upsertFrameRows(state, rows)
-
-  return {
-    ...state,
-    rows: placed.rows,
-    recoveryInsertAt: placed.recoveryInsertAt,
-    streamingTextBlocks,
-    streamingThinkingBlocks,
-    nextBlockIndexByMessageId: {
-      ...state.nextBlockIndexByMessageId,
-      [messageId]: nextBlockIndex,
-    },
-    seenFrameIds: frameId
-      ? { ...state.seenFrameIds, [frameId]: true }
-      : state.seenFrameIds,
-  }
-}
-
-function projectUserFrame(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'user' }>,
-): TranscriptSessionState {
-  const frameId = nonEmptyString(message.uuid)
-  // Dedupe BEFORE folding results, exactly as the assistant path does (:705): a
-  // replayed duplicate frame must be a total no-op, including its
-  // result-correlation side effect. Re-folding mints a fresh
-  // ToolResultProjection per id, which makes every read clone its tool-use rows
-  // and drops the nested-row/display-item caches — a whole-transcript
-  // re-render for a frame that changed nothing.
-  if (frameId && state.seenFrameIds[frameId]) return state
-  // Fold correlation next, ahead of every early return below: a tool_result-only
-  // frame projects no visible row, and `isSynthetic` is `isMeta ||
-  // isVisibleInTranscriptOnly` on a mapper that attaches `tool_use_result` to
-  // that same frame (`src/utils/messages/mappers.ts:200-206`), so neither shape
-  // may lose its result.
-  state = correlateToolResults(state, message)
-
-  // P4-36 — the hidden tier is RETAINED, not discarded. This used to be
-  // `if (message.isSynthetic === true) return state`, which threw the row away
-  // and left the reveal control with nothing to reveal. The frame now walks the
-  // SAME projection path as any other user frame and its rows land in `rows` in
-  // arrival order; only `hiddenFrameIds` records the tier, and every read
-  // decides whether to show it. Nothing moved above `correlateToolResults`, so
-  // the ordering that comment protects is unchanged: dedupe still gates the
-  // fold, the fold still runs before any early return, and a hidden frame that
-  // appends rows now ALSO marks `seenFrameIds` (via `appendFrameRows`), so its
-  // replay is a total no-op instead of re-folding a correlation it already did.
-  const isHidden = message.isSynthetic === true
-
-  const body: unknown = message.message
-  if (!frameId || !isRecord(body)) return state
-
-  const rawContent = body.content
-  const blocks: unknown[] =
-    typeof rawContent === 'string'
-      ? [{ type: 'text', text: rawContent }]
-      : Array.isArray(rawContent)
-        ? rawContent
-        : []
-  if (blocks.length === 0) return state
-
-  const messageId = nonEmptyString(body.id) ?? frameId
-  const parentToolUseId = nonEmptyString(message.parent_tool_use_id)
-  const agentName = normalizeAgentName(message.agent_name)
-  const timestamp =
-    message.timestamp === undefined
-      ? undefined
-      : nonEmptyString(message.timestamp)
-  if (message.timestamp !== undefined && timestamp === null) return state
-
-  // Message-level provenance: `origin` describes the whole turn, so every text
-  // block in it is attributed the same way (image blocks stay image rows).
-  const origin = projectMessageOrigin(message.origin)
-  if (origin?.kind === 'interruption') {
-    // The body is model-facing interruption protocol, not operator prose. Its
-    // explicit, persisted origin is the durable display fact for live and replay.
-    return appendFrameRows(state, frameId, [
-      {
-        id: frameRowId(sessionId, frameId, 'turn_stopped'),
-        sessionId,
-        frameId,
-        kind: 'turn-stopped',
-      },
-    ])
-  }
-
-  const rows = blocks.flatMap((block, blockIndex) => {
-    const row = projectUserContentBlock(block, {
-      sessionId,
-      messageId,
-      frameId,
-      blockIndex,
-      parentToolUseId,
-      ...(agentName ? { agentName } : {}),
-    }, {
-      isReplay: message.isReplay === true,
-      timestamp: timestamp ?? undefined,
-      origin,
-    })
-    return row === null ? [] : [row]
-  })
-  // Tool-result-only frames still changed correlation state above. Mark them
-  // seen even though they add no visible row, otherwise replay re-folds the
-  // same result and invalidates every transcript read cache.
-  if (rows.length === 0) {
-    return {
-      ...state,
-      seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
-    }
-  }
-  const withCompletion = recordAgentCompletion(state, origin)
-  const appended = appendFrameRows(withCompletion, frameId, rows)
-  // Identity is compared against what was HANDED to `appendFrameRows`, not the
-  // original `state`: `recordAgentCompletion` may already have returned a new
-  // object, so comparing to `state` would read a no-op append as a real one.
-  if (!isHidden || appended === withCompletion) return appended
-  return {
-    ...appended,
-    hiddenFrameIds: { ...appended.hiddenFrameIds, [frameId]: true },
-  }
-}
-
-/**
- * Retain structured completion facts by `tool_use_id`. Original background
- * launch cards do not consume them; ResumeAgent uses them to populate the
- * resumed run's independent result card. A duplicate id is overwritten by the
- * later turn (the engine notifies once per task, guarded by the `notified` flag
- * at `src/tasks/LocalAgentTask/LocalAgentTask.tsx:307`).
- */
-function recordAgentCompletion(
-  state: TranscriptSessionState,
-  origin: InjectedOrigin | null,
-): TranscriptSessionState {
-  if (origin === null || origin.kind !== 'task-notification') return state
-  const { toolUseId, completion } = origin
-  if (toolUseId === null || completion === null) return state
-  return {
-    ...state,
-    agentCompletionsByToolUseId: {
-      ...state.agentCompletionsByToolUseId,
-      [toolUseId]: completion,
-    },
-  }
-}
-
-function projectResultFrame(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'result' }>,
-): TranscriptSessionState {
-  const frameId = nonEmptyString(message.uuid)
-  const subtype = nonEmptyString(message.subtype)
-  if (!frameId || !subtype || typeof message.is_error !== 'boolean') return state
-  if (state.seenFrameIds[frameId]) return state
-
-  const result = optionalString(message.result)
-  const errors = optionalStringArray(message.errors)
-  const durationMs = optionalNumber(message.duration_ms)
-  const totalCostUsd = optionalNumber(message.total_cost_usd)
-  if (
-    result === null ||
-    errors === null ||
-    durationMs === null ||
-    totalCostUsd === null
-  ) {
-    return state
-  }
-
-  // A current engine writes an origin-tagged interruption user frame before its
-  // result. That durable marker is the one transcript seam; the result is a
-  // live lifecycle byproduct and would otherwise duplicate it. Legacy emitters
-  // without the origin retain their existing interrupted result seam.
-  if (
-    subtype === 'interrupted' &&
-    state.rows.some(row => row.kind === 'turn-stopped')
-  ) {
-    return {
-      ...state,
-      seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
-    }
-  }
-
-  const row: ResultRow = {
-    id: frameRowId(sessionId, frameId, 'result'),
-    sessionId,
-    frameId,
-    kind: 'result',
-    subtype,
-    isError: message.is_error,
-    ...(result === undefined ? {} : { result }),
-    errors: errors ?? [],
-    ...(durationMs === undefined ? {} : { durationMs }),
-    ...(totalCostUsd === undefined ? {} : { totalCostUsd }),
-  }
-  return appendFrameRows(state, frameId, [row])
-}
-
-function projectSystemFrame(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'system' }>,
-): TranscriptSessionState {
-  const frameId = nonEmptyString(message.uuid)
-  if (!frameId || state.seenFrameIds[frameId]) return state
-
-  switch (message.subtype) {
-    case 'init': {
-      const cwd = nonEmptyString(message.cwd)
-      const model = nonEmptyString(message.model)
-      const tools = stringArray(message.tools)
-      const permissionMode = nonEmptyString(message.permissionMode)
-      if (!cwd || !model || !tools || !permissionMode) return state
-      // P4-23 (operator, 2026-07-09): the visible ✦ "Session started" banner row
-      // was removed — Claude/ChatGPT show no such banner. The `case 'init'` still
-      // runs and STILL captures the P3-7 slash-command catalog (this frame does
-      // double duty); it just emits NO transcript row now.
-      //
-      // The slash catalog rides the SAME init frame (no new wire vocabulary):
-      // `slash_commands` is the user-invocable command names the sidecar's real
-      // catalog produced (P3-7). Tolerate its absence — a session whose sidecar
-      // catalog degraded to `[]` still captures a valid (empty) catalog.
-      const slashCommands = stringArray(message.slash_commands) ?? []
-      // Mark the frame seen so a replayed init is idempotent (the row list is no
-      // longer written, so `appendFrameRows` is not the dedupe path anymore), and
-      // store the catalog as session metadata read by the SlashCommandPicker.
-      return {
-        ...state,
-        seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
-        slashCommands,
-      }
-    }
-
-    case 'status':
-      // The engine's compaction signal. Not a row: `compact_boundary` is the
-      // durable record, and this only says a summarization call is in flight.
-      // Returns the SAME state object when nothing moved, so the 30s keep-alive
-      // re-emits do not bust the row-slice caches downstream.
-      return setCompacting(state, message.status === 'compacting')
-
-    case 'compact_boundary': {
-      const metadata = message.compact_metadata
-      if (
-        !isRecord(metadata) ||
-        (metadata.trigger !== 'manual' && metadata.trigger !== 'auto') ||
-        typeof metadata.pre_tokens !== 'number'
-      ) {
-        return state
-      }
-      // A recovered boundary is history replay, not the live compaction
-      // finishing: only clear `compacting` for a live frame (`recoveryInsertAt`
-      // non-null here means this frame is recovered, see `appendFrameRows`).
-      const nextState =
-        state.recoveryInsertAt === null ? clearCompacting(state) : state
-      return appendFrameRows(nextState, frameId, [
-        {
-          id: frameRowId(sessionId, frameId, 'compact-boundary'),
-          sessionId,
-          frameId,
-          kind: 'compact-boundary',
-          trigger: metadata.trigger,
-          preTokens: metadata.pre_tokens,
-        },
-      ])
-    }
-
-    case 'api_retry': {
-      const text = retryNoticeText(message.error)
-      if (text === null) return state
-      return appendSystemNotice(state, sessionId, frameId, 'api_retry', text)
-    }
-
-    case 'local_command_output':
-      return typeof message.content === 'string'
-        ? appendSystemNotice(
-            state,
-            sessionId,
-            frameId,
-            'local_command_output',
-            message.content,
-          )
-        : state
-
-    case 'cat_code_account_diagnostic':
-      return typeof message.user_message === 'string'
-        ? appendSystemNotice(
-            state,
-            sessionId,
-            frameId,
-            'account_diagnostic',
-            message.user_message,
-          )
-        : state
-
-    default:
-      return state
-  }
-}
-
-function setCompacting(
-  state: TranscriptSessionState,
-  compacting: boolean,
-): TranscriptSessionState {
-  return state.compacting === compacting ? state : { ...state, compacting }
-}
-
-function clearCompacting(
-  state: TranscriptSessionState,
-): TranscriptSessionState {
-  return setCompacting(state, false)
-}
-
-function appendSystemNotice(
-  state: TranscriptSessionState,
-  sessionId: SessionId,
-  frameId: string,
-  noticeType: SystemNoticeRow['noticeType'],
-  content: string,
-): TranscriptSessionState {
-  return appendFrameRows(state, frameId, [
-    {
-      id: frameRowId(sessionId, frameId, noticeType),
-      sessionId,
-      frameId,
-      kind: 'system-notice',
-      noticeType,
-      content,
-    },
-  ])
-}
-
-function appendFrameRows(
-  state: TranscriptSessionState,
-  frameId: string,
-  rows: TranscriptRow[],
-): TranscriptSessionState {
-  if (state.seenFrameIds[frameId] || rows.length === 0) return state
-  // B1: the ONE branch a recovered frame takes. Every frame in the app reaches
-  // this function, so the condition is a session field that only a `recovered`
-  // event frame can leave non-null (`projectServerFrame` re-derives it per
-  // frame and forces it back to null for anything else). An ordinary frame
-  // therefore cannot reach the insertion, and the append below is untouched.
-  if (state.recoveryInsertAt !== null) {
-    return insertFrameRows(state, state.recoveryInsertAt, frameId, rows)
-  }
-  return {
-    ...state,
-    rows: [...state.rows, ...rows],
-    seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
-  }
-}
-
-/**
- * Place one recovered frame's rows ABOVE the conversation they precede (B1).
- *
- * Nothing existing is rewritten: the rows on either side of the cut are the
- * same objects in the same order, so the read-time caches keyed on a row (the
- * nested-row wrapper, the orphan group) still hit for every one of them. Only
- * the session slice is new, which is exactly what the WeakMap caches keyed on
- * the SLICE (`nestedRowsCache` / `revealedNestedRowsCache`) need in order to
- * recompute — and recomputing is required here, because the boundary row is
- * synthesized above `rows[0]` and `rows[0]` has just changed.
- *
- * The cursor advances by what was inserted, so the next frame of the same
- * batch lands after this one and the batch keeps its own oldest-first order.
- */
-function insertFrameRows(
-  state: TranscriptSessionState,
-  at: number,
-  frameId: string,
-  rows: TranscriptRow[],
-): TranscriptSessionState {
-  return {
-    ...state,
-    rows: [...state.rows.slice(0, at), ...rows, ...state.rows.slice(at)],
-    recoveryInsertAt: at + rows.length,
-    seenFrameIds: { ...state.seenFrameIds, [frameId]: true },
-  }
-}
-
-/**
- * P2-2 correlation entry point for the `user` frame path (S1/queryHelpers.ts
- * §203-218: `tool_result` content blocks ride `user` messages, `content` is
- * `string | ContentBlockParam[]` — a plain string prompt has nothing to
- * correlate). `tool_use_result` (the companion raw engine output, read
- * alongside the block for FileEditTool diff extraction) rides the SAME `user`
- * SDKMessage the content block is on, per `queryHelpers.ts:213-215`.
- */
-function correlateToolResults(
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'user' }>,
-): TranscriptSessionState {
-  const body: unknown = message.message
-  if (!isRecord(body) || !Array.isArray(body.content)) return state
-  return foldToolResultBlocks(
-    state,
-    body.content,
-    message.tool_use_result,
-    message.tool_result_status,
-  )
-}
-
-/**
- * Scans a content-block array for any `*_tool_result` shape and folds each
- * into `toolResultsByUseId`, keyed by its own `tool_use_id` — the single
- * correlation mechanism for BOTH client tool round-trips (`tool_result` on a
- * `user` frame) and server-executed tools whose result rides inline on the
- * SAME assistant message as their `*_tool_use` block (no-op if none found).
- * `toolUseResult` (the companion diff/output payload) is a SINGLE field
- * shared across every matching block found — safe because the engine mints
- * one `user` message per individual tool result, even for parallel tool
- * calls: `query.ts:1439-1455` (`for await (const update of toolUpdates) {
- * yield update.message }`) yields ONE message per completed tool, and the
- * error/interrupt path (`query.ts:133-159`
- * `yieldMissingToolResultBlocks`) does the same — never a batch of several
- * `tool_result` blocks sharing one `toolUseResult`. Re-delivery of an
- * already-correlated id is idempotent (last-write, and in practice the
- * engine sends each result once) — folding is cheap and never mutates a
- * `ToolUseRow`, only this map.
- */
-function foldToolResultBlocks(
-  state: TranscriptSessionState,
-  content: unknown[],
-  toolUseResult?: unknown,
-  toolResultStatus?: unknown,
-): TranscriptSessionState {
-  let next: Record<string, ToolResultProjection> | null = null
-  for (const block of content) {
-    if (!isRecord(block) || typeof block.type !== 'string') continue
-    if (!isToolResultBlockType(block.type)) continue
-    const toolUseId = block.tool_use_id
-    if (typeof toolUseId !== 'string' || toolUseId.length === 0) continue
-
-    const projection = projectToolResultBlock(
-      block,
-      toolUseResult,
-      toolResultStatus === 'cancelled',
-    )
-    const preview = state.generatedImagePreviewsByUseId[toolUseId]
-    const projected =
-      preview && projection.generatedImage
-        ? {
-            ...projection,
-            generatedImage: { ...projection.generatedImage, preview },
-          }
-        : projection
-    next = { ...(next ?? state.toolResultsByUseId), [toolUseId]: projected }
-  }
-  return next ? { ...state, toolResultsByUseId: next } : state
 }
 
 /**
@@ -3214,164 +2683,6 @@ function deriveToolFamily(toolName: string): ToolFamily {
   }
 }
 
-/**
- * Grouping-position tracker over the six nested stream event types (S1 spec
- * §2: message_start / content_block_start / content_block_delta /
- * content_block_stop / message_delta / message_stop). Only the three that
- * carry grouping position or text/thinking deltas are read; the rest are
- * documented no-ops here. Per-message stop_reason/usage (message_delta) is
- * read from the stream/result layer — never projected from assistant frames
- * (S1 §4 trap).
- * Unknown event types (e.g. citations_delta, connector_text_delta, future
- * additions) fall through as tolerated no-ops.
- */
-function projectStreamEvent(
-  sessionId: SessionId,
-  state: TranscriptSessionState,
-  message: Extract<SDKMessage, { type: 'stream_event' }>,
-): TranscriptSessionState {
-  const event = isRecord(message.event) ? message.event : null
-  if (!event || typeof event.type !== 'string') return state
-
-  if (event.type === 'message_start') {
-    const startedMessage = isRecord(event.message) ? event.message : null
-    if (!startedMessage || typeof startedMessage.id !== 'string') return state
-    return {
-      ...state,
-      currentStreamMessageId: startedMessage.id,
-      currentStreamBlockIndex: null,
-    }
-  }
-
-  if (
-    event.type === 'content_block_start' &&
-    state.currentStreamMessageId &&
-    typeof event.index === 'number'
-  ) {
-    const key = streamBlockKey(state.currentStreamMessageId, event.index)
-    const contentBlock = isRecord(event.content_block)
-      ? event.content_block
-      : null
-    if (contentBlock?.type === 'text') {
-      const existing = state.streamingTextBlocks[key]
-      return {
-        ...state,
-        currentStreamBlockIndex: event.index,
-        streamingTextBlocks: existing
-          ? state.streamingTextBlocks
-          : {
-              ...state.streamingTextBlocks,
-              [key]: {
-                messageId: state.currentStreamMessageId,
-                blockIndex: event.index,
-                content: '',
-              },
-            },
-      }
-    }
-    if (contentBlock?.type === 'thinking') {
-      const reasoningKind =
-        typeof contentBlock.reasoning_kind === 'string'
-          ? contentBlock.reasoning_kind
-          : typeof contentBlock.reasoningKind === 'string'
-            ? contentBlock.reasoningKind
-            : undefined
-      const existing = state.streamingThinkingBlocks[key]
-      const nextBlock =
-        existing && (existing.reasoningKind !== undefined || !reasoningKind)
-          ? existing
-          : {
-              ...(existing ?? {
-                messageId: state.currentStreamMessageId,
-                blockIndex: event.index,
-                content: '',
-              }),
-              ...(reasoningKind ? { reasoningKind } : {}),
-            }
-      return {
-        ...state,
-        currentStreamBlockIndex: event.index,
-        streamingThinkingBlocks:
-          nextBlock === existing
-            ? state.streamingThinkingBlocks
-            : { ...state.streamingThinkingBlocks, [key]: nextBlock },
-      }
-    }
-    if (state.streamingTextBlocks[key]) {
-      const nextStreamingTextBlocks = { ...state.streamingTextBlocks }
-      delete nextStreamingTextBlocks[key]
-      return {
-        ...state,
-        currentStreamBlockIndex: event.index,
-        streamingTextBlocks: nextStreamingTextBlocks,
-      }
-    }
-    return { ...state, currentStreamBlockIndex: event.index }
-  }
-
-  if (
-    event.type === 'content_block_delta' &&
-    state.currentStreamMessageId &&
-    typeof event.index === 'number'
-  ) {
-    const delta = isRecord(event.delta) ? event.delta : null
-    const key = streamBlockKey(state.currentStreamMessageId, event.index)
-    if (delta?.type === 'text_delta' && typeof delta.text === 'string') {
-      const existing = state.streamingTextBlocks[key] ?? {
-        messageId: state.currentStreamMessageId,
-        blockIndex: event.index,
-        content: '',
-      }
-      const nextBlock = {
-        ...existing,
-        content: existing.content + delta.text,
-      }
-      const row = createStreamingTextRow(sessionId, nextBlock)
-      return {
-        ...state,
-        currentStreamBlockIndex: event.index,
-        streamingTextBlocks: {
-          ...state.streamingTextBlocks,
-          [key]: nextBlock,
-        },
-        rows: upsertStreamingRows(state.rows, [row]),
-      }
-    }
-    if (delta?.type === 'thinking_delta' && typeof delta.thinking === 'string') {
-      const existing = state.streamingThinkingBlocks[key] ?? {
-        messageId: state.currentStreamMessageId,
-        blockIndex: event.index,
-        content: '',
-      }
-      const nextBlock = {
-        ...existing,
-        content: existing.content + delta.thinking,
-      }
-      const row = createStreamingThinkingRow(sessionId, nextBlock)
-      return {
-        ...state,
-        currentStreamBlockIndex: event.index,
-        streamingThinkingBlocks: {
-          ...state.streamingThinkingBlocks,
-          [key]: nextBlock,
-        },
-        rows: upsertStreamingRows(state.rows, [row]),
-      }
-    }
-    return state
-  }
-
-  if (event.type === 'message_stop') {
-    return {
-      ...state,
-      currentStreamMessageId: null,
-      currentStreamBlockIndex: null,
-    }
-  }
-
-  return state
-}
-
 function createStreamingTextRow(
   sessionId: SessionId,
   block: StreamingTextBlock,
@@ -3412,118 +2723,6 @@ function createStreamingThinkingRow(
     ...(block.reasoningKind ? { reasoningKind: block.reasoningKind } : {}),
     isStreaming: true,
   }
-}
-
-function finalizeStreamingTurn(
-  state: TranscriptSessionState,
-): TranscriptSessionState {
-  const hasStreamingRows = state.rows.some(
-    isStreamingProjectionRow,
-  )
-  const hasStreamingState =
-    state.currentStreamMessageId !== null ||
-    state.currentStreamBlockIndex !== null ||
-    Object.keys(state.streamingTextBlocks).length > 0 ||
-    Object.keys(state.streamingThinkingBlocks).length > 0
-  if (!hasStreamingRows && !hasStreamingState) return state
-
-  // A terminal result can arrive before a stopped assistant block's full frame.
-  // Keep its finalized projected content rather than deleting the only
-  // assistant response the transcript received.
-  const rows = state.rows.map(row =>
-    isStreamingProjectionRow(row)
-      ? (() => {
-          const { isStreaming: _streaming, ...finalized } = row
-          void _streaming
-          return finalized
-        })()
-      : row,
-  )
-  return {
-    ...state,
-    rows,
-    currentStreamMessageId: null,
-    currentStreamBlockIndex: null,
-    streamingTextBlocks: {},
-    streamingThinkingBlocks: {},
-  }
-}
-
-function upsertRows(
-  rows: TranscriptRow[],
-  replacements: TranscriptRow[],
-): TranscriptRow[] {
-  if (replacements.length === 0) return rows
-  const upserted = upsertExistingRows(rows, replacements)
-  for (const row of upserted.added) upserted.rows.push(row)
-  return upserted.rows
-}
-
-/**
- * Split one frame's rows into the ones that REPLACE a row already in the list
- * (streaming finalization: same id, so it keeps its position) and the ones that
- * are new to it. Shared by both placements below so the two can never disagree
- * about which is which.
- */
-function upsertExistingRows(
-  rows: TranscriptRow[],
-  replacements: TranscriptRow[],
-): { rows: TranscriptRow[]; added: TranscriptRow[] } {
-  const byId = new Map(replacements.map(row => [row.id, row]))
-  const nextRows = rows.map(row => byId.get(row.id) ?? row)
-  const existingIds = new Set(rows.map(row => row.id))
-  return {
-    rows: nextRows,
-    added: replacements.filter(row => !existingIds.has(row.id)),
-  }
-}
-
-/**
- * Where the assistant path's rows go, which is the same question
- * `appendFrameRows` answers for every other path (B1,
- * decisions/HISTORY-LOAD-EARLIER.md). Kept separate because this path upserts:
- * a row whose id is already present is a finalized stream and must stay where
- * it stands, on both placements.
- */
-function upsertFrameRows(
-  state: TranscriptSessionState,
-  replacements: TranscriptRow[],
-): { rows: TranscriptRow[]; recoveryInsertAt: number | null } {
-  if (replacements.length === 0) {
-    return { rows: state.rows, recoveryInsertAt: state.recoveryInsertAt }
-  }
-  // B1: the same single branch `appendFrameRows` carries, on the same
-  // condition. Only a `recovered` event frame can leave the cursor non-null, so
-  // an ordinary assistant frame still lands on the plain upsert below.
-  if (state.recoveryInsertAt !== null) {
-    const upserted = upsertExistingRows(state.rows, replacements)
-    upserted.rows.splice(state.recoveryInsertAt, 0, ...upserted.added)
-    return {
-      rows: upserted.rows,
-      recoveryInsertAt: state.recoveryInsertAt + upserted.added.length,
-    }
-  }
-  return { rows: upsertRows(state.rows, replacements), recoveryInsertAt: null }
-}
-
-function upsertStreamingRows(
-  rows: TranscriptRow[],
-  replacements: (AssistantTextRow | ThinkingRow)[],
-): TranscriptRow[] {
-  if (replacements.length === 0) return rows
-  const byId = new Map(replacements.map(row => [row.id, row]))
-  const nextRows = rows.map(row => {
-    const replacement = byId.get(row.id)
-    if (replacement && isMatchingStreamingRow(row, replacement)) {
-      return replacement
-    }
-    return row
-  })
-  const existingIds = new Set(rows.map(row => row.id))
-  for (const row of replacements) {
-    if (!existingIds.has(row.id)) nextRows.push(row)
-  }
-  return nextRows
 }
 
 function isStreamingProjectionRow(
@@ -3766,7 +2965,10 @@ function projectUserContentBlock(
         kind: 'injected-turn',
         injectedKind: origin.kind,
         label: origin.label,
-        content: block.text,
+        content:
+          origin.kind === 'peer'
+            ? stripCrossSessionEnvelope(block.text)
+            : block.text,
       }
     }
     // Ordered ahead of the command-echo heuristic exactly as the terminal
@@ -4020,6 +3222,32 @@ function isLegacyTaskNotificationBanner(text: string): boolean {
 /** The legacy envelope's `<status>` tag; null when absent. */
 function parseLegacyTaskNotificationStatus(text: string): string | null {
   return /<status>([\s\S]*?)<\/status>/.exec(text)?.[1]?.trim() || null
+}
+
+/**
+ * A delivered peer message reaches the engine wrapped as
+ * `<cross-session-message from="…">` (`app/sidecar/sidecarServer.ts`
+ * `wrapCrossSessionMessage`). That envelope is MODEL-facing: it is the marker
+ * telling the recipient the text came from another session, and neutralizing
+ * the tag inside the body is a security property. None of that is display: the
+ * row already names the sender in its own label, so on screen the envelope is
+ * redundant and is internal vocabulary besides (§7). Stripped here, at the
+ * display boundary only, so what the model receives is untouched.
+ *
+ * Anchored at both ends: only a body that IS the envelope is unwrapped, and
+ * anything else — a peer message quoting the tag, a shape a newer sidecar
+ * mints — renders verbatim rather than half-parsed.
+ *
+ * The `&lt;cross-session-message` sequences the wrapper neutralized are left as
+ * they are on purpose. They are what the model saw, and nothing here can tell
+ * an escape the wrapper introduced from one the sender typed, so restoring them
+ * would mangle a body that legitimately contains the second kind.
+ */
+const CROSS_SESSION_ENVELOPE =
+  /^<cross-session-message from="[^"]*">\n?([\s\S]*?)\n?<\/cross-session-message>$/
+
+function stripCrossSessionEnvelope(text: string): string {
+  return CROSS_SESSION_ENVELOPE.exec(text)?.[1] ?? text
 }
 
 /**

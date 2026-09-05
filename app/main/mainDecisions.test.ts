@@ -1,12 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import {
   PROTOCOL_VERSION,
   type HistoryLoadEarlierMessage,
   type ServerFrame,
 } from '../shared/protocol.js'
-import type { SupervisorEvent } from '../supervisor/supervisor.js'
+import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
 import {
   MAX_FRAME_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
@@ -47,6 +48,10 @@ import {
   sanitizeSaveFileName,
   selectTranscriptBackfillCandidates,
   stampHistoryViewAnchor,
+  isLiveSidecarStatus,
+  isReadyForFrames,
+  isSessionLive,
+  isSessionReadyForFrames,
   supervisorEventToServerFrame,
   resolveSidecarLaunch,
   validateSaveTextRequest,
@@ -883,21 +888,14 @@ describe('native file attachment tokens', () => {
 })
 
 function row(overrides: Partial<SessionDescriptor> = {}): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     appSessionId: 'a',
     engineSessionId: 'e-a',
     cwd: '/repo',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
     ...overrides,
-  }
+  })
 }
 
 function select(
@@ -1455,4 +1453,110 @@ test('a non-load-earlier message is returned unchanged', () => {
   expect(stampHistoryViewAnchor(submit, 'ffffffff-ffff-4fff-8fff-ffffffffffff')).toBe(
     submit,
   )
+})
+
+describe('isSessionLive (HOST-REQUEST-PLANE — liveness, not membership)', () => {
+  // The supervisor keeps a record after its child exits and deletes one only in
+  // `killSession`, so `listSessions()` membership is not liveness. An idle park
+  // is a self-exit, which makes the tombstone case the ORDINARY one, not an
+  // edge: `some(row => row.sessionId === id)` reported every parked, crashed and
+  // closed session as live.
+  const records = [
+    { sessionId: 'spawning-1', status: 'spawning' as const },
+    { sessionId: 'connecting-1', status: 'connecting' as const },
+    { sessionId: 'ready-1', status: 'ready' as const },
+    { sessionId: 'disconnected-1', status: 'disconnected' as const },
+    { sessionId: 'exited-1', status: 'exited' as const },
+    { sessionId: 'failed-1', status: 'failed' as const },
+  ]
+
+  test('a parked or crashed session is NOT live, though its record is still there', () => {
+    // The defect this exists to prevent: a `peer.deliver` to one of these skipped
+    // the wake-block check, skipped restore, skipped the wait for ready, and
+    // forwarded into a socket that was not there — so "a message to a parked
+    // peer wakes it" could never happen (PEER-SESSIONS §15 step 6).
+    expect(isSessionLive(records, 'exited-1')).toBe(false)
+    expect(isSessionLive(records, 'failed-1')).toBe(false)
+    expect(records.some(row => row.sessionId === 'exited-1')).toBe(true)
+  })
+
+  test('a session mid-spawn or attached IS live', () => {
+    expect(isSessionLive(records, 'spawning-1')).toBe(true)
+    expect(isSessionLive(records, 'connecting-1')).toBe(true)
+    expect(isSessionLive(records, 'ready-1')).toBe(true)
+    // `disconnected` means the socket closed but the child may still be running,
+    // so it is not terminal and the host does not count it as one either.
+    expect(isSessionLive(records, 'disconnected-1')).toBe(true)
+  })
+
+  test('an unknown id is not live', () => {
+    expect(isSessionLive(records, 'never-existed')).toBe(false)
+    expect(isSessionLive([], 'ready-1')).toBe(false)
+  })
+
+  test('the predicate agrees with the host own liveness rule', () => {
+    // `Host.liveCount()` counts exactly `!isTerminalStatus`. If these two drift,
+    // the control plane and the peer plane disagree about which sessions exist.
+    for (const status of ['spawning', 'connecting', 'ready', 'disconnected'] as const) {
+      expect(isLiveSidecarStatus(status)).toBe(true)
+    }
+    for (const status of ['exited', 'failed'] as const) {
+      expect(isLiveSidecarStatus(status)).toBe(false)
+    }
+  })
+
+  test('EXISTENCE is not readiness, over all six statuses', () => {
+    // The whole reason there are two predicates. `isLiveSidecarStatus` answers
+    // whether a session exists and must keep agreeing with `Host.liveCount()`;
+    // three of the statuses it admits cannot take a frame, and the supervisor
+    // refuses one sent to them. A delivery path that reads the existence answer
+    // skips the wake and loses the message, which is what happened.
+    const existence: Record<SidecarStatus, boolean> = {
+      spawning: true,
+      connecting: true,
+      ready: true,
+      disconnected: true,
+      exited: false,
+      failed: false,
+    }
+    const readiness: Record<SidecarStatus, boolean> = {
+      spawning: false,
+      connecting: false,
+      ready: true,
+      disconnected: false,
+      exited: false,
+      failed: false,
+    }
+    // Listed rather than derived from the tables, so a status added to the union
+    // fails to compile here instead of quietly going untested.
+    const all = [
+      'spawning',
+      'connecting',
+      'ready',
+      'disconnected',
+      'exited',
+      'failed',
+    ] as const satisfies readonly SidecarStatus[]
+    for (const status of all) {
+      expect(isLiveSidecarStatus(status)).toBe(existence[status])
+      expect(isReadyForFrames(status)).toBe(readiness[status])
+    }
+    // The three that separate them, named rather than left to the tables.
+    const existsButCannotTakeAFrame = all.filter(
+      status => existence[status] && !readiness[status],
+    )
+    expect(existsButCannotTakeAFrame).toEqual(['spawning', 'connecting', 'disconnected'])
+  })
+
+  test('readiness over the record list, including a row with no record', () => {
+    expect(isSessionReadyForFrames(records, 'ready-1')).toBe(true)
+    for (const id of ['spawning-1', 'connecting-1', 'disconnected-1', 'exited-1', 'failed-1']) {
+      expect(isSessionReadyForFrames(records, id)).toBe(false)
+      // Every one of these EXISTS as far as the other predicate is concerned for
+      // the first three, which is the confusion the pair exists to end.
+      expect(records.some(row => row.sessionId === id)).toBe(true)
+    }
+    expect(isSessionReadyForFrames(records, 'never-existed')).toBe(false)
+    expect(isSessionReadyForFrames([], 'ready-1')).toBe(false)
+  })
 })
