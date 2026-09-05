@@ -86,7 +86,7 @@ export function createRealContextBreakdownExecutor(deps: {
       // fire-once `suppressNextSkillListing` latch, and copies plan + file history
       // to disk (`src/utils/conversationRecovery.ts:603-626`). Firing those from a
       // read-only popover in the LIVE process would change what the model sees.
-      // `transcriptBackfillWorker.ts:39-42` sets `CLAUDE_CODE_SIMPLE=1` purely to
+      // `transcriptBackfillWorker.ts:46-50` sets `CLAUDE_CODE_SIMPLE=1` purely to
       // neuter the hook branch for this same call; the live sidecar is not bare,
       // so that mitigation is unavailable here. These three are the loader half of
       // that function's own string-source branch (`:578-590`), with none of the tail.

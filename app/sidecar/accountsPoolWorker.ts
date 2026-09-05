@@ -78,10 +78,17 @@ import {
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type { UsageStatsByRange } from '../shared/protocol.js'
+import {
+  bootstrapWorkerEngine,
+  emitWorkerRecord,
+  errorText,
+  runDisposableWorker,
+} from './workerRuntime.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
-// imported (mirrors `sessionsCatalogWorker.ts:33`): a pool read must not drag in
-// SessionStart hooks or the live-session machinery.
+// imported (mirrors `sessionsCatalogWorker.ts:40`): a pool read must not drag in
+// SessionStart hooks or the live-session machinery. `workerRuntime.js` above is
+// engine-free by contract, so importing it does not pre-empt this.
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
@@ -96,22 +103,14 @@ async function main(): Promise<void> {
     { getPoolStatus, loadPoolForObservation },
     { loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
-    { ensureEngineMacro },
-    { enableConfigs },
   ] = await Promise.all([
     import('../../src/services/api/codexAccountPool.js'),
     import('../../src/services/api/claudeAccountPool.js'),
     import('./accountsDomain.js'),
-    import('./initializeRuntime.js'),
-    import('../../src/utils/config.js'),
   ])
-  ensureEngineMacro()
-  // The engine hard-fails any config read taken before this latch
-  // (`config.ts:1465` "Config accessed before allowed"), and both pool loads
-  // read the global config. `enableConfigs` is the engine's own idempotent
-  // unlock and validates the config file; it is the ONLY piece of `init()`
-  // this worker needs, and it carries none of init's live side-effects.
-  enableConfigs()
+  // Both pool loads below read the global config, so the config latch this
+  // opens is load-bearing here, not just hygiene.
+  await bootstrapWorkerEngine()
 
   // Both loads are disk-only (vault + config) observation; neither refreshes
   // a token or writes a vault file (see the file header). `buildAccountsSnapshot`
@@ -309,16 +308,11 @@ async function readAnthropicRouteFacts(): Promise<{
 }
 
 function emit(result: AccountsPoolWorkerResult): Promise<void> {
-  const line = JSON.stringify(result)
-  if (Buffer.byteLength(line, 'utf8') > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
-    throw new Error('accounts pool result exceeds record limit')
-  }
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${line}\n`, error => {
-      if (error) reject(error)
-      else resolve()
-    })
-  })
+  return emitWorkerRecord(
+    result,
+    MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
+    'accounts pool result',
+  )
 }
 
 async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
@@ -346,11 +340,4 @@ async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
   return request
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-void main().catch(error => {
-  process.stderr.write(`[accounts-worker] fatal: ${errorText(error)}\n`)
-  process.exit(1)
-})
+runDisposableWorker('accounts-worker', main)

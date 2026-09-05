@@ -95,13 +95,18 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
+  ACCOUNT_VERB_TYPES,
+  AGENT_MODE_VERB_TYPES,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
+  REMOTE_VERB_TYPES,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
+  SETTINGS_VERB_TYPES,
+  WORKSPACE_TRUST_VERB_TYPES,
   CONTEXT_BREAKDOWN_VERB_TYPES,
   HISTORY_LOAD_EARLIER_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
@@ -1365,6 +1370,152 @@ export class SidecarServer {
    * Inbound (client → engine): validate, then apply. Trust boundary here.
    * --------------------------------------------------------------------- */
 
+  /**
+   * Every app-owned inbound type → the handler that owns it. These are all
+   * app-owned vocabulary validated by sidecar-LOCAL schemas: the engine's shared
+   * `appClientMessageSchema` is deliberately NOT extended for any of them,
+   * because the WS server shares that schema and must not silently start
+   * accepting a frame it has no handler for (Phase-3 F3 owns any consolidation).
+   * The four kinds NOT listed here — `app.submit`, `app.abort`,
+   * `permission.response`, `app.ping` — are the engine-owned ones, and they
+   * reach `appClientMessageSchema` by falling off the end of this table.
+   *
+   * Keyed by EXACT type, and that is not a tightening: `checkStrictKeys` runs
+   * first and rejects any type outside its `allowedByType` map, so a
+   * `settings.somethingElse` never reached a handler under the prefix tests this
+   * replaced either. The verb arrays below are the same ones `protocol.ts`
+   * exports and the ladder already tested against, so the table cannot drift
+   * from the wire contract on its own.
+   *
+   * Order-independent by construction: `buildVerbRoutes` refuses a type claimed
+   * twice, so `account.profileDeleted` no longer has to be tested BEFORE the
+   * rest of the account family to keep its own handler.
+   */
+  private static readonly VERB_ROUTES: ReadonlyMap<string, VerbRoute> =
+    buildVerbRoutes([
+      // C2 — PERMISSION-BOUNDARY.md §3.
+      [
+        ['permission.setMode'],
+        (server, connection, message) => server.handleSetMode(connection, message),
+      ],
+      // IDLE-PARK (decisions/IDLE-PARK.md §2/§3). The gate + latch live in the
+      // handler because only the sidecar knows the true turn/permission/task
+      // state at the instant of park (main's frame-derived view can be stale by
+      // one in-flight submit). Originated ONLY by main's policy driver — no
+      // preload channel forwards it — but validated at the trust boundary
+      // regardless.
+      [['app.park'], (server, _connection, message) => server.handlePark(message)],
+      // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds.
+      // `host.result` settles one request this sidecar minted an id for;
+      // `peer.deliver` is a message another session sent, routed by main. Both
+      // are inbound at the trust boundary and are treated as such.
+      [
+        ['host.result'],
+        (server, _connection, message) => server.handleHostResult(message),
+      ],
+      [
+        ['peer.deliver'],
+        (server, _connection, message) => server.handlePeerDeliver(message),
+      ],
+      // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — resolved through the engine's
+      // OWN `respondToPermissionRequest` allow path.
+      [
+        ['askUserQuestion.answer'],
+        (server, connection, message) =>
+          server.handleAskUserQuestionAnswer(connection, message),
+      ],
+      // Usage stats query — real engine-backed aggregation.
+      [
+        ['stats.query'],
+        (server, connection, message) => server.handleStatsQuery(connection, message),
+      ],
+      // P4-5 account lifecycle verbs, dispatched to the engine's own account
+      // machinery. `account.profileDeleted` is deliberately NOT in
+      // `ACCOUNT_VERB_TYPES` and has its own handler.
+      [
+        ['account.profileDeleted'],
+        (server, connection, message) =>
+          server.handleAccountProfileDeleted(connection, message),
+      ],
+      [
+        ACCOUNT_VERB_TYPES,
+        (server, connection, message) => server.handleAccountVerb(connection, message),
+      ],
+      // P4-13 RemoteSettings verbs, dispatched to the engine's own
+      // bridge/direct-connect primitives.
+      [
+        REMOTE_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleRemoteSettingsVerb(connection, message),
+      ],
+      // P4-19 settings WRITE verb, validated by the closed EDITABLE_SETTINGS
+      // allowlist and applied through the engine's SettingsUpdater-under-lock.
+      [
+        SETTINGS_VERB_TYPES,
+        (server, connection, message) => server.handleSettingsVerb(connection, message),
+      ],
+      // P4-15 workspace-trust accept verb, dispatched to the engine's OWN trust
+      // persistence (`saveCurrentProjectConfig`).
+      [
+        WORKSPACE_TRUST_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleWorkspaceTrustVerb(connection, message),
+      ],
+      // P4-8b agent-mode set verb, dispatched to the engine's OWN
+      // `matchSessionMode` (a live env switch, no respawn).
+      [
+        AGENT_MODE_VERB_TYPES,
+        (server, connection, message) => server.handleAgentModeSet(connection, message),
+      ],
+      // P4-8b task-control verbs, dispatched to the engine's own stop, dismiss,
+      // or background machinery.
+      [
+        TASK_CONTROL_VERB_TYPES,
+        (server, connection, message) => {
+          void server.handleTaskControlVerb(connection, message)
+        },
+      ],
+      // P4-24c composer run-control set verbs, dispatched to the engine's OWN
+      // per-session setters (a live change, no respawn).
+      [
+        RUN_CONTROL_VERB_TYPES,
+        (server, connection, message) => server.handleRunControlVerb(connection, message),
+      ],
+      // Queue controls, served from the engine's own command queue. Force-send
+      // carries an engine-minted queued-prompt id; recall carries no target.
+      [
+        PROMPT_FORCE_VERB_TYPES,
+        (server, connection, message) => server.handlePromptForce(connection, message),
+      ],
+      [
+        PROMPT_RECALL_VERB_TYPES,
+        (server, connection, message) => server.handlePromptRecall(connection, message),
+      ],
+      // The context-breakdown request takes no renderer input, so acceptance
+      // decides only WHETHER to spend the analysis, never what it computes over.
+      [
+        CONTEXT_BREAKDOWN_VERB_TYPES,
+        (server, _connection, message) => server.handleContextBreakdownRequest(message),
+      ],
+      // The load-earlier read verb (decisions/HISTORY-LOAD-EARLIER.md) carries
+      // NO renderer-authored state beyond a correlation id, so acceptance
+      // decides only WHETHER to spend a deeper read of THIS session's own
+      // transcript, never which file is read or how much of it.
+      [
+        HISTORY_LOAD_EARLIER_VERB_TYPES,
+        (server, connection, message) => {
+          void server.handleHistoryLoadEarlier(connection, message)
+        },
+      ],
+      // P4-6b session-action WRITE verbs, dispatched to the engine's own domain
+      // operations. Membership rather than a broad `session.` prefix.
+      [
+        SESSION_ACTION_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleSessionActionVerb(connection, message),
+      ],
+    ])
+
   private handleFrame(connection: Connection, payload: unknown): void {
     // A renderer-minted request id is safe to echo back on a boundary refusal,
     // but only when it is already a bounded string. It never authorizes work;
@@ -1425,201 +1576,18 @@ export class SidecarServer {
       return
     }
 
-    // C2 — `permission.setMode` is app-owned vocabulary validated by a
-    // sidecar-LOCAL schema (PERMISSION-BOUNDARY.md §3). The engine's shared
-    // `appClientMessageSchema` is deliberately NOT extended: the WS server
-    // shares it and must not silently start accepting a frame it has no
-    // handler for (Phase-3 F3 owns any consolidation).
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type ===
-      'permission.setMode'
-    ) {
-      this.handleSetMode(connection, frame.message)
-      return
-    }
-
-    // IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — host-initiated park is app-owned
-    // vocabulary validated by a sidecar-LOCAL schema (like C2). The engine's
-    // shared `appClientMessageSchema` is deliberately NOT extended. The gate +
-    // latch live HERE because only the sidecar knows the true turn/permission/
-    // task state at the instant of park (main's frame-derived view can be stale
-    // by one in-flight submit). Originated ONLY by main's policy driver — no
-    // preload channel forwards it — but validated at the trust boundary regardless.
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type === 'app.park'
-    ) {
-      this.handlePark(frame.message)
-      return
-    }
-
-    // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds, app-owned
-    // vocabulary validated by sidecar-LOCAL schemas exactly like C2 and the park
-    // frame above. `host.result` settles one request this sidecar minted an id
-    // for; `peer.deliver` is a message another session sent, routed by main.
-    // Both are inbound at the trust boundary and are treated as such.
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type === 'host.result'
-    ) {
-      this.handleHostResult(frame.message)
-      return
-    }
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type === 'peer.deliver'
-    ) {
-      this.handlePeerDeliver(frame.message)
-      return
-    }
-
-    // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — the AskUserQuestion answer is
-    // app-owned vocabulary validated by a sidecar-LOCAL schema (like C2), then
-    // resolved through the engine's OWN `respondToPermissionRequest` allow path.
-    // The engine's shared `appClientMessageSchema` is deliberately NOT extended.
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type ===
-      'askUserQuestion.answer'
-    ) {
-      this.handleAskUserQuestionAnswer(connection, frame.message)
-      return
-    }
-
-    // P4-5 — account lifecycle verbs are app-owned vocabulary (like C2), each
-    // validated by a sidecar-LOCAL schema and dispatched to the engine's own
-    // account machinery. The engine's shared schema is deliberately not extended.
+    // App-owned inbound vocabulary routes through `VERB_ROUTES` (see its
+    // declaration). `checkStrictKeys` above has already closed the vocabulary to
+    // exact types, so an unrouted type here is one of the four engine-owned
+    // kinds and falls through to the shared schema below.
     const messageType = (frame.message as { type?: unknown } | null | undefined)
       ?.type
-    if (typeof messageType === 'string' && messageType === 'stats.query') {
-      this.handleStatsQuery(connection, frame.message)
-      return
-    }
-
-    if (messageType === 'account.profileDeleted') {
-      this.handleAccountProfileDeleted(connection, frame.message)
-      return
-    }
-
-    if (typeof messageType === 'string' && messageType.startsWith('account.')) {
-      this.handleAccountVerb(connection, frame.message)
-      return
-    }
-
-    // P4-13 — RemoteSettings verbs are app-owned vocabulary (like C2 and the
-    // P4-5 account verbs), validated by a sidecar-LOCAL schema and dispatched
-    // to the engine's own bridge/direct-connect primitives.
-    if (
-      typeof messageType === 'string' &&
-      messageType.startsWith('remoteSettings.')
-    ) {
-      this.handleRemoteSettingsVerb(connection, frame.message)
-      return
-    }
-
-    // P4-19 — the settings WRITE verb is app-owned vocabulary (like C2 and the
-    // account/RemoteSettings verbs), validated by a sidecar-LOCAL schema + the
-    // closed EDITABLE_SETTINGS allowlist and applied through the engine's
-    // SettingsUpdater-under-lock form. NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('settings.')) {
-      this.handleSettingsVerb(connection, frame.message)
-      return
-    }
-
-    // P4-15 — the workspace-trust accept verb is app-owned vocabulary (like C2
-    // and the account/RemoteSettings/settings verbs), validated by a sidecar-
-    // LOCAL schema and dispatched to the engine's OWN trust persistence
-    // (`saveCurrentProjectConfig`). NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('workspace.')) {
-      this.handleWorkspaceTrustVerb(connection, frame.message)
-      return
-    }
-
-    // P4-8b — the agent-mode set verb is app-owned vocabulary (like C2 and the
-    // account/RemoteSettings/settings/workspace verbs), validated by a sidecar-
-    // LOCAL schema and dispatched to the engine's OWN `matchSessionMode` (a live
-    // env switch, no respawn). NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('agent-mode.')) {
-      this.handleAgentModeSet(connection, frame.message)
-      return
-    }
-
-    // P4-8b — task-control verbs are app-owned vocabulary, validated by a
-    // sidecar-local schema and dispatched to the engine's own stop, dismiss, or
-    // background machinery. They are not part of the shared engine schema.
-    if (
-      typeof messageType === 'string' &&
-      (TASK_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      void this.handleTaskControlVerb(connection, frame.message)
-      return
-    }
-
-    // P4-24c — the composer run-control set verbs (model.set / effort.set /
-    // fast.set) are app-owned vocabulary (like C2 and the account/RemoteSettings/
-    // settings/workspace/agent-mode verbs), validated by a sidecar-LOCAL schema and
-    // dispatched to the engine's OWN per-session setters (a live change, no
-    // respawn). NOT part of the engine's shared schema. Membership test (three
-    // distinct prefixes) rather than a single startsWith.
-    if (
-      typeof messageType === 'string' &&
-      (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleRunControlVerb(connection, frame.message)
-      return
-    }
-
-    // Queue controls are app-owned vocabulary, validated by sidecar-local schemas
-    // and served from the engine's own command queue. Force-send carries an
-    // engine-minted queued-prompt id; recall carries no target.
-    if (
-      typeof messageType === 'string' &&
-      (PROMPT_FORCE_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handlePromptForce(connection, frame.message)
-      return
-    }
-
-    if (
-      typeof messageType === 'string' &&
-      (PROMPT_RECALL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handlePromptRecall(connection, frame.message)
-      return
-    }
-
-    // The context-breakdown request — app-owned vocabulary, validated by a
-    // sidecar-LOCAL schema. It takes no renderer input, so acceptance decides
-    // only WHETHER to spend the analysis, never what it computes over.
-    if (
-      typeof messageType === 'string' &&
-      (CONTEXT_BREAKDOWN_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleContextBreakdownRequest(frame.message)
-      return
-    }
-
-    // The load-earlier read verb (decisions/HISTORY-LOAD-EARLIER.md) is
-    // app-owned vocabulary validated by a sidecar-LOCAL schema, like C2 and the
-    // context-breakdown request. It carries NO renderer-authored state beyond a
-    // correlation id, so acceptance decides only WHETHER to spend a deeper read
-    // of THIS session's own transcript, never which file is read or how much of
-    // it. The engine's shared `appClientMessageSchema` is deliberately NOT
-    // extended.
-    if (
-      typeof messageType === 'string' &&
-      (HISTORY_LOAD_EARLIER_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      void this.handleHistoryLoadEarlier(connection, frame.message)
-      return
-    }
-
-    // P4-6b — the session-action WRITE verbs are app-owned vocabulary (like the
-    // account/settings/workspace/
-    // agent-mode/run-control verbs), validated by a sidecar-LOCAL schema and
-    // dispatched to the engine's own domain operations. NOT part of the engine's
-    // shared schema. Membership test rather than a broad `session.` prefix.
-    if (
-      typeof messageType === 'string' &&
-      (SESSION_ACTION_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleSessionActionVerb(connection, frame.message)
+    const route =
+      typeof messageType === 'string'
+        ? SidecarServer.VERB_ROUTES.get(messageType)
+        : undefined
+    if (route) {
+      route(this, connection, frame.message)
       return
     }
 
@@ -5857,6 +5825,34 @@ function wrapCrossSessionMessage(from: string, text: string): string {
     .replaceAll('>', '&gt;')
   const body = text.replace(ENVELOPE_TAG_IN_BODY, '&lt;$1$2')
   return `<${CROSS_SESSION_MESSAGE_TAG} from="${attribute}">\n${body}\n</${CROSS_SESSION_MESSAGE_TAG}>`
+}
+
+/** One app-owned inbound type's handler, as `SidecarServer.VERB_ROUTES` holds it. */
+type VerbRoute = (
+  server: SidecarServer,
+  connection: Connection,
+  message: unknown,
+) => void
+
+/**
+ * Flatten `[types, handler]` families into one exact-key route map. A type
+ * claimed by two families throws at module load rather than resolving by
+ * declaration order: routing at the trust boundary must not depend on the order
+ * the table happens to be written in.
+ */
+function buildVerbRoutes(
+  families: ReadonlyArray<readonly [readonly string[], VerbRoute]>,
+): ReadonlyMap<string, VerbRoute> {
+  const routes = new Map<string, VerbRoute>()
+  for (const [types, route] of families) {
+    for (const type of types) {
+      if (routes.has(type)) {
+        throw new Error(`duplicate inbound route for message type ${type}`)
+      }
+      routes.set(type, route)
+    }
+  }
+  return routes
 }
 
 /**

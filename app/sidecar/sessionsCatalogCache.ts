@@ -12,7 +12,8 @@
  * so last-writer-wins holds — no lock, no merge, no read-modify-write (that would
  * be the DR-2 trap in reverse). Writes are atomic
  * (temp + fsync + rename, 0700 dir / 0600 file — the `registry.ts` /
- * `transcriptCache.ts` idiom) so a reader never sees a torn file.
+ * `transcriptCache.ts` idiom) so a reader never sees a torn file; the engine's own
+ * `writeFileAtomicDurableSync` is that idiom, so this uses it rather than a copy.
  *
  * Display metadata only (titles/tags/branches/cwds) — the same content already on
  * the `sessions.snapshot` frame, `secretGuard`-clean by construction; the accepted
@@ -22,17 +23,10 @@
  * re-implements host-side, guaranteeing main's read path resolves the same file.
  */
 
-import {
-  closeSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs'
+import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { writeFileAtomicDurableSync } from '../../src/utils/atomicFile.js'
 import { getClaudeConfigHomeDir } from '../../src/utils/envUtils.js'
 import type { SessionsCatalogSnapshot } from '../shared/protocol.js'
 import {
@@ -55,34 +49,12 @@ export function writeSessionsCatalogCache(
   snapshot: SessionsCatalogSnapshot,
   dir: string = sessionsCatalogCacheDir(),
 ): void {
-  const filePath = join(dir, SESSIONS_CATALOG_CACHE_FILENAME)
+  // The 0700 dir mode is deliberate and the engine helper does not set it, so the
+  // directory is created here first; the helper's own mkdir then no-ops.
   mkdirSync(dir, { recursive: true, mode: 0o700 })
-  const tmpPath = join(
-    dir,
-    `.${SESSIONS_CATALOG_CACHE_FILENAME}.${process.pid}.${Date.now()}.tmp`,
+  writeFileAtomicDurableSync(
+    join(dir, SESSIONS_CATALOG_CACHE_FILENAME),
+    JSON.stringify(snapshot),
+    { encoding: 'utf8', mode: 0o600 },
   )
-  const json = JSON.stringify(snapshot)
-  let fd: number | undefined
-  try {
-    fd = openSync(tmpPath, 'w', 0o600)
-    writeFileSync(fd, json, 'utf8')
-    fsyncSync(fd)
-    closeSync(fd)
-    fd = undefined
-    renameSync(tmpPath, filePath)
-  } catch (error) {
-    if (fd !== undefined) {
-      try {
-        closeSync(fd)
-      } catch {
-        // ignore
-      }
-    }
-    try {
-      unlinkSync(tmpPath)
-    } catch {
-      // ignore
-    }
-    throw error
-  }
 }

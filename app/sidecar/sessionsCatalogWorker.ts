@@ -26,10 +26,17 @@ import {
   type SessionsCatalogWorkerResult,
 } from '../shared/sessionsCatalogWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
+import {
+  bootstrapWorkerEngine,
+  emitWorkerRecord,
+  errorText,
+  runDisposableWorker,
+} from './workerRuntime.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
-// imported (mirrors `transcriptBackfillWorker.ts:40`): enumeration must not drag
-// in SessionStart hooks or the live-session machinery.
+// imported (mirrors `transcriptBackfillWorker.ts:50`): enumeration must not drag
+// in SessionStart hooks or the live-session machinery. `workerRuntime.js` above
+// is engine-free by contract, so importing it does not pre-empt this.
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
@@ -37,27 +44,12 @@ async function main(): Promise<void> {
   // are engine-graph modules; the top-level static imports above are engine-free
   // (shared boundary + secretGuard), so the ~189 MB engine import is paid only
   // here, per run, exactly as CATALOG-OWNERSHIP §4 "repeated boot cost" accepts.
-  const [
-    { enumerateSessionsCatalog },
-    { writeSessionsCatalogCache },
-    { ensureEngineMacro },
-    { enableConfigs },
-  ] = await Promise.all([
-    import('./sessionsCatalogDomain.js'),
-    import('./sessionsCatalogCache.js'),
-    import('./initializeRuntime.js'),
-    import('../../src/utils/config.js'),
-  ])
-  // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
-  // full `init()` this used to run fires `void initAccountPool()`
-  // (`src/entrypoints/init.ts:86-90`), which starts periodic token refresh, a
-  // 1-second quarantine probe, and a usage POST with real OAuth tokens. Main
-  // re-spawns this worker every 30 s, so that drove real credential machinery
-  // from a throwaway process on a loop, and the unconditional `process.exit(0)`
-  // below could hard-kill a refresh it had just started. Enumeration needs the
-  // MACRO shim plus config reads and nothing else.
-  ensureEngineMacro()
-  enableConfigs()
+  const [{ enumerateSessionsCatalog }, { writeSessionsCatalogCache }] =
+    await Promise.all([
+      import('./sessionsCatalogDomain.js'),
+      import('./sessionsCatalogCache.js'),
+    ])
+  await bootstrapWorkerEngine()
 
   const catalog = await enumerateSessionsCatalog()
   if (!catalog) {
@@ -107,23 +99,11 @@ async function main(): Promise<void> {
 }
 
 function emit(result: SessionsCatalogWorkerResult): Promise<void> {
-  const line = JSON.stringify(result)
-  if (Buffer.byteLength(line, 'utf8') > MAX_SESSIONS_CATALOG_WORKER_RECORD_BYTES) {
-    throw new Error('catalog result exceeds record limit')
-  }
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${line}\n`, error => {
-      if (error) reject(error)
-      else resolve()
-    })
-  })
+  return emitWorkerRecord(
+    result,
+    MAX_SESSIONS_CATALOG_WORKER_RECORD_BYTES,
+    'catalog result',
+  )
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-void main().catch(error => {
-  process.stderr.write(`[catalog-worker] fatal: ${errorText(error)}\n`)
-  process.exit(1)
-})
+runDisposableWorker('catalog-worker', main)

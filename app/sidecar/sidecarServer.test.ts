@@ -52,7 +52,7 @@ import {
   createSidecarPermissionDomain,
   type SidecarPermissionDomain,
 } from './permissionDomain.js'
-import { createSidecarGoalDomain, type SidecarGoalDomain } from './goalDomain.js'
+import { createSidecarGoalDomain } from './goalDomain.js'
 import { createSidecarTasksDomain, type SidecarTasksDomain } from './tasksDomain.js'
 import {
   createSidecarTaskControlDomain,
@@ -91,9 +91,12 @@ import {
 import {
   createSidecarRemoteSettingsDomain,
   type RemoteSettingsCommandExecutor,
-  type SidecarRemoteSettingsDomain,
 } from './remoteSettingsDomain.js'
-import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
+import {
+  SidecarServer,
+  type SidecarServerOptions,
+  type SidecarSocketLike,
+} from './sidecarServer.js'
 import type { SDKMessage } from '../../src/entrypoints/agentSdkTypes.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
 import type {
@@ -101,10 +104,7 @@ import type {
   WorkspaceTrustAcceptResult,
 } from './workspaceTrustDomain.js'
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
-import {
-  createSidecarExtensionsDomain,
-  type SidecarExtensionsDomain,
-} from './extensionsDomain.js'
+import { createSidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
@@ -215,42 +215,21 @@ function makeAccountsDomain(
 }
 
 let servers: SidecarServer[] = []
+/**
+ * A server on the standard test identity, with `log` silenced. `overrides`
+ * carries any domain seam the test actually needs; an absent key is simply an
+ * absent option, which is what every domain seam already treats as "not wired".
+ */
 function makeServer(
   controller: AppSessionController,
-  permissions?: SidecarPermissionDomain,
-  goals?: SidecarGoalDomain,
-  accounts?: SidecarAccountsDomain,
-  workspaceTrust?: SidecarWorkspaceTrustDomain,
-  diagnostics?: SidecarDiagnosticsDomain,
-  remoteSettings?: SidecarRemoteSettingsDomain,
-  tasks?: SidecarTasksDomain,
-  extensions?: SidecarExtensionsDomain,
-  agentMode?: SidecarAgentModeDomain,
-  settings?: SidecarSettingsDomain,
-  runControls?: SidecarRunControlsDomain,
-  sessionActions?: SidecarSessionActionsDomain,
-  taskControl?: SidecarTaskControlDomain,
-  leases?: SidecarLeaseDomain,
+  overrides: Partial<SidecarServerOptions> = {},
 ): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
     controller,
-    ...(permissions ? { permissions } : {}),
-    ...(goals ? { goals } : {}),
-    ...(accounts ? { accounts } : {}),
-    ...(workspaceTrust ? { workspaceTrust } : {}),
-    ...(diagnostics ? { diagnostics } : {}),
-    ...(remoteSettings ? { remoteSettings } : {}),
-    ...(tasks ? { tasks } : {}),
-    ...(extensions ? { extensions } : {}),
-    ...(agentMode ? { agentMode } : {}),
-    ...(settings ? { settings } : {}),
-    ...(runControls ? { runControls } : {}),
-    ...(sessionActions ? { sessionActions } : {}),
-    ...(taskControl ? { taskControl } : {}),
-    ...(leases ? { leases } : {}),
     log: () => {},
+    ...overrides,
   })
   servers.push(server)
   return server
@@ -730,7 +709,7 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -754,7 +733,7 @@ test('F6 — an over-long error message is truncated before it leaves', async ()
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -798,8 +777,8 @@ function gatedTurnAdapter(): {
 /** A server wired with a counting `onPark` spy that NEVER exits the process. */
 function makeParkServer(
   controller: AppSessionController,
-  tasks?: SidecarTasksDomain,
   extra: {
+    tasks?: SidecarTasksDomain
     accounts?: SidecarAccountsDomain
     sessionActions?: SidecarSessionActionsDomain
   } = {},
@@ -812,9 +791,7 @@ function makeParkServer(
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
     controller,
-    ...(tasks ? { tasks } : {}),
-    ...(extra.accounts ? { accounts: extra.accounts } : {}),
-    ...(extra.sessionActions ? { sessionActions: extra.sessionActions } : {}),
+    ...extra,
     onPark: () => {
       parks += 1
     },
@@ -863,9 +840,7 @@ test('IDLE-PARK boundary — a valid app.park on an idle session gates the exit 
 })
 
 test('IDLE-PARK boundary — an app.park with an extra key is rejected (no park)', () => {
-  const { server, parkCount, logged } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount, logged } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -886,9 +861,7 @@ test('IDLE-PARK boundary — an app.park with an extra key is rejected (no park)
 })
 
 test('IDLE-PARK boundary — an app.park with a non-string requestId is rejected (no park)', () => {
-  const { server, parkCount, logged } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount, logged } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -948,10 +921,9 @@ test('IDLE-PARK gate — app.park is DECLINED while a permission is pending (no 
 test('IDLE-PARK gate — app.park is DECLINED while a task is running (no exit)', () => {
   const store = makePermissionStore()
   store.setState(prev => ({ ...prev, tasks: { 'park-b1': runningBashTask() } }))
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarTasksDomain(store),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
+    tasks: createSidecarTasksDomain(store),
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -988,10 +960,9 @@ test('IDLE-PARK gate — app.park is DECLINED while a FOREGROUNDED local_agent r
   // …but the foreground-inclusive raw-store gate sees it.
   expect(tasks.hasLiveWork()).toBe(true)
 
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
     tasks,
-  )
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -1033,11 +1004,9 @@ function hangingAccountsDomain(): {
 
 test('IDLE-PARK gate — app.park is DECLINED while an account verb is still writing (no exit)', async () => {
   const { domain, settle } = hangingAccountsDomain()
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    { accounts: domain },
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
+    accounts: domain,
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -1052,11 +1021,9 @@ test('IDLE-PARK gate — app.park is DECLINED while an account verb is still wri
 
 test('IDLE-PARK gate — the park gate reopens once the account verb settles', async () => {
   const { domain, settle } = hangingAccountsDomain()
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    { accounts: domain },
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
+    accounts: domain,
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -1108,11 +1075,9 @@ test('IDLE-PARK gate — app.park is declined while a targeted branch is still w
       return { ok: true, message: 'Tagged.' }
     },
   }
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    { sessionActions },
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
+    sessionActions,
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -1138,11 +1103,9 @@ test('IDLE-PARK gate — app.park is DECLINED while an OAuth sign-in is under wa
       begin: () => new Promise(() => {}),
     },
   })
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    { accounts },
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()), {
+    accounts,
+  })
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -1359,9 +1322,7 @@ test('queued parent task notifications start autonomous FIFO turns after an acti
 })
 
 test('queued parent task notification prevents idle park before the drain runs', () => {
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
   enqueuePendingNotification({
@@ -2470,9 +2431,7 @@ test('D1b — a recall is refused while the sidecar is parking, exactly as a sub
   // goes out over a connection that is about to disappear, so the queue no
   // longer holds them and the composer never received them. Same code and same
   // retryability as `handleSubmit`, so the user unparks and asks again.
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -3035,9 +2994,7 @@ test('a queued prompt a turn refuses is retried once, then given up loudly', asy
 test('a queued prompt prevents idle park before the drain runs', () => {
   // Same rule the queued worker result already had: parking here would strand a
   // message the user has already watched leave the composer.
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
   enqueue({ mode: 'prompt', value: 'do not lose me' })
@@ -3242,11 +3199,9 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
       updatedAtMs: 2,
     },
   }))
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    createSidecarGoalDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    goals: createSidecarGoalDomain(store),
+  })
   const { socket, received } = makeSocket()
 
   server.addConnection(socket)
@@ -3297,17 +3252,7 @@ test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, sec
     ],
     hooks: [],
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    goals,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    extensions,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { goals, extensions })
   const { socket, received } = makeSocket()
 
   server.addConnection(socket)
@@ -3342,16 +3287,9 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
     isBackgrounded: true,
   }
   store.setState(prev => ({ ...prev, tasks: { b1: runningBash } }))
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    createSidecarTasksDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    tasks: createSidecarTasksDomain(store),
+  })
   const { socket, received } = makeSocket()
 
   server.addConnection(socket)
@@ -3409,18 +3347,9 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
     blockReason: 'Which auth strategy should I use?',
   }
   store.setState(prev => ({ ...prev, tasks: { a1: blockedWorker } }))
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    createSidecarAgentModeDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    agentMode: createSidecarAgentModeDomain(store),
+  })
   const { socket, received } = makeSocket()
 
   server.addConnection(socket)
@@ -3499,18 +3428,7 @@ function makeAgentModeServer(
   override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
 ): { server: SidecarServer; calls: boolean[] } {
   const { domain, calls } = fakeAgentModeDomain(override)
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
   return { server, calls }
 }
 
@@ -3537,18 +3455,7 @@ test('agent-mode snapshots cannot regress when an older persisted read finishes 
       }
     },
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -3594,18 +3501,7 @@ test('agent-mode attach reads are connection-local and a newer broadcast superse
       }
     },
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
   const first = makeSocket()
   const second = makeSocket()
   server.addConnection(first.socket)
@@ -3692,18 +3588,7 @@ test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-bro
 
 test('P4-8b — one agent-mode snapshot read fans out to every attached connection', async () => {
   const { domain, snapshotReads } = fakeAgentModeDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
   const first = makeSocket()
   const second = makeSocket()
   const firstConnection = server.addConnection(first.socket)
@@ -3888,22 +3773,9 @@ function makeTaskControlServer(
 } {
   const { domain, calls, dismissCalls, backgroundCalls } =
     fakeTaskControlDomain(override)
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    undefined, // tasks
-    undefined, // extensions
-    undefined, // agentMode
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
-    domain, // taskControl
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    taskControl: domain,
+  })
   return { server, calls, dismissCalls, backgroundCalls }
 }
 
@@ -4174,22 +4046,10 @@ test('P4-8b — LIVE PATH: a real task.stop kills the worker AND drives a fresh 
   }
   store.setState(prev => ({ ...prev, tasks: { a1: runningWorker } as never }))
 
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    createSidecarTasksDomain(store), // tasks — its store-subscription re-broadcasts
-    undefined, // extensions
-    undefined, // agentMode
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
-    createSidecarTaskControlDomain(store), // taskControl — REAL stopTask
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    tasks: createSidecarTasksDomain(store),
+    taskControl: createSidecarTaskControlDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'tasks.snapshot').length
@@ -4362,22 +4222,10 @@ test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reap
   }
   store.setState(prev => ({ ...prev, tasks: { g1: blockedWorker } as never }))
 
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    createSidecarTasksDomain(store), // tasks — its store-subscription re-broadcasts
-    undefined, // extensions
-    undefined, // agentMode
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
-    createSidecarTaskControlDomain(store), // taskControl — REAL dismiss composition
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    tasks: createSidecarTasksDomain(store),
+    taskControl: createSidecarTaskControlDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'tasks.snapshot').length
@@ -4415,22 +4263,10 @@ test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reap
 test('CC-32 — a SUCCESSFUL dismiss records the worker with the agent-mode domain (so the persisted twin cannot re-supply the row) and re-broadcasts', async () => {
   const { domain: taskControl } = fakeTaskControlDomain()
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    undefined, // tasks
-    undefined, // extensions
+  const server = makeServer(new AppSessionController(probeAdapter()), {
     agentMode,
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
     taskControl,
-  )
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
@@ -4469,22 +4305,10 @@ test('CC-32 — a PERSISTED-ONLY worker (no live task) is dismissible: not_found
     message: 'That worker is already gone.',
   }))
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    undefined, // tasks
-    undefined, // extensions
+  const server = makeServer(new AppSessionController(probeAdapter()), {
     agentMode,
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
     taskControl,
-  )
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
@@ -4517,22 +4341,10 @@ test('CC-32 — a REFUSED dismiss records nothing: a row the engine kept must no
     message: 'That worker is still running. Stop it first.',
   }))
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined, // permissions
-    undefined, // goals
-    undefined, // accounts
-    undefined, // workspaceTrust
-    undefined, // diagnostics
-    undefined, // remoteSettings
-    undefined, // tasks
-    undefined, // extensions
+  const server = makeServer(new AppSessionController(probeAdapter()), {
     agentMode,
-    undefined, // settings
-    undefined, // runControls
-    undefined, // sessionActions
     taskControl,
-  )
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -4671,20 +4483,9 @@ function makeRunControlsServer(): {
   calls: string[]
 } {
   const { domain, calls } = fakeRunControlsDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    runControls: domain,
+  })
   return { server, calls }
 }
 
@@ -6319,10 +6120,9 @@ test('C3 — attach emits a permission.context snapshot faithful to the engine c
       ['/tmp/extra', { path: '/tmp/extra', source: 'session' }],
     ]),
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -6372,10 +6172,9 @@ test('C3 — no permission domain (probe fixture) → ready only, no snapshot', 
 
 test('C3 — a live-context change broadcasts a fresh snapshot (engine-applied rule)', () => {
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
   const before = contextFrames(received).length
@@ -6402,10 +6201,9 @@ test('C3 — a live-context change broadcasts a fresh snapshot (engine-applied r
 
 test('C3 — an unrelated app-state change does NOT re-emit the snapshot', () => {
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
   const before = contextFrames(received).length
@@ -6417,10 +6215,9 @@ test('C3 — an unrelated app-state change does NOT re-emit the snapshot', () =>
 
 test('C2 — permission.setMode applies every allowlisted mode via the engine transition', () => {
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6438,10 +6235,9 @@ test('C2 — permission.setMode applies every allowlisted mode via the engine tr
 
 test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () => {
   const store = makePermissionStore({ mode: 'acceptEdits' })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = contextFrames(received).length
@@ -6463,10 +6259,9 @@ test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () =
 
 test('C2 — bypassPermissions is rejected without the trusted launch capability', () => {
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = contextFrames(received).length
@@ -6501,10 +6296,9 @@ test('C2 — bypassPermissions is accepted when the context marks it available',
   // The session context reports that the desktop mode is available; the
   // boundary honours the bypass request.
   const store = makePermissionStore({ isBypassPermissionsModeAvailable: true })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6542,10 +6336,7 @@ test('C2 — auto is REJECTED when the live classifier gate is unavailable', () 
       permissionClassifierEnabled: false,
     }),
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    permissions,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { permissions })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6579,10 +6370,7 @@ test('C2 — auto reaches the engine transition when the live classifier gate is
       permissionClassifierEnabled: true,
     }),
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    permissions,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { permissions })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6602,10 +6390,9 @@ test('C2 — auto reaches the engine transition when the live classifier gate is
 
 test('C2 — an unknown mode string fails the sidecar-local schema', () => {
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6629,10 +6416,9 @@ test('C2/F10 — a setMode frame smuggling a destination key is rejected wholesa
   // sidecar. A renderer that tries to address settings persistence is refused
   // by strict-key checking before any schema runs.
   const store = makePermissionStore()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    createSidecarPermissionDomain(store),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6697,7 +6483,9 @@ test('C1+C3 — resolving with a suggestion selection then applying it re-snapsh
       resolved = r
     }, [suggestion]),
   )
-  const server = makeServer(controller, createSidecarPermissionDomain(store))
+  const server = makeServer(controller, {
+    permissions: createSidecarPermissionDomain(store),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -6814,7 +6602,7 @@ afterEach(() => {
 test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-clean', () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -6898,20 +6686,11 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
     },
     runVerb: () => ({ ok: true, message: 'Updated.', changed: true }),
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
+  const server = makeServer(new AppSessionController(probeAdapter()), {
     accounts,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
     settings,
     runControls,
-  )
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'accounts.snapshot').length
@@ -6952,7 +6731,7 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
 test('P4-5 — account.result never carries token material', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r', accountId: 'a' }))
@@ -6963,7 +6742,7 @@ test('P4-5 — account.result never carries token material', async () => {
 
 test('P4-5 — rejects an account verb carrying an unexpected key (checkStrictKeys)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -6979,7 +6758,7 @@ test('P4-5 — rejects an account verb carrying an unexpected key (checkStrictKe
 
 test('P4-5 — rejects account.switch with a missing accountId (schema)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -7004,7 +6783,7 @@ test('P4-5 — a valid account.rename passes the boundary and dispatches with it
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7028,7 +6807,7 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   const accounts = makeAccountsDomain({
     executor: fakeExecutor({ delete: () => { deleted = true; return { ok: true, message: 'x' } } }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   // confirm omitted
@@ -7068,12 +6847,7 @@ test('host deletion notice clears a live sidecar pool without emitting account.r
       },
     }),
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    accounts,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7116,12 +6890,7 @@ test('host deletion notice rejects extra keys before changing local state', () =
       },
     }),
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    accounts,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7159,7 +6928,7 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
 
 test('P4-15 — account.login emits an oauth.login.progress waiting_for_login carrying the url (secretGuard-clean through send)', async () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7213,7 +6982,7 @@ test('CC-17 — account.login provider:anthropic passes the strict boundary and 
     },
     isFirstRunEligible: () => true,
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7245,7 +7014,7 @@ test('CC-17 — account.login rejects renderer-authored provider activation auth
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7273,7 +7042,7 @@ test('CC-17 — account.login rejects an unknown provider at the strict boundary
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7309,7 +7078,7 @@ test('boundary — account.oauthCancel is accepted and reaches the domain', asyn
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7334,7 +7103,7 @@ test('boundary — account.oauthCancel with an unexpected key is rejected (check
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7376,7 +7145,7 @@ test('boundary — account.switch carrying provider:"anthropic" crosses and rout
       },
     ],
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7399,7 +7168,7 @@ test('boundary — account.switch carrying provider:"anthropic" crosses and rout
 
 test('boundary — account.switch with an unknown provider is rejected fail-closed', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7424,20 +7193,10 @@ test('P4-15 — paste-code then alias completes the flow (success) and re-broadc
     oauthRunner: fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received_codes.push(c) }),
   })
   const { domain: runControls } = fakeRunControlsDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
+  const server = makeServer(new AppSessionController(probeAdapter()), {
     accounts,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
     runControls,
-  )
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7471,7 +7230,7 @@ test('P4-15 — paste-code then alias completes the flow (success) and re-broadc
 
 test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStrictKeys)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -7492,7 +7251,7 @@ test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStri
 
 test('P4-15 — rejects account.oauthPasteCode with a missing code (schema)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, accounts)
+  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -7527,7 +7286,7 @@ test('P4-13 — attach emits a remoteSettings.snapshot', () => {
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -7542,7 +7301,7 @@ test('P4-13 — a valid bridgeToggle produces an ok result and re-broadcasts the
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
@@ -7571,7 +7330,7 @@ test('P4-13 — a rejected bridgeToggle prerequisite produces an ok:false result
     commands: [],
     executor: fakeRemoteExecutor({ checkBridgePrerequisites: async () => 'blocked by policy' }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
@@ -7598,7 +7357,7 @@ test('P4-13 — a valid directConnect never carries token material and echoes re
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7641,7 +7400,7 @@ test('T3 — directConnect accepts a plain http URL and hands it to the domain',
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -7697,7 +7456,7 @@ test('T3 — directConnect rejects every non-plain-http serverUrl at the boundar
         },
       }),
     })
-    const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+    const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
     const { socket, received } = makeSocket()
     const conn = server.addConnection(socket)
 
@@ -7734,7 +7493,7 @@ test('P4-13 — rejects a remoteSettings verb carrying an unexpected key (checkS
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -7760,7 +7519,7 @@ test('P4-13 — rejects directConnect with a missing serverUrl (schema)', () => 
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), undefined, undefined, undefined, undefined, undefined, remoteSettings)
+  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
   server.handleData(
@@ -7798,19 +7557,9 @@ test('P4-13 — a remoteSettings verb with no remoteSettings domain fails closed
 
 /** makeServer with only a (fake) settings domain wired. */
 function makeSettingsServer(runVerb?: SidecarSettingsDomain['runVerb']): SidecarServer {
-  return makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    fakeSettingsDomain(runVerb),
-  )
+  return makeServer(new AppSessionController(probeAdapter()), {
+    settings: fakeSettingsDomain(runVerb),
+  })
 }
 
 test('P4-19 — a valid settings.setValue produces an ok result and re-broadcasts the snapshot', () => {
@@ -8297,13 +8046,7 @@ test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read
     detectedRepo: 'acme/cat-code',
     trustRoot: '/repo',
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    workspaceTrust,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { workspaceTrust })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -8320,13 +8063,7 @@ test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read
 
 test('P4-14 — a null workspace-trust read degrades to no frame, never strands the connection', () => {
   const workspaceTrust = fakeWorkspaceTrust(null)
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    workspaceTrust,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { workspaceTrust })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -8343,13 +8080,9 @@ function makeWorkspaceTrustServer(
   snapshot: ReturnType<SidecarWorkspaceTrustDomain['getSnapshot']>,
   acceptTrust?: () => WorkspaceTrustAcceptResult,
 ): SidecarServer {
-  return makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    fakeWorkspaceTrust(snapshot, acceptTrust),
-  )
+  return makeServer(new AppSessionController(probeAdapter()), {
+    workspaceTrust: fakeWorkspaceTrust(snapshot, acceptTrust),
+  })
 }
 
 test('queued task notifications fail closed on false/null trust and drain after workspace.trust accepts', async () => {
@@ -8375,13 +8108,7 @@ test('queued task notifications fail closed on false/null trust and drain after 
         options?.onInputPersisted?.()
       },
     })
-    const server = makeServer(
-      controller,
-      undefined,
-      undefined,
-      undefined,
-      workspaceTrust,
-    )
+    const server = makeServer(controller, { workspaceTrust })
     const { socket } = makeSocket()
     const conn = server.addConnection(socket)
     enqueuePendingNotification({
@@ -8545,13 +8272,9 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
       turnRan = true
     },
   })
-  const server = makeServer(
-    controller,
-    undefined,
-    undefined,
-    undefined,
-    fakeWorkspaceTrust({ trusted: false, detectedRepo: null, trustRoot: '/repo' }),
-  )
+  const server = makeServer(controller, {
+    workspaceTrust: fakeWorkspaceTrust({ trusted: false, detectedRepo: null, trustRoot: '/repo' }),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -8570,13 +8293,9 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
 })
 
 test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off when trusted)', async () => {
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    fakeWorkspaceTrust({ trusted: true, detectedRepo: null, trustRoot: '/repo' }),
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    workspaceTrust: fakeWorkspaceTrust({ trusted: true, detectedRepo: null, trustRoot: '/repo' }),
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -8601,13 +8320,7 @@ test('P4-25 — app.submit under a NULL/failed trust snapshot is rejected (fail-
       turnRan = true
     },
   })
-  const server = makeServer(
-    controller,
-    undefined,
-    undefined,
-    undefined,
-    fakeWorkspaceTrust(null),
-  )
+  const server = makeServer(controller, { workspaceTrust: fakeWorkspaceTrust(null) })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -8637,14 +8350,7 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
     healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
     memoryWarnings: [],
   })
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    diagnostics,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { diagnostics })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -8670,14 +8376,7 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
 
 test('P4-14 — a null diagnostics read degrades to no frame, never strands the connection', () => {
   const diagnostics = fakeDiagnostics(null)
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    diagnostics,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { diagnostics })
   const { socket, received } = makeSocket()
   server.addConnection(socket)
 
@@ -8769,21 +8468,9 @@ function makeSessionActionsServer(): {
   calls: string[]
 } {
   const { domain, calls } = fakeSessionActionsDomain()
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    sessionActions: domain,
+  })
   return { server, calls }
 }
 
@@ -9223,21 +8910,9 @@ test('an over-cap export is refused in words the operator can act on', async () 
       return { ok: true, message: 'Tagged.' }
     },
   }
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    domain,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), {
+    sessionActions: domain,
+  })
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -9588,23 +9263,7 @@ function fakeLeaseReader(over: Partial<LeaseReader> = {}): LeaseReader {
 }
 
 function leaseServerFixture(leases?: SidecarLeaseDomain) {
-  const server = makeServer(
-    new AppSessionController(probeAdapter()),
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    undefined,
-    leases,
-  )
+  const server = makeServer(new AppSessionController(probeAdapter()), { leases })
   return server
 }
 
@@ -10306,9 +9965,7 @@ test('IDLE-PARK — a peer.deliver landing after the park latch is refused, so m
   // Without the latch check the message was enqueued onto a queue this process
   // drops and then ACKED, which is what releases main's only copy — the sender
   // was told `queued_live` for a message nobody held.
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()
   const conn = server.addConnection(socket)
 
@@ -10337,9 +9994,7 @@ test('IDLE-PARK — the other ordering needs no new gate: a delivered peer messa
   // a hand-built queue entry, so the two halves of the fix are pinned together:
   // the guard above handles park-then-deliver, this handles deliver-then-park,
   // and no third state is left where the message can go missing.
-  const { server, parkCount } = makeParkServer(
-    new AppSessionController(probeAdapter()),
-  )
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket } = makeSocket()
   const conn = server.addConnection(socket)
 
