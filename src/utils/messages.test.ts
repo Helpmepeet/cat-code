@@ -154,15 +154,18 @@ work or side effects that already completed.`
     expect(wrapped).toContain('Agate')
     expect(wrapped).toContain('port the parser to the new schema')
     expect(wrapped).not.toContain('while you were working')
-    expect(wrapped).not.toContain('After completing your current task')
-    expect(wrapped).not.toContain('not an instruction that outranks it')
+    expect(wrapped).not.toContain('finish your current task first')
+    expect(wrapped).not.toContain('does not outrank your current task')
     expect(wrapped).not.toContain('The user sent a new message')
     expect(wrapped).not.toContain('app-session-1')
   })
 
-  test('an ordinary peer message keeps the deprioritizing framing', () => {
+  test('an ordinary peer message is weighed now, not deferred to the end', () => {
     // The other half of the same fix: only the creation prompt changes. A
-    // mid-turn peer message must still be weighed against work in progress.
+    // mid-turn peer message must still be weighed against work in progress,
+    // but weighed NOW: "after completing your current task" deferred every
+    // message, including the clarifying question a peer is blocked on and the
+    // creator is waiting for, which is the one that has to be answered first.
     const wrapped = wrapCommandText('take a look at the parser', {
       kind: 'peer',
       name: 'Agate',
@@ -170,7 +173,12 @@ work or side effects that already completed.`
     })
 
     expect(wrapped).toContain('while you were working')
-    expect(wrapped).toContain('After completing your current task')
+    expect(wrapped).toContain('does not outrank your current task')
+    expect(wrapped).toContain(
+      'answer promptly when a peer is waiting on it to continue relevant work',
+    )
+    expect(wrapped).toContain('otherwise finish your current task first')
+    expect(wrapped).not.toContain('After completing your current task')
     expect(wrapped).not.toContain('created you')
   })
 

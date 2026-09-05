@@ -421,7 +421,7 @@ function getAgentModeSessionSpecificGuidanceSection(
       ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
       : null,
     hasSkills
-      ? `When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      ? `When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
       : null,
     DISCOVER_SKILLS_TOOL_NAME !== null &&
     hasSkills &&
@@ -486,7 +486,7 @@ function getSessionSpecificGuidanceSection(
       ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
       : null,
     hasSkills
-      ? `When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      ? `When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
       : null,
     DISCOVER_SKILLS_TOOL_NAME !== null &&
     hasSkills &&
@@ -1241,15 +1241,11 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
  * `hasEmbeddedSearchTools`), so this section names the search surface that
  * actually exists rather than a tool the model cannot call.
  *
- * The section is unconditional, so it also reaches sessions that have a tool
- * for reading another session, and its recipes reach the same bytes with none
- * of that tool's checks: no resolution of which sessions the caller may read,
- * no bound on output, no redaction, and no workspace scope, since the resolve
- * recipe globs the whole projects directory. Rather than drop guidance whose
- * real uses (session-id forensics, subagent logs) are unserved elsewhere, the
- * text states those uses and defers to a tool where one exists. Which route a
- * model takes is behaviour nobody here has measured; this removes an avoidable
- * collision, it does not close a hole.
+ * When the task is simply to understand another session's work, guidance
+ * prefers available session-reading tools over reconstructing context from raw
+ * files. When debugging requires raw events or tool results the tool does not
+ * expose, direct transcript inspection remains available, including discovering
+ * relevant sessions.
  */
 function getSessionTranscriptsSection(): string {
   const embedded = hasEmbeddedSearchTools()
@@ -1257,20 +1253,24 @@ function getSessionTranscriptsSection(): string {
     ? `\`grep\` via the ${BASH_TOOL_NAME} tool`
     : GREP_TOOL_NAME
   const resolveInstruction = embedded
-    ? `Given a session id prefix, resolve the file with \`find\` via the ${BASH_TOOL_NAME} tool, scoped to the projects dir:
+    ? `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with \`find\` via the ${BASH_TOOL_NAME} tool (scoped to the workspace directory under projects if known, or the projects dir):
 
-    find ~/.cat-code/projects -name '*9a993deb*.jsonl'`
-    : `Given a session id prefix, resolve the file with ${GLOB_TOOL_NAME}, passing the projects dir as the \`path\` argument rather than the default cwd:
+    find ~/.cat-code/projects -name '*9a993deb*.jsonl'
 
-    ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"`
+Require unambiguous resolution to a single file before reading contents.`
+    : `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with ${GLOB_TOOL_NAME}, passing the workspace directory under projects if known, or the projects dir as the \`path\` argument rather than the default cwd:
+
+    ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
+
+Require unambiguous resolution to a single file before reading contents.`
   const query = (pattern: string) =>
-    embedded ? `grep '${pattern}'` : `${GREP_TOOL_NAME} '${pattern}'`
+    embedded
+      ? `grep '${pattern}' <path-to-transcript.jsonl>`
+      : `${GREP_TOOL_NAME} '${pattern}' path="<path-to-transcript.jsonl>"`
 
   return `## Reading session transcripts
 
-These files are the raw record of a session. They are here for two jobs: forensics on a session id you were given, and reading the logs of subagents you spawned.
-
-Two things follow from that. A session id names exactly one file, so resolve by id, and do not search the projects directory for sessions whose id you were not given. And when a tool exists for what you actually want, such as reading or messaging a session that is running right now, call that tool instead of opening files: it resolves which sessions you are allowed to read, bounds what comes back, and redacts what should not be repeated. Reading a file here does none of that and drops the whole raw record into your context.
+These files are the raw record of a session. When you need to understand another session's work, prefer the available session-reading tool. For debugging that requires raw events or tool results the tool does not expose, inspect the transcript directly.
 
 Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields, and do NOT write a custom parser. The shape is stable.
 
@@ -1282,7 +1282,7 @@ Paths:
 
 ${resolveInstruction}
 
-Common queries on a transcript:
+Examples for querying an individual transcript:
 
     ${query('"type":"tool_use"')}      # list tool calls
     ${query('"stop_reason"')}          # find last API response boundary

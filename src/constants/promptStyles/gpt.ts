@@ -143,15 +143,17 @@ export function getGPTDoingTasksSection(enabledTools: Set<string>): string {
     `VERIFICATION: For risky or important changes, verify before reporting done. If verification is not possible, state that explicitly. Do not verify small, low-risk changes.`,
   ]
 
-  const editToolName = enabledTools.has(FILE_PATCH_TOOL_NAME)
-    ? FILE_PATCH_TOOL_NAME
-    : FILE_EDIT_TOOL_NAME
+  const editToolName = getPreferredEditToolName(enabledTools)
 
   const items = [
     `TASK DOMAIN: You handle software engineering tasks — bugs, new functionality, refactoring, explanation, and more. When an instruction is ambiguous, interpret it in the context of software engineering and the current working directory. Example: "change methodName to snake case" means find and modify the method in code, not just reply "method_name".`,
     `CAPABILITY: You are highly capable and can handle ambitious tasks. Defer to the user's judgment on whether a task is too large to attempt.`,
     `DISAGREEMENT: If the user is wrong, say so clearly, calmly, and briefly. Do not agree to preserve momentum. If you notice a nearby bug, risky assumption, or likely mistake related to the task, mention it briefly even if not asked. If you find a real problem with the task as specified, state the concern in a sentence or two and keep building, delivering the complete work under explicitly stated assumptions. If you raise a concern and the user repeats or reaffirms the request, that is their decision: say so briefly and proceed with the full request. This does not override a necessary refusal or the need to confirm a risky or destructive action. If you decline something, say so plainly in a sentence, offer the nearest thing you can do, and move on without moralizing.`,
-    `RULE — Read before modifying: Before proposing any change to a file, you must have read its current contents in this conversation. Verification: confirm the file appears in a prior ${FILE_READ_TOOL_NAME} tool result before emitting an ${editToolName}.`,
+    ...(editToolName && enabledTools.has(FILE_READ_TOOL_NAME)
+      ? [
+          `RULE — Read before modifying: Before proposing any change to a file, you must have read its current contents in this conversation. Verification: confirm the file appears in a prior ${FILE_READ_TOOL_NAME} tool result before emitting an ${editToolName}.`,
+        ]
+      : []),
     `RULE — Minimize new files: Do not create files unless absolutely necessary. Prefer editing an existing file over creating a new one to prevent file bloat.`,
     `RULE — No time estimates: Do not give time estimates or predictions for how long tasks will take. Focus on what needs to be done.`,
     `RULE — Failure handling: ${RETRY_RULE} Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when genuinely stuck after investigation.`,
@@ -203,10 +205,14 @@ DECISION CHECKLIST before any action:
 // 5. Using tools section
 // ---------------------------------------------------------------------------
 
-function getPreferredEditToolName(enabledTools: Set<string>): string {
-  return enabledTools.has(FILE_PATCH_TOOL_NAME)
-    ? FILE_PATCH_TOOL_NAME
-    : FILE_EDIT_TOOL_NAME
+function getPreferredEditToolName(enabledTools: Set<string>): string | null {
+  if (enabledTools.has(FILE_PATCH_TOOL_NAME)) {
+    return FILE_PATCH_TOOL_NAME
+  }
+  if (enabledTools.has(FILE_EDIT_TOOL_NAME)) {
+    return FILE_EDIT_TOOL_NAME
+  }
+  return null
 }
 
 export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
@@ -228,31 +234,54 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const editToolName = getPreferredEditToolName(enabledTools)
 
   const preferredToolRules = [
-    `File reading → ${FILE_READ_TOOL_NAME} for whole files; it is bounded (offset/limit) and numbered`,
-    `File editing → ${editToolName}`,
-    // The patch format requires relative paths but never says relative to what,
-    // so a session rooted in a subdirectory invites project-root-style paths
-    // that resolve one level too deep.
-    ...(editToolName === FILE_PATCH_TOOL_NAME
+    ...(enabledTools.has(FILE_READ_TOOL_NAME)
       ? [
-          `${FILE_PATCH_TOOL_NAME} file paths → resolved against the session working directory, which is not always the project root`,
+          `File reading → ${FILE_READ_TOOL_NAME} for whole files; it is bounded (offset/limit) and numbered`,
         ]
       : []),
-    `File creation → ${FILE_WRITE_TOOL_NAME}`,
+    ...(editToolName
+      ? [
+          `File editing → ${editToolName}`,
+          ...(editToolName === FILE_PATCH_TOOL_NAME
+            ? [
+                `${FILE_PATCH_TOOL_NAME} file paths → resolved against the session working directory, which is not always the project root`,
+              ]
+            : []),
+        ]
+      : []),
+    ...(enabledTools.has(FILE_WRITE_TOOL_NAME)
+      ? [`File creation → ${FILE_WRITE_TOOL_NAME}`]
+      : []),
     ...(embedded
       ? []
       : [
-          `File search → ${GLOB_TOOL_NAME}`,
-          `Content search → ${GREP_TOOL_NAME}`,
+          ...(enabledTools.has(GLOB_TOOL_NAME)
+            ? [`File search → ${GLOB_TOOL_NAME}`]
+            : []),
+          ...(enabledTools.has(GREP_TOOL_NAME)
+            ? [`Content search → ${GREP_TOOL_NAME}`]
+            : []),
         ]),
-    `Shell execution → ${BASH_TOOL_NAME} for commands, builds, tests, and targeted shell reads and searches`,
+    ...(enabledTools.has(BASH_TOOL_NAME)
+      ? [
+          `Shell execution → ${BASH_TOOL_NAME} for commands, builds, tests, and targeted shell reads and searches`,
+        ]
+      : []),
   ]
 
   const items = [
-    `RULE — File mutations: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
-    `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
-    `RULE — Tool routing: Dedicated tools let the user review your work. Route each operation to its tool:`,
-    preferredToolRules,
+    ...(editToolName
+      ? [
+          `RULE — File mutations: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
+        ]
+      : []),
+    `RULE — Show the diff: After any file mutation performed by a command rather than by ${editToolName ?? FILE_EDIT_TOOL_NAME}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+    ...(preferredToolRules.length > 0
+      ? [
+          `RULE — Tool routing: Dedicated tools let the user review your work. Route each operation to its tool:`,
+          preferredToolRules,
+        ]
+      : []),
     taskToolName
       ? `TASK TRACKING: Use ${taskToolName} to break down and track work. Mark each task complete as soon as it is done. Do not batch completions.`
       : null,
@@ -370,7 +399,7 @@ export function getGPTAgentModeSessionGuidanceSection(
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
       : null,
     hasSkills
-      ? `HANDOFF PROMPTS: When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      ? `HANDOFF PROMPTS: When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
       : null,
     discoverSkillsRule,
   ].filter(item => item !== null)
@@ -455,7 +484,7 @@ export function getGPTSessionGuidanceSection(
       ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
       : null,
     hasSkills
-      ? `HANDOFF PROMPTS: When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      ? `HANDOFF PROMPTS: When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
       : null,
     discoverSkillsRule,
   ].filter(item => item !== null)
