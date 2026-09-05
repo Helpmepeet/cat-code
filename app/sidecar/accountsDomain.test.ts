@@ -242,7 +242,7 @@ describe('P4-5 read-seam — projection semantics', () => {
 function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsCommandExecutor {
   const ok = (message: string): AccountVerbResult => ({ ok: true, message })
   return {
-    switch: () => ok('switched'),
+    switch: async () => ok('switched'),
     switchAnthropic: async () => ok('switched anthropic'),
     rename: () => ok('renamed'),
     delete: async () => ok('deleted'),
@@ -368,6 +368,90 @@ describe('real Codex delete executor cleanup', () => {
   })
 })
 
+/*
+ * The desktop switch used to call `switchToAccount` and stop there, while the
+ * terminal `/switch-account` ran the whole transaction. The pool write alone
+ * leaves live `follow-main` subagent leases on the previous account and never
+ * clears the sticky-HTTP-fallback / auth-sensitive caches. The transaction
+ * itself is the engine's (`commitCodexAccountSwitch`); what this side owes is
+ * calling it, and reporting its refusal honestly.
+ */
+describe('real Codex switch executor', () => {
+  test('runs the engine switch transaction, not just the pool write', async () => {
+    const switched: string[] = []
+    const executor = createRealAccountsExecutor({
+      commitSwitch: async accountId => {
+        switched.push(accountId)
+        return poolAccount({ accountId, alias: 'work' })
+      },
+    })
+
+    const result = await executor.switch('b')
+
+    expect(switched).toEqual(['b'])
+    expect(result).toEqual({ ok: true, message: 'Switched to work' })
+  })
+
+  test('a refused transaction reports ok:false and the pool as unchanged', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a' }), poolAccount({ accountId: 'b' })],
+      activeAccountId: 'a',
+    })
+    let calls = 0
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({
+        commitSwitch: async () => {
+          calls += 1
+          return null
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'r1',
+      accountId: 'b',
+    })
+
+    expect(calls).toBe(1)
+    expect(out.result).toEqual({
+      ok: false,
+      message: 'Could not switch to that account.',
+    })
+    expect(out.poolChanged).toBe(false)
+  })
+
+  test('the verb awaits the transaction before reporting a pool change', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a' }), poolAccount({ accountId: 'b', alias: 'b' })],
+      activeAccountId: 'a',
+    })
+    // Resolving on a later tick is what a sync `executor.switch(...)` call
+    // could not have waited for: without the await the verb answered while the
+    // lease reassignment and the cache clear were still outstanding.
+    let settled = false
+    const domain = makeAccountsDomain({
+      executor: createRealAccountsExecutor({
+        commitSwitch: async accountId => {
+          await new Promise(resolve => setTimeout(resolve, 0))
+          settled = true
+          return poolAccount({ accountId, alias: 'b' })
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.switch',
+      requestId: 'r1',
+      accountId: 'b',
+    })
+
+    expect(settled).toBe(true)
+    expect(out.result.ok).toBe(true)
+    expect(out.poolChanged).toBe(true)
+  })
+})
+
 /**
  * A FAKE OAuth runner — never opens a browser, binds port 1455, or writes the
  * vault (the real run is the operator's live step). Drives the controller's state
@@ -411,7 +495,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     })
     const switched: string[] = []
     const domain = makeAccountsDomain({
-      executor: fakeExecutor({ switch: id => { switched.push(id); return { ok: true, message: 'ok' } } }),
+      executor: fakeExecutor({ switch: async id => { switched.push(id); return { ok: true, message: 'ok' } } }),
     })
     const out = await domain.runVerb({ type: 'account.switch', requestId: 'r1', accountId: 'b' })
     expect(out.result.ok).toBe(true)
@@ -423,7 +507,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     seedCodexAccountPoolForTest({ accounts: [poolAccount({ accountId: 'a' })], activeAccountId: 'a' })
     let called = false
     const domain = makeAccountsDomain({
-      executor: fakeExecutor({ switch: () => { called = true; return { ok: true, message: 'ok' } } }),
+      executor: fakeExecutor({ switch: async () => { called = true; return { ok: true, message: 'ok' } } }),
     })
     const out = await domain.runVerb({ type: 'account.switch', requestId: 'r', accountId: 'ghost' })
     expect(out.result.ok).toBe(false)
@@ -447,7 +531,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     const switched: string[] = []
     const domain = makeAccountsDomain({
       executor: fakeExecutor({
-        switch: id => {
+        switch: async id => {
           switched.push(id)
           return { ok: true, message: 'ok' }
         },
@@ -502,7 +586,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     let called = false
     const domain = makeAccountsDomain({
       executor: fakeExecutor({
-        switch: () => {
+        switch: async () => {
           called = true
           return { ok: true, message: 'ok' }
         },
@@ -534,7 +618,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     })
     const domain = makeAccountsDomain({
       executor: fakeExecutor({
-        switch: () => ({ ok: false, message: 'Could not switch to that account.' }),
+        switch: async () => ({ ok: false, message: 'Could not switch to that account.' }),
       }),
     })
 

@@ -374,16 +374,71 @@ describe('domain wiring', () => {
       },
     } as unknown as AppStateStore
     let notified = 0
-    const stop = createSidecarLeaseDomain(store, { reader: fakeReader() }).subscribe(
-      () => {
-        notified += 1
-      },
-    )
+    const stop = createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: () => () => {},
+    }).subscribe(() => {
+      notified += 1
+    })
     expect(listeners).toHaveLength(1)
     listeners[0]!()
     expect(notified).toBe(1)
     stop()
     expect(unsubscribed).toBe(1)
+  })
+
+  /*
+   * The store is not enough. A lease also MOVES with no task mutation at all —
+   * `failoverCodexLease` mid-turn, an account switch reassigning every
+   * `follow-main` lease — and while this domain subscribed to the store ONLY,
+   * nothing re-emitted `lease.snapshot` until some unrelated app-state change
+   * happened to fire. The roster went on naming the previous account.
+   */
+  test('subscribe also rides the lease manager, with no app-state mutation', () => {
+    const leaseListeners: Array<() => void> = []
+    const store = {
+      getState: () => ({ tasks: {} }),
+      subscribe: () => () => {},
+    } as unknown as AppStateStore
+    let notified = 0
+    createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: fn => {
+        leaseListeners.push(fn)
+        return () => {}
+      },
+    }).subscribe(() => {
+      notified += 1
+    })
+
+    expect(leaseListeners).toHaveLength(1)
+    leaseListeners[0]!()
+    leaseListeners[0]!()
+    expect(notified).toBe(2)
+  })
+
+  test('the returned unsubscribe detaches BOTH sources, and twice is a no-op', () => {
+    let storeDetached = 0
+    let leaseDetached = 0
+    const store = {
+      getState: () => ({ tasks: {} }),
+      subscribe: () => () => {
+        storeDetached += 1
+      },
+    } as unknown as AppStateStore
+    const stop = createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: () => () => {
+        leaseDetached += 1
+      },
+    }).subscribe(() => {})
+
+    stop()
+    expect(storeDetached).toBe(1)
+    expect(leaseDetached).toBe(1)
+    stop()
+    expect(storeDetached).toBe(1)
+    expect(leaseDetached).toBe(1)
   })
 })
 

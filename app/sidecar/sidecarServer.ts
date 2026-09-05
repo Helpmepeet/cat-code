@@ -942,9 +942,10 @@ export class SidecarServer {
         void this.broadcastAgentModeSnapshot()
       })
     }
-    // P4-32b — leases move on the SAME events that move the worker roster (a
-    // spawn registers a lease, a finish releases one), so the lease seam rides
-    // the same store subscription rather than polling the lease manager.
+    // P4-32b — the lease seam fans its own subscription out over the app-state
+    // store (a spawn registers a lease, a finish releases one) AND the lease
+    // manager's emitter (a failover or an account switch moves a lease with no
+    // task mutation at all). Still no polling; see `leaseDomain.ts` §4.
     if (this.leases) {
       this.unsubscribeLeaseSnapshot = this.leases.subscribe(() => {
         this.broadcastLeaseSnapshot()

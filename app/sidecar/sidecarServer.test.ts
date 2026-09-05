@@ -6126,7 +6126,7 @@ const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsCommandExecutor {
   return {
-    switch: () => ({ ok: true, message: 'switched' }),
+    switch: async () => ({ ok: true, message: 'switched' }),
     switchAnthropic: async () => ({
       ok: true,
       message: 'switched anthropic',

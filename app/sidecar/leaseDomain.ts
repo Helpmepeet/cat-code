@@ -18,13 +18,19 @@
  *     projection and asserts the output is `secretGuard`-clean.
  *  3. **Throw-free.** A failed read returns null; the sidecar degrades and the
  *     attaching connection is never stranded.
- *  4. **Reactivity = emit-on-attach + store-driven re-emit (NOT a poll).** The
- *     lease map is a bare module singleton with no emitter, but leases move on
- *     exactly the events that mutate `AppState.tasks`: a worker spawn registers a
- *     lease when that worker is on the Codex path (`registerWorkerCodexLease`,
- *     `AgentTool.tsx`) and a worker finish releases one
- *     (`LocalAgentTask.tsx:388,554,581,817`). So this domain subscribes to the
- *     SAME app-state store that drives the `agent-mode.snapshot` re-broadcast.
+ *  4. **Reactivity = emit-on-attach + two event sources (NOT a poll).** Both are
+ *     needed and neither covers the other:
+ *       - the app-state store, because a worker spawn registers a lease when that
+ *         worker is on the Codex path (`registerWorkerCodexLease`,
+ *         `AgentTool.tsx`) and a worker finish releases one
+ *         (`LocalAgentTask.tsx:388,554,581,817`) — the SAME store that drives the
+ *         `agent-mode.snapshot` re-broadcast;
+ *       - the lease manager's own emitter (`subscribeToCodexLeaseChanges`),
+ *         because a lease also MOVES without any task mutation: a
+ *         `failoverCodexLease` mid-turn, an account switch reassigning every
+ *         `follow-main` lease, a repair after a deleted account. Store-only, the
+ *         roster kept naming the previous account until some unrelated app-state
+ *         mutation happened to re-emit.
  *
  * The owner set is deliberately NOT "every lease in the process": it is the main
  * lease plus the live `local_agent` workers of THIS session, so the snapshot is
@@ -37,9 +43,9 @@
  * `initAccountPool()` (`app/sidecar/initializeRuntime.ts:40` → `src/entrypoints/
  * init.ts`), so `getPoolStatus().initialized` can still be false at attach. An
  * empty roster is therefore the truth at that moment, and the renderer's empty
- * state says so; the store-driven re-broadcast fills it in as soon as a turn or a
- * worker moves. Do not "fix" this by polling the pool or by seeding a placeholder
- * lease.
+ * state says so; the re-broadcast fills it in as soon as a turn registers a lease
+ * or a worker moves. Do not "fix" this by polling the pool or by seeding a
+ * placeholder lease.
  *
  * ZERO transport knowledge: frames, wire validation and limits stay in
  * `sidecarServer.ts`.
@@ -47,6 +53,7 @@
 import {
   getCodexLeaseForOwner,
   getCodexLeaseSnapshot,
+  subscribeToCodexLeaseChanges,
   type CodexLease,
 } from '../../src/services/api/codexAccountLeaseManager.js'
 import { getPoolStatus } from '../../src/services/api/codexAccountPool.js'
@@ -124,9 +131,19 @@ export type SidecarLeaseDomain = {
 
 export function createSidecarLeaseDomain(
   appStateStore: AppStateStore,
-  options: { reader?: LeaseReader } = {},
+  options: {
+    reader?: LeaseReader
+    /**
+     * The lease manager's own change emitter, behind the same injection idiom as
+     * `reader` so a test can drive it without the real module singleton. Real
+     * default: `subscribeToCodexLeaseChanges`.
+     */
+    subscribeToLeaseChanges?: (listener: () => void) => () => void
+  } = {},
 ): SidecarLeaseDomain {
   const reader = options.reader ?? createRealLeaseReader()
+  const subscribeToLeaseChanges =
+    options.subscribeToLeaseChanges ?? subscribeToCodexLeaseChanges
   return {
     getSnapshot() {
       try {
@@ -135,8 +152,19 @@ export function createSidecarLeaseDomain(
         return null
       }
     },
+    // Fans out to BOTH sources (header §4). The returned unsubscribe tears down
+    // both and is idempotent: the sidecar can call it on teardown after an
+    // earlier detach without double-detaching either source.
     subscribe(listener) {
-      return appStateStore.subscribe(listener)
+      const stopStore = appStateStore.subscribe(listener)
+      const stopLeases = subscribeToLeaseChanges(listener)
+      let stopped = false
+      return () => {
+        if (stopped) return
+        stopped = true
+        stopStore()
+        stopLeases()
+      }
     },
   }
 }
