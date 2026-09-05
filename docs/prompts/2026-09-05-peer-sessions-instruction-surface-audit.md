@@ -63,8 +63,9 @@ answer promptly when it unblocks relevant work; otherwise the timing is yours.
 When a peer asks you something, answer when you can, including "I could not
 finish"; sending a message does not guarantee an answer.
 
-When the user asks for a session, create a peer; when they ask for a prompt,
-write text; do not create one unasked. Pass the user's intent on faithfully,
+When the user asks for a session, create a peer; when they ask to reach a
+session that exists, message it; when they ask for a prompt, write text; do not
+create one unasked. Pass the user's intent on faithfully,
 quoting exactly where the wording matters, and share what you already know
 that would save the peer rediscovering it: findings, constraints, earlier
 attempts, the reasons behind decisions, open questions, and where the
@@ -127,6 +128,10 @@ The `CreatePeer` prompt changes with it (F14 in §3.4).
 | 8 | "most of the prompting skill doesnt apply to when prompting peer" | F13b says so; the handoff-prompt rules are for pasted prompts and subagents |
 | 9 | "our model is intelligence enough. i hope we doesnt have a piled of instruction to shape to the correct behavior. i want it as a guideline/example for model to act on" | the shape of §0.1: guideline plus example, mechanics left to the tools |
 | 10 | "Cobalt should do it" (asked: if Nickel tells Cobalt "push" or "delete that file", should Cobalt do it, or ask you first?) | R6 holds for CLAUDE.md §10 gates; F4e inverted, and its "the only refusal is" phrasing removed later (§0.3) |
+| 11 (2026-09-06) | "Fix creator name reuse by routing through its stable ID. If the original creator is gone, report that clearly. Never silently redirect to whoever now owns its name. Keep names as the conversational interface." | F17 ruled; build item in §3.8 |
+| 12 (2026-09-06) | "Keep the 16-hop allowance for now. Observe actual conversations before raising it or changing what it counts. Describe it accurately as an exchange limit with expiry after inactivity." | F19 ruled; the report's description stands |
+| 13 (2026-09-06) | "Keep the existing delivery protocol, but represent uncertainty honestly. Confirmed delivery, confirmed non-delivery, and unconfirmed delivery are distinct. If wording alone cannot express that because the result contains a misleading `delivered: false`, authorize the smallest result-contract change needed to preserve the distinction." | F21 ruled; build item in §3.8 |
+| 14 (2026-09-06) | "Fix the handoff-skill trigger now, alongside the text work. Trigger it when the user asks for a written prompt. In desktop sessions, a request to create a session should use `CreatePeer`; a request to contact an existing session should message that session. Merely mentioning 'session' should trigger neither." | F24, new in §3.4 |
 
 ### 0.3 Agreed direction (2026-09-05, later discussion) and what still needs a decision
 
@@ -164,15 +169,15 @@ documents remain data. The guideline stays short with an example; mechanics
 live in tool descriptions. That paragraph is context for the revision, not
 text to paste into a prompt.
 
-**Proposals that need a separate decision, not made here.**
+**Decisions taken on 2026-09-06 (rulings 11 to 14 in §0.2), and what stays open.**
 
-| item | why it is a decision, not a wording change | where |
+| item | ruling | where |
 |---|---|---|
-| Stable creator routing: a peer's remembered creator name can resolve to a different session after a registry reap | fixing it means routing the creator by id, a request-plane change under HR3 | F17, §3.8 |
-| The exchange allowance: 16 hops per ordered pair across an exchange that ends after 10 quiet minutes, creation counted as the first | changing the limit or its semantics is a runtime and design decision; this report only records it as a constraint on the proposed behaviour | F19, §3.8 |
-| Any change to what a `SendToPeer` outcome means (as opposed to how it is worded) | the outcomes are the request plane's contract | F21, §3.8 |
-| A desktop condition on the engine's handoff-skill line | engine text shared with the terminal | §5 |
-| A per-capability control separating "may message" from "may read" | R9 rules `ReadPeer` unconditional within a workspace | §5.2 |
+| Stable creator routing (F17) | Route the creator through its stable id. If the original creator is gone, say so clearly; never silently redirect to whoever now holds its name. Names stay the conversational interface. | §3.8 F17 |
+| The exchange allowance (F19) | Keep 16 hops for now; observe real conversations before raising it or changing what it counts; describe it as an exchange limit that expires after inactivity. | §3.8 F19 |
+| `SendToPeer` outcomes (F21) | Keep the delivery protocol; represent uncertainty honestly, with confirmed delivery, confirmed non-delivery and unconfirmed delivery distinct. If wording cannot express that because the result carries a misleading `delivered: false`, the smallest result-contract change that preserves the distinction is authorized. | §3.8 F21 |
+| The engine's handoff-skill line (F24) | Fix now, with the text work: trigger only when the user asks for a written prompt; in desktop sessions, a request to create a session uses `CreatePeer` and a request to contact an existing session messages it; mentioning "session" alone triggers neither. | §3.4 F24 |
+| A per-capability control separating "may message" from "may read" | Not asked; R9 stands. | §5.2 |
 
 Ranked recommendations (details in §3, each with current text and replacement):
 
@@ -194,20 +199,20 @@ Ranked recommendations (details in §3, each with current text and replacement):
 | F11 | `src/tools/AgentTool/prompt.ts` example block | delete the greeting-responder example | a session spawned a subagent to answer "Hi" and cited it (§4.3) |
 | F12 | `src/tools/SendMessageTool/prompt.ts`, `src/tools.ts:141` | remove the dormant `uds:` prompt branches and the phantom `ListPeersTool` binding | it shares a tool name with the shipped feature and the terminal port was ruled out; the rest of the dormant port is a separate cleanup |
 | F13 | the other five repo skills, `docs/migration/backlog/phase5.md`, `docs/migration/process/GUI-VERIFICATION.md` | small additions each; reporting kept where a workflow asks for it, never as a universal duty | listed in §3.5 to §3.7 |
-| F17 | `app/host/host.ts`, `app/main/peerRequestPlane.ts` | RECORD, decision needed: a peer's remembered creator name can name a different session after a reap | verified reachable when the registry is at its bound (§3.8) |
+| F17 | `app/host/host.ts`, `app/main/peerRequestPlane.ts`, sidecar peer tools | RULED 2026-09-06: route the creator by stable id; report a gone creator clearly; never silently redirect | verified reachable when the registry is at its bound (§3.8) |
 | F18 | `app/sidecar/createPeerTool.ts`, `src/utils/messages.ts` | align "wait for the report" with a peer's clarifying question, which must be answered now | inferred, not reproduced (§3.8) |
-| F19 | `app/shared/limits.ts`, `app/main/peerRequestPlane.ts` | RECORD, decision needed: 16 hops per pair per exchange, an exchange ending after 10 quiet minutes; creation is hop one; the allowance counts messages, not usefulness | verified (§3.8) |
+| F19 | `app/shared/limits.ts`, `app/main/peerRequestPlane.ts` | RULED 2026-09-06: keep 16 hops per pair per exchange, an exchange ending after 10 quiet minutes, creation as hop one; observe before changing; describe accurately | verified (§3.8) |
 | F20 | `app/sidecar/readPeerTool.ts:759-760`, `app/sidecar/listPeersTool.ts` | activity is not completion: "whether it is done is a ListPeers answer" is wrong | verified (§3.8) |
-| F21 | `app/sidecar/sendToPeerTool.ts` `describeOutcome` / `describeError` | three result sentences impose waiting, assert the peer is working, or turn unconfirmed into undelivered | verified against the forwarding and wake paths (§3.8) |
+| F21 | `app/sidecar/sendToPeerTool.ts` `describeOutcome` / `describeError`, result contract | three result sentences impose waiting, assert the peer is working, or turn unconfirmed into undelivered; RULED 2026-09-06: three distinct states, smallest contract change authorized | verified against the forwarding and wake paths (§3.8) |
 | F22 | doctrine, `SendToPeer` prompt and `text` description | "say everything in one message" in three places, and "asks nothing gets no reply" | verified (§3.8); reconciled to natural messages with follow-ups |
 | F23 | proposals in this report and `SendToPeer` results | closed is not unavailable: a message restores a closed peer unless the user blocked it, it is gone, or the restore fails | verified against `handlePeerDeliver` (§3.8) |
+| F24 | `src/constants/prompts.ts:424`, `:489`; `src/constants/promptStyles/gpt.ts:402`, `:487`; doctrine | RULED 2026-09-06: the handoff-skill line fires only on a request for a written prompt; the doctrine says create for "create a session", message for "contact a session", neither for a mention | Nickel wrote a fenced prompt on "give the task to next session" (§2.1) |
 
 Every recommendation was checked against the two binding constraints. None
 re-adds a §0a cut or touches a locked decision. None asks prompt text to enforce a
 bound; F1 and F2 remove imperatives, and F3, F9, F14, F15 and F16 are guideline
-sentences of the kind §5 already carries. F17, F19 and F21's semantic half are
-recorded as constraints and handed to a separate decision (§0.3), not worked
-around. F4's §10 item records the operator's 2026-09-05 ruling that R6 holds
+sentences of the kind §5 already carries. F17, F19, F21's contract half and
+F24 were open decisions and were ruled on 2026-09-06 (§0.3). F4's §10 item records the operator's 2026-09-05 ruling that R6 holds
 for those gates too (§3.1).
 
 ## 1. Which surfaces reach a peer at runtime
@@ -934,6 +939,25 @@ are for questions that unblock work, and the rest is the recipient's timing.
 `After completing your current task`, which goes with this change; move that
 assertion to the new sentence.)
 
+**F24, the engine's handoff-skill trigger. RULED 2026-09-06 (ruling 14).**
+Current text, in both prompt styles (`src/constants/prompts.ts:424`, `:489`;
+`src/constants/promptStyles/gpt.ts:402`, `:487`): `When the user asks you to
+write a prompt for another model, agent, or session, load and follow the
+writing-handoff-prompts skill (via Skill, if listed) before writing the
+prompt.` Nickel loaded the skill and printed a fenced prompt on "let give the
+task to next session", which asked for nothing written (§2.1). Replacement,
+same four sites: `When the user asks for a written prompt to hand to another
+model, agent, or session, load and follow the writing-handoff-prompts skill
+(via Skill, if listed) before writing it. A request to hand work to another
+session, or to reach one, is not a request for a prompt.` The desktop half
+lives in the doctrine block (§0.1), extended by one clause: `When the user asks
+for a session, create a peer; when they ask to reach a session that exists,
+message it; when they ask for a prompt, write text; do not create one unasked.`
+Why: the engine text is shared with the terminal, where "another session" can
+only mean a pasted prompt, so it stays neutral and the desktop block carries
+the two peer verbs. Owed with it: the prompt-section tests that pin the
+sentence, and the global skill's own trigger description is out of scope (§6).
+
 **F12, remove the dormant port's prompt text and phantom binding.**
 `src/tools/SendMessageTool/prompt.ts:9-14` and `:40-56` carry `uds:` /
 `bridge:` / `ListPeers` text behind `feature('UDS_INBOX')`, and
@@ -1068,6 +1092,22 @@ What this report does NOT propose is making every creator exchange go through
 `ListPeers`, which would reintroduce the behaviour §2 measured; the roster
 would in any case show the new Alex under the same name.
 
+RULED 2026-09-06 (ruling 11): route the creator through its stable id; if the
+original creator is gone, report that clearly; never silently redirect to
+whoever now owns the name; names stay the conversational interface. Build
+constraints, for the session that implements it: the model keeps addressing by
+name, so the id must come from the sidecar's own spawn env
+(`CATCODE_SIDECAR_CREATED_BY`, already present) and never from model-authored
+input (HC1, HR3: main resolves names to ids); main must check that the named
+row and the remembered id agree, deliver when they do, and when they do not
+answer the sender in plain words that the Alex that created it is gone (and,
+if a different Alex now exists, say that too) rather than delivering to the
+new holder; any new field on a request-plane frame is a closed-allowlist change
+with a schema, a boundary test and a decision reference, and HOST-REQUEST-PLANE
+§2/§4 and PEER-SESSIONS §2 are amended in place. The `createdBy` shown by
+`ListPeers` already resolves at read time and shows `gone`; the send path is
+what this ruling adds.
+
 **F18, inferred: waiting guidance versus a blocking clarification.** Confirmed
 in text, not reproduced. `app/sidecar/createPeerTool.ts:173-175` demands a report and says
 "Then wait for that message instead of watching them work"; the busy-recipient
@@ -1094,8 +1134,11 @@ challenge is bounded: a creator and its peer that exchange fifteen messages
 inside ten minutes have spent the allowance a completion report would need,
 and the report is refused with `chain_too_long` until the pair has been quiet
 for ten minutes. The allowance counts exchanges, not usefulness. This report
-records the constraint; changing the value or the semantics is a runtime and
-design decision (§0.3), and nothing here suggests a way around the guard.
+records the constraint. RULED 2026-09-06 (ruling 12): keep 16 for now,
+observe real conversations before raising it or changing what it counts, and
+describe it as an exchange limit that expires after inactivity, which is how
+this section and the `chain_too_long` result already describe it. Nothing here
+suggests a way around the guard.
 
 **F20, activity described as completion.** Confirmed. `app/sidecar/readPeerTool.ts:759-760`
 says "Whether it is done is a ListPeers answer and costs nothing", and the
@@ -1124,8 +1167,17 @@ The two "Delivered" sentences (`:69`, `:76`) are correct as far as they go and
 already say delivered, not done; delivery, consumption (the ack main waits
 for, `app/main/peerRequestPlane.ts:920-931`) and task completion are three facts, and
 no result sentence should let the second or third be read into the first.
-Wording only; what each outcome means on the wire is the request plane's
-contract and stays as it is (§0.3).
+RULED 2026-09-06 (ruling 13): the delivery protocol stays; the result must
+represent confirmed delivery, confirmed non-delivery and unconfirmed delivery
+as three distinct facts. The result type carries `delivered: boolean`
+(`app/sidecar/sendToPeerTool.ts:30-35`), which cannot say "unconfirmed": the
+timeout case above reports `delivered: false` for a message main may still
+deliver after `ready`. The smallest contract change that preserves the
+distinction is authorized, for example a three-valued delivery field or an
+explicit `confirmed` flag beside the existing outcome vocabulary; the wire
+outcomes themselves do not change. The renderer's speech row reads the result
+for its delivered, sending, stopped and not-delivered states (PEER-SESSIONS
+§6), so it needs a state for "unconfirmed" and a test.
 
 **F22, single-message pressure in three places, and "asks nothing gets no
 reply".** Confirmed: the shipped doctrine ("Every message costs the recipient a
@@ -1253,8 +1305,8 @@ engine's handoff-skill line ("When the user asks you to write a prompt for
 another model, agent, or session") fired for Nickel on "give the task to next
 session" and produced a fenced prompt the operator had not asked for (§2.1);
 the block's "session means a peer, prompt means text" sits later in the prompt
-and is specific, so it should win, and if it does not the engine line needs a
-desktop condition, which is a decision listed in §0.3.
+and is specific; the engine line itself is now reworded so that only a request
+for a written prompt triggers the skill (F24, ruled 2026-09-06).
 
 ### 5.1 Outside survey, 2026-09-05: what it confirms, where we differ by ruling, what it adds
 
