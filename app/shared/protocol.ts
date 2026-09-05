@@ -739,6 +739,19 @@ export const PEER_DELIVER_REFUSAL_REASONS = [
    * addition recorded.
    */
   'delivery_failed',
+  /**
+   * The sender addressed the session that created it, and the row now holding
+   * that name is NOT that session (F17, ruling 11 of 2026-09-06;
+   * HOST-REQUEST-PLANE §4 step 1a, PEER-SESSIONS §2).
+   *
+   * A peer learns its creator's name once, at spawn. Names are unique only
+   * among current registry rows and are released when a row is reaped
+   * (`app/host/peerNames.ts`, `app/host/registry.ts` `isReapableForBound`), so
+   * a reissued name makes the remembered one point at a stranger. The ruling
+   * is that such a send is REFUSED, never redirected: delivering it would put
+   * one session's private context into another's transcript.
+   */
+  'creator_reissued',
 ] as const
 
 export type PeerDeliverRefusalReason =
@@ -759,11 +772,34 @@ export type PeerDeliverOutcome =
  * is absent by decision: no path anywhere (HC1/HR3 — main sources the cwd from
  * the requester's own registry row), no account field (R10), no permission mode
  * (§0a), and no `from` (HR2 — identity is the connection).
+ *
+ * `expectCreatorId` is the one id on this plane, and it does not weaken that
+ * list. It is not the SENDER's identity, which is still the connection and
+ * nothing else; it is not model-authored, since the sidecar reads it from its
+ * own spawn env (`CATCODE_SIDECAR_CREATED_BY`, host-owned like the cwd) and no
+ * tool argument reaches it; and it can only ever NARROW a delivery, never widen
+ * one, because main resolves the name first and the id is compared against the
+ * row that name already produced. See the field's own comment below.
  */
 export type HostRequestArgs = {
   'peers.list': Record<string, never>
   'peer.create': { prompt: string; model?: string; effort?: string }
-  'peer.deliver': { to: string; text: string }
+  'peer.deliver': {
+    to: string
+    text: string
+    /**
+     * The `appSessionId` this sender remembers as its creator's, sent ONLY when
+     * `to` names that creator (F17, ruling 11 of 2026-09-06;
+     * HOST-REQUEST-PLANE §4 step 1a, PEER-SESSIONS §2).
+     *
+     * Names are released on reap and reissued; ids are not. So main compares
+     * this against the row the name resolved to and refuses
+     * `refused:creator_reissued` when they differ, rather than delivering to
+     * whoever now holds the name. Absent means the ordinary path, unchanged:
+     * the sender is not addressing its creator, or it never had one.
+     */
+    expectCreatorId?: string
+  }
   'peer.ack': { messageId: string }
 }
 

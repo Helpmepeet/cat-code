@@ -126,6 +126,17 @@ export type PeerIdentity = {
   name: string | null
   /** The creating session's name, or null for a user-created session. */
   createdByName: string | null
+  /**
+   * The creating session's `appSessionId`, or null for a user-created session.
+   *
+   * The name above is what the model reads and writes; this is what a send to
+   * the creator is CHECKED against (F17, ruling 11 of 2026-09-06). A name is
+   * released when its row is reaped and may be handed out again, so the
+   * remembered name can come to mean a different session; ids are never reused,
+   * which is why the registry stores `createdBy` as one (PEER-SESSIONS §2).
+   * Never shown to the model and never accepted from it.
+   */
+  createdById: string | null
 }
 
 export function readPeerIdentity(
@@ -133,11 +144,14 @@ export function readPeerIdentity(
 ): PeerIdentity {
   const name = env.CATCODE_SIDECAR_NAME
   const createdByName = env.CATCODE_SIDECAR_CREATED_BY_NAME
+  const createdById = env.CATCODE_SIDECAR_CREATED_BY
   return {
     name: name === undefined || name === '' ? null : name,
     createdByName:
       createdByName === undefined || createdByName === ''
         ? null
         : createdByName,
+    createdById:
+      createdById === undefined || createdById === '' ? null : createdById,
   }
 }

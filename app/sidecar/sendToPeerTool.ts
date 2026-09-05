@@ -41,8 +41,10 @@ import {
 } from '../shared/protocol.js'
 import {
   describeHostRequestError,
+  readPeerIdentity,
   requestPeerHost,
   type PeerHostRequester,
+  type PeerIdentity,
 } from './peerHostRequester.js'
 
 export const SEND_TO_PEER_TOOL_NAME = 'SendToPeer'
@@ -80,6 +82,7 @@ export type SendToPeerOutcome =
   | 'peer_did_not_start'
   | 'peer_did_not_take_it'
   | 'no_such_peer'
+  | 'creator_reissued'
   | 'text_too_large'
   | 'send_failed'
 
@@ -214,6 +217,18 @@ function describeOutcome(
         outcome: 'peer_did_not_take_it',
         summary: `Not delivered. ${to} is open but did not take the message just now. Nothing reached it. You can try once more later or carry on without it.`,
       }
+    // Only main can tell this apart from an ordinary send, and only because the
+    // send carried the remembered creator id (F17, ruling 11). The sentence says
+    // the creator is gone and stops there: offering to write to the session that
+    // holds the name now would be the silent redirect the ruling forbids, and
+    // that session knows nothing about this one's work.
+    case 'refused:creator_reissued':
+      return {
+        to,
+        delivery: 'not_delivered',
+        outcome: 'creator_reissued',
+        summary: `Not delivered. The session called ${to} that created you is gone, and a different session has that name now. Nothing was sent to it. Carry on without it, or tell the user what you were going to ask.`,
+      }
   }
 }
 
@@ -222,9 +237,27 @@ function describeOutcome(
  * to do about it. Nothing here is thrown, so a refusal never reaches the model
  * as a tool error it might read as a bug in its own call.
  */
-function describeError(to: string, error: HostRequestError): SendToPeerResult {
+function describeError(
+  to: string,
+  error: HostRequestError,
+  /** True when `to` named this session's own creator: see `creatorIdFor`. */
+  addressingCreator: boolean,
+): SendToPeerResult {
   switch (error.code) {
     case 'session_not_found':
+      // Two different facts behind one wire code, and the sender can tell them
+      // apart because it knows who created it. A name that resolves to nothing
+      // when it is the CREATOR's name means the creator's row is gone entirely
+      // (F17, ruling 11): the roster cannot help, so the sentence does not send
+      // the model there, and it needs no wire reason of its own.
+      if (addressingCreator) {
+        return {
+          to,
+          delivery: 'not_delivered',
+          outcome: 'no_such_peer',
+          summary: `Not delivered. ${to} created you and that session is gone now. Carry on without it, or tell the user what you were going to ask.`,
+        }
+      }
       return {
         to,
         delivery: 'not_delivered',
@@ -274,8 +307,29 @@ function describeError(to: string, error: HostRequestError): SendToPeerResult {
   }
 }
 
+/** The same normalisation main resolves a name under (`peerRequestPlane.ts`). */
+function nameKey(value: string): string {
+  return value.trim().toLowerCase()
+}
+
+/**
+ * The creator id to send with this message, or null to send none (F17, ruling 11
+ * of 2026-09-06).
+ *
+ * It rides ONLY a message addressed to this session's own creator, by the same
+ * case-insensitive name match main resolves under, so every other send crosses
+ * the plane exactly as it did before. The model neither sees this id nor can
+ * supply one: it comes from the spawn env, which only main writes.
+ */
+function creatorIdFor(to: string, identity: PeerIdentity): string | null {
+  const { createdByName, createdById } = identity
+  if (createdByName === null || createdById === null) return null
+  return nameKey(to) === nameKey(createdByName) ? createdById : null
+}
+
 export function createSendToPeerTool(
   requestHost: PeerHostRequester = requestPeerHost,
+  identity: PeerIdentity = readPeerIdentity(),
 ) {
   return buildTool({
     name: SEND_TO_PEER_TOOL_NAME,
@@ -368,9 +422,14 @@ export function createSendToPeerTool(
         }
       }
 
-      const answer = await requestHost('peer.deliver', { to, text: input.text })
+      const expectCreatorId = creatorIdFor(to, identity)
+      const answer = await requestHost('peer.deliver', {
+        to,
+        text: input.text,
+        ...(expectCreatorId !== null ? { expectCreatorId } : {}),
+      })
       if (!answer.ok) {
-        return { data: describeError(to, answer.error) }
+        return { data: describeError(to, answer.error, expectCreatorId !== null) }
       }
       // Checked, not trusted: see `DELIVER_OUTCOMES`. An outcome outside the
       // closed list is reported as an unconfirmed send, never as a delivery,

@@ -702,14 +702,22 @@ test('a spawn model decides the provider, exactly as a resumed one does', () => 
 })
 
 test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or says neither', () => {
-  const both = buildPeerDoctrine({ name: 'Bear', createdByName: 'Alex' })
+  const both = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
+  })
   expect(both).toStartWith(
     'You are Bear. Alex created you.\n\nPeers are other sessions of the same user',
   )
 
   // A user-created session omits the creator sentence (§5). It must not gain a
   // sentence about a creator that does not exist.
-  const userCreated = buildPeerDoctrine({ name: 'Bear', createdByName: null })
+  const userCreated = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: null,
+    createdById: null,
+  })
   expect(userCreated).toStartWith(
     'You are Bear.\n\nPeers are other sessions of the same user',
   )
@@ -719,7 +727,11 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
 
   // No name at all: no name sentence, rather than a sentence with a hole in it.
   // The block then opens on the guideline itself, with no empty first line.
-  const unnamed = buildPeerDoctrine({ name: null, createdByName: null })
+  const unnamed = buildPeerDoctrine({
+    name: null,
+    createdByName: null,
+    createdById: null,
+  })
   expect(unnamed).toStartWith(
     'Peers are other sessions of the same user in this workspace',
   )
@@ -744,23 +756,37 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
 test('the doctrine is assembled from the spawn env, empty strings and all', () => {
   // The only source it can have: the appended prompt is fixed when the
   // controller is built, before there is a socket to ask main anything on.
-  expect(readPeerIdentity({})).toEqual({ name: null, createdByName: null })
+  expect(readPeerIdentity({})).toEqual({
+    name: null,
+    createdByName: null,
+    createdById: null,
+  })
   expect(
     readPeerIdentity({
       CATCODE_SIDECAR_NAME: '',
       CATCODE_SIDECAR_CREATED_BY_NAME: '',
+      CATCODE_SIDECAR_CREATED_BY: '',
     }),
-  ).toEqual({ name: null, createdByName: null })
+  ).toEqual({ name: null, createdByName: null, createdById: null })
   expect(
     readPeerIdentity({
       CATCODE_SIDECAR_NAME: 'Bear',
       CATCODE_SIDECAR_CREATED_BY_NAME: 'Alex',
+      CATCODE_SIDECAR_CREATED_BY: 'alex-app-session-id',
     }),
-  ).toEqual({ name: 'Bear', createdByName: 'Alex' })
+  ).toEqual({
+    name: 'Bear',
+    createdByName: 'Alex',
+    // F17 — the id is read beside the name, and by the same empty-is-absent
+    // rule. It is what a send to the creator is checked against; the name is
+    // only what the model writes.
+    createdById: 'alex-app-session-id',
+  })
 
   const prompt = buildDesktopSystemPrompt({
     name: 'Bear',
     createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
   })
   expect(prompt).toStartWith(DESKTOP_SYSTEM_PROMPT_ADDENDUM)
   expect(prompt).toContain('You are Bear.')

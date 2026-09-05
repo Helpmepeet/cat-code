@@ -41,8 +41,10 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
+  PEER_DELIVER_REFUSAL_REASONS,
   PROTOCOL_VERSION,
   type ClientFrame,
+  type PeerDeliverOutcome,
   type PermissionContextFrame,
   type ServerFrame,
   type SettingsVerbMessage,
@@ -9623,6 +9625,56 @@ test('HR5/F6 — a result for one verb cannot satisfy another verb schema', asyn
 
   const outcome = await pending
   expect(outcome.ok).toBe(false)
+})
+
+test('F17 — the deliver value schema takes every refusal the wire declares, and nothing else', async () => {
+  // `peerDeliverOutcomeSchema` is DERIVED from `PEER_DELIVER_REFUSAL_REASONS`,
+  // so a reason added to the protocol needs no edit here. That is a claim about
+  // this boundary, not about the constant, so it is checked by running every
+  // declared reason through the real schema, plus one that is not declared.
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
+  const outcomes: PeerDeliverOutcome[] = [
+    'queued_live',
+    'queued_wake',
+    ...PEER_DELIVER_REFUSAL_REASONS.map(
+      reason => `refused:${reason}` as PeerDeliverOutcome,
+    ),
+  ]
+
+  let index = 0
+  for (const outcome of outcomes) {
+    const pending = server.requestHost('peer.deliver', { to: 'Bear', text: 'hi' })
+    const requestId = (
+      received.filter(f => f.kind === 'host.request')[index] as { requestId: string }
+    ).requestId
+    index += 1
+    server.handleData(
+      conn,
+      hostPlaneFrame({
+        type: 'host.result',
+        requestId,
+        ok: true,
+        value: { messageId: 'm1', outcome },
+      }),
+    )
+    expect(await pending).toEqual({ ok: true, value: { messageId: 'm1', outcome } } as never)
+  }
+
+  const pending = server.requestHost('peer.deliver', { to: 'Bear', text: 'hi' })
+  const requestId = (
+    received.filter(f => f.kind === 'host.request')[index] as { requestId: string }
+  ).requestId
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      value: { messageId: 'm1', outcome: 'refused:something_new' },
+    }),
+  )
+  const refused = await pending
+  expect(refused.ok ? null : refused.error.code).toBe('internal_error')
 })
 
 test('HR5/F6 — an unrecognised host error code degrades to the closed union', async () => {

@@ -72,7 +72,7 @@ main → sidecar   host.result   { protocolVersion, sessionId, requestId, ok, va
 |---|---|---|
 | `peers.list` | registry rows in the requester's workspace that carry a name | descriptors: name, appSessionId, engineSessionId (null until the row's first ready frame), status (live/parked/closed), presence (`running` \| `needs_user` \| `idle`, from the `activity` frame, §4 step 4a; absent for a row that is not live), createdBy (resolved to a name, or `gone`), lastActivity, title |
 | `peer.create` | in this order: allocate the name against the registry → spawn through the `createSessionInWorkspace` path (`host.ts:430`) with `name`, `createdBy` (id) and the creator's name in the child's spawn env → persist the row → await that row's `ready` → deliver the creation prompt as a `request` with `generateTitle` on and the text untagged (PEER-SESSIONS §5). Model and effort travel in the spawn env (`CATCODE_SIDECAR_MODEL`, `CATCODE_SIDECAR_EFFORT`, from the request args, which the requesting sidecar filled from its own state); permission mode is neither carried nor inherited (PEER-SESSIONS §0a). No idempotency cache: the sidecar client never auto-retries this verb, and a timeout result tells the model to check `ListPeers` before trying again, because the row is named and visible from the moment it is persisted (`host.ts:484` order). A prompt send rejected after `ready` (`supervisor.send`, `supervisor.ts:459`) keeps the row, since it is a real session the operator can see, and the result names the peer and the failed step so the caller can `SendToPeer` the prompt itself | the new row's name + appSessionId, plus a failed step when one failed |
-| `peer.deliver` | resolve name → row; live: forward `peer.deliver` inbound to that sidecar (the wake-block flag is irrelevant to a live row); parked/closed: refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`), else main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
+| `peer.deliver` | resolve name → row; 🔁 check `expectCreatorId` against that row when the arg is present (§4 step 1a); live: forward `peer.deliver` inbound to that sidecar (the wake-block flag is irrelevant to a live row); parked/closed: refuse if the row's `peerWakeBlocked` is set (`refused:user_stopped`), else main's own restore-then-deliver (§4 step 5); mint `messageId` | outcome enum (§4) + `messageId` |
 | `peer.ack` | release the pending message the RECIPIENT is acking and write its metadata-only operational-log line; the id is looked up in that session's own pending list, so a forged id can only drop the acking session's own message | the `messageId` |
 
 **🔁 AMENDED 2026-09-03 during the build: four verbs, not three.** `peer.ack` was
@@ -86,6 +86,35 @@ A verb on the existing `host.request` frame adds neither a frame kind nor an
 inbound surface, so the security baseline is untouched; only this closed
 allowlist widens. `peer.ack` is not model-facing: no tool reaches it, and its
 argument is an id main itself minted.
+
+**🔁 AMENDED 2026-09-06 (operator ruling 11): `peer.deliver` gains one optional
+arg, `expectCreatorId`.** The audit's F17
+(`docs/prompts/2026-09-05-peer-sessions-instruction-surface-audit.md` §3.8)
+showed the creator link can be routed to the wrong session. A peer learns its
+creator's NAME once, at spawn (`CATCODE_SIDECAR_CREATED_BY_NAME`), names are
+unique only among CURRENT registry rows and are released when a row is reaped
+(`app/host/host.ts` `allocatePeerName`), reaping happens whenever the registry
+passes `MAX_REGISTRY_SESSIONS` (256) and removes closed rows oldest-first
+(`app/host/registry.ts` `enforceBound` / `isReapableForBound`), and a send
+resolves `to` by name against current rows. So: Alex creates Bear, Alex closes,
+the reap takes Alex's row, the pool reissues "Alex", and Bear's next message to
+its creator reaches a stranger. The operator's registry held 224 rows on
+2026-09-04, so the bound is reachable. The ruling: "Fix creator name reuse by
+routing through its stable ID. If the original creator is gone, report that
+clearly. Never silently redirect to whoever now owns its name. Keep names as the
+conversational interface."
+
+What that costs the plane, and why it does not widen it. The arg is the
+`appSessionId` the SENDING sidecar remembers as its creator's, read from
+`CATCODE_SIDECAR_CREATED_BY` in its own spawn env, which only main writes and
+which is the same trust class as the cwd. It is sent only when the trimmed `to`
+matches the remembered creator name under main's own case-insensitive
+normalisation, so every other send crosses unchanged. HR2 is untouched: this is
+not the sender's identity, which is still the connection. HC1/HR3 are untouched:
+the model never sees an id, no tool argument reaches this field, and the NAME is
+still what selects the row. And it can only narrow, never widen: the check runs
+after resolution and its only effect is a refusal. `SendToPeer`'s `to` argument
+does not change.
 
 On the wire, `host.result` and `peer.deliver` are two new variants of
 `SidecarClientMessage` (`protocol.ts:576`), sent through the existing
@@ -175,6 +204,23 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 
 1. Main resolves `to` (a name) against the registry, HR3-scoped. No row →
    `session_not_found`.
+1a. **🔁 ADDED 2026-09-06 (ruling 11, F17).** If the request carries
+   `expectCreatorId` and the row step 1 resolved does not have that
+   `appSessionId`, main refuses `refused:creator_reissued` and delivers nothing.
+   It does not redirect, does not fall back to the row the id names, and does not
+   look for the creator anywhere else: a name released by a reap and handed out
+   again means the remembered creator is gone, and delivering here would put one
+   session's private context into a stranger's transcript. The refusal is typed
+   and logged like every other (step 3), and it runs BEFORE the chain, the token
+   bucket and the duplicate window, so a sender that met a reissued name keeps
+   the allowance it needs for the conversations it can still have. Absent arg =
+   this step does nothing, and the path is the one that shipped.
+
+   The name-not-found case needs nothing here. A creator whose row is gone
+   entirely fails step 1 and is already `session_not_found`; only the SENDER
+   knows it was addressing its creator, so only the sender can word that
+   specially, which `sendToPeerTool.ts` `describeError` does. Main gains one
+   refusal reason, not two.
 2. Main builds the inbound `peer.deliver` frame: `{ from: <requester name>,
    fromSessionId, messageId, text }`. 🔁 The frame carried a `hops` array until
    2026-09-03; it was required, validated at the sidecar and read by nothing, so
@@ -328,7 +374,8 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
 6. The `host.result` reports what happened: `queued_live`, `queued_wake`,
    `refused:<reason>` (reasons include
    `user_stopped`, `hop_loop`, `hop_runaway`, `rate`, `duplicate`,
-   `queue_full`, `wake_failed`, and 🔁 `delivery_failed`, ADDED 2026-09-03
+   `queue_full`, `wake_failed`, 🔁 `creator_reissued` (step 1a, ADDED
+   2026-09-06), and 🔁 `delivery_failed`, ADDED 2026-09-03
    during the build: the recipient was already AWAKE and the hand-off to its
    process failed anyway, which `wake_failed` misreported as a peer that could
    not be brought back), plus the main-minted `messageId`. The sending

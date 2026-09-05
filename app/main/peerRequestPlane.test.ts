@@ -16,6 +16,7 @@ import {
   type PeerRequestPlaneDeps,
 } from './peerRequestPlane.js'
 import {
+  MAX_HOST_REQUEST_ARG_CHARS,
   MAX_HOST_REQUEST_FRAMES_PER_WINDOW,
   MAX_HOST_REQUESTS_PER_WINDOW,
   MAX_PEER_DELIVERY_ATTEMPTS,
@@ -629,6 +630,166 @@ describe('peer.deliver', () => {
     await inflight
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_wake' })
     expect(h.deliveries()).toHaveLength(1)
+  })
+})
+
+/* ------------------------------------------------------------------------- *
+ * F17 / ruling 11 — a remembered creator name can name a different session
+ *
+ * The sender knows WHICH session created it, from its own spawn env; the name
+ * it addresses is only how the model says so. These prove the id narrows the
+ * delivery and can never widen or redirect it, and that a send without the id
+ * is the path that shipped before.
+ * ------------------------------------------------------------------------- */
+
+describe('F17 — the creator is routed by id, never by a reissued name', () => {
+  test('the id is an accepted optional arg, and a matching one delivers as usual', async () => {
+    const h = harness()
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', {
+        to: 'Bear',
+        text: 'ping',
+        expectCreatorId: BEAR,
+      }),
+    )
+
+    expect(h.lastResult()?.value).toEqual({ messageId: 'msg-1', outcome: 'queued_live' })
+    expect(h.deliveries()).toHaveLength(1)
+    // The id is a CHECK, not content: nothing about it reaches the recipient.
+    expect(h.deliveries()[0]?.message).toEqual({
+      type: 'peer.deliver',
+      messageId: 'msg-1',
+      from: 'Alex',
+      fromSessionId: ALEX,
+      text: 'ping',
+    })
+  })
+
+  test('a name now held by a different row is REFUSED, never redirected', async () => {
+    // The reap scenario: the row that created this sender is gone, the pool
+    // handed "Bear" to a new session, and the sender still remembers the old id.
+    const h = harness()
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', {
+        to: 'Bear',
+        text: 'the part you asked me for is done',
+        expectCreatorId: CORAL,
+      }),
+    )
+
+    expect(h.lastResult()?.value).toEqual({
+      messageId: 'msg-1',
+      outcome: 'refused:creator_reissued',
+    })
+    // The whole point: the session now called Bear hears nothing at all.
+    expect(h.deliveries()).toHaveLength(0)
+    // §4 step 3 — typed AND logged, never dropped silently.
+    expect(h.logged).toEqual([
+      {
+        appSessionId: ALEX,
+        from: 'Alex',
+        to: 'Bear',
+        kind: 'request',
+        messageId: 'msg-1',
+        outcome: 'refused:creator_reissued',
+      },
+    ])
+  })
+
+  test('the refusal spends no allowance, so the sender can still write elsewhere', async () => {
+    // It is refused BEFORE the chain, the token bucket and the dedup window, so
+    // a sender that hit a reissued name is not then rate-limited out of the
+    // conversation it can still have.
+    const h = harness()
+    for (let i = 0; i < PEER_SEND_BURST + 2; i++) {
+      await h.plane.handleRequest(
+        ALEX,
+        request(
+          'peer.deliver',
+          { to: 'Bear', text: `note ${i}`, expectCreatorId: CORAL },
+          `req-${i}`,
+        ),
+      )
+      expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:creator_reissued' })
+    }
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hello' }, 'after'),
+    )
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+  })
+
+  test('a non-string id is rejected at validation, and nothing is routed', async () => {
+    const h = harness()
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi', expectCreatorId: 7 }),
+    )
+    expect(h.lastResult()?.error?.code).toBe('bad_request')
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
+  test('an oversize id is rejected on the same bound as every other arg', async () => {
+    const h = harness()
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', {
+        to: 'Bear',
+        text: 'hi',
+        expectCreatorId: 'x'.repeat(MAX_HOST_REQUEST_ARG_CHARS + 1),
+      }),
+    )
+    expect(h.lastResult()?.error?.code).toBe('bad_request')
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
+  test('an id naming a row the name did not select cannot pull that row in', async () => {
+    // It NARROWS: the name still chooses the row, and an id naming a DIFFERENT
+    // live peer refuses rather than routing to the row the id names.
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'hi', expectCreatorId: CORAL }),
+    )
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:creator_reissued' })
+    expect(h.deliveries()).toHaveLength(0)
+  })
+
+  test('a send WITHOUT the id behaves exactly as it did before it existed', async () => {
+    // The same scenario, one carrying a matching id and one carrying none,
+    // produces the same frames, the same result and the same log line.
+    const withId = harness()
+    await withId.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'ping', expectCreatorId: BEAR }),
+    )
+    const without = harness()
+    await without.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'ping' }),
+    )
+
+    expect(without.sent).toEqual(withId.sent)
+    expect(without.logged).toEqual(withId.logged)
+    expect(without.deliveries()).toHaveLength(1)
+  })
+
+  test('validation carries the id through, and omits the key when it is absent', () => {
+    const carried = validateHostRequest(
+      request('peer.deliver', { to: 'Bear', text: 'hi', expectCreatorId: BEAR }),
+    )
+    expect(carried).toMatchObject({
+      ok: true,
+      request: { verb: 'peer.deliver', to: 'Bear', text: 'hi', expectCreatorId: BEAR },
+    })
+    const bare = validateHostRequest(request('peer.deliver', { to: 'Bear', text: 'hi' }))
+    // Absent, not undefined-valued: the delivery path tests for the key.
+    expect(bare.ok && Object.keys(bare.request)).toEqual(['verb', 'to', 'text'])
   })
 })
 

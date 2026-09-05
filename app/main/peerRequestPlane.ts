@@ -204,7 +204,10 @@ const VERB_ARG_KEYS: Record<
 > = {
   'peers.list': { required: [], optional: [] },
   'peer.create': { required: ['prompt'], optional: ['model', 'effort'] },
-  'peer.deliver': { required: ['to', 'text'], optional: [] },
+  // `expectCreatorId` is optional and is checked exactly like `model` /
+  // `effort`: a string, bounded by `MAX_HOST_REQUEST_ARG_CHARS`. It narrows a
+  // delivery and can never widen one (F17, ruling 11; see `handlePeerDeliver`).
+  'peer.deliver': { required: ['to', 'text'], optional: ['expectCreatorId'] },
   'peer.ack': { required: ['messageId'], optional: [] },
 }
 
@@ -259,7 +262,12 @@ function readRequestId(frame: unknown): string | null {
 export type ValidatedHostRequest =
   | { verb: 'peers.list' }
   | { verb: 'peer.create'; prompt: string; model?: string; effort?: string }
-  | { verb: 'peer.deliver'; to: string; text: string }
+  | {
+      verb: 'peer.deliver'
+      to: string
+      text: string
+      expectCreatorId?: string
+    }
   | { verb: 'peer.ack'; messageId: string }
 
 export type HostRequestValidation =
@@ -377,7 +385,14 @@ export function validateHostRequest(frame: unknown): HostRequestValidation {
       return {
         ok: true,
         requestId,
-        request: { verb, to: strings.to as string, text: strings.text as string },
+        request: {
+          verb,
+          to: strings.to as string,
+          text: strings.text as string,
+          ...(strings.expectCreatorId !== undefined
+            ? { expectCreatorId: strings.expectCreatorId }
+            : {}),
+        },
       }
     case 'peer.ack':
       return {
@@ -1219,6 +1234,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
         outcome,
       })
       return { ok: true as const, value: { messageId, outcome } }
+    }
+
+    // §4 step 1a (F17, ruling 11 of 2026-09-06) — the name resolved, but the
+    // sender remembers WHICH session it is writing to, and the two must be the
+    // same row. A peer learns its creator's name once at spawn; a name is
+    // released when its row is reaped and handed out again, so the remembered
+    // name can come to mean a stranger. Refuse rather than redirect: delivering
+    // here would hand one session's private context to another under a name it
+    // never earned. Absent id = the unchanged path, and the id can only ever
+    // rule a delivery out, since the name is what selected the row in the first
+    // place.
+    if (
+      request.expectCreatorId !== undefined &&
+      request.expectCreatorId !== target.appSessionId
+    ) {
+      return refuse('refused:creator_reissued')
     }
 
     // §6 — the wake block is about REOPENING, so an existing row ignores it.

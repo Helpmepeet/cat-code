@@ -31,7 +31,7 @@ import {
   type HostRequestVerb,
   type PeerDeliverOutcome,
 } from '../shared/protocol.js'
-import type { PeerHostRequester } from './peerHostRequester.js'
+import type { PeerHostRequester, PeerIdentity } from './peerHostRequester.js'
 import type { HostRequestOutcome } from './sidecarServer.js'
 import {
   createSendToPeerTool,
@@ -78,11 +78,23 @@ function failing(error: HostRequestError) {
   return fakeRequester({ 'peer.deliver': { ok: false, error } })
 }
 
+/**
+ * A session with no peer identity of its own, which is what the process env
+ * gives every test that does not ask for one. `undefined` here would fall
+ * through to `readPeerIdentity()` and read the real environment.
+ */
+const ANONYMOUS: PeerIdentity = {
+  name: null,
+  createdByName: null,
+  createdById: null,
+}
+
 async function send(
   requestHost: PeerHostRequester,
   input: { to: string; text: string },
+  identity: PeerIdentity = ANONYMOUS,
 ): Promise<SendToPeerResult> {
-  const result = await createSendToPeerTool(requestHost).call(input)
+  const result = await createSendToPeerTool(requestHost, identity).call(input)
   return result.data
 }
 
@@ -395,4 +407,121 @@ test('the tool keeps a stable name and is not read-only', () => {
   expect(tool.name).toBe(SEND_TO_PEER_TOOL_NAME)
   expect(tool.name).toBe('SendToPeer')
   expect(tool.isReadOnly()).toBe(false)
+})
+
+/* ------------------------------------------------------------------------- *
+ * F17 / ruling 11 — the creator is addressed by name and checked by id
+ * ------------------------------------------------------------------------- */
+
+/** Bear, created by Alex, the way a spawn env describes it. */
+const BEAR_OF_ALEX: PeerIdentity = {
+  name: 'Bear',
+  createdByName: 'Alex',
+  createdById: 'alex-app-session-id',
+}
+
+test('a message to the creator carries the remembered id, and only that message', async () => {
+  const toCreator = delivering('queued_live')
+  await send(toCreator.requestHost, { to: 'Alex', text: 'done' }, BEAR_OF_ALEX)
+  expect(toCreator.calls).toEqual([
+    {
+      verb: 'peer.deliver',
+      args: { to: 'Alex', text: 'done', expectCreatorId: 'alex-app-session-id' },
+    },
+  ])
+
+  // Every other name goes over the wire exactly as it did before: the check
+  // exists because this session was TOLD who created it, and it knows nothing
+  // about who any other name belongs to.
+  const toAnyone = delivering('queued_live')
+  await send(toAnyone.requestHost, { to: 'Coral', text: 'hi' }, BEAR_OF_ALEX)
+  expect(toAnyone.calls).toEqual([
+    { verb: 'peer.deliver', args: { to: 'Coral', text: 'hi' } },
+  ])
+})
+
+test('the creator match is the one main resolves under: case and spacing', async () => {
+  const lowered = delivering('queued_live')
+  await send(lowered.requestHost, { to: '  alex ', text: 'done' }, BEAR_OF_ALEX)
+  // `to` is trimmed before it is sent, and the name compared case-insensitively,
+  // so a model writing the name in any casing gets the check rather than
+  // silently falling onto the unchecked path.
+  expect(lowered.calls).toEqual([
+    {
+      verb: 'peer.deliver',
+      args: { to: 'alex', text: 'done', expectCreatorId: 'alex-app-session-id' },
+    },
+  ])
+})
+
+test('a session with no creator sends no id, whatever name it writes to', async () => {
+  const userCreated = delivering('queued_live')
+  await send(userCreated.requestHost, { to: 'Alex', text: 'hi' }, {
+    name: 'Bear',
+    createdByName: null,
+    createdById: null,
+  })
+  expect(userCreated.calls).toEqual([
+    { verb: 'peer.deliver', args: { to: 'Alex', text: 'hi' } },
+  ])
+})
+
+test('a reissued creator name is reported as the creator being gone, with no redirect', async () => {
+  const result = await send(
+    delivering('refused:creator_reissued').requestHost,
+    { to: 'Alex', text: 'the part you asked for is done' },
+    BEAR_OF_ALEX,
+  )
+
+  expect(result.delivery).toBe('not_delivered')
+  expect(result.outcome).toBe('creator_reissued')
+  expect(result.summary).toContain('that created you is gone')
+  expect(result.summary).toContain('a different session has that name now')
+  // Ruling 11: never offer the session that holds the name now as a substitute.
+  expect(result.summary).not.toContain('ListPeers')
+  expect(result.summary).not.toContain('try again')
+})
+
+test('a creator whose row is gone entirely is said so, without sending the model to the roster', async () => {
+  const gone = await send(
+    failing({ code: 'session_not_found', message: 'no row' }).requestHost,
+    { to: 'Alex', text: 'done' },
+    BEAR_OF_ALEX,
+  )
+
+  expect(gone.delivery).toBe('not_delivered')
+  expect(gone.outcome).toBe('no_such_peer')
+  expect(gone.summary).toContain('Alex created you and that session is gone now')
+  // The roster cannot help: the creator is not in it. The same code for any
+  // other name still points there, because there it is the right advice.
+  expect(gone.summary).not.toContain('ListPeers')
+
+  const stranger = await send(
+    failing({ code: 'session_not_found', message: 'no row' }).requestHost,
+    { to: 'Coral', text: 'hello' },
+    BEAR_OF_ALEX,
+  )
+  expect(stranger.summary).toContain('ListPeers')
+})
+
+test('neither new sentence carries an id or an em dash', async () => {
+  // CLAUDE.md §7: a tool result is a user-visible surface.
+  const reissued = await send(
+    delivering('refused:creator_reissued').requestHost,
+    { to: 'Alex', text: 'done' },
+    BEAR_OF_ALEX,
+  )
+  const gone = await send(
+    failing({ code: 'session_not_found', message: 'no row' }).requestHost,
+    { to: 'Alex', text: 'done' },
+    BEAR_OF_ALEX,
+  )
+
+  for (const sentence of [reissued.summary, gone.summary]) {
+    expect(sentence).not.toContain('\u2014')
+    expect(sentence).not.toContain('alex-app-session-id')
+    // And each says what to do next, which is what every other sentence here
+    // is held to.
+    expect(sentence).toContain('tell the user what you were going to ask')
+  }
 })
