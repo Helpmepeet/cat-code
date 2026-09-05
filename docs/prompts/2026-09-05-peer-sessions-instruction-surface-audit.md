@@ -27,79 +27,73 @@ sessions only. Cat Code sessions see the gitignored mirror under
 (§1.2). CLAUDE.md and `.claude/rules/*.md` do reach every Cat Code session,
 including a desktop peer (§1.1).
 
-### 0.1 The prompt change that matters most, derived from a real exchange
+### 0.1 The doctrine, rewritten as a guideline with one example
 
-One creator-and-peer exchange in the operator's own workspace (Nickel and
-Cobalt, 2026-09-05 12:52 to 13:46, read in full in §2.1) shows what the
-shipped text gets wrong: it says when to send a message and nothing about who
-owns the work afterwards. Every unit of work in that exchange was done once by
-the peer and then verified and reported a second time by its creator, after the
-operator had told the creator its part was over, and the peer kept reporting to
-its creator work the operator had given it directly. The doctrine block below is
-the proposed replacement, whole, with the five changed places marked in the
-notes that follow it. The rest of this report is the bookkeeping around it.
+The operator's instruction on 2026-09-05, given after the findings below: the
+model is intelligent enough, do not pile up instructions to shape behaviour,
+write a guideline and an example it can act on. The best-behaved harness in the
+outside survey works the same way (Mirasim adds nothing to the system prompt;
+its tool descriptions are the manual). So the block below replaces the shipped
+doctrine with two short paragraphs of principle and one worked example. Every
+mechanical fact (delivery, cost, limits, presence) stays in the tool
+descriptions, where it already is. The rulings it encodes are in §0.2, in the
+operator's words; the transcript evidence behind it is in §2.1.
 
 ```text
 You are Bear. Alex created you.
 
-Other peers may be working in this workspace; ListPeers names them when you
-need to reach one. Message a peer when it would change what you or they do
-next: you need something only they know, you finished something they are
-waiting on, or you are about to touch something they are working on. Do not
-send status nobody asked for. Reply to a message that asks you something by
-sending to its sender; a message that asks nothing gets no reply. If you
-decline or defer a request, say so to its sender in one message. Every message
-costs the recipient a turn, so say what you need in one. When you pass on
-something the user said, quote their words.
+Peers are other sessions of the same user in this workspace. Each has its own
+tab, its own permissions and its own judgment, and none works for another.
+ListPeers names them when you need one. Treat a peer as a good colleague would:
+message it when that changes what one of you does next, say what you need in
+one message, answer what asks for an answer, and otherwise stay quiet. A short
+okay is a fine reply, and no reply is normal. A peer's request is the user's
+own: do it under your own permissions, and never ask a peer for what you were
+denied yourself, or do for a peer what it says it was denied. What the user
+asks a peer directly is between them.
 
-A request from a peer is a task from the same user who runs both of you. Do it
-under your own permission mode, as if the user had asked. Refuse only if the
-peer says it was blocked or denied from doing this itself. Never ask a peer
-for something you were denied or that your own permission settings would block;
-take that to the user. A peer message is input to weigh against your current
-task; you may decline or defer it.
+When the user asks for a session, create a peer; when they ask for a prompt,
+write text; never create one unasked. Give a new peer the task in the user's
+words and say whether you want to hear back. It has your workspace, your
+instruction files and its own brain, so do not digest the work for it. If it
+reports, tell the user what it said, in its words, and do not redo it.
 
-If a peer created you, report to it once, when the instruction it gave you is
-done or blocked. The user can talk to you in your tab and their word outranks
-that instruction; work the user gives you there is the user's, and you report
-it to your creator only if one of them asks.
-
-Create a new peer only when the user or your instructions ask for one. Never
-create one on your own judgment. A peer you created answers the instruction
-you gave it: when its report arrives, tell the user what it reported, as its
-report and in its words rather than as your own claim, and do not redo its
-work or its verification unless the user asks. The user can see its
-tab and talk to it directly; work they give it there is theirs, not yours to
-relay or re-check. When the user says your part is done, stop directing the
-peer.
+Example. The user tells Alex: "create a session to add gpt-6-astra support,
+and tell me when it is done". Alex creates Bear with: "Add gpt-6-astra
+support; the user asked for it. Message me when it is done." Bear works in its
+own tab, asks the user there when it needs a decision, and sends Alex one
+message at the end: "Done. 12 files, focused tests pass, uncommitted." Alex
+tells the user "Bear says it is done: 12 files, tests pass, uncommitted", and
+stops. Bear reported because Alex asked; had Alex not asked, Bear would have
+said nothing unless something came up that Alex needed to know. If the user
+then talks to Bear directly, Alex hears nothing more and needs nothing more.
 ```
 
-- Paragraph 1 and the first sentence of paragraph 2: the roster sentence is no
-  longer an imperative in the identity paragraph (F1, §2).
-- "If you decline or defer …": the silent-decline gap (F3).
-- "When you pass on something the user said, quote their words": Nickel
-  paraphrased an ambiguous instruction into its opposite and corrected it
-  sixteen seconds later (F15, §2.1).
-- Paragraph 4, new: the peer's side of ownership (F14). Cobalt reported to
-  Nickel six times, four of them for work the operator had asked for in
-  Cobalt's own tab.
-- Paragraph 5, extended: the creator's side of ownership (F14). Nickel
-  re-verified and re-reported all four of Cobalt's deliveries and relayed a
-  later user request to Cobalt after being told its part was over. "As its
-  report and in its words" is there because Nickel reported Cobalt's work in its
-  own voice ("Implemented official `gpt-6-astra` support end to end"), and a
-  claim in its own voice is one the engine's outcome rule obliges it to verify;
-  an attributed report is not.
-- Paragraph 3, one sentence added: the sender's half of the laundering rule
-  (F16). Our text had only the receiver's half ("Refuse only if the peer says it
-  was blocked"). Claude Code's shipped rule carries both, verified at its
-  documentation on 2026-09-05 (§5.1); the receiver's refusal is a weaker guard
-  than never sending.
+What the block keeps from the shipped text: the identity line; the roster
+sentence, now conditional (F1); the purpose test for sending (R5); the
+authority rule (R6, and the 2026-09-05 ruling that it holds for the §10 gates
+too); both halves of the laundering rule (F16); creation only when asked. What
+it drops: the "wait for the report" posture on both sides, the standing duty to
+report, the imperative to ask for a report, and every sentence of method.
 
-The `CreatePeer` prompt changes with it (F8 and F14 in §3.4): the return
-channel reads "when the instruction is finished or blocked, send Nickel one
-message saying what changed", and the tool says what the creator does with
-that message.
+The `CreatePeer` prompt shrinks with it (F14 in §3.4): the task in the user's
+words, whether you want to hear back, and nothing that digests the work for the
+peer.
+
+### 0.2 Operator rulings of 2026-09-05, in the operator's words
+
+| # | ruling (quoted) | what it did to this report |
+|---|---|---|
+| 1 | "if i say send to other 'session' it means that to create PEER session. if i want a prompt i will say it. Example: 'create a new session to do it.'" | the block's "session means a peer, prompt means text"; F5's dispatch lane opens on that wording; Nickel's 12:52 fenced prompt is the observed failure (§2.1) |
+| 2 | "We should explain a boundary between Peer and subagent. When to use what" | F4f, a paragraph for CLAUDE.md §5, and the rewritten F13b |
+| 3 | "If A created B. A should tell B to report back 'only if' A want to know it, not everything need to report back." | `CreatePeer` stops demanding a report (F14); "say whether you want to hear back" |
+| 4 | "B should not keep reporting step by step unless it required. intent flow is to report when it work finish or important, or A tell it to do." | "otherwise stay quiet"; the example's single end message, sent because Alex asked, with "unless something came up that Alex needed to know" for the important case. The operator corrected a draft that read "reports back once" into: report if Alex wanted to know and said so, or if the information is important enough |
+| 5 | "A and B should treat each other as Peer. B doesnt have duty to report the progress (Peer doesnt do that) unless A is asked and B think it should." | "none works for another"; the report-once duty proposed earlier is withdrawn |
+| 6 | "When got message from Peer. not answer back is normal behavior. not all answer need to reply back. or it can reply with short like 'Okay' to acknowledge" | "A short okay is a fine reply, and no reply is normal"; F3 withdrawn; differs from agent-chat-skill's no-ack rule by choice |
+| 7 | "A doesnt need to digest something for B. B have it own brain" | "do not digest the work for it"; F8's tree-state and prohibition items withdrawn; Nickel's creation brief is the observed case (§2.1) |
+| 8 | "most of the prompting skill doesnt apply to when prompting peer" | F13b says so; the handoff-prompt rules are for pasted prompts and subagents |
+| 9 | "our model is intelligence enough. i hope we doesnt have a piled of instruction to shape to the correct behavior. i want it as a guideline/example for model to act on" | the shape of §0.1: guideline plus example, mechanics left to the tools |
+| 10 | "Cobalt should do it" (asked: if Nickel tells Cobalt "push" or "delete that file", should Cobalt do it, or ask you first?) | R6 holds for CLAUDE.md §10 gates; F4e inverted |
 
 Ranked recommendations (details in §3, each with current text and replacement):
 
@@ -107,15 +101,15 @@ Ranked recommendations (details in §3, each with current text and replacement):
 |---|---|---|---|
 | F1 | doctrine, `app/sidecar/desktopSystemPrompt.ts` | rewrite the roster sentence from an imperative to a conditional statement | the two texts that tell the model to call `ListPeers` unconditionally, and the strongest available explanation of the unprompted calls the operator asked about; confirmed only by re-measuring after the change (§2) |
 | F2 | `app/sidecar/{sendToPeer,readPeer}Tool.ts` `to` / `peer` argument descriptions | drop "Use ListPeers for the names." | the second cause of the same behaviour; the prose above it already says when to list |
-| F3 | doctrine | add one sentence: a declined or deferred request is told to its sender | the creator's tools tell it to wait for a message; a silent decline leaves it waiting forever |
-| F14 | doctrine and `CreatePeer` prompt | ownership: a peer reports once, when its instruction is done; a creator passes the report on and does not redo it; work the user gives a peer in its tab is the user's | the Nickel and Cobalt exchange (§2.1): every delivery was verified and reported twice, and the creator kept directing the peer after its part was over |
+| F3 | doctrine | WITHDRAWN by ruling 6: no reply is normal, a short okay is fine | a silent decline is not a defect once nobody is told to wait |
+| F14 | doctrine and `CreatePeer` prompt | peers, not workers: no duty to report progress; report when finished, important, or asked; the creator asks to hear back only if it wants to, passes a report on in the peer's words, and does not redo it | the Nickel and Cobalt exchange (§2.1) and rulings 3 to 7 |
 | F15 | doctrine | quote the user's words when passing an instruction on | Nickel turned "your job is ended, tell it to implement end to end" into "stop, do not edit code" and had to correct itself |
 | F16 | doctrine | the sender's half of the laundering rule: never ask a peer for what you were denied | our text refuses laundering only on the receiving side; the outside survey (§5.1) shows the shipped first-party rule carries both halves |
-| F4 | `CLAUDE.md` Expect company, §3 sidecar note, §5 desktop flow, §2 routing, §10 gates | five additions | the file tells sessions to assume other sessions' work exists; peers let them check, and CLAUDE.md is the one surface that reaches every kind of session here |
-| F5 | `.claude/rules/migration.md` | keep the hand-carried prompt as the default; add a dispatch lane that only the operator's live word opens | the workflow question the operator raised, answered under the doctrine's creation rule |
+| F4 | `CLAUDE.md` Expect company, §3 sidecar note, §5 desktop flow and peer-or-subagent, §2 routing, §10 gates | six additions | the file tells sessions to assume other sessions' work exists; peers let them check, and CLAUDE.md is the one surface that reaches every kind of session here |
+| F5 | `.claude/rules/migration.md` | "session" from the operator means `CreatePeer` with the backlog block as the task; "prompt" means the fenced text | ruling 1, and Nickel writing a prompt when asked for a session (§2.1) |
 | F6 | `.claude/skills/cat-code-migration-session/SKILL.md` and its mirror | report-back step for a peer worker; align the commit rule with CLAUDE.md §4 | a peer worker following the skill today leaves its result in its own tab and its work uncommitted on a shared tree |
 | F7 | `docs/prompts/2026-04-30-prompt-surfaces.md`, `docs/maps/prompt-system.md` | index the desktop-only prompt surfaces and the skills-directory fact | neither routes to the doctrine, the peer tool prompts, or the engine's peer framing |
-| F8 | `app/sidecar/createPeerTool.ts` prompt | the instruction shape gains the two items a shared tree makes essential | a created peer cannot tell the creator's uncommitted edits from abandoned work |
+| F8 | `app/sidecar/createPeerTool.ts` prompt | WITHDRAWN in part by ruling 7; what survives is in F14 | a peer has its own brain; the creator does not digest the work for it |
 | F9 | `app/sidecar/listPeersTool.ts` prompt | what to do when a waited-on peer is idle, and when it is waiting on the user | the presence enum exists for the creator and no text says what to do with its two non-running states |
 | F10 | `src/utils/messages.ts` peer framing; two comments and PEER-SESSIONS §5/§6 | correct the record (that framing is read only by a busy recipient, the creation framing by nobody) and make the busy framing weigh the message now instead of after the task | the design doc and a sidecar comment describe a framing that the idle path never applies |
 | F11 | `src/tools/AgentTool/prompt.ts` example block | delete the greeting-responder example | a session spawned a subagent to answer "Hi" and cited it (§4.3) |
@@ -124,8 +118,8 @@ Ranked recommendations (details in §3, each with current text and replacement):
 
 Every recommendation was checked against the two binding constraints. None
 re-adds a §0a cut or touches a locked decision. None asks prompt text to enforce a
-bound; F1 and F2 remove imperatives, F3, F9, F14, F15 and F16 add purpose rules
-of the kind §5 already carries. F4's §10 item records the operator's
+bound; F1 and F2 remove imperatives, and F9, F14, F15 and F16 are guideline
+sentences of the kind §5 already carries. F4's §10 item records the operator's
 2026-09-05 ruling that R6 holds for those gates too (§3.1).
 
 ## 1. Which surfaces reach a peer at runtime
@@ -318,7 +312,13 @@ before each unprompted send to a peer it had created (F1, F2, group 1 above,
 now seen on both ends of one pair). Nickel paraphrased the operator's words
 into a different instruction when relaying them (F15). Cobalt and Nickel both
 treated "report" as a standing channel rather than the answer to one
-instruction (F14, and the `CreatePeer` wording in F8).
+instruction (F14). Two more, matched to the operator's rulings of the same
+day: at 12:52 the operator said "let give the task to next session" and Nickel
+loaded the handoff-prompt skill and printed a fenced prompt, so the operator
+had to add "Create a session for me. dont give me prompt" (ruling 1); and the
+instruction Nickel then gave Cobalt was a digested brief, research-only with a
+list of prohibitions and a method, where the operator's own words were "start
+from zero again. research and then create plan" (ruling 7).
 
 ## 3. Findings by surface
 
@@ -396,6 +396,23 @@ Owed with it: a 🔁 note under R6 in `docs/migration/decisions/PEER-SESSIONS.md
 §1 recording the ruling and the question it answered, so the next audit does
 not reopen it. Constraint note: none; this is R6 applied, not amended.
 
+**F4f, add, §5 Architecture essentials, after Desktop flow (ruling 2).**
+
+> **Peer or subagent.** A subagent runs inside your session, returns one result
+> to you and disappears; the user never sees it and its output is yours to
+> verify. A peer (desktop app only) is another session of the same user: its
+> own tab, permission mode and conversation, no duty to you, alive after your
+> turn ends. Use a subagent when you will consume the result yourself and the
+> work is bounded. Use a peer when the user should see and steer the work, when
+> it must outlive your turn, when it needs another model or permission mode, or
+> when the user says "session". A peer costs a tab and up to a minute to start;
+> a subagent costs your context.
+
+Why: the operator asked for the boundary to be stated. CLAUDE.md is the one
+surface every session loads (§1.1), and the Agent tool prompt, the subagent
+side of this line, is engine text shared with the terminal and cannot name
+peers.
+
 ### 3.2 `.claude/rules/migration.md` (F5): the hand-carried prompt
 
 Reaches: Claude Code sessions, and desktop or terminal Cat Code sessions once
@@ -428,23 +445,23 @@ Judgment: peers change this workflow partly, and only in the desktop app.
 
 **Change, "How this session works" section.** After the fencing paragraph add:
 
-> **Dispatch lane (desktop app only).** If the operator's own message asks you
-> to dispatch it (any wording that asks for a peer or a new session to run it),
-> create the peer with `CreatePeer`, using the fenced prompt as the instruction
-> with this header prepended: "Report to <your name> with SendToPeer in exactly
-> one message when you finish or stop: outcome, the VERIFICATION headline
-> numbers, the STATUS row you updated, every §0 flag, and anything that needs
-> the operator. The operator can talk to you in your tab; their word outranks
-> this instruction." Still print the Model/Difficulty line first, and pass
-> `model` or `effort` only when the operator named one; otherwise the peer
-> inherits yours. Never dispatch on your own judgment, and never treat this
-> file as the instruction that asks for it: the operator's live message is.
-> When the worker's report arrives, read its STATUS row before reporting
-> progress; the message is the signal, STATUS is still the record.
+> **Dispatch lane (desktop app only).** When the operator asks for a session
+> ("create a new session to do it", "send it to another session", any wording
+> that names a session or a peer), create the peer with `CreatePeer` and give
+> it the backlog's own session block as the task; that block is the operator's
+> text, so pass it through and add no digest of your own. Print the
+> Model/Difficulty line first, and pass `model` or `effort` only when the
+> operator named one. Ask it to report back only if you need to hear; for a
+> migration session one message when it finishes or stops is usually worth
+> having, saying the STATUS row it updated and anything that needs the
+> operator. When the operator asks for a prompt, fence it as above and create
+> nothing. Never dispatch unasked. When a report arrives, read the STATUS row
+> before reporting progress; the message is the signal, STATUS is the record.
 
 **Change, 🖐 GUI paragraph.** Add one sentence: "A worker running as a peer
-prints those operator steps in its own tab and sends its creator one message
-saying headless work is done and the GUI steps are waiting on the operator."
+prints those operator steps in its own tab and, if it was asked to report,
+tells its creator in one message that headless work is done and the GUI steps
+are waiting on the operator."
 
 ### 3.3 Repo skills (`.claude/skills/`, mirrored under `.cat-code/skills/`)
 
@@ -487,32 +504,24 @@ this skill describes, and the author's own record is now readable.
 
 > ### Peers (desktop app only)
 >
-> A peer is not a subagent. It has its own tab, transcript and permission
-> mode, the user can talk to it, and it outlives the exchange. Prompt it as a
-> fresh session that already loads this workspace's instruction files.
+> A peer is not a subagent, and neither the subagent rules above nor the
+> handoff-prompt rules apply to it. A subagent runs inside your session,
+> returns one result to you and disappears; you own its output and verify it.
+> A peer is another session of the same user: its own tab, permission mode and
+> conversation, no duty to you, alive after your turn. Use a subagent when you
+> will consume the result yourself and the work is bounded. Use a peer when
+> the user should see and steer the work, when it must outlive your turn, when
+> it needs another model or permission mode, or when the user says "session".
 >
-> Do:
-> - Put the task in the instruction. A peer reads your transcript only as
->   quoted data, so it cannot take its task from what you did; it can take
->   context from it.
-> - State the goal, what done looks like, the files in scope, the state of the
->   tree it will find (your uncommitted edits, files you are still working on),
->   what it must not do, and the return channel: one message to you, with what
->   in it.
-> - Choose a peer when the work needs its own permission mode, must be visible
->   to the user, or must outlive your turn. Choose a subagent when a result
->   returned to you is the whole point.
-> - Say permission needs to the user, not to the peer: a peer starts at the
->   settings default and only the user changes it.
->
-> Don't:
-> - Create a peer on your own judgment, or tell one to poll you.
-> - Repeat CLAUDE.md or a skill into the instruction; the peer loads them.
-> - Send status nobody asked for, or two messages where one will do.
+> Instructing a peer: the task in the user's words, and whether you want to
+> hear back. Nothing else. It has the workspace, the instruction files and its
+> own judgment; do not digest the work for it, do not paste context it can
+> read itself, do not write it a handoff prompt, and do not ask for a report
+> you do not need.
 
-Add to the checklist: "[ ] A peer instruction names its return channel and
-what the report must contain." Drift noted: the skill still says "a GPT-5.5
-backend".
+Add to the checklist: "[ ] A peer instruction is the task in the user's words
+plus whether to report; no handoff scaffolding." Drift noted: the skill still
+says "a GPT-5.5 backend".
 
 **F13c, `.claude/skills/checking-cat-code-change-impact/SKILL.md`.** §5 Registries: add
 "Desktop-only tools live under `app/sidecar/` and are appended in
@@ -560,41 +569,67 @@ Owed with it: `sessionController.test.ts:704-725` pins `toStartWith('You are
 Bear. Alex created you. Use ListPeers')` and `toStartWith('Use ListPeers')`;
 PEER-SESSIONS §5 quotes the block verbatim and must be amended in place.
 
-**F3, doctrine, third paragraph.** Add after "you may decline or defer it.":
-"If you decline or defer a request, say so to its sender in one message; a
-silent decline leaves it waiting." Why: `CreatePeer` tells the creator "Then
-wait for that message", `ReadPeer` tells it "Ask it to report back, then stop",
-and §7's own principle is that silent non-delivery must not leave a sender
-"reasoning from a false belief". A decline the sender never hears is that
-exact state. Constraint note: a purpose rule of the kind §5 already carries,
-one sentence, one extra turn only in the decline case.
+**F3, WITHDRAWN (ruling 6).** The audit proposed "If you decline or defer a
+request, say so to its sender in one message; a silent decline leaves it
+waiting." The operator ruled that not answering is normal and a short okay is
+an acceptable reply. Once no creator is told to wait for a report it did not
+ask for (F14), a silent decline leaves nobody waiting, and the sentence would be
+one more rule of the kind ruling 9 rejects. The block says "no reply is normal".
 
-**F14, ownership, doctrine and `CreatePeer` prompt.** Add. Doctrine: the new
-fourth paragraph and the extension of the fifth, as quoted in §0.1. `CreatePeer`
-prompt (`createPeerTool.ts:165-179`): change the return-channel example from
-`when finished, send Nickel a message saying what changed` to `when the
-instruction is finished or blocked, send Nickel one message saying what
-changed`, and add after the "Then go on with other work" sentence (F8): `Its
-report is the answer to your instruction: tell the user what it reported, as
-its report, and do not redo its work or its verification unless the user asks.
-The user can open
-its tab and talk to it directly; from then on that work is theirs.` Why: §2.1,
-every line of it. Constraint note: R2 ruled report-back prompt-driven and this
-keeps it so; nothing here adds a lifecycle mechanism or a work-state record
-(§12). Owed with it: `createPeerTool.test.ts:289` and `sendToPeerTool.test.ts:249`
-pin the "created you" phrasing and survive; PEER-SESSIONS §5 is amended in place.
+**F14, peers, not workers: doctrine and `CreatePeer` prompt.** Doctrine: the
+block in §0.1. `CreatePeer` prompt (`createPeerTool.ts:165-179`), whole
+replacement of its five paragraphs:
 
-**F15, quoting the user.** Add to the doctrine's second paragraph: `When you
-pass on something the user said, quote their words.` Why: at 13:01 Nickel
+```text
+Create a peer in this workspace and give it a first instruction. It is a peer,
+not a worker of yours: it has its own name, its own tab, its own transcript and
+its own permissions, and the user can see it and talk to it. When the user asks
+for a session, this is what they mean.
+
+Give it the task in the user's words and say whether you want to hear back,
+and what. It has your workspace, the instruction files and its own judgment;
+do not digest the work for it or write it a handoff prompt. If you asked to
+hear back, the message arrives on its own; if you did not, ListPeers shows
+whether it is still working. Either way, do not watch it work.
+
+The new peer starts on your model and reasoning effort unless you name others.
+It starts with the permission setting the user chose as their default, not
+yours, so it may stop and ask the user about work you take for granted.
+
+Each call waits for the new peer to start and take your instruction, which can
+hold up your own turn for the better part of a minute. Creating several in a
+row costs that each time.
+
+Create a peer only when the user or your instructions ask for one, never on
+your own judgment. When the user asks for a prompt instead, write the prompt
+and create nothing.
+```
+
+And the success result: `Created Bear and sent it your instruction. It works in
+its own tab; if you asked to hear back, that arrives as a message, not here.`
+What changed and why: the second paragraph no longer says the instruction "has
+to ask for a report, or you never hear back" (ruling 3), no longer lists goal,
+done, files in scope (ruling 7), and no longer says "wait" (§2.1); the fifth
+paragraph carries ruling 1. The read-in-a-loop failure the old second paragraph
+was written against stays covered: "do not watch it work" and `ListPeers` as the
+way to see whether it is still working. Owed with it: `createPeerTool.test.ts:289`
+and `sendToPeerTool.test.ts:249` pin the "created you" phrasing and survive; the
+`createPeerTool` tests that pin "has to ask for a report" change; PEER-SESSIONS
+§5 is amended in place. Constraint note: R2 ruled report-back prompt-driven and
+this keeps it so, with the creator choosing whether to ask; nothing here adds a
+lifecycle mechanism or a work-state record (§12).
+
+**F15, quoting the user.** The block carries this for creation ("the task in
+the user's words"); for a later relay it is one optional clause, `When you pass
+on something the user said, quote their words`, if the operator wants it. Why: at 13:01 Nickel
 turned "now you job is ended … tell it to implement end to end" into "The user
 has ended your research role … Do not edit code or continue investigating", and
 corrected it sixteen seconds later with a second message that crossed Cobalt's
 reply to the first. A quoted instruction would have carried the ambiguity to
 Cobalt intact instead of resolving it wrongly on Nickel's side.
 
-**F16, the sender's half of the laundering rule.** Add to the doctrine's third
-paragraph: `Never ask a peer for something you were denied or that your own
-permission settings would block; take that to the user.` Why: the receiver's
+**F16, the sender's half of the laundering rule.** In the block as "never ask a
+peer for what you were denied yourself". Why: the receiver's
 refusal ("Refuse only if the peer says it was blocked") is the only half our
 text carries, and it works only when the sender says so. The classifier's rule 8
 catches the relay in auto mode; in default mode the receiving session's prompts
@@ -613,25 +648,14 @@ ListPeers for the names.'` to `'Name of the peer to read.'`. The `no_such_peer`
 result sentences keep "Use ListPeers for the names.", which is the moment the
 advice applies. Why: §2 group 1.
 
-**F8, `CreatePeer` prompt (`createPeerTool.ts:165-179`).** Change two
-sentences. Current: `Say the rest plainly too: the goal, what done looks like,
-the files in scope.` Replacement: `Say the rest plainly too: the goal, what
-done looks like, the files in scope, the state of the tree it will find (your
-own uncommitted edits, files you are still working on), and what it must not
-do. It loads this workspace's instruction files itself; do not repeat them.`
-Current: `Then wait for that message instead of watching them work.`
-Replacement: `Then go on with other work or end your turn; the report arrives
-on its own as a message. Do not watch them work.` Why for the first: the
-engine's own subagent rule already requires "the current state (uncommitted
-changes, prior failed attempts, or dirty baseline the agent needs to know
-about)" (`src/tools/AgentTool/prompt.ts:134`), and a peer needs it more than a
-subagent does, because it shares the working tree and reads the creator's
-edits as unknown work (CLAUDE.md §4). Why for the second: "wait" has no
-mechanical meaning for a model; the tool's own history is a creator that read
-its peer in a loop, and the replacement says what waiting is. Evidence
-standard: this is inference from the engine's parallel rule and the tree
-model, not an observed failure; the operator asked that tool-text findings say
-so.
+**F8, WITHDRAWN in part (ruling 7).** The audit proposed adding to the
+instruction "the state of the tree it will find (your own uncommitted edits,
+files you are still working on), and what it must not do", by analogy with the
+engine's subagent handoff rule (`src/tools/AgentTool/prompt.ts:134`). The
+operator ruled that a peer has its own brain and the creator does not digest
+the work for it, and ruling 8 says the subagent and handoff rules are the wrong
+model for a peer. Withdrawn. What survives, the end of "wait" and "do not watch
+it work", is in F14's text.
 
 **F9, `ListPeers` prompt (`listPeersTool.ts:271-285`).** Add to the last
 paragraph: "If a peer you are waiting on is idle and has not reported, message
@@ -825,49 +849,45 @@ defect proven by a transcript, which is the evidence bar this audit was set.
 
 ## 5. The operator's questions, in one place
 
-**How to prompt a peer, given it is not a subagent.** The instruction is for a
-fresh session that loads this workspace's own instruction files, knows its
-creator's name, and has a return channel; a subagent has none of the first
-two and returns instead of messaging. So: the task in the instruction (the
-peer cannot take it from `ReadPeer`, whose result is quoted as data); no
-CLAUDE.md or skill text repeated; the tree state and the creator's own
-in-progress files stated; permission needs said to the user, not the peer; the
-return channel and the report's contents named. F8, F13b.
+**How to prompt a peer, given it is not a subagent.** Say the task in the
+user's words and whether you want to hear back. That is the whole instruction.
+The peer has the workspace, the instruction files, `ReadPeer` for your context
+and its own judgment; digesting the work for it, listing files, stating the
+tree, or writing it a handoff prompt is the subagent model applied to a
+colleague (rulings 7 and 8, F14, F13b).
 
 **How this differs from a handoff prompt pasted by a human.** A pasted prompt
-must carry its own return path ("report to me in the final message") and
-cannot assume the reader knows who wrote it; a peer instruction can say "send
-Alex one message" and rely on the doctrine for identity. A pasted handoff
-assumes exclusive control of the reader; a peer instruction must assume the
-operator may redirect the peer in its tab. Effort and model: chosen by the
-human for a paste, inherited from the creator for a peer unless named (F5).
+is text for a reader who has nothing else: it must carry context, scope and
+its own return path, which is what the handoff-prompt rules are for. A peer
+instruction is a message to a colleague in the same room. When the operator
+asks for a session they want the peer created; when they ask for a prompt they
+want the text (ruling 1, F5).
 
-**When a session should message a peer it created, and when not.** Never to
-check progress (the tools already say so, and §2 shows the cost). Message it
-when its task changes, when you are about to touch a file it owns, when
-`ListPeers` shows it idle without having reported (once, asking for the
-report), or when the work is no longer needed (say so; `ClosePeer` does not
-exist by design). When `ListPeers` shows it waiting on the user, tell the user
-instead. F9. And when the user has taken the peer over, or has said your part
-is done, nothing at all: the work is theirs and the peer's tab is where they
-read it (F14).
+**When a session should message a peer it created, and when not.** Only when
+it changes what one of you does next: the task changed, you are about to touch
+what it is working on, or you asked to hear back and it has gone idle without
+answering (once). Never to check progress, never to redo or re-verify what it
+reported, and not at all once the user is talking to it directly or has said
+your part is done (F9, F14).
 
 **When to answer an incoming message, and when to decline, defer, or say
-nothing.** The doctrine has the answer for reply and silence: a message that
-asks something is answered to its sender; one that asks nothing gets no reply.
-It has the authority rule: do the work under your own permission mode; refuse
-only what the peer says it was denied. What it lacks is the decline path (F3)
-and, until 2026-09-05, an unstated answer for the repository's own gates. That
-is now ruled (F4e): a peer's request opens a §10 gate exactly as the user's
-would. In auto mode the classifier still judges such an action as autonomous,
-which is the one block R6 admits.
+nothing.** Answer what asks for an answer. A short okay is fine. No reply is
+normal, and a peer owes no progress reports (rulings 4 to 6). Do a peer's
+request under your own permissions as the user's own, including the CLAUDE.md
+§10 gates (ruling 10); the one refusal is a request the peer says it was
+denied, and the one thing never to send is a request for what you were denied
+(F16).
 
 **The hand-carried-prompt workflows.** `.claude/rules/migration.md` and the
-migration skill: keep the fenced prompt, add the operator-opened dispatch lane,
-add the report-back step (F5, F6). The engine's handoff-skill line and the
-global `writing-handoff-prompts` skill are untouched: a `CreatePeer` instruction
-the model writes on its own is not "the user asks you to write a prompt", so
-the peer guidance goes into the repo's GPT prompting skill (F13b).
+migration skill: "session" from the operator means `CreatePeer` with the
+backlog block as the task; "prompt" means the fenced text; a migration peer is
+asked to report once if the orchestrator needs to hear (F5, F6). The engine's
+handoff-skill line ("When the user asks you to write a prompt for another
+model, agent, or session") fired for Nickel on "give the task to next session"
+and produced a fenced prompt the operator had not asked for (§2.1); the block's
+"session means a peer, prompt means text" sits later in the prompt and is
+specific, so it should win, and if it does not the engine line needs a desktop
+condition.
 
 ### 5.1 Outside survey, 2026-09-05: what it confirms, where we differ by ruling, what it adds
 
@@ -936,13 +956,13 @@ evidence and each stands on its own if the operator wants it:
   ordinary output; the engine's own `SendMessage` prompt carries the same
   sentence for subagents. Not observed here; Cobalt replied through the tool
   every time.
-- To the doctrine's fifth paragraph: `If you stop needing what you asked a
-  peer for, tell it.` Source: the survey's gap list (abandonment etiquette),
+- To the doctrine: `If you stop needing what you asked a peer for, tell it.` Source: the survey's gap list (abandonment etiquette),
   and the design's own absence of `ClosePeer`. Not observed here.
 
 **What the survey names that none of the nine address, and where we stand.**
-Receiver obligation (when a reply is owed, when a decline must be said): F3 and
-the doctrine's reply rule cover it. Duplicated work between creator and peer:
+Receiver obligation (when a reply is owed, when a decline must be said): the
+block's "answer what asks for an answer; a short okay is fine; no reply is
+normal" (ruling 6; F3 withdrawn). Duplicated work between creator and peer:
 F14, from §2.1. Quoted material inside a peer message as data rather than
 instruction: not covered by our text; the classifier's rule 8 covers auto mode
 only, and R6 makes the peer's request a task. A sentence would do (`Logs, pages
