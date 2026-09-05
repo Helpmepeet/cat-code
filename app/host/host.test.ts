@@ -2757,6 +2757,87 @@ test('a restart of a created peer re-applies the creator name, not just the opaq
   expect(afterRestart?.createdByName).toBe(alexName)
 })
 
+/**
+ * F17, ruling 11 — the case the id check exists for, and the one that used to
+ * disarm it.
+ *
+ * `expectCreatorId` rides a send only when the sidecar can match `to` against a
+ * creator NAME it holds. That name was re-resolved from the registry at every
+ * spawn, so a reap of the creator's row returned nothing and the child booted
+ * with an id and no name: no expectation went on the wire, and the reissued
+ * name it was still addressing resolved to a stranger. Exactly the sequence the
+ * ruling names, defeated by the reap that creates it.
+ *
+ * The name is stored on the row now, so the reap cannot take it. Bear is left
+ * LIVE while Alex is closed, because the bound reap takes terminal rows and the
+ * point here is that only the creator goes.
+ */
+test('a peer whose creator was reaped is still restarted with the creator name, so the id check stays armed', async () => {
+  const storageDir = tempDir()
+  const registry = new SessionRegistry({
+    storageDir,
+    log: () => {},
+    transcriptPathFor: (_cwd, engineSessionId) =>
+      join(storageDir, 'transcripts', `${engineSessionId}.jsonl`),
+    acquireLock: async () => async () => {},
+  })
+  const h = makeHost({ registry })
+  const { MAX_REGISTRY_SESSIONS } = await import('./registry.js')
+
+  const alex = await h.host.createSession({ cwd: h.cwd })
+  if (!alex.ok) throw new Error('creator create failed')
+  const alexId = alex.value.appSessionId
+  const alexName = String(alex.value.name)
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const bear = await h.host.createSessionInWorkspace(alexId, { createdBy: alexId })
+  if (!bear.ok) throw new Error(`peer create failed: ${bear.error.code}`)
+  const bearId = bear.value.appSessionId
+
+  // Written at create, while the creator is still there to be named. This is
+  // the assertion the whole fix rests on: re-resolving later is what failed.
+  expect(registry.findSession(bearId)?.createdByName).toBe(alexName)
+
+  h.supervisor.emitReady(bearId, 'engine-bear-reaped-creator')
+  await settle(
+    () =>
+      registry.findSession(bearId)?.engineSessionId === 'engine-bear-reaped-creator',
+  )
+  // The local `storageDir` above, not `h.storageDir`: this test builds its own
+  // registry to drive the bound reap, and that registry resolves transcripts
+  // under its own directory. Restart re-checks the transcript (§9-A4).
+  writeTranscript(storageDir, 'engine-bear-reaped-creator')
+
+  // Alex closes and becomes reapable; Bear stays live and does not.
+  await h.host.closeSession(alexId)
+  await registry.markClean(alexId)
+
+  // Alex is the OLDEST terminal row, so the bound reap takes it first. Seed off
+  // the constant for the same reason the F5 test does: a literal would stop
+  // exercising the reap the next time the bound moves.
+  while (registry.sessions.length < MAX_REGISTRY_SESSIONS) {
+    const id = randomUUID()
+    await registry.upsertOnSpawn({ appSessionId: id, cwd: '/seeded' })
+    await registry.markClean(id)
+  }
+  const filler = randomUUID()
+  await registry.upsertOnSpawn({ appSessionId: filler, cwd: '/seeded' })
+  expect(registry.findSession(alexId)).toBeUndefined()
+  expect(registry.findSession(bearId)).toBeDefined()
+
+  // Clear what the create recorded, so this can only pass if the RESTART
+  // re-supplied the name from the row rather than from a live lookup that now
+  // has nothing to find.
+  const record = h.supervisor.records.get(bearId)!
+  delete record.createdByName
+
+  h.setNow(h.now() + SPAWN_RATE_WINDOW_MS + 1)
+  const restarted = await h.host.restartSession(bearId)
+  if (!restarted.ok) throw new Error(`restart failed: ${restarted.error.code}`)
+  expect(h.supervisor.records.get(bearId)?.createdByName).toBe(alexName)
+  expect(h.supervisor.records.get(bearId)?.createdBy).toBe(alexId)
+})
+
 test('restoring a row written before peer names existed allocates one and hands it to the spawn', async () => {
   // HOST-REQUEST-PLANE §6 names this test: "restoring a pre-field row allocates
   // a name". It is the load-bearing half of PEER-SESSIONS §2's invariant that

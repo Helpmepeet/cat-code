@@ -1729,7 +1729,7 @@ test('an unconfirmed send is drawn as unconfirmed, not as a failure', () => {
 test('an unreadable send result renders as delivered with no state word', () => {
   for (const [id, content] of [
     ['not-json', 'delivered'],
-    ['wrong-shape', JSON.stringify({ to: 'Bear', delivered: false })],
+    ['no-delivery-field', JSON.stringify({ to: 'Bear', outcome: 'delivered' })],
     ['unknown-value', JSON.stringify({ to: 'Bear', delivery: 'maybe' })],
   ] as const) {
     const html = render(
@@ -1747,6 +1747,86 @@ test('an unreadable send result renders as delivered with no state word', () => 
     expect(html).not.toContain('sending')
     expect(html).not.toContain('text-tone-danger')
   }
+})
+
+/**
+ * A transcript is replayed from disk, so rows written BEFORE the three-valued
+ * field are still drawn today, and they carry the old `delivered` boolean and no
+ * `delivery` key. Reading only the new key made every one of them unreadable,
+ * and an unreadable result draws as arrival, so on reopen every past refusal
+ * turned into a message that had landed. The boolean is read as a fallback.
+ */
+test('a row recorded before the three-valued field keeps its old verdict on replay', () => {
+  const refused = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'success',
+      result: {
+        isError: false,
+        diff: null,
+        content: JSON.stringify({
+          to: 'Bear',
+          delivered: false,
+          outcome: 'no_such_peer',
+          summary: 'Not delivered. There is no peer called Bear here.',
+        }),
+      },
+      id: 'legacy-refused',
+    }),
+  )
+  expect(refused).toContain('not delivered')
+
+  const arrived = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: 'ping' },
+      status: 'success',
+      result: {
+        isError: false,
+        diff: null,
+        content: JSON.stringify({
+          to: 'Bear',
+          delivered: true,
+          outcome: 'delivered',
+          summary: 'Delivered to Bear.',
+        }),
+      },
+      id: 'legacy-delivered',
+    }),
+  )
+  expect(arrived).not.toContain('not delivered')
+  expect(arrived).not.toContain('not confirmed')
+})
+
+/**
+ * The tool never throws, so its own refusals all arrive as `success` and are
+ * read off the result. An ENGINE-level error is the other thing entirely: the
+ * call returned no result of this tool's shape, so there is no delivery field,
+ * and nothing was ever put on the wire. Reachable with no exotic setup, e.g. an
+ * empty `text` failing the input schema. It used to fall through every arm to
+ * the arrival rendering, drawing a message that was never sent as one that
+ * landed, in a row whose own contract is that arrival is the only undrawn state.
+ */
+test('a send that failed before it left is drawn as not sent, not as delivered', () => {
+  const errored = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: { to: 'Bear', text: '' },
+      status: 'error',
+      result: {
+        isError: true,
+        diff: null,
+        content: 'InputValidationError: text must contain at least 1 character',
+      },
+      id: 'engine-error',
+    }),
+  )
+  expect(errored).toContain('not sent')
+  expect(errored).toContain('text-tone-danger')
 })
 
 test('a send in flight and a stopped send do not read as delivered', () => {

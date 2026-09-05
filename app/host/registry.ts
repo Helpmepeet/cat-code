@@ -168,6 +168,17 @@ export type RegistrySession = {
    */
   createdBy?: string
   /**
+   * [D] The NAME the creator carried when this row was made, stored beside the
+   * id rather than instead of it (F17, ruling 11 of 2026-09-06). The id above is
+   * what identity is decided by; this is the label the created session was told,
+   * and it has to outlive the creator because that is exactly when it is needed.
+   * Resolving it live instead returns nothing once the creator's row is reaped,
+   * which is the one moment a reissued name can point somewhere new, so a peer
+   * booted after that reap would send with no expectation to check and the
+   * message would reach whoever now holds the name. WRITE-ONCE with `createdBy`.
+   */
+  createdByName?: string
+  /**
    * [D] The user's standing "do not let peers reopen this" answer (PEER-SESSIONS
    * §6, HOST-REQUEST-PLANE §5). Absent means false. Durable on purpose: it
    * survives close, park, restore and relaunch, and disappears only with the row
@@ -815,6 +826,7 @@ export class SessionRegistry {
      */
     name?: string
     createdBy?: string
+    createdByName?: string
     enginePid?: number
     socketPath?: string
   }): Promise<string[]> {
@@ -840,6 +852,12 @@ export class SessionRegistry {
       if (input.createdBy !== undefined && existing.createdBy === undefined) {
         existing.createdBy = input.createdBy
       }
+      if (
+        input.createdByName !== undefined &&
+        existing.createdByName === undefined
+      ) {
+        existing.createdByName = input.createdByName
+      }
       existing.enginePid = input.enginePid
       existing.socketPath = input.socketPath
       existing.lastAttachedAt = now
@@ -856,6 +874,9 @@ export class SessionRegistry {
         forked: input.forked ?? false,
         ...(input.name !== undefined ? { name: input.name } : {}),
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
+        ...(input.createdByName !== undefined
+          ? { createdByName: input.createdByName }
+          : {}),
         createdAt: now,
         lastAttachedAt: now,
         // CC-2: a fresh spawn has SENT nothing yet — attach/spawn must not fake
@@ -1345,6 +1366,7 @@ function rowsEqual(left: RegistrySession, right: RegistrySession): boolean {
     left.forked === right.forked &&
     left.name === right.name &&
     left.createdBy === right.createdBy &&
+    left.createdByName === right.createdByName &&
     left.peerWakeBlocked === right.peerWakeBlocked &&
     left.titleUpdatedAt === right.titleUpdatedAt &&
     left.createdAt === right.createdAt &&
@@ -1384,6 +1406,10 @@ function mergeRegistryRow(
     baseline && local.createdBy === baseline.createdBy
       ? latest.createdBy
       : local.createdBy
+  const createdByName =
+    baseline && local.createdByName === baseline.createdByName
+      ? latest.createdByName
+      : local.createdByName
   const peerWakeBlocked =
     baseline && local.peerWakeBlocked === baseline.peerWakeBlocked
       ? latest.peerWakeBlocked
@@ -1400,6 +1426,7 @@ function mergeRegistryRow(
     forked,
     ...(name !== undefined ? { name } : {}),
     ...(createdBy !== undefined ? { createdBy } : {}),
+    ...(createdByName !== undefined ? { createdByName } : {}),
     ...(peerWakeBlocked ? { peerWakeBlocked } : {}),
     createdAt: Math.min(latest.createdAt, local.createdAt),
     lastAttachedAt: Math.max(latest.lastAttachedAt, local.lastAttachedAt),
@@ -1486,6 +1513,8 @@ function validateRow(candidate: unknown): RegistrySession | null {
   // runs at every launch and not only on a row's next spawn.
   if (typeof candidate.name === 'string') row.name = candidate.name
   if (typeof candidate.createdBy === 'string') row.createdBy = candidate.createdBy
+  if (typeof candidate.createdByName === 'string')
+    row.createdByName = candidate.createdByName
   // Absent ⇒ false (PEER-SESSIONS §6). Only `true` is stored, so an old row and a
   // row the user cleared are byte-identical on disk.
   if (candidate.peerWakeBlocked === true) row.peerWakeBlocked = true

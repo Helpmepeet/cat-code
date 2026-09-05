@@ -2575,6 +2575,14 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
  * the rest — arrive as `success`. Keying the row off `status === 'error'` drew
  * every one of them as delivered.
  *
+ * A row RECORDED BEFORE the three-valued field existed carries the old
+ * `delivered` boolean and no `delivery` key, and a transcript is replayed from
+ * disk, so those rows are still drawn long after the change. Reading only the
+ * new key answered null for every one of them, and null with a result present
+ * is the ARRIVAL rendering below, so every old refusal redrew as delivered on
+ * reopen. The boolean is read as the fallback it now is: it never carried the
+ * unconfirmed case, which is precisely why it was replaced.
+ *
  * Null when there is no result yet, or when the result is not the shape this
  * tool documents: an unreadable result must not be reported as a failure.
  */
@@ -2586,12 +2594,20 @@ function peerSendDelivery(
   try {
     const parsed: unknown = JSON.parse(content)
     if (typeof parsed !== 'object' || parsed === null) return null
-    const value = (parsed as Record<string, unknown>)['delivery']
-    return value === 'delivered' ||
+    const fields = parsed as Record<string, unknown>
+    const value = fields['delivery']
+    if (
+      value === 'delivered' ||
       value === 'not_delivered' ||
       value === 'unconfirmed'
-      ? value
-      : null
+    ) {
+      return value
+    }
+    const legacy = fields['delivered']
+    if (typeof legacy === 'boolean') {
+      return legacy ? 'delivered' : 'not_delivered'
+    }
+    return null
   } catch {
     return null
   }
@@ -2626,17 +2642,25 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
   const to = typeof row.input['to'] === 'string' ? row.input['to'] : null
   const text = typeof row.input['text'] === 'string' ? row.input['text'] : ''
   const delivery = peerSendDelivery(row)
-  const failed = delivery === 'not_delivered'
+  // An engine-level error is the one case the tool's own result cannot speak
+  // for: the call never returned a result of its documented shape, so there is
+  // no delivery field to read. It is a confirmed non-send (the frame was never
+  // built), and it is reachable without anything exotic, e.g. an empty `text`
+  // failing the input schema. Left out, it fell through every arm below to the
+  // arrival rendering, drawing a message that was never sent as one that landed.
+  const failed = delivery === 'not_delivered' || row.status === 'error'
   const state =
     row.status === 'cancelled'
       ? 'stopped'
-      : failed
-        ? 'not delivered'
-        : delivery === 'unconfirmed'
-          ? 'not confirmed'
-          : delivery === null && row.result == null
-            ? 'sending'
-            : null
+      : row.status === 'error'
+        ? 'not sent'
+        : failed
+          ? 'not delivered'
+          : delivery === 'unconfirmed'
+            ? 'not confirmed'
+            : delivery === null && row.result == null
+              ? 'sending'
+              : null
   return (
     <div className="flex w-full gap-2.5">
       <span

@@ -255,7 +255,7 @@ function describeError(
           to,
           delivery: 'not_delivered',
           outcome: 'no_such_peer',
-          summary: `Not delivered. ${to} created you and that session is gone now. Carry on without it, or tell the user what you were going to ask.`,
+          summary: `Not delivered. ${to} created you and cannot be reached from here any more. Carry on without it, or tell the user what you were going to ask.`,
         }
       }
       return {
@@ -401,8 +401,11 @@ export function createSendToPeerTool(
         'Peers are reached only here; SendMessage reaches subagents you started',
         'and, with Agent Teams on, teammates, never a peer.',
         '',
-        'The result says what actually happened. If it says the message was not',
-        'delivered, it was not delivered: do not carry on as if they have it.',
+        'The result says what actually happened, and it separates three things.',
+        'If it says the message was not delivered, it was not delivered: do not',
+        'carry on as if they have it. If it says the message is not confirmed,',
+        'nobody knows either way and it may still arrive, so ask them whether it',
+        'reached them rather than sending the same text again.',
       ].join('\n')
     },
 

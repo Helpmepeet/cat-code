@@ -587,9 +587,13 @@ export class Host implements HostApi {
     // name when it has one: the upsert below is write-once for the field, but
     // allocating a second name we then discard would burn a pool entry on every
     // restore.
-    const existingName = this.registry.findSession(appSessionId)?.name
+    const existingRow = this.registry.findSession(appSessionId)
+    const existingName = existingRow?.name
     const name = existingName ?? this.allocatePeerName()
-    const createdByName = this.creatorNameFor(input.createdBy)
+    const createdByName = this.creatorNameFor(
+      input.createdBy,
+      existingRow?.createdByName,
+    )
 
     // Persist the live row BEFORE spawning so a crash between spawn and the next
     // launch still finds a row to sweep (REGISTRY.md §4.5 write points). The
@@ -612,6 +616,7 @@ export class Host implements HostApi {
         forked,
         name,
         ...(input.createdBy !== undefined ? { createdBy: input.createdBy } : {}),
+        ...(createdByName !== undefined ? { createdByName } : {}),
       })
       rowPersisted = true
       for (const reapedId of reaped) {
@@ -680,12 +685,27 @@ export class Host implements HostApi {
    * value it can never render. One helper rather than three copies of the
    * lookup, for spawn, restore and restart.
    *
-   * Undefined when the creator's row is gone: names are released on reap, so a
-   * stale label would be worse than none (§2 — a reaped creator reads as gone).
+   * The row's OWN stored label wins over a live lookup, and that order is the
+   * whole point (F17, ruling 11). A live lookup returns nothing once the
+   * creator's row is reaped, and a reap is exactly when its name can be reissued
+   * to someone else, so a peer booted after one would hold an id it cannot pair
+   * with a name, send with no expectation for main to check, and have the
+   * message delivered to whoever now answers to that name. The stored label is
+   * written once while the creator is still there and survives the reap, which
+   * is what keeps `expectCreatorId` armed across park, restore and restart. The
+   * earlier reasoning here, that a stale label would be worse than none, held
+   * only while nothing verified the label against the id; it is the other way
+   * round now, because a label plus an id is checkable and an id alone is not.
+   *
+   * Undefined only when this session had no creator, or when its row predates
+   * the stored label and the creator's row is already gone.
    */
-  private creatorNameFor(createdBy: string | undefined): string | undefined {
+  private creatorNameFor(
+    createdBy: string | undefined,
+    stored?: string | undefined,
+  ): string | undefined {
     if (createdBy === undefined) return undefined
-    return this.registry.findSession(createdBy)?.name
+    return stored ?? this.registry.findSession(createdBy)?.name
   }
 
   /**
@@ -930,7 +950,7 @@ export class Host implements HostApi {
 
     // Evict replay BEFORE the restart (mirrors the prior main behavior + P3-0).
     this.evictReplay(appSessionId)
-    const creatorName = this.creatorNameFor(row.createdBy)
+    const creatorName = this.creatorNameFor(row.createdBy, row.createdByName)
     try {
       this.supervisor.restartSession(appSessionId, {
         cwd: row.cwd,

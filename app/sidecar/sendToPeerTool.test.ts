@@ -491,7 +491,12 @@ test('a creator whose row is gone entirely is said so, without sending the model
 
   expect(gone.delivery).toBe('not_delivered')
   expect(gone.outcome).toBe('no_such_peer')
-  expect(gone.summary).toContain('Alex created you and that session is gone now')
+  // "cannot be reached", not "is gone": `session_not_found` also comes back for
+  // a creator whose row still exists but is neither live nor resumable, so the
+  // stronger claim would be one the wire code does not carry.
+  expect(gone.summary).toContain(
+    'Alex created you and cannot be reached from here any more',
+  )
   // The roster cannot help: the creator is not in it. The same code for any
   // other name still points there, because there it is the right advice.
   expect(gone.summary).not.toContain('ListPeers')

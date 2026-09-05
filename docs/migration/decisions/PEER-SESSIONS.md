@@ -293,9 +293,14 @@ terminal session from an hour ago can never be reached. So:
   everywhere a model can act, so an address in the result is tokens without a
   use"), and that reason holds: every peer verb takes a name. The consequence
   worth recording is that a model holds no id with which to resolve a peer's
-  transcript file, and the engine's own transcript section forbids searching
-  the projects directory for one, so `ReadPeer`'s failure routing cannot send
-  a reader to the file. It now routes to the peer or to the user instead (§8).
+  transcript file, so `ReadPeer`'s failure routing has no id to hand on and
+  cannot send a reader to the file. It routes to the peer or to the user
+  instead (§8). The engine's transcript section
+  (`src/constants/prompts.ts:1256-1273`) is not the thing that closes this: it
+  was rewritten on 2026-09-06 and now gives prefix-resolution recipes rather
+  than the prohibition it carried at `caa5f2d9`. The absent id is the whole of
+  the reason, which is the durable half anyway, since it holds however that
+  section is worded.
   The request-plane frame is unchanged; this amends the row description only.
 - 🔁 AMENDED 2026-09-04, from the `ListPeers` use-report. The ordering above
   was right and the TOOL's prompt was wrong: it said "newest activity first",
@@ -353,10 +358,17 @@ build must either hide that tool's peer branches in desktop sessions or make
 leaving both is not. The next line of that array bound `ListPeersTool` under
 `feature('UDS_INBOX')` to a module that does not exist in this tree (the
 dormant port, research doc §4). 🔁 RESOLVED 2026-09-06: that binding and the
-`uds:` / `bridge:` prompt branches are DELETED, so one `ListPeers` is left in
-the tree and `SendMessageTool`'s prompt no longer teaches addresses this fork
-has none of. The rest of the dormant port stays; `UDS_INBOX` is still read in
-ten other files and removing it is a separate engine task. The overlap itself
+`uds:` / `bridge:` prompt branches are DELETED, so one `ListPeers` is left
+bound in the tree and `SendMessageTool/prompt.ts` no longer teaches addresses
+this fork has none of. Not the whole of that vocabulary: the `to` argument's
+own `.describe()` (`src/tools/SendMessageTool/SendMessageTool.ts:96-99`) still
+carries `uds:`, `bridge:` and "use ListPeers to discover" behind
+`feature('UDS_INBOX')`, which is in no build list, so no shipped model reads
+it. It stays because the rest of the dormant port stays; `UDS_INBOX` is still
+read in ten other files and removing it is a separate engine task. Worth
+knowing when that task runs: the argument description is a prompt surface, read
+at the moment the model writes the field, so it is the half that would matter
+most if the flag were ever enabled. The overlap itself
 is closed in text rather than by hiding the tool: the `SendToPeer` prompt now
 says peers are reached only there, and `SendMessage` reaches subagents and,
 with Agent Teams on, teammates, never a peer.
