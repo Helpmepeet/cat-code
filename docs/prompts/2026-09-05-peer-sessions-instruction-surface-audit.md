@@ -42,7 +42,9 @@ first contact, messages are natural and unformatted, reporting is optional,
 and a creator shares what it knows while leaving the approach to the peer.
 Every mechanical fact (delivery, cost, limits, presence) stays in the tool
 descriptions, where it already is. The rulings it encodes are in §0.2; the
-transcript evidence is in §2.1.
+transcript evidence is in §2.1 and §2.2, the second being a real creation
+instruction the operator pointed at as "not how peer talks to peer", with its
+rewrite in the voice this block asks for.
 
 ```text
 You are Bear. Alex created you.
@@ -170,7 +172,7 @@ Ranked recommendations (details in §3, each with current text and replacement):
 | F1 | doctrine, `app/sidecar/desktopSystemPrompt.ts` | rewrite the roster sentence from an imperative to a conditional statement | the two texts that tell the model to call `ListPeers` unconditionally, and the strongest available explanation of the unprompted calls the operator asked about; confirmed only by re-measuring after the change (§2) |
 | F2 | `app/sidecar/{sendToPeer,readPeer}Tool.ts` `to` / `peer` argument descriptions | drop "Use ListPeers for the names." | the second cause of the same behaviour; the prose above it already says when to list |
 | F3 | doctrine | RESHAPED: withdrawn as a duty by ruling 6, kept as a guideline sentence, "when a peer asks you something, answer when you can, including 'I could not finish'" | the agreed direction: a requested answer is provided when feasible; silence and a short okay remain normal for anything that asked nothing |
-| F14 | doctrine and `CreatePeer` prompt | a connection, not a manager and a worker: no standing duty to report; ask to hear back when the result matters to you or to the user; share what you know and leave the approach to the peer; relay a report as the peer's and check it when integrating or when asked, not by habit | the Nickel and Cobalt exchange (§2.1), rulings 3 to 7, and §0.3 |
+| F14 | doctrine and `CreatePeer` prompt | a connection, not a manager and a worker: no standing duty to report; ask to hear back when the result matters to you or to the user; share what you know and leave the approach to the peer; relay a report as the peer's and check it when integrating or when asked, not by habit | the Nickel and Cobalt exchange (§2.1), the Hermes instruction (§2.2), rulings 3 to 7, and §0.3 |
 | F15 | doctrine | pass the user's intent on faithfully; quote exactly where the wording matters, paraphrase faithfully otherwise | Nickel turned "your job is ended, tell it to implement end to end" into "stop, do not edit code" and had to correct itself |
 | F16 | doctrine | the sender's half of the laundering rule: never ask a peer for what you were denied | our text refuses laundering only on the receiving side; the outside survey (§5.1) shows the shipped first-party rule carries both halves |
 | F4 | `CLAUDE.md` Expect company, §3 sidecar note, §5 desktop flow and peer-or-subagent, §2 routing, §10 gates | six additions | the file tells sessions to assume other sessions' work exists; peers let them check, and CLAUDE.md is the one surface that reaches every kind of session here |
@@ -397,6 +399,101 @@ instruction Nickel then gave Cobalt was a digested brief, research-only with a
 list of prohibitions and a method, where the operator's own words were "start
 from zero again. research and then create plan" (ruling 7).
 
+### 2.2 A creation instruction under the shipped text, and the same instruction as a peer would write it
+
+The operator pointed at one more exchange on 2026-09-06, quoting the
+instruction a creator gave its peer and saying: this is not how a peer talks
+to a peer, and if it is going to talk like this it could spawn a subagent.
+Both transcripts were read the same way as §2.1 (tool names, message bodies,
+the assistant's own sentences). Times are 2026-09-05 UTC.
+
+| time | what happened |
+|---|---|
+| 14:58 to 16:34 | The operator asks Hermes (engine `a53090b3`) about the MCP worktree, has it open PR #21, and has it run five parallel ChatGPT reviews. Hermes verifies the reviews' claims itself and keeps three regressions. "Fix it." Hermes starts implementing. |
+| 16:37:05 | Operator: "Stop, spawn peer session to implement it instead". |
+| 16:37:34 | Hermes creates Paracelsus with a 3,821-character instruction, the one the operator quoted. |
+| 16:37:41 | Paracelsus's first tool call is `ListPeers`, with its creator's name already in its prompt (§2 group 1, a third instance). |
+| 16:53:28 | Paracelsus sends a 2,160-character report in the fields the instruction dictated: changed files, commit SHA, each battery command with its result, limitations. |
+| 16:54:53 | Hermes re-runs the focused tests, finds one new fork test failing because its feature gate is off in the test build, and sends Paracelsus an 853-character correction scoped to that test. |
+
+**What in the instruction is knowledge, and what is method.** Read against
+§0.3, the instruction divides cleanly. Knowledge Hermes held and Paracelsus
+would otherwise have had to rediscover: the worktree path, branch and clean
+commit; the three regressions with file anchors, the mechanism of each, and
+the fact that the baseline had no such window; that the fork case may lack a
+resume harness. That belongs in the message and is the reason a peer was
+better informed than a fresh session would be. Method and format Hermes
+prescribed, which a peer decides for itself: "Use Apply_patch only", the
+seven-command verification list (CLAUDE.md §3 already binds every session to
+it), "First re-check `git status --short` and read the relevant current
+source/tests before editing" (CLAUDE.md §7 and §11), the STATUS-record
+procedure (§6 and the migration skill), "Commit your exact files … with a
+conventional message" (§4), "do not push" (§4), and the report's fixed field
+list. Roughly two thirds of the text restates instruction files the peer loads
+itself or dictates how to work; the rest is the findings. The operator's
+reading is right: a message that fixes the method, the tool, the checklist and
+the report format is a subagent brief, and for a subagent it would be the
+correct shape (the engine's own handoff rule asks for exactly this,
+`src/tools/AgentTool/prompt.ts:134`). The peer was still the right choice
+here, because the operator asked for one ("spawn peer session") and wanted the
+work visible and steerable while Hermes was stopped; the shape of the message
+was the mistake.
+
+**Where the shape came from.** Three texts a desktop session reads push it
+there: the shipped `CreatePeer` prompt, "Say the rest plainly too: the goal,
+what done looks like, the files in scope" and "The instruction has to ask for
+a report" (`app/sidecar/createPeerTool.ts:173-175`); the engine's Agent-tool
+"Handoff completeness" paragraph, written for subagents; and the repository
+GPT prompting skill's Subagents section, "Require tight handoffs: exact paths,
+current state, constraints, done criteria" (`.cat-code/skills/cat-code-gpt-prompting/SKILL.md`),
+with nothing beside it saying a peer is different. F14, F13b and F4f are the
+three fixes.
+
+**What followed was half right.** Hermes re-running the focused tests before
+taking the commit into a PR it owns is the integration case §0.3 allows, and
+it found a real defect (a test compiled with `FORK_SUBAGENT` off); that check
+was not duplicate verification. The report Paracelsus wrote was competent and
+useless in its shape: the field list made it 2,160 characters of which Hermes
+used one line, the SHA. Paracelsus listing peers before anything else is the
+roster imperative again (F1, F2).
+
+**The same instruction in the voice §0.1 asks for**, about 1,500 characters,
+carrying every fact above and none of the method:
+
+```text
+The user wants the three regressions in PR #21 fixed in the MCP worktree:
+/Users/pt/cat-code/.worktrees/desktop-mcp-runtime, branch
+worktree-desktop-mcp-runtime, clean at 07e8a611. Leave the primary tree alone,
+and no merge or PR; I own those. What I found, verified against source at that
+commit:
+
+1. src/services/mcp/client.ts: disposeServerConnection() deletes the
+   connectToServer cache entry before awaiting cleanup, and the old client's
+   onclose (around :1654-1679) deletes the same key unconditionally, so a
+   replacement started during stdio cleanup gets evicted and a third connection
+   is created. The baseline had no such window.
+2. src/tools/AgentTool/runAgent.ts: the child agentOptions (around :858-890)
+   forward getMcpRuntimeSnapshot but not a scoped refreshMcpRuntime, and
+   query.ts:2032-2047 refreshes MCP inputs between iterations only when that
+   callback exists, so a child or resumed agent freezes its MCP tools.
+3. Forks: AgentTool.tsx:1210-1213 and resumeAgent.ts:232-276 keep the parent's
+   exact tools for cache identity but read a fresh mcpRuntimeSnapshot, so
+   runAgent pairs stale tools with fresh clients and commands.
+
+I think each wants a regression test at the production boundary; the fork case
+may have no resume harness, so judge how much coverage is worth adding. If any
+of the three looks wrong to you, tell me before fixing it. Message me when it
+is committed, with what the battery said; I will take it from there into the
+PR.
+```
+
+It shares the findings with their anchors and the one fact about the tree the
+peer could not know, marks the coverage question as a judgment, invites the
+peer to challenge the diagnosis, asks to hear back because Hermes owes the PR,
+and says what it needs to hear in one clause instead of a field list. The
+peer's instruction files carry the battery, the commit rules and the STATUS
+row.
+
 ## 3. Findings by surface
 
 Format for each: kind (add / change / delete), current text, replacement, why,
@@ -606,7 +703,9 @@ this skill describes, and the author's own record is now readable.
 
 Add to the checklist: "[ ] A peer instruction carries the user's intent
 faithfully and what the creator already knows, and asks to hear back only when
-that matters." Drift noted: the skill still says "a GPT-5.5 backend".
+that matters." §2.2 is the worked case: the Hermes instruction as written, and
+as this section would have it written. Drift noted: the skill still says "a
+GPT-5.5 backend".
 
 **F13c, `.claude/skills/checking-cat-code-change-impact/SKILL.md`.** §5 Registries: add
 "Desktop-only tools live under `app/sidecar/` and are appended in
@@ -1091,9 +1190,12 @@ when the result matters to your work or to the user, and say what you need
 is text for a reader who has nothing else, and must carry its own return path
 and formatting; the handoff-prompt rules exist for it. A peer instruction is a
 message to a colleague who shares the workspace and can ask you a question,
-so it carries what you know and not a format. When the operator asks for a
-session they want the peer created; when they ask for a prompt they want the
-text (ruling 1, F5).
+so it carries what you know and not a format. §2.2 shows both shapes on one
+task: the 3,821-character brief a creator wrote under the shipped text, two
+thirds of it method and format the peer's own instruction files already carry,
+and the 1,500-character message that keeps every finding and drops the rest.
+When the operator asks for a session they want the peer created; when they ask
+for a prompt they want the text (ruling 1, F5).
 
 **When a session should message a peer it created, and when not.** To
 clarify, to pass on something relevant, to ask an opinion, to challenge an
@@ -1280,6 +1382,10 @@ closed with presence, and by F9. Nothing in the delta changes a sentence of
 - Two outside surveys (§5.1, §5.2) were checked at six of their fourteen
   sources; the rest are reported as the surveys describe them and were not
   opened.
+- §2.2 reads one exchange; it shows the shape the shipped text produces, not
+  how often. The report Paracelsus wrote in the dictated fields was still a
+  competent report; the waste it demonstrates is in what the creator asked
+  for, not in what the peer did.
 - F17 is reachable by code reading and needs the registry at its 256-row
   bound; it was not reproduced. F18 is inferred from two texts read together;
   no transcript shows a creator deferring a peer's clarifying question.
