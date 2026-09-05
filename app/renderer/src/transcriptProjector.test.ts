@@ -540,7 +540,7 @@ test('reconciles concurrent raw and summary reasoning against their own block in
       messageFrame('session-1', message),
     ),
   ]
-  const state = projectSequential(frames)
+  const state = projectPerFrame(frames)
   const reasoning = selectTranscriptRows(state, 'session-1').filter(
     row => row.kind === 'thinking',
   )
@@ -4406,7 +4406,7 @@ test('hidden tier: a synthetic frame correlates its tool_result EXACTLY ONCE', (
   })
 
   // ONE frame that is BOTH hidden AND a result carrier: exactly the shape the
-  // ordering comment above `correlateToolResults` protects.
+  // fold-before-any-early-return ordering in `projectUserFrame` protects.
   const hiddenCarrier = messageFrame('session-1', {
     type: 'user',
     message: {
@@ -5065,6 +5065,11 @@ test('a live frame appends even when the closing result never arrived', () => {
   state = projectServerFrame(state, assistantFrame('session-1', 2))
 
   expect(bodies(state)).toEqual(['old-a', 'body 1', 'body 2'])
+
+  // The live frame also CLOSED the cursor, so the next recovery opens a fresh
+  // batch at the head instead of continuing the abandoned one beneath 'old-a'.
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-b'))
+  expect(bodies(state)).toEqual(['old-b', 'old-a', 'body 1', 'body 2'])
 })
 
 /**
@@ -5179,22 +5184,14 @@ test('a refused result never clears the boundary row', () => {
   ).toContain('history-boundary')
 })
 
-function projectSequential(
+/** The finest partition: one frame per delivery, which is what live delivery does. */
+function projectPerFrame(
   frames: readonly ServerFrame[],
 ): ReturnType<typeof createTranscriptState> {
   return frames.reduce(projectServerFrame, createTranscriptState())
 }
 
-function projectSequentialDeliveries(
-  deliveries: readonly (readonly ServerFrame[])[],
-): ReturnType<typeof createTranscriptState> {
-  return deliveries.reduce(
-    (state, delivery) => delivery.reduce(projectServerFrame, state),
-    createTranscriptState(),
-  )
-}
-
-function projectBatchDeliveries(
+function projectDeliveries(
   deliveries: readonly (readonly ServerFrame[])[],
 ): ReturnType<typeof createTranscriptState> {
   return deliveries.reduce(projectServerFrames, createTranscriptState())
@@ -5209,13 +5206,21 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Baseline oracle for the batched projector. It deliberately uses only the
- * established single-frame reducer: the optimization is added after this
- * corpus is committed, so its expected state cannot inherit transaction
- * assumptions. Whole-state equality covers every TranscriptSessionState
- * collection, rather than only the visible row projection.
+ * The property replay depends on: how frames are CUT INTO DELIVERIES cannot
+ * change the state they project to. One projection transaction runs per
+ * delivery — fresh drafts, a fresh row index, fresh copy-on-write flags — so a
+ * fault in draft creation or publication shows up here as a partition-dependent
+ * result. The expected state is the finest partition (one frame per delivery,
+ * i.e. live delivery); every coarser partition is compared against it. Whole-
+ * state equality covers every TranscriptSessionState collection, rather than
+ * only the visible row projection.
+ *
+ * The corpus below is the adversarial one this test was committed with: the
+ * whole SDKMessage fixture set, plus a hidden-tier frame, an image preview, a
+ * truncation latch, an open recovery batch and its closing result, a second
+ * session, and a frame for a session that was never opened.
  */
-test('sequential transcript projection is invariant across replay delivery partitions', () => {
+test('transcript projection is invariant across replay delivery partitions', () => {
   const sessionId = 'session-1'
   const secondSessionId = 'session-2'
   const fixtureFrames = allSdkMessageSamples().map(sample =>
@@ -5259,29 +5264,15 @@ test('sequential transcript projection is invariant across replay delivery parti
       uuid: '00000000-0000-4000-8000-00000000d002',
     }),
   ]
-  const expected = projectSequential(frames)
+  const expected = projectPerFrame(frames)
 
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
-  expect(projectBatchDeliveries(frames.map(frame => [frame]))).toEqual(expected)
-  expect(projectSequentialDeliveries([frames])).toEqual(expected)
-  expect(projectSequentialDeliveries(frames.map(frame => [frame]))).toEqual(
-    expected,
-  )
 
   // Every boundary in this bounded adversarial corpus, plus partitions shaped
   // like frame caps, byte caps, and the lazy replay timer's partial flush.
   for (let splitAt = 1; splitAt < frames.length; splitAt += 1) {
     expect(
-      projectSequentialDeliveries([
-        frames.slice(0, splitAt),
-        frames.slice(splitAt),
-      ]),
-    ).toEqual(expected)
-    expect(
-      projectBatchDeliveries([
-        frames.slice(0, splitAt),
-        frames.slice(splitAt),
-      ]),
+      projectDeliveries([frames.slice(0, splitAt), frames.slice(splitAt)]),
     ).toEqual(expected)
   }
   for (const partition of [
@@ -5296,12 +5287,11 @@ test('sequential transcript projection is invariant across replay delivery parti
       cursor += size
     }
     deliveries.push(frames.slice(cursor))
-    expect(projectSequentialDeliveries(deliveries)).toEqual(expected)
-    expect(projectBatchDeliveries(deliveries)).toEqual(expected)
+    expect(projectDeliveries(deliveries)).toEqual(expected)
   }
 })
 
-test('batch projection matches the single-frame projector at every streaming reasoning prefix', () => {
+test('one-delivery projection matches per-frame delivery at every streaming reasoning prefix', () => {
   for (const fixture of [
     S1_STREAMING_REASONING_TURN,
     S1_CONCURRENT_REASONING_TURN,
@@ -5313,13 +5303,13 @@ test('batch projection matches the single-frame projector at every streaming rea
     for (let count = 1; count <= frames.length; count += 1) {
       const prefix = frames.slice(0, count)
       expect(projectServerFrames(createTranscriptState(), prefix)).toEqual(
-        projectSequential(prefix),
+        projectPerFrame(prefix),
       )
     }
   }
 })
 
-test('batch projection preserves sequential semantics for interleaved sessions and adversarial frames', () => {
+test('delivery partitioning is preserved for interleaved sessions and adversarial frames', () => {
   const primary = 'batch-primary'
   const secondary = 'batch-secondary'
   const streamedFinal = messageFrame(primary, {
@@ -5421,17 +5411,17 @@ test('batch projection preserves sequential semantics for interleaved sessions a
     assistantFrame(primary, 8),
   ]
 
-  const expected = projectSequential(frames)
+  const expected = projectPerFrame(frames)
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
-  expect(projectBatchDeliveries([
+  expect(projectDeliveries([
     frames.slice(0, 3),
     frames.slice(3, 8),
     frames.slice(8),
   ])).toEqual(expected)
 })
 
-test('batch projection preserves source identities and publishes no-op batches', () => {
-  const initial = projectSequential([
+test('projection preserves source identities and publishes no-op deliveries', () => {
+  const initial = projectPerFrame([
     ready('session-1'),
     assistantFrame('session-1', 1),
     ready('session-2'),
@@ -5463,14 +5453,14 @@ test('batch projection preserves source identities and publishes no-op batches',
 })
 
 test('single live reducer projection remains the single-frame projector path', () => {
-  const state = projectSequential([ready('session-1')])
+  const state = projectPerFrame([ready('session-1')])
   const frame = assistantFrame('session-1', 1)
   expect(reduceLiveTranscriptState(state, frame)).toEqual(
     projectServerFrame(state, frame),
   )
 })
 
-test('batch projection retains a recovered typed assistant error without a frame id', () => {
+test('a recovered typed assistant error without a frame id is retained', () => {
   const frame = {
     ...messageFrame('session-1', {
       type: 'assistant',
@@ -5483,7 +5473,7 @@ test('batch projection retains a recovered typed assistant error without a frame
   const frames = [ready('session-1'), frame]
 
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(
-    projectSequential(frames),
+    projectPerFrame(frames),
   )
 })
 
@@ -5600,7 +5590,7 @@ test('assistant frame with error produces a provider_error system notice', () =>
     uuid: '00000000-0000-4000-8000-000000000001',
   } as unknown as SDKMessage)
 
-  const state = projectSequential([ready('session-1'), frame])
+  const state = projectPerFrame([ready('session-1'), frame])
   const rows = selectTranscriptRows(state, 'session-1')
   expect(rows).toHaveLength(1)
   expect(rows[0]).toMatchObject({
