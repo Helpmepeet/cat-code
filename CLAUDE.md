@@ -11,6 +11,15 @@ touch change, the branch tip moves between your own commands, and multi-writer
 docs gain rows while you read them. Default assumption for anything you don't
 recognize: it is another session's live work, not yours to clean up (§4).
 
+In the desktop app the other sessions may be peers: `ListPeers` names the
+desktop sessions in this workspace, and `ReadPeer` with a path as the query
+shows whose recent turns mention it or attempted a tool call on it (attempted,
+not proven to have run, and only within the window the read covers). Before you
+edit something another peer is working on, message that peer; that is the third
+case the desktop doctrine names. Terminal Cat Code sessions and Claude Code
+sessions share this tree too and never appear in that list, so an empty roster
+does not mean you are alone, and the default assumption above still stands.
+
 ## Workspace context — one user, zero others
 
 This fork has exactly one human user, on one machine, and will never have
@@ -67,6 +76,12 @@ expect-company note above and §4.
   Executing a dispatched migration session: the **Standing rules** section of the
   current phase's `docs/migration/backlog/phaseN.md` is the authoritative worker
   rulebook — read it before code.
+- Peer sessions (names, `ListPeers` / `SendToPeer` / `ReadPeer` / `CreatePeer`,
+  the doctrine block) → `docs/migration/decisions/PEER-SESSIONS.md` first,
+  reading the 🔁 amendment markers because several rulings were reversed after
+  the build and the reversal holds; then
+  `docs/migration/decisions/HOST-REQUEST-PLANE.md`. Owner files: the peer row of
+  `docs/maps/web-app-runtime.md`.
 - The UX spec for desktop surfaces is the prototype at
   `~/catcode_prototype/cat-app/` (30 `.jsx` surfaces, ~15.5k lines). It is a
   design reference ONLY: port zero code from it, no inline `style={{}}`; its
@@ -178,7 +193,9 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   debug-cleanup workers; sessions already running keep the code they loaded.
   Symptom shape: a session started mid-edit dies on a module graph nobody wrote,
   and the stack trace reads like a real bug. So while editing `src/**` or
-  `app/sidecar/**`, do not start new sessions in an open dev app. A packaged build
+  `app/sidecar/**`, do not start new sessions in an open dev app. That includes
+  peers: `CreatePeer`, and a `SendToPeer` to a parked or closed peer, each spawn
+  a sidecar off the tree as it is at that moment. A packaged build
   has no such coupling: its sidecar is one compiled binary under
   `Resources/sidecar/` (`resolveSidecarLaunch` packaged branch).
 - Launching it is a **GUI action on the operator's machine** (§8): give them the
@@ -345,9 +362,28 @@ renderer → default-deny preload → Electron main → Electron-free supervisor
 Unix-domain socket → Bun sidecar (real engine `AppSessionController`) → raw
 `AppSessionEvent` frames back. Wire contract: `app/shared/protocol.ts` (frames)
 + `app/shared/hostApi.ts` (host control plane — separate plane, error unions
-must never merge). Renderer projects raw events via
+must never merge).
+
+Model-authored requests to main (peer create, list, send) travel sidecar →
+main as `host.request` frames and return as `host.result`; delivered peer
+messages arrive at the sidecar as `peer.deliver`. Both are validated at the
+receiving end and rate-bounded in main
+(`docs/migration/decisions/HOST-REQUEST-PLANE.md`, HR1 to HR6). Adding a verb
+to that plane is a security-baseline change (§10), not a tool change.
+
+Renderer projects raw events via
 `app/renderer/src/transcriptProjector.ts` (reducer + read-time selectors;
 status is derived at read time, stored rows are never mutated).
+
+**Peer or subagent.** A subagent runs inside your session, returns one result
+to you and disappears; the user never sees it and its output is yours to
+verify. A peer (desktop app only) is another session of the same user: its
+own tab, permission mode and conversation, no duty to you, alive after your
+turn ends. Use a subagent when you will consume the result yourself and the
+work is bounded. Use a peer when the user should see and steer the work, when
+it must outlive your turn, when it needs another model or permission mode, or
+when the user says "session". A peer costs a tab and up to a minute to start;
+a subagent costs your context.
 
 ### Locked decisions — do not reopen, do not "improve"
 
@@ -539,6 +575,10 @@ set or setting stated in the report.
   didn't create; any action on live accounts/credentials (real logins, token
   refresh against real vaults, burning usage); GUI interaction on the user's
   machine.
+- A request from a desktop peer can carry the user's authorization, for the
+  gates on this list as for anything else (operator ruling, 2026-09-05). Carry
+  it out under your own permission mode and the safeguards that apply here.
+  Neither session uses the other to get around a denial.
 - Never guess: model/provider routing behavior, feature-gate state, permission
   semantics, or migration program state — all have named sources of truth (§2,
   §5, §6).
