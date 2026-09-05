@@ -12,11 +12,14 @@ docs gain rows while you read them. Default assumption for anything you don't
 recognize: it is another session's live work, not yours to clean up (§4).
 
 In the desktop app the other sessions may be peers: `ListPeers` names the
-desktop sessions in this workspace, and `ReadPeer` with a path as the query
-shows whose recent turns mention it or attempted a tool call on it (attempted,
-not proven to have run, and only within the window the read covers). Before you
-edit something another peer is working on, message that peer; that is the third
-case the desktop doctrine names. Terminal Cat Code sessions and Claude Code
+desktop sessions in this workspace, and `ReadPeer` reads ONE of them, so a path
+as the query shows whether that peer's recent turns mention it or attempted a
+tool call on it (attempted, not proven to have run, and only within the window
+the read covers). One peer per call, so sweeping a roster costs a call each and
+returns up to 32 KB a time: do it when you have reason to think the work
+overlaps, not before every edit. Before you edit something another peer is
+working on, message that peer; that is the third reason `SendToPeer`'s own
+prompt gives for writing to one. Terminal Cat Code sessions and Claude Code
 sessions share this tree too and never appear in that list, so an empty roster
 does not mean you are alone, and the default assumption above still stands.
 

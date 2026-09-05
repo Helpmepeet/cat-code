@@ -282,13 +282,17 @@ test('the prompt asks for the roster only when the name is not already known', a
   ).prompt()
 
   // An unconditional "use ListPeers first" spends a call on a name the sender
-  // was just handed: the sender of a message it is answering, and the creator
-  // named in its own instructions. Both cases are exempted by name, and the
-  // reason for the remaining case stays, because a released name can be given
-  // to a different session later.
+  // was just handed. Three cases are exempted by name: the sender of a message
+  // it is answering, the creator named in its own instructions, and a peer it
+  // created itself, whose name came back from the create. Both ends of a
+  // creator/created pair were measured listing before writing to the other, so
+  // exempting only one end left half the waste in place. The reason for the
+  // remaining case stays: a released name can be given to a different session.
   expect(prompt).toContain('answering a message')
   expect(prompt).toContain('the peer that created you')
-  expect(prompt).toContain('For any other name, use ListPeers first')
+  expect(prompt).toContain('writing to one you created yourself')
+  expect(prompt).toContain('For')
+  expect(prompt).toContain('any other name, use ListPeers first')
   expect(prompt).not.toContain('Use ListPeers first: names change')
 })
 

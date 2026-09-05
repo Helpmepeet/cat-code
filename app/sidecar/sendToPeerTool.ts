@@ -385,9 +385,15 @@ export function createSendToPeerTool(
       return [
         'Message a peer in this workspace, by name.',
         '',
-        'You already have the name when you are answering a message or writing to',
-        'the peer that created you. For any other name, use ListPeers first: a',
-        'name you remember from earlier may now belong to a different peer.',
+        // The created→creator direction was carved out on 2026-09-04; the
+        // creator→created one was not, so a session writing to a peer it had
+        // made minutes earlier fell under "any other name" and was told to
+        // list. That is the measured waste F1 and F2 exist to remove, on the
+        // other end of the same pair: the name came back from the create.
+        'You already have the name when you are answering a message, writing to',
+        'the peer that created you, or writing to one you created yourself. For',
+        'any other name, use ListPeers first: a name you remember from earlier',
+        'may now belong to a different peer.',
         '',
         'Every message costs that peer a turn. If it is working it reads',
         'yours at its next step, if it is idle it starts a turn, and if it is not',
