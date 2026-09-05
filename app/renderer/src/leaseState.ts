@@ -22,8 +22,8 @@ import type {
 } from '../../shared/protocol.js'
 import { createContext } from 'react'
 import {
-  selectAccountsSnapshot,
   selectActiveAccount,
+  selectLastAccountsSnapshot,
   type AccountsState,
 } from './accountsState.js'
 import { selectWorkerDisplayName } from './orchestratorState.js'
@@ -120,15 +120,22 @@ export type SessionCodexAccountSources = {
  * that drifts, both real:
  *  - another pane switches accounts, persisting B, and every pane's face starts
  *    saying B while this one still runs on C;
- *  - `failoverCodexLease` (`src/services/api/codexAccountLeaseManager.ts`) moves a
- *    session's lease without touching `activeIndex`, so the face keeps naming the
- *    account the requests left.
+ *  - a failover moves a session's lease mid-turn. A MAIN-thread failover does
+ *    converge on its own, because `withRetry` follows it with
+ *    `persistMainLeaseActiveAccount` (`src/services/api/withRetry.ts:39,634`) and
+ *    the pool catches up; but the global roster is republished by a worker on a
+ *    60s timer, so until then the face still names the account the requests left.
+ *    A SUBAGENT failover is not persisted at all — only main is.
  *
  * Order, freshest identity first:
  *  1. this session's ACTIVE main-thread lease — the routing identity of a live
  *     turn. A failed lease keeps the account id it could NOT use, so only a
  *     holding one names an account (the `selectLeaseForLabel` refusal, reused).
- *  2. this session's OWN accounts snapshot, built from its in-memory pool.
+ *  2. this session's OWN accounts snapshot, built from its in-memory pool —
+ *     `selectLastAccountsSnapshot`, so a parked or crashed session keeps naming
+ *     what it actually ran on instead of falling back to a persisted account it
+ *     never used. That selector exists for this face and is display-only; the
+ *     switcher's arming is decided separately by `canSwitchAccount`.
  *  3. the roster's persisted active account, i.e. the previous behaviour.
  *
  * Between turns there is legitimately no main lease: the engine registers it per
@@ -152,7 +159,7 @@ export function selectSessionCodexAccount(
     if (leased) return leased
   }
 
-  const own = selectActiveAccount(selectAccountsSnapshot(accounts, sessionId))
+  const own = selectActiveAccount(selectLastAccountsSnapshot(accounts, sessionId))
   if (own) {
     const owned = rosterRow(own.id)
     if (owned) return owned

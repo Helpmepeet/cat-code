@@ -660,6 +660,35 @@ test('between turns there is no main lease, so the session own snapshot carries 
   expect(resolved?.usagePrimary).toBe(77)
 })
 
+test('a parked session keeps naming what it ran on, not the persisted account', () => {
+  // The lifecycle frame drops both the live lease snapshot and the session's
+  // current accounts snapshot, so a parked pane has only `lastSessions` left.
+  // Falling through to the roster would name an account this session never used.
+  const attached = accountsStateWithSession(
+    's1',
+    accountsSnapshot([
+      poolRow({ id: 'acct-a', alias: 'aurora' }),
+      poolRow({ id: 'acct-b', alias: 'basalt', isDefault: true }),
+    ]),
+  )
+  const parked = reduceAccountsState(attached, {
+    type: 'frame',
+    frame: {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 's1',
+      status: 'exited',
+    } satisfies LifecycleFrame,
+  })
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: null,
+    accounts: parked,
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-b')
+})
+
 test('with neither a lease nor a session snapshot the pool default still answers', () => {
   const resolved = selectSessionCodexAccount({
     roster: ROSTER,
