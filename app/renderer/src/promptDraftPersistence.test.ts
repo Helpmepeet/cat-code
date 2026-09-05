@@ -8,17 +8,7 @@ import {
   readPromptDraftsFromStorage,
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
-
-function fakeStorage(seed: Record<string, string> = {}) {
-  const values = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => values.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      values.set(key, value)
-    },
-    raw: values,
-  }
-}
+import { memoryStorage as fakeStorage } from './viewPreferenceStorageFixture.js'
 
 const draftsOf = (entries: Record<string, string>): PromptDraftState =>
   entries as PromptDraftState

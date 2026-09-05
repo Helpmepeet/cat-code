@@ -24,15 +24,10 @@ import {
   writeCodeThemeToStorage,
   type CodeThemeKey,
 } from './codeTheme.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    raw: store,
-  }
-}
+import {
+  memoryStorage as storage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 describe('persistence', () => {
   test('an empty store, and no store at all, leave the caller on the default', () => {
@@ -84,14 +79,7 @@ describe('persistence', () => {
   })
 
   test('a storage that throws does not take the caller down with it', () => {
-    const hostile = {
-      getItem: () => {
-        throw new Error('denied')
-      },
-      setItem: () => {
-        throw new Error('denied')
-      },
-    }
+    const hostile = throwingStorage()
     expect(readCodeThemeFromStorage(hostile)).toBeNull()
     expect(() => writeCodeThemeToStorage(hostile, 'nord')).not.toThrow()
   })

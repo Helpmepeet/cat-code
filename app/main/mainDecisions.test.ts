@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import {
   PROTOCOL_VERSION,
   type HistoryLoadEarlierMessage,
@@ -887,21 +888,14 @@ describe('native file attachment tokens', () => {
 })
 
 function row(overrides: Partial<SessionDescriptor> = {}): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     appSessionId: 'a',
     engineSessionId: 'e-a',
     cwd: '/repo',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
     ...overrides,
-  }
+  })
 }
 
 function select(

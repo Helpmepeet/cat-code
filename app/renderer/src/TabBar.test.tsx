@@ -4,30 +4,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
-
-function descriptor(
-  id: string,
-  overrides: Partial<SessionDescriptor> = {},
-): SessionDescriptor {
-  return {
-    appSessionId: id,
-    engineSessionId: `engine-${id}`,
-    cwd: `/tmp/${id}`,
-    title: null,
-    forked: false,
-    name: null,
-    createdBy: null,
-    peerWakeBlocked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
-    ...overrides,
-  }
-}
+import { sessionDescriptor as descriptor } from './sessionDescriptorFixture.js'
 
 function tab(
   id: string,

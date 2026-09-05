@@ -61,17 +61,7 @@ import {
   writeViewPreference,
   type ViewPreferenceStorage,
 } from './viewPreference.js'
-
-function storage(seed: Record<string, string> = {}): ViewPreferenceStorage & {
-  map: Map<string, string>
-} {
-  const map = new Map(Object.entries(seed))
-  return {
-    map,
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => void map.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 test('every preference still reads the record shape already on disk', () => {
   expect(

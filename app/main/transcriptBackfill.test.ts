@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { PROTOCOL_VERSION } from '../shared/protocol.js'
 import type { TranscriptBackfillSessionResult } from '../shared/transcriptBackfill.js'
 import {
@@ -60,20 +61,15 @@ function cacheDir(): string {
 }
 
 function descriptor(restorable: boolean): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     appSessionId: APP_ID,
     engineSessionId: ENGINE_ID,
     cwd: '/tmp',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
     status: restorable ? 'exited' : 'ready',
     restorable,
-    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
-    lastMessageSentAt: null,
-  }
+  })
 }
 
 function result(): TranscriptBackfillSessionResult {

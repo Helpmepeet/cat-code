@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import { resolveOpenHistorySession } from './openHistorySession.js'
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import type {
   SessionCatalogEntry,
   SessionsCatalogSnapshot,
@@ -37,21 +38,14 @@ function catalog(entries: SessionCatalogEntry[]): SessionsCatalogSnapshot {
 }
 
 function descriptor(over: Partial<SessionDescriptor> = {}): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     appSessionId: '11111111-1111-4111-8111-111111111111',
     engineSessionId: ENGINE_ID,
     cwd: '/Users/pt/project',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
-    lastMessageSentAt: null,
     ...over,
-  }
+  })
 }
 
 describe('resolveOpenHistorySession (open-from-history boundary)', () => {

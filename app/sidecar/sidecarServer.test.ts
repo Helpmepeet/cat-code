@@ -160,6 +160,20 @@ function clientFrame(message: ClientFrameMessage): Buffer {
   } satisfies ClientFrame)
 }
 
+/**
+ * The same envelope, for the messages `ClientFrame` cannot describe because
+ * being undescribable is the point: an unallowlisted verb, a field of the wrong
+ * type, a renderer-authored key the contract has no room for. The opt-out those
+ * call sites each spelled out by hand lives here instead.
+ */
+function rawFrame(message: unknown): Buffer {
+  return encodeFrame({
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SESSION,
+    message,
+  })
+}
+
 /** Adapter that yields the probe message (no permission). */
 function probeAdapter(): AppSessionControllerAdapter {
   return {
@@ -235,6 +249,21 @@ function makeServer(
   return server
 }
 
+/**
+ * The whole attach ritual: a server on the test identity, an in-memory socket,
+ * and the connection between them. `overrides` passes straight through to
+ * `makeServer`, so a test still names only the domain seams it needs.
+ */
+function connect(
+  controller: AppSessionController,
+  overrides: Partial<SidecarServerOptions> = {},
+) {
+  const server = makeServer(controller, overrides)
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+  return { server, socket, received, conn }
+}
+
 /** A fake settings domain — exercises the SERVER boundary (schema + allowlist +
  * dispatch + result frame + re-broadcast) without a real disk write (that round
  * trip is proven in settingsDomain.test.ts). */
@@ -273,10 +302,7 @@ afterEach(() => {
 })
 
 test('on attach, the server sends the canonical controller-derived app.ready payload', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
 
   expect(received[0]).toEqual({
     kind: 'ready',
@@ -344,9 +370,7 @@ test('image app.submit content blocks reach the real controller prompt unchanged
       seenPrompt = prompt
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const connection = server.addConnection(socket)
+  const { server, received, conn: connection } = connect(controller)
   const prompt = [
     {
       type: 'image' as const,
@@ -530,9 +554,7 @@ test('a structured image result without a live GenerateImage tool id cannot trig
 })
 
 test('rejects a frame with the wrong protocolVersion and echoes its bounded request id', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, encodeFrame({ protocolVersion: 999, sessionId: SESSION, message: { type: 'app.submit', requestId: 'wrong-version', prompt: 'x' } }))
   const err = received.find(f => f.kind === 'error')
   expect(err?.kind).toBe('error')
@@ -540,9 +562,7 @@ test('rejects a frame with the wrong protocolVersion and echoes its bounded requ
 })
 
 test('rejects a frame addressed to a different sessionId and echoes its bounded request id', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: 'other', message: { type: 'app.submit', requestId: 'wrong-session', prompt: 'x' } }))
   const err = received.find(f => f.kind === 'error' && f.message.includes('sessionId'))
   expect(err).toBeDefined()
@@ -550,9 +570,7 @@ test('rejects a frame addressed to a different sessionId and echoes its bounded 
 })
 
 test('rejects an unallowlisted message type and echoes its bounded request id', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: SESSION, message: { type: 'run-command', requestId: 'unknown-verb', command: 'rm -rf /' } }))
   const error = received.find(f => f.kind === 'error' && f.code === 'bad_request')
   expect(error?.kind).toBe('error')
@@ -560,9 +578,7 @@ test('rejects an unallowlisted message type and echoes its bounded request id', 
 })
 
 test('rate-limit rejection echoes the rejected verb request id', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   for (let i = 0; i < MAX_FRAMES_PER_WINDOW; i++) {
     server.handleData(conn, clientFrame({ type: 'app.ping', nonce: `n-${i}` }))
   }
@@ -582,9 +598,7 @@ test('a backward wall-clock jump resets the sidecar rate window', () => {
   let now = 100_000
   Date.now = () => now
   try {
-    const server = makeServer(new AppSessionController(probeAdapter()))
-    const { socket, received } = makeSocket()
-    const conn = server.addConnection(socket)
+    const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
     for (let index = 0; index < MAX_FRAMES_PER_WINDOW; index += 1) {
       server.handleData(conn, clientFrame({ type: 'app.ping', nonce: `n-${index}` }))
     }
@@ -605,26 +619,20 @@ test('a backward wall-clock jump resets the sidecar rate window', () => {
 })
 
 test('app.ping is answered with a pong', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, clientFrame({ type: 'app.ping', nonce: 'nonce-1' }))
   const pong = received.find(f => f.kind === 'pong')
   expect(pong?.kind).toBe('pong')
 })
 
 test('T7 — rejects a prompt over the length cap', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, clientFrame({ type: 'app.submit', requestId: 'r1', prompt: 'x'.repeat(MAX_PROMPT_BYTES + 1) }))
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
 test('T7 — rejects an app.ping nonce over the text cap (and answers no pong)', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({ type: 'app.ping', nonce: 'x'.repeat(MAX_TEXT_FIELD_CHARS + 1) }),
@@ -650,9 +658,7 @@ test('boundary — a valid app.abort aborts the turn and mass-denies pendings', 
       })
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -675,9 +681,7 @@ test('T7 — rejects an app.abort reason over the text cap (no abort)', () => {
     aborts += 1
     return realAbort(reason)
   }
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -709,9 +713,7 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo1' } as never))
   await flush()
@@ -733,9 +735,7 @@ test('F6 — an over-long error message is truncated before it leaves', async ()
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo2' } as never))
   await flush()
@@ -772,6 +772,29 @@ function gatedTurnAdapter(): {
     },
     release,
   }
+}
+
+/**
+ * A turn that persists its input first, then stays open until `release()` is
+ * called, so a test can queue work behind a live turn. `release()` before the
+ * turn has started is a no-op, which is what the `?.()` at every call site
+ * that spelled this out by hand meant.
+ */
+function gatedTurnController(): {
+  controller: AppSessionController
+  release: () => void
+} {
+  let release: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn({ options }) {
+      options?.onInputPersisted?.()
+      await new Promise<void>(resolve => {
+        release = resolve
+      })
+      yield buildProbeToolUseMessage()
+    },
+  })
+  return { controller, release: () => release?.() }
 }
 
 /** A server wired with a counting `onPark` spy that NEVER exits the process. */
@@ -1189,9 +1212,7 @@ test('app.submit emits the live user event before the assistant and the projecto
       } as never
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1265,9 +1286,7 @@ test('queued parent task notifications start autonomous FIFO turns after an acti
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   // A directly accepted human submit wins over the queued background result.
   server.handleData(
@@ -1353,9 +1372,7 @@ test('a mid-turn submit is queued INTO the running turn, not refused', async () 
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1410,9 +1427,7 @@ test('a queued prompt no tool round drained still gets its own turn, announced o
       await new Promise<void>(resolve => releases.push(resolve))
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1465,9 +1480,7 @@ test('Stop does not eat a message queued into the turn it interrupts', async () 
       releaseTurn?.()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1507,19 +1520,8 @@ test('T7 — the mid-turn queue has a DEPTH cap, not just a rate cap', async () 
   // Refusing a mid-turn submit used to bound how much could pile up. Queueing
   // removed that bound, so a flooding renderer could fill the running turn's
   // context wholesale. Depth is capped explicitly instead.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1553,7 +1555,7 @@ test('T7 — the mid-turn queue has a DEPTH cap, not just a rate cap', async () 
   )
   expect(overflowed).toBe(false)
 
-  release?.()
+  release()
 })
 
 /**
@@ -1578,19 +1580,8 @@ const IMAGE_PROMPT = [
 test('T7 — a mid-turn prompt carrying an image counts toward the DEPTH cap', async () => {
   // Without this the accumulation bound MAX_QUEUED_PROMPTS exists to impose is
   // open: image-bearing prompts pile up limited only by the arrival-rate caps.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1622,7 +1613,7 @@ test('T7 — a mid-turn prompt carrying an image counts toward the DEPTH cap', a
   expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
   expect(getCommandQueueSnapshot()).toHaveLength(MAX_QUEUED_PROMPTS)
 
-  release?.()
+  release()
 })
 
 test('a queued image prompt no tool round drained still gets its own turn', async () => {
@@ -1637,9 +1628,7 @@ test('a queued image prompt no tool round drained still gets its own turn', asyn
       await new Promise<void>(resolve => releases.push(resolve))
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1704,19 +1693,8 @@ function userMessageTexts(received: ServerFrame[]): string[] {
 }
 
 test('D1a — a mid-turn message stages as queued and stays out of the transcript', async () => {
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1738,26 +1716,15 @@ test('D1a — a mid-turn message stages as queued and stays out of the transcrip
   const queued = getCommandQueueSnapshot()
   expect(staged?.[0]?.id).toBe(queued[0]?.uuid)
 
-  release?.()
+  release()
 })
 
 test('D1a — the engine consuming a staged message is what commits it', async () => {
   // `notifyCommandLifecycle(uuid, 'started')` fires on the drain that actually
   // takes the command into the running turn (`src/query.ts`), just before
   // `removeFromQueue`. That is the moment the message becomes real.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1777,23 +1744,12 @@ test('D1a — the engine consuming a staged message is what commits it', async (
   // And the staged row is gone, so the message is shown exactly once.
   expect(queuedPromptSnapshots(received).at(-1)).toEqual([])
 
-  release?.()
+  release()
 })
 
 test('D1a — a refused mid-turn message leaves nothing staged', async () => {
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -1821,22 +1777,13 @@ test('D1a — a refused mid-turn message leaves nothing staged', async () => {
   // the message back.
   expect(received.at(-1)?.kind).toBe('error')
 
-  release?.()
+  release()
 })
 
 test('D1a — a renderer attaching mid-turn learns what is already staged', async () => {
   // A reload drops everything the renderer held. The staged rows must come back
   // with it, or a message waiting on the running turn is invisible again.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
+  const { controller, release } = gatedTurnController()
   const server = makeServer(controller)
   const first = makeSocket()
   const conn = server.addConnection(first.socket)
@@ -1858,7 +1805,7 @@ test('D1a — a renderer attaching mid-turn learns what is already staged', asyn
   expect(staged).toHaveLength(1)
   expect(staged?.[0]?.text).toBe('and the logs')
 
-  release?.()
+  release()
 })
 
 test('D1a — an unrelated queue event does not publish an empty staged list', () => {
@@ -1866,9 +1813,7 @@ test('D1a — an unrelated queue event does not publish an empty staged list', (
   // empty, which is why the attach path suppresses this exact frame as noise.
   // Sending it anyway on the first worker enqueue of the session put the noise
   // back through the other door.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
   expect(queuedPromptSnapshots(received)).toEqual([])
 
   // A worker result can never appear in this list, but it moves the queue the
@@ -1909,9 +1854,7 @@ test('D1a — a submit that throws synchronously announces its staged message on
     return realSubmit(...args)
   }) as AppSessionController['submit']
 
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2005,19 +1948,8 @@ async function serverWithStagedPromptCarrying(
   prompt: SubmitPromptValue,
   submitId: string,
 ) {
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2038,23 +1970,12 @@ async function serverWithStagedPromptCarrying(
       options: { submitId },
     }),
   )
-  return { server, conn, received, end: () => release?.() }
+  return { server, conn, received, end: release }
 }
 
 async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2065,7 +1986,7 @@ async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
     conn,
     clientFrame({ type: 'app.submit', requestId: 'mid', prompt }),
   )
-  return { server, conn, received, end: () => release?.() }
+  return { server, conn, received, end: release }
 }
 
 test('prompt.force aborts only while the displayed queue head is still waiting', async () => {
@@ -2085,9 +2006,7 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
       releaseCurrent?.()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2345,9 +2264,7 @@ test('D1b — a recall the engine outran corrects the answer it already gave', a
 
 test('D1b — a recall with nothing waiting takes nothing back', async () => {
   const controller = new AppSessionController(probeAdapter())
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2489,9 +2406,7 @@ function submitAnswers(received: ServerFrame[]) {
 
 test('D5 — an idle submit is answered accepted, once, with its own id', async () => {
   const controller = new AppSessionController(probeAdapter())
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2546,19 +2461,8 @@ test('D5 — a mid-turn submit is answered accepted from the staging dispatch', 
 
 test('D5 — the depth-cap refusal is answered refused, naming that submit', async () => {
   // The reachable refusal, and the one the retained copy exists for.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2594,7 +2498,7 @@ test('D5 — the depth-cap refusal is answered refused, naming that submit', asy
   // The error still says WHY; the answer says WHICH.
   expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
 
-  release?.()
+  release()
 })
 
 test('D5 — a submit refused while parking is answered, so its message comes back', () => {
@@ -2631,9 +2535,7 @@ test('D5 — a submit refused while parking is answered, so its message comes ba
 })
 
 test('D5 — an oversize prompt is answered refused, not left waiting', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -2658,23 +2560,17 @@ test('D5 — an oversize prompt is answered refused, not left waiting', () => {
 test('D5 — a submit rejected at the boundary is still answered', () => {
   // A strict-key violation and a schema failure both refuse the prompt before
   // `handleSubmit` runs. The renderer is holding the message either way.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'app.submit',
-        requestId: 'strict',
-        prompt: 'hello',
-        options: { submitId: 'sub-strict' },
-        runCommand: 'rm -rf /',
-      },
-    } as unknown as ClientFrame),
+    rawFrame({
+      type: 'app.submit',
+      requestId: 'strict',
+      prompt: 'hello',
+      options: { submitId: 'sub-strict' },
+      runCommand: 'rm -rf /',
+    }),
   )
   expect(submitAnswers(received).at(-1)).toEqual({
     kind: 'submit.result',
@@ -2687,16 +2583,12 @@ test('D5 — a submit rejected at the boundary is still answered', () => {
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'app.submit',
-        requestId: 'schema',
-        prompt: '',
-        options: { submitId: 'sub-schema' },
-      },
-    } as unknown as ClientFrame),
+    rawFrame({
+      type: 'app.submit',
+      requestId: 'schema',
+      prompt: '',
+      options: { submitId: 'sub-schema' },
+    }),
   )
   expect(submitAnswers(received).at(-1)).toEqual({
     kind: 'submit.result',
@@ -2718,22 +2610,16 @@ test('D5 boundary — a malformed submitId is rejected, and no turn runs', () =>
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'app.submit',
-        requestId: 'bad-id',
-        prompt: 'hello',
-        options: { submitId: 42 },
-      },
-    } as unknown as ClientFrame),
+    rawFrame({
+      type: 'app.submit',
+      requestId: 'bad-id',
+      prompt: 'hello',
+      options: { submitId: 42 },
+    }),
   )
 
   expect(turns).toBe(0)
@@ -2742,9 +2628,7 @@ test('D5 boundary — a malformed submitId is rejected, and no turn runs', () =>
 })
 
 test('D5 boundary — an over-long submitId is rejected like any other free text', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -2763,9 +2647,7 @@ test('D5 boundary — an over-long submitId is rejected like any other free text
 test('D5 — a submit with no correlation id is answered by nothing at all', async () => {
   // The boundary drain and the donut's Compact row keep nothing back, so there
   // is no id to address and no answer to send.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -2783,19 +2665,8 @@ test('D1b — three messages the engine outran produce ONE correction with the t
   // (`src/query.ts:1836-1842`), so this used to emit three corrections, each
   // claiming exactly one message. The user read three contradictory statements
   // about one click, and none of them was the count.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2838,7 +2709,7 @@ test('D1b — three messages the engine outran produce ONE correction with the t
     'Those messages already went to the model.',
   )
 
-  release?.()
+  release()
 })
 
 /* ── D1a — the staged list a reconnect has to be corrected about ──────────── */
@@ -2848,16 +2719,7 @@ test('D1a — a reconnect is told the staged list emptied while nobody was liste
   // emptied the list could not be published (no connection was open), and the
   // attach path only ever re-sent a NON-empty list, so the sidecar sent nothing
   // and main's sticky replay slot kept showing [A] as waiting.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
+  const { controller, release } = gatedTurnController()
   const server = makeServer(controller)
   const first = makeSocket()
   const conn = server.addConnection(first.socket)
@@ -2883,15 +2745,13 @@ test('D1a — a reconnect is told the staged list emptied while nobody was liste
 
   expect(queuedPromptSnapshots(reattached.received)).toEqual([[]])
 
-  release?.()
+  release()
 })
 
 test('D1a — a fresh session with nothing ever waiting still gets no staged frame', () => {
   // The suppression this preserves: an attaching reader's own list starts empty,
   // so an empty frame on every handshake is noise.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
 
   expect(queuedPromptSnapshots(received)).toEqual([])
 })
@@ -2907,19 +2767,8 @@ test('T4 — a mid-turn submit carrying a goalSnapshot is refused, not silently 
   // The queue turns a command into an ATTACHMENT, not a submit, so there is
   // nowhere for session identity to ride. Validating the field and then dropping
   // it would be the worst of both.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -2939,7 +2788,7 @@ test('T4 — a mid-turn submit carrying a goalSnapshot is refused, not silently 
   expect(received.filter(frame => frame.kind === 'error')).toHaveLength(1)
   expect(getCommandQueueSnapshot()).toHaveLength(0)
 
-  release?.()
+  release()
 })
 
 test('a queued prompt a turn refuses is retried once, then given up loudly', async () => {
@@ -3167,9 +3016,7 @@ test('P4-6 title-rider — generates after durable input acceptance before the t
 })
 
 test('T4 — rejects a submit whose goalSnapshot is not a valid ThreadGoal', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({
@@ -3199,12 +3046,9 @@ test('P4-10 — emits the live thread goal snapshot on attach and store change',
       updatedAtMs: 2,
     },
   }))
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     goals: createSidecarGoalDomain(store),
   })
-  const { socket, received } = makeSocket()
-
-  server.addConnection(socket)
 
   const attachSnapshot = received.find(
     (frame): frame is Extract<ServerFrame, { kind: 'thread-goal.snapshot' }> =>
@@ -3252,10 +3096,7 @@ test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, sec
     ],
     hooks: [],
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { goals, extensions })
-  const { socket, received } = makeSocket()
-
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { goals, extensions })
 
   const readyIdx = received.findIndex(f => f.kind === 'ready')
   const goalIdx = received.findIndex(f => f.kind === 'thread-goal.snapshot')
@@ -3287,12 +3128,9 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
     isBackgrounded: true,
   }
   store.setState(prev => ({ ...prev, tasks: { b1: runningBash } }))
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     tasks: createSidecarTasksDomain(store),
   })
-  const { socket, received } = makeSocket()
-
-  server.addConnection(socket)
 
   const attachSnapshot = received.find(
     (frame): frame is Extract<ServerFrame, { kind: 'tasks.snapshot' }> =>
@@ -3347,12 +3185,9 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
     blockReason: 'Which auth strategy should I use?',
   }
   store.setState(prev => ({ ...prev, tasks: { a1: blockedWorker } }))
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     agentMode: createSidecarAgentModeDomain(store),
   })
-  const { socket, received } = makeSocket()
-
-  server.addConnection(socket)
 
   // sendAgentModeSnapshot is async (the session plane is a file-backed engine
   // read), fired-and-forgotten on attach — poll for the emitted frame.
@@ -3455,9 +3290,7 @@ test('agent-mode snapshots cannot regress when an older persisted read finishes 
       }
     },
   }
-  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { agentMode: domain })
 
   expect(reads).toHaveLength(1)
   reads.shift()!.resolve({ active: false, objective: 'initial', phase: 'planning', workers: [] })
@@ -3552,14 +3385,10 @@ test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-bro
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'agent-mode.set',
-        requestId: 'am1',
-        active: true,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'agent-mode.set',
+      requestId: 'am1',
+      active: true,
     }),
   )
 
@@ -3609,14 +3438,10 @@ test('P4-8b — one agent-mode snapshot read fans out to every attached connecti
 
   server.handleData(
     firstConnection,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'agent-mode.set',
-        requestId: 'am-fanout',
-        active: true,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'agent-mode.set',
+      requestId: 'am-fanout',
+      active: true,
     }),
   )
 
@@ -3651,11 +3476,7 @@ test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'agent-mode.set', requestId: 'am2', active: false } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'agent-mode.set', requestId: 'am2', active: false }),
   )
 
   expect(received.some(f => f.kind === 'agent-mode.set.result' && f.ok)).toBe(true)
@@ -3671,11 +3492,7 @@ test('P4-8b — rejects agent-mode.set with a NON-boolean active (Zod boundary),
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'agent-mode.set', requestId: 'am3', active: 'yes' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'agent-mode.set', requestId: 'am3', active: 'yes' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -3690,11 +3507,7 @@ test('P4-8b — rejects agent-mode.set missing requestId at the schema boundary,
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'agent-mode.set', active: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'agent-mode.set', active: true }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -3709,12 +3522,8 @@ test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKe
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      // A renderer-supplied extra key is rejected before the verb reaches the domain.
-      message: { type: 'agent-mode.set', requestId: 'am4', active: true, sessionMode: 'coordinator' } as unknown as ClientFrame['message'],
-    }),
+    // A renderer-supplied extra key is rejected before the verb reaches the domain.
+    rawFrame({ type: 'agent-mode.set', requestId: 'am4', active: true, sessionMode: 'coordinator' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -3786,14 +3595,10 @@ test('P4-8b — a valid task.stop dispatches the domain + acks task-control.resu
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'task.stop',
-        requestId: 'ts1',
-        taskId: 'agent-1',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'task.stop',
+      requestId: 'ts1',
+      taskId: 'agent-1',
     }),
   )
 
@@ -3939,11 +3744,7 @@ test('P4-8b — an unknown/terminal task acks ok:false (fail-closed), no crash',
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.stop', requestId: 'ts2', taskId: 'gone' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.stop', requestId: 'ts2', taskId: 'gone' }),
   )
 
   for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
@@ -3961,11 +3762,7 @@ test('P4-8b — rejects task.stop with a NON-string taskId (Zod boundary), no do
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.stop', requestId: 'ts3', taskId: 42 } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.stop', requestId: 'ts3', taskId: 42 }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -3980,11 +3777,7 @@ test('P4-8b — rejects task.stop missing requestId at the schema boundary, no d
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.stop', taskId: 'agent-1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.stop', taskId: 'agent-1' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -3999,13 +3792,9 @@ test('P4-8b — rejects task.stop carrying an unexpected key (checkStrictKeys), 
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      // A renderer-supplied extra key (e.g. a forged engine handle) is rejected
-      // before the verb reaches the domain.
-      message: { type: 'task.stop', requestId: 'ts4', taskId: 'agent-1', kill: true } as unknown as ClientFrame['message'],
-    }),
+    // A renderer-supplied extra key (e.g. a forged engine handle) is rejected
+    // before the verb reaches the domain.
+    rawFrame({ type: 'task.stop', requestId: 'ts4', taskId: 'agent-1', kill: true }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4015,17 +3804,11 @@ test('P4-8b — rejects task.stop carrying an unexpected key (checkStrictKeys), 
 
 test('P4-8b — task.stop with NO task-control domain fails closed (internal_error), no result frame', () => {
   // A server without a taskControl domain — the verb routes but the domain is absent.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.stop', requestId: 'ts5', taskId: 'agent-1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.stop', requestId: 'ts5', taskId: 'agent-1' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
@@ -4046,21 +3829,15 @@ test('P4-8b — LIVE PATH: a real task.stop kills the worker AND drives a fresh 
   }
   store.setState(prev => ({ ...prev, tasks: { a1: runningWorker } as never }))
 
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     tasks: createSidecarTasksDomain(store),
     taskControl: createSidecarTaskControlDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'tasks.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.stop', requestId: 'ts6', taskId: 'a1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.stop', requestId: 'ts6', taskId: 'a1' }),
   )
 
   for (
@@ -4100,14 +3877,10 @@ test('CC-32 — a valid task.dismiss dispatches the DISMISS domain call + acks t
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'task.dismiss',
-        requestId: 'td1',
-        taskId: 'agent-1',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'task.dismiss',
+      requestId: 'td1',
+      taskId: 'agent-1',
     }),
   )
 
@@ -4130,11 +3903,7 @@ test('CC-32 — rejects task.dismiss with a NON-string taskId (Zod boundary), no
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td2', taskId: 42 } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td2', taskId: 42 }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4149,11 +3918,7 @@ test('CC-32 — rejects task.dismiss missing requestId at the schema boundary, n
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', taskId: 'agent-1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', taskId: 'agent-1' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4168,16 +3933,12 @@ test('CC-32 — rejects task.dismiss carrying a forged eviction key (checkStrict
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      // The renderer must never author eviction state — only the target id.
-      message: {
-        type: 'task.dismiss',
-        requestId: 'td3',
-        taskId: 'agent-1',
-        evictAfter: 0,
-      } as unknown as ClientFrame['message'],
+    // The renderer must never author eviction state — only the target id.
+    rawFrame({
+      type: 'task.dismiss',
+      requestId: 'td3',
+      taskId: 'agent-1',
+      evictAfter: 0,
     }),
   )
 
@@ -4187,17 +3948,11 @@ test('CC-32 — rejects task.dismiss carrying a forged eviction key (checkStrict
 })
 
 test('CC-32 — task.dismiss with NO task-control domain fails closed (internal_error), no result frame', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td4', taskId: 'agent-1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td4', taskId: 'agent-1' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
@@ -4222,21 +3977,15 @@ test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reap
   }
   store.setState(prev => ({ ...prev, tasks: { g1: blockedWorker } as never }))
 
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     tasks: createSidecarTasksDomain(store),
     taskControl: createSidecarTaskControlDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'tasks.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td5', taskId: 'g1' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td5', taskId: 'g1' }),
   )
 
   for (
@@ -4263,21 +4012,15 @@ test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reap
 test('CC-32 — a SUCCESSFUL dismiss records the worker with the agent-mode domain (so the persisted twin cannot re-supply the row) and re-broadcasts', async () => {
   const { domain: taskControl } = fakeTaskControlDomain()
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     agentMode,
     taskControl,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td6', taskId: 'w-live' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td6', taskId: 'w-live' }),
   )
 
   for (
@@ -4305,21 +4048,15 @@ test('CC-32 — a PERSISTED-ONLY worker (no live task) is dismissible: not_found
     message: 'That worker is already gone.',
   }))
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     agentMode,
     taskControl,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td8', taskId: 'w-persisted' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td8', taskId: 'w-persisted' }),
   )
 
   for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
@@ -4341,20 +4078,14 @@ test('CC-32 — a REFUSED dismiss records nothing: a row the engine kept must no
     message: 'That worker is still running. Stop it first.',
   }))
   const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     agentMode,
     taskControl,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'task.dismiss', requestId: 'td7', taskId: 'w-live' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'task.dismiss', requestId: 'td7', taskId: 'w-live' }),
   )
 
   for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
@@ -4497,14 +4228,10 @@ test('P4-24c — a valid model.set switches the model + re-broadcasts run-contro
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'model.set',
-        requestId: 'rc1',
-        model: 'gpt-5.6-terra',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'model.set',
+      requestId: 'rc1',
+      model: 'gpt-5.6-terra',
     }),
   )
 
@@ -4539,14 +4266,10 @@ test('P4-24c — an idempotent set (no change) acks ok but does NOT re-broadcast
   // The fake seeds model = 'claude-opus-4-6'; re-setting the same model is a no-op.
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'model.set',
-        requestId: 'rc2',
-        model: 'claude-opus-4-6',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'model.set',
+      requestId: 'rc2',
+      model: 'claude-opus-4-6',
     }),
   )
 
@@ -4561,14 +4284,10 @@ test('P4-24c — model.set null restores provider-local Default through the stri
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'model.set',
-        requestId: 'rc-default',
-        model: null,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'model.set',
+      requestId: 'rc-default',
+      model: null,
     }),
   )
 
@@ -4621,19 +4340,11 @@ test('P4-24c — a valid effort.set + fast.set both round-trip through the domai
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'effort.set', requestId: 'rc3', effort: 'high' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'effort.set', requestId: 'rc3', effort: 'high' }),
   )
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'fast.set', requestId: 'rc4', active: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'fast.set', requestId: 'rc4', active: true }),
   )
 
   expect(calls).toEqual(['effort:high', 'fast:true'])
@@ -4652,14 +4363,10 @@ test('P4-24c — a well-typed unsupported model returns a correlated failed resu
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'model.set',
-        requestId: 'rc-unsupported-model',
-        model: 'forged-model',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'model.set',
+      requestId: 'rc-unsupported-model',
+      model: 'forged-model',
     }),
   )
 
@@ -4681,14 +4388,10 @@ test('P4-24c — a well-typed unsupported effort returns a correlated failed res
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'effort.set',
-        requestId: 'rc-unsupported-effort',
-        effort: 'forged-effort',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'effort.set',
+      requestId: 'rc-unsupported-effort',
+      effort: 'forged-effort',
     }),
   )
 
@@ -4710,11 +4413,7 @@ test('P4-24c — rejects model.set with a NON-string model (Zod boundary), no do
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'model.set', requestId: 'rc5', model: 42 } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'model.set', requestId: 'rc5', model: 42 }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4729,11 +4428,7 @@ test('P4-24c — rejects effort.set with a NON-string effort (Zod boundary), no 
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'effort.set', requestId: 'rc-effort-type', effort: 42 } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'effort.set', requestId: 'rc-effort-type', effort: 42 }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4748,11 +4443,7 @@ test('P4-24c — rejects fast.set with a NON-boolean active, no domain call', ()
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'fast.set', requestId: 'rc6', active: 'yes' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'fast.set', requestId: 'rc6', active: 'yes' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4767,11 +4458,7 @@ test('P4-24c — rejects model.set missing requestId at the schema boundary, no 
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'model.set', model: 'opus' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'model.set', model: 'opus' }),
   )
 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -4786,16 +4473,12 @@ test('P4-24c — rejects a run-control verb carrying an unexpected key (checkStr
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      // A renderer-supplied extra key is rejected before the verb reaches the domain.
-      message: {
-        type: 'model.set',
-        requestId: 'rc7',
-        model: 'opus',
-        provider: 'openai',
-      } as unknown as ClientFrame['message'],
+    // A renderer-supplied extra key is rejected before the verb reaches the domain.
+    rawFrame({
+      type: 'model.set',
+      requestId: 'rc7',
+      model: 'opus',
+      provider: 'openai',
     }),
   )
 
@@ -4807,17 +4490,11 @@ test('P4-24c — rejects a run-control verb carrying an unexpected key (checkStr
 test('P4-24c — a run-control verb with no domain present fails closed (internal_error)', () => {
   // No runControls domain wired → the verb is structurally valid but has no
   // executor; it must fail closed, never silently succeed.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'fast.set', requestId: 'rc8', active: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'fast.set', requestId: 'rc8', active: true }),
   )
 
   expect(
@@ -4827,9 +4504,7 @@ test('P4-24c — a run-control verb with no domain present fails closed (interna
 })
 
 test('T5a — permission.response for an unknown requestId is rejected', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({ type: 'permission.response', requestId: 'never-minted', response: { behavior: 'allow', updatedInput: {} } }),
@@ -4844,9 +4519,7 @@ test('T6 — an allow that rewrites updatedInput is rejected', async () => {
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   // Start a turn so the permission request is raised.
   void controller.submit('go')
@@ -4875,9 +4548,7 @@ test('T6 — an allow that echoes the gated input is accepted', async () => {
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -4908,9 +4579,7 @@ test('T6/F1 — an empty updatedInput forwards the GATED input, not "use origina
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -4942,9 +4611,7 @@ test('T6b/F10 — an allow carrying updatedPermissions is REJECTED at the bounda
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -4984,9 +4651,7 @@ test('T6b — sanitizePermissionResponse still strips updatedPermissions (defens
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  server.addConnection(socket)
+  const { server, socket } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5033,9 +4698,7 @@ test('C1 — allow + applySuggestions attaches the ENGINE-minted suggestion as u
       resolved = r
     }, [suggestion]),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5071,9 +4734,7 @@ test('C1 — an empty applySuggestions is a plain allow-once (nothing attached)'
       resolved = r
     }, [bashSuggestion('ls:*')]),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5101,9 +4762,7 @@ test('C1 — an out-of-range index is rejected fail-closed (request stays pendin
       resolved = r
     }, [bashSuggestion('ls:*')]),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5132,9 +4791,7 @@ test('C1 — a selection against a request that minted NO suggestions is rejecte
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5163,9 +4820,7 @@ test('C1 — non-integer, duplicate, and oversize selections are rejected', asyn
       resolved = r
     }, [bashSuggestion('ls:*'), bashSuggestion('pwd')]),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5203,9 +4858,7 @@ test('C1 — applySuggestions on a deny is rejected', async () => {
       resolved = r
     }, [bashSuggestion('ls:*')]),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5260,9 +4913,7 @@ test('C1 — a selection resolves against ITS OWN request, not another pending o
       ])
     },
   })
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 2)
@@ -5359,9 +5010,7 @@ test('C5 — LIVE PATH: an index answer resolves the real request with engine-la
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5395,9 +5044,7 @@ test('C5 — LIVE PATH: a single-select "Other…" freeform answer is the freefo
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5415,9 +5062,7 @@ test('C5 — an answer frame against a NON-AskUserQuestion request is rejected, 
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -5437,9 +5082,7 @@ test('C5 — an answer frame against a NON-AskUserQuestion request is rejected, 
 })
 
 test('C5 — an answer for an unknown requestId is permission_not_found', () => {
-  const server = makeServer(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
   server.handleData(conn, askAnswerFrame([{ optionIndices: [0] }], 'never-minted'))
   expect(received.some(f => f.kind === 'error' && f.code === 'permission_not_found')).toBe(true)
 })
@@ -5451,9 +5094,7 @@ test('C5 — an out-of-range option index is rejected fail-closed (stays pending
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5472,9 +5113,7 @@ test('C5 — an answers array whose length ≠ questions is rejected', async () 
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5496,9 +5135,7 @@ test('C5 — a single-select question with two components is rejected', async ()
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5526,9 +5163,7 @@ test('C5 — a question answered with nothing is rejected', async () => {
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5545,9 +5180,7 @@ test('C5 — a duplicate option index is rejected', async () => {
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5576,9 +5209,7 @@ test('C5 — two questions with the SAME text are rejected, never collapsed into
       resolved = r
     }),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5597,9 +5228,7 @@ test('C5 — an over-long freeform "other" is rejected by the schema', async () 
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5622,9 +5251,7 @@ test('C5 — a schema-rejected answer still correlates: the error carries the re
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
   const requestId = controller.getPendingPermissionRequests()[0]!.requestId
@@ -5647,9 +5274,7 @@ test('C5 — a non-integer option index is rejected fail-closed', async () => {
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5665,9 +5290,7 @@ test('C5 — a non-array answers payload is rejected fail-closed', async () => {
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5680,9 +5303,7 @@ test('C5 — an extra nested key on an answer is rejected (strict inner schema)'
   const controller = new AppSessionController(
     askQuestionAdapter(ASK_QUESTIONS, () => {}),
   )
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
 
@@ -5695,9 +5316,7 @@ test('C5 — an extra nested key on an answer is rejected (strict inner schema)'
 })
 
 test('C5 — an extra TOP-level key on the frame is rejected (checkStrictKeys)', () => {
-  const server = makeServer(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(askQuestionAdapter(ASK_QUESTIONS, () => {})))
   server.handleData(
     conn,
     clientFrame({
@@ -5717,9 +5336,7 @@ test('C5 — an extra TOP-level key on the frame is rejected (checkStrictKeys)',
 test('F10 — a frame with an extra key on an allowlisted type is rejected (not stripped)', () => {
   // The reused Zod schema STRIPS unknown keys; the contract requires rejection.
   // `{type:"app.ping", nonce, runCommand}` must produce bad_request, not a pong.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({ type: 'app.ping', nonce: 'n', runCommand: 'rm -rf ~' } as never),
@@ -5729,9 +5346,7 @@ test('F10 — a frame with an extra key on an allowlisted type is rejected (not 
 })
 
 test('F10 — an unexpected key inside app.submit.options is rejected', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({
@@ -5747,9 +5362,7 @@ test('F10 — an unexpected key inside app.submit.options is rejected', () => {
 })
 
 test('F10 — an unexpected key toolUseID inside permission.response.response is rejected', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({
@@ -5775,9 +5388,7 @@ test('F6 — an outbound event carrying a secret key is blocked, not shipped', a
       } as never
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { received } = connect(controller)
   expect(received[0]?.kind).toBe('ready') // the ready handshake is clean
 
   void controller.submit('go')
@@ -5819,9 +5430,7 @@ test('raw forwarding omits undefined optional SDK fields instead of dropping the
       } as never
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(controller)
 
   void controller.submit('go')
   await waitFor(() => received.some(frame => frame.kind === 'event'))
@@ -5840,9 +5449,7 @@ test('F6 — a contaminated `ready` handshake is blocked (secret guard covers re
   const controller = new AppSessionController(probeAdapter())
   // Contaminate the goal snapshot so it rides along in the ready payload.
   controller.updateGoalSnapshot({ threadId: 't', accessToken: 'sk-leak' } as never)
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(controller)
   // No clean `ready` frame goes out; an internal_error is sent instead.
   expect(received.some(f => f.kind === 'ready')).toBe(false)
   const err = received.find(f => f.kind === 'error')
@@ -5853,9 +5460,7 @@ test('F6 — a contaminated `ready` handshake is blocked (secret guard covers re
 test('F10 — a prototype-name type (constructor) is rejected, not crashed', () => {
   // `type in allowedByType` used to accept inherited keys and then crash on a
   // prototype function. It must be a clean bad_request now.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   expect(() =>
     server.handleData(conn, clientFrame({ type: 'constructor' } as never)),
   ).not.toThrow()
@@ -5871,9 +5476,7 @@ test('F10 — deny+interrupt (a host-only escalation) is rejected on permission.
   // The Zod schema accepts `interrupt` (host field), but the renderer contract
   // does not expose it. Strict checking of `response` keys must reject it rather
   // than let it reach the engine and change deny behavior.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({
@@ -5891,9 +5494,7 @@ test('F10 — deny+interrupt (a host-only escalation) is rejected on permission.
 test('F10 — a legit deny still passes strict checks (reaches permission_not_found)', () => {
   // Guard against over-rejection: a contract-valid deny must NOT be flagged as an
   // unexpected-key error; with no pending request it should hit permission_not_found.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
     clientFrame({
@@ -5911,9 +5512,7 @@ test('F5 — ready frame does not alias the controller\'s live objects (mutation
   const mutableSnapshot = { threadId: 'thread-123', name: 'Original Name' } as any
   controller.getGoalSnapshot = () => mutableSnapshot
 
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(controller)
 
   const ready = received.find(f => f.kind === 'ready')
   expect(ready).toBeDefined()
@@ -5933,9 +5532,7 @@ test('F5 — ready frame canonicalizes undefined-valued fields', () => {
     description: undefined,
   } as any)
 
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(controller)
 
   const ready = received.find(f => f.kind === 'ready')
   expect(ready).toBeDefined()
@@ -6120,11 +5717,9 @@ test('C3 — attach emits a permission.context snapshot faithful to the engine c
       ['/tmp/extra', { path: '/tmp/extra', source: 'session' }],
     ]),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
 
   // Ready first, snapshot immediately after (§4: attach emission; the
   // engine-owned AppReadyPayload is not widened).
@@ -6162,9 +5757,7 @@ test('C3 — attach emits a permission.context snapshot faithful to the engine c
 })
 
 test('C3 — no permission domain (probe fixture) → ready only, no snapshot', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
 
   expect(received[0]?.kind).toBe('ready')
   expect(contextFrames(received)).toHaveLength(0)
@@ -6172,11 +5765,9 @@ test('C3 — no permission domain (probe fixture) → ready only, no snapshot', 
 
 test('C3 — a live-context change broadcasts a fresh snapshot (engine-applied rule)', () => {
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
   const before = contextFrames(received).length
 
   // The engine's own decision path applies C1 updates via setAppState
@@ -6201,11 +5792,9 @@ test('C3 — a live-context change broadcasts a fresh snapshot (engine-applied r
 
 test('C3 — an unrelated app-state change does NOT re-emit the snapshot', () => {
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { received } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
   const before = contextFrames(received).length
 
   store.setState(prev => ({ ...prev, thinkingEnabled: !prev.thinkingEnabled }))
@@ -6215,11 +5804,9 @@ test('C3 — an unrelated app-state change does NOT re-emit the snapshot', () =>
 
 test('C2 — permission.setMode applies every allowlisted mode via the engine transition', () => {
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   for (const mode of ['acceptEdits', 'plan', 'dontAsk', 'default'] as const) {
     server.handleData(
@@ -6235,11 +5822,9 @@ test('C2 — permission.setMode applies every allowlisted mode via the engine tr
 
 test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () => {
   const store = makePermissionStore({ mode: 'acceptEdits' })
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = contextFrames(received).length
   const contextBefore = store.getState().toolPermissionContext
 
@@ -6259,11 +5844,9 @@ test('C2 — setMode to the CURRENT mode is a no-op and emits no snapshot', () =
 
 test('C2 — bypassPermissions is rejected without the trusted launch capability', () => {
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = contextFrames(received).length
 
   server.handleData(
@@ -6296,11 +5879,9 @@ test('C2 — bypassPermissions is accepted when the context marks it available',
   // The session context reports that the desktop mode is available; the
   // boundary honours the bypass request.
   const store = makePermissionStore({ isBypassPermissionsModeAvailable: true })
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
@@ -6336,9 +5917,7 @@ test('C2 — auto is REJECTED when the live classifier gate is unavailable', () 
       permissionClassifierEnabled: false,
     }),
   }
-  const server = makeServer(new AppSessionController(probeAdapter()), { permissions })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { permissions })
 
   server.handleData(
     conn,
@@ -6370,9 +5949,7 @@ test('C2 — auto reaches the engine transition when the live classifier gate is
       permissionClassifierEnabled: true,
     }),
   }
-  const server = makeServer(new AppSessionController(probeAdapter()), { permissions })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { permissions })
 
   server.handleData(
     conn,
@@ -6390,11 +5967,9 @@ test('C2 — auto reaches the engine transition when the live classifier gate is
 
 test('C2 — an unknown mode string fails the sidecar-local schema', () => {
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
@@ -6416,11 +5991,9 @@ test('C2/F10 — a setMode frame smuggling a destination key is rejected wholesa
   // sidecar. A renderer that tries to address settings persistence is refused
   // by strict-key checking before any schema runs.
   const store = makePermissionStore()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
@@ -6448,9 +6021,7 @@ test('C2/F10 — a setMode frame smuggling a destination key is rejected wholesa
 })
 
 test('C2 — setMode without a permission domain fails closed (probe fixture)', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -6483,11 +6054,9 @@ test('C1+C3 — resolving with a suggestion selection then applying it re-snapsh
       resolved = r
     }, [suggestion]),
   )
-  const server = makeServer(controller, {
+  const { server, received, conn } = connect(controller, {
     permissions: createSidecarPermissionDomain(store),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   void controller.submit('go')
   await waitFor(() => controller.getPendingPermissionRequests().length === 1)
@@ -6602,9 +6171,7 @@ afterEach(() => {
 test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-clean', () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   const snap = received.find(f => f.kind === 'accounts.snapshot')
   expect(snap?.kind).toBe('accounts.snapshot')
@@ -6615,17 +6182,13 @@ test('P4-5 — attach emits a redacted accounts.snapshot that is secretGuard-cle
 })
 
 test('stats — ordinary attach does not start a per-sidecar usage scan', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
   await Promise.resolve()
   expect(received.some(f => f.kind === 'stats.usage.snapshot')).toBe(false)
 })
 
 test('stats — stats.query with range: 30d dispatches and responds with 30d stats.usage.snapshot', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -6646,9 +6209,7 @@ test('stats — stats.query with range: 30d dispatches and responds with 30d sta
 })
 
 test('stats — stats.query with invalid range fails closed (bad_request)', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -6686,13 +6247,11 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
     },
     runVerb: () => ({ ok: true, message: 'Updated.', changed: true }),
   }
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     accounts,
     settings,
     runControls,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
   const before = received.filter(f => f.kind === 'accounts.snapshot').length
   const beforeRunControls = received.filter(
     f => f.kind === 'run-controls.snapshot',
@@ -6731,9 +6290,7 @@ test('P4-5 — a valid account.switch produces an ok account.result and re-broad
 test('P4-5 — account.result never carries token material', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture({ accountId: 'a' })], activeAccountId: 'a' })
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   server.handleData(conn, accountFrame({ type: 'account.switch', requestId: 'r', accountId: 'a' }))
   await flush()
   const result = received.find(f => f.kind === 'account.result')
@@ -6742,32 +6299,20 @@ test('P4-5 — account.result never carries token material', async () => {
 
 test('P4-5 — rejects an account verb carrying an unexpected key (checkStrictKeys)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'account.switch', requestId: 'r', accountId: 'a', updatedPermissions: [] } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'account.switch', requestId: 'r', accountId: 'a', updatedPermissions: [] }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
 test('P4-5 — rejects account.switch with a missing accountId (schema)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'account.switch', requestId: 'r' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'account.switch', requestId: 'r' }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
@@ -6783,9 +6328,7 @@ test('P4-5 — a valid account.rename passes the boundary and dispatches with it
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -6807,26 +6350,16 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   const accounts = makeAccountsDomain({
     executor: fakeExecutor({ delete: () => { deleted = true; return { ok: true, message: 'x' } } }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   // confirm omitted
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'account.delete', requestId: 'r', accountId: 'a' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'account.delete', requestId: 'r', accountId: 'a' }),
   )
   // confirm:false
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'account.delete', requestId: 'r2', accountId: 'a', confirm: false } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'account.delete', requestId: 'r2', accountId: 'a', confirm: false }),
   )
   expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBeGreaterThanOrEqual(2)
   expect(deleted).toBe(false)
@@ -6847,9 +6380,7 @@ test('host deletion notice clears a live sidecar pool without emitting account.r
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -6890,21 +6421,15 @@ test('host deletion notice rejects extra keys before changing local state', () =
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'account.profileDeleted',
-        requestId: 'host-delete',
-        accountId: 'keep-account',
-        extra: true,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'account.profileDeleted',
+      requestId: 'host-delete',
+      accountId: 'keep-account',
+      extra: true,
     }),
   )
 
@@ -6915,9 +6440,7 @@ test('host deletion notice rejects extra keys before changing local state', () =
 })
 
 test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
@@ -6928,9 +6451,7 @@ test('P4-5 — an account verb with no accounts domain fails closed (internal_er
 
 test('P4-15 — account.login emits an oauth.login.progress waiting_for_login carrying the url (secretGuard-clean through send)', async () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
   await flush()
@@ -6982,9 +6503,7 @@ test('CC-17 — account.login provider:anthropic passes the strict boundary and 
     },
     isFirstRunEligible: () => true,
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -7014,21 +6533,15 @@ test('CC-17 — account.login rejects renderer-authored provider activation auth
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'account.login',
-        requestId: 'forged-activation',
-        provider: 'anthropic',
-        activateProvider: true,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'account.login',
+      requestId: 'forged-activation',
+      provider: 'anthropic',
+      activateProvider: true,
     }),
   )
 
@@ -7042,20 +6555,14 @@ test('CC-17 — account.login rejects an unknown provider at the strict boundary
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'account.login',
-        requestId: 'bad-provider',
-        provider: 'other',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'account.login',
+      requestId: 'bad-provider',
+      provider: 'other',
     }),
   )
 
@@ -7078,9 +6585,7 @@ test('boundary — account.oauthCancel is accepted and reaches the domain', asyn
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'l1' } as never))
   await flush()
@@ -7103,9 +6608,7 @@ test('boundary — account.oauthCancel with an unexpected key is rejected (check
     executor: fakeExecutor(),
     oauthRunner: fakeOAuthRunner(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -7145,9 +6648,7 @@ test('boundary — account.switch carrying provider:"anthropic" crosses and rout
       },
     ],
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -7168,9 +6669,7 @@ test('boundary — account.switch carrying provider:"anthropic" crosses and rout
 
 test('boundary — account.switch with an unknown provider is rejected fail-closed', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
   server.handleData(
     conn,
@@ -7193,12 +6692,10 @@ test('P4-15 — paste-code then alias completes the flow (success) and re-broadc
     oauthRunner: fakeOAuthRunner({ requireManualCode: true, onPasteReceived: c => received_codes.push(c) }),
   })
   const { domain: runControls } = fakeRunControlsDomain()
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     accounts,
     runControls,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(conn, accountFrame({ type: 'account.login', requestId: 'r1' }))
   await flush()
@@ -7230,20 +6727,14 @@ test('P4-15 — paste-code then alias completes the flow (success) and re-broadc
 
 test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStrictKeys)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'account.oauthAlias',
-        requestId: 'r',
-        alias: 'work',
-        updatedPermissions: [],
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'account.oauthAlias',
+      requestId: 'r',
+      alias: 'work',
+      updatedPermissions: [],
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -7251,16 +6742,10 @@ test('P4-15 — rejects account.oauthAlias carrying an unexpected key (checkStri
 
 test('P4-15 — rejects account.oauthPasteCode with a missing code (schema)', () => {
   const accounts = makeAccountsDomain({ executor: fakeExecutor(), oauthRunner: fakeOAuthRunner() })
-  const server = makeServer(new AppSessionController(probeAdapter()), { accounts })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'account.oauthPasteCode', requestId: 'r' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'account.oauthPasteCode', requestId: 'r' }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
@@ -7286,9 +6771,7 @@ test('P4-13 — attach emits a remoteSettings.snapshot', () => {
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
 
   const snap = received.find(f => f.kind === 'remoteSettings.snapshot')
   expect(snap?.kind).toBe('remoteSettings.snapshot')
@@ -7301,18 +6784,12 @@ test('P4-13 — a valid bridgeToggle produces an ok result and re-broadcasts the
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
   const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r1', enable: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'remoteSettings.bridgeToggle', requestId: 'r1', enable: true }),
   )
   await flush()
 
@@ -7330,18 +6807,12 @@ test('P4-13 — a rejected bridgeToggle prerequisite produces an ok:false result
     commands: [],
     executor: fakeRemoteExecutor({ checkBridgePrerequisites: async () => 'blocked by policy' }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
   const before = received.filter(f => f.kind === 'remoteSettings.snapshot').length
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r2', enable: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'remoteSettings.bridgeToggle', requestId: 'r2', enable: true }),
   )
   await flush()
 
@@ -7357,17 +6828,11 @@ test('P4-13 — a valid directConnect never carries token material and echoes re
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'remoteSettings.directConnect', requestId: 'r3', serverUrl: 'https://remote.example.test:8200' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'remoteSettings.directConnect', requestId: 'r3', serverUrl: 'https://remote.example.test:8200' }),
   )
   await flush()
 
@@ -7400,20 +6865,14 @@ test('T3 — directConnect accepts a plain http URL and hands it to the domain',
       },
     }),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'remoteSettings.directConnect',
-        requestId: 'ok-1',
-        serverUrl: 'http://127.0.0.1:8200',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'remoteSettings.directConnect',
+      requestId: 'ok-1',
+      serverUrl: 'http://127.0.0.1:8200',
     }),
   )
   await flush()
@@ -7456,20 +6915,14 @@ test('T3 — directConnect rejects every non-plain-http serverUrl at the boundar
         },
       }),
     })
-    const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-    const { socket, received } = makeSocket()
-    const conn = server.addConnection(socket)
+    const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
 
     server.handleData(
       conn,
-      encodeFrame({
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: SESSION,
-        message: {
-          type: 'remoteSettings.directConnect',
-          requestId: 'bad-1',
-          serverUrl,
-        } as unknown as ClientFrame['message'],
+      rawFrame({
+        type: 'remoteSettings.directConnect',
+        requestId: 'bad-1',
+        serverUrl,
       }),
     )
     await flush()
@@ -7493,20 +6946,14 @@ test('P4-13 — rejects a remoteSettings verb carrying an unexpected key (checkS
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'remoteSettings.bridgeToggle',
-        requestId: 'r',
-        enable: true,
-        updatedPermissions: [],
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'remoteSettings.bridgeToggle',
+      requestId: 'r',
+      enable: true,
+      updatedPermissions: [],
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -7519,31 +6966,19 @@ test('P4-13 — rejects directConnect with a missing serverUrl (schema)', () => 
     commands: [],
     executor: fakeRemoteExecutor(),
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { remoteSettings })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { remoteSettings })
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'remoteSettings.directConnect', requestId: 'r' } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'remoteSettings.directConnect', requestId: 'r' }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
 test('P4-13 — a remoteSettings verb with no remoteSettings domain fails closed (internal_error)', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: { type: 'remoteSettings.bridgeToggle', requestId: 'r', enable: true } as unknown as ClientFrame['message'],
-    }),
+    rawFrame({ type: 'remoteSettings.bridgeToggle', requestId: 'r', enable: true }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
@@ -7574,16 +7009,12 @@ test('P4-19 — a valid settings.setValue produces an ok result and re-broadcast
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w1',
-        source: 'userSettings',
-        key: 'includeCoAuthoredBy',
-        value: false,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w1',
+      source: 'userSettings',
+      key: 'includeCoAuthoredBy',
+      value: false,
     }),
   )
 
@@ -7609,16 +7040,12 @@ test('P4-19 — a dynamic-enum (outputStyle) string value passes the boundary to
   const conn = server.addConnection(socket)
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'os1',
-        source: 'userSettings',
-        key: 'outputStyle',
-        value: 'Explanatory',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'os1',
+      source: 'userSettings',
+      key: 'outputStyle',
+      value: 'Explanatory',
     }),
   )
   const result = received.find(f => f.kind === 'settings.result')
@@ -7632,17 +7059,13 @@ test('P4-19 — rejects a settings verb carrying an unexpected key (checkStrictK
   const conn = server.addConnection(socket)
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w',
-        source: 'userSettings',
-        key: 'includeCoAuthoredBy',
-        value: false,
-        updatedPermissions: [],
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w',
+      source: 'userSettings',
+      key: 'includeCoAuthoredBy',
+      value: false,
+      updatedPermissions: [],
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -7660,16 +7083,12 @@ test('P4-19 — rejects a non-editable source (policy) at the schema boundary', 
   const conn = server.addConnection(socket)
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w',
-        source: 'policySettings',
-        key: 'includeCoAuthoredBy',
-        value: false,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w',
+      source: 'policySettings',
+      key: 'includeCoAuthoredBy',
+      value: false,
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
@@ -7685,31 +7104,23 @@ test('P4-19 — rejects a mistyped value and a non-allowlisted key at the value 
   // fastMode is boolean → a string value is rejected.
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w1',
-        source: 'userSettings',
-        key: 'fastMode',
-        value: 'on',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w1',
+      source: 'userSettings',
+      key: 'fastMode',
+      value: 'on',
     }),
   )
   // apiKey is NOT in the editable allowlist → rejected (never written).
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w2',
-        source: 'userSettings',
-        key: 'apiKey',
-        value: 'sk-live-X',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w2',
+      source: 'userSettings',
+      key: 'apiKey',
+      value: 'sk-live-X',
     }),
   )
   expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBe(2)
@@ -7728,11 +7139,7 @@ function sendSettingsFrame(
 ): void {
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: message as unknown as ClientFrame['message'],
-    }),
+    rawFrame(message),
   )
 }
 
@@ -7929,21 +7336,15 @@ test('P4-56 — autoMemoryEnabled rejects wrong type, source, and unknown key', 
 })
 
 test('P4-19 — a settings verb with no settings domain fails closed (internal_error)', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'settings.setValue',
-        requestId: 'w',
-        source: 'userSettings',
-        key: 'includeCoAuthoredBy',
-        value: false,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'settings.setValue',
+      requestId: 'w',
+      source: 'userSettings',
+      key: 'includeCoAuthoredBy',
+      value: false,
     }),
   )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
@@ -8005,9 +7406,7 @@ test('a removed connection cannot submit a late frame into the engine', async ()
       turns++
     },
   })
-  const server = makeServer(controller)
-  const { socket } = makeSocket()
-  const connection = server.addConnection(socket)
+  const { server, conn: connection } = connect(controller)
 
   server.removeConnection(connection)
   server.handleData(
@@ -8046,9 +7445,7 @@ test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read
     detectedRepo: 'acme/cat-code',
     trustRoot: '/repo',
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { workspaceTrust })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { workspaceTrust })
 
   const snap = received.find(f => f.kind === 'workspace-trust.snapshot')
   expect(snap).toEqual({
@@ -8063,9 +7460,7 @@ test('P4-14 — attach emits a workspace-trust.snapshot carrying the domain read
 
 test('P4-14 — a null workspace-trust read degrades to no frame, never strands the connection', () => {
   const workspaceTrust = fakeWorkspaceTrust(null)
-  const server = makeServer(new AppSessionController(probeAdapter()), { workspaceTrust })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { workspaceTrust })
 
   expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
   // The rest of the attach sequence still ran (ready always fires first).
@@ -8108,9 +7503,7 @@ test('queued task notifications fail closed on false/null trust and drain after 
         options?.onInputPersisted?.()
       },
     })
-    const server = makeServer(controller, { workspaceTrust })
-    const { socket } = makeSocket()
-    const conn = server.addConnection(socket)
+    const { server, conn } = connect(controller, { workspaceTrust })
     enqueuePendingNotification({
       mode: 'task-notification',
       value: `Task notification\nTask ID: worker-trust-${String(initialSnapshot?.trusted)}\nSummary: Agent @Ada completed`,
@@ -8149,13 +7542,9 @@ test('P4-15 — a valid workspace.trust accept produces an ok result and re-broa
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'workspace.trust',
-        requestId: 't1',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'workspace.trust',
+      requestId: 't1',
     }),
   )
 
@@ -8184,13 +7573,9 @@ test('P4-15 — an already-trusted accept returns ok but does NOT re-broadcast (
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'workspace.trust',
-        requestId: 't2',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'workspace.trust',
+      requestId: 't2',
     }),
   )
 
@@ -8216,16 +7601,12 @@ test('P4-15 — rejects a workspace.trust verb carrying a renderer-authored path
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      // A renderer-supplied `path` is exactly what HC1 forbids — rejected before
-      // the verb ever reaches the domain (no path field exists in the contract).
-      message: {
-        type: 'workspace.trust',
-        requestId: 't',
-        path: '/etc',
-      } as unknown as ClientFrame['message'],
+    // A renderer-supplied `path` is exactly what HC1 forbids — rejected before
+    // the verb ever reaches the domain (no path field exists in the contract).
+    rawFrame({
+      type: 'workspace.trust',
+      requestId: 't',
+      path: '/etc',
     }),
   )
 
@@ -8248,12 +7629,8 @@ test('P4-15 — rejects a workspace.trust verb missing requestId at the schema b
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'workspace.trust',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'workspace.trust',
     }),
   )
 
@@ -8272,11 +7649,9 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
       turnRan = true
     },
   })
-  const server = makeServer(controller, {
+  const { server, received, conn } = connect(controller, {
     workspaceTrust: fakeWorkspaceTrust({ trusted: false, detectedRepo: null, trustRoot: '/repo' }),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
@@ -8293,11 +7668,9 @@ test('P4-15 — app.submit at an UNTRUSTED cwd is rejected (unauthorized) and no
 })
 
 test('P4-15 — app.submit at a TRUSTED cwd proceeds to a turn (the gate is off when trusted)', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     workspaceTrust: fakeWorkspaceTrust({ trusted: true, detectedRepo: null, trustRoot: '/repo' }),
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
@@ -8320,9 +7693,7 @@ test('P4-25 — app.submit under a NULL/failed trust snapshot is rejected (fail-
       turnRan = true
     },
   })
-  const server = makeServer(controller, { workspaceTrust: fakeWorkspaceTrust(null) })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller, { workspaceTrust: fakeWorkspaceTrust(null) })
 
   server.handleData(
     conn,
@@ -8350,9 +7721,7 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
     healthWarnings: ['Found invalid settings files: /tmp/x.json. They will be ignored.'],
     memoryWarnings: [],
   })
-  const server = makeServer(new AppSessionController(probeAdapter()), { diagnostics })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { diagnostics })
 
   const snap = received.find(f => f.kind === 'diagnostics.snapshot')
   expect(snap).toEqual({
@@ -8376,18 +7745,14 @@ test('P4-14 — attach emits a diagnostics.snapshot carrying the domain read', (
 
 test('P4-14 — a null diagnostics read degrades to no frame, never strands the connection', () => {
   const diagnostics = fakeDiagnostics(null)
-  const server = makeServer(new AppSessionController(probeAdapter()), { diagnostics })
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()), { diagnostics })
 
   expect(received.some(f => f.kind === 'diagnostics.snapshot')).toBe(false)
   expect(received[0]?.kind).toBe('ready')
 })
 
 test('P4-14 — absent domains (probe mode) emit neither snapshot, without throwing', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  server.addConnection(socket)
+  const { received } = connect(new AppSessionController(probeAdapter()))
 
   expect(received.some(f => f.kind === 'workspace-trust.snapshot')).toBe(false)
   expect(received.some(f => f.kind === 'diagnostics.snapshot')).toBe(false)
@@ -8546,27 +7911,19 @@ test('message-targeted actions reject forged fields and malformed targets before
 
   server.handleData(
     connection,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.editFromMessage',
-        requestId: 'forged-1',
-        userMessageId: TARGET_USER_MESSAGE_ID,
-        action: 'branch',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.editFromMessage',
+      requestId: 'forged-1',
+      userMessageId: TARGET_USER_MESSAGE_ID,
+      action: 'branch',
     }),
   )
   server.handleData(
     connection,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.branchFromMessage',
-        requestId: 'forged-2',
-        userMessageId: '../../conversation',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.branchFromMessage',
+      requestId: 'forged-2',
+      userMessageId: '../../conversation',
     }),
   )
   await flush()
@@ -8839,14 +8196,10 @@ test('P4-6b — a valid session.rename dispatches + acks ok + relabels via sessi
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.rename',
-        requestId: 'sr1',
-        title: 'Renamed Title',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.rename',
+      requestId: 'sr1',
+      title: 'Renamed Title',
     }),
   )
   await flush()
@@ -8869,13 +8222,9 @@ test('P4-6b — a valid session.export returns the rendered text on the result',
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.export',
-        requestId: 'se1',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.export',
+      requestId: 'se1',
     }),
   )
   await flush()
@@ -8910,21 +8259,15 @@ test('an over-cap export is refused in words the operator can act on', async () 
       return { ok: true, message: 'Tagged.' }
     },
   }
-  const server = makeServer(new AppSessionController(probeAdapter()), {
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
     sessionActions: domain,
   })
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.export',
-        requestId: 'se-big',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.export',
+      requestId: 'se-big',
     }),
   )
   await flush()
@@ -8946,13 +8289,9 @@ test('the existing session.branch verb remains accepted as additive v1 vocabular
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.branch',
-        requestId: 'sb1',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.branch',
+      requestId: 'sb1',
     }),
   )
   await flush()
@@ -8975,13 +8314,9 @@ test('P4-6b — rejects session.rename missing requestId at the schema boundary,
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.rename',
-        title: 'x',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.rename',
+      title: 'x',
     }),
   )
   await flush()
@@ -8997,14 +8332,10 @@ test('P4-6b — rejects session.rename with a NON-string title (Zod boundary), n
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.rename',
-        requestId: 'sr2',
-        title: 123,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.rename',
+      requestId: 'sr2',
+      title: 123,
     }),
   )
   await flush()
@@ -9020,14 +8351,10 @@ test('P4-6b — rejects session.export carrying an unexpected key (checkStrictKe
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.export',
-        requestId: 'se2',
-        format: 'markdown',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.export',
+      requestId: 'se2',
+      format: 'markdown',
     }),
   )
   await flush()
@@ -9043,14 +8370,10 @@ test('P4-29 — a valid session.tag dispatches + acks ok under the tag verb', as
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.tag',
-        requestId: 'st1',
-        tag: 'infra',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.tag',
+      requestId: 'st1',
+      tag: 'infra',
     }),
   )
   await flush()
@@ -9071,14 +8394,10 @@ test('P4-29 — an EMPTY session.tag is accepted (the engine remove form), not r
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.tag',
-        requestId: 'st2',
-        tag: '',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.tag',
+      requestId: 'st2',
+      tag: '',
     }),
   )
   await flush()
@@ -9095,14 +8414,10 @@ test('P4-29 — rejects session.tag with a NON-string tag (Zod boundary), no dom
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.tag',
-        requestId: 'st3',
-        tag: { name: 'infra' },
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.tag',
+      requestId: 'st3',
+      tag: { name: 'infra' },
     }),
   )
   await flush()
@@ -9119,15 +8434,11 @@ test('P4-29 — rejects session.tag carrying an unexpected key (checkStrictKeys)
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.tag',
-        requestId: 'st4',
-        tag: 'infra',
-        sessionId: 'forged',
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.tag',
+      requestId: 'st4',
+      tag: 'infra',
+      sessionId: 'forged',
     }),
   )
   await flush()
@@ -9138,20 +8449,14 @@ test('P4-29 — rejects session.tag carrying an unexpected key (checkStrictKeys)
 })
 
 test('P4-6b — a session-action verb with NO domain (probe) fails closed with internal_error', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
-    encodeFrame({
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: SESSION,
-      message: {
-        type: 'session.branchFromMessage',
-        requestId: 'sb2',
-        userMessageId: TARGET_USER_MESSAGE_ID,
-      } as unknown as ClientFrame['message'],
+    rawFrame({
+      type: 'session.branchFromMessage',
+      requestId: 'sb2',
+      userMessageId: TARGET_USER_MESSAGE_ID,
     }),
   )
   await flush()
@@ -9184,9 +8489,7 @@ test('production app.submit order: the echoed user message, THEN turn.status(tru
       } as never
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -9347,13 +8650,9 @@ test('P4-32b — the inbound allowlist did NOT grow: a lease verb is rejected ba
     ).length
     server.handleData(
       conn,
-      encodeFrame({
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: SESSION,
-        message: {
-          type,
-          requestId: `lease-${type}`,
-        } as unknown as ClientFrame['message'],
+      rawFrame({
+        type,
+        requestId: `lease-${type}`,
       }),
     )
     // Fail closed: an unallowlisted type is refused before any dispatch, so it
@@ -9418,9 +8717,7 @@ function makePeerServer(): { server: SidecarServer; logged: string[] } {
 }
 
 test('HR5 — a valid peer.deliver reaches the REAL engine queue as a peer-origin task notification', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
 
@@ -9478,19 +8775,8 @@ test('HR5 — a peer message a BUSY session receives gets its row when the turn 
   // tells anyone is `notifyCommandLifecycle`, and it tells that only for a
   // command carrying a uuid (`src/query.ts:2010`) — which a delivered peer
   // message did not, so the row never existed anywhere.
-  let release: (() => void) | undefined
-  const controller = new AppSessionController({
-    async *runTurn({ options }) {
-      options?.onInputPersisted?.()
-      await new Promise<void>(resolve => {
-        release = resolve
-      })
-      yield buildProbeToolUseMessage()
-    },
-  })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { controller, release } = gatedTurnController()
+  const { server, received, conn } = connect(controller)
 
   server.handleData(
     conn,
@@ -9519,7 +8805,7 @@ test('HR5 — a peer message a BUSY session receives gets its row when the turn 
   // never be recalled back into the composer.
   expect(queuedPromptSnapshots(received).flat()).toEqual([])
 
-  release?.()
+  release()
 })
 
 test('HR5 — an IDLE recipient still gets exactly one row, never a second', async () => {
@@ -9527,9 +8813,7 @@ test('HR5 — an IDLE recipient still gets exactly one row, never a second', asy
   // always rendered. It reaches the queue through `dequeue`, which fires no
   // lifecycle signal, so the busy-path announcement cannot also run for it.
   // Firing the signal that cannot arrive is the proof.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
   const uuid = getCommandQueueSnapshot()[0]?.uuid
@@ -9550,9 +8834,7 @@ function queuedPeerText(): string {
 }
 
 test('M3 — a body cannot close the envelope and keep talking outside it', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
 
   // The forgery: end the envelope, then continue with something the auto-mode
   // classifier would read as this session's own words rather than a peer's.
@@ -9578,9 +8860,7 @@ test('M3 — a body cannot close the envelope and keep talking outside it', () =
 })
 
 test('M3 — an opening tag in a body is defused too, and other markup is not', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -9600,9 +8880,7 @@ test('M3 — an opening tag in a body is defused too, and other markup is not', 
 })
 
 test('the creation prompt is delivered UNTAGGED, and only when main says so', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true })))
 
@@ -9616,9 +8894,7 @@ test('the creation prompt is delivered UNTAGGED, and only when main says so', ()
 })
 
 test('the creation-prompt flag survives onto the origin, so the engine can frame it', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver({ untagged: true })))
 
@@ -9767,9 +9043,7 @@ test('a delivered peer message is acked only once the engine has CONSUMED it, no
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   server.handleData(conn, hostPlaneFrame(validPeerDeliver()))
   // The command is on the queue and the turn for it has started, and that is
@@ -9814,9 +9088,7 @@ test('a process killed between delivery and consumption acks nothing, so main is
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   // A human turn is running, so the peer message waits on the queue.
   server.handleData(
@@ -9855,9 +9127,7 @@ test('a redelivered message the session already consumed is not handed to the mo
       yield buildProbeToolUseMessage()
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   // Busy, so the message waits for the running turn's next tool boundary and
   // the idle drain cannot take it instead.
@@ -9900,9 +9170,7 @@ test('a redelivered message the session already consumed is not handed to the mo
 })
 
 test('a message still waiting on the queue is not enqueued a second time by a redelivery', () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const messageId = '5f0b3d1a-1111-4111-8111-000000000002'
   server.handleData(conn, hostPlaneFrame(validPeerDeliver({ messageId })))
@@ -10007,9 +9275,7 @@ test('IDLE-PARK — the other ordering needs no new gate: a delivered peer messa
 })
 
 test('the request client mints an id, awaits its result, and resolves the caller', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   const sent = received.find(f => f.kind === 'host.request')
@@ -10071,9 +9337,7 @@ test('a host.result whose requestId matches nothing settles nobody and is droppe
 })
 
 test('a malformed host.result settles nobody rather than resolving a caller with garbage', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
@@ -10097,9 +9361,7 @@ test('a malformed host.result settles nobody rather than resolving a caller with
 })
 
 test('an unanswered host request resolves with a typed failure instead of hanging', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket } = makeSocket()
-  server.addConnection(socket)
+  const { server } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   // `close()` settles every in-flight request. Without that a caller waits on a
@@ -10144,9 +9406,7 @@ test('presence is idle at ready, and two prompts resolved out of order stay need
       await Promise.all([first, second])
     },
   })
-  const server = makeServer(controller)
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(controller)
 
   const presences = () =>
     received.filter(f => f.kind === 'activity').map(f => (f as { presence: string }).presence)
@@ -10182,9 +9442,7 @@ test('presence is idle at ready, and two prompts resolved out of order stay need
 })
 
 test('presence is published only when it MOVES', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   server.handleData(
     conn,
@@ -10274,9 +9532,7 @@ test('HR5/F6 — a host.result whose value does not match its verb is refused, n
   // well-formed envelope carrying the wrong shape reached the caller wearing a
   // type nothing had checked — and `peers.list` carries an `engineSessionId`
   // that a reader joins into a filesystem path.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
@@ -10306,9 +9562,7 @@ test('HR5/F6 — a peers.list row carries the model and effort main observed, an
   // the day it ships. What the boundary still owes is that the row is a CLOSED
   // shape, so the same call proves the strict object has not been loosened into
   // a pass-through by the addition.
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
@@ -10350,9 +9604,7 @@ test('HR5/F6 — a peers.list row carries the model and effort main observed, an
 })
 
 test('HR5/F6 — a result for one verb cannot satisfy another verb schema', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peer.deliver', { to: 'Bear', text: 'hi' })
   const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
@@ -10374,9 +9626,7 @@ test('HR5/F6 — a result for one verb cannot satisfy another verb schema', asyn
 })
 
 test('HR5/F6 — an unrecognised host error code degrades to the closed union', async () => {
-  const server = makeServer(new AppSessionController(probeAdapter()))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
+  const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
 
   const pending = server.requestHost('peers.list', {})
   const requestId = (received.find(f => f.kind === 'host.request') as { requestId: string })
