@@ -27,14 +27,23 @@ export async function commitCodexAccountSwitch(
   const account = switchToAccount(idPrefix)
   if (!account) return null
 
-  // The main thread holds a persistent codex lease (see query.ts) that pins an
-  // accountId at creation time. switchToAccount only updates pool.activeIndex,
-  // so without this the lease (and therefore the status line + API routing)
-  // stays on the previous account.
+  // switchToAccount only updates pool.activeIndex; a lease pins its accountId at
+  // creation time. So reassign whatever is live: the main-thread lease if a turn
+  // is running right now, plus every `follow-main` subagent lease.
+  //
+  // The two have very different lifetimes, and the difference is why the desktop
+  // path looked fine for so long. The main lease is per-TURN — registered at
+  // `query.ts:422` and released in the `finally` at `:2137` — so a switch between
+  // turns needs no reassignment at all: the next turn registers a fresh lease on
+  // the new active account. A `follow-main` subagent lease outlives the turn, so
+  // without this an async worker keeps spending the account the user switched off.
   reassignCodexLeasesToActiveAccount()
 
-  // Reset the Codex fetch cache context so the next request picks up the new
-  // account's conversation routing instead of the old one.
+  // Hygiene, not routing. The conversation id is already keyed by
+  // `${accountId}:${model}` (`codex-fetch-adapter.ts`), so B never inherits A's
+  // entry and clearing it changes no account selection. What this actually drops
+  // is the sticky-HTTP-fallback state, which is transport behavior carried over
+  // from the account we just left.
   resetCodexCacheContext()
 
   // Mirror the Claude switch path: clear all auth-sensitive caches so stale
