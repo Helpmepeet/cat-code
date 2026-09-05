@@ -9,6 +9,8 @@
  * than on the global Accounts page.
  */
 import type {
+  AccountsSnapshot,
+  AccountStatus,
   AgentModeWorkerItem,
   LeaseOwnerRow,
   LeaseSelectionKind,
@@ -19,6 +21,11 @@ import type {
   SessionId,
 } from '../../shared/protocol.js'
 import { createContext } from 'react'
+import {
+  selectAccountsSnapshot,
+  selectActiveAccount,
+  type AccountsState,
+} from './accountsState.js'
 import { selectWorkerDisplayName } from './orchestratorState.js'
 
 export type LeaseStateStore = {
@@ -84,6 +91,74 @@ export function selectLeaseForOwner(
 ): LeaseOwnerRow | null {
   if (!snapshot || !ownerId) return null
   return snapshot.owners.find(owner => owner.ownerId === ownerId) ?? null
+}
+
+/** The engine's owner id for the main lease (`src/query.ts`, protocol JOIN KEY note). */
+const MAIN_LEASE_OWNER_ID = 'main-thread'
+
+export type SessionCodexAccountSources = {
+  /**
+   * The roster the pane is already rendering — the host-global pool whenever one
+   * exists (`composerRailModel.ts` `railAccounts`). It stays the source of every
+   * displayed FIELD (usage, health, alias); only which row is active is resolved
+   * here.
+   */
+  roster: AccountsSnapshot | null
+  /** This session's own lease snapshot (`selectLeaseSnapshot`). */
+  leases: LeaseSnapshot | null
+  accounts: AccountsState
+  sessionId: SessionId | null
+}
+
+/**
+ * Which Codex account a session is actually ROUTING through, as a row of the
+ * roster already on screen.
+ *
+ * The roster's own `isDefault` cannot answer this. It flags the PERSISTED active
+ * account, read off disk by the disposable accounts-pool worker, while a session
+ * is its own engine process holding its own in-memory `activeIndex`. Two ways
+ * that drifts, both real:
+ *  - another pane switches accounts, persisting B, and every pane's face starts
+ *    saying B while this one still runs on C;
+ *  - `failoverCodexLease` (`src/services/api/codexAccountLeaseManager.ts`) moves a
+ *    session's lease without touching `activeIndex`, so the face keeps naming the
+ *    account the requests left.
+ *
+ * Order, freshest identity first:
+ *  1. this session's ACTIVE main-thread lease — the routing identity of a live
+ *     turn. A failed lease keeps the account id it could NOT use, so only a
+ *     holding one names an account (the `selectLeaseForLabel` refusal, reused).
+ *  2. this session's OWN accounts snapshot, built from its in-memory pool.
+ *  3. the roster's persisted active account, i.e. the previous behaviour.
+ *
+ * Between turns there is legitimately no main lease: the engine registers it per
+ * turn and releases it in a `finally`, and the sidecar drops synthesised leases.
+ * So step 1 coming up empty is the ORDINARY case and step 2 carries it.
+ *
+ * An id the roster does not contain falls through to the next step rather than
+ * rendering an invented or empty row: a wrong account is worse than a stale one.
+ */
+export function selectSessionCodexAccount(
+  sources: SessionCodexAccountSources,
+): AccountStatus | null {
+  const { accounts, leases, roster, sessionId } = sources
+  const rows = roster?.accounts ?? []
+  const rosterRow = (accountId: string): AccountStatus | null =>
+    rows.find(row => row.id === accountId) ?? null
+
+  const mainLease = selectLeaseForOwner(leases, MAIN_LEASE_OWNER_ID)
+  if (mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding') {
+    const leased = rosterRow(mainLease.accountId)
+    if (leased) return leased
+  }
+
+  const own = selectActiveAccount(selectAccountsSnapshot(accounts, sessionId))
+  if (own) {
+    const owned = rosterRow(own.id)
+    if (owned) return owned
+  }
+
+  return selectActiveAccount(roster)
 }
 
 /**

@@ -1,11 +1,18 @@
 import { expect, test } from 'bun:test'
 import type {
+  AccountsSnapshot,
+  AccountStatus,
   AgentModeWorkerItem,
   LeaseOwnerRow,
   LeaseSnapshot,
   LeaseSnapshotFrame,
   LifecycleFrame,
 } from '../../shared/protocol.js'
+import {
+  createAccountsState,
+  reduceAccountsState,
+  type AccountsState,
+} from './accountsState.js'
 import {
   createLeaseState,
   leaseAccountLabel,
@@ -17,6 +24,7 @@ import {
   selectLeaseForOwner,
   selectLeaseGroups,
   selectLeaseSnapshot,
+  selectSessionCodexAccount,
 } from './leaseState.js'
 
 function workerFixture(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
@@ -520,4 +528,204 @@ test('the note branches on selectionKind, never on the reason prose', () => {
     0,
   )
   expect(manual[0]?.agents[0]?.note).toBeNull()
+})
+
+/* ── selectSessionCodexAccount ─────────────────────────────────────────────── */
+
+function poolRow(over: Partial<AccountStatus> = {}): AccountStatus {
+  return {
+    id: 'acct-a',
+    alias: 'aurora',
+    status: 'healthy',
+    statusReason: null,
+    availability: 'available',
+    availabilityLabel: 'Ready',
+    isDefault: false,
+    hasVaultProfile: true,
+    source: 'vault',
+    usagePrimary: 20,
+    usageWeekly: 40,
+    usageLimitReached: false,
+    usageResetAt: null,
+    lastRefreshIso: null,
+    lastError: null,
+    planType: 'plus',
+    switchable: true,
+    ...over,
+  }
+}
+
+function accountsSnapshot(rows: AccountStatus[]): AccountsSnapshot {
+  return {
+    anthropicRouteAvailable: false,
+    accounts: rows,
+    activeAccountId: rows.find(row => row.isDefault)?.id ?? null,
+    readyCount: rows.filter(row => row.status === 'healthy').length,
+    poolCount: rows.length,
+    initialized: true,
+    anthropicAccounts: [],
+    anthropicActiveAccountId: null,
+    anthropicReadyCount: 0,
+    anthropicPoolCount: 0,
+    anthropicInitialized: true,
+  }
+}
+
+/** The host-global roster every pane renders: A is the PERSISTED active account. */
+const ROSTER = accountsSnapshot([
+  poolRow({ id: 'acct-a', alias: 'aurora', isDefault: true, usagePrimary: 11 }),
+  poolRow({ id: 'acct-b', alias: 'basalt', usagePrimary: 77 }),
+])
+
+function accountsStateWithSession(
+  sessionId: string,
+  snap: AccountsSnapshot,
+): AccountsState {
+  return reduceAccountsState(createAccountsState(), {
+    type: 'frame',
+    frame: { kind: 'accounts.snapshot', protocolVersion: 1, sessionId, accounts: snap },
+  })
+}
+
+test('the main lease outranks the pool default, so a failover renames the face', () => {
+  // The pool still persists A as active; this session failed over to B.
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: snapshot({
+      owners: [
+        owner({
+          ownerId: 'main-thread',
+          ownerType: 'main',
+          ownerLabel: 'Main thread',
+          accountId: 'acct-b',
+          selectionKind: 'failover',
+        }),
+      ],
+    }),
+    accounts: createAccountsState(),
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-b')
+  // Metadata stays the roster's fresh copy, not anything re-derived from the lease.
+  expect(resolved?.alias).toBe('basalt')
+  expect(resolved?.usagePrimary).toBe(77)
+})
+
+test('a subagent lease never names the main face', () => {
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: snapshot({ owners: [owner({ accountId: 'acct-b' })] }),
+    accounts: createAccountsState(),
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-a')
+})
+
+test('a failed main lease keeps an account id it could not use, so it is refused', () => {
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: snapshot({
+      owners: [
+        owner({
+          ownerId: 'main-thread',
+          ownerType: 'main',
+          ownerLabel: 'Main thread',
+          accountId: 'acct-b',
+          state: 'failed',
+        }),
+      ],
+    }),
+    accounts: createAccountsState(),
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-a')
+})
+
+test('between turns there is no main lease, so the session own snapshot carries it', () => {
+  // Another pane switched to A and persisted it; this session still runs on B.
+  const accounts = accountsStateWithSession(
+    's1',
+    accountsSnapshot([
+      poolRow({ id: 'acct-a', alias: 'aurora' }),
+      poolRow({ id: 'acct-b', alias: 'basalt', isDefault: true }),
+    ]),
+  )
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: snapshot({ owners: [] }),
+    accounts,
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-b')
+  expect(resolved?.usagePrimary).toBe(77)
+})
+
+test('with neither a lease nor a session snapshot the pool default still answers', () => {
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: null,
+    accounts: createAccountsState(),
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-a')
+})
+
+test('an id the displayed roster does not carry falls through instead of inventing a row', () => {
+  // A deleted account can still be named by a live lease and by the session's own
+  // stale snapshot. Neither may synthesise a row the pool no longer has.
+  const accounts = accountsStateWithSession(
+    's1',
+    accountsSnapshot([poolRow({ id: 'acct-gone', alias: 'ghost', isDefault: true })]),
+  )
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: snapshot({
+      owners: [
+        owner({
+          ownerId: 'main-thread',
+          ownerType: 'main',
+          ownerLabel: 'Main thread',
+          accountId: 'acct-gone',
+        }),
+      ],
+    }),
+    accounts,
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-a')
+})
+
+test('no roster means no face, whatever the lease says', () => {
+  expect(
+    selectSessionCodexAccount({
+      roster: null,
+      leases: snapshot({
+        owners: [owner({ ownerId: 'main-thread', ownerType: 'main', accountId: 'acct-b' })],
+      }),
+      accounts: createAccountsState(),
+      sessionId: 's1',
+    }),
+  ).toBeNull()
+})
+
+test('a lease from another session never reaches this face', () => {
+  // `selectLeaseSnapshot` is session-scoped upstream; this asserts the selector
+  // itself reads only what it was handed.
+  let leaseStore = createLeaseState()
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame(
+      's2',
+      snapshot({
+        owners: [owner({ ownerId: 'main-thread', ownerType: 'main', accountId: 'acct-b' })],
+      }),
+    ),
+  })
+  const resolved = selectSessionCodexAccount({
+    roster: ROSTER,
+    leases: selectLeaseSnapshot(leaseStore, 's1'),
+    accounts: createAccountsState(),
+    sessionId: 's1',
+  })
+  expect(resolved?.id).toBe('acct-a')
 })

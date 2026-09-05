@@ -367,6 +367,7 @@ import {
   createLeaseState,
   reduceLeaseState,
   selectLeaseSnapshot,
+  selectSessionCodexAccount,
 } from './leaseState.js'
 import { OrchestratorRoster } from './OrchestratorRoster.js'
 import { GoalsPage } from './GoalsPage.js'
@@ -3369,8 +3370,19 @@ export function App() {
 	        sessionId,
 	      )
 	      const panelProvider = rail.provider
+	      const panelLeases = selectLeaseSnapshot(leases, sessionId)
+	      // The face names the account this session ROUTES through, which is its
+	      // main lease, not the pool's persisted active row. See
+	      // `selectSessionCodexAccount` for why the two drift.
 	      const panelActiveCodexAccount =
-	        panelProvider === 'openai' ? selectActiveAccount(panelAccounts) : null
+	        panelProvider === 'openai'
+	          ? selectSessionCodexAccount({
+	              roster: panelAccounts,
+	              leases: panelLeases,
+	              accounts,
+	              sessionId,
+	            })
+	          : null
 	      const panelActiveAnthropicAccount =
 	        shouldShowAnthropicPoolAccount(panelProvider, panelAccounts)
 	          ? selectActiveAnthropicAccount(panelAccounts)
@@ -3386,7 +3398,7 @@ export function App() {
 	          <SessionPane
 	            /* P4-32b read seam, reused: the agent card names the Codex account
 	             * its worker holds. This pane's own session, not the active one. */
-	            leases={selectLeaseSnapshot(leases, sessionId)}
+	            leases={panelLeases}
 	            accountsSnapshot={panelAccounts}
 	            activeAccount={panelActiveCodexAccount}
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
