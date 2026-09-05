@@ -748,4 +748,109 @@ describe('/switch-account', () => {
     const status = claudePoolModule.getClaudePoolStatus()
     expect(status.accounts[status.activeIndex]?.accountUuid).toBe('claude-uuid-1')
   })
+
+  test('a Codex switch runs the shared engine transaction exactly once', async () => {
+    // The engine-state half moved into commitCodexAccountSwitch, so the command
+    // must neither skip it nor run applyPostCodexAccountSwitchRefresh twice
+    // (once in the transaction, once in the context refresh).
+    setSessionProvider('openai')
+    codexPoolModule.seedCodexAccountPoolForTest({
+      accounts: [
+        createCodexAccount('codex-account-one', 'main', 1),
+        createCodexAccount('codex-account-two', 'backup', 2),
+      ],
+      activeAccountId: 'codex-account-one',
+    })
+    leaseManagerModule.seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'main thread',
+      accountId: 'codex-account-one',
+      strategy: 'follow-main',
+    })
+
+    const resetContextSpy = spyOn(
+      codexFetchAdapterModule,
+      'resetCodexCacheContext',
+    ).mockImplementation(() => {})
+    const applyRefreshSpy = spyOn(
+      codexPoolModule,
+      'applyPostCodexAccountSwitchRefresh',
+    ).mockImplementation(() => {})
+    const clearCachesSpy = mock(async () => {})
+    const logoutModule = await import('../logout/logout.js')
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(clearCachesSpy)
+
+    const onChangeAPIKey = mock(() => {})
+    const setMessages = mock(() => {})
+
+    const result = await call(
+      'backup',
+      {
+        onChangeAPIKey,
+        setMessages,
+        setAppState: mock(() => {}),
+      } as unknown as Parameters<typeof call>[1],
+    )
+
+    expect(result).toEqual({ type: 'text', value: 'Switched to backup' })
+    expect(resetContextSpy).toHaveBeenCalledTimes(1)
+    expect(clearCachesSpy).toHaveBeenCalledTimes(1)
+    expect(applyRefreshSpy).toHaveBeenCalledTimes(1)
+    expect(onChangeAPIKey).toHaveBeenCalledTimes(1)
+    expect(setMessages).toHaveBeenCalledTimes(1)
+    expect(
+      leaseManagerModule.getCodexLeaseForOwner('main-thread')?.accountId,
+    ).toBe('codex-account-two')
+    leaseManagerModule.resetCodexLeaseManagerForTest()
+  })
+
+  test('a Claude switch still refreshes engine state after the switch', async () => {
+    // The Codex path moved its engine refresh into commitCodexAccountSwitch;
+    // the Claude path has no transaction to move it into, so the command must
+    // keep running it itself.
+    claudePoolModule.seedClaudeAccountPoolForTest({
+      accounts: [
+        {
+          accountUuid: 'claude-uuid-1',
+          emailAddress: 'one@example.com',
+          accessToken: 'a1',
+          refreshToken: 'r1',
+          expiresAt: Date.now() + 60_000,
+          status: 'healthy' as const,
+          alias: 'work1',
+        },
+        {
+          accountUuid: 'claude-uuid-2',
+          emailAddress: 'two@example.com',
+          accessToken: 'a2',
+          refreshToken: 'r2',
+          expiresAt: Date.now() + 60_000,
+          status: 'healthy' as const,
+          alias: 'work2',
+        },
+      ],
+      activeAccountUuid: 'claude-uuid-1',
+    })
+
+    spyOn(claudePoolModule, 'syncClaudeAccountToStorage').mockImplementation(() => {})
+    const logoutModule = await import('../logout/logout.js')
+    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(async () => {})
+    const applyRefreshSpy = spyOn(
+      codexPoolModule,
+      'applyPostCodexAccountSwitchRefresh',
+    ).mockImplementation(() => {})
+
+    const result = await call(
+      'work2',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(() => {}),
+      } as unknown as Parameters<typeof call>[1],
+    )
+
+    expect(result).toEqual({ type: 'text', value: 'Switched to Claude account work2' })
+    expect(applyRefreshSpy).toHaveBeenCalledTimes(1)
+  })
 })

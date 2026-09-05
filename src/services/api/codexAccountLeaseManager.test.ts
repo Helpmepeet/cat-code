@@ -2800,4 +2800,189 @@ describe('codexAccountLeaseManager', () => {
       'initial',
     )
   })
+
+  describe('subscribeToCodexLeaseChanges', () => {
+    test('fires when a failover moves a lease to another account', () => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'main-account',
+        accounts: [
+          buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+          buildPoolAccount({ accountId: 'backup', alias: 'backup' }),
+        ],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'subagent-x',
+        ownerType: 'subagent',
+        ownerLabel: 'Subagent X',
+        accountId: 'main-account',
+        strategy: 'spread',
+      })
+
+      let notifications = 0
+      moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        notifications += 1
+      })
+
+      moduleUnderTest.failoverCodexLease('subagent-x', 'main-account', 'usage cap 429')
+
+      expect(notifications).toBe(1)
+      expect(moduleUnderTest.getCodexLeaseForOwner('subagent-x')?.accountId).toBe(
+        'backup',
+      )
+    })
+
+    test('fires once for a whole reassignment sweep, and not at all when nothing moved', () => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'new-main',
+        accounts: [
+          buildPoolAccount({ accountId: 'old-main', alias: 'old' }),
+          buildPoolAccount({ accountId: 'new-main', alias: 'main' }),
+        ],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'old-main',
+        strategy: 'follow-main',
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'follow-worker',
+        ownerType: 'subagent',
+        ownerLabel: 'Follow Worker',
+        accountId: 'old-main',
+        strategy: 'follow-main',
+      })
+
+      let notifications = 0
+      moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        notifications += 1
+      })
+
+      moduleUnderTest.reassignCodexLeasesToActiveAccount()
+
+      // Two leases moved, but the user performed one switch.
+      expect(notifications).toBe(1)
+      expect(moduleUnderTest.getCodexLeaseForOwner('follow-worker')?.accountId).toBe(
+        'new-main',
+      )
+
+      // Everything is already on the active account: no change, no notification.
+      moduleUnderTest.reassignCodexLeasesToActiveAccount()
+      expect(notifications).toBe(1)
+    })
+
+    test('does not fire when registerCodexLease returns an existing lease unchanged', () => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'main-account',
+        accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+      })
+
+      let notifications = 0
+      moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        notifications += 1
+      })
+
+      moduleUnderTest.registerCodexLease({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+      })
+      expect(notifications).toBe(1)
+
+      // Same owner: registerCodexLease hands back the existing lease untouched.
+      moduleUnderTest.registerCodexLease({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+      })
+      expect(notifications).toBe(1)
+    })
+
+    test('fires when a lease is released, and unsubscribing stops delivery idempotently', () => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'main-account',
+        accounts: [buildPoolAccount({ accountId: 'main-account', alias: 'main' })],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'subagent-x',
+        ownerType: 'subagent',
+        ownerLabel: 'Subagent X',
+        accountId: 'main-account',
+        strategy: 'spread',
+      })
+
+      let notifications = 0
+      const unsubscribe = moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        notifications += 1
+      })
+
+      moduleUnderTest.releaseCodexLease('subagent-x')
+      expect(notifications).toBe(1)
+
+      // Releasing an owner with no lease deletes nothing.
+      moduleUnderTest.releaseCodexLease('subagent-x')
+      expect(notifications).toBe(1)
+
+      unsubscribe()
+      unsubscribe()
+
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'subagent-y',
+        ownerType: 'subagent',
+        ownerLabel: 'Subagent Y',
+        accountId: 'main-account',
+        strategy: 'spread',
+      })
+      moduleUnderTest.releaseCodexLease('subagent-y')
+      expect(notifications).toBe(1)
+    })
+
+    test('a throwing listener neither breaks the mutation nor replaces a failover error', () => {
+      seedCodexAccountPoolForTest({
+        activeAccountId: 'main-account',
+        accounts: [
+          buildPoolAccount({ accountId: 'main-account', alias: 'main' }),
+          buildPoolAccount({ accountId: 'backup', alias: 'backup' }),
+        ],
+      })
+      moduleUnderTest.seedCodexLeaseForTest({
+        ownerId: 'subagent-x',
+        ownerType: 'subagent',
+        ownerLabel: 'Subagent X',
+        accountId: 'main-account',
+        strategy: 'spread',
+      })
+
+      let laterListenerRan = false
+      moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        throw new Error('listener exploded')
+      })
+      moduleUnderTest.subscribeToCodexLeaseChanges(() => {
+        laterListenerRan = true
+      })
+
+      // The mutation completes and the surviving listener still runs.
+      const replacement = moduleUnderTest.failoverCodexLease(
+        'subagent-x',
+        'main-account',
+        'usage cap 429',
+      )
+      expect(replacement.accountId).toBe('backup')
+      expect(laterListenerRan).toBe(true)
+
+      // The failover that cannot find a replacement must rethrow ITS error, not
+      // the listener's, even though it notifies on the way out.
+      let thrown: unknown
+      try {
+        moduleUnderTest.failoverCodexLease('subagent-x', 'backup', 'usage cap 429')
+      } catch (error) {
+        thrown = error
+      }
+      expect((thrown as Error).message).toBe(
+        moduleUnderTest.getCodexLeaseExhaustedMessage(),
+      )
+      expect(moduleUnderTest.getCodexLeaseForOwner('subagent-x')?.state).toBe('failed')
+    })
+  })
 })

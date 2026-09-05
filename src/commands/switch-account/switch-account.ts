@@ -6,11 +6,10 @@ import {
   getPoolStatus,
   isCodexAccountSwitchable,
   resolveCodexAccountByPrefix,
-  switchToAccount,
   updateAccountUsageHints,
 } from '../../services/api/codexAccountPool.js'
 import { fetchAccountUsage } from '../../services/api/codexUsage.js'
-import { reassignCodexLeasesToActiveAccount } from '../../services/api/codexAccountLeaseManager.js'
+import { commitCodexAccountSwitch } from '../../services/api/codexAccountSwitch.js'
 import {
   getClaudePoolStatus,
   resolveClaudeAccountByPrefix,
@@ -33,7 +32,6 @@ import {
   getConfiguredAnthropicProvider,
   persistStartupProviderPreference,
 } from '../../utils/model/providers.js'
-import { resetCodexCacheContext } from '../../services/api/codex-fetch-adapter.js'
 import { emitAccountDiagnostic } from '../../services/api/accountDiagnostics.js'
 
 function countStatuses(accounts: readonly { status: string }[]): Record<string, number> {
@@ -79,12 +77,19 @@ function emitManualSwitchFailure(reason: string): void {
   })
 }
 
+/**
+ * The UI/context half of a manual account switch. `refreshEngineState` is the
+ * engine-state half for callers that have not already run it: the Codex path
+ * runs it inside `commitCodexAccountSwitch`, so passing it here again would
+ * regenerate the API session id twice per switch.
+ */
 function applyPostSwitchAccountStateRefresh(
   context: Parameters<LocalCommandCall>[1],
+  refreshEngineState?: () => void,
 ): void {
   context.onChangeAPIKey()
   context.setMessages(stripSignatureBlocks)
-  applyPostCodexAccountSwitchRefresh()
+  refreshEngineState?.()
   context.setAppState(prev => ({
     ...prev,
     authVersion: prev.authVersion + 1,
@@ -155,7 +160,7 @@ async function performClaudeSwitch(
   syncClaudeAccountToStorage()
   clearOAuthTokenCache()
   await clearAuthRelatedCaches()
-  applyPostSwitchAccountStateRefresh(context)
+  applyPostSwitchAccountStateRefresh(context, applyPostCodexAccountSwitchRefresh)
   if (crossingProvider) {
     switchRuntimeProvider('anthropic', context)
   }
@@ -231,22 +236,12 @@ async function performCodexSwitch(
     }
   }
 
-  const result = switchToAccount(idPrefix)
+  // Engine-state half of the switch, shared with the desktop executor so the
+  // two cannot drift: pool activeIndex, lease reassignment, Codex fetch cache
+  // context, auth caches, and the post-switch engine refresh.
+  const result = await commitCodexAccountSwitch(idPrefix)
   if (!result) return null
 
-  // The main thread holds a persistent codex lease (see query.ts) that pins an
-  // accountId at creation time. switchToAccount only updates pool.activeIndex,
-  // so without this the lease (and therefore the status line + API routing)
-  // stays on the previous account.
-  reassignCodexLeasesToActiveAccount()
-
-  // Reset the Codex fetch cache context so the next request picks up the new
-  // account's conversation routing instead of the old one.
-  resetCodexCacheContext()
-
-  // Mirror the Claude switch path: clear all auth-sensitive caches so stale
-  // rate-limit state, memoized tokens, and tool schema caches don't carry over.
-  await clearAuthRelatedCaches()
   applyPostSwitchAccountStateRefresh(context)
   if (crossingProvider) {
     switchRuntimeProvider('openai', context)
