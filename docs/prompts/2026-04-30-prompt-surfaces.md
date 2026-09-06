@@ -29,6 +29,17 @@ This file is intentionally:
 
 ## Start Here
 
+**Before proposing any cut or addition to prompt text, read
+[the instruction-stack decision report](../reports/2026-09-06-instruction-stack-decisions.md).**
+This file routes you to the code that owns a prompt; that one records what has
+already been decided about the text itself, which items landed, and which
+arguments were tried and failed. It indexes every prompt report and plan, so it is
+the single door to that work. Its live follow-ons are the
+[apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md), which holds the
+implementable before-and-after text and the fork-drift provenance table, and the
+[GPT craft-coaching decision](../reports/2026-09-06-gpt-craft-coaching-decision.md),
+which is open and awaiting the operator.
+
 If you are changing the assistant's main behavior, inspect these in order:
 
 1. `src/constants/prompts.ts`

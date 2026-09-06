@@ -214,10 +214,22 @@ for provenance, not conclusions.
    Part D, added 2026-09-06, carries D3. Its A2 and D3 entries hold the upstream
    measurement summarised in §3a. This is the file to open when implementing.
 
+### Open, awaiting a decision
+
+- [GPT craft-coaching decision](2026-09-06-gpt-craft-coaching-decision.md) — the
+  follow-on to section 2 of this file. It splits the 6,692-character execution
+  outlier into craft coaching, which both vendors retired, and autonomy rules,
+  which both are growing, then offers two sizes of cut to the craft half: 266
+  characters resting on our own redundancy, or 1,099 resting on Codex's judgment
+  for the GPT path. Verified against the installed Codex binary and all nineteen
+  Claude Code builds. **If adopted it supersedes A3 and A4 above**, which were
+  scoped before that split existed.
+
 ### Where the prompts actually live
 
 - [Prompt surfaces router](../prompts/2026-04-30-prompt-surfaces.md) — which file
-  owns which prompt. Open this before searching for any prompt text.
+  owns which prompt. Open this before searching for any prompt text. Its
+  Start Here section now points back here.
 - `CLAUDE.md` §7 — the comment rule that is already applied, and the subject of
   the open decision in section 4 above.
 - [Peer-session instruction surface](../prompts/2026-09-05-peer-sessions-instruction-surface-audit.md)

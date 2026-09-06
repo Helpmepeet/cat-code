@@ -191,6 +191,11 @@ need an example.
 
 ### A3. Remove the snake-case example and the capability compliment
 
+> **May be superseded.** The [GPT craft-coaching decision](../reports/2026-09-06-gpt-craft-coaching-decision.md)
+> re-scopes this item inside a larger craft slice, and corrects one claim below:
+> "absent from all three comparators" is wrong, Claude Code ships the snake-case
+> example verbatim today. Decide that report before applying A3's GPT half.
+
 **GPT — `src/constants/promptStyles/gpt.ts`:**
 
 `TASK DOMAIN` — remove the final sentence only:
@@ -209,6 +214,12 @@ ambitious tasks.").
 disambiguation instruction, and the user-authority clause about task size.
 
 ### A4. Remove two restated sentences (NARROWED after review)
+
+> **May be superseded.** Both removals here are the redundancy tier of the
+> [GPT craft-coaching decision](../reports/2026-09-06-gpt-craft-coaching-decision.md),
+> which also puts the surrounding sentences in play. That report's option B would
+> cut the maxim this item deliberately restored, so the two disagree on purpose;
+> decide it before applying A4.
 
 **Was:** three removals including the three-lines maxim. **Now:** two, GPT path
 only. An independent review argued the maxim is a distinct preference rather than
