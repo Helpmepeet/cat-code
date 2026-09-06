@@ -542,7 +542,16 @@ export const ClaudeCliTool = buildTool({
       : 'Asking Claude CLI'
   },
   toAutoClassifierInput(input) {
-    return input.prompt
+    // Returning the whole parsed input, not a hand-formatted string, is what
+    // keeps this forgery-resistant: the classifier's transcript builder
+    // JSON-encodes whatever this returns (yoloClassifier.ts toCompactBlock),
+    // so cwd/model/effort/permission_mode always land as their own JSON keys
+    // with the caller's real values, and anything inside `prompt` that reads
+    // like one of those keys stays escaped text nested in the "prompt"
+    // string, never a sibling key that could override the real one. A field
+    // the caller left unset is simply absent from the object (and therefore
+    // from the JSON), rather than showing up as some specific mode.
+    return input
   },
   async checkPermissions(input, context) {
     // context.agentId is only set for a subagent call; the main thread leaves
