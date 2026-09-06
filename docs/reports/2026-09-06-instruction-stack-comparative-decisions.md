@@ -79,11 +79,14 @@ follows is what that check established. Sections it changes carry an inline
 
 ### Standing note on direction
 
-Four of these decisions (D2, D3, D4, D5) propose **adding** text. Each addresses
-a genuine tension found in source, but the operator's original brief was that
-instruction should shrink as models improve. Adding is a legitimate outcome of
-this comparison and is recorded as such; it is a choice to make knowingly, not a
-side effect to absorb.
+Five of these decisions (D2, D3, D4, D5, D13) propose **adding** text. Each
+addresses a genuine tension found in source, but the operator's original brief was
+that instruction should shrink as models improve. Adding is a legitimate outcome
+of this comparison and is recorded as such; it is a choice to make knowingly, not
+a side effect to absorb. D13 is the only one of the five with measured harm behind
+it — a retracted bug report and a lost session — where the other four rest on
+inferred tension. That difference is the strongest argument available for adding
+anything at all right now.
 
 ### Prior-session measurements this pass rests on
 
@@ -417,6 +420,67 @@ A generic "run the suite" instruction must not override this repository's
 explicit prohibition on bare root `bun test` or misclassify its known-red
 baselines.
 
+### D13. Comments must not create obligations on files they do not live in
+
+**Origin:** an inbound proposal from a separate comment audit of this branch (592
+files, roughly 44,000 branch-added comment lines). It reports that redundant
+comments are largely absent — "restates the code" produced about 25 findings
+across the whole corpus — and that the real defect is comments carrying a
+maintenance obligation nobody can discharge: cross-file line citations, restated
+constant values, counting claims, and status notes that outlived the work. It
+proposes a rule and argues it belongs in the system instruction rather than a
+project file.
+
+**CONFIRMED independently (main session, 2026-09-06).** This branch carries 1,129
+comment lines with `file.ts:NNN` citations across `src/` and `app/`. A spread
+sample of 16 was resolved and the cited line read. Two resolved to the wrong file
+through a basename collision in the checking script and were discarded. Of the
+remaining 14, roughly half cite a line that says something unrelated:
+
+| Comment claims | Cited line actually reads |
+| --- | --- |
+| `autoCompact.ts:373-374`, compaction behavior | a comment about `utils/api.js` and MCP client init |
+| `sessionStorage.ts:3009` is `saveCustomTitle` | `const parentUuid =` |
+| `PromptInput.tsx:1872` sets `evictAfter: 0` | `stopOrDismissAgent(task.id, setAppState)` |
+| `agentToolUtils.ts:734` is `AgentToolResult.model` | a comment about logging `input_tokens` |
+| `FileReadTool.ts:721` reaches `addLineNumbers` | `} satisfies ToolDef(...)` |
+
+Four were accurate, including `genericProcessUtils.ts:20` landing exactly on
+`isProcessRunning`. **Verified:** every wrong citation in the sample points at a
+line that exists and reads as plausible code, so no lint can distinguish it from
+a correct one. That matches the audit's finding that only 1.8% of citations are
+mechanically detectable.
+
+**Verified harm shape:** the audit reports one such comment — a window-size
+derivation whose input constant had been replaced by a token — caused a
+non-existent layout bug to be reported and retracted, costing a session. The
+failure is false confidence rather than confusion: the comments read as precise.
+
+**Decision: adopt, with the third clause revised.** The first two clauses hold as
+proposed: never restate a value that exists in code, name the constant; never
+cite a line number in another file, name the file and the symbol.
+
+**Revision to the third clause.** "Never write status notes" is too broad, and
+this repository supplies the counterexample: `prompts.ts:502` is
+`// @[MODEL LAUNCH]: Remove this section when we launch numbat.` That is a status
+note, it is accurate, and it is load-bearing, because it tells a reader the
+section is conditional and names the event that retires it. The defect is a
+status note with no owner and no trigger. Require a named trigger or a decision
+reference instead of banning the category.
+
+**Suspected, not established:** that the habit is induced rather than default. One
+plausible mechanism is that the harness instruction to reference code as
+`file_path:line_number` exists because it renders clickable in a terminal, where
+the reader resolves it immediately and can check it on the spot. A comment is the
+same syntax with neither property. If that is the leak, the clarification belongs
+beside the rule that creates it, distinguishing a citation consumed now from one
+that must survive a refactor. This was not tested.
+
+**Placement.** `CLAUDE.md` §7 already governs comments and asks them to state
+constraints code cannot show. It does not say a comment must not create an
+obligation on a file it does not live in. That is one clause, and it belongs
+there whether or not a system-level version happens.
+
 ## 4. Disposition of the original 15 groups
 
 | Group | Comparative disposition | Action |
@@ -484,6 +548,10 @@ that default-session changes come before `-p`-only ones:
 **Recommended second tranche:** Configuration-aware T3 deduplication;
 Astra-style unnamed-skill selection; verifier-policy revision; investigation of
 the conditional TodoWrite nudge.
+
+**Separate from the prompt-source tranches:** D13 changes `CLAUDE.md` §7, not
+`src/constants/`, so it does not interact with any group above and can land on its
+own. It is the best-evidenced item in this report.
 
 **Suspected and requiring behavioral evaluation:** Whether removing the remaining
 writing examples, Learning examples, planner quotas, or verification recipes
