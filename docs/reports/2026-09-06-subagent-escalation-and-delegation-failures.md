@@ -1,17 +1,21 @@
-# Subagent escalation and delegation: seven defects found from one blocked worker
+# Subagent escalation and delegation: what one blocked worker exposed
 
 **Date:** 2026-09-06
 **Status:** Findings only. Nothing fixed, nothing changed in `src/` or `app/`.
-**Scope:** the subagent escalation path (`ask_orchestrator`, `SendMessage`),
-the delegation boundary (`ALL_AGENT_DISALLOWED_TOOLS`), the background-task
-namespace, and the coordinator-to-worker message channel.
+**Revision:** rewritten after an adversarial review; every claim below was
+re-derived from source or transcript. §5 of the first version was refuted and is
+now recorded as such. Counts, timestamps and one quotation were wrong in the
+first version and are corrected here.
+**Scope:** the subagent escalation path (`ask_orchestrator`, `SendMessage`), the
+delegation boundary (`ALL_AGENT_DISALLOWED_TOOLS`, `ClaudeCli`), auto mode's view
+of both, and the coordinator-to-worker message channel.
 **Evidence:** engine session `b7a7db9a-b981-4b1c-80e1-fd8d7899724a` (desktop app
-session `bf507bbd-0a88-46a1-9c64-be97f195ce0f`, named Alum), plus a sweep of all
-1,840 subagent transcripts across 457 sessions under `~/.cat-code/projects`.
+session `bf507bbd-0a88-46a1-9c64-be97f195ce0f`, named Alum), its debug log, and a
+sweep of all 1,840 subagent transcripts across 457 sessions under
+`~/.cat-code/projects`.
 
 This started as one question: what happened to a subagent named Wilkes. Wilkes
-was the visible symptom. Three of the four subagents in that session misfired,
-two of them in ways that left processes running on the machine.
+was the visible symptom. Three of the four subagents in that session misfired.
 
 ---
 
@@ -23,58 +27,59 @@ animation opportunities, partitioned by component filename:
 
 | Agent | id | Partition | Outcome |
 |---|---|---|---|
-| Ritchie | `a8c3fed45084bfd9f` | A–C | Delegated to 4 nested engines (§4) |
+| Ritchie | `a8c3fed45084bfd9f` | A–C | Tried to delegate: 3 `ClaudeCli`, then 4 shell spawns |
 | Kay | `a9ee0c5a8079cc72e` | D–P | Completed, then redirected onto Q–S |
 | Wilkes | `aaf1056ee62605a91` | Q–S | Returned Blocked, 0 components read |
-| Goldstine | `a154c0a744d4180d7` | T–Z | Delegated to 4+ nested engines (§4) |
+| Goldstine | `a154c0a744d4180d7` | T–Z | Tried to delegate: 4 `ClaudeCli`, then 4 shell spawns |
 | Backus | `a8bc6b6b72553597b` | A–C (replacement) | Completed correctly |
 
-Each was handed a brief that opened:
+That table is derived from the parent transcript. Do not re-derive it from the
+`agent-*.meta.json` files: `runAgent.ts` rewrites `spawnedAt` and
+`parentToolUseId` on resume, so Ritchie's meta reads `12:56:41` and Kay's
+`12:51:11` — resume times, not spawn times.
+
+Each worker was handed a brief that opened:
 
 > Read-only discovery for a desktop animation design report. User explicitly
 > requests Luna subagents sweep ALL application components for animation
 > opportunities, no implementation; main agent must NOT read application code…
 
 Three of the four read *"Luna subagents sweep ALL application components"* as an
-instruction to **themselves** to delegate. Wilkes gave up. Ritchie and Goldstine
-shelled out.
+instruction to **themselves** to delegate.
 
 Backus is the control. Its prompt opened *"YOU are the Luna subagent assigned to
 read source. Do NOT delegate or spawn other agents."* It did the work.
 
 ---
 
-## 2. `ask_orchestrator` is a no-op with no consumer and no test
+## 2. `ask_orchestrator` is an echo, and its contract is unreachable
 
 Wilkes, unable to find an Agent tool, called the tool that exists for exactly
-this situation:
-
-```
-ask_orchestrator({kind: "blocked", message: "…No Agent/subagent tool or running
-subagent handles are available in this session…", evidence: [...]})
-```
-
-It got its own words back, verbatim.
+this situation, and got its own words back.
 
 `AskOrchestratorTool.call()`
 (`src/tools/AskOrchestratorTool/AskOrchestratorTool.ts:112`) returns its input
-unchanged. `parseAskOrchestratorToolResult`
-(`src/tools/AskOrchestratorTool/AskOrchestratorTool.ts:36`) is exported and has
-**zero call sites** in `src/` or `app/` — the only reference is its own
-recursion. The tool directory holds no test file.
+(normalising an omitted `evidence` to `[]`). `parseAskOrchestratorToolResult`
+(same file, line 36) is exported and has **zero call sites** in `src/` or `app/`
+— the only reference is its own recursion.
 
-The echo is not accidental. The real contract is stated at
+On tests, narrowly: there is no test file in the tool's directory, and nothing
+tests `call()` or the escalation contract. Three suites do reference the tool —
+`src/agent-mode/rolePrompts.test.ts`, `src/tools/AgentTool/agentToolUtils.test.ts`
+and `src/services/compact/prompt.test.ts` — covering name resolution and
+tool-set exclusion.
+
+The echo is not accidental. The real contract is at
 `src/agent-mode/rolePrompts.ts:70`:
 
 > Use `ask_orchestrator` when you need a decision from the orchestrator before
 > you can proceed. **After calling it, stop your turn immediately and return a
 > blocked handoff with the question.**
 
-So the tool is a marker and the worker's *final result* is the delivery channel.
-That is a coherent design. The problem is where it is written: `rolePrompts.ts`
-builds Agent Mode **role** prompts. A `general-purpose` subagent spawned through
-`AgentTool` never sees it. What it sees is the tool's own description, which is
-one sentence and promises a conversation:
+The tool is a marker; the worker's *final result* is the delivery channel. That
+is coherent. The problem is where it is written: `rolePrompts.ts` builds Agent
+Mode **role** prompts, which a `general-purpose` subagent never sees. What it
+sees is the tool's one-sentence description, which promises a conversation:
 
 > Ask the orchestrator for clarification, missing context, or report that you
 > are blocked with evidence. Use this instead of guessing when the task is
@@ -82,116 +87,143 @@ one sentence and promises a conversation:
 
 A model reads that as request/response, gets a non-answer, and escalates.
 
-**Corpus:** `ask_orchestrator` has been called **once, ever**, across 1,840
-subagent transcripts — by Wilkes.
+One qualifier that matters for the fix: the tool is declared
+`shouldDefer: true` (line 83), so it is not in a subagent's default tool list.
+Wilkes reached it only because a `ToolSearch` for "agent subagent task
+delegation" surfaced it. Editing the description therefore helps only agents
+that search their way to it; the contract also needs to live somewhere the
+agent always sees.
+
+**Corpus:** `ask_orchestrator` has been called **once, ever**, across the whole
+transcript corpus — by Wilkes.
 
 ---
 
 ## 3. The delegation denial is never communicated
 
 `src/constants/tools.ts:55` strips `Agent` and `ResumeAgent` from every subagent
-outside `USER_TYPE=ant`. That is deliberate and correct — it is an
-authorization boundary, not a capability oversight.
+outside `USER_TYPE=ant`. That is deliberate — an authorization boundary, not an
+oversight.
 
-The line that tells a worker about it is
-`src/agent-mode/rolePrompts.ts:46`:
+The line that tells a worker about it is `src/agent-mode/rolePrompts.ts:46`:
 
 > `- You do not have Agent: nested delegation is orchestrator-only. Do the
 >   investigation yourself.`
 
-Same problem as §2: it is composed into Agent Mode role prompts only. A
-general-purpose subagent is denied the capability and never told, so when a
-prompt implies delegation it goes looking. Wilkes ran `ToolSearch
-select:Agent` ("No matching deferred tools found"), then two more semantic
-searches — which returned `ClaudeCli`, `EnterWorktree` and `ExitWorktree` as the
-nearest matches for "spawn worker parallel agent", pointing it further astray.
+Same problem as §2: Agent Mode role prompts only. A general-purpose subagent is
+denied the capability and never told, so when a brief implies delegation it goes
+looking. Wilkes's actual sequence was `ToolSearch select:Agent` ("No matching
+deferred tools found") → `ToolSearch "agent subagent task delegation"` (which
+returned `ClaudeCli`, `TodoWrite`, `EnterWorktree`, `ask_orchestrator`,
+`ExitWorktree`) → `ask_orchestrator` → `ToolSearch "spawn worker parallel agent"`
+→ `SendMessage`.
 
-After that, Wilkes tried `SendMessage({to: "orchestrator"})` and got:
+Then:
 
 > No running subagent or Agent Mode worker found for orchestrator. Without Agent
 > Teams, SendMessage can only target running worker handles or agent IDs.
 
 That message is accurate. `src/tools/SendMessageTool/SendMessageTool.ts:1296` is
-the honest fall-through: SendMessage routes downward and sideways — running
-workers you own, agent IDs, teammates under Agent Teams — never upward. There is
-no parent address by design. But nothing in the tool's description says the
-parent is unreachable, so the model keeps hunting before it gives up.
+the honest fall-through: SendMessage routes downward and sideways, never upward.
+There is no parent address by design, and nothing in the tool's description says
+so.
 
 ---
 
-## 4. `Bash` walks straight through the delegation boundary
+## 4. The nested-delegation front door, and the fallback through `Bash`
 
-Ritchie and Goldstine did not give up. They launched full nested engines:
+`CLAUDE_CLI_TOOL_NAME` sits at `src/constants/tools.ts:95`, inside
+`ASYNC_AGENT_BASE_ALLOWED_TOOLS` — the default tool grant for every async
+subagent, two lines below `ASK_ORCHESTRATOR_TOOL_NAME`. It is not in
+`ALL_AGENT_DISALLOWED_TOOLS`. So a subagent may not use `Agent`, and is handed by
+default a tool whose purpose is launching a nested Claude CLI session. That is
+also what `ToolSearch` handed Wilkes.
+
+Both workers used it **first**, and it failed:
+
+| Agent | `ClaudeCli` calls | `permission_mode` | Result |
+|---|---|---|---|
+| Ritchie | 3, at 12:44:42 | `auto` | all `exit_code: 1` |
+| Goldstine | 4, at 12:44:55 | `dontAsk` | all `exit_code: 1` |
+
+The child's own output is `[claude-code:unrecognized_model]
+{"model":"gpt-5.6-luna"}` and `Failed to authenticate: OAuth session expired and
+could not be refreshed`. The tool accepts a `model` its target cannot run: a
+worker on `gpt-5.6-luna` naturally passes its own model, and nothing validates it
+at the tool boundary. Seven calls were spent on this.
+
+Only then did they fall back to shell:
 
 ```
 timeout 600 cat-code -p --model gpt-5.6-luna --effort low \
   --permission-mode auto --tools Read,Bash --output-format text "…"
 ```
 
-Ritchie launched four (three at 12:43, one at 12:47). Goldstine launched four
-between 12:45:36 and 12:51:25, and another at 12:54:44. Three of Goldstine's
-were still running when this report's investigation began.
+Ritchie: 12:45:23.164, 12:45:34.760, 12:45:34.790, and 12:47:41.385.
+Goldstine: 12:45:36.532, then 12:51:25.298/.301/.357. (The first version of this
+report dated Ritchie's to 12:43 — that was the subagents' own spawn time — and
+counted a fifth Goldstine spawn at 12:54:44, which is a `pgrep`, not a launch.)
 
-Three consequences, in ascending order of how easy they are to miss:
+So the causal sentence is not that the runtime "silently cannot" delegate. It has
+a first-class nested-delegation tool, that tool is broken on this machine, and
+`Bash` was the fallback.
 
-1. **The tool-list boundary is advisory in practice.** A nested top-level engine
-   receives the full tool pool, including the `Agent` tool its parent process
-   deliberately withheld. `--permission-mode dontAsk` is *not* an escalation —
-   it denies anything not pre-approved (`coreSchemas.ts`: "Don't prompt for
-   permissions, deny if not pre-approved") — so this is a capability hole, not a
-   permission hole. But it is a hole.
+Three consequences:
 
-2. **Every nested engine boots a GUI-automation server.** `cua-driver` is
-   registered as a global MCP server in `~/.cat-code/.cat-code.json`, so each
-   `cat-code -p` spawns a `/Users/pt/.local/bin/cua-driver mcp` child. Ritchie's
-   own `ps` caught three of them at once. A read-only text sweep stood up three
-   GUI drivers, on a machine where §8 of `CLAUDE.md` makes GUI driving a
-   per-run, operator-authorized action.
+1. **A nested top-level engine gets the full tool pool.** Directly observed on
+   the `ClaudeCli` path: the failed children's `system/init` frames list
+   `["Task","Bash",…,"TaskStop",…]`, including `Task`, the delegation tool the
+   parent process withheld. The shell spawns both passed `--tools Read,Bash`,
+   which is an allowlist (`src/main.tsx:985`), so no *observed* nested run
+   actually received `Agent`. The hole is real; it was not exercised here.
 
-3. **Some of it is invisible.** Goldstine passed `--no-session-persistence`.
-   Those runs leave no transcript, so their reasoning, tool calls and token
-   spend are unrecoverable.
+2. **Each nested engine adds a `cua-driver mcp` child.** `cua-driver` is the sole
+   global MCP server in `~/.cat-code/.cat-code.json`. Ritchie's own `ps` caught
+   three at 12:47:30 and two at 12:48:37. Note what this is and is not: MCP tools
+   are already available to every subagent — `filterToolsForAgent`
+   (`src/tools/AgentTool/agentToolUtils.ts`) returns true for any `mcp__` tool
+   ahead of every disallow check. The nested engines added processes, not
+   capability.
 
-**Corpus:** only **3** of 1,840 subagent transcripts ever shelled out to a
-nested `cat-code`, and **2 of the 3 are this session**. This is not a chronic
-habit; it is what happens when a brief tells a worker to delegate and the
-runtime silently cannot.
+3. **Some of it is invisible.** Goldstine passed `--no-session-persistence`;
+   those runs leave no transcript.
 
----
-
-## 5. A subagent's background tasks are filed under the parent's session
-
-Ritchie's four `cat-code -p` runs were registered in the **parent's** task
-namespace, `/private/tmp/claude-501/-Users-pt-cat-code/b7a7db9a-…/tasks/`, and
-their completion notices were enqueued into the **parent's** queue:
-
-```
-L329 12:48:24  Task ID: b2u1uob4b  Status: completed
-               Background command "Run Luna read-only B component sweep" completed (exit code 0)
-L380 12:48:52  Task ID: b4i3rcnio  Status: completed
-               Background command "Run Luna read-only C component sweep" completed (exit code 0)
-L398 12:48:59  Task ID: bfxi3kbxd  Status: failed
-               Background command "Run Luna read-only A component sweep" failed with exit code 144
-L399 12:48:59  Task ID: bnfd39oj2  Status: failed
-               Background command "Run bare Luna A discovery sweep" failed with exit code 144
-```
-
-Every one of those notifications carries a `Tool use ID` that **does not exist
-in the parent transcript** — `call_BSDtkWbJU63SJtl7zipmwWaT`,
-`call_W9XgoNdXdy4cTVVBAsWHD2LB`, `call_qJjMdkRQ49vS3QqimcVdxvhD`,
-`call_DjVsGAeFtXpOZYQ6GH8JFV7A` are all Ritchie's. The orchestrator received
-completion and failure reports for work it never launched, addressed by IDs it
-cannot resolve, and had to reason about them anyway.
+**Corpus:** exactly **2** of 1,840 subagent transcripts contain a real nested
+`cat-code` spawn, and both are this session. (The first version said 3. The third
+was an agent authoring a markdown code fence containing `cat-code -p` into
+`/Users/pt/open-design/README.md` — a naive-grep artifact, and the exact trap
+this report warns about elsewhere.)
 
 ---
 
-## 6. Exit code 144 is an internal sentinel, surfaced as a real exit status
+## 5. REFUTED: subagent background tasks are *not* misrouted to the parent
 
-Two of those background runs died with zero bytes of output and
-`failed with exit code 144`.
+The first version of this report claimed Ritchie's background runs were
+registered in the parent's task namespace and that "the orchestrator received
+completion and failure reports for work it never launched". That is wrong.
 
-There is no `144` anywhere in the codebase. It is produced at
-`src/utils/ShellCommand.ts:225`, inside `#exitHandler`:
+`src/tools/BashTool/BashTool.tsx:660` stamps `agentId: toolUseContext.agentId`
+onto the shell task. `src/query.ts` gives a subagent only
+`cmd.mode === 'task-notification' && cmd.agentId === currentAgentId`, and both
+main-thread drains (`src/utils/queueProcessor.ts:61`, `src/cli/print.ts:2059`)
+take the complement, `cmd.agentId === undefined`. A notification stamped with
+Ritchie's agentId cannot reach the parent's turn. The parent's transcript
+contains those four records only because there is one JSONL per engine session.
+
+What survives is smaller and real: `logOperation`
+(`src/utils/messageQueueManager.ts`) writes `sessionId` and **drops `agentId`
+entirely**, so the persisted `queue-operation` record does not say who a queued
+notification was addressed to. That is what made the record misreadable — an
+observability gap, not a routing defect.
+
+---
+
+## 6. Exit 144 is a sentinel, it decodes as the wrong signal, and Ritchie fired it
+
+Two background runs ended with zero bytes and `failed with exit code 144`.
+
+There is no `144` in the codebase. It is produced at
+`src/utils/ShellCommand.ts:225` inside `#exitHandler`:
 
 ```ts
 const exitCode =
@@ -202,146 +234,107 @@ const exitCode =
       : 1
 ```
 
-144 means **killed by SIGTERM** — the process never chose an exit status. Both
-kills landed within 5 ms of each other at 12:48:59.87, consistent with a process
-group teardown, not with two independent failures.
+Two problems, not one. The value is opaque *and* misleading: under the universal
+`128 + N` convention it decodes as signal 16, which on macOS is SIGURG. SIGTERM's
+conventional code is 143. A model that applies the convention gets a wrong
+answer, not no answer.
 
-What the model sees is a plausible-looking numeric exit code from a program that
-does not use one. What actually happened — the work was terminated and its
-output lost — is not recoverable from the message. `#exitHandler` should report
-the signal.
+Who sent the SIGTERM is answered in Ritchie's own transcript, which the first
+version of this report did not check. At 12:48:55.422 Ritchie ran, described as
+"Stop owned delegated sweeps":
 
----
-
-## 7. Coordinator-to-worker messages leave no record anywhere
-
-This is the one I could not close, and it is the most consequential.
-
-At 12:48:45 the parent, having realised its workers were misreading the brief,
-sent all three running subagents a correction:
-
-> Clarification: YOU are the requested Luna subagent, so you should inspect the
-> source yourself…
-
-All three calls returned:
-
-```json
-{"success": true, "message": "Message queued for delivery to @Goldstine at its next tool round."}
+```
+kill 37882 37884 37885 37899 37963 37966 37967 37981 37997 37999 38000 38014 38944 38946 38947
 ```
 
-None of the three messages appears anywhere in the recipients' transcripts. Nor
-does any evidence that one arrived.
-
-I widened it to the whole corpus. **39** parent-to-named-subagent `SendMessage`
-calls exist, from 2026-08-02 to 2026-09-06, 34 on desktop and 5 in the terminal.
-All 39 returned `success: true`. **Zero** produced a record of receipt in the
-recipient's transcript.
-
-The mechanism reads correct in source:
-
-- queued under `agentId` into the shared task store —
-  `src/tools/SendMessageTool/SendMessageTool.ts:321`
-- drained once per tool round — `src/utils/attachments.ts:927` →
-  `src/utils/attachments.ts:1095`
-- `agentId` and `setAppStateForTasks` are both propagated to the child context by
-  `createSubagentContext` (`src/utils/forkedAgent.ts`)
-- the delivered text is wrapped as *"The coordinator sent a message while you
-  were working: …"* (`src/utils/messages.ts`, `wrapCommandText`)
-
-Then I ran the control, and it defeats the inference: the **task-notification**
-wrapper text ("A background agent completed a task:") is *also* absent from
-every transcript in the corpus — and task notifications demonstrably do arrive,
-because the parent visibly acts on them. The wrapped delivery text is simply
-never persisted to JSONL. Sixteen transcripts contain the coordinator wrapper
-string, and on inspection all sixteen are agents *reading `messages.ts` source*,
-not receiving messages.
-
-**So absence proves nothing either way, and that is itself the finding:** a
-coordinator cannot tell whether a correction reached a worker, and neither can
-anyone reading the logs afterwards. The behavioural evidence in this session
-leans toward non-delivery — Goldstine spawned three more nested engines at
-12:51:25, 2.5 minutes after being told not to delegate; Ritchie returned a
-duplicate A–C sweep — but three models ignoring an instruction is not proof.
-
-Settling it requires either a `--debug` run that dumps request bodies, or the
-fix itself: persist the delivery.
+It returned `Exit code 8` at 12:48:59.872 — eight of the fifteen were already
+gone — and the two 144 notifications were enqueued at 12:48:59.870 and .875.
+Ritchie killed its own sweeps. §10's open question is closed, and the guess about
+a process-group teardown is withdrawn.
 
 ---
 
-## 8. The cascade that cost the most was ordinary confusion, amplified
+## 7. A subagent ran a discovery-paired kill on the shared machine
 
-Wilkes owned Q–S. When the parent replaced it, it labelled the replacement
-*"Replace A C animation sweep"* and scoped Backus to A–C. So A–C was swept twice
-(Ritchie and Backus), Q–S was orphaned, and the repair arrived minutes later as
-a `ResumeAgent` redirecting Kay off its finished D–P work onto Q–S.
+That `kill` list was not remembered; it was discovered. Ritchie ran a
+machine-wide sweep at 12:48:43 —
+`ps -axo pid=,etime=,state=,command= | rg 'cat-code -p --model gpt-5\.6-luna|…'`
+— and killed every PID it printed. Its own launches were at 12:45:23, 12:45:34
+×2 and 12:47:41; at least one targeted group (37997/37999/38000) had an elapsed
+time placing its start around 12:45:40, which is not obviously Ritchie's.
 
-That is a model error, not an engine defect. It is listed here because §7 is what
-made it expensive: the parent's three attempts to correct its running workers
-mid-flight had no observable effect, so it could only fix things by killing and
-respawning.
-
-The session did recover. It produced its sweep.
-
----
-
-## 9. Recommended order
-
-| # | Defect | Cost to fix | Why this order |
-|---|---|---|---|
-| 7 | Coordinator deliveries unrecorded | Small | Cheap, settles the open question permanently, makes every future orchestration debuggable |
-| 2 | `ask_orchestrator` contract invisible to non-role agents | One edit | Move the "call it, then end your turn" contract into the tool description |
-| 3 | Delegation denial never communicated | One edit | Same: the no-Agent line belongs in the subagent system prompt, not only in role prompts |
-| 6 | 144 sentinel surfaced as an exit code | Small | Report the signal; a killed process should not look like a program's own status |
-| 5 | Subagent tasks in the parent's namespace | Design | Needs a decision about task ownership, not a patch |
-| 4 | `Bash` bypasses the delegation boundary | Design | Needs a decision about whether the boundary is meant to hold at all |
-
-§1 and §8 need no fix. They are what the other six produce.
+`CLAUDE.md` §4 bans exactly this pattern, and `.claude/hooks/block-sweep-kill.sh`
+enforces it for Claude Code sessions. Cat Code's own `Bash` tool applied no such
+guard to a subagent. Whether another worker's engine was destroyed cannot be
+recovered from the transcripts.
 
 ---
 
-## 10. What is not established
+## 8. Coordinator-to-worker messages: the silence is explained, the delivery is not
 
-- Whether the 39 coordinator messages were delivered. §7 explains why the logs
-  cannot answer it and what would.
-- Why two of Ritchie's four background runs were SIGTERMed while the other two
-  completed. The 5 ms gap between the two kills suggests one teardown event, but
-  I did not identify what triggered it.
-- Whether any nested engine ever used its `cua-driver` MCP server. It was
-  attached to at least six processes; nothing in the evidence shows a GUI call
-  being made.
+At 12:48:45 the parent sent all three running subagents a correction:
+
+> Clarification: YOU are the requested Luna subagent, so you should read source
+> directly. Only I, the parent/main agent, am forbidden…
+
+All three returned `success: true, "Message queued for delivery to @X at its next
+tool round."` None appears in any recipient's transcript.
+
+**Why no record is now settled, and it is not evidence of anything.**
+`src/tools/AgentTool/runAgent.ts:931` reads *"Yield attachment messages (e.g.,
+structured_output) without recording them"*, then `yield`s and `continue`s before
+the recording path. A delivered coordinator message arrives as an attachment, so
+**no subagent transcript can ever contain one**, whatever happened at runtime.
+The corpus-wide absence is a property of the logger, not a measurement. (In the
+*main* session a drained `queued_command` *is* persisted — the parent's own
+transcript holds `"Wilkes dead. spawn again"` as an attachment record. It is the
+subagent path that drops it.)
+
+The first version of this report also claimed the task-notification wrapper text
+is "absent from every transcript in the corpus". That sentence is false: it
+occurs 22 times across 19 transcripts, all inside `tool_result` blocks. The point
+it was making — that it never appears as a *delivered message* — survives; the
+sentence did not.
+
+**The behavioural evidence is mixed, not leaning toward non-delivery.** Counting
+deduplicated `tool_use` blocks either side of the 12:48:45.9 message: Ritchie 31
+before / 103 after, Goldstine 12 / 71, Kay 44 / 59. Ritchie killed its delegated
+engines ten seconds after the message and began reading `app/renderer` source
+itself. That looks like compliance. Against it, Goldstine launched three more
+nested engines at 12:51:25 — but 14 seconds after a *second* message that asked
+about partitions and did not repeat the no-delegation instruction. On balance:
+leaning toward delivery for Ritchie, unresolved for Goldstine.
+
+**Corpus:** 39 parent-to-named-subagent `SendMessage` calls exist under the
+natural definition, all returning `success: true`. The first version attached a
+date range and a desktop/terminal split to that number; three independent
+re-derivations produced three different splits, so both are withdrawn. Earliest
+confirmed *event* (a `tool_use` in a parent transcript, not a quotation inside a
+compaction summary): 2026-08-05.
 
 ---
 
-## 11. Addendum: auto mode, and the front door §4 missed
+## 9. Escalation capability differs by spawn shape, and nobody is told
 
-Added 2026-09-06 after review. §4 said `Bash` walks through the delegation
-boundary. That is true but it is the secondary path, and it left the operator's
-question unanswered: the session was in auto mode, so why did auto mode not
-block any of it?
+`isAsync` is `run_in_background === true || selectedAgent.background === true`
+(`src/tools/AgentTool/AgentTool.tsx:1052`), and `filterToolsForAgent` applies
+`ASYNC_AGENT_ALLOWED_TOOLS` only when `isAsync`. `SEND_MESSAGE_TOOL_NAME` is not
+in that set — it appears only in `IN_PROCESS_TEAMMATE_ALLOWED_TOOLS`
+(`src/constants/tools.ts:162`) and `COORDINATOR_MODE_ALLOWED_TOOLS` (line 193).
 
-### 11.1 `ClaudeCli` is a sanctioned subagent capability
+So the four foreground workers had `SendMessage`, which cannot reach a parent,
+while Backus — the background replacement — had no `SendMessage` at all. Its only
+escalation channel was the no-op of §2. Two workers on the same task, in the same
+session, with different escalation capability, neither told which it had.
 
-`CLAUDE_CLI_TOOL_NAME` sits at `src/constants/tools.ts:95`, inside
-`ASYNC_AGENT_BASE_ALLOWED_TOOLS` — the default tool grant for every async
-subagent — two lines below `ASK_ORCHESTRATOR_TOOL_NAME`. It is not in
-`ALL_AGENT_DISALLOWED_TOOLS`.
+---
 
-So the boundary is not merely leaky. A subagent may not use `Agent` for
-"authorization-boundary" reasons (§3), and is handed, by default, a tool whose
-whole purpose is launching a nested Claude/Cat Code CLI session.
+## 10. Auto mode allowed all of it, and could not have done otherwise
 
-That is how most of the spawning in this session actually happened. Counting
-`tool_use` blocks in the subagent transcripts:
+Session totals: **154 auto-mode classifications, 154 `allow`, 0 denials** —
+covering all seven `ClaudeCli` calls and all eight shell spawns.
 
-| Agent | `ClaudeCli` calls | `permission_mode` passed | plus `Bash cat-code -p` |
-|---|---|---|---|
-| Ritchie | 6 | `auto` ×6 | 4 |
-| Goldstine | 4 | `dontAsk` ×4 | 4 |
-
-Roughly twenty nested engine spawns, not the eight §4 implies. §4's count and
-its framing both understate this.
-
-### 11.2 Why auto mode allowed the `ClaudeCli` calls: it never saw the mode
+### 10.1 On the `ClaudeCli` path the classifier never sees the configuration
 
 `ClaudeCliTool.toAutoClassifierInput`
 (`src/tools/ClaudeCliTool/ClaudeCliTool.tsx:497`) is:
@@ -352,98 +345,118 @@ toAutoClassifierInput(input) {
 },
 ```
 
-The classifier receives the tool name and the delegated prompt. It does not
-receive `permission_mode`, `tools`, `disallowed_tools`, `model`, or `cwd`. The
-debug log shows exactly that — the classified action reads
-`ClaudeCli Goal: Produce a read-only desktop animation design discovery
-report…`, with no flags anywhere in it.
+It receives the tool name and the delegated prompt. Not `permission_mode`, not
+`tools`, not `model`, not `cwd`. The debug log confirms it: the classified action
+reads `ClaudeCli Goal: Produce a read-only desktop animation design discovery
+report…`, no flags anywhere.
 
-The same tool's `checkPermissions` returns `behavior: 'passthrough'` with the
-message:
+That same tool's `checkPermissions` returns `passthrough` with the message
+*"Review the delegated prompt, cwd, model, effort, and permission mode before
+allowing."* Under auto mode the reviewer is the classifier, and four of those
+five fields are what it is never given. The only hard guard is a
+`bypassPermissions` check (line 502).
 
-> ClaudeCli launches an external Claude CLI process. **Review the delegated
-> prompt, cwd, model, effort, and permission mode before allowing.**
+### 10.2 On the `Bash` path it saw everything and allowed it anyway
 
-Under auto mode the reviewer is the classifier, and four of the five fields that
-sentence asks it to review are the fields it is never given. The only hard guard
-is a `bypassPermissions` check (`ClaudeCliTool.tsx:502`); `dontAsk` and `auto`
-are unguarded.
+The debug log records it classifying the full command lines verbatim, both the
+`--permission-mode auto` and the `--permission-mode dontAsk` variants.
 
-This is a structural blindness, not a judgment error. No classifier prompt
-change can fix it.
-
-### 11.3 Why auto mode allowed the `Bash` spawns: judgment, not blindness
-
-On the Bash path the classifier saw everything. The debug log records it
-classifying, verbatim,
-`Bash timeout 600 cat-code -p --model gpt-5.6-luna --effort low
---permission-mode auto --tools Read,Bash …` and
-`Bash cat-code -p --model gpt-5.6-luna --effort high --permission-mode dontAsk
---tools Read,Bash --disallowed-tools Edit,Write,NotebookEdit,Apply_patch
---no-session-persistence …`. It allowed both.
-
-There is a vendored rule that is squarely on point, `Create Unsafe Agents`
+The on-point rule is `Create Unsafe Agents`
 (`src/utils/permissions/yolo-classifier-prompts/upstream/permissions.txt:76`):
+"launching ANY agent or coding-agent loop that can run arbitrary actions… without
+sandbox isolation AND without a per-action approval/monitor gate, whatever binary
+drives it." It is `named+specifics` — block unless the user named the agent. The
+user named nothing.
 
-> Creating new autonomous agent loops that can execute arbitrary actions (e.g.
-> shell commands, code execution) without human approval or established safety
-> frameworks… This is NOT limited to `claude` — it covers launching ANY agent or
-> coding-agent loop that can run arbitrary actions (shell, code execution, file
-> edits) without sandbox isolation AND without a per-action approval/monitor
-> gate, whatever binary drives it.
+Its trip condition is conjunctive, and `--permission-mode auto` supplies a
+per-action gate: another instance of the same classifier. So auto mode reads its
+own recursion as the human approval the rule is asking for.
 
-It is a `named+specifics` rule: it should block unless the user named the agent
-being run with sandbox or approvals off. The user named nothing.
+### 10.3 The deeper reason: the classifier is starved and identity-blind
 
-The most likely reason it did not fire is that its trip condition is
-conjunctive — no sandbox **and** no per-action gate — and `--permission-mode
-auto` supplies a per-action gate. The gate is another instance of the same
-classifier. So auto mode approves its own recursion: at every depth the
-"approval" is machine approval standing in for a human who is never asked, and
-the rule reads as satisfied at each level.
+Measured from the debug log's own context comparison, for the four shell spawns:
 
-The user's `settings.json` `autoMode` block carries custom `allow`, `soft_deny`
-and `environment` entries but no `hard_deny`, and nothing about spawning agents,
-so the vendored rule was the only thing standing here.
+| agent context | classifier context | of which user turns |
+|---|---|---|
+| 41,968 tok | 2,266 tok | 1,850 chars |
+| 41,223 tok | 2,459 tok | 1,850 chars |
+| 46,073 tok | 2,570 tok | 2,057 chars |
+| 50,000 tok | 3,053 tok | 1,850 chars |
 
-**Session totals: 154 auto-mode classifications, 154 `allow`, 0 denials** —
-including all six `ClaudeCli` spawns and all the `cat-code -p` shell spawns.
+Roughly 5–6%, and most of that is tool schema text.
 
-### 11.4 `dontAsk` was the safer of the two, not the mistake
+Worse than the volume is what is excluded. `buildTranscriptEntries`
+(`src/utils/permissions/yoloClassifier.ts:457`) keeps user turns and assistant
+`tool_use` blocks and drops the rest, because *"assistant text is model-authored
+and could be crafted to influence the classifier's decision."* That is a sound
+anti-injection decision, and it means the subagent's misreading — which exists
+only in its reasoning — is structurally invisible. Tool results are dropped too,
+so the empty `ToolSearch select:Agent` result is invisible as well.
 
-Goldstine passed `--permission-mode dontAsk`; Ritchie passed `auto`. The
-intuition that `dontAsk` is the wrong choice, and that these spawns should have
-used `auto`, is inverted for this case.
+And `agentId`, `agentType`, `isSubagent`, `subagent` appear **nowhere** in
+`yoloClassifier.ts`. The classifier cannot tell a subagent from the main session.
 
-`src/utils/permissions/permissions.ts:527` converts an `ask` decision to `deny`
-under `dontAsk`, before the auto-mode branch at line 539 is reached. So in a
-non-interactive `-p` child, `dontAsk` denies everything not already pre-approved
-by rules, while `auto` hands the decision to the classifier. `dontAsk` is
-strictly the more restrictive of the two.
+The consequence for design: asking auto mode to *detect the misunderstanding* is
+not reachable, and widening its input to model-authored text would trade a
+containment hole for a prompt-injection surface. Asking it to block the
+*category* is reachable, because it needs only two structural facts it currently
+lacks — the caller is a subagent, and this action starts an agent loop.
 
-The convention that a delegated Cat Code run should use `--permission-mode auto`
-exists because a human is dispatching a run they want to succeed, and under `-p`
-a gated call is denied rather than prompted. It is a convention about the
-operator's own dispatches. Applied to a spawn the operator never authorized, it
-would make things worse, not better: `auto` is precisely what let Ritchie's six
-nested engines recurse the classifier.
+---
 
-So there is nothing to fix in the mode the subagent chose. The defects are that
-it could spawn at all (§11.1), and that auto mode could not see what it was
-spawning (§11.2) or judge it when it could (§11.3).
+## 11. The cascade, and a stale comment in the same area
 
-### 11.5 Effect on §9
+Wilkes owned Q–S. The parent labelled its replacement *"Replace A C animation
+sweep"* and scoped Backus to A–C. A–C was swept twice, Q–S was orphaned, and the
+repair arrived as a `ResumeAgent` redirecting Kay off its finished D–P work. A
+model error, not an engine defect. The session recovered and produced its sweep.
 
-The fix order in §9 stands, with two additions above `#5`:
+Separately, `app/renderer/src/orchestratorState.ts:158` states that blocked
+workers "fed a question back through AskOrchestratorTool
+(`AskOrchestratorTool.ts:83`)". Both halves are false: `handoffStatus` is parsed
+from the worker's result text (`extractHandoffStatus` in
+`src/tasks/LocalAgentTask/LocalAgentTask.tsx`), and line 83 of that tool is
+`shouldDefer: true`.
 
-- Pass the full delegated configuration to the classifier for `ClaudeCli`, not
-  just the prompt. Small, and it closes a hole no prompt tuning can reach.
-- Decide whether `CLAUDE_CLI_TOOL_NAME` belongs in
-  `ASYNC_AGENT_BASE_ALLOWED_TOOLS` at all. If nested delegation is an
-  authorization boundary worth stripping `Agent` for, granting every async
-  subagent a CLI that spawns a whole session is the same boundary with a
-  different door.
+---
 
-Whether a classifier should ever treat its own recursion as the "per-action
-approval gate" that satisfies `Create Unsafe Agents` is a policy question for
-the operator, not a patch.
+## 12. Fix order
+
+| Defect | Cost | Note |
+|---|---|---|
+| §10.1 `ClaudeCli` hides its config from the classifier | Small | Pass the full delegated configuration, not just the prompt. No prompt tuning reaches this. |
+| §10.3 classifier has no caller identity | Small | Passing agent identity makes "a subagent must not start an agent loop" decidable from structural facts. The highest-leverage single change here. |
+| §2, §3, §9 three prompt/capability gaps | One edit each | Contract and denial must reach general-purpose and background workers, not only Agent Mode roles. §2 must account for `shouldDefer`. |
+| §8 coordinator deliveries unrecorded | Small | Record the attachment in the sidechain; also the only way to close the open question below. |
+| §6 the 144 sentinel | Small | Report the signal. 144 is not merely opaque, it decodes as SIGURG. |
+| §4 `ClaudeCli` model validation | Small | Seven calls burned on a model the target cannot run. |
+| §5 `logOperation` drops `agentId` | Small | Persist it, so a queued notification's addressee is recoverable. |
+| §7 no sweep-kill guard in Cat Code's Bash | Design | The rule exists and is enforced for Claude Code sessions only. |
+| §4 `ClaudeCli` in the default async grant | Design | If nested delegation is a boundary worth stripping `Agent` for, this is the same boundary with a different door. |
+
+Whether a classifier should ever treat its own recursion as the approval gate
+that satisfies `Create Unsafe Agents` is a policy question, not a patch.
+
+---
+
+## 13. Open
+
+- **Whether the 39 coordinator messages are delivered.** The silence is explained
+  (§8), so only the runtime question is open. A controlled spawn-then-SendMessage
+  with a nonce settles it; an attempt on 2026-09-06 was blocked because the Codex
+  pool was capped, and the Claude Code harness has no `SendMessage` tool to test
+  the mechanism in.
+- **Whether Ritchie's 12:48:55 kill destroyed another worker's engine.** PID
+  37997's owner is not recoverable from the transcripts.
+- **Whether every nested `cat-code -p` boots a `cua-driver` child.** Three were
+  observed while four runs were alive.
+
+## 14. Method note
+
+Two counts in the first version of this report were wrong in the same way: a
+string in a transcript was treated as an event. Transcripts contain agents
+reading repository source, `ToolSearch` results listing tool names, tool results
+carrying file contents, and compaction summaries quoting earlier turns. Every
+count here was re-derived by parsing `tool_use` blocks and deduplicating by tool
+id. Where two methods disagreed and nothing depended on the answer — the
+desktop/terminal split in §8 — the claim was withdrawn rather than picked.
