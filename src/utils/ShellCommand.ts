@@ -35,6 +35,15 @@ export type ShellCommand = {
   kill: () => void
   status: 'running' | 'backgrounded' | 'completed' | 'killed'
   /**
+   * Process id of the spawned shell, or undefined when nothing was spawned or
+   * the child reference has been released by cleanup(). The shell is its own
+   * process group leader, so this doubles as the group id used by
+   * killProcessGroupSync. Surfaced so callers can decide whether a process a
+   * command names is one this runtime started: see checkKillOwnership in
+   * tools/BashTool/killOwnership.ts.
+   */
+  readonly pid?: number
+  /**
    * Cleans up stream resources (event listeners).
    * Should be called after the command completes or is killed to prevent memory leaks.
    */
@@ -206,6 +215,10 @@ class ShellCommandImpl implements ShellCommand {
 
   get status(): 'running' | 'backgrounded' | 'completed' | 'killed' {
     return this.#status
+  }
+
+  get pid(): number | undefined {
+    return this.#childProcess?.pid
   }
 
   #abortHandler(): void {

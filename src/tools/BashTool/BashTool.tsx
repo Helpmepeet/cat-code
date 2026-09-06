@@ -45,6 +45,7 @@ import { userFacingName as fileEditUserFacingName } from '../FileEditTool/UI.js'
 import { trackGitOperations } from '../shared/gitOperationTracking.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
 import { interpretCommandResult } from './commandSemantics.js';
+import { checkKillOwnership } from './killOwnership.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
 import { parseSedEditCommand } from './sedEditParser.js';
@@ -541,6 +542,13 @@ export const BashTool = buildTool({
     };
   },
   async checkPermissions(input, context): Promise<PermissionResult> {
+    // Runs ahead of bashToolHasPermission so a worker cannot reach a process it
+    // did not start through an allow rule, auto mode, or bypassPermissions: a
+    // deny returned here is honoured at step 1d of the permission pipeline,
+    // before any of those. Kept out of bashPermissions.ts because
+    // bashToolHasPermission sits against Bun's feature() DCE budget.
+    const ownership = checkKillOwnership(input.command, context);
+    if (ownership) return ownership;
     return bashToolHasPermission(input, context);
   },
   renderToolUseMessage,
