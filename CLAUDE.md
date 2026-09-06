@@ -466,6 +466,51 @@ Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
 - Tell the user what to DO ("Change it from the CLI"), not why we have not
   built it ("needs a recorded permission-boundary review").
 
+### Comments (audit, 2026-09-06)
+
+A comment must not require maintenance to stay true. It may depend only on what
+changes in the SAME EDIT that changes the comment.
+
+- **No line number in a citation to another file.** Name the file and the symbol
+  (`sessionStorage.ts` `saveCustomTitle`) — greppable, and it survives edits to
+  that file. A `file.ts:NNN` pointer hands upkeep to whoever edits the target,
+  who cannot know your comment exists.
+- **Never restate a value that lives in code.** Name the constant. Distance is
+  no protection: `ElicitationDialog.tsx` carried "Overhead: ~9 lines" nine lines
+  above `const DIALOG_OVERHEAD = 14`.
+- **No counting claims** ("five of six kinds", "2 types in production", "9
+  dispatches"). They break when someone adds a case in another file, and no tool
+  can see it happen.
+- **No status notes** ("deferred", "not yet wired", "currently X"). Nothing ever
+  comes back to delete them. `OrchestratorRoster.tsx` told readers a working
+  feature was deliberately broken for months after it had been fixed.
+- **A derivation belongs in code, not prose.** If a constant follows from another
+  value, compute it. `MIN_WINDOW_WIDTH`'s arithmetic outlived the `740px` literal
+  it was anchored to and then argued, convincingly, for a bug that did not exist.
+- **Stable identifiers are wanted, keep them**: decision-doc names
+  (SECURITY-MINIMUM, PERMISSION-BOUNDARY, HR1-HR6, T4/T5a/T6/T7),
+  `~/catcode_prototype/` citations (frozen tree, cannot rot), and past-tense
+  incident records ("during the 2026-08-14 freeze it read 4.2-4.7ms"), which stay
+  true forever.
+
+**Do not read the existing comments as the house style.** The 2026-09-06 audit
+found ~1,779 cross-file line citations, roughly 30% already wrong, drifting up to
+2,260 lines; `protocol.ts` is 59% comment by line with two thirds of its citations
+stale, and `transcriptProjector.ts` is written as a running gloss on ~30 other
+files. That register is the defect. Write to the rules above regardless of what
+the file around you does.
+
+Check what YOU added, not the tree:
+
+```bash
+git diff main...HEAD -U0 | rg '^\+\s*(//|\*).*[A-Za-z0-9_/.-]+\.tsx?:[0-9]+'
+```
+
+should print nothing. A repo-wide sweep is red against the backlog and is not the
+gate; the backlog decays as files are touched. Only 1.8% of stale citations are
+mechanically detectable (missing file, line past EOF), so nothing automated will
+catch this for you.
+
 - **TypeScript everywhere; scripts are plain Bun TS.** Root tsconfig is
   `strict: false` — do NOT enable strict flags or drive-by-fix unrelated type
   errors in `src/`. `app/` IS strict — keep it that way.
@@ -485,8 +530,8 @@ Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
   both sides; verify by deliberately removing a case and seeing the error.
 - Tests use `bun:test` (`describe/test/expect/afterEach`). Prefer a module's
   exported `_forTest` reset helpers over process-global workarounds.
-- Comments state constraints code can't show (see `protocol.ts` doc comments
-  citing decisions). No narration comments, no comments on untouched code.
+- Comments state constraints code can't show. No narration comments, no
+  comments on untouched code. What a comment may DEPEND on is ruled above.
 - No new dependencies without asking. Python tooling: `uv` only. Search: `rg`.
 - Prefer editing existing files; no speculative features, configurability, or
   refactors beyond the request.
