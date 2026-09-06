@@ -3,7 +3,9 @@
 > **Superseded for conclusions.** Read [../reports/2026-09-06-instruction-stack-decisions.md](../reports/2026-09-06-instruction-stack-decisions.md) for where this work landed. This file is kept as the evidence record; some of its conclusions were later reversed.
 
 **Date:** 2026-09-06
-**Status:** Proposed. Nothing applied. Awaiting the operator's approval, per item.
+**Status:** Partly applied. **A2, A5, B4 and D3 landed in `0b177104`** as one
+commit, being the four the provenance scan showed to be fork drift. Everything
+else is still proposed and awaiting the operator's approval, per item.
 **Inputs:** [subtraction report](../reports/2026-09-06-instruction-stack-subtraction.md)
 (`169f4e29`) and [comparative report](../reports/2026-09-06-instruction-stack-comparative-decisions.md)
 (`27a9da10`, `59a152e7`).
@@ -95,8 +97,21 @@ is impossible" is verified against **our** implementation clearing the list;
 upstream's runtime was not executed and its behavior is unknown here.
 
 **Decided 2026-09-06, by the operator:** A5 is widened to upstream's all-four
-deletion and B4 lifts upstream's wording. Both are written into their items below.
-Still nothing is applied to source.
+deletion and B4 lifts upstream's wording.
+
+**Applied 2026-09-06 in `0b177104`:** the four drift items, A2, A5, B4 and D3, as
+one commit, on the reasoning that they carry the least of our own judgment and the
+most external support. Evidence in that commit message. The remaining items are
+untouched, and each now rests on our own argument alone.
+
+**One stale reference this surfaced, reported and not fixed.**
+`src/components/agents/generateAgent.ts:61-68` carries the same instruction A2 just
+deleted, in the prompt that helps a user author an agent definition: "Context: The
+user is creating a test-runner agent that should be called after a logical chunk of
+code is written", then "Since a significant piece of code was written, use the
+Agent tool to launch the test-runner agent to run the tests". It is a different
+surface, reached only through agent creation rather than injected every session, so
+it is outside A2 as specified and was left alone.
 
 ---
 
