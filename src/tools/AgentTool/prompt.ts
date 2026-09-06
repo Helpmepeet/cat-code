@@ -4,6 +4,7 @@ import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import { isTeammate } from '../../utils/teammate.js'
 import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
+import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
@@ -210,6 +211,31 @@ ${AGENT_TOOL_NAME}({
 
   const forkExamples = isGPTPromptStyle ? forkExamplesGPT : forkExamplesClaude
 
+  const currentExamples = `Example usage:
+
+<example_agent_descriptions>
+"test-runner": use this agent after you are done writing code to run tests
+</example_agent_descriptions>
+
+<example>
+user: "Please write a function that checks if a number is prime"
+assistant: I'm going to use the ${FILE_WRITE_TOOL_NAME} tool to write the following code:
+<code>
+function isPrime(n) {
+  if (n <= 1) return false
+  for (let i = 2; i * i <= n; i++) {
+    if (n % i === 0) return false
+  }
+  return true
+}
+</code>
+<commentary>
+Since a significant piece of code was written and the task was completed, now use the test-runner agent to run the tests
+</commentary>
+assistant: Uses the ${AGENT_TOOL_NAME} tool to launch the test-runner agent
+</example>
+`
+
   // When the gate is on, the agent list lives in an agent_listing_delta
   // attachment (see attachments.ts) instead of inline here. This keeps the
   // tool description static across MCP/plugin/permission changes so the
@@ -388,7 +414,7 @@ ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME
       ? `To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. `
       : `A completed or stopped agent cannot be resumed from this context — ${RESUME_AGENT_TOOL_NAME} is not available here; spawn a fresh ${AGENT_TOOL_NAME} instead. `
   }${canSendMessage ? `Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered at the worker's next tool round and does not interrupt its current work. ` : ''}${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
-- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
+- The agent's outputs should generally be trusted.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
 - If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
@@ -404,5 +430,7 @@ ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME
         ? `
 - The name, team_name, and mode parameters are not available in this context — teammates cannot spawn other teammates. Omit them to spawn a subagent.`
         : ''
-  }${whenToForkSection}${writingThePromptSection}${forkEnabled ? `\n\n${forkExamples}` : ''}`
+  }${whenToForkSection}${writingThePromptSection}
+
+${forkEnabled ? forkExamples : currentExamples}`
 }
