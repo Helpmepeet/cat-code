@@ -141,7 +141,8 @@ Grouped by reason, because the risk differs. Nothing here is applied.
 | **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four are inherited and upstream deleted all four, keeping the namespace syntax as prose | Open. Widened by the provenance scan; applied then reverted |
 | **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | `-p` runs only |
 | **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material | Claude path only |
-| **A7** | investigate | Audit the verification-agent nudge | Live on the default interactive path, forces an agent spawn, has no tests | Investigation only |
+| **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED 2026-09-06.** Closed; produced A8 |
+| **A8** | cut | Delete the unreachable verification nudge | Inherited at the fork point, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | Open. The only item that provably cannot change behavior |
 | **B1** | add | Let the final answer restate the outcome | RULE 6 as written forbids the summary a user needs after a long run | Reviewed, ready |
 | **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that the work up to the gate should be done first | Reviewed, ready |
 | **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Modify: belongs in the Actions section |
@@ -210,9 +211,11 @@ Added 2026-09-06. The status column above says what state each item is in. It do
 not say what **shape** the edit has, and this file's own framing, plus the apply
 plan's Part A "deletions" and Part B "additions", offered only two.
 
-Of the sixteen items, five are cuts (A1, A2, A3, A4, A6b), **five are tweaks**
+Of the eighteen items, six are cuts (A1, A2, A3, A4, A6b, A8), **five are tweaks**
 (A5, A6a, B4, D2, D3), three are additions (B1, B2, B3), two are investigations
-(A7, D4), one is a rule choice (C1), and one belongs to another session (D1).
+(A7 answered, D4 still open), one is a rule choice (C1), and one belongs to
+another session (D1). Seventeen of those are rows in the table above; C1 lives in
+section 4.
 
 The five tweaks are currently filed under deletions or additions because there was
 no third slot. That is not only untidy: cut-versus-add is a size axis, so it made
@@ -220,6 +223,26 @@ character count the default measure of a programme that was mostly not about siz
 When the four applied items were measured, four of their six hunks turned out to
 be rewrites. The full classification, the measurement behind it, and the third
 option it opens for the craft slice are in the apply plan under "Shape".
+
+### 3c. A7, closed: the nudge was never live
+
+Investigated 2026-09-06, no edit made. **The verification-agent nudge cannot fire
+and never has.** Its second gate resolves through `isGrowthBookEnabled()` to
+`is1PEventLoggingEnabled()`, which in this fork is a stub whose entire body is
+`return false`; the two overrides that could bypass it both require
+`USER_TYPE === 'ant'`. Verified by executing the gate, not by reading it. It is
+also inherited at the fork point and gone from current upstream, the same shape as
+A2 and D3, and no test in `src/` references it.
+
+Two consequences. **A2's judgment was never confounded**: this file and the apply
+plan both warned that removing A2's example while a stronger directive stayed live
+would make the two inseparable, and that warning rested on a premise nobody
+checked. And the finding produced **A8**, a cut that provably cannot change
+behavior. Full working in the apply plan's A7 and A8 sections.
+
+That makes five items whose standing changed once someone measured instead of
+reasoned: A2 and D3 strengthened, A1 weakened, A3's "absent from all three
+comparators" falsified, and A7's premise overturned.
 
 ### The three defects worth understanding
 

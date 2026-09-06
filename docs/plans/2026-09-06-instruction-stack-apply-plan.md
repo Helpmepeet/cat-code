@@ -17,6 +17,7 @@ claims are all evidence and are unaffected by the revert. What was withdrawn is
 the decision to apply. Where this file says the operator chose something, read it
 as a proposal that was accepted once and is now open again, not as a standing
 ruling.
+
 **Inputs:** [subtraction report](../reports/2026-09-06-instruction-stack-subtraction.md)
 (`169f4e29`) and [comparative report](../reports/2026-09-06-instruction-stack-comparative-decisions.md)
 (`27a9da10`, `59a152e7`).
@@ -32,7 +33,7 @@ not the reason. Group by reason instead, because the risk differs:
 | Group | Why | Items | What approving it costs you |
 | --- | --- | --- | --- |
 | **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4, D3 | Nothing. These are defects; they need no thesis about model strength |
-| **1b. Live and untested** | An instruction that forces an agent spawn, on the default path, with no coverage | A7 | Investigation only; it gates how A2 is judged |
+| ~~**1b. Live and untested**~~ **Answered: dead, not live** | A7 asked whether an instruction forcing an agent spawn was live on the default path with no coverage. It is not live: its second gate cannot open. | A7 → **A8** | Nothing. A7 is closed and cost no edit; A8 deletes the dead code |
 | **2. Pure simplification** | The same rule, said once instead of twice | A1, A3, A4, A5, A6b | Nothing behavioral is claimed. This is the original brief |
 | **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3 | The only real bet on the table |
 | **4. Already applied, needs reconciling** | The rule landed before this plan; it now bans a comment the repo relies on | C1 | A choice between two rules, not an edit |
@@ -91,12 +92,15 @@ whether one idea is stated once, in the place that owns it.
 
 | Shape | Items | Count |
 |---|---|---:|
-| **Cut** — delete, add nothing | A1, A2, A3, A4, A6b | 5 |
+| **Cut** — delete, add nothing | A1, A2, A3, A4, A6b, **A8** | 6 |
 | **Tweak** — replace wrong or unusable text with right text | A5, A6a, B4, D2, D3 | 5 |
 | **Add** — new instruction where we have none | B1, B2, B3 | 3 |
-| **Investigate** — no edit authorized | A7, D4 | 2 |
+| **Investigate** — no edit authorized | A7 (answered), D4 (open) | 2 |
 | **Decide** — a choice between two rules, then a tweak | C1 | 1 |
 | **Not ours** | D1 | 1 |
+
+A8 was produced by closing A7 and is the only cut in the plan that provably cannot
+change behavior, since its gate is held shut by a hardcoded `return false`.
 
 Three consequences, none of them requiring a decision now:
 
@@ -404,10 +408,66 @@ immediate updates, truthful completion.
 **Do not claim a GPT saving from the scenario removal:** `prompt.ts:231` already
 selects a compact GPT variant, so that block is Claude-path text.
 
-### A7. Audit the verification-agent nudge on both task paths
+### A7. Audit the verification-agent nudge on both task paths — ANSWERED 2026-09-06
 
-Not a text edit, and not yet a change: an investigation that must happen before or
-alongside the rest, because it is live on the default interactive path.
+**Determination: the nudge cannot fire, has never fired, and is inherited text
+upstream has since deleted.** It is dead code, not a live directive. The
+investigation is closed; its finding becomes A8 below. Nothing was edited.
+
+**Verified by execution, not by reading.** Running the real gate function in this
+tree:
+
+```
+is1PEventLoggingEnabled() = false
+tengu_hive_evidence       = false
+```
+
+The chain, each link verified in source: `isGrowthBookEnabled()` is exactly
+`is1PEventLoggingEnabled()`, and that function in
+`src/services/analytics/firstPartyEventLogger.ts` is a stub whose whole body is
+`return false` — telemetry is disabled in this fork. So
+`getFeatureValue_CACHED_MAY_BE_STALE('tengu_hive_evidence', false)` returns its
+default forever. The two escapes that could override it, `getEnvOverrides` and
+`getConfigOverrides`, both require `process.env.USER_TYPE === 'ant'`, which is
+unset here and belongs to Anthropic-internal builds.
+
+The first gate is open: `'VERIFICATION_AGENT'` is in the build list at
+`scripts/build.ts`. The second is welded shut. Both must hold, so neither path
+ever appends the note.
+
+**Verified: it is inherited, and upstream deleted it.** `git log -S` puts both
+copies in `86051a8e`, the initial private publish snapshot, so nobody here wrote
+it. Counts across both literal tables:
+
+| String | Fork point 2.1.87 | Upstream 2.1.239 |
+|---|---:|---:|
+| `You just closed out 3+ tasks` | 2 | **0** |
+| `only the verifier issues a verdict` | 2 | **0** |
+| `verificationNudgeNeeded` | 6 | **0** |
+
+Same shape as A2 and D3: fork drift, retired upstream, still carried here.
+
+**Verified: no test anywhere in `src/` references the nudge or its gate.**
+`TodoWriteTool` has no test file at all.
+
+**So this item's own premise was wrong, and so was the warning built on it.**
+This section previously said the nudge is "live on the default interactive path,
+forces an agent spawn", and warned that applying A2 while it remained would leave
+a stronger directive in place and confound the two as one behavior change. Being
+present on the interactive path in code and being reachable are different claims,
+and only the first was checked. **A2 could have been judged on its own throughout.**
+
+**What the earlier scope note got right.** It correctly refused to call the nudge
+`-p`-only: `TaskUpdateTool` does carry it on the V2 interactive path, and that
+correction stands. The error was downstream of it.
+
+**One thing not explained.** `tengu_hive_evidence` appears zero times in both
+upstream binaries while `verificationNudgeNeeded` appears six times at the fork
+point. The flag name may be minified, constructed, or absent from the SDK build.
+This is recorded rather than guessed at; it does not affect the determination,
+which rests on executing the gate rather than on string counts.
+
+**Original scope, retained for the record.**
 
 **Verified:** both `TodoWriteTool.ts` (V1) and `TaskUpdateTool.ts` (V2) append an
 instruction into their tool RESULT telling the model to spawn the verification
@@ -426,9 +486,51 @@ this instruction remains, removing the example changes what the model reads whil
 leaving a stronger directive in place, and the two will be judged together as one
 behavior change.
 
-**What to determine, not to change:** whether this is an intentional workflow
-requirement or an obsolete heuristic; whether its gates are live in the operator's
-sessions; and what coverage it should carry. No edit is authorized by this item.
+**What was to be determined**, now answered above: whether this is an intentional
+workflow requirement or an obsolete heuristic — **neither**, it is upstream
+residue that upstream itself retired; whether its gates are live in the operator's
+sessions — **no, the second gate cannot open**; and what coverage it should carry
+— none, because A8 proposes deleting it.
+
+### A8. Delete the unreachable verification nudge
+
+**New 2026-09-06, produced by A7.** Shape: **cut**. This is the only item in the
+plan that cannot change model behavior, because the code it removes has none.
+
+**Files:** `src/tools/TodoWriteTool/TodoWriteTool.ts` and
+`src/tools/TaskUpdateTool/TaskUpdateTool.ts`.
+
+**Remove**, in each file: the `verificationNudgeNeeded` schema field, the gated
+block that sets it, the field on the returned data, the `NOTE: You just closed out
+3+ tasks…` string in the result mapper, and the now-unused
+`VERIFICATION_AGENT_TYPE` import. **Verified:** that import has no other use in
+either file; its only reference is inside the nudge string.
+
+**Then remove `'VERIFICATION_AGENT'` from the build feature list in
+`scripts/build.ts`, or record why it stays.** **Verified:** these two gated blocks
+are the *only* `feature('VERIFICATION_AGENT')` call sites in `src/`. Deleting them
+leaves the name in the build list with zero runtime consumers, which is exactly
+the half-wired state `CLAUDE.md` §5 and §8 item 7 warn about. Decide it in the
+same edit rather than leaving an orphan.
+
+**What must NOT be removed: the verification agent itself.** `VERIFICATION_AGENT`
+is registered in `src/tools/AgentTool/builtInAgents.ts`, independently of this
+flag and of the nudge, and `src/tools/AgentTool/built-in/verificationAgent.ts`
+stays. A8 deletes an unreachable instruction telling the model to spawn that
+agent; the agent remains spawnable on request exactly as now. Its own prompt is a
+separate question, nominated as T5 in the subtraction report and not in this plan.
+
+**One stale comment to fix or drop while in there.** The V2 block's comment says
+"TaskUpdateToolOutput is @internal so this field does not touch the public SDK
+surface". **Verified:** the identifier `TaskUpdateToolOutput` appears nowhere in
+`src/` except inside that comment. The reassurance may still be true, but its
+stated reason cites a type that does not exist under that name, so it cannot be
+relied on as written. It disappears with the block under this item.
+
+**Risk:** none, and for once that is demonstrable rather than asserted. The gate
+is closed by a hardcoded `return false`, so no session reaches this code and no
+emitted text changes. The one real consequence is the orphaned build feature
+above, which is why that decision is part of the item rather than a follow-up.
 
 ---
 
