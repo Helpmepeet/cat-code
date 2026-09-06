@@ -178,7 +178,7 @@ another session's. Seventeen are rows below; C1 is in §5.
 | **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | **READY.** Verified defect. `-p` runs only, so low reach |
 | **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material. ~5,841 chars, the largest single cut | **DECIDED: do it.** Claude path only, and a deliberate divergence: upstream still ships them |
 | **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED.** Closed; produced A8 |
-| **A8** | cut | Delete the unreachable verification nudge | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | **READY.** The only item that provably cannot change behavior |
+| **A8** | cut | Delete the unreachable verification nudge, and its now-orphaned build-list entry | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | **READY.** The only item that provably cannot change behavior |
 | **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | **DECIDED: in.** The visible tip of the talk-row gap in §2 |
 | **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | **DECIDED: in**, and no longer unsupported: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
 | **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | **DECIDED: in.** Belongs in the Actions section |
@@ -295,9 +295,18 @@ comparator carries this guidance, so afterwards the product does not say it at a
 to anyone. That is the choice, and it is consistent with the principle above rather
 than an oversight.
 
-**Sizes.** `ABSTRACTION` 256, `SCOPE` 352 (of which sentence 1 and the comment
-rules are marked Keep in the craft report §4), `TASK DOMAIN` 216 of 336,
-`CAPABILITY` 55 of 126. Per-sentence verdicts and exact strings are in the craft
+**Sizes.** `ERROR HANDLING` 411 and `ABSTRACTION` 256 go entirely. `SCOPE` loses
+161 of 352, keeping sentence one and the comment rules. `TASK DOMAIN` loses 216 of
+336, keeping the working-directory clause. `CAPABILITY` loses 55 of 126, keeping
+the deferral sentence. Roughly 1,099 characters.
+
+**No pre-composed replacement strings, by operator ruling 2026-09-06.** An earlier
+note called the craft slice not-ready because the five sections had verdicts but no
+written-out "after" text. That is not a blocker: the implementer composes each
+section from the per-sentence verdicts in the craft report §4, including the
+judgment calls that follow, such as whether a section header survives when every
+sentence under it is cut. Those are ordinary editing decisions, not open questions
+for this document. Per-sentence verdicts and exact strings are in the craft
 report §4, which remains the implementation detail for this decision.
 
 **b. The comment rule, reframed by the operator 2026-09-06.** The question was

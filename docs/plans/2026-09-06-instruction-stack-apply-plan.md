@@ -512,12 +512,15 @@ block that sets it, the field on the returned data, the `NOTE: You just closed o
 `VERIFICATION_AGENT_TYPE` import. **Verified:** that import has no other use in
 either file; its only reference is inside the nudge string.
 
-**Then remove `'VERIFICATION_AGENT'` from the build feature list in
-`scripts/build.ts`, or record why it stays.** **Verified:** these two gated blocks
-are the *only* `feature('VERIFICATION_AGENT')` call sites in `src/`. Deleting them
-leaves the name in the build list with zero runtime consumers, which is exactly
-the half-wired state `CLAUDE.md` §5 and §8 item 7 warn about. Decide it in the
-same edit rather than leaving an orphan.
+**Then remove `'VERIFICATION_AGENT'` from the build feature list at
+`scripts/build.ts:51`. DECIDED 2026-09-06.** **Verified across `src/`, `app/`,
+`scripts/` and tests:** the only two `feature('VERIFICATION_AGENT')` call sites are
+the gated blocks above. Deleting them without the list entry leaves the build
+advertising a capability nothing implements, which is the half-wired state
+`CLAUDE.md` §5 and §8 item 7 warn about. Nothing is lost by removing it: the
+verification agent is registered separately in `builtInAgents.ts` and is
+unaffected, and if the workflow is ever revived the flag returns alongside its call
+sites. Do it in the same edit.
 
 **What must NOT be removed: the verification agent itself.** `VERIFICATION_AGENT`
 is registered in `src/tools/AgentTool/builtInAgents.ts`, independently of this
