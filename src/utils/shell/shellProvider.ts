@@ -17,6 +17,12 @@ export type ShellProvider = {
       id: number | string
       sandboxTmpDir?: string
       useSandbox: boolean
+      /**
+       * This command runs on behalf of a subagent and the worker environment
+       * allowlist is on. Providers must not have the shell source anything that
+       * re-introduces environment after the spawn-time filter has run.
+       */
+      workerScoped?: boolean
     },
   ): Promise<{ commandString: string; cwdFilePath: string }>
 

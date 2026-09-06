@@ -940,7 +940,11 @@ async function* runShellCommand({
     },
     preventCwdChanges,
     shouldUseSandbox: shouldUseSandbox(input),
-    shouldAutoBackground
+    shouldAutoBackground,
+    // Already carried this far to attribute background tasks to their agent.
+    // exec needs the same fact to decide whether the child gets the worker
+    // environment allowlist.
+    agentId
   });
 
   // Start the command execution
