@@ -139,7 +139,7 @@ never for the AgentTool item, and never opens a version binary at all.
 
 **Method.** Twenty strings counted in the fork-point bundle
 `node_modules/@anthropic-ai/claude-agent-sdk/cli.js` (`VERSION:"2.1.87"`) and in
-all nineteen builds in `~/.local/share/claude/versions/`, 2.1.214 to 2.1.239,
+the 16 distinct builds in `~/.local/share/claude/versions/` (19 files; three are `.orig-` duplicates), 2.1.214 to 2.1.239,
 across both the UTF-8 and the UTF-16LE literal tables. **Long exact strings
 produce false zeros when upstream reworded slightly: A3b and A4k both read as
 deleted on the first pass and are not.** Every zero was re-probed with three short
@@ -174,7 +174,7 @@ of a selected live branch.
   the relevance test B4 asks for, and is now lifted the way D3's was.
 - **A4's review reversal is independently confirmed.** The maxim it restored,
   `Three similar lines is better than a premature abstraction`, is in all
-  nineteen upstream builds.
+  16 distinct upstream builds.
 
 **One caution this adds.** Five items are not drift, and A6a and D2 are defects we
 share with upstream rather than defects we introduced. Fixing them puts this fork
@@ -230,14 +230,20 @@ items 1 and 2 by `PRIORITY RULE` and the `RISKY ACTIONS` list; item 3 by
 authorized that exact scope"; item 4 by `OBSTACLE RULE` ("do not bypass safety
 checks").
 
-**Risk, revised 2026-09-06.** The redundancy is verified and the four items really
-do restate the four rules above them. But the bucket reconstruction in the decision
-report's §2a places this checklist inside `# Executing Actions with Care`, the
-permission category, which is the one category where **both** comparators outspend
-us. So this is a trim to our thinnest surface, and a checklist closing a dense
-section is a recall device rather than plain repetition, a different form from the
-prose it summarises. Nothing here shows the recall device is doing work, and
-nothing shows it is not. Decide A1 deliberately; it is no longer a free cut.
+**Risk: none identified, restored 2026-09-06.** A downgrade written earlier that
+day is **withdrawn**. It argued this checklist sits in the permission category,
+"the one category where both comparators outspend us", making it a trim to our
+thinnest surface. That was wrong twice: Claude Code spends ~600 there against our
+2,774, and once Codex's autonomy text is bucketed the way ours is, we outspend
+Codex too (decision report §2). We are the heaviest of the three on permission, not
+the lightest, so no thinness argument applies.
+
+What remains is the original claim, and it is verified: the four numbered items
+restate `PRIORITY RULE`, `RISKY ACTIONS`, `INSTRUCTION AUTHORITY` and
+`OBSTACLE RULE` from sixteen lines above. One judgment worth stating without
+dressing it as evidence: a checklist closing a dense section is a recall device, a
+different form from the prose it summarises, and nothing here measures whether that
+form earns its place.
 
 ### A2. Delete the AgentTool prime-number example
 
@@ -262,8 +268,8 @@ already deleted it.** `git blame` puts the whole `currentExamples` body in
 `86051a8e`, the initial private publish snapshot, so no line of it is our work.
 The fork-point bundle `node_modules/@anthropic-ai/claude-agent-sdk/cli.js`
 (`VERSION:"2.1.87"`) carries `isPrime` once, `greeting-responder` five times and
-`test-runner` fourteen times. Nineteen upstream builds in
-`~/.local/share/claude/versions/`, 2.1.214 through 2.1.239, were scanned for both
+`test-runner` fourteen times. The builds in `~/.local/share/claude/versions/`, 2.1.214 through 2.1.239 — 19
+files but **16 distinct versions**, three being `.orig-` duplicates — were scanned for both
 the UTF-8 and the UTF-16LE literal tables: `isPrime`, `greeting-responder` and the
 wrapper tag `example_agent_descriptions` return **zero hits in every one of them**.
 Upstream removed the structure, not just the story. The only `test-runner` string
@@ -276,7 +282,7 @@ example as its reason; see the peer-sessions instruction-surface audit, F11.
 **Risk, revised down after that measurement.** The stated risk was that the
 non-fork path ends up with no worked example at all. Upstream's current Agent
 description has no worked example either, and has shipped that way across all
-nineteen builds above; its mechanics live in prose bullets under `## Usage notes`.
+16 distinct builds above; its mechanics live in prose bullets under `## Usage notes`.
 So this is a return to upstream behavior rather than an untested cut. It remains
 the largest behavior-shaped deletion in Part A and is still worth reverting alone
 if unnecessary delegation rises.
@@ -675,7 +681,7 @@ the opposite at the moment of the call, which is the closer instruction.
 
 **Provenance, measured 2026-09-06 in both literal tables.** The fork-point bundle
 at 2.1.87 carries `outputs should generally be trusted` once and `Trust but verify`
-zero times. All nineteen upstream builds from 2.1.214 to 2.1.239 are the exact
+zero times. All 16 distinct upstream builds from 2.1.214 to 2.1.239 are the exact
 inverse, with identical counts in every one of them: zero and four. The replacement
 occupies the same bullet list, confirmed by the neighbouring bullet that both
 builds share verbatim, `Clearly tell the agent whether you expect it to write code

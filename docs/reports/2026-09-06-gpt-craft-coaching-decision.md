@@ -31,9 +31,13 @@ single clear outlier:
 |---|---:|---:|---:|
 | How to do the work | **6,692** | 2,642 | 2,019 |
 
-Two and a half times either comparator. That number was named as the outlier and
-then never worked. Nothing that has landed or is planned moves more than roughly
-370 characters of it.
+**Corrected 2026-09-06: the gap is smaller than "two and a half times".** Codex's
+autonomy text is bucketed into its permission row while ours sits in this row; on
+consistent bucketing it is Codex 4,378 against our 6,692, a 1.5× gap. See the
+decision report §2. The category is still the largest single divergence, and the
+craft half below is unaffected, because that half was measured inside the sections
+themselves rather than derived from this row. Nothing landed or planned moves more
+than roughly 370 characters of it.
 
 **The category is not one thing, and that is why it was never worked.** It holds
 two kinds of text with opposite trends:
@@ -101,44 +105,58 @@ every idea in the slice, including the ones A and B cut.
 
 ### Current Codex has no craft section at all
 
-**Verified-measurement, 2026-09-06.** The installed binary at
-`~/.codex/packages/standalone/current/bin/codex` (221 MB, reached through
-`~/.local/bin/codex`) carries nine templates, located by their `You are Codex`
-openings. Segmenting on those boundaries and searching each span for the legacy
-coding-guideline block, `Fix the problem at the root cause`:
+**Corrected 2026-09-06 after external review. The conclusion holds; the method
+below it did not, and is replaced.**
 
-| Template opening | Span | Carries the craft guidelines |
-|---|---:|---|
-| `You are Codex, an OpenAI general-purpose agentic assistant…` | ~955 KB | yes |
-| `You are Codex, a coding agent based on GPT-5…` | 16,672 | no |
-| `You are Codex, an agent based on GPT-5…` (three templates) | ~21,000 each | no |
-| `You are Codex, a coding agent based on GPT-5…` (three more) | 20,492 to 43,259 | one of three |
-| final template | ~40,000 | no |
+**Verified-measurement, on the template this report actually compares against.**
+`gpt-6-astra` lives in `~/.codex/models_cache.json` as
+`models[0].model_messages.instructions_template`, 21,261 characters. It contains
+**no** `Fix the problem at the root cause` block, and its eighteen headings contain
+no craft section: the whole of its execution budget is `# Rules for getting work
+done` (2,642), with the rest going to permission, autonomy and communication.
+Note this is a **remote catalog value that changes on refresh**, not a pinned
+artefact, and `gpt-6-astra` appears **zero times** in the installed binary — so no
+claim about astra can be sourced from that binary.
 
-Seven of nine, including every modern `based on GPT-5` coding template, have
-dropped it. The block survives in the general-purpose assistant prompt and one
-older template.
+**Withdrawn: the nine-template table.** An earlier version of this section
+segmented the installed binary at `You are Codex` openings and reported that seven
+of nine templates had dropped the craft block, with the general-purpose prompt and
+"one of three" retaining it. That segmentation attributes text to whichever opening
+precedes it, which is not the same as the template it belongs to; decoding the
+embedded template strings properly places the binary's surviving craft blocks in
+legacy `You are a coding agent. Please keep going` strings, an older prompt
+lineage. The span sizes and the yes/no column in that table should not be relied
+on. What survives, on better evidence, is the claim that matters: the modern
+templates carry no craft guidelines.
 
-**Verified-measurement.** Keyword counts inside one current template (bytes
-169,294,289 to 169,314,781): `scope` 0, `abstraction` 0, `error handling` 0,
-`ambiguous` 0, `root cause` 0, `complexity` 1, `minimal` 1.
+**Verified-measurement, keyword counts** inside a current template in the binary
+(bytes 169,294,289 to 169,314,781): `scope` 0, `abstraction` 0, `error handling` 0,
+`ambiguous` 0, `root cause` 0, `complexity` 1, `minimal` 1. **That template is
+`gpt-5.4` by its catalog slug, not astra**, so read it as corroboration from a
+sibling template rather than as evidence about astra.
 
-**Verified-text.** That template's section headings are
-`## Editing constraints`, `## Special user requests`, `## Autonomy and
-persistence`, `## Frontend tasks`, `## Formatting rules`, `## Final answer
-instructions`, `## Intermediary updates`, `## Values`, `## Tone & User
-Experience`, `## Escalation`, `## Interaction Style`. Its execution budget goes to
-tool mechanics, autonomy, and communication. Not to craft.
-
-This confirms the decision report's section 1 claim, which had not been checked
-against the shipped binary: elementary coaching is what OpenAI retired.
+**Verified-text.** Astra's own headings are `# When to ask the user for
+permission`, `# Autonomy and persistence`, `# Personality`, `## Writing style`,
+`## Technical communication`, `# Working with the user`, `## Intermediate
+commentary`, `## Final answer`, `# Rules for getting work done`, `# Using skills`,
+`# Apps (Connectors)`, `# Plugins` and their subsections. Execution is one section
+of eighteen. Not craft.
 
 ### Claude Code kept all five
 
 **Verified-measurement**, both literal tables, across the 2.1.87 fork-point bundle
-and all nineteen builds in `~/.local/share/claude/versions/`: `methodName`,
-`snake case`, `highly capable`, `premature abstraction` and the error-handling
-sentences are present in every build. Upstream's own wording, current:
+and the 16 distinct builds in `~/.local/share/claude/versions/` (19 files; three
+are `.orig-` duplicates): `methodName`, `snake case`, `highly capable`,
+`premature abstraction` and the error-handling sentences are present in every one.
+
+**One of those five is not verbatim ours, corrected 2026-09-06.** The capability
+sentence differs: upstream says "You are highly capable and often allow users to
+complete ambitious tasks that would otherwise be too complex or take too long",
+while ours reads "highly capable and can handle ambitious tasks" — **zero hits in
+any build, including the fork point.** Ours is a fork rewrite that dropped the
+clause about tasks otherwise too complex or slow. That is a point in favour of
+cutting it, since what we carry is neither Anthropic's reasoning nor Codex's
+silence, and against calling it inherited text. Upstream's own wording, current:
 
 > Don't add features, refactor, or introduce abstractions beyond what the task
 > requires. A bug fix doesn't need surrounding cleanup; a one-shot operation

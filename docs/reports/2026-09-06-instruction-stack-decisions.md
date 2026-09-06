@@ -26,14 +26,23 @@ enumerated tool instructions with prose. And Codex's own ladder runs 21,544 char
 for `gpt-5.2`, 12,896 for `5.4`, 19,754 for `5.5`, 17,730 for `5.6`, 21,261 for
 `gpt-6-astra`. Size tracks model family and role, not recency.
 
-**A narrower version survived, and was later confirmed against the shipped
-binary.** Between `gpt-5.2` and its current templates OpenAI deleted "Fix the
-problem at the root cause", "Avoid unneeded complexity" and "Do not attempt to fix
-unrelated bugs or broken tests", and spent the budget on permission, autonomy and
-communication instead. **Elementary craft coaching is what got retired; autonomy
-and communication grew.** Verified 2026-09-06 in the installed Codex binary: of
-its nine templates, seven — including every modern `based on GPT-5` coding
-template — carry no craft guidelines at all.
+**A narrower version survived.** Between `gpt-5.2` and its current templates
+OpenAI deleted "Fix the problem at the root cause", "Avoid unneeded complexity"
+and "Do not attempt to fix unrelated bugs or broken tests", and spent the budget on
+permission, autonomy and communication instead. **Elementary craft coaching is what
+got retired; autonomy and communication grew.**
+
+**Verified 2026-09-06, on the corrected evidence.** The `gpt-6-astra` template —
+the one this report compares against — contains no craft block at all. That is
+checked directly in the template, and it is the load-bearing fact.
+**An earlier version of this claim did not reproduce and is withdrawn:** it said
+"of the installed binary's nine templates, seven carry no craft guidelines",
+derived by splitting the binary at `You are Codex` openings. That segmentation
+attributes text to the wrong template. Decoding the templates properly puts the
+binary's surviving craft blocks in legacy `You are a coding agent. Please keep
+going` strings, an older prompt lineage, not in the modern model templates. The
+direction is unchanged and better supported; the method behind the old numbers was
+not sound.
 
 **What this means here.** No argument in this document rests on making the prompt
 smaller. Each item stands because our text contradicts our own code, repeats
@@ -55,6 +64,36 @@ instruction files:
 Claude Code's figure is one capture from 2026-08-12 and excludes its MCP browser
 block, so it is a floor.
 
+**⚠ The Codex column is not bucketed the same way as ours. Corrected 2026-09-06
+after external review; read this before using the table.**
+
+Its source is `~/.codex/models_cache.json`, `models[0].instructions_template`,
+which is 21,261 characters — a **remote catalog value that changes on refresh**,
+not a pinned binary. `gpt-6-astra` appears zero times in the installed Codex
+binary, so any claim here "verified against the installed binary" does not cover
+this model. The rows decompose as:
+
+| Row | What it actually is in astra | Chars |
+|---|---|---:|
+| Work | `# Rules for getting work done` alone | 2,642 |
+| Permission | `# When to ask the user for permission` 1,976 **+ `# Autonomy and persistence` 1,736** | 3,712 |
+| Talk | nine communication sections | 10,293 |
+
+**So Codex's autonomy text is counted as permission, while ours is counted as
+work.** Our `PROACTIVE EXECUTION`, `EXPLORE RULE` and `INVESTIGATION DISCIPLINE`
+total 1,914 and sit inside our 6,692. Bucketed consistently:
+
+- work: Codex 4,378 against our 6,692 — **a 1.5× gap, not 2.5×**
+- permission: Codex 1,976 against our 2,774 — **we outspend Codex**
+
+As a share of each prompt, permission is 11.2% for us, 9.3% for Codex and 5.4% for
+Claude Code, so **we are the heaviest of the three, not the lightest.** An earlier
+version of this report said the opposite in both places; both statements are
+withdrawn, and A1's standing changes with them (§3, §4).
+
+The craft finding in §1 is unaffected: it was checked inside the astra template
+itself, not derived from these rows.
+
 **Method, reconstructed 2026-09-06** because the table shipped without one.
 `./cli-dev --dump-system-prompt --model gpt-6-astra` emits exactly 24,680
 characters, and the rows are our own top-level headings grouped: work =
@@ -65,19 +104,21 @@ Care` 2,774.
 **Two caveats the table does not carry.** It covers 13,602 of 24,680 characters,
 **55%** — `# System Rules`, `# Session-Specific Guidance`, `# Environment`,
 `## Reading session transcripts` and the preamble are in no bucket, so no total
-may be derived from these rows. And the Codex column is a judgment, not a heading
-match: their 2,642 is `## Editing constraints` plus `## Autonomy and persistence`,
-so **that first row compares our craft coaching against their tool mechanics.**
-The craft finding in §1 survives only because it was checked against the binary
-directly rather than inferred from the row.
+may be derived from these rows. The Codex column's own caveat is the boxed note
+above: it is a different bucketing, from a remote catalog value rather than a
+pinned artefact.
 
 **Reading the two rows nobody worked.** Permission and care is *not* thin: four
 concrete risky-action categories with examples, instruction authority, obstacle
-rule. "Lightest relative to our size" is arithmetic, not a demonstrated gap. The
+rule. On the corrected bucketing we spend more on it than either comparator, so
+there is no deficiency to close here at all. The
 talk row is a **shape** difference: our 4,136 is overwhelmingly prohibitions (no
-emojis, no restating, no em dashes, no engagement prompts), while Codex spends
-3,121 on `## Final answer instructions` and 2,343 on `## Intermediary updates`,
-and we have no equivalent to either. We say what not to say; they say what to say.
+emojis, no restating, no em dashes, no engagement prompts), while astra spends
+2,325 on `## Final answer` with its formatting and visualization subsections, 1,097
+on `## Intermediate commentary` and 1,890 on `## Writing style`, and we have no
+equivalent to any of them. We say what not to say; they say what to say. (Earlier
+figures of 3,121 and 2,343 came from a `gpt-5.4` template, not from astra, and are
+corrected here.)
 
 **Tool descriptions are the larger surface** and were never compared: 42,328
 characters across 27 tools in the default pool, against a 24,680-character system
@@ -98,9 +139,9 @@ another session's. Seventeen are rows below; C1 is in §5.
 
 | Item | Shape | What it does | Why | Status |
 |---|---|---|---|---|
-| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated fifteen lines above | Open. Redundancy verified, but it trims the permission category, our thinnest against both comparators |
+| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated sixteen lines above, at `gpt.ts:197` | Open. Verified redundancy. An earlier permission-thinness caveat is **withdrawn**, see §2 |
 | **A2** | cut | Delete AgentTool's prime-number example | Tells the model to delegate because code was written, which our policy contradicts | Open. Inherited; upstream deleted it |
-| **A3** | cut | Drop the snake-case example and "You are highly capable" | Ordinary coding-assistant teaching. **"Absent from all three comparators" was wrong:** Claude Code ships both verbatim | Open, re-scoped by the craft decision in §5 |
+| **A3** | cut | Drop the snake-case example and "You are highly capable" | Ordinary coding-assistant teaching. **"Absent from all three comparators" was wrong**, but so was the correction: Claude Code ships the snake-case example verbatim on the Claude path, while our capability sentence is a fork rewrite that dropped a clause | Open, re-scoped by the craft decision in §5 |
 | **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Open, re-scoped by §5 |
 | **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four inherited; upstream deleted all four, keeping the syntax as prose | Open. Applied then reverted |
 | **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | Open. `-p` runs only |
@@ -108,10 +149,10 @@ another session's. Seventeen are rows below; C1 is in §5.
 | **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED.** Closed; produced A8 |
 | **A8** | cut | Delete the unreachable verification nudge | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | Open. The only item that provably cannot change behavior |
 | **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | Open. The visible tip of the talk-row gap in §2 |
-| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | Open |
+| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | Open, and **no longer unsupported**: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
 | **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Open. Belongs in the Actions section |
 | **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Open. Inherited; upstream removed it after 2.1.215 and its replacement is available to lift |
-| **D1** | not ours | Write's description names `Edit`, absent from the GPT pool | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Another session fixed it.** Do not touch |
+| **D1** | not ours | Write's description names `Edit`, absent from the GPT pool | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Fixed only in the working tree**, not in HEAD (last commit `ea085822`). Another session's dirty file: do not touch, and do not assume it is safe |
 | **D2** | tweak | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites; TaskGet does not, so a finished prerequisite blocks forever | Open. Verified defect |
 | **D3** | tweak | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Open. Upstream replaced this sentence; text drafted |
 | **D4** | investigate | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | Open |
@@ -137,8 +178,11 @@ than the pool. If those diverge, the defect returns.
 Six items' standing moved when checked against evidence rather than argued from
 our own text. This is the session's real output.
 
-**Fork drift, measured across the 2.1.87 SDK bundle and all 19 builds in
-`~/.local/share/claude/versions/`, both UTF-8 and UTF-16LE literal tables:**
+**Fork drift, measured across the 2.1.87 SDK bundle and the builds in
+`~/.local/share/claude/versions/`, both UTF-8 and UTF-16LE literal tables.** That
+directory holds 19 files but **16 distinct versions** — three are `.orig-`
+duplicates of a locally patched copy. Counts were identical across all of them, so
+no conclusion moves, but "19 builds" overstated the independent evidence:
 
 | String | Fork point | Upstream now |
 |---|---:|---:|
@@ -158,12 +202,20 @@ our own text. This is the session's real output.
   lifted rather than composed. **A3a, A3b, A6a, A6b and D2 are not drift** —
   upstream still ships all five, so A6a and D2 are defects we *share* rather than
   introduced. **A1, A4a, A4b, B1 and D4 are ours.**
-- **A1 weakened.** Its checklist sits inside the permission section, so it trims
-  the one category where both comparators outspend us, and a checklist closing a
-  dense section is a recall device rather than plain repetition. The redundancy
-  claim is still verified.
-- **A3's stated reason was false.** "Absent from all three comparators" — Claude
-  Code ships both the snake-case example and the capability sentence verbatim.
+- **A1 was weakened, then restored.** It was downgraded on the grounds that its
+  checklist trims the permission category, "the one category where both comparators
+  outspend us". **That was wrong twice over**: Claude Code spends ~600 against our
+  2,774, and once autonomy is bucketed consistently we spend more than Codex too
+  (§2). A1 is back to what the first pass said, verified redundancy at
+  `gpt.ts:197`, sixteen lines below the `PRIORITY RULE` it restates. The recall-
+  device observation stands as a judgment, without a measurement behind it.
+- **A3's stated reason was false, and so was the first correction.** "Absent from
+  all three comparators" is wrong: Claude Code ships the snake-case example
+  verbatim, on the Claude path. But "ships both verbatim" overshot. Our
+  `highly capable and can handle ambitious tasks` has **zero** hits in any upstream
+  build; upstream's is the longer "often allow users to complete ambitious tasks
+  that would otherwise be too complex or take too long". Ours is a fork rewrite
+  that dropped a clause, which matters for the craft decision in §5a.
 - **A7's premise was overturned.** The nudge cannot fire: `isGrowthBookEnabled()`
   is exactly `is1PEventLoggingEnabled()`, a stub whose whole body is
   `return false`, and both overrides require `USER_TYPE === 'ant'`. Verified by
