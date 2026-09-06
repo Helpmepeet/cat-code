@@ -81,12 +81,39 @@ size argument did not survive, and the defects do not need it.
 Base prompts, product-authored text only, excluding tool schemas and loaded
 instruction files:
 
-| | Cat Code (GPT) | Codex `gpt-6-astra` | Claude Code |
-|---|---:|---:|---:|
-| Total | 24,680 | 21,261 | 11,177 |
-| How to do the work | 6,692 | 2,642 | 2,019 |
-| How to talk to the user | 4,136 | 10,293 | 1,603 |
-| Permission and care | 2,774 | 3,712 | ~600 |
+**Recompared against the right model, 2026-09-06.** Everything before this was
+measured against `gpt-6-astra`, which no session here ever receives. The models
+this fork runs are `gpt-5.6-sol` and `gpt-5.6-terra`, and they share a different
+template.
+
+| | Cat Code before | **Cat Code now** | **Codex 5.6, in use** | Codex astra | Claude Code |
+|---|---:|---:|---:|---:|---:|
+| Total | 24,680 | 23,687 | **17,730** | 21,261 | 11,177 |
+| How to do the work | 6,692 | 5,556 | **1,922** | 2,642 | 2,019 |
+| How to talk to the user | 4,136 | 4,300 | **6,949** | 10,293 | 1,603 |
+| Permission and care | 2,774 | 2,753 | **3,974** | 3,712 | ~600 |
+
+Against the model actually in use our execution text is **2.9×** theirs, not the
+2.1× the astra column suggested. Their 1,922 is `# Rules for getting work done`
+(1,103) plus `## File editing constraints` (819), and both are pure mechanics —
+reach for `rg`, prefer parallelization, do not chain shell commands with `echo
+"===="` separators, escaping caution, no blocking sleep over 60s, never repurpose
+`$HOME`, use `apply_patch`, never `git reset --hard` without asking. **No craft
+coaching, same as astra**, so the craft decision is unaffected by the correction.
+
+**Codex ships four templates; we ship one.** `gpt-5.6-sol`, `-terra`, `-luna`,
+`gpt-reserve` and `codex-auto-review` are byte-identical at 17,730
+(`sha1 a27cb90a…`); astra is 21,261, `gpt-5.5` 19,754, `gpt-5.4-mini` 11,114. Ours
+is keyed on provider alone — `isGPTPromptStyle` is `provider === 'openai'` — so
+every GPT model gets the same text. Verified: the astra and sol dumps are both
+23,687 characters and differ by one line, the model name. Whether per-model
+divergence is worth having is untested here and is not proposed by any item.
+
+**What astra adds over 5.6**, for reference, since astra is where most of this
+report's Codex evidence came from: +3,344 on communication, +784 on execution, new
+`# Apps (Connectors)` and `# Plugins` sections worth 1,574, and **−1,855 on
+skills**. The growth is communication and new product surfaces, paid for partly by
+halving skills guidance.
 
 Claude Code's figure is one capture from 2026-08-12 and excludes its MCP browser
 block, so it is a floor.
@@ -180,7 +207,7 @@ another session's. Seventeen are rows below; C1 is in §5.
 | **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED.** Closed; produced A8 |
 | **A8** | cut | Delete the unreachable verification nudge, and its now-orphaned build-list entry | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | **READY.** The only item that provably cannot change behavior |
 | **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | **DECIDED: in.** The visible tip of the talk-row gap in §2 |
-| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | **DECIDED: in**, and no longer unsupported: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
+| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | **APPLIED, but its support was astra-only.** That sentence is in astra and has **zero** hits in the 5.6 template these sessions receive. Applied on a justification that does not hold for the models in use, see §4 |
 | **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | **DECIDED: in.** Belongs in the Actions section |
 | **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | **READY.** Inherited; upstream removed it after 2.1.215, replacement wording available to lift |
 | **D1** | not ours | Write's description names `Edit`, absent from the GPT pool | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Fixed only in the working tree**, not in HEAD (last commit `ea085822`). Another session's dirty file: do not touch, and do not assume it is safe |
@@ -254,6 +281,31 @@ no conclusion moves, but "19 builds" overstated the independent evidence:
   would confound them was wrong — **A2 could have been judged alone throughout.**
 - **A4's review reversal was confirmed.** Upstream keeps the three-lines maxim
   that a reviewer restored against the original draft.
+
+**One item's justification did not survive the model correction: B2.** It was
+recorded as "no longer unsupported" because astra states it almost verbatim: "You
+MUST complete the work that is already authorized… before asking the user for
+permission as a final step". The 5.6 template returns **zero** for `already
+authorized`, `before asking the user for permission`, `as a final step` and
+`complete the work`. So the vendor support is real for a model this fork does not
+run, and absent from the one it does. B2 is already applied. It is not thereby
+wrong — it still addresses a stated gap, that we say when to stop and never that
+authorized work should be finished first — but it now rests on our own judgment
+alone, like B3, rather than on Codex.
+
+**Two other astra-sourced claims, checked and holding.** The craft finding is
+unaffected: 5.6's execution sections are mechanics with no craft coaching, same as
+astra. And 5.6 carries the `SCOPE` analogue plainly — "Existing or new changes
+belong to the user unless you know otherwise, so you preserve them, ignore
+unrelated edits" — which is the ownership framing this report already described.
+
+**A third does not hold, and it was advice I gave twice.** The code-comment rules
+kept inside `SCOPE` were kept because "this is the one place current Codex
+explicitly agrees with us". That quote is from the `gpt-5.4` template in the
+binary. **Neither astra nor 5.6 has any code-comment rule** — astra's only
+non-"commentary" mention concerns PR descriptions, and 5.6 has none at all. Those
+sentences, and the two `COMMENTS —` blocks in the same section, have no Codex
+support. They were not cut and remain in the prompt.
 
 **One live incident, not a hypothesis.** The `greeting-responder` sibling of A2's
 example was deleted in `ba285305` after session `13a6bfc5` spawned a subagent for
