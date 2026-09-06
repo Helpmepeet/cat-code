@@ -1,4 +1,12 @@
-# The GPT craft-coaching slice: one decision, two sizes
+# The GPT craft-coaching slice: one decision, three shapes
+
+> **The decision itself now lives in
+> [the instruction-stack decision report](2026-09-06-instruction-stack-decisions.md),
+> §5a**, alongside the other open decisions, so there is one place to decide from.
+> This file is kept for the detail that does not belong there: every sentence with
+> its verdict and character count (§4), the Codex binary segmentation (§3), and the
+> worked rewrite behind option C (§2). Where the two differ, the decision report is
+> current.
 
 **Date:** 2026-09-06
 **Status:** Decision needed. Nothing applied.
