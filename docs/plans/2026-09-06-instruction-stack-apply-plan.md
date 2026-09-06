@@ -18,15 +18,18 @@ not the reason. Group by reason instead, because the risk differs:
 
 | Group | Why | Items | What approving it costs you |
 | --- | --- | --- | --- |
-| **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4a, D3 | Nothing. These are defects; they need no thesis about model strength |
+| **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4, D3 | Nothing. These are defects; they need no thesis about model strength |
 | **1b. Live and untested** | An instruction that forces an agent spawn, on the default path, with no coverage | A7 | Investigation only; it gates how A2 is judged |
 | **2. Pure simplification** | The same rule, said once instead of twice | A1, A3, A4, A5, A6b | Nothing behavioral is claimed. This is the original brief |
-| **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3, B4b | The only real bet on the table |
+| **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3 | The only real bet on the table |
 | **4. Already applied, needs reconciling** | The rule landed before this plan; it now bans a comment the repo relies on | C1 | A choice between two rules, not an edit |
 
-Two items split across groups. A6a is the false active-state claim (group 1);
-A6b is its eight narrated scenarios (group 2). B4a removes an unfollowable
-absolute (group 1); B4b adds the relevance test (group 3).
+One item splits across groups: A6a is the false active-state claim (group 1),
+A6b its eight narrated scenarios (group 2). B4 no longer splits. It was an
+unfollowable absolute in group 1 plus a Codex-informed replacement in group 3;
+the provenance measurement below showed the absolute is inherited and that
+upstream has already replaced it, so the whole item is group 1 and its
+replacement text is lifted rather than composed.
 
 Groups 1 and 2 stand without the shrink thesis, which is the claim the comparator
 work did not support. Group 3 is the only place another vendor's judgment
@@ -37,6 +40,63 @@ without affecting the others.
 text and can be shown not to break the build or drop a named contract. It cannot
 be shown to improve model behavior. Both source reports say the behavioral benefit
 is suspected.
+
+## Provenance: which items are fork drift, and which are ours
+
+Measured 2026-09-06, after the items below were written. None of the three source
+passes did this: the comparative pass names Claude Code as a comparator but
+mentions it eight times against Codex's eighteen, in three of thirteen sections,
+never for the AgentTool item, and never opens a version binary at all.
+
+**Method.** Twenty strings counted in the fork-point bundle
+`node_modules/@anthropic-ai/claude-agent-sdk/cli.js` (`VERSION:"2.1.87"`) and in
+all nineteen builds in `~/.local/share/claude/versions/`, 2.1.214 to 2.1.239,
+across both the UTF-8 and the UTF-16LE literal tables. **Long exact strings
+produce false zeros when upstream reworded slightly: A3b and A4k both read as
+deleted on the first pass and are not.** Every zero was re-probed with three short
+fragments before being recorded as absent. Counts are string presence, not proof
+of a selected live branch.
+
+| Item | Cat's text came from | Upstream today | Reading |
+|---|---|---|---|
+| A2 | inherited | deleted, 0/19 | drift, catching up |
+| A5 | inherited | all four examples deleted, prose instead | drift, catching up |
+| B4 | inherited | removed after 2.1.215 | drift, catching up |
+| D3 | inherited | replaced, 0/19 old and 4/19 new | drift, caught up in Part D |
+| A3a | inherited | still shipped, verbatim, 19/19 | not drift |
+| A3b | inherited, already shortened here | still shipped, both sentences | not drift |
+| A6a | inherited | still shipped, verbatim, both claims | not drift, shared defect |
+| A6b | inherited | still shipped, 19/19 | not drift |
+| D2 | inherited | still shipped, verbatim | not drift, shared defect |
+| A1 | ours | never present | ours to judge |
+| A4a | ours | upstream carries the two preceding sentences, never the restatement | ours, and supported |
+| A4b | ours | never present | ours to judge |
+| B1 | ours | never present | ours to judge |
+| D4 | ours | never present | ours to judge |
+
+**Three consequences for items as written.**
+
+- **A5 was planned smaller than the evidence supports, and has been widened.** It
+  kept the namespaced example because that syntax is product-specific. Upstream
+  deleted all four and states the syntax in prose instead: `` `skill`: exact name
+  from the listing, no leading slash. Plugin skills use `plugin:skill` ``. A5 now
+  removes all four and states the syntax, in both branches.
+- **B4 need not invent wording, and no longer does.** Upstream's replacement is
+  the relevance test B4 asks for, and is now lifted the way D3's was.
+- **A4's review reversal is independently confirmed.** The maxim it restored,
+  `Three similar lines is better than a premature abstraction`, is in all
+  nineteen upstream builds.
+
+**One caution this adds.** Five items are not drift, and A6a and D2 are defects we
+share with upstream rather than defects we introduced. Fixing them puts this fork
+ahead of upstream rather than level with it, which is a coherent choice but cannot
+borrow upstream's judgment as support. For A6a specifically, "the stated invariant
+is impossible" is verified against **our** implementation clearing the list;
+upstream's runtime was not executed and its behavior is unknown here.
+
+**Decided 2026-09-06, by the operator:** A5 is widened to upstream's all-four
+deletion and B4 lifts upstream's wording. Both are written into their items below.
+Still nothing is applied to source.
 
 ---
 
@@ -157,21 +217,36 @@ half-finished implementations either` — a second constraint the GPT wording do
 not carry. Cutting it would lose that. The earlier draft treated the two paths as
 symmetric; they are not.
 
-### A5. Trim the Skill invocation examples
+### A5. Replace the Skill invocation examples with the syntax statement
 
-**File:** `src/tools/SkillTool/prompt.ts`, GPT branch.
+**Widened 2026-09-06 by the provenance measurement.** This item was "remove three
+of four, keep the namespaced one, because that syntax is product-specific". All
+four are inherited and upstream deleted all four; the namespace syntax survives
+there as prose, inline, which is what made keeping an example look necessary.
+Scope also widens from the GPT branch to both, because both carry the same four
+lines and the Claude branch is the closer twin to the description upstream cut.
 
-**Remove** three of the four example invocations, keeping the namespaced one
-because that syntax is product-specific:
+**File:** `src/tools/SkillTool/prompt.ts`, both branches.
+
+**Remove** all four example invocations: the GPT branch's `2. Example
+invocations:` item with its four sub-bullets, and the Claude branch's
+`- Examples:` item with its four sub-bullets.
+
+**Add** in place of the GPT branch's removed item:
 
 ```
-   - `skill: "pdf"`
-   - `skill: "commit", args: "-m 'Fix bug'"`
-   - `skill: "review-pr", args: "123"`
+2. Pass the skill name exactly as the listing gives it, with no leading slash. A namespaced skill keeps its prefix, as in `ms-office-suite:pdf`.
 ```
 
-**What stays:** `skill: "ms-office-suite:pdf"`, the invocation order, where the
-list lives, the no-reinjection rule, and the built-in-command exclusion.
+and the same sentence as a bullet under the Claude branch's `How to invoke:`.
+
+**Why the syntax stays but the examples go:** the namespace form is the one thing
+here a model cannot infer from the schema, which is why upstream keeps it too,
+stated inline rather than demonstrated. The other three show a parameter shape the
+schema already declares.
+
+**What stays:** the invocation order, where the list lives, the no-reinjection
+rule, and the built-in-command exclusion.
 
 ### A6. Correct TodoWrite's active-state claim and drop the scenarios
 
@@ -284,21 +359,30 @@ failure of implementing during an analysis-only request.
 
 ### B4. Skill relevance instead of an absolute trigger
 
-**File:** `src/tools/SkillTool/prompt.ts`, GPT branch, `BINDING CONSTRAINTS`.
+**Strengthened 2026-09-06: this is drift, and the replacement is upstream's.**
+The absolute is inherited. Upstream removed it after 2.1.215 and put a relevance
+test in its place, which is what this item was going to compose from scratch. Lift
+it, as D3 does, instead of inventing wording. Scope widens to both branches: the
+absolute appears in each.
+
+**File:** `src/tools/SkillTool/prompt.ts`, both branches.
 
 **Remove:** `NEVER mention a skill without actually calling this tool.`
 
-**Change** the blocking requirement so that an explicitly named or invoked skill
-stays binding, while an unnamed one is a judgment call: do not select a skill on
-keyword match, superficial relevance, or mere availability alone. Per review, the
-replacement must distinguish DISCUSSING a skill (naming it, saying it exists or
-does not fit) from REQUESTING its use, which is what the invocation rule governs.
-The current absolute conflates the two.
+**Replace** the blocking-requirement bullet with three, the first two adapted from
+upstream's current description, the third carrying the review's discuss-versus-
+request distinction that upstream leaves implicit:
 
-**Why:** the current absolute makes it impossible to tell the user a skill exists
-but does not fit. Codex's newest template draws exactly this line; its previous
-one does not, so this is our policy choice informed by theirs, not a unanimous
-practice.
+```
+- A skill the user names or invokes is a BLOCKING REQUIREMENT: call this tool before generating any other response about the task.
+- Otherwise call this tool first when the task at hand is one a listed skill covers. Judge that on the task, not on a keyword match, superficial relevance, or mere availability.
+- Naming a skill is not invoking it. You may say that a skill exists, or that one does not fit, without calling this tool.
+```
+
+**Why:** the absolute makes it impossible to tell the user a skill exists but does
+not fit. Upstream and Codex's newest template both draw this line; upstream having
+deleted the exact sentence we still carry moves this from a policy choice informed
+by Codex to a correction of inherited text.
 
 ---
 

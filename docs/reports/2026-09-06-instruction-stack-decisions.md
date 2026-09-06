@@ -71,14 +71,14 @@ Grouped by reason, because the risk differs. Nothing here is applied.
 | **A2** | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Reviewed, ready. Inherited text; upstream deleted it, see §3a |
 | **A3** | Drop the snake-case example and "You are highly capable" | Teaches ordinary coding-assistant behavior; absent from all three comparators | Reviewed, ready |
 | **A4** | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Narrowed after review, ready |
-| **A5** | Keep one Skill invocation example, drop three | Namespace syntax is product-specific; the bare forms are not | Reviewed, ready |
+| **A5** | Drop all four Skill invocation examples, state the syntax instead | All four are inherited and upstream deleted all four, keeping the namespace syntax as prose | Widened after the provenance scan, ready |
 | **A6a** | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | `-p` runs only |
 | **A6b** | Drop TodoWrite's eight narrated scenarios | Teaching material | Claude path only |
 | **A7** | Audit the verification-agent nudge | Live on the default interactive path, forces an agent spawn, has no tests | Investigation only |
 | **B1** | Let the final answer restate the outcome | RULE 6 as written forbids the summary a user needs after a long run | Reviewed, ready |
 | **B2** | Finish authorized preparation before asking approval | We say when to stop, never that the work up to the gate should be done first | Reviewed, ready |
 | **B3** | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Modify: belongs in the Actions section |
-| **B4** | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Modify: separate discussing a skill from requesting it |
+| **B4** | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Ready. Inherited; upstream removed it after 2.1.215 and its replacement wording is lifted |
 | **D1** | Write's description names `Edit`, which the GPT pool does not expose | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Another session is fixing it.** Do not touch |
 | **D2** | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites out of its own `blockedBy`; TaskGet does not, so a finished prerequisite blocks forever | Verified, unplanned |
 | **D3** | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Planned in the apply plan, Part D. Upstream replaced this sentence; we adopt its wording |
@@ -119,6 +119,17 @@ gap, that upstream's sentence covers code changes and not claimed external actio
 **It also overrides one of our own recommendations.** The 2026-09-05 peer-sessions
 audit advised keeping the test-runner example because it "carries the mechanics
 alone". That predates this comparison.
+
+**Extended to every item, same day.** The scan was then run across the rest of the
+plan; the full table lives in the apply plan under "Provenance". In short: A5 and
+B4 are drift too, and both were widened to match upstream, B4 lifting its
+replacement wording rather than composing it. A3a, A3b, A6a, A6b and D2 are **not**
+drift, because upstream still ships all five unchanged, so A6a and D2 are defects
+this fork shares with upstream rather than introduced. A1, A4a, A4b, B1 and D4 are
+ours and were never upstream's. A4's review reversal is confirmed: upstream keeps
+the maxim it restored. Two long-string searches produced false zeros before every
+absence was re-probed with short fragments, which is why the table records
+fragments rather than sentences.
 
 **One live incident, already acted on.** The sibling `greeting-responder` example
 in the same block was deleted in `ba285305` after session `13a6bfc5` spawned a
