@@ -47,18 +47,47 @@ mistake.
 
 ## 2. The decision
 
-| Option | What it cuts | Chars | Rests on |
-|---|---|---:|---|
-| **A. Redundancy only** | Text that restates its own neighbours, plus one sentence that instructs nothing | **266** | Our own text. No vendor needed |
-| **B. Redundancy plus the Codex-aligned craft cuts** | Everything in A, plus the craft sentences current Codex has dropped | **1,099** | Codex's judgment for the GPT path |
+| Option | Shape | What it does | Chars | Rests on |
+|---|---|---|---:|---|
+| **A. Redundancy only** | cut | Removes text that restates its own neighbours, plus one sentence that instructs nothing | **266** | Our own text. No vendor needed |
+| **B. Redundancy plus the Codex-aligned craft cuts** | cut | Everything in A, plus the craft sentences current Codex has dropped | **1,099** | Codex's judgment for the GPT path |
+| **C. Rewrite the slice tighter** | tweak | Keeps every idea, states each once. Not yet drafted; estimated 500 to 700 | est. | Nothing. No vendor needed |
 
 Option B is 4.5% of the 24,680-character GPT prompt, and about 74% of this slice.
 
-Option A is available whatever you decide about vendors. Option B is a bet that
-the vendor who trains the model we run is the right authority on what that model
-still needs told.
+Option A is available whatever you decide about vendors. **Option B is a bet**:
+that the vendor who trains the model we run is the right authority on what that
+model still needs told, against a vendor who still ships every one of these
+sentences.
 
-Both options keep every sentence in section 4 marked **Keep**.
+**Option C, added 2026-09-06, avoids that bet entirely.** The two vendors disagree
+about whether these ideas are worth stating. They do not disagree about whether an
+idea should be stated twice. A rewrite keeps what Anthropic kept and removes only
+the repetition neither would defend, so it needs no ruling about who is right.
+
+Worked example, illustrative and not the proposed final text. `ERROR HANDLING`
+today, 411 characters:
+
+> Do not add error handling, fallbacks, or validation for scenarios that cannot
+> happen inside internal code paths. Trust internal code and framework guarantees.
+> At system boundaries (user input, external APIs, file I/O, network calls) —
+> validate and handle errors. These are real failure points. The rule is: no
+> defensive code for hypothetical internal failures; yes to error handling at real
+> external boundaries.
+
+The same instruction, roughly 160 characters:
+
+> Validate and handle errors at system boundaries: user input, external APIs, file
+> I/O, network calls. Inside internal code paths, trust your own code and the
+> framework.
+
+Nothing is dropped. The rule is stated once instead of three times, positively
+instead of as a prohibition followed by its exception followed by a summary of
+both. **Option C's number is an estimate until the other four sections are drafted
+the same way**, which is why the table above does not give it a firm figure.
+
+Options A and B keep every sentence in section 4 marked **Keep**. Option C keeps
+every idea in the slice, including the ones A and B cut.
 
 ## 3. The evidence
 

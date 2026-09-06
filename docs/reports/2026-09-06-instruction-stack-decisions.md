@@ -70,24 +70,24 @@ anywhere as a saving.
 
 Grouped by reason, because the risk differs. Nothing here is applied.
 
-| Item | What it does | Why | Status |
-|---|---|---|---|
-| **A1** | Delete the GPT decision checklist | Its four decisions are stated in the same section, fifteen lines above | Reviewed, ready |
-| **A2** | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Open. Inherited text; upstream deleted it, see §3a. Applied then reverted |
-| **A3** | Drop the snake-case example and "You are highly capable" | Teaches ordinary coding-assistant behavior. **"Absent from all three comparators" was wrong:** Claude Code ships both verbatim today, only Codex lacks them | Open, and re-scoped by the craft-coaching report |
-| **A4** | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Narrowed after review, ready |
-| **A5** | Drop all four Skill invocation examples, state the syntax instead | All four are inherited and upstream deleted all four, keeping the namespace syntax as prose | Open. Widened by the provenance scan; applied then reverted |
-| **A6a** | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | `-p` runs only |
-| **A6b** | Drop TodoWrite's eight narrated scenarios | Teaching material | Claude path only |
-| **A7** | Audit the verification-agent nudge | Live on the default interactive path, forces an agent spawn, has no tests | Investigation only |
-| **B1** | Let the final answer restate the outcome | RULE 6 as written forbids the summary a user needs after a long run | Reviewed, ready |
-| **B2** | Finish authorized preparation before asking approval | We say when to stop, never that the work up to the gate should be done first | Reviewed, ready |
-| **B3** | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Modify: belongs in the Actions section |
-| **B4** | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Open. Inherited; upstream removed it after 2.1.215, and its replacement wording is available to lift. Applied then reverted |
-| **D1** | Write's description names `Edit`, which the GPT pool does not expose | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Another session is fixing it.** Do not touch |
-| **D2** | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites out of its own `blockedBy`; TaskGet does not, so a finished prerequisite blocks forever | Verified, unplanned |
-| **D3** | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Open. Text drafted in the apply plan, Part D, using upstream's replacement wording. Applied then reverted |
-| **D4** | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | Investigation only |
+| Item | Shape | What it does | Why | Status |
+|---|---|---|---|---|
+| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated in the same section, fifteen lines above | Reviewed, ready |
+| **A2** | cut | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Open. Inherited text; upstream deleted it, see §3a. Applied then reverted |
+| **A3** | cut | Drop the snake-case example and "You are highly capable" | Teaches ordinary coding-assistant behavior. **"Absent from all three comparators" was wrong:** Claude Code ships both verbatim today, only Codex lacks them | Open, and re-scoped by the craft-coaching report |
+| **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Narrowed after review, ready |
+| **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four are inherited and upstream deleted all four, keeping the namespace syntax as prose | Open. Widened by the provenance scan; applied then reverted |
+| **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | `-p` runs only |
+| **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material | Claude path only |
+| **A7** | investigate | Audit the verification-agent nudge | Live on the default interactive path, forces an agent spawn, has no tests | Investigation only |
+| **B1** | add | Let the final answer restate the outcome | RULE 6 as written forbids the summary a user needs after a long run | Reviewed, ready |
+| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that the work up to the gate should be done first | Reviewed, ready |
+| **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Modify: belongs in the Actions section |
+| **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Open. Inherited; upstream removed it after 2.1.215, and its replacement wording is available to lift. Applied then reverted |
+| **D1** | not ours | Write's description names `Edit`, which the GPT pool does not expose | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Another session is fixing it.** Do not touch |
+| **D2** | tweak | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites out of its own `blockedBy`; TaskGet does not, so a finished prerequisite blocks forever | Verified, unplanned |
+| **D3** | tweak | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Open. Text drafted in the apply plan, Part D, using upstream's replacement wording. Applied then reverted |
+| **D4** | investigate | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | Investigation only |
 
 ### 3a. The upstream measurement, and what it settled
 
@@ -141,6 +141,23 @@ in the same block was deleted in `ba285305` after session `13a6bfc5` spawned a
 subagent for "Hi" and quoted the example as its reason. So the mechanism by which
 this block is read as instruction rather than illustration is demonstrated, not
 suspected, even though A2's own effect remains unmeasured.
+
+### 3b. Shape, and why the table above reads as smaller than it is
+
+Added 2026-09-06. The status column above says what state each item is in. It does
+not say what **shape** the edit has, and this file's own framing, plus the apply
+plan's Part A "deletions" and Part B "additions", offered only two.
+
+Of the sixteen items, five are cuts (A1, A2, A3, A4, A6b), **five are tweaks**
+(A5, A6a, B4, D2, D3), three are additions (B1, B2, B3), two are investigations
+(A7, D4), one is a rule choice (C1), and one belongs to another session (D1).
+
+The five tweaks are currently filed under deletions or additions because there was
+no third slot. That is not only untidy: cut-versus-add is a size axis, so it made
+character count the default measure of a programme that was mostly not about size.
+When the four applied items were measured, four of their six hunks turned out to
+be rewrites. The full classification, the measurement behind it, and the third
+option it opens for the craft slice are in the apply plan under "Shape".
 
 ### The three defects worth understanding
 

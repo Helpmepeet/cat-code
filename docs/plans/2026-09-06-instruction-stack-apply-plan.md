@@ -54,6 +54,78 @@ text and can be shown not to break the build or drop a named contract. It cannot
 be shown to improve model behavior. Both source reports say the behavioral benefit
 is suspected.
 
+## Shape: cut, tweak, or add
+
+Added 2026-09-06, at the operator's instruction, after they pointed out that the
+choice was never binary. This is a classification pass only. **No item's text is
+changed by it and no decision is taken here.**
+
+**Why this was missing.** This file is organised as Part A "deletions", Part B
+"additions", Part C and Part D. That describes the edit as one of two shapes, so
+every replacement had to be filed as a deletion or an addition. Four items are
+neither.
+
+**Measured on what was actually applied, in `0b177104` before its revert.** Six
+hunks landed:
+
+| Hunk | Removed | Added | Shape |
+|---|---:|---:|---|
+| A2 example block | 711 | 0 | cut |
+| unused import | 65 | 0 | cut |
+| D3 trust sentence | 50 | 197 | **rewrite** |
+| A5 GPT examples | 97 | 93 | **rewrite** |
+| B4 GPT bullets | 387 | 575 | **rewrite** |
+| B4 and A5, Claude branch | 473 | 574 | **rewrite** |
+
+Four of six were rewrites. The commit's own message called them deletions and
+corrections.
+
+**Why it matters beyond tidiness.** Cut-versus-add is a size axis, so a taxonomy
+built from it makes character count the default scorecard. That is how the whole
+programme came to be judged at "net −344 characters", a true number that measures
+nothing anyone intended: most of the work was not trying to change the size, it
+was trying to make wrong text right. A tweak has no size signal. Its bar is
+whether one idea is stated once, in the place that owns it.
+
+### Every item by shape
+
+| Shape | Items | Count |
+|---|---|---:|
+| **Cut** — delete, add nothing | A1, A2, A3, A4, A6b | 5 |
+| **Tweak** — replace wrong or unusable text with right text | A5, A6a, B4, D2, D3 | 5 |
+| **Add** — new instruction where we have none | B1, B2, B3 | 3 |
+| **Investigate** — no edit authorized | A7, D4 | 2 |
+| **Decide** — a choice between two rules, then a tweak | C1 | 1 |
+| **Not ours** | D1 | 1 |
+
+Three consequences, none of them requiring a decision now:
+
+- **B4 stops splitting.** It was recorded as B4a "remove an unfollowable absolute"
+  in group 1 and B4b "add the relevance test" in group 3, the group described as
+  "the only real bet on the table". It was never two items. It is one replacement,
+  and the split existed only because there was no slot for that shape. Treating it
+  as a bet also overstated it: replacing an unusable absolute is not optional, and
+  the wording to replace it with is available to lift from upstream.
+- **A6a and D2 are misfiled.** Both sit under deletions and neither can be done by
+  deleting. D2 especially: a wrong readiness check cannot be fixed by removing it,
+  because the model still has to know when a task is ready.
+- **The size framing was an artifact.** Of the five cuts, only A2 and A6b are
+  large. The programme was never going to shrink much, and now that is visible in
+  the structure instead of surfacing as a surprise at the end.
+
+### The shape the craft-coaching report was missing
+
+The [GPT craft-coaching decision](../reports/2026-09-06-gpt-craft-coaching-decision.md)
+offers two options, both cuts: 266 characters of redundancy, or 1,099 following
+Codex. Its section 2 now carries a third, added by this pass: **rewrite the five
+sections tighter, same intent, fewer characters.**
+
+That option matters because it needs **no vendor ruling at all.** Option B is a bet
+that OpenAI is right and Anthropic wrong about text both still ship. A rewrite
+does not take that side: it keeps the idea Anthropic kept and drops the repetition
+neither vendor would defend. The vendor disagreement that made option B a bet
+simply does not arise.
+
 ## Provenance: which items are fork drift, and which are ours
 
 Measured 2026-09-06, after the items below were written. None of the three source
