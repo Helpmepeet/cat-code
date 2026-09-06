@@ -105,23 +105,29 @@ ambitious tasks.").
 **What stays:** the software-engineering domain statement, the working-directory
 disambiguation instruction, and the user-authority clause about task size.
 
-### A4. Remove three restated maxims
+### A4. Remove two restated sentences (NARROWED after review)
 
-**GPT — `gpt.ts`, `codeStyleRules`:**
+**Was:** three removals including the three-lines maxim. **Now:** two, GPT path
+only. An independent review argued the maxim is a distinct preference rather than
+a restatement, and re-reading the rule confirms it.
 
-- From `ERROR HANDLING`, remove: `These are real failure points. The rule is: no defensive code for hypothetical internal failures; yes to error handling at real external boundaries.`
-- From `ABSTRACTION`, remove: `The right complexity level is exactly what the task requires.` and `Three similar lines of code is better than a premature abstraction.`
+**File:** `src/constants/promptStyles/gpt.ts`, `codeStyleRules`.
 
-**Claude — `prompts.ts`, `codeStyleSubitems`:** remove the corresponding
-`The right amount of complexity is what the task actually requires...` clause and
-`Three similar lines of code is better than a premature abstraction.`
+- From `ERROR HANDLING`, remove: `These are real failure points. The rule is: no defensive code for hypothetical internal failures; yes to error handling at real external boundaries.` It restates the two sentences before it.
+- From `ABSTRACTION`, remove: `The right complexity level is exactly what the task requires.` `SCOPE` already says to do only what was asked.
 
-**What stays:** validate at real boundaries, do not add defensive code for
-impossible internal cases, do not build abstractions for one-time operations, do
-not design for hypothetical futures.
+**Now kept, reversing the earlier draft:** `Three similar lines of code is better
+than a premature abstraction.` The surrounding clauses govern one-time operations
+and hypothetical future requirements. The maxim governs the case where repetition
+already exists, which is the only moment abstraction is actually tempting and the
+one case nothing else in the rule covers. Removing it would leave the tempting
+case unaddressed.
 
-**Note:** the surviving sentences carry the operator's actual preferences. Only
-the illustrations and restatements go.
+**Claude path: nothing to remove.** `prompts.ts` has no twin of the ERROR HANDLING
+sentence, and its complexity sentence reads `no speculative abstractions, but no
+half-finished implementations either` — a second constraint the GPT wording does
+not carry. Cutting it would lose that. The earlier draft treated the two paths as
+symmetric; they are not.
 
 ### A5. Trim the Skill invocation examples
 
@@ -237,7 +243,10 @@ should be finished first, which invites stopping earlier than necessary.
 
 ### B3. Analysis is not authorization
 
-**File:** `gpt.ts`, `# Doing Tasks`, alongside `TASK DOMAIN`.
+**File:** `gpt.ts`, `getGPTActionsSection()`, not `# Doing Tasks`. A review
+noted this is an authorization statement, and authorization is owned by the
+Actions section; placing it beside `TASK DOMAIN` would split the scope rules
+across two owners.
 
 **Add:** `A request to inspect, explain, review, or diagnose does not by itself authorize implementation. Persistence means completing the authorized scope.`
 
@@ -253,7 +262,10 @@ failure of implementing during an analysis-only request.
 
 **Change** the blocking requirement so that an explicitly named or invoked skill
 stays binding, while an unnamed one is a judgment call: do not select a skill on
-keyword match, superficial relevance, or mere availability alone.
+keyword match, superficial relevance, or mere availability alone. Per review, the
+replacement must distinguish DISCUSSING a skill (naming it, saying it exists or
+does not fit) from REQUESTING its use, which is what the invocation rule governs.
+The current absolute conflates the two.
 
 **Why:** the current absolute makes it impossible to tell the user a skill exists
 but does not fit. Codex's newest template draws exactly this line; its previous
@@ -285,6 +297,12 @@ also relies on.
    comment into something the rule permits.
 2. Soften the applied rule so a status note is allowed when it names its
    retirement trigger or an owning decision, and leave the comment as it stands.
+
+**Review input, not a decision:** the independent reviewer recommends keeping the
+blanket ban and handling the legacy comment separately, on the grounds that the
+comment's existence proves neither an active retirement workflow nor a licence to
+relax the applied rule. That is a fair challenge to this plan's claim that the
+comment is load-bearing, which is inference rather than evidence.
 
 Nothing here should be applied until that choice is made. The evidence behind the
 rule itself is unaffected: 1,129 comment lines on this branch carry `file.ts:NNN`
