@@ -48,7 +48,11 @@ import type {
   ToolUseSummaryMessage,
   UserMessage,
 } from '../../types/message.js'
-import { createAttachmentMessage } from '../../utils/attachments.js'
+import {
+  createAttachmentMessage,
+  type Attachment,
+} from '../../utils/attachments.js'
+import { getWorkerCapabilityPromptLine } from '../../utils/agentCapabilities.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import {
@@ -635,18 +639,35 @@ async function* runAgentInCleanupScope({
     appState.toolPermissionContext.additionalWorkingDirectories.keys(),
   )
 
-  const agentSystemPrompt = override?.systemPrompt
-    ? override.systemPrompt
-    : asSystemPrompt(
-        await getAgentSystemPrompt(
-          agentDefinition,
-          toolUseContext,
-          resolvedAgentModel,
-          additionalWorkingDirectories,
-          resolvedTools,
-          workerName ?? undefined,
-        ),
-      )
+  // Appended here rather than inside getAgentSystemPrompt because that
+  // builder does not run on the ordinary spawn path: AgentTool assembles the
+  // whole prompt itself and hands it over as override.systemPrompt whenever
+  // there is no worktree or cwd override, so a line added only in the builder
+  // would miss exactly the general-purpose workers it exists for. This is the
+  // one place every worker's final prompt passes through.
+  //
+  // Fork children are the exception. They deliberately run on the parent's
+  // exact prompt and tool array so the request prefix stays cache-identical,
+  // and their capabilities are the parent's, so there is nothing to correct.
+  const workerCapabilityLine = useExactTools
+    ? null
+    : getWorkerCapabilityPromptLine(resolvedTools.map(tool => tool.name))
+
+  const builtAgentSystemPrompt =
+    override?.systemPrompt ??
+    (await getAgentSystemPrompt(
+      agentDefinition,
+      toolUseContext,
+      resolvedAgentModel,
+      additionalWorkingDirectories,
+      resolvedTools,
+      workerName ?? undefined,
+    ))
+  const agentSystemPrompt = asSystemPrompt(
+    workerCapabilityLine
+      ? [...builtAgentSystemPrompt, workerCapabilityLine]
+      : builtAgentSystemPrompt,
+  )
 
   // Determine abortController:
   // - Override takes precedence
@@ -953,6 +974,37 @@ async function* runAgentInCleanupScope({
         // here made exhaustion look like a clean completion to every caller.
         yield message
         if (reachedMaxTurns) break
+        // A delivered queued_command carries the origin of whoever injected
+        // it (SendMessage's queued coordinator turn, a task-notification,
+        // a channel/teammate/peer message) via getAgentPendingMessageAttachments
+        // / getQueuedCommandAttachments. Record only this one attachment kind,
+        // naming its origin, so a subagent's sidechain can show it was
+        // delivered — this file's blanket "don't record attachments" rule
+        // still stands for the rest (structured_output, diagnostics, skill
+        // discovery, plan/auto-mode reminders, …), which are re-derived every
+        // turn from live state and would just be turn-by-turn noise if logged.
+        // AttachmentMessage.attachment is declared `unknown` in
+        // types/message.ts, so the union it always holds has to be named once
+        // to read it; naming the real union rather than an ad-hoc shape is
+        // what makes a rename of `origin` a compile error here instead of a
+        // silently dead diagnostic.
+        const deliveredAttachment = message.attachment as Attachment
+        if (
+          deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.origin
+        ) {
+          await recordSidechainTranscript(
+            // The compound stream_event guard above does not narrow
+            // StreamEvent out of `message`, so the attachment branch is still
+            // typed AttachmentMessage | StreamEvent here.
+            [message as Message],
+            agentId,
+            lastRecordedUuid,
+          ).catch(err =>
+            logForDebugging(`Failed to record sidechain transcript: ${err}`),
+          )
+          lastRecordedUuid = message.uuid as UUID
+        }
         continue
       }
 

@@ -20,10 +20,7 @@ import { FILE_PATCH_TOOL_NAME } from 'src/tools/FilePatchTool/constants.js'
 import { EXIT_PLAN_MODE_TOOL_NAME } from 'src/tools/ExitPlanModeTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from 'src/tools/NotebookEditTool/constants.js'
 import { CLAUDE_CLI_TOOL_NAME } from 'src/tools/ClaudeCliTool/constants.js'
-import {
-  ALL_AGENT_DISALLOWED_TOOLS,
-  getAsyncAgentFileEditTool,
-} from 'src/constants/tools.js'
+import { getAsyncAgentFileEditTool } from 'src/constants/tools.js'
 
 // ---------------------------------------------------------------------------
 // Coding Worker (V2)
@@ -39,11 +36,10 @@ function getCodingWorkerSystemPrompt(provider: APIProvider): string {
   // comes from the request model and can disagree — naming the wrong alias
   // sends the worker to a tool it does not have.
   const editToolName = getAsyncAgentFileEditTool()
-  // Workers only receive Agent where nested delegation is permitted;
-  // ALL_AGENT_DISALLOWED_TOOLS strips it in every other build, so the prompt
-  // must not promise a capability the worker does not have.
-  const canDelegate = !ALL_AGENT_DISALLOWED_TOOLS.has(AGENT_TOOL_NAME)
-  const noDelegationLine = `- You do not have ${AGENT_TOOL_NAME}: nested delegation is orchestrator-only. Do the investigation yourself.`
+  // Whether this worker may delegate is not stated here. runAgent appends one
+  // line built from the pool the worker actually received
+  // (getWorkerCapabilityPromptLine), so a role prompt that also asserted it
+  // would be a second copy of the same fact with no way to stay in sync.
 
   if (provider === 'openai') {
     return `You are the Implementor for an Agent Mode coding run. Execute the assigned implementation slice exactly as planned.
@@ -61,12 +57,6 @@ TOOL DOCTRINE:
 - Use ${editToolName} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for build, test, lint, and other local commands.
 - Use ${CLAUDE_CLI_TOOL_NAME} only for a narrow advisory pass (a review, second opinion, or focused read-only investigation) with a self-contained prompt. Never delegate your assigned implementation work to it — you make the code changes yourself. Delegated runs must not edit files: do not pass permission_mode acceptEdits or bypassPermissions.
-${
-  canDelegate
-    ? `- You may use ${AGENT_TOOL_NAME} only to spawn the Explore agent for deeper read-only investigation when that is clearly better than doing the search yourself.
-- Do NOT use ${AGENT_TOOL_NAME} to spawn other coding workers, planners, or verifiers.`
-    : noDelegationLine
-}
 - Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
 
 BOUNDARIES:
@@ -117,12 +107,6 @@ Keep the whole response compact and operational.`
 - Use ${editToolName} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for local build, test, lint, and repo commands.
 - Use ${CLAUDE_CLI_TOOL_NAME} only for a narrow advisory pass (a review, second opinion, or focused read-only investigation) with a self-contained prompt. Never delegate your assigned implementation work to it — you make the code changes yourself. Delegated runs must not edit files: do not pass permission_mode acceptEdits or bypassPermissions.
-${
-  canDelegate
-    ? `- You may use ${AGENT_TOOL_NAME} only to spawn the Explore agent for deeper read-only investigation when that is clearly better than doing the search yourself.
-- Do not use ${AGENT_TOOL_NAME} to spawn other coding workers, planners, or verifiers.`
-    : noDelegationLine
-}
 - Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
 
 ## Boundaries
