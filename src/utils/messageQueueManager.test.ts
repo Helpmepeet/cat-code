@@ -24,7 +24,7 @@ import {
   switchSession,
 } from '../bootstrap/state.js'
 import type { UUID } from 'crypto'
-import { asSessionId } from '../types/ids.js'
+import { asAgentId, asSessionId } from '../types/ids.js'
 import type { QueuedCommand } from '../types/textInputTypes.js'
 import { createUserMessage } from './messages.js'
 import {
@@ -257,6 +257,41 @@ test("the terminal's pasted images are not in the record, only its text", async 
   const enqueued = state.operations.find(op => op.operation === 'enqueue')
   expect(enqueued?.content).toBe('what is in [Image #1]')
   expect(JSON.stringify(enqueued)).not.toContain('aGVsbG8=')
+})
+
+test('a notification addressed to a subagent names that agent on enqueue and on its retraction', async () => {
+  // Before this fix, logOperation wrote `sessionId` and dropped `agentId`
+  // entirely, so a queue-operation record could not say which of several
+  // concurrent subagents a notification belonged to (one JSONL per engine
+  // session, and every subagent shares it) — the routing itself was correct,
+  // only the record was ambiguous.
+  const uuid = randomUUID() as UUID
+  const agentId = asAgentId('a-coordinator-target-1234567890ab')
+  const command: QueuedCommand = {
+    value: 'task finished',
+    mode: 'task-notification',
+    uuid,
+    agentId,
+  }
+  const state = await withDurableSession(() => {
+    enqueue(command)
+    dequeueAllMatching(cmd => cmd.uuid === uuid)
+  })
+
+  const enqueued = state.operations.find(op => op.operation === 'enqueue')
+  expect(enqueued?.agentId).toBe(agentId)
+  const retracted = state.operations.find(op => op.operation !== 'enqueue')
+  expect(retracted?.agentId).toBe(agentId)
+})
+
+test('a main-thread notification records no agentId', async () => {
+  const uuid = randomUUID() as UUID
+  const state = await withDurableSession(() => {
+    enqueue({ value: 'for the main thread', mode: 'prompt', uuid })
+  })
+
+  const enqueued = state.operations.find(op => op.operation === 'enqueue')
+  expect(enqueued?.agentId).toBeUndefined()
 })
 
 test('a retraction record carries the uuid and nothing else', async () => {

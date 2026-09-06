@@ -4958,6 +4958,7 @@ export async function loadTranscriptFile(
           timestamp: entry.timestamp,
           sessionId: entry.sessionId,
           ...(entry.uuid !== undefined ? { uuid: entry.uuid } : {}),
+          ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
           ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
           ...(entry.content !== undefined ? { content: entry.content } : {}),
         })
@@ -5185,6 +5186,11 @@ export type SessionQueueOperation = {
   timestamp: string
   sessionId: string
   uuid?: UUID
+  /**
+   * Agent this notification was addressed to; undefined = main thread. Carried
+   * on every operation, like `uuid` (`messageQueueManager.logOperation`).
+   */
+  agentId?: AgentId
   /**
    * Recorded on `enqueue` only, like `content`, and read there: it is how a
    * reader tells a user prompt from a task notification. A retraction is matched

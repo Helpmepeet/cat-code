@@ -1,5 +1,6 @@
 import type { UUID } from 'crypto'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages'
+import type { AgentId } from './ids.js'
 
 /**
  * Restored 2026-08-17. This module is imported by `src/types/logs.ts`,
@@ -37,6 +38,13 @@ export type QueueOperationMessage = {
    * the retraction fix, which a reader cannot subtract and must ignore.
    */
   uuid?: UUID
+  /**
+   * Agent this notification was addressed to; undefined = main thread. Carried
+   * on every operation (enqueue and retraction alike), like `uuid`, so a reader
+   * doesn't have to cross-reference the original enqueue to see who a dequeue
+   * or remove belonged to.
+   */
+  agentId?: AgentId
   /** Recorded on `enqueue` only: it is how a reader tells a prompt from a task notification. */
   mode?: string
   /**

@@ -222,7 +222,7 @@ class ShellCommandImpl implements ShellCommand {
       code !== null && code !== undefined
         ? code
         : signal === 'SIGTERM'
-          ? 144
+          ? SIGTERM
           : 1
     this.#resolveExitCode(exitCode)
   }
