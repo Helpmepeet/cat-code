@@ -10,9 +10,25 @@ Every "before" string below was read from source at HEAD on 2026-09-06. All targ
 files were clean at planning time, so no other session was mid-edit in them; that
 must be re-checked immediately before applying.
 
-**How to approve.** Part A removes text and adds none. Part B adds text. Part C is
-one clause in `CLAUDE.md`. They are independent: approving A does not commit you
-to B. Individual items can be dropped without affecting the others.
+**How to approve.** The items below are written as Part A (removals), Part B
+(additions) and Part C (one `CLAUDE.md` clause), but that split describes the edit,
+not the reason. Group by reason instead, because the risk differs:
+
+| Group | Why | Items | What approving it costs you |
+| --- | --- | --- | --- |
+| **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4a | Nothing. These are defects; they need no thesis about model strength |
+| **2. Pure simplification** | The same rule, said once instead of twice | A1, A3, A4, A5, A6b | Nothing behavioral is claimed. This is the original brief |
+| **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3, B4b | The only real bet on the table |
+| **4. Measured defect** | Prevents a fault observed in our own output | C1 | One clause; the only item with harm evidence rather than inference |
+
+Two items split across groups. A6a is the false active-state claim (group 1);
+A6b is its eight narrated scenarios (group 2). B4a removes an unfollowable
+absolute (group 1); B4b adds the relevance test (group 3).
+
+Groups 1 and 2 stand without the shrink thesis, which is the claim the comparator
+work did not support. Group 3 is the only place another vendor's judgment
+outranks ours. The groups are independent, and individual items can be dropped
+without affecting the others.
 
 **What cannot be promised.** No ablation has been run. Applying this changes the
 text and can be shown not to break the build or drop a named contract. It cannot
