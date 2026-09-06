@@ -127,10 +127,18 @@ Four imperatives, the brief invoked as governing authority, and a dictation of
 what the peer should *say* in its own report. The manager register is not only
 Benitoite being deferential; the creator holds it too.
 
-### 6. The final message is the schema being filled
+### 6. The final message is shaped to the brief's five fields
 
 Message 4 runs about 200 words: gate counts, expectation totals, sweep results,
-all in the five fields the brief demanded. A colleague's version is one line.
+ordered as the brief's report schema asked for them.
+
+The detail itself is not the fault, and an earlier draft of this report was
+wrong to read it as posturing. `CLAUDE.md` §3 requires the commands and their
+outcomes pasted in the final report, and the closing line of §11 makes pasted
+battery output and a completed stale-reference sweep conditions of claiming
+completion. Benitoite was meeting a repository requirement. What that
+requirement does not account for is the creator dictating a five-field shape
+for it, or the duplication in §8.
 
 ### 7. The frame reaches the user's screen
 
@@ -151,7 +159,9 @@ procedure with a four-variable launch command. It also includes:
 > by the installed `rg`; the equivalent portable query above was rerun
 > successfully.
 
-That sentence exists to demonstrate diligence. Nobody needed it.
+That is the far end of the evidence detail. Whether §3's "commands and their
+outcomes" reaches a note about a regex form that was replaced before it ran is
+arguable, so it is recorded here as register rather than as a breach.
 
 Benitoite is never told that a relay exists. From inside its tab an unsigned
 ticket arrived and it delivered against it, so it writes a standalone report
@@ -201,11 +211,56 @@ have never been in the schema. `summary` is a field in the `SendToPeer` *result*
 shape, so writing the output shape into the input is one candidate explanation,
 and it is unverified.
 
+## A candidate source for the register
+
+The `Agent` tool's own description carries a delegation template, and the brief
+corresponds to it closely. Under **Handoff completeness**,
+`src/tools/AgentTool/prompt.ts` requires that a delegation prompt include
+"exact file paths, the current state (uncommitted changes, prior failed
+attempts, or dirty baseline the agent needs to know about), what 'done' looks
+like, and any constraints the agent must follow", and under **Never delegate
+understanding**, "include file paths, line numbers, what specifically to
+change".
+
+Each of those has a counterpart in the brief: the target file list, the
+"Current shared-tree state" paragraph about other sessions' uncommitted work,
+the verification battery as the completion condition, the "Scope limits"
+section, and the JSX-level bullets. The shared-tree paragraph is the closest
+correspondence, because nothing in `CreatePeer` asks for it while
+"dirty baseline the agent needs to know about" does.
+
+That text was available to Cavansite. The sidecar builds its tool list from the
+engine's own `getTools` and appends the peer tools after it
+(`app/sidecar/sessionController.ts`), so the `Agent` tool's description sits in
+the same list as `CreatePeer`. Cavansite never called the tool.
+
+**This is a matching source, not a demonstrated cause.** A dirty shared tree and
+explicit completion criteria also follow from `CLAUDE.md` §4 and §3 on their
+own, so the correspondence does not establish which text produced the brief,
+and one exchange cannot separate them.
+
+Two observations cut against the obvious reading of it:
+
+- The same tool description already carries collegial framing, five lines above
+  the checklist: brief the agent "like a smart colleague who just walked into
+  the room", give it enough context "to make judgment calls rather than just
+  following a narrow instruction", and "prescribed steps become dead weight when
+  the premise is wrong". Whatever produced the brief, the enumerated checklist
+  was followed and the framing immediately above it was not.
+- No corrective was active. The `writing-handoff-prompts` skill teaches the
+  distinction between what a recipient already has and what it lacks, and it is
+  installed at user scope, but it is description-triggered on being asked for a
+  prompt. "send peer session Luna model to implement" is not that, and it did
+  not fire; Cavansite's only skill load was `cat-code-cold-review`.
+
 ## Open
 
-- Whether the register came from the tool text, from the plan document and
-  review skill already in Cavansite's context, or from the general prior that
-  handing work to another agent means writing a specification. All three point
-  the same way and the transcripts cannot separate them.
+- Which text produced the register. The `Agent` tool template above is the
+  best-supported candidate, but the plan document and review skill already in
+  Cavansite's context, and the general prior that handing work to another agent
+  means writing a specification, point the same way. The transcripts cannot
+  separate them.
 - Whether one exchange is enough to generalize. This is a single pair, on two
   Codex models, on one task shape.
+- Whether the duplication in §8 has any owner in the current instructions.
+  The reporting requirements are written for one session reporting to the user.
