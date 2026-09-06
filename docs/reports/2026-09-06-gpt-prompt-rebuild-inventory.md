@@ -65,6 +65,54 @@ Each section has one job. Ours does not: `# Doing Tasks` holds fourteen unrelate
 blocks, and autonomy lives under `# Session-Specific Guidance`. That disorder
 caused two of the three errors in section 1.
 
+## 2a. What the rebuild is and is not
+
+**It is not an architecture change.** The composition machinery came with the fork
+and is sound. `gpt.ts` is ten section-builder functions — `getGPTIntroSection`,
+`getGPTSystemSection`, `getGPTDoingTasksSection(enabledTools)`,
+`getGPTUsingToolsSection(enabledTools)`, `getGPTActionsSection`,
+`getGPTToneAndStyleSection`, `getGPTOutputSection`,
+`getGPTSessionGuidanceSection`, plus separate agent-mode variants — with 17
+conditional insertion points, sections parameterised by the enabled tool set, and
+feature flags for fork, skill search and repl mode. Shared core, tool-conditional
+policy, mode variants and runtime context all already compose. **Do not rebuild
+that. It exists and it works.**
+
+**What drifted is where the lines sit.** This fork inherited Claude Code's module
+boundaries and then poured GPT-specific content into them without redrawing any of
+them. `# Doing Tasks` became a junk drawer holding fourteen unrelated blocks, from
+`DISAGREEMENT` to `RULE — Security` to both `COMMENTS —` rules. Autonomy —
+`PROACTIVE EXECUTION`, `INVESTIGATION DISCIPLINE`, `EXPLORE RULE` — ended up under
+`# Session-Specific Guidance`, which is not what that section is for and is why two
+analyses in this session put them in the wrong bucket.
+
+**That disorder is the job.** Codex 5.6's sections each have one job, which is why
+its layout is worth studying even though its per-generation monolith is not worth
+copying. Redraw the boundaries; keep the machinery.
+
+## 2b. The model layer: build it last, if at all
+
+Our model-specific layer is **0%**. `isGPTPromptStyle` is `provider === 'openai'`
+and nothing in prompt assembly keys on a model. A natural proposal is to add a thin
+per-model override. Three reasons to leave it until everything else is done.
+
+**Neither vendor does much of it in the client.** Codex pushes model variation
+entirely to the backend catalog — the client receives whatever
+`instructions_template` comes down, so its "per-model prompts" are not client
+architecture at all. Upstream Claude Code carries `isOpus` six times in 2.1.239 and
+nothing comparable for the other families; whether those gate prompt text or
+capability was not determined here. Published guidance puts the model-specific
+share at 0 to 10 percent, and the evidence suggests the low end.
+
+**There is no observation behind it.** Nobody has seen `gpt-5.6-sol` behave
+differently from `-terra` in a way a prompt should fix, and the ablation that could
+show it was deliberately skipped.
+
+**If it is built, key it on family, not model id.** Codex ships sol, terra, luna,
+`gpt-reserve` and `codex-auto-review` the byte-identical template. Splitting luna
+from sol would diverge from the vendor on no evidence; in this repo luna is the
+cheap model for migration test turns, so its difference is cost, not behaviour.
+
 ## 3. Constraints, all from operator rulings this session
 
 - **The prompt must stand alone.** What a loaded instruction file happens to
