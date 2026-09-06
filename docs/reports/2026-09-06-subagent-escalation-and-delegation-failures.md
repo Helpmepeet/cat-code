@@ -188,11 +188,39 @@ Three consequences:
 3. **Some of it is invisible.** Goldstine passed `--no-session-persistence`;
    those runs leave no transcript.
 
-**Corpus:** exactly **2** of 1,840 subagent transcripts contain a real nested
-`cat-code` spawn, and both are this session. (The first version said 3. The third
-was an agent authoring a markdown code fence containing `cat-code -p` into
+**Corpus — the shell route is new, the `ClaudeCli` route is not.** Exactly **2**
+of 1,840 subagent transcripts contain a real nested `cat-code` shell spawn, and
+both are this session. (The first version said 3. The third was an agent
+authoring a markdown code fence containing `cat-code -p` into
 `/Users/pt/open-design/README.md` — a naive-grep artifact, and the exact trap
 this report warns about elsewhere.)
+
+The front door has been in use since May. Deduplicating `tool_use` blocks by id
+across every non-replay subagent transcript, **14 `ClaudeCli` calls by subagents
+across 6 parent sessions**:
+
+| Date | Parent | Calls | `permission_mode` |
+|---|---|---|---|
+| 2026-05-31 | `3be0260f…` | 1 | `dontAsk` |
+| 2026-05-31 | `1560c2bf…` | 1 | `dontAsk` |
+| 2026-07-11 | `3d89921b…` | 2 | `acceptEdits`, model `opus` |
+| 2026-07-12 | `2927630a…` | 1 | `plan` |
+| 2026-07-13 | `9b13959b…` | 2 | `acceptEdits` |
+| 2026-09-06 | `b7a7db9a…` | 7 | `auto` ×3, `dontAsk` ×4 |
+
+So today is the largest instance, not the first: half the corpus history is this
+one session, but the behaviour goes back three months and has crossed four
+projects. The July attempts failed at a different gate — `this workspace has not
+been trusted`, a structural block on headless spawn into an unvisited directory.
+That gate did **not** stop today's: neither Ritchie's nor Goldstine's transcripts
+contain the trust message at all.
+
+The internal half of the boundary, by contrast, holds perfectly: **zero**
+`Agent` or `ResumeAgent` `tool_use` blocks by any non-replay subagent, across all
+1,840 transcripts since 2026-04-17. (Apparent hits live only in
+`agent-acompact-*` transcripts, which replay the parent session's own history
+under the compaction agent's id.) `ALL_AGENT_DISALLOWED_TOOLS` does exactly what
+it claims; `ClaudeCli` is simply not in it.
 
 ---
 
