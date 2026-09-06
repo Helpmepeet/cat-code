@@ -7,10 +7,20 @@ import React from 'react'
 import { PassThrough } from 'stream'
 import { Box } from '../../ink.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
+import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/constants.js'
+import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
+import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
+import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
+import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
+import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
+import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import {
   ClaudeCliTool,
   _claudeCliToolInternalsForTest,
 } from './ClaudeCliTool.js'
+import { CLAUDE_CLI_TOOL_NAME } from './constants.js'
 
 type FakeChildOptions = {
   stdout?: string
@@ -53,13 +63,24 @@ function buildContext({
   mode = 'default',
   isBypassPermissionsModeAvailable = false,
   prePlanMode,
+  agentId,
+  toolNames,
 }: {
   mode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
   isBypassPermissionsModeAvailable?: boolean
   prePlanMode?: 'default' | 'acceptEdits' | 'plan' | 'auto' | 'dontAsk' | 'bypassPermissions'
+  /** Set to give this context a subagent identity (context.agentId). Leaving
+   * it undefined models the main thread. */
+  agentId?: string
+  /** Names in the caller's resolved tool pool (context.options.tools). */
+  toolNames?: string[]
 } = {}): ToolUseContext {
   return {
     abortController: new AbortController(),
+    agentId,
+    options: {
+      tools: (toolNames ?? []).map(name => ({ name }) as never),
+    },
     getAppState: () =>
       ({
         toolPermissionContext: {
@@ -70,6 +91,23 @@ function buildContext({
       }) as never,
   } as ToolUseContext
 }
+
+// Mirrors the Agent Mode coding worker's own `tools` list
+// (src/agent-mode/rolePrompts.ts, AGENT_MODE_CODING_WORKER) — the one
+// built-in definition that names ClaudeCli explicitly, so its resolved pool
+// is the shape 2a must keep passing.
+const CODING_WORKER_TOOL_NAMES = [
+  AGENT_TOOL_NAME,
+  BASH_TOOL_NAME,
+  FILE_READ_TOOL_NAME,
+  FILE_EDIT_TOOL_NAME,
+  FILE_PATCH_TOOL_NAME,
+  FILE_WRITE_TOOL_NAME,
+  GLOB_TOOL_NAME,
+  GREP_TOOL_NAME,
+  CLAUDE_CLI_TOOL_NAME,
+  ASK_ORCHESTRATOR_TOOL_NAME,
+]
 
 afterEach(() => {
   delete process.env.CLAUDE_CLI_PATH
@@ -193,6 +231,72 @@ describe('ClaudeCliTool', () => {
 
     expect(trusted.behavior).toBe('passthrough')
   })
+
+  test('denies a subagent whose resolved tool pool does not carry ClaudeCli', async () => {
+    const denied = await ClaudeCliTool.checkPermissions(
+      { prompt: 'Do the work' },
+      buildContext({
+        agentId: 'agent-1',
+        toolNames: ['Read', 'Grep'],
+      }),
+    )
+
+    expect(denied.behavior).toBe('deny')
+    expect(denied.message).toContain('does not have Claude CLI')
+  })
+
+  test('does not deny a subagent whose resolved pool carries ClaudeCli, shaped like the Agent Mode coding worker', async () => {
+    const decision = await ClaudeCliTool.checkPermissions(
+      { prompt: 'Review the auth module' },
+      buildContext({
+        agentId: 'agent-1',
+        toolNames: CODING_WORKER_TOOL_NAMES,
+      }),
+    )
+
+    expect(decision.behavior).toBe('passthrough')
+  })
+
+  test('main thread is unaffected by the worker grant check even with an empty tool pool', async () => {
+    const decision = await ClaudeCliTool.checkPermissions(
+      { prompt: 'Review the auth module' },
+      buildContext({ toolNames: [] }),
+    )
+
+    expect(decision.behavior).toBe('passthrough')
+  })
+
+  test.each(['acceptEdits', 'bypassPermissions'] as const)(
+    'denies a worker delegating with permission_mode %s even though its pool carries ClaudeCli',
+    async permission_mode => {
+      const denied = await ClaudeCliTool.checkPermissions(
+        { prompt: 'Do the work', permission_mode },
+        buildContext({
+          agentId: 'agent-1',
+          toolNames: CODING_WORKER_TOOL_NAMES,
+          mode: 'bypassPermissions', // even a trusted parent mode does not help a worker
+        }),
+      )
+
+      expect(denied.behavior).toBe('deny')
+      expect(denied.message).toContain(permission_mode)
+    },
+  )
+
+  test.each(['dontAsk', 'auto'] as const)(
+    'does not deny a worker delegating with permission_mode %s',
+    async permission_mode => {
+      const decision = await ClaudeCliTool.checkPermissions(
+        { prompt: 'Do the work', permission_mode },
+        buildContext({
+          agentId: 'agent-1',
+          toolNames: CODING_WORKER_TOOL_NAMES,
+        }),
+      )
+
+      expect(decision.behavior).toBe('passthrough')
+    },
+  )
 
   test('rejects invalid effort values at the schema boundary', () => {
     const parsed = ClaudeCliTool.inputSchema.safeParse({

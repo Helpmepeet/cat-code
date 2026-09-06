@@ -13,6 +13,7 @@ import { expandPath } from '../../utils/path.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { subprocessEnv } from '../../utils/subprocessEnv.js'
+import { resolveWorkerCapabilities } from '../../utils/agentCapabilities.js'
 import { CLAUDE_CLI_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, PROMPT } from './prompt.js'
 
@@ -218,6 +219,18 @@ function isTrustedBypassParentMode(context: Pick<ToolUseContext, 'getAppState'>)
       permissionContext.prePlanMode === 'bypassPermissions')
   )
 }
+
+// Permission modes that let the delegated Claude CLI process apply edits
+// without asking. rolePrompts.ts tells the Agent Mode coding worker never to
+// pass either of these to a delegated run; this enforces that in code rather
+// than relying on the worker to comply. 'dontAsk' and 'auto' are excluded on
+// purpose: 'dontAsk' converts an ask into a deny (permissions.ts, dontAsk mode
+// transformation) and 'auto' still routes through the classifier, so neither
+// skips the permission system the way these two do.
+const WORKER_FORBIDDEN_DELEGATED_PERMISSION_MODES = new Set([
+  'acceptEdits',
+  'bypassPermissions',
+])
 
 function isPathLikeExecutable(executable: string): boolean {
   return (
@@ -498,6 +511,43 @@ export const ClaudeCliTool = buildTool({
     return input.prompt
   },
   async checkPermissions(input, context) {
+    // context.agentId is only set for a subagent call; the main thread leaves
+    // it undefined (Tool.ts). Everything below is a backstop: the ordinary
+    // path already keeps ClaudeCli out of a worker's pool unless its own
+    // agent definition names it (ASYNC_AGENT_EXPLICIT_GRANT_TOOLS), so this
+    // only matters if some other path assembles a worker's pool without that
+    // filter.
+    if (context.agentId !== undefined) {
+      const capabilities = resolveWorkerCapabilities(
+        context.options.tools.map(tool => tool.name),
+      )
+      if (!capabilities.mayDelegateExternally) {
+        return {
+          behavior: 'deny',
+          message:
+            'This worker does not have Claude CLI in its tool pool. Do the work yourself instead of delegating to Claude CLI.',
+          decisionReason: {
+            type: 'other',
+            reason: 'claude_cli_not_granted_to_worker',
+          },
+        }
+      }
+
+      if (
+        input.permission_mode !== undefined &&
+        WORKER_FORBIDDEN_DELEGATED_PERMISSION_MODES.has(input.permission_mode)
+      ) {
+        return {
+          behavior: 'deny',
+          message: `A delegated Claude CLI run from a worker cannot use permission_mode ${input.permission_mode}. Drop permission_mode, or pick a mode that does not edit files automatically.`,
+          decisionReason: {
+            type: 'other',
+            reason: 'delegated_worker_permission_mode_edits_files',
+          },
+        }
+      }
+    }
+
     if (
       input.permission_mode === 'bypassPermissions' &&
       !isTrustedBypassParentMode(context)
