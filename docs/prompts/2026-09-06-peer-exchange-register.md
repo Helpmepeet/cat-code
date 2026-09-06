@@ -234,10 +234,44 @@ engine's own `getTools` and appends the peer tools after it
 (`app/sidecar/sessionController.ts`), so the `Agent` tool's description sits in
 the same list as `CreatePeer`. Cavansite never called the tool.
 
-**This is a matching source, not a demonstrated cause.** A dirty shared tree and
-explicit completion criteria also follow from `CLAUDE.md` §4 and §3 on their
-own, so the correspondence does not establish which text produced the brief,
-and one exchange cannot separate them.
+### The correspondence, measured
+
+Every `Agent` tool call in the local session history was swept: 304 prompts
+across 96 sessions. The two blocks quoted above have not changed since the
+initial snapshot on 2026-04-30, so the whole population was written under the
+guidance that is live today.
+
+| Marker | Population | Cavansite's peer brief |
+|---|---|---|
+| Names file paths | 82% | yes |
+| Warns about current or dirty repository state | ~46% | yes |
+| Names done or verification | 88% | yes |
+| States constraints | 89% | yes |
+| Names an actual verification command | 15% | yes |
+| Length | — | 92nd percentile of the 304 |
+
+The peer brief sits inside that distribution on every marker. The phrasing
+matches too. From the population: "the shared migration tree is dirty with
+other sessions' changes"; "the working tree is heavily dirty from multiple
+concurrent sessions". Cavansite: "the repository is on `migration` with
+extensive unrelated uncommitted work from other sessions."
+
+**So a peer brief is not distinguishable from a subagent brief.** Whatever
+produces the shape, the peer path received it unchanged.
+
+Method notes, because two of these numbers needed correcting mid-sweep. A first
+pass put the done-criteria marker at 14%; that was an artifact of a narrow
+pattern, and a looser one gives 88%. Ten dirty-state matches were read by hand
+and nine were genuine, so that rate is ~46% rather than the 51% the pattern
+reported.
+
+**This is a matching source, not a demonstrated cause, and the sweep does not
+change that.** An earlier draft claimed the dirty-tree warning could only come
+from the `Agent` checklist, since nothing else asks a session to put that
+warning into a prompt for someone else. That claim was too strong: the tree
+really is dirty and a recipient really does need to know, so a competent
+delegator writes it unprompted. Checklist carry-over and the repository's own
+conditions predict the same numbers, and this evidence cannot separate them.
 
 Two observations cut against the obvious reading of it:
 
@@ -260,7 +294,15 @@ Two observations cut against the obvious reading of it:
   Cavansite's context, and the general prior that handing work to another agent
   means writing a specification, point the same way. The transcripts cannot
   separate them.
-- Whether one exchange is enough to generalize. This is a single pair, on two
-  Codex models, on one task shape.
+- Whether one exchange is enough to generalize on the peer side. It is one
+  pair, on two Codex models, on one task shape, and history cannot extend it:
+  of the 8 `CreatePeer` calls that exist, 7 predate the doctrine rewrite of
+  2026-09-06 and were written under tool text that no longer exists. The
+  delegation population above is the opposite case, stable since April and
+  still growing, so a change to that guidance is gradeable in a way a change to
+  the peer text currently is not.
+- Model-authored peers are a small share of use. The roster carried ~75 peers
+  against 8 `CreatePeer` calls in history, so most peers are tabs the user
+  opened. That should bound the investment.
 - Whether the duplication in §8 has any owner in the current instructions.
   The reporting requirements are written for one session reporting to the user.
