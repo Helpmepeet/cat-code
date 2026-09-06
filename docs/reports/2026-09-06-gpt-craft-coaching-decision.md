@@ -154,9 +154,19 @@ sentence differs: upstream says "You are highly capable and often allow users to
 complete ambitious tasks that would otherwise be too complex or take too long",
 while ours reads "highly capable and can handle ambitious tasks" — **zero hits in
 any build, including the fork point.** Ours is a fork rewrite that dropped the
-clause about tasks otherwise too complex or slow. That is a point in favour of
-cutting it, since what we carry is neither Anthropic's reasoning nor Codex's
-silence, and against calling it inherited text. Upstream's own wording, current:
+clause about tasks otherwise too complex or slow.
+
+**That opens a sub-choice this report had closed by assumption.** What we carry is
+neither Anthropic's sentence nor Codex's silence, so "delete it" is not the only
+move available. Either is defensible and neither is established here:
+
+- **cut** — the remaining half instructs nothing, which is why §4 marks it Cut;
+- **restore** — take upstream's full sentence back, on the grounds that the clause
+  we dropped is the part that carries meaning, and what is left is the husk.
+
+An earlier draft of this paragraph asserted the first as though the external review
+had recommended it. It did not; it observed only that Anthropic's version carries a
+substantive clause ours dropped. Upstream's own wording, current:
 
 > Don't add features, refactor, or introduce abstractions beyond what the task
 > requires. A bug fix doesn't need surrounding cleanup; a one-shot operation
