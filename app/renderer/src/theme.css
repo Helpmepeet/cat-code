@@ -79,6 +79,22 @@
   --tone-danger: #f87171;
   --tone-info: #60a5fa;
 
+  /*
+   * PEER. One colour for every peer (operator, 2026-09-05): the peer's NAME
+   * says which peer it is, this marks the peer namespace. A token rather than a
+   * literal class because it is used at three alphas (text, a 20% border and a
+   * 10% fill on the incoming bubble), and only a token gets the `/<alpha>`
+   * utilities the way `--accent` does.
+   *
+   * NOT selectable, and that is the point: it must not move with the accent
+   * picker, so it is declared here beside the tone hues rather than in
+   * `[data-accent]`. Chosen by measurement, not taste — it is the largest gap
+   * left in the FAMILY_STYLE hue wheel (21 degrees from `read` and from
+   * `agent-control`, its nearest neighbours) and 105 degrees from the pink
+   * accent, which clears all five selectable accents.
+   */
+  --peer: #818cf8;
+
   /* Settings source badges. `user` is the muted text hue and `project`/`local`
    * are the info/purple hues, so all three move with the appearance for the same
    * reason those do: as TEXT on a near-white ground a 400-level hue is around
@@ -461,6 +477,9 @@ html[data-appearance='light'] {
   --tone-danger: #dc2626;
   --tone-info: #2563eb;
 
+  /* Darkened the same way every family hue is on near-white (indigo-600). */
+  --peer: #4f46e5;
+
   --source-user: #52525b;
   --source-project: #2563eb;
   --source-local: #7c3aed;
@@ -791,6 +810,9 @@ html[data-glass='on'] [data-window-overlay] {
   --color-tone-good: var(--tone-good);
   --color-tone-success: var(--tone-good);
   --color-tone-info: var(--tone-info);
+
+  /* Peer surfaces: `text-peer`, `border-peer/20`, `bg-peer/10`. */
+  --color-peer: var(--peer);
 
   /* Settings source badges (P4-3): per-source hues from the prototype's
    * SETTING_SOURCES palette (Settings.jsx) so the badges read as the prototype.

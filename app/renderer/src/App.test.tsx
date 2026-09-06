@@ -2865,11 +2865,6 @@ test('the composer prompt and the provenance seam are wired to their selectors',
   expect(source).not.toContain(
     "? 'Ask Cat Code anything or describe a task…'",
   )
-
-  // The seam resolves the creator id against the roster at read time. Reading
-  // it off the descriptor instead would be the stale-name bug §2 rejects.
-  expect(source).toContain('selectCreationSeam(shell, id)')
-  expect(source).toContain('creationSeam={creationSeamsById.get(sessionId) ?? null}')
 })
 
 /**

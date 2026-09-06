@@ -4,7 +4,6 @@ import {
   activeAfterPaneChange,
   createShellState,
   reduceShellState,
-  selectCreationSeam,
   selectLiveSessions,
   selectPaneSessions,
   selectSession,
@@ -328,61 +327,4 @@ test('activeAfterPaneChange: no panes left → null (empty shell)', () => {
 
 test('activeAfterPaneChange: a null active stays null', () => {
   expect(activeAfterPaneChange(null, ['live'])).toBeNull()
-})
-
-/* ── PEER-SESSIONS §6: the created-session provenance seam ─────────────────── */
-
-test('the seam resolves the creator id to a name at read time', () => {
-  let state = createShellState()
-  state = reduceShellState(state, added(descriptor('alex', { name: 'Alex' })))
-  state = reduceShellState(
-    state,
-    added(descriptor('bear', { name: 'Bear', createdBy: 'alex' })),
-  )
-
-  expect(selectCreationSeam(state, 'bear')).toEqual({
-    label: 'Bear',
-    detail: 'created by Alex',
-  })
-})
-
-/**
- * §2: names are RELEASED when a row is reaped and handed out again, ids are
- * not. So the creator is stored as an id and a creator the roster no longer
- * holds is gone. This is the assertion that would fail if the descriptor ever
- * started carrying a frozen creator name instead: a stale label would survive
- * the reap and quietly name whichever session got the name next.
- */
-test('a creator the roster no longer holds reads as gone, never as a stale name', () => {
-  let state = createShellState()
-  state = reduceShellState(state, added(descriptor('alex', { name: 'Alex' })))
-  state = reduceShellState(
-    state,
-    added(descriptor('bear', { name: 'Bear', createdBy: 'alex' })),
-  )
-  state = reduceShellState(state, { type: 'session-removed', appSessionId: 'alex' })
-
-  const seam = selectCreationSeam(state, 'bear')
-  expect(seam).toEqual({
-    label: 'Bear',
-    detail: 'created by a session that is gone',
-  })
-  // And never the raw id, which is engineering detail the user cannot act on.
-  expect(seam?.detail).not.toContain('alex')
-})
-
-test('a session the user opened themselves has no seam at all', () => {
-  let state = createShellState()
-  state = reduceShellState(state, added(descriptor('solo', { name: 'Quartz' })))
-  expect(selectCreationSeam(state, 'solo')).toBeNull()
-
-  // Nor does a row that predates the name field, or one that is not in the
-  // roster at all.
-  state = reduceShellState(
-    state,
-    added(descriptor('legacy', { name: null, createdBy: 'solo' })),
-  )
-  expect(selectCreationSeam(state, 'legacy')).toBeNull()
-  expect(selectCreationSeam(state, 'not-a-session')).toBeNull()
-  expect(selectCreationSeam(state, null)).toBeNull()
 })

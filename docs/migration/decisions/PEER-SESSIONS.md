@@ -587,12 +587,27 @@ asked-for work (R6).
   (`src/types/message.ts:10`); the projector's `injectedKind` already
   tolerates an unknown kind with a neutral fallback, so the engine-type change
   is additive and the renderer degrades gracefully before it learns the label.
-- **Outgoing sends and creates are ordinary tool cards.**
-- **A created session opens with one seam row**, "Bear, created by Alex",
-  derived by the renderer from the descriptor's `name` / `createdBy` (no wire
-  frame; the centered-divider seam grammar in `TranscriptView.tsx`), followed
-  by the creation prompt as a `peer`-origin injected row from Alex, never as a
-  user bubble containing words the operator did not type.
+- **Outgoing sends and creates are ordinary tool cards.** 🔁 SUPERSEDED
+  2026-09-05 (operator): a create and a read stay cards, but with an operation
+  mark in the peer colour rather than the `other` fallback's `•`/`Tool`; a SEND
+  is not a card at all. It is this session speaking, so it renders as a speech
+  row (quote mark, recipient, message as prose) with its own delivered /
+  sending / stopped / not-delivered states read from the tool RESULT, since
+  `SendToPeer` never sets `is_error`.
+- **A created session opens with one seam row** 🔁 SUPERSEDED 2026-09-05
+  (operator): the seam is DELETED and nothing replaces it. The creation prompt
+  already arrives as a `peer`-origin row naming the creator, and it is the
+  first row, so the seam named the same session twice and "created this
+  session" would only restate what position says. `SessionCreationSeam` and
+  `selectCreationSeam` are gone with it, which also drops the read-time creator
+  resolution and the "creator is gone" state; a transcript row's frozen label
+  is the historically accurate answer for a row.
+- **An incoming peer message is a right-aligned bubble** (operator,
+  2026-09-05), carrying `UserBubble`'s own geometry and recipe in the peer
+  colour: the right of the column is what ARRIVES and drives a turn, which is
+  as true of a peer's message as of the user's. It used to sit left among the
+  tool cards. There is ONE peer colour for every peer (`--peer`), not a
+  per-peer palette: the name says which peer, the colour marks the namespace.
 - **Composer placeholder** names the session. 🔁 CORRECTED during the build: the
   "today" string quoted here was wrong, so the replacement drawn from it was too.
   `Message Cat Code` exists only in a test fixture; the real placeholder is

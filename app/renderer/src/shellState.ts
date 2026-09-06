@@ -248,6 +248,11 @@ export function activeAfterPaneChange(
   return paneOrder[0] ?? null
 }
 
+/**
+ * One session by id. Its last production caller left with the creation seam
+ * (2026-09-05); it stays as this module's read API beside `selectSessions`,
+ * because the alternative is reducer tests reaching into `byId` directly.
+ */
 export function selectSession(
   state: ShellState,
   sessionId: SessionId | null,
@@ -259,47 +264,6 @@ function isDescriptor(
   value: SessionDescriptor | undefined,
 ): value is SessionDescriptor {
   return value !== undefined
-}
-
-/** The provenance seam a created session opens with (PEER-SESSIONS §6). */
-export type SessionCreationSeam = {
-  /** The session's own name. */
-  label: string
-  /** Who created it, already worded for the row. */
-  detail: string
-}
-
-/**
- * "Bear · created by Alex" — derived here, not delivered: no frame carries it,
- * and no resolved creator NAME is on the descriptor either. Names are released
- * when a row is reaped and then handed out again, so a name frozen into a
- * snapshot would outlive the session it came from and start pointing at a
- * different one; the descriptor therefore carries the creator's ID and readers
- * resolve it at read time (PEER-SESSIONS §2).
- *
- * That resolution is `selectSession` over the same roster the tabs and the
- * sidebar read, so a creator the app cannot see is exactly a creator that is
- * gone, and the row says so rather than printing a raw id at the user.
- *
- * Null when the session was not created by another session (the ordinary case:
- * the user opened it), and null when it has no name of its own to be introduced
- * by. A row that carries a creator always carries a name, because the one path
- * that sets a creator allocates the name in the same spawn.
- */
-export function selectCreationSeam(
-  state: ShellState,
-  sessionId: SessionId | null,
-): SessionCreationSeam | null {
-  const session = selectSession(state, sessionId)
-  const name = session?.name ?? null
-  const createdBy = session?.createdBy ?? null
-  if (name === null || createdBy === null) return null
-  const creator = selectSession(state, createdBy)?.name ?? null
-  return {
-    label: name,
-    detail:
-      creator === null ? 'created by a session that is gone' : `created by ${creator}`,
-  }
 }
 
 /* ------------------------------------------------------------------------- *

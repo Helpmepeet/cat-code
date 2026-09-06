@@ -760,6 +760,43 @@ export function composerPromptPlaceholder(name: string | null): string {
 }
 
 /**
+ * The same placeholder, split so the NAME can carry the peer colour (operator,
+ * 2026-09-05).
+ *
+ * Tinting this session's own name is deliberate and is what the colour means:
+ * it marks the PEER NAMESPACE, not "somebody else". Your session has a peer
+ * name as much as any other does, and this is the one place that name is
+ * addressed to you, so the colour says "this is the name peers reach you by".
+ *
+ * Null when there is no name to tint. The unnamed fallback stays the ORIGINAL
+ * string byte for byte and untinted, because "Cat Code" is the product, not a
+ * peer name; `composerPromptPlaceholder` remains the single owner of both
+ * strings, so the two can never drift apart.
+ */
+export type ComposerPlaceholderParts = {
+  lead: string
+  name: string
+  tail: string
+}
+
+export function composerPlaceholderParts(
+  name: string | null,
+): ComposerPlaceholderParts | null {
+  const trimmed = name?.trim() ?? ''
+  if (trimmed.length === 0) return null
+  const whole = composerPromptPlaceholder(trimmed)
+  const at = whole.indexOf(trimmed)
+  // Defensive: if the name is somehow not in the string the wording owns, the
+  // caller renders the plain string rather than a mis-split one.
+  if (at < 0) return null
+  return {
+    lead: whole.slice(0, at),
+    name: trimmed,
+    tail: whole.slice(at + trimmed.length),
+  }
+}
+
+/**
  * Whether a submit the user did not type can be sent right now: the donut's
  * Compact row, which puts `/compact` on the wire without going through the draft.
  *

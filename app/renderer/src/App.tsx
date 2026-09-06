@@ -51,10 +51,8 @@ import {
   activeAfterPaneChange,
   createShellState,
   reduceShellState,
-  selectCreationSeam,
   selectPaneSessions,
   sessionAtSlot,
-  type SessionCreationSeam,
   type ShellState,
 } from './shellState.js'
 import {
@@ -157,6 +155,7 @@ import {
   createImageAttachmentState,
   createPasteState,
   canSendUntypedSubmit,
+  composerPlaceholderParts,
   composerPromptPlaceholder,
   createPendingSubmitState,
   createRetainedSubmitState,
@@ -1543,20 +1542,6 @@ export function App() {
         tabs.map(tab => [tab.descriptor.appSessionId, tab.descriptor] as const),
       ),
     [tabs],
-  )
-
-  // PEER-SESSIONS §6 — "Bear · created by Alex", the row a session created by
-  // another session opens with. Derived, never delivered: the descriptor stores
-  // the creator as an ID precisely so no stale name can be frozen into a
-  // snapshot, so the name is resolved here against the roster at read time.
-  //
-  // Memoized per roster change rather than recomputed per render: the seam is a
-  // fresh object each call, and the transcript below is `memo`, so an unmemoized
-  // one would re-render every pane on every keystroke in the composer.
-  const creationSeamsById = useMemo(
-    () =>
-      new Map(paneSessionIds.map(id => [id, selectCreationSeam(shell, id)] as const)),
-    [shell, paneSessionIds],
   )
 
   // P4-6a — the merged Sessions catalog: the host registry rows (openable) ∪
@@ -3425,7 +3410,6 @@ export function App() {
             onOpenAccountSwitcher={() => getBridge().refreshAccountsPool()}
 	            activeConnection={sessionConnection}
 	            activeDescriptor={descriptor}
-	            creationSeam={creationSeamsById.get(sessionId) ?? null}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
                 isActivePane={sessionId === activeSessionId}
@@ -4672,7 +4656,6 @@ export function SessionPane({
   activeConnection,
   turnStartedAt = null,
   activeDescriptor,
-  creationSeam = null,
   branch,
   sandboxed,
   activeLog,
@@ -5078,6 +5061,10 @@ export function SessionPane({
   const composerPlaceholder = composerGate.editable
     ? composerPromptPlaceholder(activeDescriptor?.name ?? null)
     : 'Connecting…'
+  // The name carries the peer colour; the connection copy has no name in it.
+  const composerPlaceholderName = composerGate.editable
+    ? composerPlaceholderParts(activeDescriptor?.name ?? null)
+    : null
   const paused = permissionQueue.length > 0
   // Slice-cached: stable ref while the session's rows are unchanged, so both
   // `deriveActivity` and the token estimate share one projection.
@@ -5643,7 +5630,6 @@ export function SessionPane({
             loadEarlierPending={historyLoadEarlierPending}
             loadEarlierFailure={historyLoadEarlierFailure}
             onLoadEarlier={onLoadEarlierHistory}
-            creationSeam={creationSeam ?? null}
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onMessageAction={onMessageAction}
@@ -6078,6 +6064,7 @@ export function SessionPane({
               onRemovePaste={onRemovePaste}
               pastes={pastes}
               placeholder={composerPlaceholder}
+              placeholderParts={composerPlaceholderName}
               typeahead={composerTypeahead}
               value={prompt}
             />
@@ -6502,11 +6489,6 @@ type SessionPaneProps = {
    * session is off screen, and the elapsed clock must survive that. */
   turnStartedAt?: number | null
   activeDescriptor: SessionDescriptor | undefined
-  /**
-   * "Bear · created by Alex" (PEER-SESSIONS §6), resolved by App against the
-   * roster. Null for a session the user opened themselves.
-   */
-  creationSeam?: SessionCreationSeam | null
   activeLog: RawMessageSessionLog
   /** Read-only git branch for the empty-state meta strip — this session's own
    * `diagnostics.snapshot`, falling back to the session log's `gitBranch`. */

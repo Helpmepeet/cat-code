@@ -35,6 +35,8 @@ import { pasteIdAtCaret } from './composerState.js'
 import { selectAttachableImageFile } from './imageAttachment.js'
 import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
+import type { ComposerPlaceholderParts } from './composerState.js'
+import { PEER_TONE_CLASS } from './peerSurfaces.js'
 
 /** The textarea-shaped surface the pane's handlers drive the field through. */
 export type ComposerInputHandle = {
@@ -60,6 +62,14 @@ type ComposerInputProps = {
   onRemovePaste: (entry: PasteEntry, at: number) => void
   onValueChange: (next: string) => void
   placeholder: string
+  /**
+   * The same text with the session's own name split out, so it can carry the
+   * peer colour. Absent for an unnamed session and for the connection copy,
+   * which render `placeholder` plainly. `placeholder` stays the whole string
+   * either way: it is what reaches `aria-placeholder`, and assistive tech must
+   * get one sentence rather than three spans.
+   */
+  placeholderParts?: ComposerPlaceholderParts | null
   /** Collapsed pastes for this session, oldest first. */
   pastes: PasteEntry[]
   /** A live session that cannot accept input right now (history, crashed). */
@@ -84,6 +94,7 @@ export function ComposerInput({
   onRemovePaste,
   onValueChange,
   placeholder,
+  placeholderParts,
   pastes,
   readOnly,
   ref,
@@ -331,7 +342,15 @@ export function ComposerInput({
           aria-hidden
           className="pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint"
         >
-          {placeholder}
+          {placeholderParts == null ? (
+            placeholder
+          ) : (
+            <>
+              {placeholderParts.lead}
+              <span className={PEER_TONE_CLASS}>{placeholderParts.name}</span>
+              {placeholderParts.tail}
+            </>
+          )}
         </div>
       ) : null}
 
