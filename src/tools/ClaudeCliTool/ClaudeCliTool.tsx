@@ -10,7 +10,7 @@ import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { pwd } from '../../utils/cwd.js'
 import { errorMessage } from '../../utils/errors.js'
 import { expandPath } from '../../utils/path.js'
-import { killProcessTree } from '../../utils/processTree.js'
+import { killProcessTree, registerDelegatedChild } from '../../utils/processTree.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { subprocessEnv } from '../../utils/subprocessEnv.js'
@@ -327,7 +327,7 @@ function formatPromptSummary(prompt: string | undefined, limit = 80): string {
 
 async function runClaudeCliTask(
   input: Input,
-  context: Pick<ToolUseContext, 'abortController'>,
+  context: Pick<ToolUseContext, 'abortController' | 'agentId'>,
   spawnImpl: ClaudeCliSpawn = spawn as ClaudeCliSpawn,
 ): Promise<ClaudeCliToolOutput> {
   const command = buildClaudeCliCommand(input)
@@ -361,10 +361,12 @@ async function runClaudeCliTask(
     let timeout: ReturnType<typeof setTimeout> | undefined
     let onAbort = (): void => {}
     let onProcessExit = (): void => {}
+    let unregisterDelegatedChild = (): void => {}
 
     const finish = (output: ClaudeCliToolOutput): void => {
       if (settled) return
       settled = true
+      unregisterDelegatedChild()
       if (timeout) clearTimeout(timeout)
       context.abortController.signal.removeEventListener('abort', onAbort)
       // Through the EventEmitter view: process.off('exit', …) does not
@@ -393,6 +395,13 @@ async function runClaudeCliTask(
       detached: process.platform !== 'win32',
       windowsHide: true,
     })
+
+    // Tracked so the worker that spawned this (if any) can reap it from
+    // runAgent.ts's finally block even if neither abort nor the timeout below
+    // catches it first: the streaming tool executor can discard an in-flight
+    // tool call without aborting it, same as the process-exit reaper exists
+    // for below. finish() unregisters this on every settlement path.
+    unregisterDelegatedChild = registerDelegatedChild(context.agentId, child)
 
     // Group kill first so descendants go too; the direct kill then covers a
     // child that never led a group (Windows, or a spawn that failed).

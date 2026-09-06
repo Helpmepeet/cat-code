@@ -35,6 +35,7 @@ import type {
 } from '../../services/mcp/types.js'
 import type { Tool, Tools, ToolUseContext } from '../../Tool.js'
 import { killShellTasksForAgent } from '../../tasks/LocalShellTask/killShellTasks.js'
+import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import type { Command } from '../../types/command.js'
 import type { AgentId } from '../../types/ids.js'
 import type {
@@ -1154,6 +1155,10 @@ async function* runAgentInCleanupScope({
     // `run_in_background` shell loop (e.g. test fixture fake-logs.sh) outlives
     // the agent as a PPID=1 zombie once the main session eventually exits.
     killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
+    // Same reasoning as killShellTasksForAgent, for delegated Claude CLI runs
+    // instead of background shells: a worker's own child processes should not
+    // outlive the worker.
+    killDelegatedChildrenForAgent(agentId)
     if (workerName) releaseWorkerName(workerName)
     /* eslint-disable @typescript-eslint/no-require-imports */
     if (feature('MONITOR_TOOL')) {

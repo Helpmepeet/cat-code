@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
+import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
 import { rm } from 'fs/promises'
@@ -23,6 +24,7 @@ import { createAgentId } from '../../utils/uuid.js'
 import { AGENT_TOOL_NAME } from './constants.js'
 import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/prompt.js'
 import { CLAUDE_CLI_TOOL_NAME } from '../ClaudeCliTool/constants.js'
+import { _claudeCliToolInternalsForTest } from '../ClaudeCliTool/ClaudeCliTool.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { finalizeAgentTool } from './agentToolUtils.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -237,6 +239,95 @@ describe('runAgent setup-failure cleanup', () => {
 
     expectNoLeakedWorkerName()
     expect(harness.readState().sessionHooks.size).toBe(0)
+  })
+})
+
+describe('runAgent worker-scoped delegated-child cleanup', () => {
+  let tempDir: string
+  // Only pids this describe block spawns itself; never a process-table
+  // sweep, since other sessions and the operator share this machine.
+  const spawnedPids: number[] = []
+
+  beforeEach(() => {
+    resetStateForTests()
+    resetWorkerNamesForTests()
+    tempDir = mkdtempSync(join(tmpdir(), 'run-agent-delegated-'))
+    switchSession(asSessionId('session-run-agent-delegated'), tempDir)
+  })
+
+  afterEach(() => {
+    resetWorkerNamesForTests()
+    resetStateForTests()
+    for (const pid of spawnedPids.splice(0)) {
+      try {
+        process.kill(pid, 'SIGKILL')
+      } catch {
+        // Already gone, which the test below asserts.
+      }
+    }
+  })
+
+  function isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function waitUntilGone(pid: number, timeoutMs = 3_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    while (Date.now() < deadline) {
+      if (!isAlive(pid)) return true
+      await new Promise(resolve => setTimeout(resolve, 25))
+    }
+    return !isAlive(pid)
+  }
+
+  // The scenario killShellTasksForAgent already covers for background bash:
+  // a call the worker made outlives the worker's own run because nothing
+  // else was watching it (the streaming tool executor can discard an
+  // in-flight tool call without aborting it). Reproduced here for
+  // ClaudeCliTool by spawning through its own seam and deliberately never
+  // awaiting the result, then draining the worker's run to completion.
+  test('a delegated Claude CLI child dies when the worker that spawned it does', async () => {
+    const agentId = createAgentId('delegated-cleanup-test')
+    const harness = createAppStateHarness()
+    queryScript = async function* () {
+      yield createAssistantMessage({ content: 'done' })
+    }
+
+    let markSpawned: () => void = () => {}
+    const spawned = new Promise<void>(resolve => {
+      markSpawned = resolve
+    })
+    void _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello', timeout: 30_000 },
+      { abortController: new AbortController(), agentId },
+      (_executable, _args, options) => {
+        const child = spawn('/bin/sh', ['-c', 'sleep 20'], options)
+        if (child.pid !== undefined) spawnedPids.push(child.pid)
+        markSpawned()
+        return child as never
+      },
+    )
+    await spawned
+    const [pid] = spawnedPids
+    expect(isAlive(pid!)).toBe(true)
+
+    for await (const _message of startAgent(harness, {
+      override: {
+        agentId,
+        systemPrompt: ['fixture prompt'] as never,
+        userContext: {},
+        systemContext: {},
+      },
+    })) {
+      // drain
+    }
+
+    expect(await waitUntilGone(pid!)).toBe(true)
   })
 })
 

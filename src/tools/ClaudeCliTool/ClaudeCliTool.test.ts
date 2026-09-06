@@ -8,6 +8,8 @@ import React from 'react'
 import { PassThrough } from 'stream'
 import { Box } from '../../ink.js'
 import type { ToolUseContext } from '../../Tool.js'
+import { asAgentId } from '../../types/ids.js'
+import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/constants.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
@@ -660,6 +662,63 @@ describe('ClaudeCliTool', () => {
     const grandchild = await backgroundPid
     expect(result.status).toBe('timeout')
     expect(await waitUntilGone(grandchild)).toBe(true)
+  })
+
+  test('registers the delegated child under context.agentId so a worker-scoped reap can reach it', async () => {
+    // Neither abort nor the timeout is what reaps this process here: the
+    // point of the registry is the gap those two miss (runAgent.ts's finally,
+    // reached when the streaming tool executor discards an in-flight call
+    // without aborting it). killDelegatedChildrenForAgent is that reaper's
+    // own entry point, called directly to prove the wiring without driving a
+    // whole subagent run through runAgent.ts.
+    const agentId = asAgentId('a00000000000000f1')
+    const context = { abortController: new AbortController(), agentId }
+    let markSpawned: () => void = () => {}
+    const spawned = new Promise<void>(resolve => {
+      markSpawned = resolve
+    })
+
+    const promise = _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello', timeout: 30_000 },
+      context,
+      (executable, args, options) => {
+        const child = spawnShellWithBackgroundChild(() => {})(
+          executable,
+          args,
+          options,
+        )
+        markSpawned()
+        return child
+      },
+    )
+
+    await spawned
+    const [directChild] = spawnedPids
+
+    killDelegatedChildrenForAgent(agentId)
+    const result = await promise
+
+    expect(await waitUntilGone(directChild!)).toBe(true)
+    expect(result.exit_code).not.toBeNull()
+  })
+
+  test('does not register anything for a main-thread call (no agentId)', async () => {
+    // context.agentId is undefined on the main thread (Tool.ts). Reaping a
+    // made-up agentId must not reach a process that was never filed under
+    // any agentId, which is what would happen if registration ignored the
+    // undefined case instead of no-op'ing.
+    const child = new FakeChildProcess({ autoExit: false })
+    const promise = _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello', timeout: 30_000 },
+      buildContext(),
+      () => child as never,
+    )
+
+    killDelegatedChildrenForAgent(asAgentId('a00000000000000f2'))
+    expect(child.killedWith).toBeUndefined()
+
+    child.kill('SIGKILL')
+    await promise
   })
 
   test('drops its process-exit reaper once the run settles', async () => {
