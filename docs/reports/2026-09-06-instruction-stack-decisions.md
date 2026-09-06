@@ -358,10 +358,31 @@ is suspected. What can be shown is that a sentence contradicts our code, repeats
 itself, names something absent, or is unreachable. That is the whole basis for
 acting, and it is why A8 is the only item whose "no risk" is a measurement.
 
-The measurement that would change this is cheap and undone: run a fixed task set
-against the current prompt and against one cut group at a time, on the models
-actually in use, and compare scope errors, boundary violations, unnecessary tool
-calls, and output quality. It costs model quota, which is why nobody has run it.
+**The ablation is deliberately not being run. Decided 2026-09-06.** The shape it
+would take is known: a fixed task set against the current prompt and against one
+cut group at a time, on the models actually in use, comparing scope errors,
+boundary violations, unnecessary tool calls and output quality.
+
+Two reasons it is skipped, and the second is decisive.
+
+The items that most invite measurement are the ones whose answer does not depend on
+it. D2's readiness check is wrong whatever a model does with it, A6a states an
+invariant the code makes impossible, A8 is unreachable, and A2, A5, B4 and D3 are
+text upstream itself removed.
+
+What remains is the craft slice, roughly 1,100 characters of 24,680. **A 4.5%
+change to the prompt is below what a cheap ablation can resolve.** Separating that
+from ordinary run-to-run variance needs a large fixed task set and several runs per
+arm, and no such task set exists — building it is the cost, not running it. An
+underpowered version returns a number that looks like evidence and is not, which is
+worse than having none.
+
+**What is worth capturing, and costs nothing:** a prompt-text baseline.
+`./cli-dev --dump-system-prompt` on the pre-change tree, diffed against the same
+command afterwards, confirms exactly what left the emitted prompt and that nothing
+else moved. That is the verification this plan already asks for, it needs no model
+quota, and it must be taken **before the first edit** or it is not a baseline. The
+figure to match is 24,680 characters.
 
 ## 8. Where everything else is
 
