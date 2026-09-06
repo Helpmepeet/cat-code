@@ -15,7 +15,6 @@ import {
 } from '../constants/prompts.js'
 import {
   getGPTDoingTasksSection,
-  getGPTSessionGuidanceSection,
   getGPTUsingToolsSection,
 } from '../constants/promptStyles/gpt.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
@@ -464,7 +463,7 @@ describe('provider and prompt regressions', () => {
   })
 
   test('GPT read discipline permits shell reads and states why Read is the default', () => {
-    const guidance = getGPTSessionGuidanceSection(new Set(['Grep', 'Read']), [])
+    const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
 
     expect(guidance).toContain('`rg`')
     expect(guidance).toContain('`sed -n` line ranges')
@@ -582,9 +581,11 @@ describe('provider and prompt regressions', () => {
     // on the dump measured a prompt no session runs.
     expect(withTools).toContain('AGENT TOOL:')
     expect(withTools).toContain('TASK TRACKING:')
-    expect(withTools).toContain(`File editing → ${FILE_PATCH_TOOL_NAME}`)
+    expect(withTools).toContain(`Use ${FILE_PATCH_TOOL_NAME} for local file edits.`)
     expect(withoutTools).not.toContain('AGENT TOOL:')
-    expect(withoutTools).not.toContain(`File editing → ${FILE_PATCH_TOOL_NAME}`)
+    expect(withoutTools).not.toContain(
+      `Use ${FILE_PATCH_TOOL_NAME} for local file edits.`,
+    )
 
     // Guard the call site itself: the dump path is an entrypoint fast path
     // with no other coverage.
@@ -604,7 +605,8 @@ describe('provider and prompt regressions', () => {
     expect(restrictedSection).not.toContain('File search →')
     expect(restrictedSection).not.toContain('Content search →')
     expect(restrictedSection).not.toContain('RULE — File mutations')
-    expect(restrictedSection).toContain('File reading → Read')
-    expect(restrictedSection).toContain('Shell execution → Bash')
+    expect(restrictedSection).not.toContain('PATHS:')
+    expect(restrictedSection).toContain('READ DISCIPLINE:')
+    expect(restrictedSection).toContain('through the Bash tool')
   })
 })

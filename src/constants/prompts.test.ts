@@ -6,8 +6,8 @@ import {
 } from './prompts.js'
 import {
   getGPTIntroSection,
-  getGPTSessionGuidanceSection,
   getGPTToneAndStyleSection,
+  getGPTUsingToolsSection,
 } from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 
@@ -123,7 +123,7 @@ describe('Normal mode static delegation guidance', () => {
     expect(promptsSource).toContain(reviewRule)
     expect(promptsSource).toContain(delegationReasons)
 
-    const gptGuidance = getGPTSessionGuidanceSection(new Set(['Agent']), [])
+    const gptGuidance = getGPTUsingToolsSection(new Set(['Agent']))
     expect(gptGuidance).toContain(reviewRule)
     expect(gptGuidance).toContain(delegationReasons)
   })
@@ -135,7 +135,7 @@ describe('GPT read discipline guidance', () => {
     delete process.env.EMBEDDED_SEARCH_TOOLS
 
     try {
-      const guidance = getGPTSessionGuidanceSection(new Set(['Grep', 'Read']), [])
+      const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
 
       expect(guidance).toContain('Grep to locate')
       expect(guidance).toContain('head_limit')
@@ -155,10 +155,7 @@ describe('GPT read discipline guidance', () => {
     delete process.env.CLAUDE_CODE_ENTRYPOINT
 
     try {
-      const guidance = getGPTSessionGuidanceSection(
-        new Set(['Bash', 'Read']),
-        [],
-      )
+      const guidance = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
 
       expect(guidance).toContain('READ DISCIPLINE:')
       expect(guidance).toContain('`find` or `grep` via the Bash tool')
@@ -181,6 +178,49 @@ describe('GPT read discipline guidance', () => {
 
   test('Claude style does not carry the GPT read discipline rule', () => {
     expect(promptsSource).not.toContain('READ DISCIPLINE:')
+  })
+})
+
+describe('GPT section boundaries', () => {
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  // Each rule has one home. Before the redraw, session guidance carried the
+  // proceed/confirm rule, the investigation rule, and the whole delegation
+  // block, so an assembly that drops session guidance lost them and the
+  // always-present actions section never stated when to proceed alone.
+  test('the GPT assembly files each moved rule under the section that owns it', async () => {
+    const tools = [
+      { name: 'Agent' },
+      { name: 'AskUserQuestion' },
+      { name: 'Bash' },
+      { name: 'Read' },
+      { name: 'Grep' },
+      { name: 'Apply_patch' },
+    ] as unknown as Parameters<typeof getSystemPrompt>[0]
+
+    const prompt = (await getSystemPrompt(tools, 'gpt-5.6-terra')).join('\n')
+    const sectionNamed = (heading: string) => {
+      const start = prompt.indexOf(`${heading}\n`)
+      expect(start).toBeGreaterThan(-1)
+      const next = prompt.indexOf('\n# ', start + 1)
+      return next === -1 ? prompt.slice(start) : prompt.slice(start, next)
+    }
+
+    const actions = sectionNamed('# Acting and Asking')
+    expect(actions).toContain('ACT OR ASK:')
+    expect(actions).toContain('REQUEST SCOPE:')
+
+    const usingTools = sectionNamed('# Using Your Tools')
+    expect(usingTools).toContain('READ DISCIPLINE:')
+    expect(usingTools).toContain('AGENT TOOL:')
+
+    const sessionGuidance = sectionNamed('# Session-Specific Guidance')
+    expect(sessionGuidance).not.toContain('ACT OR ASK')
+    expect(sessionGuidance).not.toContain('INVESTIGATION:')
+    expect(sessionGuidance).not.toContain('READ DISCIPLINE:')
+    expect(sessionGuidance).not.toContain('AGENT TOOL:')
   })
 })
 

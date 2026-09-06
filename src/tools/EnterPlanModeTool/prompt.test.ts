@@ -14,7 +14,7 @@ describe('EnterPlanMode tool prompt', () => {
 
   test('ships the plan-sparingly wording to every user type', () => {
     // The external-only variant used to tell the model to prefer plan mode for
-    // most implementation work, contradicting PROACTIVE EXECUTION in the GPT
+    // most implementation work, contradicting ACT OR ASK in the GPT
     // system prompt. There is one variant now.
     delete process.env.USER_TYPE
     const external = getEnterPlanModeToolPrompt()
