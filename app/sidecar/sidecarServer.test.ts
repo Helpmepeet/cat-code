@@ -4129,10 +4129,30 @@ function fakeRunControlsDomain(): {
       provider: 'anthropic',
       providerSwitchLocked,
       options: [
-        { value: null, label: 'Default', provider: 'anthropic' },
-        { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' },
-        { value: 'claude-opus-4-6', label: 'Claude Opus 4.6', provider: 'anthropic' },
-        { value: 'opus', label: 'Opus', provider: 'anthropic' },
+        {
+          value: null,
+          label: 'Default',
+          provider: 'anthropic',
+          effortOptions: ['low', 'medium', 'high'],
+        },
+        {
+          value: 'gpt-5.6-terra',
+          label: 'GPT-5.6 Terra',
+          provider: 'openai',
+          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        },
+        {
+          value: 'claude-opus-4-6',
+          label: 'Claude Opus 4.6',
+          provider: 'anthropic',
+          effortOptions: ['low', 'medium', 'high', 'max'],
+        },
+        {
+          value: 'opus',
+          label: 'Opus',
+          provider: 'anthropic',
+          effortOptions: ['low', 'medium', 'high', 'max'],
+        },
       ],
     },
     effort: {

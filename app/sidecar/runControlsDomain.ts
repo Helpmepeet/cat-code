@@ -58,8 +58,10 @@ import {
 } from '../../src/services/compact/autoCompact.js'
 import {
   getDefaultCodexModel,
+  getDefaultMainLoopModel,
   getMainLoopModel,
   getMarketingNameForModel,
+  parseUserSpecifiedModel,
 } from '../../src/utils/model/model.js'
 import {
   getModelOptions,
@@ -419,6 +421,29 @@ function safe<T>(fn: () => T, fallback: T): T {
 }
 
 /**
+ * The effort levels one PICKER ROW would offer, for `RunControlModelOption`.
+ *
+ * A row's `value` is a selection, not a model id — an alias (`opus`, `haiku`),
+ * a canonical id, or null for the provider-local Default — and the effort
+ * helpers answer for model ids: `modelSupportsEffort('opus')` is false while
+ * `modelSupportsEffort('claude-opus-5')` is true. So the selection is resolved
+ * FIRST, through the engine's own `parseUserSpecifiedModel` /
+ * `getDefaultMainLoopModel` (the pair `getMainLoopModel` itself is built from),
+ * and the levels then come off the same two engine functions the live snapshot
+ * uses for the current model. No second capability table.
+ */
+export function effortOptionsForSelection(value: string | null): string[] {
+  const model =
+    value == null
+      ? safe(() => getDefaultMainLoopModel(), null)
+      : safe(() => parseUserSpecifiedModel(value), null)
+  if (!model) return []
+  return safe(() => modelSupportsEffort(model), false)
+    ? safe(() => [...getSupportedEffortLevels(model)], [])
+    : []
+}
+
+/**
  * Pure snapshot builder over the live app-state + the engine's OWN model/effort/
  * fast helpers. Throw-free (display = degrade gracefully): any engine read that
  * fails degrades that slice to a safe default rather than crashing the snapshot.
@@ -440,6 +465,7 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       provider: toRunControlProvider(
         resolveModelSelectionProvider(option.value),
       ),
+      effortOptions: effortOptionsForSelection(option.value),
     }))
 
   const selected = safe(

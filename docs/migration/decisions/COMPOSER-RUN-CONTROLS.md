@@ -103,6 +103,17 @@ allowlist entry:
   an effort value the request path will clamp or override. A model change that does not support the
   raw selected tier reconciles the selection back to Auto, so every visible effective tier has a
   truthful checked-row state.
+- **Per-row effort options** (`RunControlModelOption.effortOptions`, added 2026-09-06) answer the
+  same two engine functions for a row the user has NOT picked yet: the option's `value` is a
+  selection, so it is resolved through the engine's own `parseUserSpecifiedModel` /
+  `getDefaultMainLoopModel` first, then read with `modelSupportsEffort` /
+  `getSupportedEffortLevels` (`effortOptionsForSelection`, `app/sidecar/runControlsDomain.ts`).
+  Resolution is the whole point: `modelSupportsEffort` is false for the alias `opus` and true for
+  the id it resolves to. It exists because the model card became two faces — pick a model, then set
+  that model's effort — and the card has to know BEFORE the click whether a row leads anywhere,
+  which `effort.options` cannot say because it answers only for the current model. Additive; the
+  snapshot's own `effort` slice is unchanged.
+
 - **Fast** is offered only when `isFastModeSupportedByModel(model)` and enabled only when
   `isFastModeAvailable()`; the real `getFastModeUnavailableReason()` becomes the disabled tooltip.
   When off AND the model can't run fast, the ⚡ is hidden. The sidecar repeats both gates at the

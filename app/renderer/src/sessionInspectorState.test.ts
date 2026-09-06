@@ -79,7 +79,14 @@ const runControls: RunControlsSnapshot = {
     selected: 'claude-opus-5',
     provider: 'anthropic',
     providerSwitchLocked: false,
-    options: [{ value: 'claude-opus-5', label: 'Opus 5', provider: 'anthropic' }],
+    options: [
+      {
+        value: 'claude-opus-5',
+        label: 'Opus 5',
+        provider: 'anthropic',
+        effortOptions: ['low', 'medium', 'high', 'max'],
+      },
+    ],
   },
   effort: { current: 'high', selected: 'high', supported: true, options: ['low', 'high'] },
   fast: { active: true, supportedByModel: true, available: true, unavailableReason: null },

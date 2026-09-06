@@ -217,13 +217,31 @@ const ANTHROPIC_STATUS_LABEL: Record<AnthropicAccountStatus['status'], string> =
 }
 
 /**
- * Interactive MODEL face → a popover of the REAL selectable models (`model.set`).
+ * Interactive MODEL face → the composer's model card (`model.set`), a two-face
+ * popover: a grouped list of the REAL selectable models, and, once one is
+ * picked, that model's effort ladder (`effort.set`).
  *
  * The face reads the engine's display NAME for the resolved model (`label`), not
  * the model id (`current`): picking "Haiku 4.5" used to leave the face reading
  * `claude-haiku-4-5-20251001`, because `current` is what the engine resolves the
  * selection to. `current` is still the fallback, so a model the engine has no
  * name for shows its id rather than nothing.
+ *
+ * WHY EFFORT LIVES HERE TOO, next to a rail that already has its own effort
+ * face. The two are one decision at the moment of switching: the valid levels
+ * are a property of the model (`getSupportedEffortLevels`, and some models have
+ * none at all), and a switch to a model that cannot take the level you
+ * are on silently drops it (`reconcileEffortForModel`). Choosing a model in one
+ * popover and discovering the reset in another is what this closes. The rail's
+ * `ReasoningChip` is untouched and stays the direct route for an effort-only
+ * change; both write the same `effort.set` verb, so they cannot disagree.
+ *
+ * ONE FACE AT A TIME, never both: the card's job is the switch, and a model list
+ * standing beside a ladder spends the whole card on a comparison that only
+ * matters for the row being picked. Picking a row with no levels at all (Haiku)
+ * closes the card instead of advancing, which is why the rows that DO lead
+ * somewhere carry a chevron — `option.effortOptions` is what makes that
+ * predictable before the click, and it is the only reason that field exists.
  */
 function ModelChip({
   current,
@@ -232,7 +250,9 @@ function ModelChip({
   provider,
   providerSwitchLocked,
   options,
+  effortSelected,
   onSelect,
+  onSetEffort,
   faceProps,
 }: {
   current: string | null
@@ -241,11 +261,22 @@ function ModelChip({
   provider: RunControlProvider
   providerSwitchLocked: boolean
   options: RunControlModelOption[]
+  /** `RunControlsSnapshot.effort.selected` — the RAW session selection, null = Auto. */
+  effortSelected: string | null
   onSelect: (value: string | null) => void
+  /** Absent when the pane has no effort setter wired; the card is then the plain
+   * model list it was before, with no second face to reach. */
+  onSetEffort?: (effort: string) => void
   faceProps?: ComposerFaceProps
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
+  // The row whose ladder the second face is showing, or null for the model list.
+  // Held as the OPTION, not a model id: its `effortOptions` are the ladder, and
+  // they are already correct in the snapshot the user is looking at, so the face
+  // does not wait on the re-broadcast that follows `model.set`.
+  const [effortStep, setEffortStep] = useState<RunControlModelOption | null>(null)
   const face = label ?? current
+  const groups = groupOptionsByProvider(options)
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -255,7 +286,13 @@ function ModelChip({
         aria-haspopup="menu"
         aria-expanded={open}
         title={face ? `Model: ${face}` : 'Select model'}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          // Reopening always lands on the model list. An outside click closes
+          // without running `close`, so this is also where a step left behind by
+          // one is cleared.
+          setEffortStep(null)
+          setOpen(value => !value)
+        }}
         className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)] hover:text-text-primary`}
       >
         {face ?? 'Model'}
@@ -263,47 +300,235 @@ function ModelChip({
       {open ? (
         <div
           role="menu"
-          aria-label="Model"
+          aria-label={effortStep ? 'Reasoning effort' : 'Model'}
           onKeyDown={handleMenuRovingKeyDown}
           className={`${POPOVER_PANEL} max-h-[320px] w-64 overflow-auto`}
         >
-          <div className={POPOVER_HEADING}>Model</div>
-          {options.map(option => {
-            const active = selected === option.value
-            const crossProvider =
-              (provider === 'openai') !== (option.provider === 'openai')
-            const disabled = providerSwitchLocked && crossProvider
-            return (
-              <button
-                key={option.value ?? '__provider_default__'}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                aria-disabled={disabled}
-                disabled={disabled}
-                onClick={() => {
-                  if (disabled) return
-                  onSelect(option.value)
-                  close()
-                }}
-                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
-                  active ? 'bg-white/[0.06]' : ''
-                }`}
-              >
-                <span
-                  className={`min-w-0 truncate text-xs ${active ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-primary'}`}
+          {effortStep && onSetEffort ? (
+            <ModelEffortFace
+              option={effortStep}
+              selected={effortSelected}
+              onSelect={onSetEffort}
+              onBack={() => setEffortStep(null)}
+            />
+          ) : (
+            groups.map(group => {
+              // The lock is a PROVIDER fact, so it reads at the group: four
+              // identically dimmed rows say the same thing four times, and the
+              // rows carried no visual state at all before (native `disabled`
+              // alone paints nothing).
+              const groupLocked =
+                providerSwitchLocked &&
+                (provider === 'openai') !== (group.provider === 'openai')
+              return (
+                <div
+                  key={group.provider}
+                  className={groupLocked ? 'opacity-40' : undefined}
                 >
-                  {option.label}
-                </span>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-subtle">
-                  {formatProvider(option.provider)}
-                </span>
-              </button>
-            )
-          })}
+                  {groups.length > 1 ? (
+                    <div className={POPOVER_HEADING}>
+                      {formatProvider(group.provider)}
+                    </div>
+                  ) : null}
+                  {group.options.map(option => {
+                    const active = selected === option.value
+                    const hasEffort =
+                      onSetEffort != null && option.effortOptions.length > 0
+                    return (
+                      <button
+                        key={option.value ?? '__provider_default__'}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        aria-disabled={groupLocked}
+                        disabled={groupLocked}
+                        onClick={() => {
+                          if (groupLocked) return
+                          onSelect(option.value)
+                          // A model with no effort knob has no second face, so
+                          // the pick IS the whole interaction.
+                          if (hasEffort) setEffortStep(option)
+                          else close()
+                        }}
+                        className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
+                          active ? 'bg-white/[0.06]' : ''
+                        }`}
+                      >
+                        <span
+                          className={`min-w-0 truncate text-xs ${active ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-primary'}`}
+                        >
+                          {option.label}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          {/* What "Default" currently resolves to, and only while
+                            * it is the live selection — `label` is the engine's
+                            * name for the model this session RUNS, which answers
+                            * for the Default row only when Default is what is
+                            * selected. */}
+                          {option.value === null && active && label ? (
+                            <span className="text-[11px] text-text-ghost">
+                              {label}
+                            </span>
+                          ) : null}
+                          {hasEffort ? <StepChevron /> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })
+          )}
         </div>
       ) : null}
     </div>
+  )
+}
+
+/** Provider groups in first-appearance order, so the engine's own option order
+ * (`getModelOptions()`, Default first) survives the grouping. */
+function groupOptionsByProvider(
+  options: RunControlModelOption[],
+): { provider: RunControlProvider; options: RunControlModelOption[] }[] {
+  const groups: { provider: RunControlProvider; options: RunControlModelOption[] }[] = []
+  for (const option of options) {
+    const group = groups.find(entry => entry.provider === option.provider)
+    if (group) group.options.push(option)
+    else groups.push({ provider: option.provider, options: [option] })
+  }
+  return groups
+}
+
+/** The chevron marking a row that leads to an effort ladder. */
+function StepChevron() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-text-ghost"
+      aria-hidden
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+
+/**
+ * The model card's SECOND face: one model's effort ladder.
+ *
+ * The levels are ordinal, so they are drawn as one divided rail filled up to the
+ * chosen level rather than as a list of equal rows — the same reason the rail's
+ * own effort face shows a word and not a number. Two things fall out of that for
+ * free: the fill says how far up you are, and a rail that runs out sooner says
+ * the model tops out sooner. Levels
+ * come from the option the user picked, so this face is correct in the same
+ * frame the pick happens, before the sidecar's re-broadcast lands.
+ *
+ * `selected` is the RAW session selection, not the applied tier, for the reason
+ * `ReasoningChip` gives: an env or provider default must not read back as a
+ * level the user chose. Auto is therefore an empty rail, and it is a control of
+ * its own rather than a rung, because it is not a point on the scale.
+ */
+function ModelEffortFace({
+  option,
+  selected,
+  onSelect,
+  onBack,
+}: {
+  option: RunControlModelOption
+  selected: string | null
+  onSelect: (effort: string) => void
+  onBack: () => void
+}) {
+  const levels = option.effortOptions
+  const currentIndex = selected === null ? -1 : levels.indexOf(selected)
+  const isAuto = selected === null
+  return (
+    <>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onBack}
+        className="flex w-full items-center gap-1.5 rounded-md px-2 pb-1.5 pt-1 text-left text-xs text-[light-dark(#0e7490,#22d3ee)] transition-colors hover:bg-white/5"
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0 text-text-ghost"
+          aria-hidden
+        >
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        <span className="min-w-0 truncate">{option.label}</span>
+      </button>
+      <div className="flex items-center justify-between px-2 pb-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
+          Effort
+        </span>
+        <span className="flex items-center gap-1.5">
+          {currentIndex >= 0 ? (
+            <span className="text-[11px] text-tone-warn">
+              {formatEffort(levels[currentIndex]!)}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={isAuto}
+            onClick={() => onSelect('auto')}
+            className={`rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+              isAuto
+                ? 'bg-white/[0.06] text-tone-warn'
+                : 'text-text-subtle hover:text-text-primary'
+            }`}
+          >
+            Auto
+          </button>
+        </span>
+      </div>
+      {/* One divided rail, not six buttons: hairline dividers in the panel's own
+        * colour keep the rungs separable while the bar still reads as a single
+        * meter, so a full bar means "this model's ceiling" rather than "six of
+        * six things are on". The buttons carry the vertical padding, so the hit
+        * target is the row height and not the 6px bar. */}
+      <div className="flex px-2 pb-1">
+        {levels.map((level, index) => {
+          const on = currentIndex >= 0 && index <= currentIndex
+          return (
+            <button
+              key={level}
+              type="button"
+              role="menuitemradio"
+              aria-checked={index === currentIndex}
+              aria-label={formatEffort(level)}
+              title={formatEffort(level)}
+              onClick={() => onSelect(level)}
+              className="flex-1 py-1.5"
+            >
+              <span
+                className={`block h-1.5 border-r border-surface-raised transition-colors ${
+                  index === 0 ? 'rounded-l-full' : ''
+                } ${index === levels.length - 1 ? 'rounded-r-full border-r-0' : ''} ${
+                  on ? 'bg-tone-warn' : 'bg-white/15'
+                }`}
+              />
+            </button>
+          )
+        })}
+      </div>
+    </>
   )
 }
 
@@ -1349,7 +1574,9 @@ export function ComposerActionsBar({
               provider={runControls.model.provider}
               providerSwitchLocked={runControls.model.providerSwitchLocked}
               options={runControls.model.options}
+              effortSelected={runControls.effort.selected}
               onSelect={onSetModel}
+              onSetEffort={onSetEffort}
               faceProps={faceProps('model')}
             />
             <RailSep />

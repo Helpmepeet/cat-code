@@ -2681,6 +2681,7 @@ function liveRunControls(
           value: model,
           label: currentLabel,
           provider: model.startsWith('gpt-') ? 'openai' : 'anthropic',
+          effortOptions: ['low', 'medium', 'high'],
         },
       ],
     },

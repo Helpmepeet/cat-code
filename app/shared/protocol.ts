@@ -2198,6 +2198,22 @@ export type RunControlModelOption = {
   label: string
   /** Resolved request route if this option is selected in the current session. */
   provider: RunControlProvider
+  /**
+   * The effort levels THIS option would offer, resolved at the sidecar by the
+   * engine's own `modelSupportsEffort` / `getSupportedEffortLevels` over the
+   * model the option's value resolves to (`parseUserSpecifiedModel`, the same
+   * resolver `getMainLoopModel` uses). Empty when the model takes no effort
+   * knob at all.
+   *
+   * Additive alongside `RunControlsSnapshot.effort.options`, which answers only
+   * for the CURRENT model and therefore cannot say what a row a user has not
+   * picked yet would offer. The composer's model card needs that BEFORE the
+   * pick: the ladder's length is a property of the model and some models have no
+   * ladder at all, a switch silently drops a level the new model cannot take
+   * (`reconcileEffortForModel`), and the card's second face has to know whether
+   * the row it just applied has one at all.
+   */
+  effortOptions: string[]
 }
 
 export type RunControlsSnapshot = {
