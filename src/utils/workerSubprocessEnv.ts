@@ -26,10 +26,16 @@ export const WORKER_ENV_ALLOWLIST_FLAG = 'CAT_CODE_WORKER_ENV_ALLOWLIST'
  * says why it is here and what breaks without it.
  *
  * Deliberately NOT here, and each is a live variable on the operator's machine:
- *   SSH_AUTH_SOCK          a worker can sign and authenticate as the operator
+ *   SSH_AUTH_SOCK          a worker can authenticate and sign as the operator
  *                          for as long as the agent is unlocked. Excluding it
- *                          stops a worker's git fetch/push over SSH, which is
- *                          consistent with CLAUDE.md saying workers do not push.
+ *                          costs this repo nothing: origin is an https remote,
+ *                          and neither a signing key nor commit.gpgsign is
+ *                          configured, so no git path here reaches the agent.
+ *                          Authenticated git over the network fails for a
+ *                          worker regardless, because the osxkeychain
+ *                          credential helper needs SECURITYSESSIONID, which is
+ *                          also excluded. That is the intended outcome, not a
+ *                          gap: the operator pushes, workers do not.
  *   CLAUDE_CODE_MESSAGING_TOKEN, CLAUDE_CODE_MESSAGING_SOCKET
  *                          together a capability handle onto the cross-session
  *                          messaging plane, not an API secret. A worker holding
