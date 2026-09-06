@@ -2,10 +2,11 @@
 
 **Date:** 2026-09-06
 **Status:** Findings only. Nothing fixed, nothing changed in `src/` or `app/`.
-**Revision:** rewritten after an adversarial review; every claim below was
-re-derived from source or transcript. §5 of the first version was refuted and is
-now recorded as such. Counts, timestamps and one quotation were wrong in the
-first version and are corrected here.
+**Revision:** third pass. Rewritten after an adversarial review, then corrected
+again after a peer critique of the fix direction. Every claim was re-derived from
+source or transcript. §5 of the first version was refuted; the classification
+count, the sweep-kill enforcement claim, and the framing of §4 were wrong in
+later versions and are corrected here.
 **Scope:** the subagent escalation path (`ask_orchestrator`, `SendMessage`), the
 delegation boundary (`ALL_AGENT_DISALLOWED_TOOLS`, `ClaudeCli`), auto mode's view
 of both, and the coordinator-to-worker message channel.
@@ -130,7 +131,7 @@ so.
 
 ---
 
-## 4. The nested-delegation front door, and the fallback through `Bash`
+## 4. The granted delegation channel, and the fallback through `Bash`
 
 `CLAUDE_CLI_TOOL_NAME` sits at `src/constants/tools.ts:95`, inside
 `ASYNC_AGENT_BASE_ALLOWED_TOOLS` — the default tool grant for every async
@@ -138,6 +139,22 @@ subagent, two lines below `ASK_ORCHESTRATOR_TOOL_NAME`. It is not in
 `ALL_AGENT_DISALLOWED_TOOLS`. So a subagent may not use `Agent`, and is handed by
 default a tool whose purpose is launching a nested Claude CLI session. That is
 also what `ToolSearch` handed Wilkes.
+
+**This is deliberate, and that changes what the defect is.** Commit `b35072ba`
+(2026-05-21) says so in its own message: the tool was wired into "the base tool
+registry, the async-agent allowed-tool list, and the Agent Mode coding-worker
+role prompts and allowedTools." The intended use is stated at
+`src/agent-mode/rolePrompts.ts:63`: *"Use ClaudeCli only for a narrow advisory
+pass (a review, second opinion, or focused read-only investigation)… Never
+delegate your assigned implementation work to it."*
+
+So Ritchie and Goldstine did not slip through a hole; they exercised a granted
+capability. The defect is that the grant's **scope** does not match its stated
+intent. It is default-on for every async subagent, while the documented purpose
+is a bounded advisory pass by an Agent Mode coding worker that is separately told
+how to use it. The repository therefore holds two policies at once: internal
+recursive delegation is prohibited, and external delegated agent loops are
+granted broadly and described narrowly.
 
 Both workers used it **first**, and it failed:
 
@@ -264,8 +281,9 @@ const exitCode =
 
 Two problems, not one. The value is opaque *and* misleading: under the universal
 `128 + N` convention it decodes as signal 16, which on macOS is SIGURG. SIGTERM's
-conventional code is 143. A model that applies the convention gets a wrong
-answer, not no answer.
+conventional code is 143 — and the same file already defines it, `const SIGTERM =
+143`, sixteen lines above the handler that returns 144. The file contradicts
+itself.
 
 Who sent the SIGTERM is answered in Ritchie's own transcript, which the first
 version of this report did not check. At 12:48:55.422 Ritchie ran, described as
@@ -291,10 +309,16 @@ machine-wide sweep at 12:48:43 —
 ×2 and 12:47:41; at least one targeted group (37997/37999/38000) had an elapsed
 time placing its start around 12:45:40, which is not obviously Ritchie's.
 
-`CLAUDE.md` §4 bans exactly this pattern, and `.claude/hooks/block-sweep-kill.sh`
-enforces it for Claude Code sessions. Cat Code's own `Bash` tool applied no such
-guard to a subagent. Whether another worker's engine was destroyed cannot be
-recovered from the transcripts.
+`CLAUDE.md` §4 bans exactly this pattern. The hook that enforces it for Claude
+Code sessions would **not** have caught this one: `.claude/hooks/block-sweep-kill.sh`
+deliberately permits a plain `kill 12345` (its own header lists that form as
+still-allowed) and fires only on `pkill`/`killall` or a discovery-to-kill
+pipeline inside one command. Ritchie ran the sweep in one command and the numeric
+kill in a later one. So porting the hook unchanged into Cat Code would not close
+this; the correct control is ownership — a worker may terminate only process
+trees registered to it, which the runtime already tracks per `agentId` for shell
+tasks. Whether another worker's engine was destroyed cannot be recovered from the
+transcripts.
 
 ---
 
@@ -359,8 +383,14 @@ session, with different escalation capability, neither told which it had.
 
 ## 10. Auto mode allowed all of it, and could not have done otherwise
 
-Session totals: **154 auto-mode classifications, 154 `allow`, 0 denials** —
+Session totals: **106 actions classified** (93 `Bash`, 7 `ClaudeCli`, 6 `User`)
+and **97 recorded permission decisions, every one `allow`, zero denials** —
 covering all seven `ClaudeCli` calls and all eight shell spawns.
+
+(An earlier revision said "154 classifications, 154 allows". That counted
+`"behavior": "allow"` occurrences in the debug log, most of which sit inside
+permission-rule *suggestion* objects rather than decisions — the same
+string-is-not-an-event error this report flags in §14, made by this report.)
 
 ### 10.1 On the `ClaudeCli` path the classifier never sees the configuration
 
@@ -448,19 +478,50 @@ from the worker's result text (`extractHandoffStatus` in
 
 ---
 
+## 11b. Two containment gaps under the delegation channel
+
+Neither is about who may delegate; both are about what a granted child can leave
+behind.
+
+**`ClaudeCli` does not own its process tree.** `ClaudeCliTool` spawns with plain
+`spawn` and, on timeout or abort, calls `child.kill('SIGKILL')` on the direct
+child only. `ShellCommand` by contrast has `killProcessGroupSync`, and registered
+background shell tasks are attributed to a worker and killed when it exits
+(`src/tasks/LocalShellTask/killShellTasks.ts`). So a `ClaudeCli` child's own
+descendants — its MCP servers among them — can outlive it. That is the mechanism
+behind the leftover `cua-driver mcp` processes in §4, and it matters more than
+the model-validation repair.
+
+**A subagent's subprocesses inherit the environment, credentials included.**
+`subprocessEnv()` (`src/utils/subprocessEnv.ts`) returns `process.env` unless
+`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is truthy; scrubbing is off by default. So
+removing a tool from a schema does not remove the underlying authority: a worker
+with a shell still has the credentials, the account vault under `~/.cat-code/`,
+and the network. Any claim that "subagents cannot create agency" is a statement
+about tool lists, not about capability, until that environment is narrowed.
+
+---
+
 ## 12. Fix order
 
-| Defect | Cost | Note |
+| # | Change | Why here |
 |---|---|---|
-| §10.1 `ClaudeCli` hides its config from the classifier | Small | Pass the full delegated configuration, not just the prompt. No prompt tuning reaches this. |
-| §10.3 classifier has no caller identity | Small | Passing agent identity makes "a subagent must not start an agent loop" decidable from structural facts. The highest-leverage single change here. |
-| §2, §3, §9 three prompt/capability gaps | One edit each | Contract and denial must reach general-purpose and background workers, not only Agent Mode roles. §2 must account for `shouldDefer`. |
-| §8 coordinator deliveries unrecorded | Small | Record the attachment in the sidechain; also the only way to close the open question below. |
-| §6 the 144 sentinel | Small | Report the signal. 144 is not merely opaque, it decodes as SIGURG. |
-| §4 `ClaudeCli` model validation | Small | Seven calls burned on a model the target cannot run. |
-| §5 `logOperation` drops `agentId` | Small | Persist it, so a queued notification's addressee is recoverable. |
-| §7 no sweep-kill guard in Cat Code's Bash | Design | The rule exists and is enforced for Claude Code sessions only. |
-| §4 `ClaudeCli` in the default async grant | Design | If nested delegation is a boundary worth stripping `Agent` for, this is the same boundary with a different door. |
+| 1 | Move `ClaudeCli` out of `ASYNC_AGENT_BASE_ALLOWED_TOOLS` into the explicit-grant mechanism already used for `Skill` (`ASYNC_AGENT_EXPLICIT_GRANT_TOOLS`) | Decides whether everything below is hardening an allowed feature or closing an unintended one. `generalPurposeAgent.ts:60` is `tools: ['*']`, so a wildcard must not count as an explicit grant. |
+| 2 | Enforce the grant deterministically in `ClaudeCli.checkPermissions` using `ToolUseContext.agentId`/`agentType` (`src/Tool.ts:254`) | A code-level deny beats asking a classifier to apply a rule. Also enforce the prompt's own limits — no `acceptEdits`/`bypassPermissions` from a worker. |
+| 3 | Give `ClaudeCli` the same process-group ownership and worker-scoped cleanup that `Bash` already has (§11b) | Stops granted children leaving descendants behind. |
+| 4 | Pass the full delegated configuration to the classifier (§10.1) | Defence in depth and audit, *after* the deterministic decision — not a second authorization layer. |
+| 5 | One harness-authored line per worker stating whether it may delegate and which escalation channel it has (§2, §3, §9) | Replaces four hand-maintained prompt variants. Derived from the resolved capability, not asserted separately. |
+| 6 | Make `ask_orchestrator` terminal: it should end the worker loop and construct the blocked handoff itself | Removes the echo, the misleading name, and the reliance on the model volunteering to stop. |
+| 7 | Ownership-scoped cancellation instead of raw `kill` (§7) | The runtime already knows which shell tasks belong to which `agentId`. A regex on command shape does not. |
+| 8 | Diagnostics: record coordinator-message origin in sidechains; add `agentId` to queue-operation records; replace 144 with the real signal | Cheap, and §8's open question needs the first of these or an instrumented request. |
+| 9 | Narrow the subprocess environment for workers (§11b) | Decides whether the boundary is a tool-list convention or an actual containment boundary. Largest scope; needs a decision, not a patch. |
+
+Dropped from the previous ordering: classifier caller identity as the top item
+(superseded by 2, which enforces the same fact in code), porting the sweep-kill
+hook (§7 — it would not have caught this), and static `ClaudeCli` model
+validation (it would have pushed both workers to the less-governed shell route
+sooner; reject incompatible provider namespaces instead and let the external CLI
+own its own model catalog).
 
 Whether a classifier should ever treat its own recursion as the approval gate
 that satisfies `Create Unsafe Agents` is a policy question, not a patch.
