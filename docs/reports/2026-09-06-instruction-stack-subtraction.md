@@ -2,6 +2,19 @@
 
 Date: 2026-09-06. Status: analysis only; no prompt edits authorized or applied.
 
+**Superseded in part.** A later comparative pass, recorded in
+[2026-09-06-instruction-stack-comparative-decisions.md](2026-09-06-instruction-stack-comparative-decisions.md),
+supplies the outward comparison this report's recommendations lack: across the
+entire recommendations region below there are zero references to any other
+harness. Two dispositions change there. **S4 is contested**: Codex's newest
+template teaches sentence-level composition in the same terms this report
+proposes cutting, and it grew communication text while halving execution
+guidance. **T2 and the TodoWrite items are non-interactive only**: `TodoWrite`
+is disabled whenever the session is interactive, so they reach `-p` runs alone.
+The comparative pass also found a model-facing instruction outside every
+`prompt.ts` file, in TodoWrite's tool-result text, which this report's scope
+could not have reached.
+
 ## Decision and evidence standard
 
 **Recommendation: remove redundant instruction and generic tutorials before removing behavioral constraints. Do not adopt a percentage-reduction target, replace the entire harness with a tiny prompt, or use another product's prompt length as permission to keep ours unchanged.**
