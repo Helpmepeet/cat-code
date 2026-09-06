@@ -404,7 +404,8 @@ toAutoClassifierInput(input) {
 ```
 
 It receives the tool name and the delegated prompt. Not `permission_mode`, not
-`tools`, not `model`, not `cwd`. The debug log confirms it: the classified action
+`model`, not `effort`, not `max_turns`, not `cwd`. (An earlier revision also
+listed `tools`; `ClaudeCli` has no such field.) The debug log confirms it: the classified action
 reads `ClaudeCli Goal: Produce a read-only desktop animation design discovery
 report…`, no flags anywhere.
 
@@ -496,9 +497,19 @@ the model-validation repair.
 `subprocessEnv()` (`src/utils/subprocessEnv.ts`) returns `process.env` unless
 `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB` is truthy; scrubbing is off by default. So
 removing a tool from a schema does not remove the underlying authority: a worker
-with a shell still has the credentials, the account vault under `~/.cat-code/`,
-and the network. Any claim that "subagents cannot create agency" is a statement
-about tool lists, not about capability, until that environment is narrowed.
+with a shell still has the credentials in the environment and the network. Any
+claim that "subagents cannot create agency" is a statement about tool lists, not
+about capability, until that environment is narrowed.
+
+Two corrections to the scope of that, established while implementing §12. The
+account vault under `~/.cat-code/` does **not** belong on that list: its path
+derives from the home directory, not from an environment variable, so no
+environment change reaches it. And the existing scrub flag cannot be the
+mechanism: subagents run inside this process and `subprocessEnv()` takes no
+caller argument, so a process-wide flag cannot tell a worker's shell from the
+operator's, and enabling it to contain a worker would degrade the operator's own
+shell, hooks, MCP servers and LSP for the session. See
+`docs/reports/2026-09-06-worker-subprocess-environment.md`.
 
 ---
 
