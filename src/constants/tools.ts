@@ -92,7 +92,6 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   FILE_WRITE_TOOL_NAME,
   NOTEBOOK_EDIT_TOOL_NAME,
   ASK_ORCHESTRATOR_TOOL_NAME,
-  CLAUDE_CLI_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
   ENTER_WORKTREE_TOOL_NAME,
@@ -104,10 +103,17 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
  * agent definition names them in its `tools` list. Skill is orchestrator-only
  * by default so the orchestrator doctrine ("workers do not have Skill access")
  * is true unless a role explicitly grants it (owner decision 2026-07-30, C10).
+ * ClaudeCli launches a nested external Claude CLI agent loop, so it is a
+ * narrow advisory tool for a role that names it (the Agent Mode coding
+ * worker), not a default grant for every worker — a wildcard `tools: ['*']`
+ * definition does not count as naming it (see resolveAgentTools).
  * ALL_AGENT_DISALLOWED_TOOLS stays absolute: this escape hatch never reopens a
  * recursion or authorization boundary.
  */
-export const ASYNC_AGENT_EXPLICIT_GRANT_TOOLS = new Set([SKILL_TOOL_NAME])
+export const ASYNC_AGENT_EXPLICIT_GRANT_TOOLS = new Set([
+  SKILL_TOOL_NAME,
+  CLAUDE_CLI_TOOL_NAME,
+])
 
 const ASYNC_AGENT_V1_TASK_TOOLS = [TODO_WRITE_TOOL_NAME] as const
 
@@ -174,8 +180,8 @@ export const IN_PROCESS_TEAMMATE_ALLOWED_TOOLS = new Set([
  * - ExitPlanModeTool: Plan mode is a main thread abstraction.
  * - TaskStopTool: Requires access to main thread task state.
  * - TungstenTool: Uses singleton virtual terminal abstraction that conflicts between agents.
- * - SkillTool: Orchestrator-only by default; an agent definition that names it
- *   in `tools` still gets it (ASYNC_AGENT_EXPLICIT_GRANT_TOOLS).
+ * - SkillTool, ClaudeCliTool: Default-off; an agent definition that names one
+ *   of these in `tools` still gets it (ASYNC_AGENT_EXPLICIT_GRANT_TOOLS).
  *
  * ENABLE LATER (NEED WORK):
  * - MCPTool: TBD

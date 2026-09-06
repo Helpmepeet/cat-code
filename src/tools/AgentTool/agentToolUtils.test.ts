@@ -7,6 +7,7 @@ import {
 } from '../../bootstrap/state.js'
 import { FORK_WORKER_RESULT_TAG } from '../../constants/xml.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { CLAUDE_CLI_TOOL_NAME } from '../ClaudeCliTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { SKILL_TOOL_NAME } from '../SkillTool/constants.js'
@@ -328,6 +329,103 @@ describe('resolveAgentTools Skill policy for async workers', () => {
     ])
 
     expect(toolNames).toEqual(['Read'])
+  })
+})
+
+describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  afterEach(() => {
+    resetStateForTests()
+  })
+
+  function resolveNames(tools: string[], isAsync: boolean): string[] {
+    return resolveAgentTools(
+      {
+        tools,
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      getTools(getEmptyToolPermissionContext()),
+      isAsync,
+    ).resolvedTools.map(tool => tool.name)
+  }
+
+  test('ClaudeCli is present in the base tool pool', () => {
+    expect(
+      getTools(getEmptyToolPermissionContext()).map(tool => tool.name),
+    ).toContain(CLAUDE_CLI_TOOL_NAME)
+  })
+
+  // ClaudeCli launches a nested external Claude CLI agent loop. A wildcard
+  // `tools: ['*']` definition must not count as naming it, for either spawn
+  // shape: the incident this guards against was a foreground (isAsync=false)
+  // general-purpose worker that used a wildcard grant to launch nested
+  // engines instead of doing its own assigned work.
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'withholds ClaudeCli from a wildcard %s worker',
+    (_shape, isAsync) => {
+      expect(resolveNames(['*'], isAsync)).not.toContain(CLAUDE_CLI_TOOL_NAME)
+    },
+  )
+
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'grants ClaudeCli to a %s worker whose definition names it',
+    (_shape, isAsync) => {
+      expect(resolveNames(['Read', CLAUDE_CLI_TOOL_NAME], isAsync)).toContain(
+        CLAUDE_CLI_TOOL_NAME,
+      )
+    },
+  )
+
+  test('grants ClaudeCli to the Agent Mode coding worker, which names it explicitly', async () => {
+    const { AGENT_MODE_CODING_WORKER } = await import(
+      '../../agent-mode/rolePrompts.js'
+    )
+    const toolNames = resolveAgentTools(
+      AGENT_MODE_CODING_WORKER,
+      getTools(getEmptyToolPermissionContext()),
+      true,
+    ).resolvedTools.map(tool => tool.name)
+
+    expect(toolNames).toContain(CLAUDE_CLI_TOOL_NAME)
+  })
+
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'withholds ClaudeCli from the general-purpose agent, a wildcard definition, for %s spawns',
+    async (_shape, isAsync) => {
+      const { GENERAL_PURPOSE_AGENT } = await import(
+        './built-in/generalPurposeAgent.js'
+      )
+      const toolNames = resolveAgentTools(
+        GENERAL_PURPOSE_AGENT,
+        getTools(getEmptyToolPermissionContext()),
+        isAsync,
+      ).resolvedTools.map(tool => tool.name)
+
+      expect(toolNames).not.toContain(CLAUDE_CLI_TOOL_NAME)
+    },
+  )
+
+  test('does not let an explicit request reopen the recursion boundary', () => {
+    const toolNames = resolveNames(
+      ['Read', CLAUDE_CLI_TOOL_NAME, AGENT_TOOL_NAME],
+      true,
+    )
+
+    expect(toolNames).toEqual(['Read', CLAUDE_CLI_TOOL_NAME])
   })
 })
 
