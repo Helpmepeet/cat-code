@@ -5,6 +5,12 @@
 **Audience:** whoever does the rebuild. The operator has decided it should happen
 and that it needs a stronger model than the session that wrote this file.
 
+**The inventory is of the prompt as it stands now**, after twelve items landed on
+2026-09-06 in `7e8ae0d8..740bbe27`. It is not the pre-change state. Those twelve
+removed `ERROR HANDLING` and `ABSTRACTION` outright, trimmed `SCOPE`, `TASK DOMAIN`
+and `CAPABILITY`, deleted the GPT decision checklist, and added `PREPARATION RULE`
+and `AUTHORIZATION SCOPE`; the sibling reports in section 8 carry the reasoning.
+
 This exists because a rebuild from an incomplete inventory loses content silently,
 and the inventory that guided today's work **was** incomplete. Read section 1
 before trusting any earlier list.
