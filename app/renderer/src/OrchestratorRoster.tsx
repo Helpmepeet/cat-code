@@ -189,8 +189,8 @@ function WorkerRow({
       className={ROW_CLASS}
       aria-label={workerAccessibleLabel(worker)}
       // The id is raised for P4-32b's read-only `TasksDialog` worker drilldown
-      // (ruling D1); App currently opens the dialog and drops it, so a click
-      // lands on the workers list rather than this worker. Not broken, deferred.
+      // (ruling D1); App threads it through as `focusAgentId`, so a click opens
+      // the dialog on this worker.
       onClick={() => onOpen?.(worker.agentId)}
       title={role?.label ?? undefined}
     >

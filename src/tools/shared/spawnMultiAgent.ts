@@ -610,7 +610,6 @@ async function handleSpawnInProcess(
     allocationId,
     from: 'reserved',
     to: 'starting',
-    // backendType is known immediately for in-process teammates.
   })
 
   let spawnedTask:

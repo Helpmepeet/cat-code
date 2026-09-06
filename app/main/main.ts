@@ -1375,13 +1375,21 @@ function createWindow(): void {
     // responsive layer (six `sm:grid-cols-*` uses, nothing else), so the window
     // must not shrink past the widest composition that cannot reflow.
     //
-    // Width 852 = 48 sidebar rail (`Sidebar.tsx:407` `w-12 shrink-0`, the only
-    // non-shrinking flow chrome) + 64 chat-pane padding (`App.tsx:3567` `p-8`)
-    // + 740 transcript/composer column (`App.tsx:3661` and
-    // `TranscriptView.tsx:233` `max-w-[740px]`, P4-24). The two pages with wider
-    // columns are `max-w` + `mx-auto` and reflow: Settings' 660 column beside its
-    // `w-[240px] shrink-0` rail (`SettingsShell.tsx:294,356`), and Accounts' 1000
-    // (`AccountsPage.tsx:768`), which already reflows at the 1100 default above.
+    // Width 852 is an ergonomic minimum, NOT a clipping floor: nothing in the
+    // shell breaks below it. Every surface reflows — the transcript column is
+    // `max-w-[var(--transcript-width)]` + `mx-auto`, prose carries
+    // `min-w-0 truncate`, and wide content (code, diffs, tool output) scrolls
+    // inside its own `overflow-x-auto` box. The collapsed sidebar rail
+    // (`Sidebar.tsx`, `w-12 shrink-0`) is the only non-shrinking flow chrome.
+    //
+    // This once carried an arithmetic derivation ending in 852, anchored to a
+    // hardcoded 740px transcript column. That literal is now the
+    // `--transcript-width` token (`app/renderer/src/theme.css`) at a different
+    // value, so the arithmetic stopped following from anything while still
+    // reading as authoritative. It is deleted rather than re-pinned: a
+    // derivation that lives in prose cannot be kept honest by the edit that
+    // breaks it. Below roughly rail + token the transcript simply renders
+    // narrower than its designed measure.
     //
     // Height 467 = 40 tab bar (`TabBar.tsx:119` `h-10`) + 64 chat-pane padding
     // + 16 dock gap (`App.tsx:3567` `gap-4`) + 83 composer dock at rest (36

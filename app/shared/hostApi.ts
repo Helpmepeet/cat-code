@@ -95,10 +95,10 @@ export type SessionDescriptor = {
    * `lastMessageSentAt` / `titleUpdatedAt` precedent).
    *
    * OPTIONAL, unlike `forked` / `parked`, and deliberately so for now: the host
-   * always sets it (`descriptorFromRow`), but 22 descriptor FIXTURES under
+   * always sets it (`descriptorFromRow`), but many descriptor FIXTURES under
    * `app/main` and `app/renderer` build the type by hand, and a required field
-   * would have made this control-plane change edit twenty-two files that own
-   * nothing in it. Readers use `descriptor.name ?? null`. Tighten to required in
+   * would have made this control-plane change edit every one of those files,
+   * none of which owns anything in it. Readers use `descriptor.name ?? null`. Tighten to required in
    * the wave that touches those surfaces anyway.
    */
   name?: string | null

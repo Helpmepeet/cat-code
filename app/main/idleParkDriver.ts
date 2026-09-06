@@ -136,8 +136,8 @@ const EMPTY_PROTECTED: ReadonlySet<SessionId> = new Set()
  * on `lastMessageSentAt` and its `lastAttachedAt` is dead weight — which defeats
  * §4's own premise that "`lastAttachedAt` moves on attach/restore/spawn".
  *
- * A RESTORE is exactly where those two disagree. `registry.upsert` stamps
- * `lastAttachedAt = now` on the restored row (`app/host/registry.ts:684`) but
+ * A RESTORE is exactly where those two disagree. `registry.upsertOnSpawn` stamps
+ * `lastAttachedAt = now` on the restored row (`app/host/registry.ts`) but
  * deliberately leaves `lastMessageSentAt` at whatever the session's last turn
  * wrote, possibly in a previous run days ago. Under `??` the driver read that
  * stale stamp, scored a session the user had just reopened as idle for the whole

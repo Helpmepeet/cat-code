@@ -79,7 +79,7 @@ export function applySettingsChange(
 
     // Drop working directories that settings granted and no longer grant.
     // Only removals are reconciled: adding one has to pass the async fs
-    // validation initializePermissionContext runs (permissionSetup.ts:1026),
+    // validation `initializeToolPermissionContext` runs (`permissionSetup.ts`),
     // which this synchronous reducer cannot do, and widening the workspace
     // from another process's settings write is not a change to make silently.
     const nextDirectories = settingsDirectoryKeys(newSettings)

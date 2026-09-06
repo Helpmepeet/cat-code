@@ -111,16 +111,17 @@ export function createRealContextBreakdownExecutor(deps: {
         deps.tools,
         deps.agentDefinitions,
         undefined, // terminalWidth — grid layout only, unused here
-        // `analyzeContextUsage` reads exactly three fields off this argument —
-        // `options.mcpClients`, `options.customSystemPrompt` and
-        // `options.appendSystemPrompt` — all through `?.`, but its signature
+        // `analyzeContextUsage` reads only a few fields off this argument —
+        // `options.mcpClients`, `options.customSystemPrompt`,
+        // `options.appendSystemPrompt` and `options.mainLoopProvider` — all
+        // through `?.`, but its signature
         // declares the full `Pick<ToolUseContext, 'options'>`
-        // (`context-noninteractive.ts:73` stubs the same three for the same
+        // (`context-noninteractive.ts` stubs the same fields for the same
         // reason). `mcpClients` stays `[]` and there is still no
         // `customSystemPrompt` in the sidecar's engine config, but
         // `appendSystemPrompt` is not empty: the controller sets it to
         // `buildDesktopSystemPrompt()` (`sessionController.ts`), and
-        // `analyzeContext.ts:1071` feeds it into `buildEffectiveSystemPrompt`,
+        // `analyzeContext.ts` feeds it into `buildEffectiveSystemPrompt`,
         // whose output is what `countSystemTokens` measures. This calls that
         // same builder rather than restating part of it: naming the addendum
         // alone was a second expression of the prompt, and it drifted the moment

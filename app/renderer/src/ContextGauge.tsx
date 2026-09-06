@@ -75,9 +75,10 @@ export function ContextGauge({ usage }: { usage: ContextUsage }) {
   const percent = selectContextPercent(usage)
   const tone = toneClasses(pressureTone(percent ?? 0)).text
   const arcLength = ((percent ?? 0) / 100) * CIRCUMFERENCE
-  // Drawn AFTER the arc, and in white rather than `currentColor`, so it stays
-  // legible on both sides of itself: over the tinted arc once the session has
-  // passed it, and over the faint track while it has not.
+  // Drawn AFTER the arc, and in a fixed light/dark tone rather than
+  // `currentColor`, so it stays legible on both sides of itself: over the
+  // tinted arc once the session has passed it, and over the faint track while
+  // it has not.
   const referenceFraction = selectContextReferenceFraction(usage)
   const tick = referenceFraction == null ? null : referenceTick(referenceFraction)
   // The hover text names the mark only where one is drawn, and only in `title`,

@@ -950,12 +950,12 @@ export type ReadyFrame = {
  * — serialized to one JSON frame. This is the raw-forwarding serializer proven
  * in TRANSPORT-DECISION.md §2, NOT `createAppSessionEventMapper`.
  *
- * **User-turn provenance (`SDKUserMessage.origin`).** Five of the engine's six
- * `MessageOrigin` kinds (`src/types/message.ts:10`) are engine-INJECTED turns
+ * **User-turn provenance (`SDKUserMessage.origin`).** Most of the engine's
+ * `MessageOrigin` kinds (`src/types/message.ts`) are engine-INJECTED turns
  * that nonetheless carry `role: 'user'` — `task-notification`, `coordinator`,
- * `channel`, `teammate`, `deferred-continuation`. Until this field existed the
- * discriminant never left the engine process, so the renderer could only sniff
- * message TEXT for one of them and rendered the other four as the operator's own
+ * `channel`, `teammate`, `deferred-continuation` and `peer`. Until this field
+ * existed the discriminant never left the engine process, so the renderer could
+ * only sniff message TEXT for one of them and rendered the rest as the operator's own
  * pink right-aligned bubble. `origin` now rides the raw `SDKUserMessage` on this
  * frame (engine side: `mappers.ts` `toSDKMessageOrigin`), and
  * `transcriptProjector.ts` reads it instead of re-implementing the engine's

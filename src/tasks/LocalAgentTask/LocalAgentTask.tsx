@@ -794,9 +794,9 @@ export function backgroundAgentTask(taskId: string, getAppState: () => AppState,
 }
 
 /**
- * Unregister a foreground agent task when the agent completes without being backgrounded.
- */
-/**
+ * Unregister a foreground agent task when the agent completes without being
+ * backgrounded.
+ *
  * Returns the Codex account this task was holding, when releasing it here is
  * what ended the lease. The value is handed back rather than left for the caller
  * to fetch because `releaseCodexLease` DELETES the entry: a caller that read it

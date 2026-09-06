@@ -37,7 +37,7 @@ export function Switch() {
   )
 }
 
-/** Where it lives: riding a session tab beside the title, which is why it stays this small. */
+/** Sized for a compact inline slot. See `AgentChrome.tsx` for where it is (not) rendered. */
 export function OnATab() {
   return (
     <div className="bg-app-bg p-5 font-sans">
