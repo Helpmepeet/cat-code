@@ -14,7 +14,7 @@
 
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act } from 'react'
-import type { ComponentProps } from 'react'
+import type { ComponentProps, ReactElement } from 'react'
 
 import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { createDomTestHarness } from './domTestHarness.js'
@@ -113,11 +113,11 @@ const PERMISSION_CONTEXT: PermissionContextSnapshot = {
 
 type Recorded = { models: (string | null)[]; efforts: string[] }
 
-async function mountBar(
+function bar(
   recorded: Recorded,
   over: Partial<ComponentProps<typeof ComposerActionsBar>> = {},
-): Promise<MountedTree> {
-  return harness.mount(
+): ReactElement {
+  return (
     <ComposerActionsBar
       attachDisabled={false}
       onAttach={() => {}}
@@ -132,8 +132,15 @@ async function mountBar(
       onSetModel={value => recorded.models.push(value)}
       onSetEffort={effort => recorded.efforts.push(effort)}
       {...over}
-    />,
+    />
   )
+}
+
+async function mountBar(
+  recorded: Recorded,
+  over: Partial<ComponentProps<typeof ComposerActionsBar>> = {},
+): Promise<MountedTree> {
+  return harness.mount(bar(recorded, over))
 }
 
 function recorder(): Recorded {
@@ -163,6 +170,25 @@ function rowNamed(tree: MountedTree, label: string): HTMLElement | undefined {
 
 async function openCard(tree: MountedTree): Promise<void> {
   await click(tree.container.querySelector('[data-composer-face="model"]'))
+}
+
+async function press(target: EventTarget, key: string): Promise<void> {
+  await act(async () => {
+    target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key }))
+  })
+}
+
+function focused(): Element | null {
+  return globalThis.document.activeElement
+}
+
+function rungs(tree: MountedTree): HTMLElement[] {
+  return rows(tree).filter(row => row.getAttribute('aria-label') !== null)
+}
+
+async function openLadder(tree: MountedTree, model = 'Opus 5'): Promise<void> {
+  await openCard(tree)
+  await click(rowNamed(tree, model))
 }
 
 test('the card opens on a provider-grouped model list, one row per option', async () => {
@@ -296,4 +322,123 @@ test('a locked cross-provider group is inert and reads as one dimmed block', asy
   await click(opus)
   expect(recorded.models).toEqual([])
   expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
+})
+
+/* ── keyboard ──────────────────────────────────────────────────────────────
+ * The rail is a horizontal control inside a vertical menu, so the two
+ * keyboards have to divide the arrows between them: the menu keeps Up/Down
+ * (and walks back, Auto, then the rungs), the rail answers Left/Right, and
+ * Home/End mean the ends of the SCALE while focus is inside it.
+ */
+
+test('arriving on the ladder lands focus on the level already set', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+
+  // The pick that opened this face unmounted the row that had focus, so
+  // without this the whole face would be reachable only by tabbing back in.
+  expect(focused()?.getAttribute('aria-label')).toBe('High')
+})
+
+test('arriving with no level set lands on Auto, the control that is checked', async () => {
+  const tree = await mountBar(recorder(), {
+    runControls: {
+      ...runControls(),
+      effort: { current: null, selected: null, supported: true, options: GPT_LEVELS },
+    },
+  })
+  await openLadder(tree)
+
+  expect(focused()?.textContent).toBe('Auto')
+})
+
+test('left and right walk the rail, and stop at its ends', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+  const rail = rungs(tree)
+
+  await press(focused()!, 'ArrowLeft')
+  expect(focused()?.getAttribute('aria-label')).toBe('Medium')
+  await press(focused()!, 'ArrowRight')
+  await press(focused()!, 'ArrowRight')
+  expect(focused()?.getAttribute('aria-label')).toBe('Max')
+  // A scale has ends: arrowing off the top must not wrap round to the bottom
+  // the way the menu's own roving does.
+  await press(focused()!, 'ArrowRight')
+  expect(focused()).toBe(rail[rail.length - 1]!)
+  await press(focused()!, 'Home')
+  await press(focused()!, 'ArrowLeft')
+  expect(focused()).toBe(rail[0]!)
+})
+
+test('Home and End mean the ends of the scale while focus is in the rail', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+
+  await press(focused()!, 'End')
+  expect(focused()?.getAttribute('aria-label')).toBe('Max')
+  await press(focused()!, 'Home')
+  expect(focused()?.getAttribute('aria-label')).toBe('Low')
+})
+
+test('up and down still walk the whole face, rail included', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+
+  // The menu's own roving is untouched, so the back control and Auto stay
+  // reachable from the rail without a pointer.
+  await press(focused()!, 'ArrowUp')
+  expect(focused()?.getAttribute('aria-label')).toBe('Medium')
+  await press(focused()!, 'ArrowUp')
+  await press(focused()!, 'ArrowUp')
+  expect(focused()?.textContent).toBe('Auto')
+  await press(focused()!, 'ArrowUp')
+  expect(focused()?.getAttribute('role')).toBe('menuitem')
+})
+
+test('going back returns focus to the row that was picked', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+  // The sidecar's re-broadcast, which is what makes the picked row the checked
+  // one. Without it the fixture still names the old selection, and the row this
+  // face was opened from would not be the row focus goes back to.
+  await act(async () => {
+    await tree.render(
+      bar(recorded, {
+        runControls: { ...runControls({ selected: 'opus' }) },
+      }),
+    )
+  })
+  await click(tree.container.querySelector('[role="menuitem"]'))
+
+  // Leaving the face unmounts the focused button; dropping focus on <body>
+  // would strand a keyboard user in a menu that is still open.
+  expect(focused()?.textContent).toContain('Opus 5')
+  expect(focused()?.getAttribute('aria-checked')).toBe('true')
+})
+
+test('a rung is activated by the keyboard, not by arrowing onto it', async () => {
+  const recorded = recorder()
+  const tree = await mountBar(recorded)
+  await openLadder(tree)
+
+  await press(focused()!, 'ArrowRight')
+  // Moving focus must not write: arrow keys survey the scale, Enter picks. A
+  // rail that set effort per keypress would fire a verb per rung crossed.
+  expect(recorded.efforts).toEqual([])
+  await click(focused())
+  expect(recorded.efforts).toEqual(['max'])
+})
+
+test('Escape leaves the ladder first, and only then the card', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+
+  await press(focused()!, 'Escape')
+  // One level at a time, the way a submenu unwinds — stepping into a ladder and
+  // changing your mind should not cost the card.
+  expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
+  await press(focused() ?? tree.container, 'Escape')
+  expect(menu(tree)).toBeNull()
 })

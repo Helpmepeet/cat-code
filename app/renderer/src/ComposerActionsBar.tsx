@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -187,6 +189,15 @@ const POPOVER_PANEL =
   'absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
 const POPOVER_HEADING =
   'px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle'
+/**
+ * The keyboard's own feedback. Arrow-key roving moves focus and nothing else —
+ * activation stays on Enter/Space — so without a ring the keys appear to do
+ * nothing at all, which on a 6px-tall effort rung is the difference between a
+ * usable control and a dead one. Inset, because the panel scrolls and an
+ * outward ring on the first or last row would be clipped by it.
+ */
+const MENU_FOCUS_RING =
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2'
 // The account/context cluster rides `ml-auto` at the rail's right edge, so its
 // popovers anchor right (a `left-0` panel would overflow off-screen). Own padding
 // per section (no panel-wide `p-1.5`), matching the prototype's sectioned popovers.
@@ -275,6 +286,21 @@ function ModelChip({
   // they are already correct in the snapshot the user is looking at, so the face
   // does not wait on the re-broadcast that follows `model.set`.
   const [effortStep, setEffortStep] = useState<RunControlModelOption | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // Set by the back control, read by the effect below. Leaving the second face
+  // unmounts the button that had focus, which would otherwise drop it on
+  // `<body>` — the same fall `usePopoverFocus` exists to prevent when the whole
+  // panel closes. Coming back is the same event one level down.
+  const returningToList = useRef(false)
+  useEffect(() => {
+    if (effortStep !== null || !returningToList.current) return
+    returningToList.current = false
+    // The row you came from IS the checked one: reaching the second face
+    // applied the pick.
+    panelRef.current
+      ?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
+      ?.focus()
+  }, [effortStep])
   const face = label ?? current
   const groups = groupOptionsByProvider(options)
   return (
@@ -299,6 +325,7 @@ function ModelChip({
       </button>
       {open ? (
         <div
+          ref={panelRef}
           role="menu"
           aria-label={effortStep ? 'Reasoning effort' : 'Model'}
           onKeyDown={handleMenuRovingKeyDown}
@@ -309,7 +336,10 @@ function ModelChip({
               option={effortStep}
               selected={effortSelected}
               onSelect={onSetEffort}
-              onBack={() => setEffortStep(null)}
+              onBack={() => {
+                returningToList.current = true
+                setEffortStep(null)
+              }}
             />
           ) : (
             groups.map(group => {
@@ -350,7 +380,7 @@ function ModelChip({
                           if (hasEffort) setEffortStep(option)
                           else close()
                         }}
-                        className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
+                        className={`${MENU_FOCUS_RING} flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
                           active ? 'bg-white/[0.06]' : ''
                         }`}
                       >
@@ -435,6 +465,41 @@ function StepChevron() {
  * level the user chose. Auto is therefore an empty rail, and it is a control of
  * its own rather than a rung, because it is not a point on the scale.
  */
+/**
+ * Where a key lands inside the rail, as an index into the rungs. The rail is a
+ * horizontal control living inside a vertical menu, so it answers Left/Right
+ * itself and leaves Up/Down to the menu's own roving, which walks the face's
+ * items in order (back, Auto, then the rungs).
+ *
+ * Home/End are answered here too, for the same reason: inside the rail they
+ * mean the ends of the SCALE, which is not what they mean in the menu around
+ * it. Handling them first is what makes that true — `handleMenuRovingKeyDown`
+ * returns early on an already-defaulted event.
+ *
+ * Movement CLAMPS rather than wrapping, unlike the menu: a scale has ends, and
+ * arrowing off `Ultra` back round to `Low` would be a long way from what the
+ * key was asking for.
+ */
+function nextRungIndex(
+  key: string,
+  currentIndex: number,
+  count: number,
+): number | null {
+  if (count <= 0) return null
+  switch (key) {
+    case 'ArrowLeft':
+      return Math.max(0, (currentIndex < 0 ? 0 : currentIndex) - 1)
+    case 'ArrowRight':
+      return Math.min(count - 1, currentIndex + 1)
+    case 'Home':
+      return 0
+    case 'End':
+      return count - 1
+    default:
+      return null
+  }
+}
+
 function ModelEffortFace({
   option,
   selected,
@@ -449,13 +514,53 @@ function ModelEffortFace({
   const levels = option.effortOptions
   const currentIndex = selected === null ? -1 : levels.indexOf(selected)
   const isAuto = selected === null
+  const faceRef = useRef<HTMLDivElement>(null)
+  // Arriving here is a KEYBOARD move as often as a click: the pick that opened
+  // this face unmounted the row that had focus. Land on whatever is currently
+  // checked — the level, or Auto when no level is set — so the first arrow key
+  // moves from where the user already is.
+  useEffect(() => {
+    const face = faceRef.current
+    if (!face) return
+    const landing =
+      face.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      face.querySelector<HTMLElement>('[role="menuitemradio"]')
+    landing?.focus()
+  }, [])
+
+  /**
+   * Escape leaves the LADDER, not the card. A second Escape then closes, because
+   * this handler stops only the first one from reaching the document listener
+   * `usePopoverFocus` dismisses on — the menu convention, where Escape unwinds
+   * one level at a time. Without it the two-face card would be the one place in
+   * the composer where stepping in and changing your mind costs you the popover.
+   */
+  function onFaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== 'Escape' || event.defaultPrevented) return
+    event.preventDefault()
+    event.stopPropagation()
+    onBack()
+  }
+
+  function onRailKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.defaultPrevented) return
+    const rungs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button'),
+    )
+    const active = rungs.indexOf(document.activeElement as HTMLButtonElement)
+    const target = nextRungIndex(event.key, active, rungs.length)
+    if (target === null) return
+    event.preventDefault()
+    rungs[target]?.focus()
+  }
+
   return (
-    <>
+    <div ref={faceRef} onKeyDown={onFaceKeyDown}>
       <button
         type="button"
         role="menuitem"
         onClick={onBack}
-        className="flex w-full items-center gap-1.5 rounded-md px-2 pb-1.5 pt-1 text-left text-xs text-[light-dark(#0e7490,#22d3ee)] transition-colors hover:bg-white/5"
+        className={`${MENU_FOCUS_RING} flex w-full items-center gap-1.5 rounded-md px-2 pb-1.5 pt-1 text-left text-xs text-[light-dark(#0e7490,#22d3ee)] transition-colors hover:bg-white/5`}
       >
         <svg
           width="12"
@@ -488,7 +593,7 @@ function ModelEffortFace({
             role="menuitemradio"
             aria-checked={isAuto}
             onClick={() => onSelect('auto')}
-            className={`rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+            className={`${MENU_FOCUS_RING} rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
               isAuto
                 ? 'bg-white/[0.06] text-tone-warn'
                 : 'text-text-subtle hover:text-text-primary'
@@ -503,7 +608,7 @@ function ModelEffortFace({
         * meter, so a full bar means "this model's ceiling" rather than "six of
         * six things are on". The buttons carry the vertical padding, so the hit
         * target is the row height and not the 6px bar. */}
-      <div className="flex px-2 pb-1">
+      <div className="flex px-2 pb-1" onKeyDown={onRailKeyDown}>
         {levels.map((level, index) => {
           const on = currentIndex >= 0 && index <= currentIndex
           return (
@@ -515,7 +620,7 @@ function ModelEffortFace({
               aria-label={formatEffort(level)}
               title={formatEffort(level)}
               onClick={() => onSelect(level)}
-              className="flex-1 py-1.5"
+              className={`${MENU_FOCUS_RING} flex-1 rounded-sm py-1.5`}
             >
               <span
                 className={`block h-1.5 border-r border-surface-raised transition-colors ${
@@ -528,7 +633,7 @@ function ModelEffortFace({
           )
         })}
       </div>
-    </>
+    </div>
   )
 }
 
