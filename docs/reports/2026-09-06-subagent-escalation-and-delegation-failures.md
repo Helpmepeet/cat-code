@@ -309,3 +309,141 @@ The session did recover. It produced its sweep.
 - Whether any nested engine ever used its `cua-driver` MCP server. It was
   attached to at least six processes; nothing in the evidence shows a GUI call
   being made.
+
+---
+
+## 11. Addendum: auto mode, and the front door §4 missed
+
+Added 2026-09-06 after review. §4 said `Bash` walks through the delegation
+boundary. That is true but it is the secondary path, and it left the operator's
+question unanswered: the session was in auto mode, so why did auto mode not
+block any of it?
+
+### 11.1 `ClaudeCli` is a sanctioned subagent capability
+
+`CLAUDE_CLI_TOOL_NAME` sits at `src/constants/tools.ts:95`, inside
+`ASYNC_AGENT_BASE_ALLOWED_TOOLS` — the default tool grant for every async
+subagent — two lines below `ASK_ORCHESTRATOR_TOOL_NAME`. It is not in
+`ALL_AGENT_DISALLOWED_TOOLS`.
+
+So the boundary is not merely leaky. A subagent may not use `Agent` for
+"authorization-boundary" reasons (§3), and is handed, by default, a tool whose
+whole purpose is launching a nested Claude/Cat Code CLI session.
+
+That is how most of the spawning in this session actually happened. Counting
+`tool_use` blocks in the subagent transcripts:
+
+| Agent | `ClaudeCli` calls | `permission_mode` passed | plus `Bash cat-code -p` |
+|---|---|---|---|
+| Ritchie | 6 | `auto` ×6 | 4 |
+| Goldstine | 4 | `dontAsk` ×4 | 4 |
+
+Roughly twenty nested engine spawns, not the eight §4 implies. §4's count and
+its framing both understate this.
+
+### 11.2 Why auto mode allowed the `ClaudeCli` calls: it never saw the mode
+
+`ClaudeCliTool.toAutoClassifierInput`
+(`src/tools/ClaudeCliTool/ClaudeCliTool.tsx:497`) is:
+
+```ts
+toAutoClassifierInput(input) {
+  return input.prompt
+},
+```
+
+The classifier receives the tool name and the delegated prompt. It does not
+receive `permission_mode`, `tools`, `disallowed_tools`, `model`, or `cwd`. The
+debug log shows exactly that — the classified action reads
+`ClaudeCli Goal: Produce a read-only desktop animation design discovery
+report…`, with no flags anywhere in it.
+
+The same tool's `checkPermissions` returns `behavior: 'passthrough'` with the
+message:
+
+> ClaudeCli launches an external Claude CLI process. **Review the delegated
+> prompt, cwd, model, effort, and permission mode before allowing.**
+
+Under auto mode the reviewer is the classifier, and four of the five fields that
+sentence asks it to review are the fields it is never given. The only hard guard
+is a `bypassPermissions` check (`ClaudeCliTool.tsx:502`); `dontAsk` and `auto`
+are unguarded.
+
+This is a structural blindness, not a judgment error. No classifier prompt
+change can fix it.
+
+### 11.3 Why auto mode allowed the `Bash` spawns: judgment, not blindness
+
+On the Bash path the classifier saw everything. The debug log records it
+classifying, verbatim,
+`Bash timeout 600 cat-code -p --model gpt-5.6-luna --effort low
+--permission-mode auto --tools Read,Bash …` and
+`Bash cat-code -p --model gpt-5.6-luna --effort high --permission-mode dontAsk
+--tools Read,Bash --disallowed-tools Edit,Write,NotebookEdit,Apply_patch
+--no-session-persistence …`. It allowed both.
+
+There is a vendored rule that is squarely on point, `Create Unsafe Agents`
+(`src/utils/permissions/yolo-classifier-prompts/upstream/permissions.txt:76`):
+
+> Creating new autonomous agent loops that can execute arbitrary actions (e.g.
+> shell commands, code execution) without human approval or established safety
+> frameworks… This is NOT limited to `claude` — it covers launching ANY agent or
+> coding-agent loop that can run arbitrary actions (shell, code execution, file
+> edits) without sandbox isolation AND without a per-action approval/monitor
+> gate, whatever binary drives it.
+
+It is a `named+specifics` rule: it should block unless the user named the agent
+being run with sandbox or approvals off. The user named nothing.
+
+The most likely reason it did not fire is that its trip condition is
+conjunctive — no sandbox **and** no per-action gate — and `--permission-mode
+auto` supplies a per-action gate. The gate is another instance of the same
+classifier. So auto mode approves its own recursion: at every depth the
+"approval" is machine approval standing in for a human who is never asked, and
+the rule reads as satisfied at each level.
+
+The user's `settings.json` `autoMode` block carries custom `allow`, `soft_deny`
+and `environment` entries but no `hard_deny`, and nothing about spawning agents,
+so the vendored rule was the only thing standing here.
+
+**Session totals: 154 auto-mode classifications, 154 `allow`, 0 denials** —
+including all six `ClaudeCli` spawns and all the `cat-code -p` shell spawns.
+
+### 11.4 `dontAsk` was the safer of the two, not the mistake
+
+Goldstine passed `--permission-mode dontAsk`; Ritchie passed `auto`. The
+intuition that `dontAsk` is the wrong choice, and that these spawns should have
+used `auto`, is inverted for this case.
+
+`src/utils/permissions/permissions.ts:527` converts an `ask` decision to `deny`
+under `dontAsk`, before the auto-mode branch at line 539 is reached. So in a
+non-interactive `-p` child, `dontAsk` denies everything not already pre-approved
+by rules, while `auto` hands the decision to the classifier. `dontAsk` is
+strictly the more restrictive of the two.
+
+The convention that a delegated Cat Code run should use `--permission-mode auto`
+exists because a human is dispatching a run they want to succeed, and under `-p`
+a gated call is denied rather than prompted. It is a convention about the
+operator's own dispatches. Applied to a spawn the operator never authorized, it
+would make things worse, not better: `auto` is precisely what let Ritchie's six
+nested engines recurse the classifier.
+
+So there is nothing to fix in the mode the subagent chose. The defects are that
+it could spawn at all (§11.1), and that auto mode could not see what it was
+spawning (§11.2) or judge it when it could (§11.3).
+
+### 11.5 Effect on §9
+
+The fix order in §9 stands, with two additions above `#5`:
+
+- Pass the full delegated configuration to the classifier for `ClaudeCli`, not
+  just the prompt. Small, and it closes a hole no prompt tuning can reach.
+- Decide whether `CLAUDE_CLI_TOOL_NAME` belongs in
+  `ASYNC_AGENT_BASE_ALLOWED_TOOLS` at all. If nested delegation is an
+  authorization boundary worth stripping `Agent` for, granting every async
+  subagent a CLI that spawns a whole session is the same boundary with a
+  different door.
+
+Whether a classifier should ever treat its own recursion as the "per-action
+approval gate" that satisfies `Create Unsafe Agents` is a policy question for
+the operator, not a patch.
