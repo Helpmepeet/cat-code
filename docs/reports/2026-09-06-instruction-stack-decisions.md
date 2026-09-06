@@ -66,13 +66,75 @@ supersedes the other; they are different configurations. Source files total
 153,641 characters, which is inventory, not emitted text, and is not used
 anywhere as a saving.
 
+### 2a. How the buckets were drawn, and what they leave out
+
+Reconstructed 2026-09-06. The table above shipped without a recorded methodology,
+which meant nothing built on it could be checked. It can be, and it holds.
+
+**Verified-measurement.** `./cli-dev --dump-system-prompt --model gpt-6-astra`
+emits exactly **24,680** characters, matching the total above to the character.
+Decomposed by top-level heading, the three rows are our own section names grouped:
+
+| Row | Sections | Chars |
+|---|---|---:|
+| How to do the work | `# Doing Tasks` 5,115 + `# Using Your Tools` 1,577 | 6,692 |
+| How to talk to the user | `# Tone and Style` 936 + `# Communicating with the User` 3,200 | 4,136 |
+| Permission and care | `# Executing Actions with Care` | 2,774 |
+
+**The three rows cover 13,602 of 24,680 characters, or 55%.** The remaining 11,078
+sit in no bucket: `# System Rules` 2,206, `# Session-Specific Guidance` 4,669,
+`# Environment` 1,128, `## Reading session transcripts` 1,939, and a 1,136-character
+preamble. The table reads like a decomposition of the prompt and is a
+decomposition of half of it. Do not derive a total from those three rows.
+
+**The Codex column is a judgment, not a heading match.** Segmenting a current
+template at its `## ` headings gives `## Editing constraints` 1,970 and
+`## Autonomy and persistence` 796, which sum near the stated 2,642; the talk row
+maps to formatting, final-answer, intermediary-update, tone and interaction-style
+sections, and permission to its two `## Escalation` sections. Plausible, and not
+the same operation as our own headings. So **that first row compares our craft
+coaching plus mechanics against their mechanics plus autonomy.** The craft finding
+in §1 survives this only because it was checked against the Codex binary directly
+rather than inferred from the row.
+
+### 2b. Reading the two rows nobody worked
+
+**Permission and care is not thin.** The 2,774 characters are `PRIORITY RULE`,
+`INSTRUCTION AUTHORITY`, a `RISKY ACTIONS` list with four concrete categories and
+real examples, `OBSTACLE RULE`, and `DECISION CHECKLIST`. Dense and specific.
+"Lightest of the three relative to our size" is arithmetic, not a defect finding,
+and no gap against either comparator has been demonstrated.
+
+**One consequence for A1.** The decision checklist A1 deletes lives in this
+section, so A1 trims the one category where both comparators outspend us. Its
+redundancy claim is sound, and it is verified: the four numbered items do restate
+`PRIORITY RULE`, `RISKY ACTIONS`, `INSTRUCTION AUTHORITY` and `OBSTACLE RULE`
+above them. But a checklist closing a dense section is a recall device, a
+different form from the prose it summarises, and the apply plan currently records
+A1's risk as "none identified". That should be decided deliberately rather than
+carried as a free cut.
+
+**The talk row is a shape difference, not a size one.** Our 4,136 is eight output
+rules and six formatting conventions, and read together they are overwhelmingly
+prohibitions: no emojis, no restating, no em dashes, no engagement prompts,
+teasers, open loops or upsells, no colon before a tool call. Codex's roughly
+10,000 goes elsewhere: `## Final answer instructions` at 3,121 and
+`## Intermediary updates` at 2,343, and **we have no equivalent to either**, not a
+thin version. Nothing in our prompt says how to construct a final answer.
+
+So we spend the budget on what not to say and Codex spends it on what to say. The
+remedy is not 6,000 characters of import. It is that `RULE 6` forbids restating
+while Codex devotes 3,121 characters to building a self-contained final answer.
+**B1 is the visible tip of that tension**, not a standalone nicety, and this row is
+tweak-shaped rather than add-shaped.
+
 ## 3. What we would change
 
 Grouped by reason, because the risk differs. Nothing here is applied.
 
 | Item | Shape | What it does | Why | Status |
 |---|---|---|---|---|
-| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated in the same section, fifteen lines above | Reviewed, ready |
+| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated in the same section, fifteen lines above | Open. Redundancy verified, but it trims the permission category, our thinnest against both comparators, see §2b |
 | **A2** | cut | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Open. Inherited text; upstream deleted it, see §3a. Applied then reverted |
 | **A3** | cut | Drop the snake-case example and "You are highly capable" | Teaches ordinary coding-assistant behavior. **"Absent from all three comparators" was wrong:** Claude Code ships both verbatim today, only Codex lacks them | Open, and re-scoped by the craft-coaching report |
 | **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Narrowed after review, ready |

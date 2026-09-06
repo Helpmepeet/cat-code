@@ -226,7 +226,14 @@ items 1 and 2 by `PRIORITY RULE` and the `RISKY ACTIONS` list; item 3 by
 authorized that exact scope"; item 4 by `OBSTACLE RULE` ("do not bypass safety
 checks").
 
-**Risk:** none identified. This is same-request duplication.
+**Risk, revised 2026-09-06.** The redundancy is verified and the four items really
+do restate the four rules above them. But the bucket reconstruction in the decision
+report's §2a places this checklist inside `# Executing Actions with Care`, the
+permission category, which is the one category where **both** comparators outspend
+us. So this is a trim to our thinnest surface, and a checklist closing a dense
+section is a recall device rather than plain repetition, a different form from the
+prose it summarises. Nothing here shows the recall device is doing work, and
+nothing shows it is not. Decide A1 deliberately; it is no longer a free cut.
 
 ### A2. Delete the AgentTool prime-number example
 
