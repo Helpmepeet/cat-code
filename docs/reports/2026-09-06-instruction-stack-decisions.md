@@ -32,6 +32,33 @@ and "Do not attempt to fix unrelated bugs or broken tests", and spent the budget
 permission, autonomy and communication instead. **Elementary craft coaching is what
 got retired; autonomy and communication grew.**
 
+**Narrowed 2026-09-06, twice, and the second narrowing is the important one.**
+
+An earlier draft said "Codex has none of it". That is too broad as a claim about
+the product: the checked-in `models-manager/prompt.md` does carry "Fix the problem
+at the root cause", "Avoid unneeded complexity" and "Do not attempt to fix
+unrelated bugs". But that file is the **fallback**, used when a model has no
+backend `instructions_template`. All eight models in this machine's fetched
+catalog have one — `gpt-6-astra`, `gpt-reserve`, `gpt-5.6-sol`, `gpt-5.6-terra`,
+`gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4-mini`, `codex-auto-review` — and across all
+eight, `surgical precision`, `gold-plating`, `unneeded complexity`,
+`minimal and focused`, `root cause` and `unrelated bugs` are **zero**. So the
+guidance exists and is not sent to any model this fork runs.
+
+**Confirmed from inside a live Codex session**, which is stronger evidence than any
+artefact reading: asked what its own instructions contain, it reported *avoid
+premature abstraction* **absent**, *prefer duplication over premature abstraction*
+**absent**, *avoid unnecessary defensive code* **absent**. It reported *keep
+changes minimal*, *avoid unrelated refactors* and *fix only what the task requires*
+as approximately present — but carried by scope and authorization rules ("changes
+belong to the user unless you know otherwise"), not by craft instruction, and
+*avoid unnecessary complexity* only as a rule about **responses**, not code.
+
+**So the retirement is uneven, and that matters for §5a.** Codex has a genuine
+analogue to our `SCOPE`, framed as ownership rather than craft. It has no analogue
+to `ABSTRACTION` or `ERROR HANDLING` at all. An option that deletes all five treats
+those cases as identical when they are not.
+
 **Verified 2026-09-06, on the corrected evidence.** The `gpt-6-astra` template —
 the one this report compares against — contains no craft block at all. That is
 checked directly in the template, and it is the load-bearing fact.
@@ -145,12 +172,12 @@ another session's. Seventeen are rows below; C1 is in §5.
 | **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Open, re-scoped by §5 |
 | **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four inherited; upstream deleted all four, keeping the syntax as prose | Open. Applied then reverted |
 | **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | Open. `-p` runs only |
-| **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material. ~5,841 chars, the largest single cut | Open. Claude path only; upstream still ships them |
+| **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material. ~5,841 chars, the largest single cut | **DECIDED: do it.** Claude path only, and a deliberate divergence: upstream still ships them |
 | **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED.** Closed; produced A8 |
 | **A8** | cut | Delete the unreachable verification nudge | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | Open. The only item that provably cannot change behavior |
-| **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | Open. The visible tip of the talk-row gap in §2 |
-| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | Open, and **no longer unsupported**: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
-| **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | Open. Belongs in the Actions section |
+| **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | **DECIDED: in.** The visible tip of the talk-row gap in §2 |
+| **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | **DECIDED: in**, and no longer unsupported: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
+| **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | **DECIDED: in.** Belongs in the Actions section |
 | **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Open. Inherited; upstream removed it after 2.1.215 and its replacement is available to lift |
 | **D1** | not ours | Write's description names `Edit`, absent from the GPT pool | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Fixed only in the working tree**, not in HEAD (last commit `ea085822`). Another session's dirty file: do not touch, and do not assume it is safe |
 | **D2** | tweak | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites; TaskGet does not, so a finished prerequisite blocks forever | Open. Verified defect |
@@ -254,17 +281,47 @@ worth stating, not about whether one should be stated twice. If any option is
 adopted it supersedes A3 and A4, which were scoped before this split existed.
 Per-sentence verdicts and a worked rewrite are in the craft report (§8).
 
-**b. The comment rule.** `CLAUDE.md` already bans status notes outright, which
-forbids `src/constants/prompts.ts:502`, `// @[MODEL LAUNCH]: Remove this section
-when we launch numbat.` — accurate, and naming its own retirement event. Either
-keep the ban and convert that comment, or soften the rule to permit a note
-carrying a named trigger. The reviewer recommends keeping the ban; the claim that
-the repository relies on that comment is inference, not evidence.
+**b. The comment rule, reframed by the operator 2026-09-06.** The question was
+put as "keep the blanket ban on status notes, or soften it". Both options were
+wrong, because the category is wrong.
 
-**c. Whether additions are in scope at all.** B1 through B3 add text against a
-brief that was subtraction. Each addresses a real tension, none has measured harm
-behind it, and all can be dropped without affecting anything else. B1 is the
-strongest, being the tip of the talk-row gap in §2.
+**The operator's principle:** *a good code comment should require very little
+maintenance.* That is the goal the rule was invented to serve, after an audit found
+a large stock of stale comments across the workspace. "Status note" was a proxy for
+it, and a poor one.
+
+Reframing on maintenance cost explains every existing clause instead of listing
+them, and gives a test that applies to comment shapes nobody has thought of yet:
+
+| Banned shape | Maintenance it demands |
+|---|---|
+| cross-file line citation | every edit to the *other* file |
+| a restated value | every change to the constant |
+| a counting claim | every addition or removal |
+| a status note | every change of status |
+
+And it settles the case that broke the old rule. `// @[MODEL LAUNCH]: Remove this
+section when we launch numbat.` names the single event that deletes it, so it
+demands **no** maintenance until that event, at which point it removes itself. It
+is the opposite of the problem, and the blanket ban was catching it by shape rather
+than by cost. Under the principle it stands as written.
+
+**Two consequences.** The rule needs rewording around maintenance cost rather than
+an enumerated ban, and the operator notes it belongs with the coding conventions
+rather than where it sits. Both are edits to `CLAUDE.md`, which is the operating
+manual rather than a report, so replacement wording is drafted for approval and not
+applied.
+
+**Worth stating plainly, since it is the reason this came up:** the model wrote a
+rule that bans four shapes without naming what makes them bad, then applied it to a
+comment that does not have the underlying defect. A principle would have caught
+that; a list did not.
+
+**c. Whether additions are in scope at all — DECIDED 2026-09-06: all three.** B1,
+B2 and B3 are in. The subtraction-only framing of the original brief does not
+survive: B1 fixes a rule that forbids the summary a user needs, B2 is stated almost
+verbatim in astra, and B3 guards the failure A3's removal opens up. Recorded as the
+operator's call; none has measured harm behind it and that remains true.
 
 ## 6. Deliberately not pursued
 
