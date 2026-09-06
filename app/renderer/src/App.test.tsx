@@ -1506,6 +1506,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   )
   // …and nothing instructs the user to act on a not-yet-connected session.
   expect(source).not.toContain('Focus to reconnect')
+  expect(paneSource).not.toContain('Focus to reconnect')
 })
 
 test('P4-24: the composer bar forwards the REAL active account + model override', () => {
@@ -2003,6 +2004,7 @@ test('the picker routes images through byte attachment while other files stay op
   // can decide is what App does with the result, and that a second, non-byte
   // route has not reappeared beside it.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   expect(source).toContain(
     'reduceImageAttachmentAdded(prev, sessionId, attachment)',
@@ -2012,6 +2014,7 @@ test('the picker routes images through byte attachment while other files stay op
   // No hidden `<input type="file">`: the picker is the host's, so the renderer
   // never sees a filesystem path (HC1).
   expect(source).not.toContain('imageInputRef')
+  expect(paneSource).not.toContain('imageInputRef')
 })
 
 test('debug export explicitly marks lossy raw-message retention', () => {
@@ -2767,15 +2770,18 @@ test('FIX-5 keyboard tripwire: the permission shortcuts answer the request App m
   // is the two-sources-of-truth bug this move removed. Asserted on the IMPORT
   // and the PROP, not on the bare names, which also appear in prose explaining
   // why the shell chord handler does not collide with the card's Ctrl pair.
-  expect(source).not.toContain("from './permissionPromptModel.js'")
-  expect(source).not.toContain('setPermissionCursor=')
-  expect(source).not.toContain('permissionCursor=')
+  for (const shellFile of [source, paneSource]) {
+    expect(shellFile).not.toContain("from './permissionPromptModel.js'")
+    expect(shellFile).not.toContain('setPermissionCursor=')
+    expect(shellFile).not.toContain('permissionCursor=')
+  }
 
   // The card is a select list, and BOTH the keys and the rendered rows must come
   // from ONE list. There is now exactly one `buildPermissionOptions` call in the
   // app, in the card, so `1` and a click on row 1 cannot disagree.
   expect(card).toContain('buildPermissionOptions(request.request, denyOnly === true)')
   expect(source).not.toContain('buildPermissionOptions')
+  expect(paneSource).not.toContain('buildPermissionOptions')
   expect(card.split('buildPermissionOptions(').length - 1).toBe(1)
 
   // One answer per request: a second response is rejected by the sidecar as

@@ -48,9 +48,6 @@ import { AskQuestionFlow } from './AskQuestionFlow.js'
 import { PlanBar, PlanPanel } from './PlanPanel.js'
 import { useToast } from './toastContext.js'
 import {
-  TabBar,
-} from './TabBar.js'
-import {
   type RawMessageSessionLog,
 } from './rawMessageLog.js'
 import {
@@ -60,7 +57,6 @@ import {
   type TranscriptState,
 } from './transcriptProjector.js'
 import {
-  claimLazyRestore,
   type PreviewRunFacts,
 } from './previewTranscriptState.js'
 import {
@@ -102,7 +98,6 @@ import {
   navigateHistory,
   parseMentionQuery,
   pasteTokenBeforeCaret,
-  selectAgentMentionItems,
   selectComposerGate,
   shouldCollapsePaste,
   shouldRecallWaitingMessages,
@@ -119,17 +114,10 @@ import {
   prepareImageAttachment,
 } from './imageAttachment.js'
 import {
-  MAX_WORKSPACE_PANELS,
-} from './workspaceLayout.js'
-import {
   connectionRecoveryMessage,
   connectionTone,
   type ConnectionSnapshot,
 } from './connectionState.js'
-import {
-  selectLastRunControlsSnapshot,
-} from './runControlsState.js'
-import { WelcomeScreen } from './WelcomeScreen.js'
 import {
   selectDockedOrchestratorWorkers,
 } from './orchestratorState.js'
@@ -138,14 +126,10 @@ import {
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
 import { OrchestratorRoster } from './OrchestratorRoster.js'
-import { AccountsPage } from './AccountsPage.js'
 import {
   resultToastTone,
   switchVerb,
 } from './accountsPageModel.js'
-import {
-  SessionActionsMenu,
-} from './SessionActionsMenu.js'
 import type {
   AccountResultFrame,
   AccountStatus,
@@ -171,7 +155,6 @@ import {
   fmtElapsed,
   fmtTok,
   isTurnRunning,
-  reduceTurnStarts,
   restartConnection,
   selectLiveTokenEstimate,
 } from './appModel.js'
