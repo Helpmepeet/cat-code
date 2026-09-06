@@ -272,34 +272,28 @@ call. Four of the five sections go; `SCOPE`'s framing question and `ERROR
 HANDLING`'s exception are below. Recorded with the reasoning that changed while
 deciding, because it makes two of these cuts much stronger than "Codex dropped it".
 
-**The strongest argument is not about Codex at all, and was missed until the end.**
-Two of the five are already stated in `~/.claude/CLAUDE.md`, which loads into every
-Cat Code session in this tree:
+**A duplicate-with-CLAUDE.md argument was raised and then ruled out.** It was
+noted that `~/.claude/CLAUDE.md` already states two of the five — "no speculative
+features, no premature abstraction" covering `ABSTRACTION`, and "keep changes
+minimal and related to the current request" covering `SCOPE` — so cutting them
+would delete a duplicate rather than an instruction.
 
-| Section | Already delivered by a loaded instruction file? |
-|---|---|
-| `ABSTRACTION` | **Yes** — `~/.claude/CLAUDE.md`: "Don't over-engineer. No speculative features, no premature abstraction." |
-| `SCOPE` | **Yes** — same file: "Keep changes minimal and related to the current request. No refactors unless required for the current task." |
-| `ERROR HANDLING` | **No.** No loaded file mentions defensive code or boundaries. The `cat-code/CLAUDE.md` hits are desktop wire-protocol rules, a different subject. |
-| `TASK DOMAIN` | n/a — an example and a domain statement, not a rule |
-| `CAPABILITY` | n/a — instructs nothing |
+**The operator rejected that reasoning, and the ruling is broader than this item:
+what a loaded instruction file happens to contain must not shape the system
+prompt.** The prompt is the product and has to stand on its own; `CLAUDE.md` is
+user configuration that can change, move, or be absent. Designing the prompt around
+its current contents makes the product silently depend on a file it does not own.
 
-So cutting `ABSTRACTION` and `SCOPE` deletes a **duplicate**, not an instruction:
-the session still receives both rules, from the file the operator maintains. That
-argument needs no vendor and survives whatever Codex does next.
+Two consequences. The cuts rest on the Codex argument alone, which is what was
+decided anyway. And the option of moving `ERROR HANDLING` into `CLAUDE.md` is
+withdrawn, since that is the same dependency in the other direction.
 
-**`ERROR HANDLING` is the one real loss, and it is genuinely open.** It is the only
-copy anywhere: Codex has no equivalent (confirmed absent from inside a live
-session), and no loaded instruction file carries it. Deleting it removes the
-guidance outright rather than removing a repetition. Three ways to close that, none
-chosen:
-
-1. cut it anyway, accepting the loss on the grounds that a frontier model does not
-   need to be told not to write defensive code;
-2. rewrite it tighter and keep it — 411 characters down to about 160, drafted in
-   the craft report §2;
-3. move it into `~/.claude/CLAUDE.md` beside the other two, so the prompt sheds it
-   and the guidance survives where its siblings already live.
+**`ERROR HANDLING` therefore goes too, under the same rule.** Codex has no
+equivalent, confirmed absent from inside a live session, so following Codex cuts
+it. What that costs, stated plainly rather than buried: no loaded file and no
+comparator carries this guidance, so afterwards the product does not say it at all,
+to anyone. That is the choice, and it is consistent with the principle above rather
+than an oversight.
 
 **Sizes.** `ABSTRACTION` 256, `SCOPE` 352 (of which sentence 1 and the comment
 rules are marked Keep in the craft report §4), `TASK DOMAIN` 216 of 336,
