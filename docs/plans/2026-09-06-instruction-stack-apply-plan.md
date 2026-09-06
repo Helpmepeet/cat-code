@@ -17,9 +17,10 @@ not the reason. Group by reason instead, because the risk differs:
 | Group | Why | Items | What approving it costs you |
 | --- | --- | --- | --- |
 | **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4a | Nothing. These are defects; they need no thesis about model strength |
+| **1b. Live and untested** | An instruction that forces an agent spawn, on the default path, with no coverage | A7 | Investigation only; it gates how A2 is judged |
 | **2. Pure simplification** | The same rule, said once instead of twice | A1, A3, A4, A5, A6b | Nothing behavioral is claimed. This is the original brief |
 | **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3, B4b | The only real bet on the table |
-| **4. Measured defect** | Prevents a fault observed in our own output | C1 | One clause; the only item with harm evidence rather than inference |
+| **4. Already applied, needs reconciling** | The rule landed before this plan; it now bans a comment the repo relies on | C1 | A choice between two rules, not an edit |
 
 Two items split across groups. A6a is the false active-state claim (group 1);
 A6b is its eight narrated scenarios (group 2). B4a removes an unfollowable
@@ -145,6 +146,13 @@ list lives, the no-reinjection rule, and the built-in-command exclusion.
 So this tool is disabled in every interactive session and reaches only
 non-interactive `-p` runs. Nothing in A6 changes the desktop app or the REPL.
 
+**Do not generalise that warning.** An earlier draft of this plan used it to
+downgrade the verification-agent nudge as `-p`-only. That was wrong:
+`TaskUpdateTool.ts` carries the same nudge for V2, which is the interactive path
+(see A7). The scope limit applies to this prompt text, not to the nudge. Nor
+should A6's "at most one" wording become a general Task-system invariant; V2 has
+its own semantics.
+
 **File:** `src/tools/TodoWriteTool/prompt.ts`.
 
 Three statements contradict the implementation, which clears the list when every
@@ -166,6 +174,32 @@ immediate updates, truthful completion.
 
 **Do not claim a GPT saving from the scenario removal:** `prompt.ts:231` already
 selects a compact GPT variant, so that block is Claude-path text.
+
+### A7. Audit the verification-agent nudge on both task paths
+
+Not a text edit, and not yet a change: an investigation that must happen before or
+alongside the rest, because it is live on the default interactive path.
+
+**Verified:** both `TodoWriteTool.ts` (V1) and `TaskUpdateTool.ts` (V2) append an
+instruction into their tool RESULT telling the model to spawn the verification
+agent when a main-thread list of three or more tasks closes with no item matching
+`/verif/i`, gated on `feature('VERIFICATION_AGENT')` and `tengu_hive_evidence`.
+The V2 copy carries a comment stating it covers the interactive CLI, and
+`tools.ts` includes `TaskUpdateTool` whenever V2 is enabled, which is whenever the
+session is interactive.
+
+**Verified:** no test in either tool's directory references the nudge or its
+feature gate. A tool result that forces an agent spawn has no regression coverage
+on either path.
+
+**Why it belongs here:** A2 deletes the example that pushes toward delegation. If
+this instruction remains, removing the example changes what the model reads while
+leaving a stronger directive in place, and the two will be judged together as one
+behavior change.
+
+**What to determine, not to change:** whether this is an intentional workflow
+requirement or an obsolete heuristic; whether its gates are live in the operator's
+sessions; and what coverage it should carry. No edit is authorized by this item.
 
 ---
 
@@ -230,24 +264,32 @@ practice.
 
 ## Part C — the comment rule
 
-### C1. One clause in `CLAUDE.md` §7
+### C1. Reconcile the comment rule that is already applied
 
-**Current, line 511:** `- Comments state constraints code can't show. No narration comments, no comments on untouched code.`
+**Corrected 2026-09-06.** This was drafted as an addition. It is not: `CLAUDE.md`
+already carries a `### Comments (2026-09-06)` section, landed before this plan was
+written, stating that a comment may depend only on what changes in the same edit,
+and banning cross-file line citations, restated values, counting claims, and
+status notes.
 
-**Proposed:** keep that and add: a comment must not create an obligation on a file
-it does not live in. Never restate a value that exists in code, name the constant.
-Never cite a line number in another file, name the file and the symbol. A status
-note needs a named trigger or a decision reference, since nothing will come back
-to delete a bare "deferred".
+**The conflict, verified.** That applied rule bans status notes outright. The
+comparative report's D13 argues a status note with a named trigger is
+load-bearing, and cites `src/constants/prompts.ts:502`
+(`// @[MODEL LAUNCH]: Remove this section when we launch numbat.`) as the
+example. That comment still exists. So the repository currently bans a comment it
+also relies on.
 
-**Evidence:** 1,129 comment lines on this branch carry `file.ts:NNN` citations;
-in a 16-line sample roughly half point at a line that says something unrelated,
-and none of that is mechanically detectable because every cited line exists and
-reads as plausible code.
+**Two ways to resolve, and this one is the operator's call:**
 
-**Independent of Parts A and B.** It touches no file any other item touches.
+1. Keep the blanket ban and retire the `@[MODEL LAUNCH]` pattern, converting that
+   comment into something the rule permits.
+2. Soften the applied rule so a status note is allowed when it names its
+   retirement trigger or an owning decision, and leave the comment as it stands.
 
----
+Nothing here should be applied until that choice is made. The evidence behind the
+rule itself is unaffected: 1,129 comment lines on this branch carry `file.ts:NNN`
+citations, and in a 16-line sample roughly half point at a line that says
+something unrelated, none of it mechanically detectable.
 
 ## Not in this plan, and why
 

@@ -55,18 +55,32 @@ follows is what that check established. Sections it changes carry an inline
 
 ### Corrections
 
-- **CORRECTION to D7, D10 and the T2 disposition — the tool is off in
+- **AMENDED 2026-09-06, after an independent review — the nudge DOES reach
+  interactive sessions.** `TaskUpdateTool.ts` carries the same
+  verification-agent instruction on the V2 path, under a comment stating that it
+  covers the interactive CLI, with the same gate (`VERIFICATION_AGENT`,
+  `tengu_hive_evidence`, main thread, all tasks complete, at least three, none
+  matching `/verif/i`) and the same appended text. `tools.ts` includes
+  `TaskUpdateTool` whenever V2 is enabled, and V2 is enabled exactly when the
+  session is interactive. So the correction immediately below is right about
+  `TodoWriteTool` and wrong about the behavior: the instruction reaches every
+  session, through one tool or its twin. D10's audit therefore belongs in the
+  first tranche, not the second. **Verified:** no test in either tool's directory
+  references the nudge or its feature gate, so a tool result that forces an agent
+  spawn at task completion has no regression coverage on either path.
+- **CORRECTION to D7 and the T2 disposition — the legacy tool is off in
   interactive sessions.** `TodoWriteTool.isEnabled()` returns
   `!isTodoV2Enabled()`; `isTodoV2Enabled()` in
   [utils/tasks.ts](../../src/utils/tasks.ts) returns
   `!getIsNonInteractiveSession()`; and `getIsNonInteractiveSession()` in
   [bootstrap/state.ts](../../src/bootstrap/state.ts) returns
   `!STATE.isInteractive`. So an interactive session (desktop app, REPL) runs the
-  V2 task tools and TodoWrite is disabled; TodoWrite is live only in
-  non-interactive `-p` runs. These three items remain worth fixing, because the
-  delegation lane uses `-p`, but they are not default-session changes and must
-  not head an apply tranche. This is the same dead-surface qualifier the
-  companion report applied to coordinator mode and neither pass applied here.
+  V2 task tools and the legacy TodoWrite prompt text is not emitted. Its wording
+  fixes are therefore `-p`-only. **This applies to the prompt text alone.** Do not
+  extend it to the nudge, which has a V2 twin (see the amendment above), and do
+  not turn D7's "at most one" wording into a general Task-system invariant: V2
+  has its own semantics and participates in worker coordination. The correction
+  belongs to the legacy TodoWrite contract specifically.
 - **CORRECTION to D7 — the contradiction is wider than reported.** Three
   locations conflict with the cleared-on-completion behavior, not one:
   `prompt.ts:161` and `prompt.ts:207` both say "Exactly ONE task must be
@@ -476,10 +490,19 @@ same syntax with neither property. If that is the leak, the clarification belong
 beside the rule that creates it, distinguishing a citation consumed now from one
 that must survive a refactor. This was not tested.
 
-**Placement.** `CLAUDE.md` §7 already governs comments and asks them to state
-constraints code cannot show. It does not say a comment must not create an
-obligation on a file it does not live in. That is one clause, and it belongs
-there whether or not a system-level version happens.
+**Placement — AMENDED 2026-09-06.** The rule is already applied. `CLAUDE.md`
+carries a `### Comments (2026-09-06)` section stating that a comment may depend
+only on what changes in the same edit, and banning cross-file line citations,
+restated values, counting claims, and status notes. It landed before this pass
+began. So D13 is not an addition; it is a reconciliation, and the repository
+currently contains the inconsistency this decision set out to avoid: the applied
+rule bans status notes outright, while `prompts.ts:502` still carries
+`// @[MODEL LAUNCH]: Remove this section when we launch numbat.` — the comment
+this decision identifies as load-bearing and acceptable.
+
+**Open, needs the operator.** Either keep the blanket ban and retire that comment
+pattern, or soften the applied rule to permit a status note carrying a named
+retirement trigger or decision owner. The two cannot both stand.
 
 ## 4. Disposition of the original 15 groups
 
