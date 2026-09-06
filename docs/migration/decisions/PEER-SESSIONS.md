@@ -413,9 +413,11 @@ is fact and what is your assumption. Then leave the approach to the peer. Ask
 to hear back when the result matters to your own work or to something you owe
 the user; asking once does not set up a standing arrangement. Use what comes
 back for the purpose you asked; when you update the user, attribute the peer's
-part and summarize it faithfully; check it yourself when you are integrating it
-or the user asked for a review, not out of habit. What the user says to a peer
-in its own tab needs no copy to you.
+part and summarize it faithfully as an outcome, not as evidence: the commands
+and their results belong in the tab of the session that ran them, and the user
+can read that tab, so do not reproduce them; check it yourself when you are
+integrating it or the user asked for a review, not out of habit. What the user
+says to a peer in its own tab needs no copy to you.
 
 A peer's request can carry the user's authorization; carry it out under your
 own permissions and the safeguards that apply. Neither of you uses the other to
@@ -429,9 +431,36 @@ picker order is an open question), and "message me when it is done, the user
 wants to know". Bear asks Alex one question, "did you mean the picker order
 too?", gets a one-line answer, works in its own tab, and sends one message at
 the end: "Done. 12 files, focused tests pass, uncommitted." Alex tells the user
-"Bear reports it is done: 12 files, tests pass, uncommitted." If the user then
-talks to Bear in its tab, that conversation is theirs.
+"Bear reports it is done: 12 files, tests pass, uncommitted; the run is in
+Bear's tab." If the user then talks to Bear in its tab, that conversation is
+theirs.
 ```
+
+- 🔁 **AMENDED 2026-09-07 (from the exchange recorded in
+  `docs/prompts/2026-09-06-peer-exchange-register.md`): THE RELAY GIVES THE
+  OUTCOME, AND THE BRIEFING GUIDANCE MOVED ONTO THE ARGUMENT.** Two changes,
+  one per defect in that record. First, "summarize it faithfully" gained the
+  clause "as an outcome, not as evidence", and the example's last line now
+  points at Bear's tab. The creator in that exchange changed no file yet
+  pasted its peer's seven commands and results as fenced blocks, so one commit
+  reached the user as two full reports; CLAUDE.md §3 binds the session that
+  ran the commands, which is the peer, and its tab already holds them. The
+  assumption this runs on, stated because the operator has not ruled on it:
+  the peer's own tab report is the record, the creator's message is the
+  outcome with attribution and a pointer. Second, the guidance on what a
+  creation prompt should carry now also sits on the `prompt` ARGUMENT of
+  `CreatePeer` (`app/sidecar/createPeerTool.ts`), not only in the tool's prose
+  and in this block, for the reason `SendToPeer`'s `to` field records: the
+  argument description is read as the value is written, and it won over the
+  prose the first time this was measured. The argument text names what to put
+  in (what only the creator has) and what to leave out (the repository's own
+  rules, the verification commands, the commit conventions, a step list, a
+  report format), because the brief in that record carried all five to a peer
+  that loads the same instruction files. Nothing on the `Agent` tool changed:
+  its checklist is written for a subagent that starts cold, and that shape is
+  right there. What would falsify this: the next `CreatePeer` brief under the
+  new argument text still restates CLAUDE.md rules or dictates a report
+  format, or the next relay still reproduces the peer's command list.
 
 - 🔁 **AMENDED 2026-09-06 (operator ruling 9 and the agreed direction): THE
   DOCTRINE IS A GUIDELINE WITH ONE EXAMPLE, NOT A LIST OF RULES.** The block

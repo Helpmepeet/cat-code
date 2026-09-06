@@ -39,7 +39,17 @@ const inputSchema = lazySchema(() =>
     prompt: z
       .string()
       .min(1)
-      .describe('The first instruction the new peer receives'),
+      // The guidance sits on the ARGUMENT, not only in the prose above, for the
+      // reason `sendToPeerTool.ts` gives at its `to` field: a model reads the
+      // argument description at the moment it writes the value, and that is
+      // where the prose lost. A brief written under the old one-line
+      // description restated the repository rulebook, enumerated the test
+      // battery, and dictated a five-field report, to a peer that loads the
+      // same instruction files the creator does
+      // (`docs/prompts/2026-09-06-peer-exchange-register.md`).
+      .describe(
+        'What you would tell a colleague taking this on. Put in what only you have: the user\'s request, in their words where the wording matters, what you already found, the reasons behind decisions, what is open, and where the supporting material is. Leave out what it already has: it reads the same repository instructions you do, so restated rules, verification commands and commit conventions add nothing, and a step list or a report format turns a colleague into a worker. If you want to hear back, say what for.',
+      ),
     model: z
       .string()
       .optional()

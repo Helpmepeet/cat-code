@@ -741,6 +741,13 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   expect(unnamed).toContain(
     'nothing obliges an acknowledgment; a short okay or silence can both be right',
   )
+  // The relay to the user carries the outcome, not the peer's evidence: one
+  // creator reproduced its peer's whole command list and the user read the
+  // same commit twice (docs/prompts/2026-09-06-peer-exchange-register.md §8).
+  expect(unnamed).toContain(
+    'summarize it faithfully as an outcome, not as evidence: the commands and their results belong in the tab of the session that ran them',
+  )
+  expect(unnamed).toContain("the run is in Bear's tab")
   expect(unnamed).toContain(
     'when they ask for a prompt, write text; do not create one unasked',
   )

@@ -304,5 +304,69 @@ Two observations cut against the obvious reading of it:
 - Model-authored peers are a small share of use. The roster carried ~75 peers
   against 8 `CreatePeer` calls in history, so most peers are tabs the user
   opened. That should bound the investment.
-- Whether the duplication in §8 has any owner in the current instructions.
-  The reporting requirements are written for one session reporting to the user.
+- ~~Whether the duplication in §8 has any owner in the current instructions.~~
+  Owned since 2026-09-07 by the doctrine's relay sentence; see below.
+
+## Acted on, 2026-09-07
+
+Two changes, one per defect, both committed on `migration`. The report above
+is unchanged except the Open bullet struck through; it recorded what happened,
+and that record stands.
+
+**The brief (§1, §2, §6).** The guidance on what a creation prompt carries now
+sits on the `prompt` argument of `CreatePeer` (`app/sidecar/createPeerTool.ts`),
+not only in the tool's prose and the doctrine. The argument used to read "The
+first instruction the new peer receives"; it now says what to put in (what only
+the creator has: the user's words, findings, reasons, open questions, where
+the material is) and what to leave out (restated repository rules, the
+verification commands, the commit conventions, a step list, a report format).
+Every item on the leave-out side is one the brief in this record carried.
+
+Why that position and not another prose fix: the `to` field of `SendToPeer`
+is the one measured case in this codebase of the same fight, and the argument
+description won it (the comment at that field records the two passes). The
+argument is read as the value is written, whichever text put the shape in the
+model's head, so it covers the `Agent` checklist, the plan document and the
+general prior alike without needing to know which one was the cause, which the
+Candidate source section says the transcripts cannot separate.
+
+The `Agent` tool is untouched. Its checklist is written for a subagent that
+starts with nothing and returns one result, and 304 briefs under it have drawn
+no complaint. A scoping clause there would be prose in the checklist position,
+the losing position, and would put peer text into the terminal engine, which
+has no peers.
+
+**The double report (§8).** The doctrine's relay sentence now reads "summarize
+it faithfully as an outcome, not as evidence: the commands and their results
+belong in the tab of the session that ran them, and the user can read that
+tab, so do not reproduce them", and the example's last line ends "the run is in
+Bear's tab" (`app/sidecar/desktopSystemPrompt.ts`, mirrored in PEER-SESSIONS
+§5 with an amendment marker). This resolves the collision Cavansite hit:
+CLAUDE.md §3 asks the session that ran the battery to paste it, and Cavansite
+changed no file, so §3 never bound it; the doctrine now says so in the sentence
+Cavansite was already following when it wrote "Benitoite reported these checks
+passed".
+
+The assumption this runs on, unratified: when a peer finishes work its creator
+asked for, the peer's own tab report is the record and the creator's message
+to the user is the outcome, attributed, with a pointer to that tab. The peer
+says nothing different from any other session ending a turn. If the operator
+rules the other way (creator holds the record, peer goes quiet), the sentence
+and the example both flip, and nothing else moves.
+
+**The fourth surface.** The dispatch lane in `.claude/rules/migration.md`
+already says what the argument now says: pass the backlog block through
+faithfully, add what saves rediscovery, ask to hear back only if needed, and
+"the message is the signal, STATUS is the record". It agrees with the tool
+text, so no fifth surface was added.
+
+**Not changed.** The untagged creation-message delivery, the `SendToPeer`
+schema, and the Agent tool's delegation text.
+
+**What would falsify this.** The next `CreatePeer` brief written under the new
+argument text still restating CLAUDE.md §3 or §4, or still dictating a report
+shape; or the next creator relay still reproducing the peer's command list.
+One such brief is enough, because the argument description is the last text
+read before the value is written and there is no stronger position left to
+move it to. Under the old text, n=1 (this exchange) is the whole post-rewrite
+sample, so the claim is a prediction, not a measurement.

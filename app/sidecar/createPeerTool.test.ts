@@ -301,6 +301,26 @@ test('the creation guidance says what to share and makes hearing back a choice',
   )
 })
 
+test('the prompt argument says what to put in and what to leave out', () => {
+  // The prose above the field already said "share what you already know" and
+  // "leave the approach to it", and a brief written under it restated the
+  // repository rulebook, listed the test battery and dictated a report shape
+  // (`docs/prompts/2026-09-06-peer-exchange-register.md`). The argument
+  // description is read as the value is written, which is where `SendToPeer`'s
+  // `to` field won the same fight, so the guidance sits here too.
+  const shape = createCreatePeerTool(requester({ name: 'Bear' }).requestHost)
+    .inputSchema.shape
+  const description = shape.prompt.description ?? ''
+
+  expect(description).toStartWith('What you would tell a colleague')
+  expect(description).toContain('the user\'s request, in their words where the wording matters')
+  expect(description).toContain('Leave out what it already has')
+  expect(description).toContain('restated rules, verification commands and commit conventions add nothing')
+  expect(description).toContain('a step list or a report format turns a colleague into a worker')
+  expect(description).toContain('If you want to hear back, say what for.')
+  expect(description).not.toContain('The first instruction the new peer receives')
+})
+
 test('the creation guidance says the call blocks, so a fan-out is a priced choice', async () => {
   // Main bounds the spawn at ten seconds and then waits up to thirty more for
   // the new session's ready before the instruction is delivered
