@@ -3,9 +3,20 @@
 > **Superseded for conclusions.** Read [../reports/2026-09-06-instruction-stack-decisions.md](../reports/2026-09-06-instruction-stack-decisions.md) for where this work landed. This file is kept as the evidence record; some of its conclusions were later reversed.
 
 **Date:** 2026-09-06
-**Status:** Partly applied. **A2, A5, B4 and D3 landed in `0b177104`** as one
-commit, being the four the provenance scan showed to be fork drift. Everything
-else is still proposed and awaiting the operator's approval, per item.
+**Status:** **Nothing applied. Every item is open, including the ones this file
+previously recorded as decided.**
+
+A2, A5, B4 and D3 were applied in `0b177104` and reverted in `7455159e` on the
+operator's instruction, to reopen the whole set from a clean slate rather than
+carry a partly-applied plan. The revert restored both files byte-for-byte;
+`build:dev:full` green and 148 focused tests pass on the reverted tree.
+
+**What survived and what did not.** The measurements survived: the provenance
+scan, the vendor comparisons, the character counts, and the corrections to earlier
+claims are all evidence and are unaffected by the revert. What was withdrawn is
+the decision to apply. Where this file says the operator chose something, read it
+as a proposal that was accepted once and is now open again, not as a standing
+ruling.
 **Inputs:** [subtraction report](../reports/2026-09-06-instruction-stack-subtraction.md)
 (`169f4e29`) and [comparative report](../reports/2026-09-06-instruction-stack-comparative-decisions.md)
 (`27a9da10`, `59a152e7`).
@@ -96,13 +107,17 @@ borrow upstream's judgment as support. For A6a specifically, "the stated invaria
 is impossible" is verified against **our** implementation clearing the list;
 upstream's runtime was not executed and its behavior is unknown here.
 
-**Decided 2026-09-06, by the operator:** A5 is widened to upstream's all-four
-deletion and B4 lifts upstream's wording.
+**Re-scoped by this measurement, and still only proposed:** A5 widens to
+upstream's all-four deletion, and B4 lifts upstream's wording rather than
+composing its own. Both re-scopings are consequences of the evidence above and
+stand on it. Neither carries an approval any more.
 
-**Applied 2026-09-06 in `0b177104`:** the four drift items, A2, A5, B4 and D3, as
-one commit, on the reasoning that they carry the least of our own judgment and the
-most external support. Evidence in that commit message. The remaining items are
-untouched, and each now rests on our own argument alone.
+**Applied and reverted.** The four drift items landed together in `0b177104` on
+the reasoning that they carry the least of our own judgment and the most external
+support, then were reverted in `7455159e` when the operator chose to reopen every
+decision. Read that sequence as a record, not as a recommendation withdrawn: the
+reasoning in `0b177104`'s message is still the case for those four, and the
+evidence behind it is unchanged. Only the approval is gone.
 
 **One stale reference this surfaced, reported and not fixed.**
 `src/components/agents/generateAgent.ts:61-68` carries the same instruction A2 just
