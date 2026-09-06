@@ -18,7 +18,7 @@ not the reason. Group by reason instead, because the risk differs:
 
 | Group | Why | Items | What approving it costs you |
 | --- | --- | --- | --- |
-| **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4a | Nothing. These are defects; they need no thesis about model strength |
+| **1. The instruction is wrong** | Our text contradicts our own code or policy | A2, A6a, B1, B4a, D3 | Nothing. These are defects; they need no thesis about model strength |
 | **1b. Live and untested** | An instruction that forces an agent spawn, on the default path, with no coverage | A7 | Investigation only; it gates how A2 is judged |
 | **2. Pure simplification** | The same rule, said once instead of twice | A1, A3, A4, A5, A6b | Nothing behavioral is claimed. This is the original brief |
 | **3. Adopted from Codex** | Nothing of ours is wrong; we would import their judgment | B2, B3, B4b | The only real bet on the table |
@@ -84,9 +84,35 @@ requirement, asynchronous lifecycle rules, and `forkExamples` on the fork path.
 **Why:** it contradicts our own position that having written code is not itself a
 reason to delegate, and it invents an agent that does not exist.
 
-**Risk:** the non-fork path ends up with no worked example at all. That is the
-intent, but it is the largest single behavior-shaped deletion here, so it is worth
-watching for a rise in unnecessary delegation and reverting alone if seen.
+**Provenance, measured 2026-09-06. This text is inherited, and upstream has
+already deleted it.** `git blame` puts the whole `currentExamples` body in
+`86051a8e`, the initial private publish snapshot, so no line of it is our work.
+The fork-point bundle `node_modules/@anthropic-ai/claude-agent-sdk/cli.js`
+(`VERSION:"2.1.87"`) carries `isPrime` once, `greeting-responder` five times and
+`test-runner` fourteen times. Nineteen upstream builds in
+`~/.local/share/claude/versions/`, 2.1.214 through 2.1.239, were scanned for both
+the UTF-8 and the UTF-16LE literal tables: `isPrime`, `greeting-responder` and the
+wrapper tag `example_agent_descriptions` return **zero hits in every one of them**.
+Upstream removed the structure, not just the story. The only `test-runner` string
+left in its agent description is the parallel-launch sentence, which we also carry
+at `AgentTool/prompt.ts:420` and which this item does not touch. Our own
+`greeting-responder` half was already deleted in `ba285305` after session
+`13a6bfc5` (2026-09-04, `gpt-5.6-luna`) spawned a subagent for "Hi" and quoted the
+example as its reason; see the peer-sessions instruction-surface audit, F11.
+
+**Risk, revised down after that measurement.** The stated risk was that the
+non-fork path ends up with no worked example at all. Upstream's current Agent
+description has no worked example either, and has shipped that way across all
+nineteen builds above; its mechanics live in prose bullets under `## Usage notes`.
+So this is a return to upstream behavior rather than an untested cut. It remains
+the largest behavior-shaped deletion in Part A and is still worth reverting alone
+if unnecessary delegation rises.
+
+**This supersedes one recommendation of our own.** The 2026-09-05 peer-sessions
+audit deleted the greeting example and advised keeping this one, on the grounds
+that "the test-runner example carries the mechanics alone". That was written
+before the upstream comparison. Upstream's answer is that the mechanics do not
+need an example.
 
 ### A3. Remove the snake-case example and the capability compliment
 
@@ -311,6 +337,69 @@ rule itself is unaffected: 1,129 comment lines on this branch carry `file.ts:NNN
 citations, and in a 16-line sample roughly half point at a line that says
 something unrelated, none of it mechanically detectable.
 
+---
+
+## Part D — tool descriptions
+
+Added 2026-09-06. The `D` items came from the
+[tool-description audit](../reports/2026-09-06-tool-description-comparative-audit.md)
+and carried no before/after text of their own. D3 is planned here because the same
+upstream comparison that settled A2 settled it, and because it edits a file A2
+already opens. D1 is another session's, D2 and D4 stay unplanned.
+
+### D3. Replace the blanket trust sentence with upstream's current wording
+
+**File:** `src/tools/AgentTool/prompt.ts:417`.
+
+**Before:**
+
+```
+- The agent's outputs should generally be trusted.
+```
+
+**After:**
+
+```
+- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
+```
+
+**Why this is a defect, not a preference.** Root `CLAUDE.md` states that a
+subagent's output is the parent's to verify. The shipped sentence tells the model
+the opposite at the moment of the call, which is the closer instruction.
+
+**Provenance, measured 2026-09-06 in both literal tables.** The fork-point bundle
+at 2.1.87 carries `outputs should generally be trusted` once and `Trust but verify`
+zero times. All nineteen upstream builds from 2.1.214 to 2.1.239 are the exact
+inverse, with identical counts in every one of them: zero and four. The replacement
+occupies the same bullet list, confirmed by the neighbouring bullet that both
+builds share verbatim, `Clearly tell the agent whether you expect it to write code
+or just to do research`. So this is not our wording competing with upstream's; it
+is April text that its author replaced, kept only because the fork froze at 2.1.87.
+
+**Wording chosen by the operator: upstream's, unmodified.** Two alternatives were
+put and declined. The audit's own replacement ("Use the agent's findings, but
+review returned changes and supporting evidence before reporting completion. For
+claimed external actions, obtain a verifiable result such as a URL, ID, or file
+path and check it...") states no mechanism and names no recognisable trigger. A
+hybrid adding an external-action clause to upstream's sentence was also declined.
+
+**Known gap, accepted deliberately.** Upstream's sentence covers written or edited
+code only. It does not cover an agent reporting that an external action succeeded:
+a commit made, a peer message sent, a scheduled job created. Our agents do those
+things and upstream's do not, so the case is real and is left open rather than
+missed. It can be added later as a second sentence without disturbing this one.
+
+**What stays:** the returned-id, `TaskStop`, `ResumeAgent`, `SendMessage`,
+worktree, and automatic-notification instructions. Those describe APIs the model
+cannot infer from the tool name.
+
+**Pairs with A2.** A2 removes the example that pushes toward delegating; D3
+removes the sentence that says to believe the result. Both arrived in `86051a8e`,
+both were fixed upstream, and applying one without the other leaves the pair
+half-corrected.
+
+**Risk:** none identified. One line out, one line in, no branch or gate touched.
+
 ## Not in this plan, and why
 
 - **S5, S6, T5, T6** — judgment-sensitive cuts to transcript guidance, learning-mode
@@ -343,6 +432,12 @@ listed as must-keep is still present: authorization scope and the risky-action
 list, instruction authority, harness mechanics, environment facts, compaction and
 token-budget semantics. A before/after character count is recorded for each
 provider path, as description rather than as a success measure.
+
+The dumps cover base prompts, not tool descriptions, so D3 and A2 are checked
+separately: the `src/tools/AgentTool` suite covers the file, and the emitted Agent
+description is re-read once to confirm the new trust sentence is present, the
+`currentExamples` body is gone, and the parallel-launch sentence at `:420` and the
+fork-path examples both survive.
 
 For Part C, `git diff --check` and `bun run maps:lint` only.
 

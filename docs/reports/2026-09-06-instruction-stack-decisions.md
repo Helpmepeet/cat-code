@@ -68,7 +68,7 @@ Grouped by reason, because the risk differs. Nothing here is applied.
 | Item | What it does | Why | Status |
 |---|---|---|---|
 | **A1** | Delete the GPT decision checklist | Its four decisions are stated in the same section, fifteen lines above | Reviewed, ready |
-| **A2** | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Reviewed, ready. Largest behavior change here |
+| **A2** | Delete AgentTool's prime-number example | Tells the model to spawn a reviewer because code was written, which our own policy contradicts | Reviewed, ready. Inherited text; upstream deleted it, see §3a |
 | **A3** | Drop the snake-case example and "You are highly capable" | Teaches ordinary coding-assistant behavior; absent from all three comparators | Reviewed, ready |
 | **A4** | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Narrowed after review, ready |
 | **A5** | Keep one Skill invocation example, drop three | Namespace syntax is product-specific; the bare forms are not | Reviewed, ready |
@@ -81,15 +81,57 @@ Grouped by reason, because the risk differs. Nothing here is applied.
 | **B4** | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Modify: separate discussing a skill from requesting it |
 | **D1** | Write's description names `Edit`, which the GPT pool does not expose | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Another session is fixing it.** Do not touch |
 | **D2** | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites out of its own `blockedBy`; TaskGet does not, so a finished prerequisite blocks forever | Verified, unplanned |
-| **D3** | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Verified, unplanned |
+| **D3** | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Planned in the apply plan, Part D. Upstream replaced this sentence; we adopt its wording |
 | **D4** | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | Investigation only |
+
+### 3a. The upstream measurement, and what it settled
+
+Added 2026-09-06, after the table above was written. A2 and D3 were both argued
+from our own text alone. Measuring the fork's ancestor changed the standing of
+both, and neither is now a judgment call.
+
+**Both are inherited, and upstream deleted both.** `git blame` puts the
+`currentExamples` body and the trust sentence in `86051a8e`, the initial private
+publish snapshot, so neither is our work. Counts below are over both the UTF-8 and
+the UTF-16LE literal tables, since upstream stores strings in two.
+
+| String | Fork point 2.1.87 | Upstream 2.1.214 to 2.1.239, 19 builds |
+|---|---:|---:|
+| `isPrime` | 1 | **0 in every build** |
+| `greeting-responder` | 5 | **0 in every build** |
+| `example_agent_descriptions` | present | **0 in every build** |
+| `outputs should generally be trusted` | 1 | **0 in every build** |
+| `Trust but verify` | 0 | **4 in every build** |
+
+Upstream removed A2's structure rather than its story, and swapped D3's sentence
+for its inverse in the same bullet list, confirmed by a neighbouring bullet both
+builds share verbatim. The only `test-runner` string surviving upstream is the
+parallel-launch sentence we also carry at `AgentTool/prompt.ts:420`, which A2 does
+not touch.
+
+**What this settles.** A2's stated risk was that the non-fork path would be left
+with no worked example; upstream's Agent description has had none across all 19
+builds, with the mechanics in prose bullets instead. D3's wording question is
+settled by adopting upstream's sentence unmodified, which the operator chose over
+the audit's own replacement and over a hybrid; the apply plan records the accepted
+gap, that upstream's sentence covers code changes and not claimed external actions.
+
+**It also overrides one of our own recommendations.** The 2026-09-05 peer-sessions
+audit advised keeping the test-runner example because it "carries the mechanics
+alone". That predates this comparison.
+
+**One live incident, already acted on.** The sibling `greeting-responder` example
+in the same block was deleted in `ba285305` after session `13a6bfc5` spawned a
+subagent for "Hi" and quoted the example as its reason. So the mechanism by which
+this block is read as instruction rather than illustration is demonstrated, not
+suspected, even though A2's own effect remains unmeasured.
 
 ### The three defects worth understanding
 
 **A2 and D3 point the same way.** One tells the model to delegate because code
 was written; the other tells it to trust what comes back. Together they encourage
 spawning a reviewer and then believing it. `CLAUDE.md` says the opposite on both
-counts.
+counts, and so does current upstream, per §3a.
 
 **D1 is a live bug on our main path.** Every GPT session reads "check whether
 Edit is the better tool" for a tool that is not in its pool. Another session
@@ -157,7 +199,9 @@ for provenance, not conclusions.
    the only pass over the tool surface, and the one that found real bugs.
    D1 through D4.
 4. [Apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md) — the exact
-   before and after text for every base-prompt item, grouped by reason.
+   before and after text, grouped by reason. Parts A to C are the base prompt;
+   Part D, added 2026-09-06, carries D3. Its A2 and D3 entries hold the upstream
+   measurement summarised in §3a. This is the file to open when implementing.
 
 ### Where the prompts actually live
 
