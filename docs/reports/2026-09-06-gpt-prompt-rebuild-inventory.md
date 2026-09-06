@@ -175,6 +175,43 @@ because 5.6 has no subagent tool.
 Roughly **7,200 characters have no counterpart in Codex** and survive any rebuild.
 That, not verbosity, is most of the size difference.
 
+## 4a. Fork-authored text carries intent the wording does not state
+
+Added 2026-09-07 at the operator's direction. Some blocks were written here to fix
+something specific, and the block itself does not say what. A rebuilder judging
+them on their text alone, or on whether Codex carries an equivalent, will delete
+fixes for problems that actually happened.
+
+**The commit is where the intent is, and it is one command:**
+
+```
+git log -S"<a distinctive phrase from the block>" -- src/constants/promptStyles/gpt.ts
+```
+
+**It also separates inherited from fork-authored, which nothing in the prompt text
+does.** If the only result is `86051a8e`, the initial private publish snapshot, the
+block came with the fork and its intent is upstream Claude Code's. Any other commit
+means someone here added or changed it deliberately. Verified on four blocks:
+`DISAGREEMENT` and `RULE — Outcome reporting` return `86051a8e` alone and are
+inherited; `INVESTIGATION DISCIPLINE` returns `bf7beca9` "serve one policy core
+across providers and modes"; `RULE — Show the diff` returns `339b68fe`.
+
+**What that one commit contains, as a worked example.** `339b68fe` is
+"fix(prompts): hybrid Apply_patch rule for the GPT path", and its body says the
+mutation rule was **modelled on OpenAI's gpt-5.6 text**, that the diff rule was
+added alongside it, that it fixed the Bash prompt naming `Edit` on a path where the
+registry ships `Apply_patch`, and that it shipped with regression tests for the GPT
+wording, the provider-resolved tool name, and no leakage into the Claude branch.
+
+So `RULE — Show the diff` reads, on its face, like a candidate under section 5's
+criteria: Codex 5.6 has no equivalent. Its commit says it was written *from* the
+5.6 template, to close a named defect, with tests. Those are different facts about
+the same block, and only one of them is in the prompt.
+
+**Tests may hold the intent too.** That commit added regression tests for its
+wording. A block whose phrasing is asserted somewhere under `src/**/*.test.ts` was
+deliberate, and changing it will show up as a failure rather than silently.
+
 ## 5. What made a block a candidate, and one session's floor
 
 **The criteria, so they apply to blocks nobody here has judged.** A block was
