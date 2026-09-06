@@ -155,7 +155,11 @@ files is inventory, not emitted text, and is used as a saving nowhere.
 
 ## 3. The eighteen items
 
-Nothing here is applied. **Shape** matters as much as status: the plan's Part A
+Nothing here is applied. **Nothing here is waiting on a decision either**, after
+2026-09-06: eight items are settled by the operator or by investigation, eight are
+READY on evidence that needs no further judgment, one needs a runtime measurement,
+and one belongs to another session. The only thing still genuinely open is
+`ERROR HANDLING`'s fate inside §5a. **Shape** matters as much as status: the plan's Part A
 "deletions" and Part B "additions" offered only two shapes, so five replacements
 were filed as one or the other. Cut-versus-add is a size axis, which is how a
 programme mostly about correctness came to be scored at "net −344 characters" — a
@@ -166,23 +170,23 @@ another session's. Seventeen are rows below; C1 is in §5.
 
 | Item | Shape | What it does | Why | Status |
 |---|---|---|---|---|
-| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated sixteen lines above, at `gpt.ts:197` | Open. Verified redundancy. An earlier permission-thinness caveat is **withdrawn**, see §2 |
-| **A2** | cut | Delete AgentTool's prime-number example | Tells the model to delegate because code was written, which our policy contradicts | Open. Inherited; upstream deleted it |
-| **A3** | cut | Drop the snake-case example and "You are highly capable" | Ordinary coding-assistant teaching. **"Absent from all three comparators" was wrong**, but so was the correction: Claude Code ships the snake-case example verbatim on the Claude path, while our capability sentence is a fork rewrite that dropped a clause | Open, re-scoped by the craft decision in §5 |
-| **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | Open, re-scoped by §5 |
-| **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four inherited; upstream deleted all four, keeping the syntax as prose | Open. Applied then reverted |
-| **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | Open. `-p` runs only |
+| **A1** | cut | Delete the GPT decision checklist | Its four decisions are stated sixteen lines above, at `gpt.ts:197` | **READY.** Verified redundancy; the permission-thinness caveat is withdrawn, see §2 |
+| **A2** | cut | Delete AgentTool's prime-number example | Tells the model to delegate because code was written, which our policy contradicts | **READY.** Inherited; upstream deleted it; one live incident |
+| **A3** | cut | Drop the snake-case example and "You are highly capable" | Ordinary coding-assistant teaching. **"Absent from all three comparators" was wrong**, but so was the correction: Claude Code ships the snake-case example verbatim on the Claude path, while our capability sentence is a fork rewrite that dropped a clause | **SUPERSEDED** by the craft decision, §5a |
+| **A4** | cut | Remove two restated sentences, GPT path only | "The right complexity level is exactly what the task requires" restates SCOPE | **SUPERSEDED** by the craft decision, §5a |
+| **A5** | tweak | Drop all four Skill invocation examples, state the syntax instead | All four inherited; upstream deleted all four, keeping the syntax as prose | **READY.** Inherited; upstream deleted all four. Applied then reverted |
+| **A6a** | tweak | Correct TodoWrite's "Exactly ONE in_progress" | The code clears the list on completion, so the stated invariant is impossible | **READY.** Verified defect. `-p` runs only, so low reach |
 | **A6b** | cut | Drop TodoWrite's eight narrated scenarios | Teaching material. ~5,841 chars, the largest single cut | **DECIDED: do it.** Claude path only, and a deliberate divergence: upstream still ships them |
 | **A7** | investigate | Audit the verification-agent nudge | Its premise was wrong: the nudge is gated shut and has never fired | **ANSWERED.** Closed; produced A8 |
-| **A8** | cut | Delete the unreachable verification nudge | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | Open. The only item that provably cannot change behavior |
+| **A8** | cut | Delete the unreachable verification nudge | Inherited, deleted upstream, gated shut here by a hardcoded `return false`, zero tests | **READY.** The only item that provably cannot change behavior |
 | **B1** | add | Let the final answer restate the outcome | RULE 6 forbids the summary a user needs after a long run | **DECIDED: in.** The visible tip of the talk-row gap in §2 |
 | **B2** | add | Finish authorized preparation before asking approval | We say when to stop, never that work up to the gate should be done first | **DECIDED: in**, and no longer unsupported: astra says "You MUST complete the work that is already authorized… before asking the user for permission as a final step" |
 | **B3** | add | "Analysis does not authorize implementation" | Guards the opposite failure from A3's removal | **DECIDED: in.** Belongs in the Actions section |
-| **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | Open. Inherited; upstream removed it after 2.1.215 and its replacement is available to lift |
+| **B4** | tweak | Replace the absolute skill trigger with relevance | "NEVER mention a skill without calling this tool" makes it impossible to say a skill does not fit | **READY.** Inherited; upstream removed it after 2.1.215, replacement wording available to lift |
 | **D1** | not ours | Write's description names `Edit`, absent from the GPT pool | `getProviderFileEditTool()` returns `FilePatchTool` on the OpenAI path | **Fixed only in the working tree**, not in HEAD (last commit `ea085822`). Another session's dirty file: do not touch, and do not assume it is safe |
-| **D2** | tweak | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites; TaskGet does not, so a finished prerequisite blocks forever | Open. Verified defect |
-| **D3** | tweak | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | Open. Upstream replaced this sentence; text drafted |
-| **D4** | investigate | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | Open |
+| **D2** | tweak | TaskGet says require an empty `blockedBy` | `TaskListTool` filters completed prerequisites; TaskGet does not, so a finished prerequisite blocks forever | **READY.** Verified defect, and the only fix is a rewrite |
+| **D3** | tweak | Agent says "outputs should generally be trusted" | `CLAUDE.md` says a subagent's output is the parent's to verify | **READY.** Upstream replaced this sentence; text drafted |
+| **D4** | investigate | Agent's result tells the parent to end its turn while its description permits continuing | Text conflict verified; behavior not measured | **Needs a measurement**, not a decision: launch a background agent and observe |
 
 ### The defects worth understanding
 
@@ -263,23 +267,44 @@ proof of a selected live branch.
 
 ## 5. Open, and needing your decision
 
-**a. The craft-coaching slice, three options.** The 6,692 execution outlier holds
-two kinds of text with opposite vendor trends: craft coaching, which both retired,
-and autonomy rules, which both are growing. Only the craft half is in play —
-1,481 characters across `ERROR HANDLING`, `SCOPE`, `TASK DOMAIN`, `ABSTRACTION`
-and `CAPABILITY` in `gpt.ts`.
+**a. The craft-coaching slice — DECIDED 2026-09-06: follow Codex.** The operator's
+call. Four of the five sections go; `SCOPE`'s framing question and `ERROR
+HANDLING`'s exception are below. Recorded with the reasoning that changed while
+deciding, because it makes two of these cuts much stronger than "Codex dropped it".
 
-| Option | Shape | Chars | Rests on |
-|---|---|---:|---|
-| A. Redundancy and flattery only | cut | 266 | Our own text. No vendor needed |
-| B. A, plus the craft sentences Codex dropped | cut | 1,099 | Codex's judgment for the GPT path |
-| C. Rewrite the slice tighter, same ideas | tweak | est. 500–700 | Nothing. No vendor needed |
+**The strongest argument is not about Codex at all, and was missed until the end.**
+Two of the five are already stated in `~/.claude/CLAUDE.md`, which loads into every
+Cat Code session in this tree:
 
-Option B is a bet that OpenAI is right and Anthropic wrong about text both still
-ship. **Option C avoids it**: the vendors disagree about whether these ideas are
-worth stating, not about whether one should be stated twice. If any option is
-adopted it supersedes A3 and A4, which were scoped before this split existed.
-Per-sentence verdicts and a worked rewrite are in the craft report (§8).
+| Section | Already delivered by a loaded instruction file? |
+|---|---|
+| `ABSTRACTION` | **Yes** — `~/.claude/CLAUDE.md`: "Don't over-engineer. No speculative features, no premature abstraction." |
+| `SCOPE` | **Yes** — same file: "Keep changes minimal and related to the current request. No refactors unless required for the current task." |
+| `ERROR HANDLING` | **No.** No loaded file mentions defensive code or boundaries. The `cat-code/CLAUDE.md` hits are desktop wire-protocol rules, a different subject. |
+| `TASK DOMAIN` | n/a — an example and a domain statement, not a rule |
+| `CAPABILITY` | n/a — instructs nothing |
+
+So cutting `ABSTRACTION` and `SCOPE` deletes a **duplicate**, not an instruction:
+the session still receives both rules, from the file the operator maintains. That
+argument needs no vendor and survives whatever Codex does next.
+
+**`ERROR HANDLING` is the one real loss, and it is genuinely open.** It is the only
+copy anywhere: Codex has no equivalent (confirmed absent from inside a live
+session), and no loaded instruction file carries it. Deleting it removes the
+guidance outright rather than removing a repetition. Three ways to close that, none
+chosen:
+
+1. cut it anyway, accepting the loss on the grounds that a frontier model does not
+   need to be told not to write defensive code;
+2. rewrite it tighter and keep it — 411 characters down to about 160, drafted in
+   the craft report §2;
+3. move it into `~/.claude/CLAUDE.md` beside the other two, so the prompt sheds it
+   and the guidance survives where its siblings already live.
+
+**Sizes.** `ABSTRACTION` 256, `SCOPE` 352 (of which sentence 1 and the comment
+rules are marked Keep in the craft report §4), `TASK DOMAIN` 216 of 336,
+`CAPABILITY` 55 of 126. Per-sentence verdicts and exact strings are in the craft
+report §4, which remains the implementation detail for this decision.
 
 **b. The comment rule, reframed by the operator 2026-09-06.** The question was
 put as "keep the blanket ban on status notes, or soften it". Both options were
