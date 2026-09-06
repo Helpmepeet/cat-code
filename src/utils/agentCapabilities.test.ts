@@ -106,8 +106,12 @@ describe('getWorkerCapabilityPromptLine', () => {
   test('routes escalation through ask_orchestrator only when it is in the pool', () => {
     const withTool = getWorkerCapabilityPromptLine([ASK_ORCHESTRATOR_TOOL_NAME])
     expect(withTool).toContain(
-      `call ${ASK_ORCHESTRATOR_TOOL_NAME} once, then stop your turn and return a blocked result naming the exact question`,
+      `call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run and hands the question over`,
     )
+    // runAgent ends the loop on the call now. Asking the worker to stop as
+    // well is the instruction the run contradicts, and the volunteered stop
+    // is what never happened on 2026-09-06.
+    expect(withTool).not.toContain('then stop your turn')
 
     const withoutTool = getWorkerCapabilityPromptLine(['Read'])
     expect(withoutTool).not.toContain(ASK_ORCHESTRATOR_TOOL_NAME)

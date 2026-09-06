@@ -29,6 +29,7 @@ import {
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
+import { formatBlockedHandoff } from '../../tools/AskOrchestratorTool/AskOrchestratorTool.js'
 import { getPillLabel, pillNeedsCta } from '../pillLabel.js'
 import {
   getTaskStatusIcon,
@@ -307,6 +308,56 @@ describe('LocalAgentTask foreground cleanup', () => {
       status: 'completed',
       handoffStatus: 'blocked',
       blockReason: 'Should I update the public API too?',
+    })
+  })
+
+  // The handoff runAgent writes when a worker calls ask_orchestrator has to
+  // land here the same way a model-written one does: extractHandoffStatus and
+  // extractBlockReason read the RESULT TEXT, so a constructed result that
+  // drifts from that skeleton would show as an ordinary completion with the
+  // question buried in it.
+  test('completeAgentTask reads the harness-written escalation handoff', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-escalated',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'general-purpose',
+        agentType: 'general-purpose',
+        prompt: 'test prompt',
+      },
+      agentName: 'Wilkes',
+      setAppState,
+    })
+
+    completeAgentTask(
+      {
+        agentId: 'sync-agent-escalated',
+        agentType: 'general-purpose',
+        agentName: 'Wilkes',
+        model: 'gpt-5.6-luna',
+        content: [
+          {
+            type: 'text',
+            text: formatBlockedHandoff({
+              kind: 'question',
+              message: 'Which components does Q to S cover?',
+              evidence: ['ToolSearch select:Agent returned nothing'],
+            }),
+          },
+        ],
+        totalToolUseCount: 1,
+        totalDurationMs: 100,
+        totalTokens: 10,
+      },
+      setAppState,
+    )
+
+    expect(appState.tasks['sync-agent-escalated']).toMatchObject({
+      type: 'local_agent',
+      status: 'completed',
+      handoffStatus: 'blocked',
+      blockReason: 'Which components does Q to S cover?',
     })
   })
 

@@ -67,7 +67,13 @@ import {
 import { registerFrontmatterHooks } from '../../utils/hooks/registerFrontmatterHooks.js'
 import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
-import { createUserMessage } from '../../utils/messages.js'
+import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
+import {
+  formatBlockedHandoff,
+  parseAskOrchestratorEscalation,
+  type AskOrchestratorToolResult,
+} from '../AskOrchestratorTool/AskOrchestratorTool.js'
+import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/prompt.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
@@ -268,6 +274,44 @@ function isRecordableMessage(
       'subtype' in msg &&
       msg.subtype === 'compact_boundary')
   )
+}
+
+/**
+ * Records the escalations a worker opened this run, keyed by the tool_use id
+ * that opened each one, so the matching tool_result can be recognised without
+ * re-reading the model's text.
+ */
+function collectAskOrchestratorCalls(
+  message: AssistantMessage,
+  pending: Map<string, AskOrchestratorToolResult>,
+): void {
+  for (const block of message.message.content) {
+    if (block.type !== 'tool_use' || block.name !== ASK_ORCHESTRATOR_TOOL_NAME) {
+      continue
+    }
+    const escalation = parseAskOrchestratorEscalation(block.input)
+    if (escalation) pending.set(block.id, escalation)
+  }
+}
+
+/**
+ * The escalation this user message completes, if any. A tool_result is the
+ * proof the call was allowed and ran: a denied or failed call carries
+ * `is_error`, and the worker should keep going rather than be stopped by a
+ * call the harness refused.
+ */
+function findCompletedAskOrchestratorCall(
+  message: UserMessage,
+  pending: ReadonlyMap<string, AskOrchestratorToolResult>,
+): AskOrchestratorToolResult | undefined {
+  const content = message.message.content
+  if (!Array.isArray(content)) return undefined
+  for (const block of content) {
+    if (block.type !== 'tool_result' || block.is_error === true) continue
+    const escalation = pending.get(block.tool_use_id)
+    if (escalation) return escalation
+  }
+  return undefined
 }
 
 type SetupCleanup = () => void | Promise<void>
@@ -925,6 +969,17 @@ async function* runAgentInCleanupScope({
   // Track the last recorded message UUID for parent chain continuity
   let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
 
+  // Escalation is terminal, and the harness is what makes it so. There is no
+  // reply channel into a running worker, so the only thing a worker could do
+  // after ask_orchestrator is guess; the prompts used to ask it to stop of its
+  // own accord, and the one worker that ever called the tool did not
+  // (docs/reports/2026-09-06-subagent-escalation-and-delegation-failures.md).
+  const pendingEscalations = new Map<string, AskOrchestratorToolResult>()
+  // Usage for the handoff message below. finalizeAgentTool reads the run's
+  // token total off the LAST assistant message, so a synthetic terminal
+  // carrying the zeroed default would report the whole run as 0 tokens.
+  let lastAssistantUsage: AssistantMessage['message']['usage'] | undefined
+
   try {
     for await (const message of query({
       messages: initialMessages,
@@ -1021,6 +1076,38 @@ async function* runAgentInCleanupScope({
           lastRecordedUuid = message.uuid
         }
         yield message
+
+        if (message.type === 'assistant') {
+          lastAssistantUsage = message.message.usage
+          collectAskOrchestratorCalls(message, pendingEscalations)
+          continue
+        }
+        const escalation =
+          message.type === 'user'
+            ? findCompletedAskOrchestratorCall(message, pendingEscalations)
+            : undefined
+        if (escalation) {
+          // The run's result is written here rather than left to the model,
+          // because the model has already stopped being asked for one: the
+          // loop ends on this message. finalizeAgentTool takes the last
+          // assistant text as the result, and LocalAgentTask's
+          // extractHandoffStatus reads the handoff out of that text, so a
+          // synthetic assistant message is what reaches both.
+          const handoff = createAssistantMessage({
+            content: formatBlockedHandoff(escalation),
+            ...(lastAssistantUsage ? { usage: lastAssistantUsage } : {}),
+          })
+          await recordSidechainTranscript(
+            [handoff],
+            agentId,
+            lastRecordedUuid,
+          ).catch(err =>
+            logForDebugging(`Failed to record sidechain transcript: ${err}`),
+          )
+          lastRecordedUuid = handoff.uuid
+          yield handoff
+          break
+        }
       }
     }
 

@@ -300,6 +300,135 @@ describe('runAgent max-turn exhaustion', () => {
   })
 })
 
+describe('runAgent terminal escalation', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    resetStateForTests()
+    resetWorkerNamesForTests()
+    tempDir = mkdtempSync(join(tmpdir(), 'run-agent-'))
+    switchSession(asSessionId('session-run-agent-escalation'), tempDir)
+  })
+
+  afterEach(() => {
+    resetWorkerNamesForTests()
+    resetStateForTests()
+  })
+
+  const ESCALATION = {
+    kind: 'question',
+    message: 'Which schema owns the retry field, protocol.ts or hostApi.ts?',
+    evidence: ['Both declare `retry`, and the brief names neither'],
+  }
+  const KEPT_GOING = 'Nobody answered, so I picked one.'
+
+  /**
+   * One escalation turn, followed by the turn a worker takes when nothing
+   * stops it. Wilkes took exactly that second turn on 2026-09-06 and returned
+   * Blocked having read nothing, so the second message is the regression: it
+   * must never reach the caller.
+   */
+  async function collectEscalatingRun({
+    isError = false,
+  }: { isError?: boolean } = {}): Promise<Message[]> {
+    queryScript = async function* () {
+      yield createAssistantMessage({
+        content: [
+          {
+            type: 'tool_use',
+            id: 'toolu_escalate',
+            name: ASK_ORCHESTRATOR_TOOL_NAME,
+            input: ESCALATION,
+          },
+        ] as never,
+      })
+      yield createUserMessage({
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'toolu_escalate',
+            content: 'Handed to the orchestrator.',
+            ...(isError ? { is_error: true } : {}),
+          },
+        ],
+      })
+      yield createAssistantMessage({ content: KEPT_GOING })
+    }
+    const collected: Message[] = []
+    for await (const message of startAgent(createAppStateHarness())) {
+      collected.push(message)
+    }
+    return collected
+  }
+
+  function resultTextOf(collected: Message[]): string {
+    return finalizeAgentTool(collected, 'agent-escalation', {
+      prompt: 'sweep the renderer',
+      resolvedAgentModel: 'gpt-5.6-luna',
+      isBuiltInAgent: true,
+      startTime: Date.now(),
+      agentType: 'general-purpose',
+      isAsync: false,
+    })
+      .content.map(block => block.text)
+      .join('\n')
+  }
+
+  test('ends the run instead of letting the worker take another turn', async () => {
+    const collected = await collectEscalatingRun()
+
+    expect(
+      collected.some(
+        message =>
+          message.type === 'assistant' &&
+          JSON.stringify(message.message.content).includes(KEPT_GOING),
+      ),
+    ).toBe(false)
+  })
+
+  test('returns the question and evidence as a blocked handoff', async () => {
+    const text = resultTextOf(await collectEscalatingRun())
+
+    expect(text).toContain('status: blocked')
+    expect(text).toContain(ESCALATION.message)
+    expect(text).toContain(ESCALATION.evidence[0]!)
+  })
+
+  // A blocked handoff is a finished run awaiting a decision, not a failure:
+  // `error` is what makes the parent report the agent as failed
+  // (max-turns and API-error terminals above are the paths that set it).
+  test('does not report the escalated run as an error', async () => {
+    const result = finalizeAgentTool(
+      await collectEscalatingRun(),
+      'agent-escalation',
+      {
+        prompt: 'sweep the renderer',
+        resolvedAgentModel: 'gpt-5.6-luna',
+        isBuiltInAgent: true,
+        startTime: Date.now(),
+        agentType: 'general-purpose',
+        isAsync: false,
+      },
+    )
+
+    expect(result.error).toBeUndefined()
+  })
+
+  // A denied or failed call is not an escalation the orchestrator ever
+  // received, so stopping the worker on it would strand the question.
+  test('keeps running when the escalation call itself failed', async () => {
+    const collected = await collectEscalatingRun({ isError: true })
+
+    expect(
+      collected.some(
+        message =>
+          message.type === 'assistant' &&
+          JSON.stringify(message.message.content).includes(KEPT_GOING),
+      ),
+    ).toBe(true)
+  })
+})
+
 describe('runAgent worker capability line', () => {
   let tempDir: string
 
@@ -410,8 +539,19 @@ describe('runAgent worker capability line', () => {
     const background = await systemPromptFor(pool, { isAsync: true })
     expect(background).not.toContain(SEND_MESSAGE_TOOL_NAME)
     expect(background).toContain(
-      `call ${ASK_ORCHESTRATOR_TOOL_NAME} once, then stop your turn and return a blocked result`,
+      `call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run`,
     )
+  })
+
+  // The worker is no longer asked to stop after escalating, because the
+  // harness stops it. A line that still told it to would be a rule the run
+  // contradicts, which is how the old contract failed in the first place.
+  test('does not ask the worker to stop its own turn after escalating', async () => {
+    const prompt = await systemPromptFor(['Read', ASK_ORCHESTRATOR_TOOL_NAME], {
+      isAsync: false,
+    })
+
+    expect(prompt).not.toContain('then stop your turn')
   })
 
   // The ordinary Agent spawn never reaches getAgentSystemPrompt: AgentTool

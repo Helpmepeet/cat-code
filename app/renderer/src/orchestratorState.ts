@@ -155,11 +155,13 @@ export function selectDockedOrchestratorWorkers(
 }
 
 /**
- * Attention owner (the baton). Blocked workers are always assistant-owned: they
- * fed a question back through AskOrchestratorTool (`AskOrchestratorTool.ts:83`)
- * and it lands in the delegating conversation's own queue. A pending-synthesis
- * result and a failed worker likewise await the assistant. A stopped worker is
- * settled and needs nobody.
+ * Attention owner (the baton). Blocked workers are always assistant-owned:
+ * `handoffStatus` is read out of the finished worker's result text by
+ * `extractHandoffStatus` (src/tasks/LocalAgentTask/LocalAgentTask.tsx), whether
+ * the worker wrote that handoff itself or ended its run through
+ * `ask_orchestrator`, and it lands in the delegating conversation's own queue.
+ * A pending-synthesis result and a failed worker likewise await the assistant.
+ * A stopped worker is settled and needs nobody.
  */
 export function deriveWorkerOwner(worker: AgentModeWorkerItem): WorkerOwner {
   return ownerForState(orchestratorWorkerState(worker))

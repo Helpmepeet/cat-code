@@ -69,7 +69,7 @@ export function getWorkerCapabilityPromptLine(
       : `you have no tool that starts another agent, and you MUST NOT launch one through a shell, so do the work yourself.`
 
   const escalation = capabilities.canAskOrchestrator
-    ? `If you are blocked, call ${ASK_ORCHESTRATOR_TOOL_NAME} once, then stop your turn and return a blocked result naming the exact question.`
+    ? `If you are blocked on a decision only the orchestrator can make, call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run and hands the question over.`
     : `If you are blocked, stop your turn and return a blocked result naming the exact question.`
 
   const sideways = capabilities.canSendMessage

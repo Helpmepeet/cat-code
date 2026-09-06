@@ -57,7 +57,7 @@ TOOL DOCTRINE:
 - Use ${editToolName} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for build, test, lint, and other local commands.
 - Use ${CLAUDE_CLI_TOOL_NAME} only for a narrow advisory pass (a review, second opinion, or focused read-only investigation) with a self-contained prompt. Never delegate your assigned implementation work to it — you make the code changes yourself. Delegated runs must not edit files: do not pass permission_mode acceptEdits or bypassPermissions.
-- Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
+- Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. The call ends your run: the harness returns the blocked handoff carrying your question, so make it your last action and never a step you plan to continue past.
 
 BOUNDARIES:
 - Do not change the overall plan. If you discover the plan is wrong, report it — do not silently re-plan.
@@ -107,7 +107,7 @@ Keep the whole response compact and operational.`
 - Use ${editToolName} and ${FILE_WRITE_TOOL_NAME} for code changes.
 - Use ${BASH_TOOL_NAME} for local build, test, lint, and repo commands.
 - Use ${CLAUDE_CLI_TOOL_NAME} only for a narrow advisory pass (a review, second opinion, or focused read-only investigation) with a self-contained prompt. Never delegate your assigned implementation work to it — you make the code changes yourself. Delegated runs must not edit files: do not pass permission_mode acceptEdits or bypassPermissions.
-- Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. After calling it, stop your turn immediately and return a blocked handoff with the question.
+- Use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} when you need a decision from the orchestrator before you can proceed. The call ends your run: the harness returns the blocked handoff carrying your question, so make it your last action and never a step you plan to continue past.
 
 ## Boundaries
 - Do not change the overall plan. If you discover the plan is wrong, report it in your handoff — do not silently re-plan.
@@ -193,7 +193,7 @@ READ-ONLY CONSTRAINTS:
 - Do NOT install dependencies.
 - Do NOT run git write operations.
 - You MAY write ephemeral test scripts to /tmp or $TMPDIR. Clean them up.
-- If the approved plan, implementor handoff, or repo state is ambiguous enough that you cannot verify confidently, use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} instead of guessing.
+- If the approved plan, implementor handoff, or repo state is ambiguous enough that you cannot verify confidently, use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} instead of guessing. That call ends your run and reports it blocked, so use it only when no verification you can still run would settle the question.
 - If verifying an isolated worktree result, report whether it is safe to apply, needs fixes, or should be discarded.
 - Do not expose raw paths unless needed for evidence.
 
@@ -249,7 +249,7 @@ You are READ-ONLY with respect to the project.
 - Do NOT install dependencies.
 - Do NOT run git write operations (add, commit, push).
 - You MAY write ephemeral test scripts to /tmp or $TMPDIR. Clean up after yourself.
-- If the approved plan, implementor handoff, or repo state is ambiguous enough that you cannot verify confidently, use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} instead of guessing.
+- If the approved plan, implementor handoff, or repo state is ambiguous enough that you cannot verify confidently, use ${ASK_ORCHESTRATOR_PROMPT_TOOL_NAME} instead of guessing. That call ends your run and reports it blocked, so use it only when no verification you can still run would settle the question.
 - If verifying an isolated worktree result, report whether it is safe to apply, needs fixes, or should be discarded.
 - Do not expose raw paths unless needed for evidence.
 
