@@ -1,9 +1,9 @@
 import type { ChildProcess } from 'child_process'
 import { stat } from 'fs/promises'
 import type { Readable } from 'stream'
-import treeKill from 'tree-kill'
 import { generateTaskId } from '../Task.js'
 import { formatDuration } from './format.js'
+import { killProcessGroupSync, killProcessTree } from './processTree.js'
 import {
   MAX_TASK_OUTPUT_BYTES,
   MAX_TASK_OUTPUT_BYTES_DISPLAY,
@@ -64,30 +64,6 @@ const SIZE_WATCHDOG_INTERVAL_MS = 5_000
 
 function prependStderr(prefix: string, stderr: string): string {
   return stderr ? `${prefix} ${stderr}` : prefix
-}
-
-function killProcessGroupSync(childProcess: ChildProcess): boolean {
-  const pid = childProcess.pid
-  if (!pid || process.platform === 'win32') {
-    return false
-  }
-
-  try {
-    process.kill(-pid, 'SIGKILL')
-    return true
-  } catch {
-    return false
-  }
-}
-
-function killChildProcess(childProcess: ChildProcess, signal: NodeJS.Signals): void {
-  if (killProcessGroupSync(childProcess)) {
-    return
-  }
-
-  if (childProcess.pid) {
-    treeKill(childProcess.pid, signal)
-  }
 }
 
 /**
@@ -389,7 +365,7 @@ class ShellCommandImpl implements ShellCommand {
 
   #doKill(code?: number): void {
     this.#status = 'killed'
-    killChildProcess(this.#childProcess, 'SIGKILL')
+    killProcessTree(this.#childProcess, 'SIGKILL')
     this.#resolveExitCode(code ?? SIGKILL)
   }
 

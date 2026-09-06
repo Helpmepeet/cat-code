@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { spawn, type SpawnOptionsWithoutStdio } from 'child_process'
 import { EventEmitter } from 'events'
 import { mkdtemp, rm, symlink, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
@@ -34,7 +35,11 @@ class FakeChildProcess extends EventEmitter {
   stdout = new PassThrough()
   stderr = new PassThrough()
   killedWith: NodeJS.Signals | undefined
-  pid = 12345
+  // Deliberately absent. A made-up pid would send the tool's process-group
+  // kill at whatever real group holds that number on this machine, and other
+  // sessions share it. Tests that need a real tree spawn one (see
+  // spawnShellWithBackgroundChild below).
+  pid: number | undefined = undefined
 
   constructor(private readonly opts: FakeChildOptions = {}) {
     super()
@@ -109,8 +114,69 @@ const CODING_WORKER_TOOL_NAMES = [
   ASK_ORCHESTRATOR_TOOL_NAME,
 ]
 
+/**
+ * Stands in for the external Claude CLI: a shell that starts a background
+ * child of its own and then waits. That is the shape a nested engine has (one
+ * MCP server child per configured server), and the shape that survives a
+ * signal aimed at the direct child alone. The real CLI is never launched here.
+ */
+const SHELL_WITH_BACKGROUND_CHILD = 'sleep 20 >/dev/null 2>&1 & echo $!; wait'
+
+/** Every pid a test in this file started, so afterEach can reap its own. */
+const spawnedPids: number[] = []
+
+function spawnShellWithBackgroundChild(
+  onBackgroundPid: (pid: number) => void,
+): (
+  executable: string,
+  args: string[],
+  options: SpawnOptionsWithoutStdio,
+) => never {
+  return (_executable, _args, options) => {
+    const child = spawn('/bin/sh', ['-c', SHELL_WITH_BACKGROUND_CHILD], options)
+    if (child.pid !== undefined) {
+      spawnedPids.push(child.pid)
+    }
+    child.stdout?.on('data', (chunk: Buffer | string) => {
+      const pid = Number(String(chunk).trim().split('\n')[0])
+      if (Number.isInteger(pid) && pid > 0) {
+        spawnedPids.push(pid)
+        onBackgroundPid(pid)
+      }
+    })
+    return child as never
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitUntilGone(pid: number, timeoutMs = 3_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true
+    await new Promise(resolve => setTimeout(resolve, 25))
+  }
+  return !isAlive(pid)
+}
+
 afterEach(() => {
   delete process.env.CLAUDE_CLI_PATH
+  // Only pids these tests spawned themselves. Nothing here searches the
+  // process table: other sessions and the operator share this machine.
+  for (const pid of spawnedPids.splice(0)) {
+    try {
+      process.kill(pid, 'SIGKILL')
+    } catch {
+      // Already gone, which is what the tests below assert.
+    }
+  }
 })
 
 describe('ClaudeCliTool', () => {
@@ -473,6 +539,82 @@ describe('ClaudeCliTool', () => {
 
     expect(child.killedWith).toBe('SIGKILL')
     expect(result.status).toBe('interrupted')
+  })
+
+  test('spawns the delegated CLI detached so it leads its own process group', async () => {
+    let options: SpawnOptionsWithoutStdio | undefined
+    await _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello' },
+      buildContext(),
+      (_executable, _args, opts) => {
+        options = opts
+        return new FakeChildProcess() as never
+      },
+    )
+
+    // Without this the process-group kill below has no group to signal: a
+    // group is named by its leader's pid, and a child that shares this
+    // process's group never becomes one.
+    expect(options?.detached).toBe(process.platform !== 'win32')
+  })
+
+  test('kills the delegated process tree, not just the direct child, on abort', async () => {
+    let markBackgroundPid: (pid: number) => void = () => {}
+    const backgroundPid = new Promise<number>(resolve => {
+      markBackgroundPid = resolve
+    })
+    const context = buildContext()
+
+    const promise = _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello', timeout: 30_000 },
+      context,
+      spawnShellWithBackgroundChild(pid => markBackgroundPid(pid)),
+    )
+
+    const grandchild = await backgroundPid
+    const [directChild] = spawnedPids
+    expect(isAlive(grandchild)).toBe(true)
+
+    context.abortController.abort()
+    const result = await promise
+
+    expect(result.status).toBe('interrupted')
+    expect(await waitUntilGone(directChild!)).toBe(true)
+    // Before the group kill this stayed alive, reparented to init, for the
+    // full 20 seconds: the mechanism behind the leftover cua-driver processes.
+    expect(await waitUntilGone(grandchild)).toBe(true)
+  })
+
+  test('kills the delegated process tree on timeout', async () => {
+    let markBackgroundPid: (pid: number) => void = () => {}
+    const backgroundPid = new Promise<number>(resolve => {
+      markBackgroundPid = resolve
+    })
+
+    const result = await _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello', timeout: 300 },
+      buildContext(),
+      spawnShellWithBackgroundChild(pid => markBackgroundPid(pid)),
+    )
+
+    const grandchild = await backgroundPid
+    expect(result.status).toBe('timeout')
+    expect(await waitUntilGone(grandchild)).toBe(true)
+  })
+
+  test('drops its process-exit reaper once the run settles', async () => {
+    const before = process.listenerCount('exit')
+
+    await _claudeCliToolInternalsForTest.runClaudeCliTask(
+      { prompt: 'hello' },
+      buildContext(),
+      () => new FakeChildProcess({ stdout: '{}' }) as never,
+    )
+
+    // The reaper exists because abort is not guaranteed to arrive, but one
+    // listener per delegated run that outlived the run would leak the child
+    // reference for the life of the session.
+    expect(process.listenerCount('exit')).toBe(before)
   })
 
   test('truncates very large stdout and stderr for inline tool results', async () => {

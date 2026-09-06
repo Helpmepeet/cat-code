@@ -10,6 +10,7 @@ import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { pwd } from '../../utils/cwd.js'
 import { errorMessage } from '../../utils/errors.js'
 import { expandPath } from '../../utils/path.js'
+import { killProcessTree } from '../../utils/processTree.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { subprocessEnv } from '../../utils/subprocessEnv.js'
@@ -113,6 +114,8 @@ type CapturedOutput = {
 type ClaudeCliChildProcess = {
   stdout?: Readable | null
   stderr?: Readable | null
+  /** Undefined until the spawn succeeds, and after the process is reaped. */
+  readonly pid?: number | undefined
   once(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
   once(event: 'error', listener: (error: Error) => void): unknown
   kill(signal?: NodeJS.Signals): boolean
@@ -357,12 +360,17 @@ async function runClaudeCliTask(
     let forcedStatus: ClaudeCliToolOutput['status'] | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
     let onAbort = (): void => {}
+    let onProcessExit = (): void => {}
 
     const finish = (output: ClaudeCliToolOutput): void => {
       if (settled) return
       settled = true
       if (timeout) clearTimeout(timeout)
       context.abortController.signal.removeEventListener('abort', onAbort)
+      // Through the EventEmitter view: process.off('exit', …) does not
+      // typecheck against the ambient process shim in this repo, and a
+      // listener per delegated run would otherwise stay for the session.
+      ;(process as NodeJS.EventEmitter).off('exit', onProcessExit)
       resolve(output)
     }
 
@@ -373,17 +381,43 @@ async function runClaudeCliTask(
         GIT_EDITOR: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // The delegated CLI is an engine: it starts an MCP server child per
+      // configured server, and those survive a signal aimed at the CLI alone
+      // (the leftover cua-driver processes in
+      // docs/reports/2026-09-06-subagent-escalation-and-delegation-failures.md).
+      // Detaching makes the CLI a process group leader, which is the only
+      // thing that lets killProcessTree reach its descendants. It also moves
+      // the child out of this process's group, so a terminal SIGINT no longer
+      // reaches it and termination becomes ours alone to do: the same trade
+      // Shell.ts makes for bash.
+      detached: process.platform !== 'win32',
       windowsHide: true,
     })
 
-    onAbort = (): void => {
-      forcedStatus = 'interrupted'
+    // Group kill first so descendants go too; the direct kill then covers a
+    // child that never led a group (Windows, or a spawn that failed).
+    const killDelegatedTree = (): void => {
+      killProcessTree(child, 'SIGKILL')
       child.kill('SIGKILL')
     }
 
+    onAbort = (): void => {
+      forcedStatus = 'interrupted'
+      killDelegatedTree()
+    }
+
+    // Abort is not guaranteed to arrive. An async subagent runs on an
+    // abortController unlinked from its parent's (runAgent), and the streaming
+    // tool executor can discard an in-flight tool call without aborting it, so
+    // engine exit is the last point at which this tree can still be reaped.
+    onProcessExit = (): void => {
+      killDelegatedTree()
+    }
+    process.on('exit', onProcessExit)
+
     timeout = setTimeout(() => {
       forcedStatus = 'timeout'
-      child.kill('SIGKILL')
+      killDelegatedTree()
     }, command.timeoutMs)
     timeout.unref?.()
 
