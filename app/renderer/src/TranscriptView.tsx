@@ -1114,6 +1114,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return (
         <UserBubble
           content={row.content}
+          sourceId={row.id}
           {...(onMessageAction
             ? {
                 onEdit: () =>
@@ -1713,6 +1714,32 @@ const MARKDOWN_COMPONENTS = {
       {children}
     </td>
   ),
+}
+
+const USER_BUBBLE_MARKDOWN_COMPONENTS = {
+  ...MARKDOWN_COMPONENTS,
+  p: ({ children }: ComponentPropsWithoutRef<'p'>) => (
+    <p className="whitespace-pre-wrap">{children}</p>
+  ),
+  a: ({
+    children,
+    href,
+    node: _node,
+    ...props
+  }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) => {
+    void _node
+    return (
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="text-accent underline hover:text-accent-soft"
+      >
+        {children}
+      </a>
+    )
+  },
 }
 
 function MarkdownCode({
@@ -4947,10 +4974,12 @@ function BubbleCopyChip({
  */
 function UserBubble({
   content,
+  sourceId,
   onEdit,
   onBranch,
 }: {
   content: string
+  sourceId: string
   onEdit?: () => void
   onBranch?: () => void
 }) {
@@ -4965,14 +4994,43 @@ function UserBubble({
     },
     [],
   )
+  const bubble = (
+    <div className="max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
+      <BoundedMarkdown
+        sourceId={sourceId}
+        source={content}
+        rehypePlugins={REHYPE_PLUGINS}
+        recognizeCallouts
+        renderLeaf={leaf =>
+          leaf.kind === 'code' ? (
+            <MarkdownErrorBoundary fallback={leaf.codeSource}>
+              <CodeBlock
+                code={leaf.codeSource}
+                streaming={leaf.codeOpen}
+                highlighted={
+                  <MarkdownTree
+                    tree={leaf.content}
+                    components={USER_BUBBLE_MARKDOWN_COMPONENTS}
+                  />
+                }
+              />
+            </MarkdownErrorBoundary>
+          ) : (
+            <div className="md-prose font-sans text-sm leading-relaxed">
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree
+                  tree={leaf.tree}
+                  components={USER_BUBBLE_MARKDOWN_COMPONENTS}
+                />
+              </MarkdownErrorBoundary>
+            </div>
+          )
+        }
+      />
+    </div>
+  )
   if (!onEdit) {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
-          {content}
-        </div>
-      </div>
-    )
+    return <div className="flex justify-end">{bubble}</div>
   }
   const copy = (): void => {
     const clipboard =
@@ -4997,9 +5055,7 @@ function UserBubble({
   }
   return (
     <div className="group/message flex flex-col items-end">
-      <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
-        {content}
-      </div>
+      {bubble}
       <div className="flex h-[25px] items-center gap-0.5 pr-1 pt-0.5 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100">
         <button
           type="button"

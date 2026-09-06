@@ -2780,6 +2780,81 @@ test('P4-18a REGRESSION: a projected user-text turn is rendered, not dropped', (
   expect(html).toContain('restart the sidecar please')
 })
 
+test('renders rich user Markdown with the shared bounded prose grammar', () => {
+  const content = [
+    '**bold** and *italic* with `inline code`.',
+    '',
+    '```ts',
+    'const answer = 42',
+    '```',
+    '',
+    '- first item',
+    '- second item',
+    '',
+    '> quoted text',
+    '',
+    '> [!NOTE]',
+    '> Important user note.',
+    '',
+    '| Name | Value |',
+    '| --- | --- |',
+    '| answer | 42 |',
+    '',
+    '[secure link](https://example.com)',
+    '[unsafe link](javascript:alert(1))',
+    '',
+    '<span>literal HTML</span>',
+    '',
+    'soft break',
+    'still the same paragraph',
+  ].join('\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-rich',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('<strong>bold</strong>')
+  expect(html).toContain('<em>italic</em>')
+  expect(html).toContain('<code>inline code</code>')
+  expect(html).toContain('aria-label="Copy code"')
+  expect(html).toContain('<ul>')
+  expect(html).toContain('<li>first item</li>')
+  expect(html).toContain('<blockquote>')
+  expect(html).toContain('<aside class="md-callout" data-callout-kind="note">')
+  expect(html).toContain('<table class="w-full border-collapse text-[13px]">')
+  expect(html).toContain(
+    'href="https://example.com" target="_blank" rel="noreferrer" class="text-accent underline hover:text-accent-soft"',
+  )
+  expect(html).not.toContain('href="javascript:')
+  expect(html).toContain('&lt;span&gt;literal HTML&lt;/span&gt;')
+  expect(html).toContain(
+    '<p class="whitespace-pre-wrap">soft break\nstill the same paragraph</p>',
+  )
+})
+
+test('bounds a giant user message before mounting every paragraph', () => {
+  const content = Array.from(
+    { length: 1_000 },
+    (_, index) => `User paragraph ${index + 1}`,
+  ).join('\n\n')
+  const html = render({
+    ...blockSource,
+    id: 's:m:0:user-giant',
+    kind: 'user-text',
+    role: 'user',
+    content,
+    isReplay: false,
+  })
+
+  expect(html).toContain('User paragraph 1')
+  expect(html).not.toContain('User paragraph 1000')
+  expect(html).toContain('aria-hidden="true"')
+})
+
 test('an injected turn renders system-side — never in the operator user column', () => {
   // The bug this closes: `coordinator`/`channel`/`teammate`/`deferred-continuation`
   // all carry role:'user' and rendered inside the right-aligned accent bubble,
