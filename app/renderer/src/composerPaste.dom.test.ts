@@ -15,7 +15,7 @@
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
 import { act, createElement, useRef, useState } from 'react'
 
-import { SessionPane } from './App.js'
+import { SessionPane } from './SessionPane.js'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness, MountedTree } from './domTestHarness.js'
 import {

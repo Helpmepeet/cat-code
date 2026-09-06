@@ -19,7 +19,7 @@ import { expect, test } from 'bun:test'
  * a 495px viewport; what a test CAN hold is the structure that geometry depends
  * on, which is what this file does.
  */
-const SOURCE = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+const SOURCE = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
 /**
  * The dock wrapper: the centred column that hosts the composer and its

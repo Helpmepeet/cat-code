@@ -27,7 +27,7 @@ import { act } from 'react'
 import { useState } from 'react'
 import type { ComponentProps } from 'react'
 
-import { SessionPane } from './App.js'
+import { SessionPane } from './SessionPane.js'
 import { PermissionPrompt } from './PermissionPrompt.js'
 import { PERMISSION_KEY_HOST_ATTR } from './permissionPromptModel.js'
 import type { PermissionRequest } from './permissionState.js'

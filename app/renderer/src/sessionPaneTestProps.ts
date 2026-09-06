@@ -10,7 +10,7 @@
  */
 
 import type { ComponentProps } from 'react'
-import type { SessionPane } from './App.js'
+import type { SessionPane } from './SessionPane.js'
 import { createTranscriptState } from './transcriptProjector.js'
 
 /** A minimal live, idle session pane. Spread and override the one field a test

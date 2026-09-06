@@ -23,12 +23,8 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ComponentProps } from 'react'
-import {
-  App,
-  ConnectionRecovery,
-  SessionPane,
-  TasksStrip,
-} from './App.js'
+import { App, TasksStrip } from './App.js'
+import { ConnectionRecovery, SessionPane } from './SessionPane.js'
 import {
   buildDebugExport,
   claimOAuthContextForAccountLogin,
@@ -1131,7 +1127,7 @@ test('waiting-message actions are compact icon buttons for send-now and take-bac
 })
 
 test('send-now binds the visible queue head to the sidecar-validated force verb', () => {
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
   const start = source.indexOf('const forceQueuedPrompt = (): void => {')
   const end = source.indexOf('\n  }\n\n  // Instant placement', start)
   expect(start).toBeGreaterThan(-1)
@@ -1236,7 +1232,7 @@ test('D1a: the waiting block follows the rows, and the pane re-pins when it grow
   // one thing that re-pins a parked reader to the end is `contentSignature`.
   // Queue a message with that signature blind to the queue and the new row
   // lands below the fold.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   const transcriptView = source.indexOf('<TranscriptView')
   const waitingBlock = source.indexOf('{queuedPrompts.length > 0 ? (')
@@ -1275,7 +1271,7 @@ test('the waiting-message row is written once and used at both call sites', () =
   // twice: same label, same classes, same image fallback, free to drift apart.
   // SSR proves each row still renders (the two tests above); only source can
   // say they come from one place.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   expect(source.match(/'Image attachment'/g) ?? []).toHaveLength(1)
   expect(source.match(/<QueuedRow/g) ?? []).toHaveLength(2)
@@ -1439,6 +1435,7 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
   // covered in composerState.test.ts; this pins the App-side join those pure
   // functions are wired into, and fails if a refactor unhooks one of them.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
   const submitStart = source.indexOf('  function submitSession(')
   const submitBody = source.slice(
     submitStart,
@@ -1487,24 +1484,24 @@ test('CC-16 wiring tripwire: submit parks and the drain flushes/releases through
 
   // The composer's three consumers all read the SAME gate object, so
   // "typeable" can never drift apart from "sendable" again.
-  expect(source).toContain('const composerReadOnly = !composerGate.editable')
-  expect(source).toContain('readOnly={composerReadOnly}')
+  expect(paneSource).toContain('const composerReadOnly = !composerGate.editable')
+  expect(paneSource).toContain('readOnly={composerReadOnly}')
   // Whitespace-normalised: the assertion is about which gate the send button
   // reads, not how deeply it happens to be indented. It broke once when the
   // button moved inside the send/stop ternary without its logic changing.
-  expect(source.replace(/\s+/g, ' ')).toContain(
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
     'disabled={ !composerGate.editable || preparingImage || (prompt.trim().length === 0 && images.length === 0 && fileAttachment === null) || pendingSubmit !== null }',
   )
-  expect(source).toContain(
+  expect(paneSource).toContain(
     'attachDisabled={!composerGate.editable || preparingImage || pickingFile}',
   )
-  expect(source.replace(/\s+/g, ' ')).toContain(
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
     "if (preparingImage) { event.preventDefault() toast('Wait for the image to finish attaching.', { tone: 'info' }) return }",
   )
-  expect(source.replace(/\s+/g, ' ')).toContain(
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
     "if (!onAttachImage || imagePreparationInFlightRef.current) { if (imagePreparationInFlightRef.current) { toast('Wait for the image to finish attaching.', { tone: 'info' }) } return } imagePreparationInFlightRef.current = true",
   )
-  expect(source.replace(/\s+/g, ' ')).toContain(
+  expect(paneSource.replace(/\s+/g, ' ')).toContain(
     "const unsupportedImage = files.find(file => file.type.startsWith('image/')) if (unsupportedImage) { void attachImage(unsupportedImage) return }",
   )
   // …and nothing instructs the user to act on a not-yet-connected session.
@@ -2359,10 +2356,11 @@ test('a foreground subagent is handed to the transcript, and a backgrounded one 
   // the live snapshot's subagents that are not already backgrounded. Rendering it
   // is the card's, and is covered in `TranscriptView.test.tsx`.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
   // The gate is `!isBackgrounded`, over `subagents` — NOT over `items`, which
   // excludes a foreground worker by construction (`tasksDomain.ts`).
-  expect(source).toContain('subagents.filter(item => !item.isBackgrounded)')
-  expect(source).toContain('agentBackground={agentBackground}')
+  expect(paneSource).toContain('subagents.filter(item => !item.isBackgrounded)')
+  expect(paneSource).toContain('agentBackground={agentBackground}')
   // The verb names a tool-use id; a renderer-authored task id would be the defect.
   expect(source).toContain("type: 'task.background.one',")
   expect(source).toContain('toolUseId,')
@@ -2604,9 +2602,10 @@ test('the autoscroll signature tracks the RENDERED transcript, not the capped ra
   // the follow-to-bottom effect never re-ran. SSR cannot observe an effect, so
   // this is pinned at the source (the P4-38 / userVisibleText.test.ts precedent).
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const start = source.indexOf('const contentSignature =')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
+  const start = paneSource.indexOf('const contentSignature =')
   expect(start).toBeGreaterThan(-1)
-  const line = source.slice(start, source.indexOf('\n', start))
+  const line = paneSource.slice(start, paneSource.indexOf('\n', start))
 
   expect(line).not.toContain('activeLog')
   expect(line).toContain('renderedRowCount')
@@ -2616,7 +2615,7 @@ test('a one-pixel upward transcript scroll releases the bottom lock', () => {
   // The pane coordinator is allowed to re-pin only while this lock is true.
   // Keeping it through a 120px grace range made ordinary upward scrolling fight
   // measurement corrections after a turn had stopped.
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
   expect(source).toContain('const nextAtBottom = gap <= 1')
 })
 
@@ -2729,6 +2728,7 @@ test('FIX-5 keyboard tripwire: the permission shortcuts answer the request App m
   // which surfaces may hand it one. App reads `window.catcode` from its first
   // effect, so it cannot be mounted here and this stays source text.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
   const card = readFileSync(
     new URL('./PermissionPrompt.tsx', import.meta.url),
     'utf8',
@@ -2743,8 +2743,8 @@ test('FIX-5 keyboard tripwire: the permission shortcuts answer the request App m
   expect(flat).toContain(
     'const permissionKeyTargetRequestId = pendingPermission && !dedicatedFlowOwnsKeyboard ? pendingPermission.requestId : null',
   )
-  const queueStart = source.indexOf('<PermissionQueue')
-  const queueBody = source.slice(queueStart, source.indexOf('/>', queueStart))
+  const queueStart = paneSource.indexOf('<PermissionQueue')
+  const queueBody = paneSource.slice(queueStart, paneSource.indexOf('/>', queueStart))
   expect(queueBody).toContain(
     'keyboardTargetRequestId={permissionKeyTargetRequestId}',
   )
@@ -2801,6 +2801,7 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   // selector a call site reads and whether a prop is passed at all, which is
   // exactly what these four defects were; it cannot prove the resulting UI.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   // `row.sessionId` holds the engineSessionId once one is assigned, so matching
   // a panel's appSessionId against it missed every ready session and the
@@ -2843,8 +2844,8 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
 
   // Rebuilding the field's nodes drops the selection, so an at-caret paste and
   // the atomic pill-delete both threw the caret away.
-  expect(source).toContain('el.setSelectionRange(caret, caret)')
-  expect(source).toContain('pendingCaretRef.current = {')
+  expect(paneSource).toContain('el.setSelectionRange(caret, caret)')
+  expect(paneSource).toContain('pendingCaretRef.current = {')
 })
 
 /**
@@ -2856,13 +2857,14 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
  */
 test('the composer prompt and the provenance seam are wired to their selectors', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   // The prompt is addressed to the session by name, via the one function that
   // owns the unnamed fallback. A bare literal here is the regression.
-  expect(source).toContain(
+  expect(paneSource).toContain(
     "composerPromptPlaceholder(activeDescriptor?.name ?? null)",
   )
-  expect(source).not.toContain(
+  expect(paneSource).not.toContain(
     "? 'Ask Cat Code anything or describe a task…'",
   )
 })
@@ -3000,13 +3002,16 @@ test('P4-50: the account-health bar sits above the workspace and cannot gate a s
   // SessionPane owns the composer and every disabled state on it, and is never
   // handed the derivation, so no send can be gated on account health.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
-  const paneStart = source.indexOf('export function SessionPane({')
+  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
+  const paneStart = paneSource.indexOf('export function SessionPane({')
   expect(paneStart).toBeGreaterThan(-1)
-  expect(source.slice(paneStart)).not.toContain('accountHealth')
+  expect(paneSource.slice(paneStart)).not.toContain('accountHealth')
 
   const mount = source.indexOf('<BannerStack')
   expect(mount).toBeGreaterThan(-1)
-  expect(mount).toBeLessThan(paneStart)
+  // "Above the workspace, never inside a pane" is structural since the pane
+  // moved to its own file: the bar is mounted in the shell and absent there.
+  expect(paneSource).not.toContain('<BannerStack')
   expect(source.indexOf('<BannerStack', mount + 1)).toBe(-1)
   expect(source.indexOf('<WorkspaceLayout', mount)).toBeGreaterThan(mount)
 
@@ -3056,7 +3061,7 @@ test('P4-54: shell lifecycle failures persist until the dismiss control clears t
 
   expect(source.match(/setShellError\(null\)/g)).toHaveLength(1)
   const shellErrorBarStart = source.indexOf('{shellError ? (')
-  const shellErrorBarEnd = source.indexOf('\n        ) : null}', shellErrorBarStart)
+  const shellErrorBarEnd = source.indexOf('\n          ) : null}', shellErrorBarStart)
   expect(shellErrorBarStart).toBeGreaterThan(-1)
   expect(shellErrorBarEnd).toBeGreaterThan(shellErrorBarStart)
   const shellErrorBar = source.slice(shellErrorBarStart, shellErrorBarEnd)
