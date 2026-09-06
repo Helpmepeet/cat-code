@@ -138,23 +138,76 @@ the models actually in use, and compare scope errors, boundary violations,
 unnecessary tool calls, and output quality. Until then, "the model no longer needs
 this" is a hypothesis and the defects are the evidence.
 
-## 7. Working record
+## 7. Where everything is
 
-These carry the detail and the raw evidence. Read them for provenance, not for
-conclusions.
+Start here, go outward only when you want the evidence behind a claim.
 
-- [Subtraction report](2026-09-06-instruction-stack-subtraction.md), the first
-  pass: 15 candidate cut groups, judged on internal evidence only.
-- [Comparative decisions](2026-09-06-instruction-stack-comparative-decisions.md),
-  the outward pass: reversed S4, corrected the nudge scope, found the comment
-  rule already applied.
-- [Tool-description audit](2026-09-06-tool-description-comparative-audit.md), the
-  only pass over the tool surface: D1 through D4.
-- [Apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md), the exact
-  before and after text for each base-prompt item.
+### Today's chain, in the order it happened
 
-Two independent reviews shaped the current state. One found the verification
-nudge reaches interactive sessions through `TaskUpdateTool`, correcting a claim
-made here that it was `-p` only. The other kept the three-lines-over-abstraction
-maxim that A4 originally proposed cutting, on the grounds that it governs
-existing repetition, which nothing else in that rule covers.
+Each partly corrected the one before it, which is why this file exists. Read them
+for provenance, not conclusions.
+
+1. [Subtraction report](2026-09-06-instruction-stack-subtraction.md) — the first
+   pass. 15 candidate cut groups, judged purely on our own text with no external
+   reference. Its S4 was later reversed and its TodoWrite scope was wrong.
+2. [Comparative decisions](2026-09-06-instruction-stack-comparative-decisions.md)
+   — the outward pass against Claude Code, Codex, OpenClaw and Hermes. Reversed
+   S4, corrected the nudge scope, found the comment rule already applied.
+3. [Tool-description audit](2026-09-06-tool-description-comparative-audit.md) —
+   the only pass over the tool surface, and the one that found real bugs.
+   D1 through D4.
+4. [Apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md) — the exact
+   before and after text for every base-prompt item, grouped by reason.
+
+### Where the prompts actually live
+
+- [Prompt surfaces router](../prompts/2026-04-30-prompt-surfaces.md) — which file
+  owns which prompt. Open this before searching for any prompt text.
+- `CLAUDE.md` §7 — the comment rule that is already applied, and the subject of
+  the open decision in section 4 above.
+- [Peer-session instruction surface](../prompts/2026-09-05-peer-sessions-instruction-surface-audit.md)
+  — the desktop-only addendum, out of scope for everything above.
+
+### Prior prompt work, newest first
+
+Dated files are historical records, not current truth, and several carry status
+lines that were true when written and are not now. In particular, both August 23
+reports say "nothing applied" while a later commit applied much of what they
+proposed. Verify against source before acting on any of them.
+
+- [GPT instruction-stack audit, 2026-09-05](2026-09-05-gpt-instruction-stack-audit.md)
+  — the immediate predecessor. Its fixes landed; two findings remain open.
+- [Prompt audit, 2026-08-23](2026-08-23-prompt-audit.md) — the removal half:
+  what should already have left the core prompt.
+- [Upstream delta, 2026-08-23](2026-08-23-anthropic-prompt-upstream-delta.md) —
+  the addition half: what upstream text to bring in. Its `Delivering work` and
+  `Corrections` imports did land.
+- [Codex CLI prompt trend, 2026-08-20](2026-08-20-codex-cli-harness-prompt-trend.md)
+  — Codex release-history measurements. Its conclusion that our GPT prompt needs
+  no cut was rejected: relative length cannot establish that.
+- [Upstream terminal capture, 2026-08-12](2026-08-12-upstream-baseline-no-mcp.md)
+  — the verbatim Claude Code prompt behind the 11,177-character figure in
+  section 2.
+- [Upstream desktop capture, 2026-08-11](2026-08-11-upstream-delivered-system-prompt-capture.md)
+  — the same, with MCP servers loaded. Upstream ships no prompt-dump flag, so
+  these captures are the only exact evidence of what it sends.
+- [Architecture comparison, 2026-08-10](2026-08-10-system-prompt-architecture-cat-vs-upstream.md)
+  — the audit those two captures support.
+- [Divergence ledger, 2026-08-10](2026-08-10-cat-code-upstream-divergence-ledger.md)
+  — how this fork drifted from upstream, and the method used to measure it.
+- [System-prompt content review, 2026-07-30](2026-07-30-system-prompt-content-review.md)
+  and [pipeline audit, 2026-07-30](2026-07-30-system-prompt-pipeline-audit.md) —
+  content versus assembly, reviewed separately.
+- [GPT instruction-stack audit, 2026-07-11](2026-07-11-gpt-instruction-stack-audit.md)
+  — the first audit of the effective GPT stack.
+- [Prompt bias findings, 2026-04-30](2026-04-30-research-prompt-bias-findings.md)
+  — the earliest, covering everything sent at inference time.
+
+### Reviews that changed the conclusions above
+
+Two independent reviews, neither written into a file of its own. One found the
+verification nudge reaches interactive sessions through `TaskUpdateTool`,
+correcting a claim that it was `-p` only. The other kept the
+three-lines-over-abstraction maxim that A4 originally proposed cutting, because
+it governs existing repetition, which nothing else in that rule covers. Both are
+recorded in the documents they corrected.
