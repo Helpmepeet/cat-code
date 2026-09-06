@@ -447,7 +447,13 @@ figure to match is 24,680 characters.
 
 ## 8. Where everything else is
 
-**To implement:** [apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md)
+**To rebuild:** [GPT prompt rebuild inventory](2026-09-06-gpt-prompt-rebuild-inventory.md)
+— the operator has decided the GPT prompt should be rebuilt rather than trimmed
+further. That file carries a complete 82-block inventory reconciled to the emitted
+total, the Codex 5.6 comparator, the constraints, what must survive, and the
+label-shape trap that produced three wrong inventories in one day.
+
+**To implement the applied plan:** [apply plan](../plans/2026-09-06-instruction-stack-apply-plan.md)
 — exact before-and-after text per item, the fork-drift provenance table, the shape
 classification, and the A7 determination with the A8 spec.
 
