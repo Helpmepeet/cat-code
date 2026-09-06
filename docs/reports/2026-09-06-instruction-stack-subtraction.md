@@ -1,5 +1,7 @@
 # What Cat Code's instruction stack should stop saying
 
+> **Superseded for conclusions.** Read [2026-09-06-instruction-stack-decisions.md](2026-09-06-instruction-stack-decisions.md) for where this work landed. This file is kept as the evidence record; some of its conclusions were later reversed.
+
 Date: 2026-09-06. Status: analysis only; no prompt edits authorized or applied.
 
 **Superseded in part.** A later comparative pass, recorded in

@@ -1,5 +1,7 @@
 # Instruction-stack apply plan
 
+> **Superseded for conclusions.** Read [../reports/2026-09-06-instruction-stack-decisions.md](../reports/2026-09-06-instruction-stack-decisions.md) for where this work landed. This file is kept as the evidence record; some of its conclusions were later reversed.
+
 **Date:** 2026-09-06
 **Status:** Proposed. Nothing applied. Awaiting the operator's approval, per item.
 **Inputs:** [subtraction report](../reports/2026-09-06-instruction-stack-subtraction.md)

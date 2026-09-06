@@ -1,5 +1,7 @@
 # Tool descriptions: comparative audit of the emitted GPT surface
 
+> **Superseded for conclusions.** Read [2026-09-06-instruction-stack-decisions.md](2026-09-06-instruction-stack-decisions.md) for where this work landed. This file is kept as the evidence record; some of its conclusions were later reversed.
+
 Date: 2026-09-06
 
 Status: Recommendations only. No source, prompt, existing report, or plan changed. The report is ready for installation and an explicit-path commit on the operator's current branch; that commit has not been executed from this read-only connection.
