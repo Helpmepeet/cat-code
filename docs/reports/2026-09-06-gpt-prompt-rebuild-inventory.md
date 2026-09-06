@@ -188,13 +188,25 @@ fixes for problems that actually happened.
 git log -S"<a distinctive phrase from the block>" -- src/constants/promptStyles/gpt.ts
 ```
 
-**It also separates inherited from fork-authored, which nothing in the prompt text
-does.** If the only result is `86051a8e`, the initial private publish snapshot, the
-block came with the fork and its intent is upstream Claude Code's. Any other commit
-means someone here added or changed it deliberately. Verified on four blocks:
-`DISAGREEMENT` and `RULE — Outcome reporting` return `86051a8e` alone and are
-inherited; `INVESTIGATION DISCIPLINE` returns `bf7beca9` "serve one policy core
-across providers and modes"; `RULE — Show the diff` returns `339b68fe`.
+**Separating inherited from fork-authored takes two steps, not one. Corrected
+2026-09-07 after the one-step version proved wrong.** A commit other than
+`86051a8e` means someone here changed the block deliberately, and its message is
+the intent — `INVESTIGATION DISCIPLINE` returns `bf7beca9` "serve one policy core
+across providers and modes", `RULE — Show the diff` returns `339b68fe`.
+
+But `86051a8e` alone does **not** mean inherited, which is what an earlier draft of
+this section claimed. `gpt.ts` was **created** in that commit and has 23 commits
+since, so the whole file is fork-original; a block dating to the snapshot was
+written here, not taken from upstream. Confirm by searching the upstream artifacts
+directly: `ERROR HANDLING:`, `ABSTRACTION:`, `DECISION CHECKLIST` and
+`TASK DOMAIN:` are **zero** in both the 2.1.87 SDK bundle and 2.1.239, so they were
+authored for the GPT path, which upstream has no equivalent of. `DISAGREEMENT` and
+`RULE — Outcome reporting` also date to the snapshot; whether either has an
+upstream counterpart was not checked.
+
+**The snapshot commit explains nothing.** Its message is "Initial private publish
+snapshot". So for any block introduced there, intent is not recoverable from git,
+and the text plus the tests are the only evidence left.
 
 **What that one commit contains, as a worked example.** `339b68fe` is
 "fix(prompts): hybrid Apply_patch rule for the GPT path", and its body says the
@@ -208,9 +220,17 @@ criteria: Codex 5.6 has no equivalent. Its commit says it was written *from* the
 5.6 template, to close a named defect, with tests. Those are different facts about
 the same block, and only one of them is in the prompt.
 
-**Tests may hold the intent too.** That commit added regression tests for its
-wording. A block whose phrasing is asserted somewhere under `src/**/*.test.ts` was
-deliberate, and changing it will show up as a failure rather than silently.
+**Tests may hold the intent too.** `339b68fe` added regression tests for its
+wording. A block whose phrasing is asserted under `src/**/*.test.ts` was
+deliberate, and changing it fails loudly rather than silently.
+
+**Applied retroactively to what was already cut, 2026-09-07.** Every block removed
+by the craft slice and A1 — `ERROR HANDLING`, `ABSTRACTION`, `DECISION CHECKLIST`,
+the snake-case example, the capability sentence — was introduced at `86051a8e`,
+never touched by any of the 23 later commits, and **never asserted by any test in
+the repository's history**. So none of them carried a recorded intent, and the
+applied work destroyed no documented fix. That is a weak provenance rather than a
+clean bill: it means nobody ever wrote down why they were there.
 
 ## 5. What made a block a candidate, and one session's floor
 
