@@ -163,7 +163,13 @@ export function writeTextContentWithVerifiedIdentity(
   let targetMode: number | undefined
 
   if (expectedIdentity !== undefined) {
-    const currentIdentity = getFileIdentity(filePath)
+    let currentIdentity: FileIdentity
+    try {
+      currentIdentity = getFileIdentity(filePath)
+    } catch (error) {
+      if (isENOENT(error)) return false
+      throw error
+    }
     if (!fileIdentitiesEqual(expectedIdentity, currentIdentity)) return false
     // Write directly to the target observed by Read. Re-resolving filePath in
     // the write helper would let a retargeted symlink redirect this mutation.
@@ -185,7 +191,19 @@ export function writeTextContentWithVerifiedIdentity(
     if (expectedIdentity === undefined) {
       // link(2) atomically fails with EEXIST. rename would overwrite a file
       // that appeared between the missing-file check and this write.
-      fs.linkSync(tempPath, filePath)
+      try {
+        fs.linkSync(tempPath, filePath)
+      } catch (error) {
+        if (isENOENT(error)) throw error
+        if (
+          !(error instanceof Error) ||
+          !('code' in error) ||
+          error.code !== 'EEXIST'
+        ) {
+          throw error
+        }
+        return false
+      }
       fs.unlinkSync(tempPath)
       return true
     }
@@ -193,7 +211,13 @@ export function writeTextContentWithVerifiedIdentity(
     // The temp file can take time to write, so check the version again at the
     // final mutation boundary. Node has no compare-and-swap rename primitive;
     // this is the narrowest atomic replacement it exposes.
-    const currentIdentity = getFileIdentity(filePath)
+    let currentIdentity: FileIdentity
+    try {
+      currentIdentity = getFileIdentity(filePath)
+    } catch (error) {
+      if (isENOENT(error)) return false
+      throw error
+    }
     if (!fileIdentitiesEqual(expectedIdentity, currentIdentity)) return false
     fs.renameSync(tempPath, targetPath)
     return true
@@ -203,6 +227,34 @@ export function writeTextContentWithVerifiedIdentity(
     } catch {
       // Successful rename/link consumes the temp path. Nothing remains to do.
     }
+  }
+}
+
+/**
+ * Remove a file only when it is still the filesystem object identified by the
+ * caller. The identity check and unlink are not a general filesystem CAS;
+ * cooperative writers must hold the shared mutation lock for a stronger
+ * publication boundary.
+ */
+export async function deleteFileWithVerifiedIdentity(
+  filePath: string,
+  expectedIdentity: FileIdentity,
+): Promise<boolean> {
+  let currentIdentity: FileIdentity
+  try {
+    currentIdentity = getFileIdentity(filePath)
+  } catch (error) {
+    if (isENOENT(error)) return false
+    throw error
+  }
+  if (!fileIdentitiesEqual(expectedIdentity, currentIdentity)) return false
+
+  try {
+    await getFsImplementation().unlink(filePath)
+    return true
+  } catch (error) {
+    if (isENOENT(error)) return false
+    throw error
   }
 }
 

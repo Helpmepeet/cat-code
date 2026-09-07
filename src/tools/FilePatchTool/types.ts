@@ -1,6 +1,7 @@
 import type { StructuredPatchHunk } from 'diff'
 import { z } from 'zod/v4'
 import { lazySchema } from '../../utils/lazySchema.js'
+import type { FileIdentity } from '../../utils/file.js'
 import type { LineEndingType } from '../../utils/fileRead.js'
 
 export type FilePatchOperationType = 'update' | 'add' | 'delete'
@@ -59,6 +60,7 @@ export type FilePatchBuffer = {
 export type ApplyPatchFileState = {
   path: string
   exists: boolean
+  identity?: FileIdentity
   buffer: FilePatchBuffer
 }
 
@@ -79,14 +81,28 @@ export type ApplyPatchResult = {
 export class FilePatchError extends Error {
   readonly code: string
   readonly path?: string
+  readonly mutationOutcome: FilePatchMutationOutcome
 
-  constructor(message: string, options?: { code?: string; path?: string }) {
+  constructor(
+    message: string,
+    options?: {
+      code?: string
+      path?: string
+      mutationOutcome?: FilePatchMutationOutcome
+    },
+  ) {
     super(message)
     this.name = 'FilePatchError'
     this.code = options?.code ?? 'FILE_PATCH_ERROR'
     this.path = options?.path
+    this.mutationOutcome = options?.mutationOutcome ?? 'no-mutation'
   }
 }
+
+export type FilePatchMutationOutcome =
+  | 'no-mutation'
+  | 'complete-rollback'
+  | 'incomplete-recovery'
 
 const hunkLineSchema = lazySchema(() =>
   z.strictObject({

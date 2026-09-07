@@ -2,12 +2,14 @@ import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { logError } from '../../utils/log.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
+import { acquireFileMutationLocks } from '../../utils/atomicFile.js'
 import {
   boundPatchLinesForPersistence,
   firstLineForLanguageDetection,
   getPatchFromContents,
 } from '../../utils/diff.js'
 import { getCwd } from '../../utils/cwd.js'
+import { fileIdentitiesEqual, getFileIdentity } from '../../utils/file.js'
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
@@ -25,6 +27,9 @@ import {
   validateEditDenyRule,
   validateFileNotModifiedSinceRead,
   validateTeamMemorySecrets,
+  applyFileMutationSideEffects,
+  type FileMutationPublication,
+  restoreFileMutation,
   writeFileWithSideEffects,
 } from '../FileEditTool/shared.js'
 import { applyPatchToBuffers } from './applier.js'
@@ -34,6 +39,7 @@ import { getFilePatchToolDescription } from './prompt.js'
 import {
   type ApplyPatchFileState,
   FilePatchError,
+  type FilePatchMutationOutcome,
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
@@ -267,7 +273,23 @@ export const FilePatchTool = buildTool({
     }
   },
   async call(input, { readFileState, updateFileHistoryState }, _, parentMessage) {
-    const operations = normalizeOperations(input)
+    let operations: FilePatchOperation[]
+    try {
+      operations = normalizeOperations(input)
+    } catch (error) {
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    }
+
+    let releaseMutationLocks: () => Promise<void>
+    try {
+      releaseMutationLocks = await acquireFileMutationLocks(
+        mutationPathsForOperations(operations),
+      )
+    } catch (error) {
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    }
+
+    try {
     const currentFiles = new Map<string, ApplyPatchFileState>()
 
     // Read-only phase: gather every file's current state before mutating disk.
@@ -279,6 +301,7 @@ export const FilePatchTool = buildTool({
         fileExists,
         encoding,
         lineEndings,
+        identity,
       } = readFileForEdit(operation.path)
 
       if (fileExists) {
@@ -292,6 +315,7 @@ export const FilePatchTool = buildTool({
       currentFiles.set(operation.path, {
         path: operation.path,
         exists: fileExists,
+        identity,
         buffer: {
           content: originalFileContents,
           encoding,
@@ -313,6 +337,7 @@ export const FilePatchTool = buildTool({
           currentFiles.set(operation.moveTo, {
             path: operation.moveTo,
             exists: true,
+            identity: moveTarget.identity,
             buffer: {
               content: moveTarget.content,
               encoding: moveTarget.encoding,
@@ -379,17 +404,26 @@ export const FilePatchTool = buildTool({
       }
     }
 
-    const writtenFiles: Array<{
-      path: string
-      before: string | null
-      after: string | null
-      encoding: BufferEncoding
-      lineEndings: 'LF' | 'CRLF'
-      existedBefore: boolean
-    }> = []
+    const moveSourcePaths = new Set(
+      operations
+        .filter(
+          (op): op is Extract<FilePatchOperation, { type: 'update' }> =>
+            op.type === 'update' && op.moveTo !== undefined,
+        )
+        .map(op => op.path),
+    )
+    const filesForMutation = [
+      ...applied.files.filter(file => moveDestinations.has(file.path)),
+      ...applied.files.filter(
+        file =>
+          !moveDestinations.has(file.path) && !moveSourcePaths.has(file.path),
+      ),
+      ...applied.files.filter(file => moveSourcePaths.has(file.path)),
+    ]
+    const writtenFiles: FileMutationPublication[] = []
 
     try {
-      for (const file of applied.files) {
+      for (const file of filesForMutation) {
         const originalState = currentFiles.get(file.path)
         const moveMeta = moveTargetMeta.get(file.path)
         if (!originalState && !moveMeta) {
@@ -418,83 +452,105 @@ export const FilePatchTool = buildTool({
         const onDisk = readFileForEdit(file.path)
         if (
           onDisk.fileExists !== (originalState?.exists ?? false) ||
-          onDisk.content !== (originalState?.buffer.content ?? '')
+          onDisk.content !== (originalState?.buffer.content ?? '') ||
+          (originalState?.exists === true &&
+            (originalState.identity === undefined ||
+              onDisk.identity === undefined ||
+              !fileIdentitiesEqual(originalState.identity, onDisk.identity)))
         ) {
           throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
         }
 
         if (file.type === 'delete') {
+          if (originalState?.identity === undefined) {
+            throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+          }
           await deleteFileWithSideEffects({
             absoluteFilePath: file.path,
             originalFileContents: file.before ?? '',
-            readFileState,
-          })
-          writtenFiles.push({
-            path: file.path,
-            before: file.before,
-            after: file.after,
             encoding,
             lineEndings,
-            existedBefore: true,
+            readFileState,
+            expectedIdentity: originalState.identity,
+            onPublished: publication => writtenFiles.push(publication),
           })
           continue
         }
 
         writeFileWithSideEffects({
           absoluteFilePath: file.path,
-          originalFileContents: file.before ?? '',
+          originalFileContents: file.before,
           updatedFile: file.after ?? '',
           encoding,
           lineEndings,
           readFileState,
-        })
-        writtenFiles.push({
-          path: file.path,
-          before: file.before,
-          after: file.after,
-          encoding,
-          lineEndings,
-          existedBefore: originalState?.exists ?? false,
+          expectedIdentity: originalState?.identity,
+          onPublished: publication => writtenFiles.push(publication),
         })
       }
     } catch (error) {
-      await rollbackAppliedFiles(writtenFiles, readFileState)
-      throw error
+      const rollback = await rollbackAppliedFiles(writtenFiles, readFileState)
+      throw errorWithMutationOutcome(
+        error,
+        writtenFiles.length === 0
+          ? 'no-mutation'
+          : rollback === 'complete-rollback'
+            ? 'complete-rollback'
+            : 'incomplete-recovery',
+      )
     }
 
-    for (const file of applied.files) {
-      const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
-      if (op) {
-        logFileOperation({ operation: op, tool: 'FilePatchTool', filePath: file.path })
+    try {
+      for (const file of applied.files) {
+        const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
+        if (op) {
+          logFileOperation({ operation: op, tool: 'FilePatchTool', filePath: file.path })
+        }
       }
-    }
 
-    // Built field by field, never spread from the applier result: `before`/
-    // `after` hold the whole file twice and this object is serialized verbatim
-    // onto the transcript. structuredPatch plus a bounded firstLine is
-    // everything any reader uses.
-    const output: FilePatchToolOutput = {
-      files: applied.files.map(file => {
-        const entry: FilePatchToolOutput['files'][number] = {
-          path: file.path,
-          type: file.type,
-          firstLine: firstLineForLanguageDetection(file.before ?? file.after),
-          structuredPatch: boundPatchLinesForPersistence(
-            getPatchFromContents({
-              filePath: file.path,
-              oldContent: file.before ?? '',
-              newContent: file.after ?? '',
-            }),
-          ),
-        }
-        if (file.notes && file.notes.length > 0) {
-          entry.notes = file.notes
-        }
-        return entry
-      }),
-    }
+      // Built field by field, never spread from the applier result: `before`/
+      // `after` hold the whole file twice and this object is serialized verbatim
+      // onto the transcript. structuredPatch plus a bounded firstLine is
+      // everything any reader uses.
+      const output: FilePatchToolOutput = {
+        files: applied.files.map(file => {
+          const entry: FilePatchToolOutput['files'][number] = {
+            path: file.path,
+            type: file.type,
+            firstLine: firstLineForLanguageDetection(file.before ?? file.after),
+            structuredPatch: boundPatchLinesForPersistence(
+              getPatchFromContents({
+                filePath: file.path,
+                oldContent: file.before ?? '',
+                newContent: file.after ?? '',
+              }),
+            ),
+          }
+          if (file.notes && file.notes.length > 0) {
+            entry.notes = file.notes
+          }
+          return entry
+        }),
+      }
 
-    return { data: output }
+      return { data: output }
+    } catch (error) {
+      const rollback = await rollbackAppliedFiles(writtenFiles, readFileState)
+      throw errorWithMutationOutcome(
+        error,
+        writtenFiles.length === 0
+          ? 'no-mutation'
+          : rollback === 'complete-rollback'
+            ? 'complete-rollback'
+            : 'incomplete-recovery',
+      )
+    }
+    } catch (error) {
+      if (error instanceof FilePatchError) throw error
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    } finally {
+      await releaseMutationLocks()
+    }
   },
   mapToolResultToToolResultBlockParam(output, toolUseID) {
     const count = output.files.length
@@ -555,13 +611,8 @@ function firstOperationPath(input: unknown): string | undefined {
 function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
   const parsed = 'input' in input ? parseFilePatch(input.input).ops : input.ops
 
-  const seen = new Set<string>()
-  return parsed.map(operation => {
+  const operations = parsed.map(operation => {
     const path = expandPath(operation.path)
-    if (seen.has(path)) {
-      throw new Error(`Patch contains duplicate file path: ${path}`)
-    }
-    seen.add(path)
 
     return {
       ...operation,
@@ -571,6 +622,38 @@ function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
         : {}),
     }
   })
+
+  const seen = new Set<string>()
+  for (const operation of operations) {
+    const paths = [
+      operation.path,
+      ...(operation.type === 'update' && operation.moveTo
+        ? [operation.moveTo]
+        : []),
+    ]
+    for (const path of paths) {
+      if (seen.has(path)) {
+        throw new FilePatchError(
+          `Patch contains overlapping mutation paths: ${path}.`,
+          { code: 'PATCH_OVERLAPPING_PATHS' },
+        )
+      }
+      seen.add(path)
+    }
+  }
+
+  return operations
+}
+
+function mutationPathsForOperations(
+  operations: FilePatchOperation[],
+): string[] {
+  return operations.flatMap(operation => [
+    operation.path,
+    ...(operation.type === 'update' && operation.moveTo
+      ? [operation.moveTo]
+      : []),
+  ])
 }
 
 function currentFileState(path: string, content: string): ApplyPatchFileState {
@@ -595,39 +678,44 @@ function applyPatchToSingleFile(
 }
 
 async function rollbackAppliedFiles(
-  writtenFiles: Array<{
-    path: string
-    before: string | null
-    after: string | null
-    encoding: BufferEncoding
-    lineEndings: 'LF' | 'CRLF'
-    existedBefore: boolean
-  }>,
+  writtenFiles: FileMutationPublication[],
   readFileState: ToolUseContext['readFileState'],
-): Promise<void> {
+): Promise<Extract<FilePatchMutationOutcome, 'complete-rollback' | 'incomplete-recovery'>> {
+  let recoveryComplete = true
+
   for (const file of [...writtenFiles].reverse()) {
-    // Best-effort: isolate each file so one rollback failure neither aborts
-    // recovery of the rest nor propagates out to mask the original write error
-    // that triggered the rollback (the caller rethrows that error).
     try {
-      if (!file.existedBefore) {
-        await deleteFileWithSideEffects({
-          absoluteFilePath: file.path,
-          originalFileContents: file.after ?? '',
-          readFileState,
-        })
+      const result = await restoreFileMutation(file)
+      if (result === 'conflict') {
+        recoveryComplete = false
         continue
       }
 
-      writeFileWithSideEffects({
-        absoluteFilePath: file.path,
-        originalFileContents: file.after ?? '',
-        updatedFile: file.before ?? '',
-        encoding: file.encoding,
-        lineEndings: file.lineEndings,
-        readFileState,
-      })
+      try {
+        const restoredIdentity = file.existedBefore
+          ? getFileIdentity(file.absoluteFilePath)
+          : undefined
+        applyFileMutationSideEffects({
+          publication: {
+            absoluteFilePath: file.absoluteFilePath,
+            beforeContent: file.afterContent,
+            afterContent: file.existedBefore ? file.beforeContent : null,
+            encoding: file.encoding,
+            lineEndings: file.lineEndings,
+            existedBefore: true,
+            publishedIdentity: restoredIdentity,
+          },
+          readFileState,
+        })
+      } catch (sideEffectError) {
+        logError(
+          sideEffectError instanceof Error
+            ? sideEffectError
+            : new Error(String(sideEffectError)),
+        )
+      }
     } catch (rollbackError) {
+      recoveryComplete = false
       logError(
         rollbackError instanceof Error
           ? rollbackError
@@ -635,6 +723,32 @@ async function rollbackAppliedFiles(
       )
     }
   }
+
+  return recoveryComplete ? 'complete-rollback' : 'incomplete-recovery'
+}
+
+function errorWithMutationOutcome(
+  error: unknown,
+  mutationOutcome: FilePatchMutationOutcome,
+): FilePatchError {
+  const originalMessage = error instanceof Error ? error.message : String(error)
+  const message =
+    mutationOutcome === 'no-mutation'
+      ? originalMessage.includes('No files were changed by this patch.')
+        ? originalMessage
+        : `${originalMessage} No files were changed by this patch.`
+      : mutationOutcome === 'complete-rollback'
+        ? `${originalMessage} Patch changes were rolled back completely.`
+        : `${originalMessage} Patch failed after changing files. Recovery was incomplete; an intervening change was preserved.`
+
+  if (error instanceof FilePatchError) {
+    return new FilePatchError(message, {
+      code: error.code,
+      path: error.path,
+      mutationOutcome,
+    })
+  }
+  return new FilePatchError(message, { mutationOutcome })
 }
 
 function getOperationContentPreview(operation: FilePatchOperation): string {

@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'fs'
 import { link, mkdir, open, readFile, rename, unlink } from 'fs/promises'
-import { basename, dirname, join } from 'path'
+import { basename, dirname, join, normalize } from 'path'
 import { lock } from './lockfile.js'
 
 export type AtomicWriteOptions = {
@@ -26,7 +26,7 @@ export async function acquireFileMutationLock(
   targetPath: string,
 ): Promise<() => Promise<void>> {
   await mkdir(dirname(targetPath), { recursive: true })
-  return lock(targetPath, {
+  const unlock = await lock(targetPath, {
     realpath: false,
     retries: {
       // A real extraction can hold this lock for several model turns. Keep
@@ -41,6 +41,62 @@ export async function acquireFileMutationLock(
     stale: 120_000,
     update: 30_000,
   })
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    try {
+      await unlock()
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !('code' in error) ||
+        error.code !== 'ERELEASED'
+      ) {
+        throw error
+      }
+    }
+  }
+}
+
+/**
+ * Acquire the same per-path locks used by individual file mutation tools.
+ *
+ * Lexical ordering prevents two multi-file mutations from deadlocking while
+ * they wait on the same set of cooperative locks. This protects cooperating
+ * writers only; it does not make unrelated filesystem writers transactional.
+ */
+export async function acquireFileMutationLocks(
+  targetPaths: readonly string[],
+): Promise<() => Promise<void>> {
+  const paths = [...new Set(targetPaths.map(path => normalize(path)))].sort()
+  const releases: Array<() => Promise<void>> = []
+
+  try {
+    for (const path of paths) {
+      releases.push(await acquireFileMutationLock(path))
+    }
+  } catch (error) {
+    for (const release of releases.reverse()) {
+      await release().catch(() => {})
+    }
+    throw error
+  }
+
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    let firstError: unknown
+    for (const release of releases.reverse()) {
+      try {
+        await release()
+      } catch (error) {
+        firstError ??= error
+      }
+    }
+    if (firstError !== undefined) throw firstError
+  }
 }
 
 function tempPathFor(

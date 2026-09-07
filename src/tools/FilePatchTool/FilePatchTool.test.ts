@@ -4,14 +4,21 @@ import { join } from 'path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { diagnosticTracker } from '../../services/diagnosticTracking.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
+import {
+  getFsImplementation,
+  setFsImplementation,
+} from '../../utils/fsOperations.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import { FilePatchTool } from './FilePatchTool.js'
+import { FilePatchError } from './types.js'
 
 const tempDirs: string[] = []
 const realBeforeFileEdited = diagnosticTracker.beforeFileEdited
+const originalFsImplementation = getFsImplementation()
 
 afterEach(() => {
   diagnosticTracker.beforeFileEdited = realBeforeFileEdited
+  setFsImplementation(originalFsImplementation)
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -23,11 +30,14 @@ function makeTempDir(): string {
   return dir
 }
 
-function callPatch(patch: string) {
+function callPatch(
+  patch: string,
+  readFileState = createFileStateCacheWithSizeLimit(10),
+) {
   return FilePatchTool.call(
     { input: patch },
     {
-      readFileState: createFileStateCacheWithSizeLimit(10),
+      readFileState,
       updateFileHistoryState: () => undefined,
     } as never,
     undefined as never,
@@ -89,6 +99,26 @@ describe('FilePatchTool concurrent write safety', () => {
     expect(readFileSync(filePath, 'utf8')).toBe(FIRST_PATCHED)
   })
 
+  test('preserves the source line-ending style while publishing an update', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'crlf.txt')
+    writeFileSync(filePath, 'alpha\r\nbeta\r\ngamma\r\n')
+
+    await callPatch(`*** Begin Patch
+*** Update File: ${filePath}
+@@
+ alpha
+-beta
++beta patched
+ gamma
+*** End Patch
+`)
+
+    expect(readFileSync(filePath, 'utf8')).toBe(
+      'alpha\r\nbeta patched\r\ngamma\r\n',
+    )
+  })
+
   // The re-read compares against the read-only phase's snapshot, and these two
   // shapes have no snapshot entry (a move destination) or an absent one (an
   // add), so they are where a wrong comparison would reject valid work.
@@ -146,15 +176,217 @@ describe('FilePatchTool concurrent write safety', () => {
       writeFileSync(secondPath, external),
     )
 
-    await expect(
-      callPatch(
+    let error: unknown
+    try {
+      await callPatch(
         `*** Begin Patch\n${updateFirst(firstPath)}${updateSecond(
           secondPath,
         )}*** End Patch\n`,
-      ),
-    ).rejects.toThrow(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+      )
+    } catch (caught) {
+      error = caught
+    }
 
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as Error).message).toContain(
+      FILE_UNEXPECTEDLY_MODIFIED_ERROR,
+    )
+    expect((error as FilePatchError).mutationOutcome).toBe('complete-rollback')
+    expect((error as Error).message).not.toContain('No files were changed')
     expect(readFileSync(firstPath, 'utf8')).toBe(FIRST_ORIGINAL)
     expect(readFileSync(secondPath, 'utf8')).toBe(external)
+  })
+
+  test('preserves an intervening edit when recovery sees a changed file', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'target.txt')
+    writeFileSync(filePath, FIRST_ORIGINAL)
+    const external = 'alpha\nedited during recovery\ngamma\n'
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    const originalSet = readFileState.set.bind(readFileState)
+    let observerFailed = false
+    readFileState.set = ((path, state) => {
+      if (!observerFailed) {
+        observerFailed = true
+        writeFileSync(path, external)
+        throw new Error('observer failed after publication')
+      }
+      return originalSet(path, state)
+    }) as typeof readFileState.set
+
+    let error: unknown
+    try {
+      await callPatch(
+        `*** Begin Patch\n${updateFirst(filePath)}*** End Patch\n`,
+        readFileState,
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).mutationOutcome).toBe(
+      'incomplete-recovery',
+    )
+    expect((error as Error).message).not.toContain('No files were changed')
+    expect(readFileSync(filePath, 'utf8')).toBe(external)
+  })
+
+  test('records a publication before a post-write observer can fail', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'observer.txt')
+    writeFileSync(filePath, FIRST_ORIGINAL)
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    const originalSet = readFileState.set.bind(readFileState)
+    let observerFailed = false
+    readFileState.set = ((path, state) => {
+      if (!observerFailed) {
+        observerFailed = true
+        throw new Error('observer failed after publication')
+      }
+      return originalSet(path, state)
+    }) as typeof readFileState.set
+
+    let error: unknown
+    try {
+      await callPatch(
+        `*** Begin Patch\n${updateFirst(filePath)}*** End Patch\n`,
+        readFileState,
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).mutationOutcome).toBe(
+      'complete-rollback',
+    )
+    expect(readFileSync(filePath, 'utf8')).toBe(FIRST_ORIGINAL)
+  })
+
+  test('preserves a replacement at a newly created path during recovery', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'created.txt')
+    const external = 'replacement from another writer\n'
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    const originalSet = readFileState.set.bind(readFileState)
+    let observerFailed = false
+    readFileState.set = ((path, state) => {
+      if (!observerFailed) {
+        observerFailed = true
+        writeFileSync(path, external)
+        throw new Error('observer failed after publication')
+      }
+      return originalSet(path, state)
+    }) as typeof readFileState.set
+
+    let error: unknown
+    try {
+      await callPatch(
+        `*** Begin Patch\n*** Add File: ${filePath}\n+created\n*** End Patch\n`,
+        readFileState,
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).mutationOutcome).toBe(
+      'incomplete-recovery',
+    )
+    expect(readFileSync(filePath, 'utf8')).toBe(external)
+  })
+
+  test('does not overwrite a file that reappears while restoring a deletion', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'deleted.txt')
+    writeFileSync(filePath, 'original\n')
+    const external = 'replacement after deletion\n'
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    const originalDelete = readFileState.delete.bind(readFileState)
+    let observerFailed = false
+    readFileState.delete = path => {
+      if (!observerFailed) {
+        observerFailed = true
+        writeFileSync(path, external)
+        throw new Error('observer failed after deletion')
+      }
+      return originalDelete(path)
+    }
+
+    let error: unknown
+    try {
+      await callPatch(
+        `*** Begin Patch\n*** Delete File: ${filePath}\n*** End Patch\n`,
+        readFileState,
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).mutationOutcome).toBe(
+      'incomplete-recovery',
+    )
+    expect(readFileSync(filePath, 'utf8')).toBe(external)
+  })
+
+  test('checks a move destination before deleting its source', async () => {
+    const dir = makeTempDir()
+    const sourcePath = join(dir, 'source.txt')
+    const destinationPath = join(dir, 'destination.txt')
+    writeFileSync(sourcePath, FIRST_ORIGINAL)
+    externalWriteDuringMutationPrep(1, () =>
+      writeFileSync(destinationPath, 'appeared during move\n'),
+    )
+
+    await expect(
+      callPatch(`*** Begin Patch
+*** Update File: ${sourcePath}
+*** Move to: ${destinationPath}
+@@
+ alpha
+-beta
++beta patched
+ gamma
+*** End Patch
+`),
+    ).rejects.toThrow(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+    expect(readFileSync(sourcePath, 'utf8')).toBe(FIRST_ORIGINAL)
+    expect(readFileSync(destinationPath, 'utf8')).toBe(
+      'appeared during move\n',
+    )
+  })
+
+  test('keeps the source when source deletion fails after destination publication', async () => {
+    const dir = makeTempDir()
+    const sourcePath = join(dir, 'source.txt')
+    const destinationPath = join(dir, 'destination.txt')
+    writeFileSync(sourcePath, FIRST_ORIGINAL)
+    const originalFs = getFsImplementation()
+    setFsImplementation({
+      ...originalFs,
+      async unlink(path) {
+        if (path === sourcePath) {
+          throw new Error('forced source deletion failure')
+        }
+        return originalFs.unlink(path)
+      },
+    })
+
+    await expect(
+      callPatch(`*** Begin Patch
+*** Update File: ${sourcePath}
+*** Move to: ${destinationPath}
+@@
+ alpha
+-beta
++beta patched
+ gamma
+*** End Patch
+`),
+    ).rejects.toThrow('forced source deletion failure')
+    expect(readFileSync(sourcePath, 'utf8')).toBe(FIRST_ORIGINAL)
+    expect(() => readFileSync(destinationPath, 'utf8')).toThrow()
   })
 })

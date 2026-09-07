@@ -8,6 +8,7 @@ import {
 } from '../../skills/loadSkillsDir.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
+import { acquireFileMutationLock } from '../../utils/atomicFile.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
 import {
@@ -328,11 +329,13 @@ export const FileEditTool = buildTool({
       activateConditionalSkillsForPaths([absoluteFilePath], cwd)
     }
 
-    await prepareFileMutation(
-      absoluteFilePath,
-      updateFileHistoryState,
-      parentMessage.uuid,
-    )
+    const releaseMutationLock = await acquireFileMutationLock(absoluteFilePath)
+    try {
+      await prepareFileMutation(
+        absoluteFilePath,
+        updateFileHistoryState,
+        parentMessage.uuid,
+      )
 
     // 2. Load current state and confirm no changes since last read
     // Please avoid async operations between here and writing to disk to preserve atomicity
@@ -341,6 +344,7 @@ export const FileEditTool = buildTool({
       fileExists,
       encoding,
       lineEndings: endings,
+        identity,
     } = readFileForEdit(absoluteFilePath)
 
     if (fileExists) {
@@ -378,6 +382,7 @@ export const FileEditTool = buildTool({
       encoding,
       lineEndings: endings,
       readFileState,
+      expectedIdentity: fileExists ? identity : undefined,
     })
 
     // 7. Log events
@@ -431,6 +436,9 @@ export const FileEditTool = buildTool({
     }
     return {
       data,
+      }
+    } finally {
+      await releaseMutationLock()
     }
   },
   mapToolResultToToolResultBlockParam(data: FileEditOutput, toolUseID) {

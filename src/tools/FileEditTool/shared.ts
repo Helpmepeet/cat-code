@@ -7,8 +7,11 @@ import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecret
 import type { Tool, ToolUseContext } from '../../Tool.js'
 import { isENOENT } from '../../utils/errors.js'
 import {
+  deleteFileWithVerifiedIdentity,
+  getFileIdentity,
   getFileModificationTime,
-  writeTextContent,
+  type FileIdentity,
+  writeTextContentWithVerifiedIdentity,
 } from '../../utils/file.js'
 import {
   fileHistoryEnabled,
@@ -32,6 +35,19 @@ import type { ValidationResult } from '../../Tool.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from './constants.js'
 
 export const MAX_EDIT_FILE_SIZE = 1024 * 1024 * 1024 // 1 GiB (stat bytes)
+
+export type FileMutationPublication = {
+  absoluteFilePath: string
+  beforeContent: string | null
+  afterContent: string | null
+  encoding: BufferEncoding
+  lineEndings: LineEndingType
+  existedBefore: boolean
+  expectedIdentity?: FileIdentity
+  publishedIdentity?: FileIdentity
+}
+
+export type FileMutationRestoration = 'restored' | 'conflict'
 
 type ValidationFailure = Extract<ValidationResult, { result: false }> & {
   behavior?: 'ask'
@@ -197,14 +213,17 @@ export function readFileForEdit(absoluteFilePath: string): {
   fileExists: boolean
   encoding: BufferEncoding
   lineEndings: LineEndingType
+  identity?: FileIdentity
 } {
   try {
     const meta = readFileSyncWithMetadata(absoluteFilePath)
+    const identity = getFileIdentity(absoluteFilePath)
     return {
       content: meta.content,
       fileExists: true,
       encoding: meta.encoding,
       lineEndings: meta.lineEndings,
+      identity,
     }
   } catch (e) {
     if (isENOENT(e)) {
@@ -256,6 +275,199 @@ export async function prepareFileMutation(
   }
 }
 
+export function writeFileMutation({
+  absoluteFilePath,
+  originalFileContents,
+  updatedFile,
+  encoding,
+  lineEndings,
+  expectedIdentity,
+}: {
+  absoluteFilePath: string
+  originalFileContents: string | null
+  updatedFile: string
+  encoding: BufferEncoding
+  lineEndings: LineEndingType
+  expectedIdentity?: FileIdentity
+}): FileMutationPublication {
+  const didWrite = writeTextContentWithVerifiedIdentity(
+    absoluteFilePath,
+    updatedFile,
+    encoding,
+    lineEndings,
+    expectedIdentity,
+  )
+  if (!didWrite) {
+    throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+  }
+
+  // Capture the exact object published by the filesystem before any cache,
+  // LSP, VS Code, or logging observer can fail. This is optimistic conflict
+  // detection plus cooperative locking, not crash-atomic multi-file state.
+  const publishedIdentity = getFileIdentity(absoluteFilePath)
+  return {
+    absoluteFilePath,
+    beforeContent: originalFileContents,
+    afterContent: updatedFile,
+    encoding,
+    lineEndings,
+    existedBefore: expectedIdentity !== undefined,
+    expectedIdentity,
+    publishedIdentity,
+  }
+}
+
+export async function deleteFileMutation({
+  absoluteFilePath,
+  originalFileContents,
+  encoding,
+  lineEndings,
+  expectedIdentity,
+}: {
+  absoluteFilePath: string
+  originalFileContents: string
+  encoding: BufferEncoding
+  lineEndings: LineEndingType
+  expectedIdentity: FileIdentity
+}): Promise<FileMutationPublication> {
+  if (!(await deleteFileWithVerifiedIdentity(absoluteFilePath, expectedIdentity))) {
+    throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+  }
+
+  return {
+    absoluteFilePath,
+    beforeContent: originalFileContents,
+    afterContent: null,
+    encoding,
+    lineEndings,
+    existedBefore: true,
+    expectedIdentity,
+  }
+}
+
+/**
+ * Restore one published mutation only while its post-publication state still
+ * owns the path. A deleted file is restored with no-clobber creation, so a
+ * replacement that reappeared during recovery is preserved.
+ */
+export async function restoreFileMutation(
+  publication: FileMutationPublication,
+): Promise<FileMutationRestoration> {
+  if (publication.afterContent === null) {
+    if (publication.beforeContent === null) return 'conflict'
+    return writeTextContentWithVerifiedIdentity(
+      publication.absoluteFilePath,
+      publication.beforeContent,
+      publication.encoding,
+      publication.lineEndings,
+      undefined,
+    )
+      ? 'restored'
+      : 'conflict'
+  }
+
+  if (!publication.existedBefore) {
+    if (publication.publishedIdentity === undefined) return 'conflict'
+
+    try {
+      getFileIdentity(publication.absoluteFilePath)
+    } catch (error) {
+      if (isENOENT(error)) return 'restored'
+      throw error
+    }
+
+    return (await deleteFileWithVerifiedIdentity(
+      publication.absoluteFilePath,
+      publication.publishedIdentity,
+    ))
+      ? 'restored'
+      : 'conflict'
+  }
+
+  if (publication.publishedIdentity === undefined) return 'conflict'
+  if (publication.beforeContent === null) return 'conflict'
+
+  return writeTextContentWithVerifiedIdentity(
+    publication.absoluteFilePath,
+    publication.beforeContent,
+    publication.encoding,
+    publication.lineEndings,
+    publication.publishedIdentity,
+  )
+    ? 'restored'
+    : 'conflict'
+}
+
+function updateReadFileStateAfterPublication(
+  publication: FileMutationPublication,
+  readFileState: ToolUseContext['readFileState'],
+): void {
+  if (publication.afterContent === null) {
+    readFileState.delete(publication.absoluteFilePath)
+    return
+  }
+
+  const publishedIdentity = publication.publishedIdentity
+  if (publishedIdentity === undefined) {
+    throw new Error(
+      `File publication did not return an identity for ${publication.absoluteFilePath}`,
+    )
+  }
+  readFileState.set(publication.absoluteFilePath, {
+    content: publication.afterContent,
+    timestamp: Math.floor(publishedIdentity.modifiedAtMs),
+    offset: undefined,
+    limit: undefined,
+    fileIdentity: publishedIdentity,
+  })
+}
+
+export function applyFileMutationSideEffects({
+  publication,
+  readFileState,
+}: {
+  publication: FileMutationPublication
+  readFileState: ToolUseContext['readFileState']
+}): void {
+  // Cache publication follows the transaction callback and precedes observers.
+  // If it fails, the caller already has the exact filesystem publication.
+  updateReadFileStateAfterPublication(publication, readFileState)
+
+  const lspManager = getLspServerManager()
+  if (lspManager) {
+    clearDeliveredDiagnosticsForFile(
+      `file://${publication.absoluteFilePath}`,
+    )
+    if (publication.afterContent === null) {
+      lspManager
+        .closeFile(publication.absoluteFilePath)
+        .catch((err: Error) => {
+          logError(err)
+        })
+    } else {
+      lspManager
+        .changeFile(
+          publication.absoluteFilePath,
+          publication.afterContent,
+        )
+        .catch((err: Error) => {
+          logError(err)
+        })
+      lspManager
+        .saveFile(publication.absoluteFilePath)
+        .catch((err: Error) => {
+          logError(err)
+        })
+    }
+  }
+
+  notifyVscodeFileUpdated(
+    publication.absoluteFilePath,
+    publication.beforeContent,
+    publication.afterContent,
+  )
+}
+
 export function writeFileWithSideEffects({
   absoluteFilePath,
   originalFileContents,
@@ -263,55 +475,56 @@ export function writeFileWithSideEffects({
   encoding,
   lineEndings,
   readFileState,
+  expectedIdentity,
+  onPublished,
 }: {
   absoluteFilePath: string
-  originalFileContents: string
+  originalFileContents: string | null
   updatedFile: string
   encoding: BufferEncoding
   lineEndings: LineEndingType
   readFileState: ToolUseContext['readFileState']
-}): void {
-  writeTextContent(absoluteFilePath, updatedFile, encoding, lineEndings)
-
-  const lspManager = getLspServerManager()
-  if (lspManager) {
-    clearDeliveredDiagnosticsForFile(`file://${absoluteFilePath}`)
-    lspManager.changeFile(absoluteFilePath, updatedFile).catch((err: Error) => {
-      logError(err)
-    })
-    lspManager.saveFile(absoluteFilePath).catch((err: Error) => {
-      logError(err)
-    })
-  }
-
-  notifyVscodeFileUpdated(absoluteFilePath, originalFileContents, updatedFile)
-  readFileState.set(absoluteFilePath, {
-    content: updatedFile,
-    timestamp: getFileModificationTime(absoluteFilePath),
-    offset: undefined,
-    limit: undefined,
+  expectedIdentity?: FileIdentity
+  onPublished?: (publication: FileMutationPublication) => void
+}): FileMutationPublication {
+  const publication = writeFileMutation({
+    absoluteFilePath,
+    originalFileContents,
+    updatedFile,
+    encoding,
+    lineEndings,
+    expectedIdentity,
   })
+  onPublished?.(publication)
+  applyFileMutationSideEffects({ publication, readFileState })
+  return publication
 }
 
 export async function deleteFileWithSideEffects({
   absoluteFilePath,
   originalFileContents,
   readFileState,
+  encoding,
+  lineEndings,
+  expectedIdentity,
+  onPublished,
 }: {
   absoluteFilePath: string
   originalFileContents: string
+  encoding: BufferEncoding
+  lineEndings: LineEndingType
+  expectedIdentity: FileIdentity
   readFileState: ToolUseContext['readFileState']
-}): Promise<void> {
-  await getFsImplementation().unlink(absoluteFilePath)
-
-  const lspManager = getLspServerManager()
-  if (lspManager) {
-    clearDeliveredDiagnosticsForFile(`file://${absoluteFilePath}`)
-    lspManager.closeFile(absoluteFilePath).catch((err: Error) => {
-      logError(err)
-    })
-  }
-
-  notifyVscodeFileUpdated(absoluteFilePath, originalFileContents, null)
-  readFileState.delete(absoluteFilePath)
+  onPublished?: (publication: FileMutationPublication) => void
+}): Promise<FileMutationPublication> {
+  const publication = await deleteFileMutation({
+    absoluteFilePath,
+    originalFileContents,
+    encoding,
+    lineEndings,
+    expectedIdentity,
+  })
+  onPublished?.(publication)
+  applyFileMutationSideEffects({ publication, readFileState })
+  return publication
 }
