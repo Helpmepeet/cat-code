@@ -319,11 +319,26 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
 - Exception: desktop-migration (`app/` + `docs/migration/`) work lives on the
   `migration` branch, never `main` (PROGRAM-PLAN rule).
 - **Commit your own explicit paths to the current branch freely — no need to ask;
-  commit early and often.** Uncommitted work on this shared tree is the fragile
-  state (the 2026-07-21 bug-sweep nearly lost 4 finished fixes by staying
-  uncommitted). **Push** only when asked — it publishes other sessions' commits
-  stacked under yours. Never `--no-verify`. Never `git stash` as a checkpoint — if
-  work matters, commit it.
+  commit early and often.** Commit every coherent completed slice as soon as its
+  focused verification passes; do not wait for the whole task, every worker, or
+  the full integration battery. Before waiting for another worker or ending a
+  turn, commit the finished work you own. A verification failure in an unrelated
+  concurrent slice is not a reason to leave your verified slice raw.
+- **A shared-tree implementation worker owns its commit.** Do not tell a worker
+  editing this shared tree "do not commit" and transfer the checkpoint to its
+  parent. The worker commits its explicit owned paths before returning; the parent
+  reviews that commit and adds follow-up commits if needed. If a slice cannot yet
+  be a normal commit, make an explicit `wip(scope): ...` checkpoint before waiting
+  or stopping rather than leaving it only in the working tree.
+- These rules are incident-backed. On 2026-09-07 the Agent Mode retirement parent
+  told two shared-tree implementors not to commit, made 40 patch operations of its
+  own, postponed every checkpoint until final integration, then exited while
+  waiting for a worker. Both workers were killed with
+  `parent-exited-without-result`, leaving 181 tracked paths, only 14 of them
+  staged, and no owning commit. On 2026-07-21 a bug sweep likewise nearly lost
+  four finished fixes by staying uncommitted. **Push** only when asked — it
+  publishes other sessions' commits stacked under yours. Never `--no-verify`.
+  Never `git stash` as a checkpoint — if work matters, commit it.
 - Message format: `type(scope): subject` — types `feat|fix|perf|refactor|docs|wip|merge|migration`,
   scopes seen: `app`, `codex`, `migration`, `DONE`. Multi-part commits get a
   short one-line-per-change body.
