@@ -98,7 +98,7 @@ transport, effectively-once processing.
 ## 2. Naming
 
 - **Allocator lives in Electron main, as an OWNED picker.** The engine's
-  `src/agent-mode/workerNames.ts` keeps active names in a process-local `Set`
+  `src/utils/workerNames.ts` keeps active names in a process-local `Set`
   (`:25`) that its picker always consults (`:30-35`), so it cannot coordinate
   N processes, and it has no session pool (`:104` returns null for an unknown
   agent type). Main is the one process that sees every row, so allocation

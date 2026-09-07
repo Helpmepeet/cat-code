@@ -11,7 +11,7 @@
 > sidecar parking-latch + exit-code-is-truth, no ack frame (§3); focus protection
 > = accept / restore-on-click (§4a); `MAX_LIVE_ENGINES=4`, `PARK_IDLE_TTL_MS=20m`
 > (§4). **Review found + closed** a no-turn-loss hole: the park gate's task check
-> missed a *foregrounded* running agent-mode worker — fixed by a raw-store,
+> missed a *foregrounded* running local-agent worker — fixed by a raw-store,
 > foreground-inclusive `tasksDomain.hasLiveWork()` (§3), with a test.
 > **Measured fleet reclaim** (headless `app/scripts/ram-fleet.ts`, 2026-07-22):
 > **~223 MB RSS / ~183 MB footprint reclaimed per parked session** — 6 engines
@@ -422,7 +422,7 @@ The latch is therefore an ordering guarantee over whole dispatches:
      (`app/sidecar/tasksDomain.ts:23,61-65`; this is the gate the audit noted
      "does not exist yet" — it is a read, not new state; backgrounded
      `local_agent` workers are tasks in the same store, so this one read covers
-     agent-mode workers too).
+     all active workers too).
 2. **If any gate fails → do nothing.** The session stays live; the park is
    silently declined (main re-evaluates on its next trigger). A turn/permission
    that was *accepted before this dispatch* thus **aborts the park, not the
@@ -694,7 +694,7 @@ below are the ones the operator is asked to ratify as DIE):
 | **Effort override** (xhigh/ultra/numeric ephemeral; low/med/high shared LWW) | **DIES / SHARED-LWW** | F5 matrix (`effort.ts`, `runControlsDomain.ts`) |
 | **Permission MODE; session-scoped rules; model override; fast mode** | **DIE** (in-memory, session-scoped) | `runControlsDomain.ts`; `sidecarServer.ts` setMode is session-scoped |
 | Pending permission requests; in-flight turn | **GATED AWAY** (park refuses) | §3 |
-| Agent-mode restoration fidelity | **DEGRADES** (`modeApi:null` on headless resume) | `sessionResume.ts:88-99` |
+| Legacy session-mode records | **NORMALIZES** — legacy `agent` records restore as `normal`; coordinator records remain coordinator | `src/types/logs.ts` `normalizeSessionMode`; `src/utils/sessionStorage.ts` |
 | Scroll position; MCP (`mcpClients:[]`) | DIES / MOOT | `App.tsx`; `sessionController.ts:227` |
 
 These are identical to what a **crash→restore** already loses today — park adds

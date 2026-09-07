@@ -9,8 +9,8 @@ source disagree, source wins. The account switcher is OUT of scope (P4-5); Recap
 
 ## The decision — reuse the engine's OWN per-session setters, no new state logic
 
-Each face drives the engine's real `/model`, `/effort`, `/fast` write, dispatched through a
-domain executor seam (the `agentModeDomain` recipe), NOT a re-implementation and NOT a respawn:
+Each face drives the engine's real `/model`, `/effort`, `/fast` write, dispatched through the
+sidecar's `runControlsDomain` executor seam, NOT a re-implementation and NOT a respawn:
 
 - **Model** — the engine reads `getMainLoopModel()` (→ `getMainLoopModelOverride()`) per turn
   (`QueryEngine.ts:283`). The desktop sidecar's app-state store has **no `onChangeAppState`
@@ -52,10 +52,10 @@ the new model; the domain LIVE test (`runControlsDomain.test.ts`) drives the REA
 asserts `getMainLoopModelOverride()`/`getMainLoopModel()` flip and `AppState.effortValue`/`fastMode`
 take effect.
 
-## The wire path (app-owned inbound verbs — the P4-15 / P4-8b template)
+## The wire path (app-owned inbound verbs)
 
-Like the P4-5 account verbs, the P4-8b agent-mode set, the P4-15 workspace-trust accept, and the
-P4-19 settings write, these are **app-owned inbound vocabulary** the engine's shared
+Like the P4-5 account verbs, P4-15 workspace-trust accept, and P4-19 settings write, these are
+**app-owned inbound vocabulary** the engine's shared
 `appClientMessageSchema` does NOT carry. Three distinct verbs under one family
 (`RUN_CONTROL_VERB_TYPES = ['model.set','effort.set','fast.set']`), chosen over one parameterized
 verb so each carries exactly its own bounded value and gets its own closed `checkStrictKeys`
