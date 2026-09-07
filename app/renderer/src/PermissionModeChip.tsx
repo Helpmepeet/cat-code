@@ -49,6 +49,7 @@ export function PermissionModeChip({
   onSetMode,
   readOnlyMode = null,
   faceProps,
+  onFocusComposer,
 }: {
   context: PermissionContextSnapshot | null
   onSetMode: (mode: PermissionSetModeMode) => void
@@ -60,12 +61,13 @@ export function PermissionModeChip({
    * (data-composer-face + tabIndex + onFocus). Spread on the trigger so the chip
    * joins the arrow-key roving group; absent (standalone use) → an unmanaged face. */
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
   // Feature #13 — the shared composer popover lifecycle (open flag +
-  // outside-click/Escape dismiss + first-item focus on open + focus-restore to the
+  // outside-click/Escape dismiss + selected-item focus on open + focus-restore to the
   // trigger via `close`), identical to the run-control chips. Previously this chip
-  // had bespoke state with NO first-item focus and NO in-panel roving.
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  // had bespoke state with NO selected-item focus and NO in-panel roving.
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
 
   const current = context ? permissionModeMeta(context.mode) : null
 

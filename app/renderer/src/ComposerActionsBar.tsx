@@ -265,6 +265,7 @@ function ModelChip({
   onSelect,
   onSetEffort,
   faceProps,
+  onFocusComposer,
 }: {
   current: string | null
   label: string | null
@@ -279,8 +280,9 @@ function ModelChip({
    * model list it was before, with no second face to reach. */
   onSetEffort?: (effort: string) => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   // The row whose ladder the second face is showing, or null for the model list.
   // Held as the OPTION, not a model id: its `effortOptions` are the ladder, and
   // they are already correct in the snapshot the user is looking at, so the face
@@ -335,7 +337,11 @@ function ModelChip({
             <ModelEffortFace
               option={effortStep}
               selected={effortSelected}
-              onSelect={onSetEffort}
+              onSelect={effort => {
+                onSetEffort(effort)
+                const selected = effort === 'auto' ? null : effort
+                if (effortSelected === selected) close()
+              }}
               onBack={() => {
                 returningToList.current = true
                 setEffortStep(null)
@@ -659,14 +665,16 @@ function ReasoningChip({
   options,
   onSelect,
   faceProps,
+  onFocusComposer,
 }: {
   current: string | null
   selected: string | null
   options: string[]
   onSelect: (effort: string) => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
   // The face shows the effective tier, while the checkmark reflects the raw
   // selection so an env/default override never lies about what the API receives.
@@ -848,6 +856,7 @@ export function AccountSwitcherPanel({
               key={acct.id}
               type="button"
               role="menuitem"
+              aria-current={isActive ? 'true' : undefined}
               // ACCT-6: a visible unavailable/active row stays focusable and
               // announced via aria-disabled — native `disabled` would drop it
               // from the tab order, hiding its state from keyboard users.
@@ -926,6 +935,7 @@ function AccountChip({
   onManage,
   onOpen,
   faceProps,
+  onFocusComposer,
 }: {
   active: AccountStatus
   accounts: AccountStatus[]
@@ -933,8 +943,9 @@ function AccountChip({
   onManage?: () => void
   onOpen?: () => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   const pool = accounts.length > 0 ? accounts : [active]
   const alias = active.alias ?? '(unnamed)'
   return (
@@ -1553,7 +1564,7 @@ export function ComposerActionsBar({
 
   // Roving navigation among the faces. Runs at the toolbar level, so it also fires
   // for keydowns bubbling out of an open popover — those are guarded out and left to
-  // the popover's own machinery (usePopover: first-item focus + Escape-to-close;
+  // the popover's own machinery (usePopover: selected-item focus + Escape-to-close;
   // handleMenuRovingKeyDown: in-panel ArrowUp/Down/Home/End roving, Feature #13).
   const onToolbarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
@@ -1608,7 +1619,7 @@ export function ComposerActionsBar({
       case 'ArrowDown':
         // Enter/Space already open a popover via the button's native click;
         // ArrowDown matches by activating the trigger, reusing usePopover's open +
-        // first-item focus. Faces without a popover (no aria-haspopup) ignore it.
+        // selected-item focus. Faces without a popover (no aria-haspopup) ignore it.
         if (current.getAttribute('aria-haspopup')) {
           event.preventDefault()
           current.click()
@@ -1683,6 +1694,7 @@ export function ComposerActionsBar({
               onSelect={onSetModel}
               onSetEffort={onSetEffort}
               faceProps={faceProps('model')}
+              onFocusComposer={onFocusComposer}
             />
             <RailSep />
           </>
@@ -1710,6 +1722,7 @@ export function ComposerActionsBar({
               options={runControls.effort.options}
               onSelect={onSetEffort}
               faceProps={faceProps('effort')}
+              onFocusComposer={onFocusComposer}
             />
             <RailSep />
           </>
@@ -1729,6 +1742,7 @@ export function ComposerActionsBar({
           onSetMode={onSetMode}
           readOnlyMode={permissionModeReadOnly}
           faceProps={faceProps('mode')}
+          onFocusComposer={onFocusComposer}
         />
         {fastInteractive && runControls && onSetFast ? (
           <FastChip
@@ -1752,6 +1766,7 @@ export function ComposerActionsBar({
               onManage={onManageAccounts}
               onOpen={onOpenAccountSwitcher}
               faceProps={faceProps('account')}
+              onFocusComposer={onFocusComposer}
             />
           ) : showAccount ? (
             /* The same status dot the interactive chip shows, for the same

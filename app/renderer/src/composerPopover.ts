@@ -12,6 +12,9 @@ import {
 
 export { handleMenuRovingKeyDown, nextMenuRovingIndex } from './overlayFocus.js'
 
+const SELECTED_MENU_ITEM_SELECTOR =
+  '[aria-checked="true"], [aria-current="true"]'
+
 /**
  * Shared upward-popover state for the composer's control faces (Model, Reasoning
  * effort, Permission mode, account switcher, and the context dialog). Extracted to
@@ -20,12 +23,13 @@ export { handleMenuRovingKeyDown, nextMenuRovingIndex } from './overlayFocus.js'
  *
  * Owns: the open flag; an outer ref that dismisses on outside click/Escape; and the
  * ACCT-2 focus lifecycle a `role="menu"` panel owes its items — focus moves into the
- * panel's first menu item on open, and Escape or a selection (via {@link close})
+ * panel's selected menu item on open when one exists, otherwise its first menu
+ * item. Escape or a selection (via {@link close})
  * restores focus to the trigger BEFORE the panel unmounts instead of falling back to
  * `<body>`. Plain outside-click leaves focus wherever the user clicked — only
  * Escape/selection force it back.
  */
-export function usePopover() {
+export function usePopover(onFocusComposer?: () => void) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
@@ -37,6 +41,8 @@ export function usePopover() {
     open,
     containerRef: ref,
     onEscape: closeWithoutRestore,
+    initialFocusPrioritySelector: SELECTED_MENU_ITEM_SELECTOR,
+    onShiftTab: onFocusComposer,
   })
   const close = useCallback(() => {
     setOpen(false)

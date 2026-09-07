@@ -273,11 +273,16 @@ function focusFirst(
   container: HTMLElement | null,
   selector: string,
   fallbackToContainer: boolean,
+  prioritySelector?: string,
 ): void {
   if (!container) return
-  const target = Array.from(
+  const candidates = Array.from(
     container.querySelectorAll<HTMLElement>(selector),
-  ).find(isFocusableElement)
+  ).filter(isFocusableElement)
+  const target =
+    (prioritySelector
+      ? candidates.find(element => element.matches(prioritySelector))
+      : undefined) ?? candidates[0]
   if (target) target.focus()
   else if (fallbackToContainer) container.focus()
 }
@@ -369,14 +374,20 @@ export function usePopoverFocus({
   containerRef,
   onEscape,
   initialFocusSelector = MENU_ITEM_SELECTOR,
+  initialFocusPrioritySelector,
+  onShiftTab,
 }: {
   open: boolean
   containerRef: RefObject<HTMLElement | null>
   onEscape: () => void
   initialFocusSelector?: string
+  initialFocusPrioritySelector?: string
+  onShiftTab?: () => void
 }): { restoreTriggerFocus: () => void } {
   const ownerRef = useRef<ModalFocusOwner>(Symbol('popover-focus-owner'))
   const triggerFocusRef = useRef<HTMLElement | null>(null)
+  const onShiftTabRef = useRef(onShiftTab)
+  onShiftTabRef.current = onShiftTab
 
   const restoreTriggerFocus = useCallback(() => {
     restoreFocus(triggerFocusRef.current)
@@ -396,17 +407,42 @@ export function usePopoverFocus({
       'popover',
     )
     const frame = requestAnimationFrame(() => {
-      focusFirst(containerRef.current, initialFocusSelector, false)
+      focusFirst(
+        containerRef.current,
+        initialFocusSelector,
+        false,
+        initialFocusPrioritySelector,
+      )
     })
     return () => {
       cancelAnimationFrame(frame)
       restoreFocus(restoreTargetForRemoval(modalFocusStack.unregister(owner)))
     }
-  }, [containerRef, initialFocusSelector, open])
+  }, [
+    containerRef,
+    initialFocusPrioritySelector,
+    initialFocusSelector,
+    open,
+  ])
 
   useEffect(() => {
     if (!open) return
     const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Tab' && event.shiftKey && onShiftTabRef.current) {
+        const container = containerRef.current
+        const items = container
+          ? Array.from(
+              container.querySelectorAll<HTMLElement>(MENU_ITEM_SELECTOR),
+            ).filter(isFocusableElement)
+          : []
+        const active = activeHtmlElement()
+        if (active !== null && items.includes(active)) {
+          event.preventDefault()
+          onEscape()
+          requestAnimationFrame(() => onShiftTabRef.current?.())
+          return
+        }
+      }
       const action = popoverKeyAction(
         !modalFocusStack.isBlockedByModal(ownerRef.current),
         event,

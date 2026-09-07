@@ -20,6 +20,7 @@ import { ComposerActionsBar } from './ComposerActionsBar.js'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness, MountedTree } from './domTestHarness.js'
 import type {
+  AccountStatus,
   PermissionContextSnapshot,
   RunControlsSnapshot,
 } from '../../shared/protocol.js'
@@ -40,6 +41,29 @@ afterAll(async () => {
 
 const GPT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
 const OPUS_LEVELS = ['low', 'medium', 'high', 'max']
+
+function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
+  return {
+    id: 'acct-1',
+    alias: 'hiby',
+    status: 'healthy',
+    statusReason: null,
+    availability: 'available',
+    availabilityLabel: 'Available',
+    isDefault: true,
+    hasVaultProfile: true,
+    source: 'vault',
+    usagePrimary: 10,
+    usageWeekly: 20,
+    usageLimitReached: false,
+    usageResetAt: null,
+    lastRefreshIso: null,
+    lastError: null,
+    planType: null,
+    switchable: false,
+    ...overrides,
+  }
+}
 
 /**
  * A Codex-routed session whose picker offers both providers — the shape that
@@ -172,9 +196,23 @@ async function openCard(tree: MountedTree): Promise<void> {
   await click(tree.container.querySelector('[data-composer-face="model"]'))
 }
 
-async function press(target: EventTarget, key: string): Promise<void> {
+async function openEffort(tree: MountedTree): Promise<void> {
+  await click(tree.container.querySelector('[data-composer-face="effort"]'))
+}
+
+async function openAccount(tree: MountedTree): Promise<void> {
+  await click(tree.container.querySelector('[data-composer-face="account"]'))
+}
+
+async function press(
+  target: EventTarget,
+  key: string,
+  init: KeyboardEventInit = {},
+): Promise<void> {
   await act(async () => {
-    target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key }))
+    target.dispatchEvent(
+      new KeyboardEvent('keydown', { bubbles: true, key, ...init }),
+    )
   })
 }
 
@@ -431,6 +469,15 @@ test('a rung is activated by the keyboard, not by arrowing onto it', async () =>
   expect(recorded.efforts).toEqual(['max'])
 })
 
+test('clicking the already-selected ladder rung closes the model card', async () => {
+  const tree = await mountBar(recorder())
+  await openLadder(tree)
+
+  await click(tree.container.querySelector('[aria-label="High"]'))
+
+  expect(menu(tree)).toBeNull()
+})
+
 test('Escape leaves the ladder first, and only then the card', async () => {
   const tree = await mountBar(recorder())
   await openLadder(tree)
@@ -441,4 +488,80 @@ test('Escape leaves the ladder first, and only then the card', async () => {
   expect(menu(tree)?.getAttribute('aria-label')).toBe('Model')
   await press(focused() ?? tree.container, 'Escape')
   expect(menu(tree)).toBeNull()
+})
+
+test('Shift+Tab from a picker row returns focus to the composer', async () => {
+  const composer = document.createElement('button')
+  const tree = await mountBar(recorder(), {
+    onFocusComposer: () => composer.focus(),
+  })
+  tree.container.prepend(composer)
+
+  await openEffort(tree)
+  await harness.nextFrame()
+  await press(focused()!, 'Tab', { shiftKey: true })
+  await harness.nextFrame()
+
+  expect(menu(tree)).toBeNull()
+  expect(focused()).toBe(composer)
+})
+
+test('opening the model picker focuses the selected model row', async () => {
+  const tree = await mountBar(recorder())
+  await openCard(tree)
+  await harness.nextFrame()
+
+  const selected = tree.container.querySelector(
+    '[role="menuitemradio"][aria-checked="true"]',
+  )
+  expect(selected?.textContent).toContain('GPT-5.6 Sol')
+  expect(focused()).toBe(selected)
+})
+
+test('opening the effort picker focuses the selected effort instead of Auto', async () => {
+  const tree = await mountBar(recorder(), {
+    reasoningEffort: 'max',
+    runControls: {
+      ...runControls(),
+      effort: {
+        current: 'max',
+        selected: 'max',
+        supported: true,
+        options: GPT_LEVELS,
+      },
+    },
+  })
+  await openEffort(tree)
+  await harness.nextFrame()
+
+  const selected = tree.container.querySelector(
+    '[role="menuitemradio"][aria-checked="true"]',
+  )
+  expect(selected?.textContent).toBe('Max')
+  expect(focused()).toBe(selected)
+})
+
+test('opening the account picker focuses the active account row', async () => {
+  const active = account({ id: 'acct-active', alias: 'active' })
+  const tree = await mountBar(recorder(), {
+    account: active,
+    accounts: [
+      active,
+      account({
+        id: 'acct-next',
+        alias: 'next',
+        isDefault: false,
+        switchable: true,
+      }),
+    ],
+    onSwitchAccount: () => {},
+  })
+  await openAccount(tree)
+  await harness.nextFrame()
+
+  const selected = tree.container.querySelector(
+    '[role="menuitem"][aria-current="true"]',
+  )
+  expect(selected?.textContent).toContain('active')
+  expect(focused()).toBe(selected)
 })
