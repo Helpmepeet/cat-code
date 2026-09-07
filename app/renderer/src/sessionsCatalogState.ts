@@ -171,7 +171,7 @@ export type MergedSessionRow = {
   transcriptActivityAtMs: number | null
   gitBranch: string | null
   tag: string | null
-  mode: 'agent' | 'coordinator' | 'normal' | null
+  mode: 'coordinator' | 'normal' | null
   agentSetting: string | null
   prNumber: number | null
   prRepository: string | null

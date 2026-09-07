@@ -45,13 +45,6 @@ if (feature('ABLATION_BASELINE') && process.env.CLAUDE_CODE_ABLATION_BASELINE) {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  // --agent-mode: set early so downstream module eval / runtime code can gate
-  // on a process-wide latch, mirroring coordinator mode propagation.
-  if (args.includes('--agent-mode')) {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1';
-    void import('../utils/worktree.js').then(({ cleanupOrphanedAgentWorktrees }) => cleanupOrphanedAgentWorktrees()).catch(() => {});
-  }
-
   // Fast-path for --version/-v: zero module loading needed
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-v' || args[0] === '-V')) {
     // MACRO.VERSION is inlined at build time

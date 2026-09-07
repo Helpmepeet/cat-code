@@ -55,7 +55,7 @@ export type ServerFrameBatchHandlers = {
   dispatchExtensions: (action: BatchAction<FrameReducerAction>) => void
   dispatchGoalMemory: (action: BatchAction<FrameReducerAction>) => void
   dispatchTasks: (action: BatchAction<FrameReducerAction>) => void
-  dispatchOrchestrator: (action: BatchAction<FrameReducerAction>) => void
+  dispatchWorkers: (action: BatchAction<FrameReducerAction>) => void
   dispatchLease: (action: BatchAction<FrameReducerAction>) => void
   dispatchAccounts: (action: BatchAction<FrameReducerAction>) => void
   dispatchWorkspaceTrust: (action: BatchAction<FrameReducerAction>) => void
@@ -103,7 +103,7 @@ export function applyServerFrameBatch(
   h.dispatchExtensions(batch(frameActions))
   h.dispatchGoalMemory(batch(frameActions))
   h.dispatchTasks(batch(frameActions))
-  h.dispatchOrchestrator(batch(frameActions))
+  h.dispatchWorkers(batch(frameActions))
   h.dispatchLease(batch(frameActions))
   h.dispatchAccounts(batch(frameActions))
   h.dispatchWorkspaceTrust(batch(frameActions))

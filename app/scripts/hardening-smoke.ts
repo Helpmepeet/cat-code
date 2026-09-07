@@ -233,7 +233,6 @@ async function runProductionHardeningSmoke(
       'restart',
       'runControlVerb',
       'sessionActionVerb',
-      'setAgentMode',
       'setPermissionMode',
       'settingsVerb',
       'submit',

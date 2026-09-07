@@ -75,10 +75,8 @@ import {
   getGPTDoingTasksSection,
   getGPTActionsSection,
   getGPTUsingToolsSection,
-  getGPTAgentModeUsingToolsSection,
   getGPTToneAndStyleSection,
   getGPTOutputSection,
-  getGPTAgentModeSessionGuidanceSection,
   getGPTSessionGuidanceSection,
   getGPTDefaultAgentPrompt,
 } from './promptStyles/gpt.js'
@@ -389,66 +387,6 @@ function getDiscoverSkillsGuidance(): string | null {
   return null
 }
 
-/**
- * Session-variant guidance that would fragment the cacheScope:'global'
- * prefix if placed before SYSTEM_PROMPT_DYNAMIC_BOUNDARY. Each conditional
- * here is a runtime bit that would otherwise multiply the Blake2b prefix
- * hash variants (2^N). See PR #24490, #24171 for the same bug class.
- *
- * outputStyleConfig intentionally NOT moved here — identity framing lives
- * in the static intro pending eval.
- */
-function getAgentModeSessionSpecificGuidanceSection(
-  enabledTools: Set<string>,
-  skillToolCommands: Command[],
-): string | null {
-  const hasAskUserQuestionTool = enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
-  const hasSkills =
-    skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
-
-  const items = [
-    hasAskUserQuestionTool
-      ? `If you do not understand why the user has denied a tool call, use the ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
-      : null,
-    getIsNonInteractiveSession()
-      ? null
-      : `If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands directly in the conversation.`,
-    enabledTools.has(AGENT_TOOL_NAME)
-      ? `AGENT MODE: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    getAgentModeWorkerControlGuidance(enabledTools),
-    hasSkills
-      ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
-      : null,
-    hasSkills
-      ? `When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
-      : null,
-    DISCOVER_SKILLS_TOOL_NAME !== null &&
-    hasSkills &&
-    enabledTools.has(DISCOVER_SKILLS_TOOL_NAME)
-      ? getDiscoverSkillsGuidance()
-      : null,
-  ].filter(item => item !== null)
-
-  if (items.length === 0) return null
-  return ['# Session-specific guidance', ...prependBullets(items)].join('\n')
-}
-
-export function getAgentModeWorkerControlGuidance(
-  enabledTools: Set<string>,
-): string | null {
-  const available = [
-    enabledTools.has('ListWorkers') ? 'ListWorkers' : null,
-    enabledTools.has('WaitWorkers') ? 'WaitWorkers' : null,
-    enabledTools.has('GetWorkerResult') ? 'GetWorkerResult' : null,
-    enabledTools.has('CancelWorker') ? 'CancelWorker' : null,
-  ].filter(item => item !== null)
-
-  if (available.length === 0) return null
-
-  return `Worker-control tools available in this session: ${available.join(', ')}. Follow the Worker control tools doctrine above.`
-}
-
 function getSessionSpecificGuidanceSection(
   enabledTools: Set<string>,
   skillToolCommands: Command[],
@@ -526,21 +464,6 @@ function getSimpleToneAndStyleSection(): string {
   return [`# Tone and style`, ...prependBullets(items)].join(`\n`)
 }
 
-function isAgentModePromptActive(): boolean {
-  return isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-}
-
-function getAgentModeToneSection(): string {
-  const items = [
-    `Only use emojis if the user explicitly requests it.`,
-    `Be concise, direct, and operational. No flattery, no performative reassurance.`,
-    `When referencing specific functions or pieces of code include the pattern file_path:line_number to allow easy navigation.`,
-    `When referencing GitHub issues or pull requests, use the owner/repo#123 format so they render as clickable links.`,
-    `When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
-  ]
-  return [`# Tone and style`, ...prependBullets(items)].join('\n')
-}
-
 /**
  * Key inputs for sections that branch on the enabled tool set. Sorted because
  * the guidance builders test membership, so ordering cannot change the output.
@@ -578,12 +501,11 @@ function outputStyleKeyInput(
  * The dynamic (registry-managed) half of the system prompt. Both assemblies
  * below register the same sections, keyed and ordered identically, so they live
  * here once: getSystemPrompt adds two feature-gated entries via
- * `includeFeatureGatedSections`, and Agent Mode's assembly takes the rest
- * unchanged.
+ * `includeFeatureGatedSections` controls the optional sections that are only
+ * meaningful for the full interactive prompt.
  */
 function buildDynamicPromptSections({
   gpt,
-  isAgentMode,
   model,
   provider,
   additionalWorkingDirectories,
@@ -595,7 +517,6 @@ function buildDynamicPromptSections({
   includeFeatureGatedSections,
 }: {
   gpt: boolean
-  isAgentMode: boolean
   model: string
   provider?: APIProvider
   additionalWorkingDirectories?: string[]
@@ -611,18 +532,13 @@ function buildDynamicPromptSections({
       'session_guidance',
       {
         gpt,
-        agentMode: isAgentMode,
         tools: toolNamesKeyInput(enabledTools),
         skills: skillNamesKeyInput(skillToolCommands),
       },
       () =>
         gpt
-          ? isAgentMode
-            ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-            : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
-          : isAgentMode
-            ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
-            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+          ? getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
+          : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
     systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
     systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
@@ -714,90 +630,6 @@ function buildDynamicPromptSections({
   ]
 }
 
-export async function getAgentModeSystemPromptSections(
-  tools: Tools,
-  model: string,
-  additionalWorkingDirectories?: string[],
-  mcpClients?: MCPServerConnection[],
-  provider?: APIProvider,
-): Promise<string[]> {
-  const { getAgentModeSystemPrompt } =
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js')
-
-  const [skillToolCommands, outputStyleConfig, envInfo] = await Promise.all([
-    getSkillToolCommands(getCwd()),
-    getOutputStyleConfig(),
-    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
-  ])
-
-  const requestProvider = resolveRequestProvider(model, provider)
-  const gpt = isGPTPromptStyle(requestProvider)
-  const settings = getInitialSettings()
-  const enabledTools = new Set(tools.map(_ => _.name))
-
-  const dynamicSections = buildDynamicPromptSections({
-    gpt,
-    isAgentMode: true,
-    model,
-    provider,
-    additionalWorkingDirectories,
-    mcpClients,
-    enabledTools,
-    skillToolCommands,
-    outputStyleConfig,
-    settings,
-    includeFeatureGatedSections: false,
-  })
-
-  const resolvedDynamicSections = await resolveSystemPromptSections(dynamicSections)
-
-  void envInfo
-  void outputStyleConfig
-
-  return [
-    // --- Static content (cacheable) ---
-    getCLISyspromptPrefix({
-      isNonInteractive: getIsNonInteractiveSession(),
-      hasAppendSystemPrompt: false,
-    }),
-    getAgentModeSystemPrompt(),
-    // Agent Mode replaces the default assembly, so the policy core has to be
-    // selected here explicitly. Before 2026-07-30 this branch hard-coded the
-    // Claude system section and included no cyber policy or actions section at
-    // all, which dropped exactly the hardening the more autonomous mode needs.
-    getCorePolicySection(),
-    gpt ? getGPTSystemSection() : getSimpleSystemSection(),
-    gpt ? getGPTActionsSection() : getActionsSection(),
-    gpt
-      ? getGPTAgentModeUsingToolsSection(enabledTools)
-      : getSimpleAgentModeUsingToolsSection(enabledTools),
-    gpt ? getGPTToneAndStyleSection() : getAgentModeToneSection(),
-    // === BOUNDARY MARKER - DO NOT MOVE OR REMOVE ===
-    ...(shouldUseGlobalCacheScope() ? [SYSTEM_PROMPT_DYNAMIC_BOUNDARY] : []),
-    // --- Dynamic content (registry-managed) ---
-    ...resolvedDynamicSections,
-  ].filter(s => s !== null)
-}
-
-function getSimpleAgentModeUsingToolsSection(enabledTools: Set<string>): string {
-  const taskToolName = [TASK_CREATE_TOOL_NAME, TODO_WRITE_TOOL_NAME].find(n =>
-    enabledTools.has(n),
-  )
-
-  const items = [
-    taskToolName
-      ? `Break down and manage the run with the ${taskToolName} tool. Mark each task as completed as soon as you are done with it. Do not batch completions.`
-      : null,
-    enabledTools.has(AGENT_TOOL_NAME)
-      ? `${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    `Call multiple tools in a single response when they are independent. Keep context small and decision-focused — prefer compact evidence over long raw tool output.`,
-  ].filter(item => item !== null)
-
-  return [`# Using your tools`, ...prependBullets(items)].join(`\n`)
-}
-
 export async function getSystemPrompt(
   tools: Tools,
   model: string,
@@ -882,11 +714,8 @@ export async function getSystemPrompt(
     ].filter(s => s !== null)
   }
 
-  const isAgentMode = isAgentModePromptActive()
-
   const dynamicSections = buildDynamicPromptSections({
     gpt,
-    isAgentMode,
     model,
     provider,
     additionalWorkingDirectories,
@@ -906,13 +735,11 @@ export async function getSystemPrompt(
   })
 
   // Doing-tasks is the only container for truthful outcome reporting and the
-  // retry budget, and TWO independent things drop it: Agent Mode, and an output
-  // style that turns coding instructions off. Outcome reporting is an invariant
-  // (owner decision 2026-07-30), so whenever this section is absent the core
-  // section stands in. The intro is always present here and already carries the
-  // cyber policy, so the fallback must not restate it.
+  // retry budget. An output style that turns coding instructions off drops it.
+  // Outcome reporting is an invariant, so whenever this section is absent the
+  // core section stands in. The intro is always present here and already
+  // carries the cyber policy, so the fallback must not restate it.
   const hasDoingTasksSection =
-    !isAgentMode &&
     (outputStyleConfig === null ||
       outputStyleConfig.keepCodingInstructions === true)
 
@@ -924,26 +751,18 @@ export async function getSystemPrompt(
       ? null
       : getCorePolicySection({
           cyberPolicy: false,
-          // Agent Mode has the orchestrator's tighter budget; an output-style
-          // session has no other anti-loop rule at all.
-          retryRule: !isAgentMode,
+          retryRule: true,
         }),
     hasDoingTasksSection
       ? gpt
         ? getGPTDoingTasksSection(enabledTools)
         : getSimpleDoingTasksSection()
       : null,
-    // Risky-action consent is invariant across modes, so Agent Mode keeps the
-    // actions section rather than nulling it.
     gpt ? getGPTActionsSection() : getActionsSection(),
     ...(gpt ? [] : [getDeliveringWorkSection(), getCorrectionsSection()]),
-    isAgentMode
-      ? gpt
-        ? getGPTAgentModeUsingToolsSection(enabledTools)
-        : getSimpleAgentModeUsingToolsSection(enabledTools)
-      : gpt
-        ? getGPTUsingToolsSection(enabledTools)
-        : getUsingYourToolsSection(enabledTools),
+    gpt
+      ? getGPTUsingToolsSection(enabledTools)
+      : getUsingYourToolsSection(enabledTools),
     gpt ? getGPTToneAndStyleSection() : getSimpleToneAndStyleSection(),
     gpt ? getGPTOutputSection() : getOutputEfficiencySection(),
     // === BOUNDARY MARKER - DO NOT MOVE OR REMOVE ===

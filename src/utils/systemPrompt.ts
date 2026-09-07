@@ -25,21 +25,16 @@ function isProactiveActive_SAFE_TO_CALL_ANYWHERE(): boolean {
   return proactiveModule?.isProactiveActive() ?? false
 }
 
-function isAgentModeActive_SAFE_TO_CALL_ANYWHERE(): boolean {
-  return isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-}
-
 /**
  * Builds the effective system prompt array based on priority:
  * 0. Override system prompt (if set, e.g., via loop mode - REPLACES all other prompts)
- * 1. Agent mode system prompt (if Agent mode is active) - REPLACES default entirely
- * 2. Coordinator system prompt (if coordinator mode is active)
- * 3. Agent system prompt (if mainThreadAgentDefinition is set)
+ * 1. Coordinator system prompt (if coordinator mode is active)
+ * 2. Agent system prompt (if mainThreadAgentDefinition is set)
  *    - In proactive mode: agent prompt is APPENDED to default (agent adds domain
  *      instructions on top of the autonomous agent prompt, like teammates do)
  *    - Otherwise: agent prompt REPLACES default
- * 4. Custom system prompt (if specified via --system-prompt)
- * 5. Default system prompt (the standard Cat Code prompt)
+ * 3. Custom system prompt (if specified via --system-prompt)
+ * 4. Default system prompt (the standard Cat Code prompt)
  *
  * Plus appendSystemPrompt is always added at the end if specified (except when override is set).
  */
@@ -50,7 +45,6 @@ export function buildEffectiveSystemPrompt({
   defaultSystemPrompt,
   appendSystemPrompt,
   overrideSystemPrompt,
-  agentModePromptSections,
 }: {
   mainThreadAgentDefinition: AgentDefinition | undefined
   toolUseContext: Pick<ToolUseContext, 'options'>
@@ -58,18 +52,9 @@ export function buildEffectiveSystemPrompt({
   defaultSystemPrompt: string[]
   appendSystemPrompt: string | undefined
   overrideSystemPrompt?: string | null
-  agentModePromptSections?: string[]
 }): SystemPrompt {
   if (overrideSystemPrompt) {
     return asSystemPrompt([overrideSystemPrompt])
-  }
-  // Agent mode: use a dedicated prompt assembly — doctrine first, no normal-chat noise.
-  // agentModePromptSections is pre-built by the caller (async) and passed in here.
-  if (isAgentModeActive_SAFE_TO_CALL_ANYWHERE() && agentModePromptSections) {
-    return asSystemPrompt([
-      ...agentModePromptSections,
-      ...(appendSystemPrompt ? [appendSystemPrompt] : []),
-    ])
   }
   // Coordinator mode: use coordinator prompt instead of default
   // Use inline env check instead of coordinatorModule to avoid circular

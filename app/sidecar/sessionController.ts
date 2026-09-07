@@ -86,9 +86,9 @@ import {
   type SidecarTasksDomain,
 } from './tasksDomain.js'
 import {
-  createSidecarAgentModeDomain,
-  type SidecarAgentModeDomain,
-} from './agentModeDomain.js'
+  createSidecarWorkersDomain,
+  type SidecarWorkersDomain,
+} from './workersDomain.js'
 import {
   createSidecarLeaseDomain,
   type SidecarLeaseDomain,
@@ -568,11 +568,10 @@ export type SidecarSession = {
    */
   remoteSettings: SidecarRemoteSettingsDomain | null
   /**
-   * Agent-mode / Orchestrator read-seam (P4-8, D2) — the joined worker snapshot
-   * (persisted agent-mode state ∪ live `local_agent` workers) for this session.
+   * Live worker read-seam over this session's `local_agent` tasks.
    * Read-only; null in probe mode (no engine app-state store).
    */
-  agentMode: SidecarAgentModeDomain | null
+  workers: SidecarWorkersDomain | null
   /**
    * Codex lease read-seam (P4-32b, L1) — which account each agent in THIS
    * session's swarm is leasing, projected from the engine's own lease manager.
@@ -675,7 +674,7 @@ export async function createSidecarSessionController({
       diagnostics: null,
       extensions: null,
       remoteSettings: null,
-      agentMode: null,
+      workers: null,
       leases: null,
       taskControl: null,
       panelTaskReaper: null,
@@ -739,9 +738,9 @@ export async function createSidecarSessionController({
     diagnostics: await createSidecarDiagnosticsDomain(appStateStore),
     extensions: createSidecarExtensionsDomain(extensionsSnapshot),
     remoteSettings: createSidecarRemoteSettingsDomain({ appStateStore, cwd, commands }),
-    agentMode: createSidecarAgentModeDomain(appStateStore),
+    workers: createSidecarWorkersDomain(appStateStore),
     // P4-32b — the session-scoped Codex lease read seam (L1). Same store as
-    // agent-mode: a worker spawn/finish is exactly when leases move.
+    // workers: a worker spawn/finish is exactly when leases move.
     leases: createSidecarLeaseDomain(appStateStore),
     taskControl: createSidecarTaskControlDomain(appStateStore),
     panelTaskReaper: createSidecarPanelTaskReaper(appStateStore),

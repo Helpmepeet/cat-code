@@ -29,7 +29,7 @@ import {
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
-import { formatBlockedHandoff } from '../../tools/AskOrchestratorTool/AskOrchestratorTool.js'
+import { formatBlockedHandoff } from '../../tools/AskParentSessionTool/AskParentSessionTool.js'
 import { getPillLabel, pillNeedsCta } from '../pillLabel.js'
 import {
   getTaskStatusIcon,
@@ -311,7 +311,7 @@ describe('LocalAgentTask foreground cleanup', () => {
     })
   })
 
-  // The handoff runAgent writes when a worker calls ask_orchestrator has to
+  // The handoff runAgent writes when a worker calls ask_parent_session has to
   // land here the same way a model-written one does: extractHandoffStatus and
   // extractBlockReason read the RESULT TEXT, so a constructed result that
   // drifts from that skeleton would show as an ordinary completion with the

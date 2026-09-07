@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import {
-  getAgentModeSystemPromptSections,
-  getSystemPrompt,
-} from './prompts.js'
+import { getSystemPrompt } from './prompts.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 import {
   getCorePolicySection,
@@ -19,9 +16,8 @@ import {
 /**
  * Owner decision 2026-07-30: the policy core reaches every live prompt variant.
  * These tests build the real assemblies, because the regression this guards
- * against is a variant losing a rule during assembly (C1/C9: Agent Mode
- * hard-coded the Claude system section and carried no cyber policy at all),
- * not a constant losing its text.
+ * against is a variant losing a rule during assembly, not a constant losing
+ * its text.
  */
 
 const TOOLS = [
@@ -45,21 +41,15 @@ const promptsSource = await Bun.file(
  */
 async function withPromptEnv<T>(
   run: () => Promise<T>,
-  {
-    agentMode = false,
-    simple = false,
-  }: { agentMode?: boolean; simple?: boolean } = {},
+  { simple = false }: { simple?: boolean } = {},
 ): Promise<T> {
   const saved = {
     simple: process.env.CLAUDE_CODE_SIMPLE,
-    agentMode: process.env.CLAUDE_CODE_AGENT_MODE,
     anthropicKey: process.env.ANTHROPIC_API_KEY,
     openaiKey: process.env.OPENAI_API_KEY,
   }
   if (simple) process.env.CLAUDE_CODE_SIMPLE = '1'
   else delete process.env.CLAUDE_CODE_SIMPLE
-  if (agentMode) process.env.CLAUDE_CODE_AGENT_MODE = '1'
-  else delete process.env.CLAUDE_CODE_AGENT_MODE
   process.env.ANTHROPIC_API_KEY = saved.anthropicKey ?? 'test-key'
   process.env.OPENAI_API_KEY = saved.openaiKey ?? 'test-key'
   try {
@@ -67,7 +57,6 @@ async function withPromptEnv<T>(
   } finally {
     for (const [key, value] of [
       ['CLAUDE_CODE_SIMPLE', saved.simple],
-      ['CLAUDE_CODE_AGENT_MODE', saved.agentMode],
       ['ANTHROPIC_API_KEY', saved.anthropicKey],
       ['OPENAI_API_KEY', saved.openaiKey],
     ] as const) {
@@ -85,14 +74,6 @@ const VARIANTS = [
   {
     label: 'default GPT',
     build: () => getSystemPrompt(TOOLS, GPT_MODEL),
-  },
-  {
-    label: 'Claude Agent Mode',
-    build: () => getAgentModeSystemPromptSections(TOOLS, CLAUDE_MODEL),
-  },
-  {
-    label: 'GPT Agent Mode',
-    build: () => getAgentModeSystemPromptSections(TOOLS, GPT_MODEL),
   },
 ] as const
 
@@ -144,10 +125,8 @@ describe('policy core coverage across provider and mode variants', () => {
     async (_label, build) => {
       const prompt = await withPromptEnv(async () => (await build()).join('\n'))
 
-      // Every rule the module owns, not a sample of them. RETRY_RULE is the
-      // one rule that is legitimately absent from a variant (Agent Mode runs
-      // the orchestrator's tighter budget), so the assertion is "never twice"
-      // and the presence matrix is the test above.
+      // Every rule the module owns, not a sample of them. The assertion is
+      // "never twice"; the presence matrix is the test above.
       for (const rule of [
         getCyberPolicyInstruction(),
         TOOL_OUTPUT_IS_DATA_RULE,
@@ -213,34 +192,9 @@ describe('policy core coverage across provider and mode variants', () => {
     )
   })
 
-  test('the default assembly keeps the policy core when Agent Mode is on', async () => {
-    // getSystemPrompt has its own in-session Agent Mode branch, separate from
-    // getAgentModeSystemPromptSections. systemPrompt.ts prefers the dedicated
-    // assembly, so this array is usually discarded, but it is built every turn
-    // and is what /context accounts for. It used to null both doing-tasks and
-    // actions without adding the core, leaving it with no consent rule, no
-    // instruction-authority rule, and no outcome reporting.
-    const prompt = await withPromptEnv(
-      async () => (await getSystemPrompt(TOOLS, CLAUDE_MODEL)).join('\n'),
-      { agentMode: true },
-    )
-
-    // Proves the branch was actually taken: doing-tasks is Agent Mode's tell.
-    expect(prompt).not.toContain('# Doing tasks')
-    expect(prompt).toContain(getCyberPolicyInstruction())
-    expect(prompt).toContain(INSTRUCTION_AUTHORITY_RULE)
-    expect(prompt).toContain(OUTCOME_REPORTING_RULE)
-    expect(prompt).toContain('# Executing actions with care')
-    // The intro already carries the cyber policy on this branch, so the
-    // stand-in section must not restate it.
-    expect(prompt.split(getCyberPolicyInstruction()).length - 1).toBe(1)
-    // Agent Mode keeps the orchestrator's tighter budget instead.
-    expect(prompt).not.toContain(RETRY_RULE)
-  })
-
   test('an output style that drops coding instructions still gets reporting and retry', () => {
-    // The default assembly drops doing-tasks for TWO reasons: Agent Mode, and an
-    // output style with keepCodingInstructions falsy. Doing-tasks is the only
+    // The default assembly drops doing-tasks when an output style sets
+    // keepCodingInstructions falsy. Doing-tasks is the only
     // container for outcome reporting and the retry budget, so an unguarded
     // output style silently removed both. getOutputStyleConfig() reads real
     // settings, so the axis is covered at the seam plus the wiring below.
@@ -253,12 +207,11 @@ describe('policy core coverage across provider and mode variants', () => {
     expect(fallback).toContain(RETRY_RULE)
     expect(fallback).not.toContain(getCyberPolicyInstruction())
 
-    // One condition covers both drop reasons, and the fallback is tied to it.
+    // The condition owns the drop, and the fallback is tied to it.
     expect(promptsSource).toContain('const hasDoingTasksSection =')
     expect(promptsSource).toContain(
       'outputStyleConfig.keepCodingInstructions === true',
     )
-    expect(promptsSource).toContain('retryRule: !isAgentMode,')
   })
 
   test('the proactive assembly selects the policy core and an actions section', () => {
@@ -266,7 +219,7 @@ describe('policy core coverage across provider and mode variants', () => {
     // built here; assert the wiring at its source instead.
     const proactiveBranch = promptsSource.slice(
       promptsSource.indexOf('path=simple-proactive'),
-      promptsSource.indexOf('const isAgentMode = isAgentModePromptActive()'),
+      promptsSource.indexOf('const hasDoingTasksSection ='),
     )
 
     expect(proactiveBranch).toContain('getCorePolicySection()')
@@ -298,25 +251,6 @@ describe('retry budgets by mode', () => {
         'Each retry must use a materially different strategy',
       )
       expect(prompt).toContain('After three failed attempts on the same problem')
-    },
-  )
-
-  test.each([
-    ['Claude', CLAUDE_MODEL],
-    ['GPT', GPT_MODEL],
-  ] as const)(
-    '%s Agent Mode keeps its tighter two-repair budget instead of the normal rule',
-    async (_label, model) => {
-      const prompt = await withPromptEnv(async () =>
-        (await getAgentModeSystemPromptSections(TOOLS, model)).join('\n'),
-      )
-
-      expect(prompt).toContain(
-        'After two failed repair attempts on the same issue, stop and either re-plan inline or report the blocker',
-      )
-      expect(prompt).not.toContain(
-        'After three failed attempts on the same problem',
-      )
     },
   )
 

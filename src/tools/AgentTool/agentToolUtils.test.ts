@@ -109,7 +109,7 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     resetStateForTests()
   })
 
-  test('resolves implementor tools without recursive or orchestrator routing tools', () => {
+  test('resolves implementor tools without recursive or parent-session routing tools', () => {
     const availableTools = getTools(getEmptyToolPermissionContext())
     const resolved = resolveAgentTools(IMPLEMENTOR_AGENT, availableTools, true)
     const toolNames = resolved.resolvedTools.map(tool => tool.name)
@@ -121,14 +121,10 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
       true,
     )
     expect(toolNames).not.toContain('Agent')
-    expect(toolNames).not.toContain('ask_orchestrator')
+    expect(toolNames).not.toContain('ask_parent_session')
     expect(toolNames).not.toContain('SendMessage')
     expect(toolNames).not.toContain('TeamCreate')
     expect(toolNames).not.toContain('TeamDelete')
-    expect(toolNames).not.toContain('ListWorkers')
-    expect(toolNames).not.toContain('WaitWorkers')
-    expect(toolNames).not.toContain('GetWorkerResult')
-    expect(toolNames).not.toContain('CancelWorker')
   })
 
   test('resolves verification tools as read-only and caller-oriented', () => {
@@ -143,11 +139,7 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).not.toContain('Apply_patch')
     expect(toolNames).not.toContain('Write')
     expect(toolNames).not.toContain('NotebookEdit')
-    expect(toolNames).not.toContain('ask_orchestrator')
-    expect(toolNames).not.toContain('ListWorkers')
-    expect(toolNames).not.toContain('WaitWorkers')
-    expect(toolNames).not.toContain('GetWorkerResult')
-    expect(toolNames).not.toContain('CancelWorker')
+    expect(toolNames).not.toContain('ask_parent_session')
   })
 })
 
@@ -179,38 +171,6 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
     ])
   })
 
-  test('keeps Agent Mode roles read-only or editing regardless of the alias', async () => {
-    // Dynamic import: the role definitions live behind the same tool-constant
-    // graph getTools() primes above, so import them after it has loaded.
-    const { AGENT_MODE_CODING_WORKER, AGENT_MODE_VERIFIER } = await import(
-      '../../agent-mode/rolePrompts.js'
-    )
-    const availableTools = getTools(getEmptyToolPermissionContext())
-
-    for (const provider of ['firstParty', 'openai'] as const) {
-      resetStateForTests()
-      setSessionProvider(provider)
-      const expectedEditTool =
-        provider === 'openai' ? FILE_PATCH_TOOL_NAME : FILE_EDIT_TOOL_NAME
-
-      const verifierNames = resolveAgentTools(
-        AGENT_MODE_VERIFIER,
-        availableTools,
-        true,
-      ).resolvedTools.map(tool => tool.name)
-      expect(verifierNames).toContain('Read')
-      expect(fileEditToolsIn(verifierNames)).toEqual([])
-      expect(verifierNames).not.toContain('Write')
-
-      const workerNames = resolveAgentTools(
-        AGENT_MODE_CODING_WORKER,
-        getTools(getEmptyToolPermissionContext()),
-        true,
-      ).resolvedTools.map(tool => tool.name)
-      expect(fileEditToolsIn(workerNames)).toEqual([expectedEditTool])
-    }
-  })
-
   // A role that disallows one alias must not receive the other when the pool
   // swaps for the OpenAI path — these three name only Edit in disallowedTools.
   test('keeps read-only built-ins edit-free on the OpenAI path', async () => {
@@ -233,14 +193,6 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
     }
   })
 
-  test('names both edit aliases in the verifier disallow list', async () => {
-    const { AGENT_MODE_VERIFIER } = await import(
-      '../../agent-mode/rolePrompts.js'
-    )
-
-    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_EDIT_TOOL_NAME)
-    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_PATCH_TOOL_NAME)
-  })
 })
 
 describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () => {
@@ -267,7 +219,7 @@ describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () =
 
   // Foreground vs background must not change a role's logical capabilities
   // (owner decision 2026-07-30). The async allowlist alone left Skill on every
-  // sync subagent, which made the orchestrator doctrine false for foreground
+  // sync subagent, which made the worker tool policy false for foreground
   // spawns.
   test.each([
     ['sync', false],
@@ -386,19 +338,6 @@ describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
       )
     },
   )
-
-  test('grants ClaudeCli to the Agent Mode coding worker, which names it explicitly', async () => {
-    const { AGENT_MODE_CODING_WORKER } = await import(
-      '../../agent-mode/rolePrompts.js'
-    )
-    const toolNames = resolveAgentTools(
-      AGENT_MODE_CODING_WORKER,
-      getTools(getEmptyToolPermissionContext()),
-      true,
-    ).resolvedTools.map(tool => tool.name)
-
-    expect(toolNames).toContain(CLAUDE_CLI_TOOL_NAME)
-  })
 
   test.each([
     ['sync', false],

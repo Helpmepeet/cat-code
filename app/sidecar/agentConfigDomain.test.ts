@@ -1,8 +1,5 @@
 import { expect, test } from 'bun:test'
-import type {
-  AgentModeWorkerSessionStatus,
-  AgentModeWorkerSynthesisStatus,
-} from '../../src/agent-mode/sessionState.js'
+import type { WorkerSessionStatus } from '../../src/utils/workerState.js'
 import type { TaskStatus } from '../../src/Task.js'
 import { BashTool } from '../../src/tools/BashTool/BashTool.js'
 import { getToolUseSummary as getReadToolUseSummary } from '../../src/tools/FileReadTool/UI.js'
@@ -19,7 +16,7 @@ import {
 import type { AgentDefinitionsResult } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { AGENT_CONFIG_SOURCE_ORDER } from '../renderer/src/agentConfigState.js'
 import {
-  deriveAgentModeWorkerState,
+  deriveWorkerState,
   deriveTaskAgentState,
 } from '../renderer/src/agentIdentity.js'
 import { describeToolForInspector } from '../renderer/src/toolInspectorModel.js'
@@ -54,24 +51,12 @@ const ENGINE_WORKER_STATUSES = [
   'completed',
   'failed',
   'killed',
-] as const satisfies readonly AgentModeWorkerSessionStatus[]
-const ENGINE_WORKER_SYNTHESIS_STATUSES = [
-  'pending',
-  'synthesized',
-] as const satisfies readonly AgentModeWorkerSynthesisStatus[]
+] as const satisfies readonly WorkerSessionStatus[]
 type TaskStatusesCovered = AssertAssignable<
   Exclude<TaskStatus, (typeof ENGINE_TASK_STATUSES)[number]> extends never ? true : false
 >
 type WorkerStatusesCovered = AssertAssignable<
-  Exclude<AgentModeWorkerSessionStatus, (typeof ENGINE_WORKER_STATUSES)[number]> extends never
-    ? true
-    : false
->
-type WorkerSynthesisStatusesCovered = AssertAssignable<
-  Exclude<
-    AgentModeWorkerSynthesisStatus,
-    (typeof ENGINE_WORKER_SYNTHESIS_STATUSES)[number]
-  > extends never
+  Exclude<WorkerSessionStatus, (typeof ENGINE_WORKER_STATUSES)[number]> extends never
     ? true
     : false
 >
@@ -80,7 +65,6 @@ void (null as unknown as EngineCoversProtocolAgentSources)
 void (null as unknown as SettingsBackedAgentSourcesStillUseSettingSource)
 void (null as unknown as TaskStatusesCovered)
 void (null as unknown as WorkerStatusesCovered)
-void (null as unknown as WorkerSynthesisStatusesCovered)
 
 function customAgent(
   fields: Partial<AgentDefinition> & Pick<AgentDefinition, 'agentType' | 'source'>,
@@ -275,27 +259,15 @@ test('agent display state covers every engine task and durable worker status', (
     }),
   )).toEqual(['running', 'running', 'completed', 'failed', 'stopped'])
 
-  // AgentModeWorkerSessionStatus/SynthesisStatus: src/agent-mode/sessionState.ts:18-24.
+  // WorkerSessionStatus: src/utils/workerState.ts.
   expect(ENGINE_WORKER_STATUSES.map(status =>
-    deriveAgentModeWorkerState({
+    deriveWorkerState({
       agentId: `worker-${status}`,
-      role: 'agent-mode-coding-worker',
+      role: 'coding-worker',
       description: status,
       status,
-      worktreePath: null,
     }),
   )).toEqual(['running', 'completed', 'failed', 'stopped'])
-
-  expect(ENGINE_WORKER_SYNTHESIS_STATUSES.map(synthesisStatus =>
-    deriveAgentModeWorkerState({
-      agentId: `worker-${synthesisStatus}`,
-      role: 'agent-mode-coding-worker',
-      description: synthesisStatus,
-      status: 'completed',
-      synthesisStatus,
-      worktreePath: null,
-    }),
-  )).toEqual(['result-ready', 'reviewed'])
 })
 
 test('tool inspector summaries stay coupled to real engine tool summary functions', () => {

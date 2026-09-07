@@ -130,7 +130,7 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
  *
  * `sticky` lists exactly the once-per-attach state frames, in the send order of
  * `SidecarServer.addConnection`. A few of them also re-broadcast on change
- * (settings / run-controls / accounts / goal / memory / tasks / agent-mode /
+ * (settings / run-controls / accounts / goal / memory / tasks / workers /
  * workspace-trust / remoteSettings / permission.context / queued-prompts); a
  * re-broadcast replaces the slot's value and keeps its original position,
  * because these are point-in-time state a reader applies wholesale, not
@@ -152,7 +152,7 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'thread-goal.snapshot': 'sticky',
   'memory.snapshot': 'sticky',
   'tasks.snapshot': 'sticky',
-  'agent-mode.snapshot': 'sticky',
+  'workers.snapshot': 'sticky',
   'lease.snapshot': 'sticky',
   'run-controls.snapshot': 'sticky',
   'context-breakdown.snapshot': 'sticky',
@@ -191,7 +191,6 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   lifecycle: 'ring',
   'session-title': 'ring',
   'sessions.snapshot': 'ring',
-  'agent-mode.set.result': 'ring',
   'task-control.result': 'ring',
   'run-control.result': 'ring',
   'session-action.result': 'ring',

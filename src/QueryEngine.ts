@@ -128,11 +128,6 @@ const getCoordinatorUserContext: (
 ) => { [k: string]: string } = feature('COORDINATOR_MODE')
   ? require('./coordinator/coordinatorMode.js').getCoordinatorUserContext
   : () => ({})
-const getAgentModeUserContext: (
-  mcpClients: ReadonlyArray<{ name: string }>,
-  scratchpadDir?: string,
-) => Promise<{ [k: string]: string }> =
-  require('./agent-mode/agentMode.js').getAgentModeUserContext
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 // Dead code elimination: conditional import for snip compaction
@@ -335,7 +330,6 @@ export class QueryEngine {
       typeof customSystemPrompt === 'string' ? customSystemPrompt : undefined
     let {
       defaultSystemPrompt,
-      agentModePromptSections,
       userContext: baseUserContext,
       systemContext,
     } = await fetchSystemPromptParts({
@@ -354,10 +348,6 @@ export class QueryEngine {
         mcpClients,
         isScratchpadEnabled() ? getScratchpadDir() : undefined,
       ),
-      ...(await getAgentModeUserContext(
-        mcpClients,
-        isScratchpadEnabled() ? getScratchpadDir() : undefined,
-      )),
     }
 
     // When an SDK caller provides a custom system prompt AND has set
@@ -444,7 +434,6 @@ export class QueryEngine {
       customSystemPrompt: customPrompt,
       defaultSystemPrompt,
       appendSystemPrompt: effectiveAppendSystemPrompt,
-      agentModePromptSections,
     })
 
     // Register function hook for structured output enforcement
@@ -596,7 +585,6 @@ export class QueryEngine {
       })
 
       defaultSystemPrompt = refreshedPromptParts.defaultSystemPrompt
-      agentModePromptSections = refreshedPromptParts.agentModePromptSections
       systemContext = refreshedPromptParts.systemContext
       userContext = {
         ...refreshedPromptParts.userContext,
@@ -604,10 +592,6 @@ export class QueryEngine {
           mcpClients,
           isScratchpadEnabled() ? getScratchpadDir() : undefined,
         ),
-        ...(await getAgentModeUserContext(
-          mcpClients,
-          isScratchpadEnabled() ? getScratchpadDir() : undefined,
-        )),
       }
       systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition: undefined,
@@ -615,7 +599,6 @@ export class QueryEngine {
         customSystemPrompt: customPrompt,
         defaultSystemPrompt,
         appendSystemPrompt: effectiveAppendSystemPrompt,
-        agentModePromptSections,
       })
     }
 

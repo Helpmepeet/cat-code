@@ -19,7 +19,7 @@ This file is intentionally:
 | Goal | Start here | Then inspect |
 |---|---|---|
 | Change default assistant behavior (coding deployment) | `src/constants/prompts.ts` | `src/constants/systemPromptSections.ts`, `src/QueryEngine.ts` |
-| Change deployment-aware prompt behavior | `src/constants/prompts.ts` | `src/tools/AgentTool/runAgent.ts`, `src/constants/system.ts`, `src/constants/prompts.ts` |
+| Change deployment-aware prompt behavior | `src/constants/prompts.ts` | `src/tools/AgentTool/runAgent.ts`, `src/constants/system.ts` |
 | Change prompt priority / override behavior | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/coordinator/coordinatorMode.ts`, `src/tools/AgentTool/loadAgentsDir.ts` |
 | Change injected repo or user instructions | `src/utils/claudemd.ts` | `src/context.ts`, repo `CLAUDE.md`, `.claude/rules/*.md`, `CLAUDE.local.md` |
 | Change final prompt assembly before model invocation | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/services/api/claude.ts` |
@@ -65,7 +65,7 @@ src/constants/prompts.ts
 
 src/utils/systemPrompt.ts
   chooses the winning prompt branch:
-  override > agent-mode > coordinator > agent > custom > default
+  override > coordinator > agent > custom > default
 
 appendSystemPrompt
   appended at the end of the winning branch
@@ -112,7 +112,7 @@ Usually safe for content changes:
 
 Core plumbing: edit carefully:
 
-- `src/constants/corePolicy.ts` (one rule text, several containers: a change lands in the Claude, GPT, Agent Mode, and proactive assemblies at once)
+- `src/constants/corePolicy.ts` (one rule text, several containers: a change lands in the Claude, GPT, and proactive assemblies at once)
 - `src/utils/systemPrompt.ts`
 - `src/QueryEngine.ts`
 - `src/utils/queryContext.ts`
@@ -215,11 +215,10 @@ This is the replacement order, not the load order.
 Primary precedence is defined in `src/utils/systemPrompt.ts`:
 
 1. `overrideSystemPrompt`
-2. Agent mode system prompt
-3. coordinator system prompt
-4. main-thread agent system prompt
-5. `customSystemPrompt`
-6. default system prompt
+2. coordinator system prompt
+3. main-thread agent system prompt
+4. `customSystemPrompt`
+5. default system prompt
 
 Then:
 

@@ -11,7 +11,7 @@ import type { ToolUseContext } from '../../Tool.js'
 import { asAgentId } from '../../types/ids.js'
 import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/constants.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../AskParentSessionTool/constants.js'
 import { BASH_TOOL_NAME } from '../BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
@@ -99,10 +99,9 @@ function buildContext({
   } as ToolUseContext
 }
 
-// Mirrors the Agent Mode coding worker's own `tools` list
-// (src/agent-mode/rolePrompts.ts, AGENT_MODE_CODING_WORKER) — the one
-// built-in definition that names ClaudeCli explicitly, so its resolved pool
-// is the shape 2a must keep passing.
+// Mirrors the built-in coding worker's `tools` list, the one definition that
+// names ClaudeCli explicitly, so its resolved pool is the shape 2a must keep
+// passing.
 const CODING_WORKER_TOOL_NAMES = [
   AGENT_TOOL_NAME,
   BASH_TOOL_NAME,
@@ -113,7 +112,7 @@ const CODING_WORKER_TOOL_NAMES = [
   GLOB_TOOL_NAME,
   GREP_TOOL_NAME,
   CLAUDE_CLI_TOOL_NAME,
-  ASK_ORCHESTRATOR_TOOL_NAME,
+  ASK_PARENT_SESSION_TOOL_NAME,
 ]
 
 /**
@@ -373,7 +372,7 @@ describe('ClaudeCliTool', () => {
     expect(denied.message).toContain('does not have Claude CLI')
   })
 
-  test('does not deny a subagent whose resolved pool carries ClaudeCli, shaped like the Agent Mode coding worker', async () => {
+  test('does not deny a subagent whose resolved pool carries ClaudeCli', async () => {
     const decision = await ClaudeCliTool.checkPermissions(
       { prompt: 'Review the auth module' },
       buildContext({

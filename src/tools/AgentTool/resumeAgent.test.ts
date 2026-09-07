@@ -18,7 +18,6 @@ import {
   resetStateForTests,
   switchSession,
 } from '../../bootstrap/state.js'
-import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
 import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId, asSessionId } from '../../types/ids.js'
 import { getEmptyToolPermissionContext } from '../../Tool.js'
@@ -46,7 +45,6 @@ function deferred<T>() {
 }
 
 describe('resumeAgentBackground', () => {
-  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
@@ -60,7 +58,6 @@ describe('resumeAgentBackground', () => {
     resetStateForTests()
     tempDir = mkdtempSync(join(tmpdir(), 'resume-agent-'))
     switchSession(asSessionId('session-resume'), tempDir)
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
 
     await writeAgentTranscript('agent-resume')
@@ -95,12 +92,11 @@ describe('resumeAgentBackground', () => {
     diskOutput._resetTaskOutputDirForTest()
     mock.restore()
     switchSession(asSessionId(originalSessionId), originalProjectDir)
-    restoreEnv('CLAUDE_CODE_AGENT_MODE', originalAgentMode)
     restoreEnv('CLAUDE_CODE_COORDINATOR_MODE', originalCoordinatorMode)
     await rm(tempDir, { recursive: true, force: true })
   })
 
-  test('passes Agent Mode session state tracking into the async lifecycle', async () => {
+  test('resumes onto the async lifecycle and records the spawn on the parent transcript', async () => {
     await resumeAgentBackground({
       agentId: 'agent-resume',
       prompt: 'continue',
@@ -115,12 +111,9 @@ describe('resumeAgentBackground', () => {
       expect.objectContaining({
         parentSessionId: 'session-resume',
         parentTranscriptPath: getTranscriptPath(),
-        sessionStateTracking: {
-          sessionId: 'session-resume',
-          mode: 'agent',
-          objective: 'Continue current objective',
-          statePath: getSessionStatePathFromTranscriptPath(getTranscriptPath()),
-        },
+        // Durable worker state is coordinator-only, so an ordinary session
+        // resumes without any tracking to thread through.
+        sessionStateTracking: undefined,
       }),
     )
     const parentTranscript = await readFile(getTranscriptPath(), 'utf-8')

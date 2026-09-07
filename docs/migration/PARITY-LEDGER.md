@@ -49,6 +49,16 @@ a *named owner*, and an ORPHANED row's owner is spent — so each was a ❓ cand
 rather than promoting en masse, because promoting 82 rows onto the danger list is an ownership ruling, not an audit
 finding.
 
+**Agent Mode retirement amendment — 2026-09-07.** The former Agent Mode control plane is retired. Current
+worker surfaces are generic `local_agent` task projections: `app/sidecar/workersDomain.ts` emits a
+bounded outbound-only worker snapshot, and the renderer keeps the roster, inspection, task controls,
+permission identity, transcript cards, and Codex lease joins. There is no Agent Mode toggle, badge,
+inbound mode-setting verb, or mode-specific snapshot. The `'orchestrating'` SessionsPage badge and
+WelcomeScreen Orchestrator toggle rows are therefore **✂️ cut**. The section 20 implementation notes
+below are historical parity evidence; wherever they name `agent-mode.*`, `Agent Mode` state, or a
+mode-specific host, the retirement amendment supersedes that former wiring. Generic worker rows remain
+in scope and are tracked against the live snapshot and bounded result summary.
+
 > **RULED + APPLIED 2026-07-26 — the 82 ORPHANED rows were PROMOTED to ❓, not waived.** Operator ruling: *"i dont
 > mind working it all. Just added it as a task in phase4 then."* Every row whose disposition read `⬜ deferred —
 > ORPHANED` now reads `❓ missing-no-owner — promoted from ⬜ ORPHANED 2026-07-26` (a greppable marker; per-row

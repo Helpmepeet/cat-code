@@ -17,7 +17,7 @@
  * `setSessionProvider`) and per-session app-state (`store.setState`). Because the
  * sidecar is one process per session (N-process, LOCKED), the "global" overrides
  * are correctly session-scoped. The executor is behind a seam (like
- * `agentModeDomain`): the real one wires the engine functions; tests inject a fake
+ * workers domain): the real one wires the engine functions; tests inject a fake
  * so the domain round-trip is proven without mutating real process globals.
  *
  * Read-only snapshot is secretGuard-clean by construction: model ids / effort
@@ -91,7 +91,7 @@ export type RunControlSetResult = {
  * The engine run-control ops, behind a seam (P4-24c). The real implementation
  * wires the engine's OWN `/model`, `/effort`, and `/fast` write logic; tests inject
  * a fake so a headless round-trip proves the wiring without mutating the real
- * process globals (mirrors `agentModeDomain`'s executor seam).
+ * process globals (mirrors the worker domain's executor seam).
  */
 export type RunControlExecutor = {
   /** Set this session's main-loop model (the `/model` write, session-scoped). */

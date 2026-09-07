@@ -172,7 +172,7 @@ describe('buildSessionMetadataView', () => {
     transcriptActivityAtMs: null,
     gitBranch: null,
     tag: 'auth',
-    mode: 'agent',
+    mode: 'normal',
     agentSetting: null,
     prNumber: null,
     prRepository: null,
@@ -187,7 +187,7 @@ describe('buildSessionMetadataView', () => {
     })
     expect(view).toEqual({
       sessionId: 'engine-1',
-      mode: 'agent',
+      mode: 'normal',
       permissionMode: 'acceptEdits',
       tag: 'auth',
       threadGoal: goal,

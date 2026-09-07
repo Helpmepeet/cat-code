@@ -1,7 +1,7 @@
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
 import { getSessionId } from '../../bootstrap/state.js'
-import { readSessionState } from '../../agent-mode/sessionState.js'
+import { readSessionState } from '../../utils/workerState.js'
 import { applyThreadGoalTransition } from '../../utils/threadGoalActions.js'
 import {
   buildThreadGoalToolResponse,
@@ -49,7 +49,6 @@ function describeUnresolvedWorkers(
     agentId: string
     handle?: string
     status: string
-    synthesisStatus?: string
   }>,
 ): string {
   return workers
@@ -61,9 +60,7 @@ function describeUnresolvedWorkers(
       const reason =
         worker.status === 'running'
           ? 'still running'
-          : worker.synthesisStatus === 'pending'
-            ? 'pending synthesis'
-            : worker.status
+          : worker.status
       return `@${label} (${reason})`
     })
     .join(', ')
@@ -235,18 +232,16 @@ export const UpdateGoalTool = buildTool({
     }
 
     const sessionState = await readSessionState(getSessionId())
-    const unresolvedWorkers =
-      sessionState?.knownWorkers.filter(
-        worker =>
-          worker.status === 'running' || worker.synthesisStatus === 'pending',
-      ) ?? []
+    const unresolvedWorkers = Object.values(
+      sessionState?.knownWorkers ?? {},
+    ).filter(worker => worker.status === 'running')
 
     if (unresolvedWorkers.length > 0) {
       return {
         result: false,
         message:
-          'Cannot mark the goal complete while Agent Mode still has unresolved workers. ' +
-          `Resolve or synthesize them first: ${describeUnresolvedWorkers(unresolvedWorkers)}.`,
+          'Cannot mark the goal complete while workers are still running. ' +
+          `Resolve them first: ${describeUnresolvedWorkers(unresolvedWorkers)}.`,
         errorCode: 6,
       }
     }

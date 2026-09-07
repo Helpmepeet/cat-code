@@ -43,7 +43,7 @@ const createdFiles: string[] = []
 function getSessionStatePath(sessionId: string): string {
   return getTranscriptPathForSession(sessionId).replace(
     /\.jsonl$/,
-    '.agent-mode-state.json',
+    '.worker-state.json',
   )
 }
 
@@ -54,74 +54,9 @@ function writeSessionState(sessionId: string, state: unknown): void {
   createdFiles.push(path)
 }
 
-function writePriorSessionState(
-  projectDir: string,
-  sessionId: string,
-  state: unknown,
-): void {
-  const path = join(projectDir, `${sessionId}.agent-mode-state.json`)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(state), 'utf-8')
-  createdFiles.push(path)
-}
-
-function writePriorAgentTranscript(
-  projectDir: string,
-  sessionId: string,
-  agentId: string,
-): void {
-  const path = join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`)
-  mkdirSync(dirname(path), { recursive: true })
-  const userUuid = randomUUID()
-  const assistantUuid = randomUUID()
-  writeFileSync(
-    path,
-    [
-      JSON.stringify({
-        type: 'user',
-        uuid: userUuid,
-        parentUuid: null,
-        isSidechain: true,
-        sessionId,
-        agentId,
-        timestamp: '2026-05-01T00:00:00.000Z',
-        message: { role: 'user', content: 'continue' },
-      }),
-      JSON.stringify({
-        type: 'assistant',
-        uuid: assistantUuid,
-        parentUuid: userUuid,
-        isSidechain: true,
-        sessionId,
-        agentId,
-        timestamp: '2026-05-01T00:00:01.000Z',
-        message: {
-          id: `msg-${assistantUuid}`,
-          type: 'message',
-          role: 'assistant',
-          model: 'gpt-5.6-luna',
-          content: [{ type: 'text', text: 'prior result' }],
-          stop_reason: 'end_turn',
-          stop_sequence: null,
-          usage: {
-            input_tokens: 1,
-            output_tokens: 1,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-          },
-        },
-      }),
-      '',
-    ].join('\n'),
-    'utf-8',
-  )
-  createdFiles.push(path)
-}
-
 describe('SendMessageTool durable worker handle fallback', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
-  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalAgentTeams = process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
   const originalConfigDir = process.env.CLAUDE_CONFIG_DIR
   const originalUserType = process.env.USER_TYPE
@@ -135,8 +70,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
 
     writeSessionState(sessionId, {
       sessionId,
-      mode: 'agent',
-      objective: 'Follow-up durable handle resume test',
+      mode: 'coordinator',
       activeWorkers: {},
       knownWorkers: {
         'agent-persistent': {
@@ -144,7 +78,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
           role: 'explorer',
           description: 'Explore target topic',
           status: 'completed',
-          resumable: true,
           worktreePath: null,
           handle: 'explore-1',
         },
@@ -163,11 +96,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
 
   afterEach(() => {
     mock.restore()
-    if (originalAgentMode === undefined) {
-      delete process.env.CLAUDE_CODE_AGENT_MODE
-    } else {
-      process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
-    }
     if (originalAgentTeams === undefined) {
       delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
     } else {
@@ -194,15 +122,13 @@ describe('SendMessageTool durable worker handle fallback', () => {
     switchSession(originalSessionId, originalProjectDir)
   })
 
-  test('is enabled in Agent Mode without Agent Teams', () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+  test('is enabled without Agent Teams', () => {
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(SendMessageTool.isEnabled?.()).toBe(true)
   })
 
   test('is enabled in normal sessions for running subagent targets', () => {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(SendMessageTool.isEnabled?.()).toBe(true)
@@ -219,15 +145,13 @@ describe('SendMessageTool durable worker handle fallback', () => {
     expect(description).toContain('use ResumeAgent instead')
   })
 
-  test('is not deferred in Agent Mode', () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+  test('is not deferred without Agent Teams', () => {
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     expect(isDeferredTool(SendMessageTool)).toBe(false)
   })
 
   test('without Agent Teams rejects teammate-only routes', async () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     await expect(
@@ -259,7 +183,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   test('without Agent Teams, a structured message to an @-recipient reports the message-shape error, not the recipient-format error', async () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
 
     await expect(
@@ -277,7 +200,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   test('without Agent Teams does not fall through to teammate mailbox', async () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
     const context = {
       getAppState: () => ({
@@ -484,7 +406,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
   })
 
   test('falls through to teammate mailbox when Agent Teams are enabled and target is unresolved', async () => {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
     process.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS = '1'
     process.env.CLAUDE_CONFIG_DIR = tempDir
     const teamFilePath = join(tempDir, 'teams', 'review-team', 'config.json')
@@ -636,108 +557,6 @@ describe('SendMessageTool durable worker handle fallback', () => {
     })
   })
 
-  test('returns ResumeAgent guidance for a prior-session worker handle', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    switchSession(freshSessionId, tempDir)
-
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior follow-up target',
-      activeWorkers: {},
-      knownWorkers: {
-        'agent-prior': {
-          agentId: 'agent-prior',
-          role: 'explorer',
-          description: 'Explore prior topic',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writePriorAgentTranscript(tempDir, priorSessionId, 'agent-prior')
-
-    const context = {
-      getAppState: () => ({
-        agentNameRegistry: new Map(),
-        tasks: {},
-      }),
-    } as never
-
-    const result = await SendMessageTool.call(
-      {
-        to: 'explore-prior',
-        summary: 'follow up',
-        message: 'continue prior work',
-      },
-      context,
-      undefined as never,
-      { requestId: 'req-2' } as never,
-    )
-
-    expect(resumeAgentBackground).not.toHaveBeenCalled()
-    expect(result.data).toMatchObject({
-      success: false,
-      message: expect.stringContaining(
-        'Agent "agent-prior" is stopped. Use ResumeAgent({ agentId: "explore-prior", prompt }) to restart it.',
-      ),
-    })
-  })
-
-  test('returns ResumeAgent guidance for a prior-session raw agent id', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    const priorAgentId = createAgentId()
-    switchSession(freshSessionId, tempDir)
-
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior raw-id target',
-      activeWorkers: {},
-      knownWorkers: {
-        [priorAgentId]: {
-          agentId: priorAgentId,
-          role: 'explorer',
-          description: 'Explore prior topic',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writePriorAgentTranscript(tempDir, priorSessionId, priorAgentId)
-
-    const context = {
-      getAppState: () => ({
-        agentNameRegistry: new Map(),
-        tasks: {},
-      }),
-    } as never
-
-    const result = await SendMessageTool.call(
-      {
-        to: priorAgentId,
-        summary: 'follow up',
-        message: 'continue by raw id',
-      },
-      context,
-      undefined as never,
-      { requestId: 'req-3' } as never,
-    )
-
-    expect(resumeAgentBackground).not.toHaveBeenCalled()
-    expect(result.data).toMatchObject({
-      success: false,
-      message: expect.stringContaining(
-        `Agent "${priorAgentId.slice(0, 12)}..." is stopped. Use ResumeAgent({ agentId: "${priorAgentId}", prompt }) to restart it.`,
-      ),
-    })
-  })
 })
 
 describe('SendMessageTool deterministic routing and truthful delivery', () => {

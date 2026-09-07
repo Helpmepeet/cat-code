@@ -1,7 +1,7 @@
 import { promises as fsp } from 'fs'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
-import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
-import { getCurrentSessionMode } from '../../agent-mode/agentMode.js'
+import { getSessionStatePathFromTranscriptPath } from '../../utils/workerState.js'
+import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
@@ -237,11 +237,10 @@ async function resumeAgentBackgroundLocked(
   const parentTranscriptPath = getTranscriptPath()
   const parentSessionId = getSessionId()
   const sessionStateTracking =
-    currentSessionMode === 'agent' || currentSessionMode === 'coordinator'
+    currentSessionMode === 'coordinator'
       ? {
           sessionId: parentSessionId,
           mode: currentSessionMode,
-          objective: meta?.description ?? 'Continue current objective',
           statePath: getSessionStatePathFromTranscriptPath(parentTranscriptPath),
         }
       : undefined

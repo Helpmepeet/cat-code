@@ -67,7 +67,7 @@ src/services/api/client.ts
 | Change one-turn SDK/headless execution | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/query.ts` | `QueryEngine.submitMessage()` owns the outer turn lifecycle and is where prompt/context are initially built and refreshed after slash-command model changes. |
 | Change the provider-neutral query loop | `src/query.ts` | `src/query/deps.ts`, `src/services/tools/toolOrchestration.ts`, `src/query/stopHooks.ts` | `queryLoop()` is the state machine. Tests can inject `QueryDeps` for `callModel`, `microcompact`, `autocompact`, and UUID generation. |
 | Change context assembly | `src/context.ts` | `src/utils/queryContext.ts`, `src/utils/claudemd.ts`, `src/services/api/instructionAssembly.ts` | `getUserContext()` and `getSystemContext()` are memoized. `fetchSystemPromptParts()` decides when to skip default prompt/system context for custom prompts. |
-| Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, Agent Mode, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
+| Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
 | Change provider instruction placement | `src/services/api/instructionAssembly.ts` | `src/query.ts`, `src/services/api/claude.ts`, [`prompt-system.md`](prompt-system.md) | OpenAI receives stable instructions and optional developer context. Claude-style providers receive system-context-appended prompts and user-context-prepended messages. |
 | Change model selection defaults, aliases, or catalog options | `src/utils/model/model.ts` | `src/utils/model/modelStrings.ts`, `src/utils/model/aliases.ts`, `src/utils/model/configs.ts`, `src/utils/model/modelOptions.ts`, `src/utils/context.ts`, `src/utils/effort.ts` | Defaults depend on subscription/provider. `parseUserSpecifiedModel()` resolves aliases and `[1m]`; `normalizeModelStringForAPI()` strips context suffixes at API time. New model launches need config keys, picker entries, display/canonical names, context-window budgeting, and default effort checked together. |
 | Change provider selection | `src/utils/model/providers.ts` | `src/QueryEngine.ts`, `src/query.ts`, `src/services/api/client.ts`, `app/sidecar/runControlsDomain.ts` | `getAPIProvider()` reads session provider, env, and startup preference. `resolveModelSelectionProvider()` handles interactive cross-provider selection; `resolveRequestProvider()` performs request-time GPT routing. |
@@ -85,8 +85,8 @@ src/services/api/client.ts
 | Stage | Owner | Key decisions |
 |---|---|---|
 | Initial model/provider snapshot | `src/QueryEngine.ts` | Captures `getAPIProvider()` and `getMainLoopModel()` or `parseUserSpecifiedModel(userSpecifiedModel)` before prompt fetch. |
-| Prompt/context fetch | `src/utils/queryContext.ts` | Fetches default prompt, Agent Mode sections, user context, and system context in parallel; skips default/system context for custom system prompt. |
-| Extra user context | `src/QueryEngine.ts` | Merges base user context with coordinator and Agent Mode user context. |
+| Prompt/context fetch | `src/utils/queryContext.ts` | Fetches default prompt, user context, and system context in parallel; skips default/system context for custom system prompt. |
+| Extra user context | `src/QueryEngine.ts` | Merges base user context with coordinator user context. |
 | Effective prompt | `src/utils/systemPrompt.ts` | Builds final `SystemPrompt` from branch priority plus append/memory mechanics. |
 | User input processing | `src/QueryEngine.ts` | `processUserInput()` may add messages, allowed tools, result text, or a new model. |
 | Prompt refresh after switch | `src/QueryEngine.ts` | If model or provider changed during input processing, refetch prompt/context and rebuild effective system prompt. |
@@ -112,7 +112,7 @@ src/services/api/client.ts
 
 | Context/instruction surface | Built by | Provider placement |
 |---|---|---|
-| Default or Agent Mode prompt sections | `src/constants/prompts.ts` via `src/utils/queryContext.ts` | Fed into `buildEffectiveSystemPrompt()`. See [`prompt-system.md`](prompt-system.md). |
+| Default prompt sections | `src/constants/prompts.ts` via `src/utils/queryContext.ts` | Fed into `buildEffectiveSystemPrompt()`. See [`prompt-system.md`](prompt-system.md). |
 | Custom system prompt | `src/QueryEngine.ts` input config | Replaces default prompt branch; `fetchSystemPromptParts()` skips default prompt and system context. |
 | Append system prompt | `src/QueryEngine.ts` input config | Appended to winning prompt branch unless an override prompt replaces everything. |
 | Memory mechanics prompt | `src/QueryEngine.ts` | Added only for custom system prompt plus auto-memory path override. |

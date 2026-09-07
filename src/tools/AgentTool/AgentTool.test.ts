@@ -9,11 +9,11 @@ import { PassThrough } from 'stream'
 import stripAnsi from 'strip-ansi'
 import * as React from 'react'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
-import { readSessionState } from '../../agent-mode/sessionState.js'
+import { readSessionState } from '../../utils/workerState.js'
 import {
   allocateWorkerName,
   resetWorkerNamesForTests,
-} from '../../agent-mode/workerNames.js'
+} from '../../utils/workerNames.js'
 import { render, ThemeProvider } from '../../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
 import { getBuiltInAgents } from './builtInAgents.js'
@@ -21,7 +21,6 @@ import {
   AgentTool,
   buildAgentSessionStateTracking,
   continueAgentIterator,
-  deriveSessionStateTrackingObjective,
   finalizeFailedAgentLaunch,
   inputSchema,
   registerWorkerCodexLease,
@@ -86,7 +85,6 @@ async function renderToPlainText(node: React.ReactNode): Promise<string> {
 }
 
 const originalRandom = Math.random
-const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
 const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
 const originalSdkDisableBuiltins =
   process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
@@ -94,11 +92,6 @@ const originalSdkDisableBuiltins =
 afterEach(() => {
   Math.random = originalRandom
   resetWorkerNamesForTests()
-  if (originalAgentMode === undefined) {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
-  } else {
-    process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
-  }
   if (originalCoordinatorMode === undefined) {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
   } else {
@@ -318,8 +311,7 @@ describe('AgentTool UI', () => {
 })
 
 describe('getBuiltInAgents in normal mode', () => {
-  test('registers normal implementor and verification agents without Agent Mode gates', () => {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
+  test('registers normal implementor and verification agents without coordinator gates', () => {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
     delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
 
@@ -327,22 +319,8 @@ describe('getBuiltInAgents in normal mode', () => {
 
     expect(agentTypes).toContain('implementor')
     expect(agentTypes).toContain('verification')
-    expect(agentTypes).not.toContain('agent-mode-coding-worker')
-    expect(agentTypes).not.toContain('agent-mode-verifier')
   })
 
-  test('keeps Agent Mode worker roles separate from normal-mode roles', () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
-    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
-    delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
-
-    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
-
-    expect(agentTypes).toContain('agent-mode-coding-worker')
-    expect(agentTypes).toContain('agent-mode-verifier')
-    expect(agentTypes).not.toContain('implementor')
-    expect(agentTypes).not.toContain('verification')
-  })
 })
 
 describe('resolveSystemSubagentName', () => {
@@ -454,53 +432,25 @@ describe('resolveSystemSubagentName', () => {
   })
 })
 
-describe('deriveSessionStateTrackingObjective', () => {
-  test('prefers the thread goal objective over worker description', () => {
-    expect(
-      deriveSessionStateTrackingObjective({
-        threadGoalObjective: 'Finish the real goal',
-        description: 'Implement a narrow worker task',
-      }),
-    ).toBe('Finish the real goal')
-  })
-
-  test('falls back to worker description and default text', () => {
-    expect(
-      deriveSessionStateTrackingObjective({
-        description: 'Implement a narrow worker task',
-      }),
-    ).toBe('Implement a narrow worker task')
-
-    expect(deriveSessionStateTrackingObjective({})).toBe(
-      'Continue current objective',
-    )
-  })
-})
-
 describe('buildAgentSessionStateTracking', () => {
-  test('uses thread goal state from app state inputs for agent mode', () => {
+  test('tracks coordinator worker state without goal-specific fields', () => {
     expect(
       buildAgentSessionStateTracking({
-        sessionMode: 'agent',
+        sessionMode: 'coordinator',
         sessionId: 'session-123',
-        threadGoalObjective: 'Deliver the report',
-        description: 'Map workspace',
       }),
     ).toEqual({
       sessionId: 'session-123',
-      mode: 'agent',
-      objective: 'Deliver the report',
+      mode: 'coordinator',
       statePath: expect.any(String),
     })
   })
 
-  test('returns undefined outside agent and coordinator modes', () => {
+  test('returns undefined outside coordinator mode', () => {
     expect(
       buildAgentSessionStateTracking({
         sessionMode: 'normal',
         sessionId: 'session-123',
-        threadGoalObjective: 'Deliver the report',
-        description: 'Map workspace',
       }),
     ).toBeUndefined()
   })
@@ -511,7 +461,7 @@ describe('finalizeFailedAgentLaunch', () => {
     const spawnCalls: Array<Record<string, unknown>> = []
     const terminalCalls: Array<Record<string, unknown>> = []
     const sessionId = randomUUID()
-    const statePath = join(tmpdir(), `${sessionId}.agent-mode-state.json`)
+    const statePath = join(tmpdir(), `${sessionId}.worker-state.json`)
     Math.random = () => 0
 
     const result = await finalizeFailedAgentLaunch(
@@ -527,8 +477,7 @@ describe('finalizeFailedAgentLaunch', () => {
         worktreePath: null,
         sessionStateTracking: {
           sessionId,
-          mode: 'agent',
-          objective: 'Deliver the report',
+          mode: 'coordinator',
           statePath,
         },
       },
@@ -545,8 +494,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(spawnCalls).toEqual([
       {
         sessionId,
-        mode: 'agent',
-        objective: 'Deliver the report',
+        mode: 'coordinator',
         statePath,
         handle: 'Ada',
         agentId: 'agent-123',
@@ -561,12 +509,9 @@ describe('finalizeFailedAgentLaunch', () => {
         sessionId,
         agentId: 'agent-123',
         status: 'failed',
-        error: 'store is not defined',
-        outputSummary: 'Map workspace for report flow',
         createStateIfMissing: {
           sessionId,
-          mode: 'agent',
-          objective: 'Deliver the report',
+          mode: 'coordinator',
           statePath,
         },
       },
@@ -836,7 +781,7 @@ describe('finalizeFailedAgentLaunch', () => {
         error: new Error('worktree setup failed'),
         durationMs: 42,
         sessionStateTracking: buildAgentSessionStateTracking({
-          sessionMode: 'agent',
+          sessionMode: 'coordinator',
           sessionId: 'session-123',
           threadGoalObjective: 'Deliver the report',
           description: 'Map workspace for report flow',
@@ -856,7 +801,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(terminalCalls).toHaveLength(1)
   })
 
-  test('persists generic handles for tracked Agent Mode launch failures and advances allocation', async () => {
+  test('persists generic handles for tracked launch failures and advances allocation', async () => {
     const tempProjectDir = mkdtempSync(join(tmpdir(), 'agent-tool-failed-launch-'))
     const sessionId = 'session-123'
     Math.random = () => 0
@@ -872,7 +817,7 @@ describe('finalizeFailedAgentLaunch', () => {
         error: new Error('worktree setup failed'),
         durationMs: 42,
         sessionStateTracking: buildAgentSessionStateTracking({
-          sessionMode: 'agent',
+          sessionMode: 'coordinator',
           sessionId,
           threadGoalObjective: 'Deliver the report',
           description: 'Map workspace for report flow',
@@ -880,15 +825,11 @@ describe('finalizeFailedAgentLaunch', () => {
       })
 
       const state = await readSessionState(sessionId)
-      const failedWorker = state?.knownWorkers.find(
-        worker => worker.agentId === 'agent-123',
-      )
+      const failedWorker = state?.knownWorkers['agent-123']
 
       expect(failedWorker?.handle).toBe('Ada')
       expect(failedWorker?.handle).not.toBe('agent-123')
-      expect(allocateWorkerName('Explore', [], { allowGeneric: true })).toBe(
-        'Katherine',
-      )
+      expect(allocateWorkerName('Explore')).toBe('Katherine')
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })
     }

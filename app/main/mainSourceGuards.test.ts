@@ -203,7 +203,7 @@ test('the control plane adds zero socket frame types (stays off the wire in v1)'
 
   // The only forward() targets that construct a `type:` literal are the engine
   // commands + the app-owned frames main mints/relays a literal for
-  // (permission.setMode, agent-mode.set, C5/P4-20 askUserQuestion.answer).
+  // (permission.setMode, C5/P4-20 askUserQuestion.answer).
   // Object-forwarded verbs (account.*, workspace.*, remoteSettings.*, settings.*)
   // pass `arg.verb` and never match. A new literal here is a widened outbound
   // vocabulary and must be a deliberate decision, not a drive-by.
@@ -217,7 +217,6 @@ test('the control plane adds zero socket frame types (stays off the wire in v1)'
       'app.abort',
       'permission.response',
       'permission.setMode',
-      'agent-mode.set',
       'askUserQuestion.answer',
       'app.ping',
     ]).toContain(type)

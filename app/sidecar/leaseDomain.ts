@@ -1,6 +1,6 @@
 /**
- * Codex lease read-seam (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7,
- * ruled 2026-07-30 §10). The W4 domain recipe (`accountsDomain.ts` header) applied
+ * Codex lease read-seam (P4-32b, L1, ruled 2026-07-30). The W4 domain recipe
+ * (`accountsDomain.ts` header) applied
  * to the engine's real lease manager:
  *
  *  1. **Read-only OUTBOUND projection.** `getSnapshot()` reads the engine's OWN
@@ -24,7 +24,7 @@
  *         worker is on the Codex path (`registerWorkerCodexLease`,
  *         `AgentTool.tsx`) and a worker finish releases one
  *         (`LocalAgentTask.tsx:388,554,581,817`) — the SAME store that drives the
- *         `agent-mode.snapshot` re-broadcast;
+ *         `workers.snapshot` re-broadcast;
  *       - the lease manager's own emitter (`subscribeToCodexLeaseChanges`),
  *         because a lease also MOVES without any task mutation: a
  *         `failoverCodexLease` mid-turn, an account switch reassigning every
@@ -86,8 +86,8 @@ const MAX_REASON_CHARS = 240
 /**
  * The engine lease reads, behind a seam. The real implementation wires the
  * engine's OWN lease manager + account pool; tests inject a fake so a headless
- * round-trip proves the wiring without a live pool (the `AgentModeExecutor` /
- * `AccountsCommandExecutor` idiom, `agentModeDomain.ts:54`).
+ * round-trip proves the wiring without a live pool (the worker-domain /
+ * `AccountsCommandExecutor` idiom, `workersDomain.ts`).
  */
 export type LeaseReader = {
   /** `getCodexLeaseSnapshot()` — main lease + this session's strategy + account rollup. */
@@ -174,7 +174,7 @@ export function createSidecarLeaseDomain(
  * unit-testable with hand-built fixtures.
  *
  * Owner order is main-first then worker order, which is the order the prototype's
- * roster renders (`OrchestratorMode.jsx:644-647` main, then subagents). A worker
+ * roster renders (`worker prototype` main, then subagents). A worker
  * with no lease contributes no row: a session on the Anthropic path, or one whose
  * workers have not made a Codex request yet, legitimately holds none.
  */

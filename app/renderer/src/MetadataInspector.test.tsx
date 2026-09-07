@@ -51,7 +51,7 @@ const goal: ThreadGoalSnapshot = {
 
 const session: SessionMetadataView = {
   sessionId: 'engine-xyz',
-  mode: 'agent',
+  mode: 'normal',
   permissionMode: 'acceptEdits',
   tag: 'p4-6b',
   threadGoal: goal,
@@ -81,6 +81,8 @@ test('renders the read-only drawer with the session + goal sections', () => {
   expect(html).toContain('tabindex="-1"')
   expect(html).toContain('engine-xyz')
   expect(html).toContain('acceptEdits')
+  expect(html).toContain('>normal<')
+  expect(html).not.toContain('agent')
   expect(html).toContain('#p4-6b')
   expect(html).toContain('Ship the inspector')
   expect(html).toContain('goal-42')

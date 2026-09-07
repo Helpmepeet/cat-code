@@ -47,7 +47,7 @@ export type SAModalProps = {
  * The two halves are separate components on purpose. This package has no DOM
  * click harness, so a dismissal contract is only really provable by invoking a
  * HOOK-FREE component and reading the handler off its element (the
- * `WelcomeScreen.test.tsx` / `OrchestratorReflect` convention). Keeping the
+ * `WelcomeScreen.test.tsx` hook-free component convention). Keeping the
  * effect here leaves {@link SAModalFrame} hook-free and directly exercisable.
  */
 export function SAModal(props: SAModalProps): ReactNode {

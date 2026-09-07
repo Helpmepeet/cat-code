@@ -93,7 +93,7 @@ export function AgentsPage({
       <p className="mb-4 text-[11.5px] leading-relaxed text-text-subtle">
         Definitions in <code className="font-mono text-text-muted">.cat-code/agents/*.md</code>,
         built-ins, plugins, flags, and managed policy. Running workers belong on the
-        Orchestrator and Tasks surfaces, not this config page.
+        the worker roster and Tasks surfaces, not this config page.
       </p>
 
       <div className="mb-5 grid gap-2 text-[11.5px] text-text-subtle sm:grid-cols-3">

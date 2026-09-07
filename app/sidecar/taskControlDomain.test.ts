@@ -4,7 +4,7 @@
  * allowlist + result frame) is exercised separately in `sidecarServer.test.ts` with
  * a fake executor; here we prove the engine wiring is real: a `stop` actually flips
  * the task to `killed` in the store and fires the store subscription that the
- * tasks/agent-mode snapshots re-broadcast off (the 2026-07-09 live-path gate — not a
+ * tasks/workers snapshots re-broadcast off (the 2026-07-09 live-path gate — not a
  * shape-only assertion).
  */
 import { expect, test } from 'bun:test'
@@ -39,9 +39,9 @@ test('P4-8b — stop() runs the REAL stopTask: the running worker flips to kille
   const result = await domain.stop('t1')
 
   expect(result.ok).toBe(true)
-  // The real engine kill mutated the SAME store the tasks/agent-mode read-seams read.
+  // The real engine kill mutated the SAME store the tasks/workers read-seams read.
   expect(store.getState().tasks.t1?.status).toBe('killed')
-  // The store mutation fired at least once → the tasks/agent-mode snapshot
+  // The store mutation fired at least once → the tasks/workers snapshot
   // subscriptions re-broadcast (the live path, not a synthetic frame).
   expect(notifications).toBeGreaterThan(0)
 })
@@ -326,7 +326,7 @@ test('CC-32 — dismiss() retires a BLOCKED worker the engine would never evict,
   const result = await domain.dismiss('g1')
 
   expect(result.ok).toBe(true)
-  // The row is GONE from the same store the tasks/agent-mode read-seams read.
+  // The row is GONE from the same store the tasks/workers read-seams read.
   expect(store.getState().tasks.g1).toBeUndefined()
   // The store mutation fired → the snapshot subscriptions re-broadcast (live path).
   expect(notifications).toBeGreaterThan(0)

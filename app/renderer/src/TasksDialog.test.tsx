@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type {
-  AgentModeSnapshot,
-  AgentModeWorkerItem,
+  LiveWorkersSnapshot,
+  LiveWorkerItem,
   LeaseOwnerRow,
   TaskSnapshotItem,
   TasksSnapshot,
@@ -105,7 +105,7 @@ test('excludes delegated agents from task rows and both task counts', () => {
   }
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({
+      workers={workersSnapshotFixture({
         workers: [
           workerFixture(),
           workerFixture({ agentId: 'agent_b', handle: '@probe' }),
@@ -130,7 +130,7 @@ test('excludes delegated agents from task rows and both task counts', () => {
 test('an agents-only session points the empty Tasks tab at Workers', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({
+      workers={workersSnapshotFixture({
         workers: [
           workerFixture(),
           workerFixture({ agentId: 'agent_b', handle: '@probe' }),
@@ -232,26 +232,22 @@ test('⌘K reaches the command palette instead of stopping the selected task', (
  * dialog itself.
  */
 
-function agentModeSnapshotFixture(
-  over: Partial<AgentModeSnapshot> = {},
-): AgentModeSnapshot {
+function workersSnapshotFixture(
+  over: Partial<LiveWorkersSnapshot> = {},
+): LiveWorkersSnapshot {
   return {
-    active: true,
-    objective: '',
-    phase: 'executing',
     workers: [],
     ...over,
   }
 }
 
-function workerFixture(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+function workerFixture(over: Partial<LiveWorkerItem> = {}): LiveWorkerItem {
   return {
     agentId: 'agent_a',
     handle: '@scout',
     role: 'coding-worker',
     status: 'running',
     description: 'audit the auth path',
-    origin: 'current',
     ...over,
   }
 }
@@ -278,7 +274,7 @@ function leaseOwnerFixture(over: Partial<LeaseOwnerRow> = {}): LeaseOwnerRow {
 test('the dialog offers Tasks, Workers and Accounts tabs with real counts', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({
+      workers={workersSnapshotFixture({
         workers: [workerFixture(), workerFixture({ agentId: 'agent_b', handle: '@probe' })],
       })}
       hasActiveSession={true}
@@ -331,7 +327,7 @@ test('the Workers panel groups by role, shows normalized types, and keeps lifecy
 
 test('the Workers panel counts a blocked worker as the assistant’s, never as yours', () => {
   // D2 C2, now unconditional: the handoff is queued to the delegating
-  // conversation whether or not this session runs the agent-mode persona, so
+  // conversation whether or not this session is running a special persona, so
   // nothing here alarms the user.
   const blocked = workerFixture({ handoffStatus: 'blocked', blockReason: 'pick a schema' })
   const html = renderToStaticMarkup(
@@ -378,7 +374,7 @@ test('worker detail renders prompt, block reason and the Q2 result, and offers S
       worker={workerFixture({
         handoffStatus: 'blocked',
         blockReason: 'pick a schema',
-        outputSummary: 'ported the adapter',
+        resultSummary: 'ported the adapter',
       })}
     />,
   )
@@ -397,27 +393,20 @@ test('worker detail renders prompt, block reason and the Q2 result, and offers S
   expect(html).toContain('Stop')
 })
 
-test('worker detail hides Stop for a terminal worker and for a prior-session one', () => {
-  const terminal = renderToStaticMarkup(
-    <WorkerDetailPanel
-      lease={null}
-      onBack={noop}
-      onStopTask={noop}
-      worker={workerFixture({ status: 'completed' })}
-    />,
-  )
-  expect(terminal).not.toContain('Stop')
-
-  const prior = renderToStaticMarkup(
-    <WorkerDetailPanel
-      lease={null}
-      onBack={noop}
-      onStopTask={noop}
-      worker={workerFixture({ origin: 'prior', resumable: true })}
-    />,
-  )
-  expect(prior).not.toContain('Stop')
-  expect(prior).toContain('resumable')
+test('worker detail hides Stop for a terminal worker', () => {
+  // 'killed' is deliberately not in this loop: its own state label reads
+  // "Stopped", so the substring check cannot tell the label from the button.
+  for (const status of ['completed', 'failed'] as const) {
+    const terminal = renderToStaticMarkup(
+      <WorkerDetailPanel
+        lease={null}
+        onBack={noop}
+        onStopTask={noop}
+        worker={workerFixture({ status })}
+      />,
+    )
+    expect(terminal).not.toContain('Stop')
+  }
 })
 
 /* CC-32 follow-up — Dismiss is the finished-worker escape hatch the desktop
@@ -441,7 +430,7 @@ test('CC-32 — worker detail offers Dismiss for a finished blocked worker, and 
   expect(html).not.toContain('Stop')
 })
 
-test('CC-32 — Dismiss is absent while the worker runs, for a prior-session worker, and with no active session', () => {
+test('CC-32 — Dismiss is absent while the worker runs, and with no active session', () => {
   const running = renderToStaticMarkup(
     <WorkerDetailPanel
       lease={null}
@@ -453,16 +442,6 @@ test('CC-32 — Dismiss is absent while the worker runs, for a prior-session wor
   )
   expect(running).not.toContain('Dismiss')
   expect(running).toContain('Stop')
-
-  const prior = renderToStaticMarkup(
-    <WorkerDetailPanel
-      lease={null}
-      onBack={noop}
-      onDismissTask={noop}
-      worker={workerFixture({ status: 'completed', origin: 'prior' })}
-    />,
-  )
-  expect(prior).not.toContain('Dismiss')
 
   // No active session → no verb to send, so no dead affordance.
   const noSession = renderToStaticMarkup(
@@ -576,25 +555,23 @@ test('both Workers surfaces draw from the session registry, not the raw hash', (
   ).toContain(AGENT_FACE_IDENTITY_FILL[hashedFill])
 })
 
-test('Workers compact rows normalize general-purpose and keep Resumable accessible but not visible', () => {
+test('Workers compact rows normalize general-purpose and keep the state accessible but not visible', () => {
   const worker = workerFixture({
-    agentId: 'legacy-resumable-id',
-    handle: 'legacy-resumable-id',
+    agentId: 'legacy-agent-id',
+    handle: 'legacy-agent-id',
     role: 'general-purpose',
     status: 'completed',
-    origin: 'prior',
-    resumable: true,
     description: 'Resume the investigation',
   })
   const roster = renderToStaticMarkup(
     <WorkerRosterPanel onSelect={noop} workers={[worker]} />,
   )
   expect(roster).toContain('General-purpose')
-  expect(roster).toContain('status Resumable')
-  expect(roster).not.toContain('>Resumable<')
-  expect(roster).not.toContain('legacy-resumable-id')
+  expect(roster).toContain('status Completed')
+  expect(roster).not.toContain('>Completed<')
+  expect(roster).not.toContain('legacy-agent-id')
   const compactRow = roster.match(
-    /<button aria-label="Resume the investigation, type General-purpose, status Resumable"[\s\S]*?<\/button>/,
+    /<button aria-label="Resume the investigation, type General-purpose, status Completed"[\s\S]*?<\/button>/,
   )?.[0]
   expect(compactRow).toBeDefined()
   // The row owns one lifecycle pip. AgentTypeLabel is text-only and must not
@@ -609,7 +586,7 @@ test('Workers compact rows normalize general-purpose and keep Resumable accessib
       worker={worker}
     />,
   )
-  expect(detail).toContain('Resumable')
+  expect(detail).toContain('Completed')
 })
 
 test('worker detail fabricates no WMeta field when there is no lease (waiver 7)', () => {
@@ -639,7 +616,7 @@ test('worker detail offers no focus/open-thread affordance (D1 waives WorkerFocu
   )
   expect(html).not.toContain('Open thread')
   expect(html).not.toContain('Viewing')
-  // No composer: the user only ever talks to the orchestrator.
+  // No composer: the user stays in the current session.
   expect(html).not.toContain('<textarea')
   expect(html).not.toContain('<input')
 })
@@ -846,7 +823,7 @@ test('no P4-32b surface renders an em dash (operator rule)', () => {
 test('opens on the named worker when the roster click supplies one', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({
+      workers={workersSnapshotFixture({
         workers: [
           workerFixture(),
           workerFixture({ agentId: 'agent_b', handle: '@probe', description: 'trace the drop' }),
@@ -872,7 +849,7 @@ test('opens on the named worker when the roster click supplies one', () => {
 test('falls back to the workers list when the named worker is gone', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({ workers: [workerFixture()] })}
+      workers={workersSnapshotFixture({ workers: [workerFixture()] })}
       focusAgentId="agent_that_finished"
       hasActiveSession={true}
       onClose={noop}
@@ -888,7 +865,7 @@ test('falls back to the workers list when the named worker is gone', () => {
 test('keeps the task list for entry points that name no worker', () => {
   const html = renderToStaticMarkup(
     <TasksDialog
-      agentMode={agentModeSnapshotFixture({ workers: [workerFixture()] })}
+      workers={workersSnapshotFixture({ workers: [workerFixture()] })}
       hasActiveSession={true}
       onClose={noop}
       open={true}

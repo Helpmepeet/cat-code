@@ -3704,7 +3704,7 @@ test('D2/C4: subagent tool_use + tool_result nest under the owning agent card, n
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
 
-  // Top-level: the orchestrator's own Agent/Task tool_use — the owning card.
+  // Top-level: the parent's own Agent/Task tool_use — the owning card.
   state = projectServerFrame(
     state,
     messageFrame('session-1', {

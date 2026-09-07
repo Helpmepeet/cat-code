@@ -1,6 +1,6 @@
 import { stat } from 'fs/promises'
 import { getSdkBetas, getSessionId } from '../../bootstrap/state.js'
-import { resolveWorkerAgentTarget } from '../../agent-mode/sessionState.js'
+import { resolveWorkerAgentTarget } from '../../utils/workerState.js'
 import type { AppState } from '../../state/AppStateStore.js'
 import { isLocalAgentTask } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { isMainSessionTask } from '../../tasks/LocalMainSessionTask.js'

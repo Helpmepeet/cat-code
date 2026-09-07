@@ -17,7 +17,7 @@ import {
 } from '../../services/analytics/index.js'
 import { snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js'
 import { clearDumpState } from '../../services/api/dumpPrompts.js'
-import { recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js'
+import { recordWorkerSessionTerminal } from '../../utils/workerState.js'
 import type { AppState } from '../../state/AppState.js'
 import type {
   Tool,
@@ -143,7 +143,7 @@ export function filterToolsForAgent({
     }
     // Grant-only tools (Skill) are withheld from EVERY worker unless its own
     // definition named the tool — foreground and background must not differ,
-    // or the orchestrator doctrine is true for one spawn shape and false for
+    // or the worker tool policy is true for one spawn shape and false for
     // the other (owner decision 2026-07-30, C10). Enforced only when the
     // caller supplies the definition's own list; see the field doc above.
     if (
@@ -982,11 +982,10 @@ export async function runAsyncAgentLifecycle({
   /** Parent session ID captured at spawn time. Must be passed explicitly for
    * the same reason as parentTranscriptPath. */
   parentSessionId: string
-  /** Durable Agent Mode/coordinator tracking context. When omitted, terminal
-   * recording must not create Agent Mode state for ordinary subagents. */
+  /** Durable coordinator tracking context. When omitted, terminal recording
+   * must not create coordinator state for ordinary subagents. */
   sessionStateTracking?: {
     mode: string
-    objective: string
     statePath?: string
   }
 }): Promise<void> {
@@ -1103,11 +1102,9 @@ export async function runAsyncAgentLifecycle({
         sessionId: parentSessionId,
         agentId: taskId,
         status: 'failed',
-        error: apiErrorMsg,
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+        logForDebugging(`Failed to record worker failure: ${_err}`),
       )
       unregisterActiveSubagent(taskId)
 
@@ -1149,10 +1146,9 @@ export async function runAsyncAgentLifecycle({
       sessionId: parentSessionId,
       agentId: taskId,
       status: 'completed',
-      outputSummary: description,
       createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
+      logForDebugging(`Failed to record worker completion: ${_err}`),
     )
     unregisterActiveSubagent(taskId)
 
@@ -1223,10 +1219,9 @@ export async function runAsyncAgentLifecycle({
         sessionId: parentSessionId,
         agentId: taskId,
         status: 'killed',
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+      logForDebugging(`Failed to record worker kill: ${_err}`),
       )
       unregisterActiveSubagent(taskId)
       const worktreeResult = await getWorktreeResult()
@@ -1262,11 +1257,9 @@ export async function runAsyncAgentLifecycle({
       sessionId: parentSessionId,
       agentId: taskId,
       status: 'failed',
-      error: msg,
-      outputSummary: description,
       createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+      logForDebugging(`Failed to record worker failure: ${_err}`),
     )
     unregisterActiveSubagent(taskId)
     const worktreeResult = await getWorktreeResult()

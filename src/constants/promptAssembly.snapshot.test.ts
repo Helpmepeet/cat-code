@@ -58,26 +58,15 @@ function normalizeModelIdentity(prompt: string): string {
     .replace(/Assistant knowledge cutoff is[^\n]*/g, 'Assistant knowledge cutoff is <cutoff>.')
 }
 
-async function assemble(
-  tools: ToolList,
-  model: string,
-  { agentMode = false }: { agentMode?: boolean } = {},
-): Promise<string> {
-  const savedAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
+async function assemble(tools: ToolList, model: string): Promise<string> {
   const savedOpenAi = process.env.OPENAI_API_KEY
   const savedAnthropic = process.env.ANTHROPIC_API_KEY
   process.env.OPENAI_API_KEY = savedOpenAi ?? 'test-key'
   process.env.ANTHROPIC_API_KEY = savedAnthropic ?? 'test-key'
-  if (agentMode) {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
-  } else {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
-  }
   try {
     clearSystemPromptSections()
     return normalizeMachine((await getSystemPrompt(tools, model)).join('\n'))
   } finally {
-    restore('CLAUDE_CODE_AGENT_MODE', savedAgentMode)
     restore('OPENAI_API_KEY', savedOpenAi)
     restore('ANTHROPIC_API_KEY', savedAnthropic)
   }
@@ -130,16 +119,15 @@ describe('assembled system prompt', () => {
     clearSystemPromptSections()
   })
 
-  const cases: [name: string, model: string, tools: ToolList, agentMode: boolean][] = [
-    ['gpt-5.6-terra.full', 'gpt-5.6-terra', FULL_TOOLS, false],
-    ['gpt-5.6-terra.minimal', 'gpt-5.6-terra', MINIMAL_TOOLS, false],
-    ['gpt-5.6-terra.agent-mode', 'gpt-5.6-terra', FULL_TOOLS, true],
-    ['claude-opus-5.full', 'claude-opus-5', FULL_TOOLS, false],
+  const cases: [name: string, model: string, tools: ToolList][] = [
+    ['gpt-5.6-terra.full', 'gpt-5.6-terra', FULL_TOOLS],
+    ['gpt-5.6-terra.minimal', 'gpt-5.6-terra', MINIMAL_TOOLS],
+    ['claude-opus-5.full', 'claude-opus-5', FULL_TOOLS],
   ]
 
-  for (const [name, model, tools, agentMode] of cases) {
+  for (const [name, model, tools] of cases) {
     test(`${name} matches its checked-in snapshot`, async () => {
-      const prompt = await assemble(tools, model, { agentMode })
+      const prompt = await assemble(tools, model)
       checkAgainstSnapshot(name, prompt)
     })
   }

@@ -775,7 +775,7 @@ export async function runHeadless(
   }
 
   // SessionStart hooks can emit initialUserMessage — the first user turn for
-  // headless orchestrator sessions where stdin is empty and additionalContext
+  // headless sessions where stdin is empty and additionalContext
   // alone (an attachment, not a turn) would leave the REPL with nothing to
   // respond to. The hook promise is awaited inside loadInitialMessages, so the
   // module-level pending value is set by the time we get here.

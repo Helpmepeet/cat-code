@@ -50,20 +50,10 @@ mock.module('./utils/queryContext.js', () => ({
     if (!stubsActive) return realFetchSystemPromptParts(...args)
     return {
       defaultSystemPrompt: [],
-      agentModePromptSections: [],
       userContext: {},
       systemContext: {},
     }
   },
-}))
-
-const actualAgentMode = await import('./agent-mode/agentMode.js')
-const realGetAgentModeUserContext = actualAgentMode.getAgentModeUserContext
-mock.module('./agent-mode/agentMode.js', () => ({
-  ...actualAgentMode,
-  getAgentModeUserContext: async (
-    ...args: Parameters<typeof realGetAgentModeUserContext>
-  ) => (stubsActive ? {} : realGetAgentModeUserContext(...args)),
 }))
 
 const actualQuery = await import('./query.js')

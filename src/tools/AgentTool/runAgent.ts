@@ -5,13 +5,12 @@ import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { getProjectRoot, getSessionId } from '../../bootstrap/state.js'
-import { loadRoleFilePrompt, loadContextIndex } from '../../agent-mode/roleFiles.js'
 import {
   readSessionState,
   readPersistedWorkerHandle,
   recordWorkerSessionSpawn,
-} from '../../agent-mode/sessionState.js'
-import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
+} from '../../utils/workerState.js'
+import { allocateWorkerName, releaseWorkerName } from '../../utils/workerNames.js'
 import { getCommand, getSkillToolCommands, hasCommand } from '../../commands.js'
 import {
   getDefaultAgentPrompt,
@@ -71,10 +70,10 @@ import { executeSubagentStartHooks } from '../../utils/hooks.js'
 import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import {
   formatBlockedHandoff,
-  parseAskOrchestratorEscalation,
-  type AskOrchestratorToolResult,
-} from '../AskOrchestratorTool/AskOrchestratorTool.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/prompt.js'
+  parseAskParentSessionEscalation,
+  type AskParentSessionToolResult,
+} from '../AskParentSessionTool/AskParentSessionTool.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../AskParentSessionTool/prompt.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
@@ -85,7 +84,6 @@ import {
   setAgentTranscriptSubdir,
   writeAgentMetadata,
 } from '../../utils/sessionStorage.js'
-import { getAgentModePromptInjections } from '../../agent-mode/roleFiles.js'
 import {
   isRestrictedToPluginOnly,
   isSourceAdminTrusted,
@@ -282,15 +280,15 @@ function isRecordableMessage(
  * that opened each one, so the matching tool_result can be recognised without
  * re-reading the model's text.
  */
-function collectAskOrchestratorCalls(
+function collectAskParentSessionCalls(
   message: AssistantMessage,
-  pending: Map<string, AskOrchestratorToolResult>,
+  pending: Map<string, AskParentSessionToolResult>,
 ): void {
   for (const block of message.message.content) {
-    if (block.type !== 'tool_use' || block.name !== ASK_ORCHESTRATOR_TOOL_NAME) {
+    if (block.type !== 'tool_use' || block.name !== ASK_PARENT_SESSION_TOOL_NAME) {
       continue
     }
-    const escalation = parseAskOrchestratorEscalation(block.input)
+    const escalation = parseAskParentSessionEscalation(block.input)
     if (escalation) pending.set(block.id, escalation)
   }
 }
@@ -301,10 +299,10 @@ function collectAskOrchestratorCalls(
  * `is_error`, and the worker should keep going rather than be stopped by a
  * call the harness refused.
  */
-function findCompletedAskOrchestratorCall(
+function findCompletedAskParentSessionCall(
   message: UserMessage,
-  pending: ReadonlyMap<string, AskOrchestratorToolResult>,
-): AskOrchestratorToolResult | undefined {
+  pending: ReadonlyMap<string, AskParentSessionToolResult>,
+): AskParentSessionToolResult | undefined {
   const content = message.message.content
   if (!Array.isArray(content)) return undefined
   for (const block of content) {
@@ -445,14 +443,13 @@ async function* runAgentInCleanupScope({
   /** Optional subdirectory under subagents/ to group this agent's transcript
    * with related ones (e.g. workflows/<runId> for workflow subagents). */
   transcriptSubdir?: string
-  /** Optional Agent Mode durable-state context. When present, this run is the
+  /** Optional coordinator durable-state context. When present, this run is the
    * actual start/resume of a worker session and should update durable worker
    * state by default. Set recordSpawn: false for sync→background continuation
    * when the worker identity should be reused but not re-recorded as a spawn. */
   sessionStateTracking?: {
     sessionId: string
     mode: string
-    objective: string
     statePath?: string
     recordSpawn?: boolean
   }
@@ -493,14 +490,13 @@ async function* runAgentInCleanupScope({
         )
       : null
   const reservedWorkerHandles = sessionStateTracking
-    ? (
+    ? Object.values(
         (
           await readSessionState(
             sessionStateTracking.sessionId,
             sessionStateTracking.statePath,
           )
-        )?.knownWorkers ??
-        []
+        )?.knownWorkers ?? {},
       )
         .map(worker => worker.handle)
         .filter((handle): handle is string => Boolean(handle && handle.length > 0))
@@ -952,7 +948,6 @@ async function* runAgentInCleanupScope({
     void recordWorkerSessionSpawn({
       sessionId: sessionStateTracking.sessionId,
       mode: sessionStateTracking.mode,
-      objective: sessionStateTracking.objective,
       ...(sessionStateTracking.statePath
         ? { statePath: sessionStateTracking.statePath }
         : {}),
@@ -963,7 +958,7 @@ async function* runAgentInCleanupScope({
       worktreePath: worktreePath ?? null,
       spawnedAt: new Date().toISOString(),
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker spawn: ${_err}`),
+      logForDebugging(`Failed to record worker spawn: ${_err}`),
     )
   }
 
@@ -972,10 +967,10 @@ async function* runAgentInCleanupScope({
 
   // Escalation is terminal, and the harness is what makes it so. There is no
   // reply channel into a running worker, so the only thing a worker could do
-  // after ask_orchestrator is guess; the prompts used to ask it to stop of its
+  // after ask_parent_session is guess; the prompts used to ask it to stop of its
   // own accord, and the one worker that ever called the tool did not
   // (docs/reports/2026-09-06-subagent-escalation-and-delegation-failures.md).
-  const pendingEscalations = new Map<string, AskOrchestratorToolResult>()
+  const pendingEscalations = new Map<string, AskParentSessionToolResult>()
   // Usage for the handoff message below. finalizeAgentTool reads the run's
   // token total off the LAST assistant message, so a synthetic terminal
   // carrying the zeroed default would report the whole run as 0 tokens.
@@ -1080,12 +1075,12 @@ async function* runAgentInCleanupScope({
 
         if (message.type === 'assistant') {
           lastAssistantUsage = message.message.usage
-          collectAskOrchestratorCalls(message, pendingEscalations)
+          collectAskParentSessionCalls(message, pendingEscalations)
           continue
         }
         const escalation =
           message.type === 'user'
-            ? findCompletedAskOrchestratorCall(message, pendingEscalations)
+            ? findCompletedAskParentSessionCall(message, pendingEscalations)
             : undefined
         if (escalation) {
           // The run's result is written here rather than left to the model,
@@ -1289,17 +1284,8 @@ async function getAgentSystemPrompt(
     )
   }
 
-  const promptInjections = isBuiltInAgent(agentDefinition)
-    ? await getAgentModePromptInjections(agentDefinition.agentType)
-    : []
-
-  const prompts = [
-    agentPrompt,
-    ...promptInjections,
-  ]
-
   return enhanceSystemPromptWithEnvDetails(
-    prompts,
+    [agentPrompt],
     resolvedAgentModel,
     additionalWorkingDirectories,
     enabledToolNames,

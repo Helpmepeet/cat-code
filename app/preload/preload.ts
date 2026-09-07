@@ -64,7 +64,6 @@ import {
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
   CH_WORKSPACE_TRUST_VERB,
-  CH_AGENT_MODE_SET,
   CH_TASK_CONTROL_VERB,
   CH_RUN_CONTROL_VERB,
   CH_PROMPT_FORCE,
@@ -287,16 +286,6 @@ const bridge: CatCodeBridge = {
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_WORKSPACE_TRUST_VERB, payload)
-  },
-  setAgentMode(sessionId: SessionId, active: boolean): void {
-    // P4-8b — HC3 fixed sender for the in-session Orchestrator toggle. Same
-    // posture as `setPermissionMode`: the renderer supplies only a scalar intent;
-    // main mints the `requestId` and light-coerces the type, and the sidecar is
-    // the trust boundary (Zod schema + engine `matchSessionMode`). No path, no
-    // token crosses; the renderer never authors an engine object or a cwd.
-    const payload = { sessionId, active }
-    sendGuard.assertAllowed(payload)
-    ipcRenderer.send(CH_AGENT_MODE_SET, payload)
   },
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void {
     // P4-8b — HC3 fixed sender for the worker Stop/kill action. Same posture as

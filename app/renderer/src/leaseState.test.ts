@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test'
 import type {
   AccountsSnapshot,
   AccountStatus,
-  AgentModeWorkerItem,
+  LiveWorkerItem,
   LeaseOwnerRow,
   LeaseSnapshot,
   LeaseSnapshotFrame,
@@ -27,7 +27,7 @@ import {
   selectSessionCodexAccount,
 } from './leaseState.js'
 
-function workerFixture(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+function workerFixture(over: Partial<LiveWorkerItem> = {}): LiveWorkerItem {
   return {
     agentId: 'agent_a',
     handle: 'Hopper',

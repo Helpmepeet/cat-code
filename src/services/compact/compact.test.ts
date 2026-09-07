@@ -157,7 +157,7 @@ describe('compactConversation', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('full compaction reads session state without requiring agent mode options', async () => {
+  test('full compaction reads session state without mode-specific options', async () => {
     const { compactConversation, buildPostCompactMessages } = await import(
       './compact.js'
     )
@@ -190,7 +190,6 @@ describe('compactConversation', () => {
 
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
-    expect(summaryMessage).not.toContain('Agent Mode Run State')
   })
 
   test('marks the summary when a peer message is inside the summarized span', async () => {

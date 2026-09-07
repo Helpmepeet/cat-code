@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 import {
   PermissionPrompt,
 } from './PermissionPrompt.js'
@@ -38,8 +38,8 @@ const REQUEST: PermissionRequest = {
 }
 
 function worker(
-  over: Partial<AgentModeWorkerItem> = {},
-): AgentModeWorkerItem {
+  over: Partial<LiveWorkerItem> = {},
+): LiveWorkerItem {
   return {
     agentId: 'worker-42',
     handle: 'Vale',

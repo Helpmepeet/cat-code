@@ -75,7 +75,6 @@ import {
   CH_SET_MODE,
   CH_ACCOUNT_VERB,
   CH_WORKSPACE_TRUST_VERB,
-  CH_AGENT_MODE_SET,
   CH_TASK_CONTROL_VERB,
   CH_RUN_CONTROL_VERB,
   CH_PROMPT_FORCE,
@@ -1956,7 +1955,7 @@ function sendHostEvent(event: HostEvent): void {
  * the sidecar bounds structurally.
  *
  * Handlers that do more than relay stay hand-written below: CH_SUBMIT resolves
- * attachment tokens, CH_SET_MODE and CH_AGENT_MODE_SET mint the requestId in
+ * attachment tokens, CH_SET_MODE mints the requestId in
  * main, CH_STATS_QUERY checks a second field, CH_PERMISSION and
  * CH_ANSWER_QUESTIONS carry engine-minted ids.
  */
@@ -2126,24 +2125,6 @@ function registerIpcHandlers(): void {
       forward(arg.sessionId, arg.verb as SidecarClientMessage)
     })
   }
-
-  ipcMain.on(
-    CH_AGENT_MODE_SET,
-    (_e, arg: { sessionId: SessionId; active: unknown }) => {
-      if (typeof arg?.sessionId !== 'string') return
-      // P4-8b — light UX coercion only; the SIDECAR is the trust boundary and
-      // fully re-validates (Zod schema + engine `matchSessionMode`). Drop a
-      // non-boolean `active` fail-closed rather than forwarding a frame that is
-      // guaranteed to be rejected. main mints the `requestId` (a UX correlation
-      // field, not a security one; the sidecar bounds it structurally).
-      if (typeof arg.active !== 'boolean') return
-      forward(arg.sessionId, {
-        type: 'agent-mode.set',
-        requestId: generateRequestId(),
-        active: arg.active,
-      })
-    },
-  )
 
   ipcMain.on(
     CH_STATS_QUERY,

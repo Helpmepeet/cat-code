@@ -1,6 +1,5 @@
 import type { UUID } from 'crypto'
 import { getSessionId } from '../bootstrap/state.js'
-import { updateSessionObjective } from '../agent-mode/sessionState.js'
 import { clearThreadGoal, saveThreadGoal } from './sessionStorage.js'
 import {
   createThreadGoal,
@@ -95,8 +94,8 @@ export async function applyThreadGoalTransition<
   reason,
   actor,
   expectedRevision,
-  objective,
-  resetWorkers = false,
+  objective: _objective,
+  resetWorkers: _resetWorkers = false,
   nowMs,
 }: {
   context: ThreadGoalActionContext<TState>
@@ -130,11 +129,6 @@ export async function applyThreadGoalTransition<
 
   const nextGoal = updateThreadGoalStatus(current, to, reason, nowMs)
   saveThreadGoal(nextGoal)
-  await updateSessionObjective({
-    sessionId: nextGoal.threadId,
-    objective: objective ?? nextGoal.objective,
-    resetWorkers,
-  })
   context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
 
   return { ok: true, code: 'ok', goal: nextGoal }
@@ -146,7 +140,7 @@ export async function createThreadGoalAction<
   context,
   objective,
   tokenBudget,
-  resetWorkers = true,
+  resetWorkers: _resetWorkers = true,
   nowMs,
 }: {
   context: ThreadGoalActionContext<TState>
@@ -163,11 +157,6 @@ export async function createThreadGoalAction<
   )
 
   saveThreadGoal(nextGoal)
-  await updateSessionObjective({
-    sessionId: nextGoal.threadId,
-    objective: nextGoal.objective,
-    resetWorkers,
-  })
   context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
 
   return nextGoal
@@ -183,11 +172,6 @@ export async function clearThreadGoalAction<
   goal: ThreadGoal
 }): Promise<void> {
   clearThreadGoal(goal.goalId)
-  await updateSessionObjective({
-    sessionId: getSessionId(),
-    objective: '',
-    resetWorkers: true,
-  })
   context.setAppState(prev => ({ ...prev, threadGoal: null }))
 }
 
@@ -206,8 +190,8 @@ export async function updateThreadGoalStatusAction<
   status,
   reason,
   actor,
-  objective,
-  resetWorkers = false,
+  objective: _objective,
+  resetWorkers: _resetWorkers = false,
 }: {
   context: ThreadGoalActionContext<TState>
   goal: ThreadGoal
@@ -229,11 +213,6 @@ export async function updateThreadGoalStatusAction<
   const nextGoal = updateThreadGoalStatus(goal, status, reason)
 
   saveThreadGoal(nextGoal)
-  await updateSessionObjective({
-    sessionId: nextGoal.threadId,
-    objective,
-    resetWorkers,
-  })
   context.setAppState(prev => ({ ...prev, threadGoal: nextGoal }))
 
   return { ok: true, code: 'ok', goal: nextGoal }

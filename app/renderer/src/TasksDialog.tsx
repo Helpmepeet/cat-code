@@ -7,7 +7,7 @@
  * has (`TasksPage.jsx:109` keyboard `K`/`k` on a non-terminal row; footer hint
  * `:227`) — deferred in P4-9's read-only v1 for lack of an inbound write verb
  * (PARITY-LEDGER §21 rows "Keyboard: K → stop" / footer-hint strip). It rides the
- * new `task.stop` verb (`decisions/AGENT-CHROME.md` §2 WorkerDetail Stop); the
+ * new `task.stop` verb (WorkerDetail Stop); the
  * renderer only NAMES the target `taskId`, the sidecar re-resolves it against the
  * live store and runs the engine's own `stopTask`. The per-type detail dialogs
  * (`ShellDetailDialog` + 4 siblings) stay deferred — no fake toasts.
@@ -24,20 +24,19 @@
  * Visual grammar adapted from `~/catcode_prototype/cat-app/TasksPage.jsx`
  * (`BgTasksDialog`), rebuilt on the P0-2 tokens, zero ported code.
  *
- * P4-32b adds the prototype's `TasksPanel` tab structure
- * (`OrchestratorMode.jsx:713`) as ruled on 2026-07-30
- * (`decisions/ORCHESTRATOR-IN-SESSION.md` §10): inspection **D1** puts a READ-ONLY
- * worker drilldown here and nowhere else, and lease option **L1** adds the
+ * P4-32b adds the prototype's `TasksPanel` tab structure as ruled on 2026-07-30:
+ * inspection **D1** puts a READ-ONLY worker drilldown here and nowhere else, and
+ * lease option **L1** adds the
  * session-scoped Codex lease roster. Consequences that shape this file:
  *
  *  - **D1 waives `WorkerFocusView` entirely.** There is no main-column focus swap,
- *    no "Open thread" control and no worker composer: the user talks only to the
- *    orchestrator (`OrchestratorMode.jsx:1-15`). The waiver is recorded in
+ *    no "Open thread" control and no worker composer: the user stays in the
+ *    current session. The waiver is recorded in
  *    `PARITY-LEDGER.md` §20 rather than left as a silent omission.
  *  - **Result policy Q2** puts a worker's real conclusion HERE and never in the
  *    transcript or a focus column (`selectWorkerResult`, `workerInspection.ts`).
  *  - The tab row is three items, not the prototype's two (🔁 adapted): this dialog
- *    is the real `/tasks` manager, whose list is a SUPERSET of orchestrator workers
+ *    is the real `/tasks` manager, whose list is a SUPERSET of worker tasks
  *    (background bash, dreams, monitors, remote agents). Folding workers into that
  *    list would either hide those tasks or drop the prototype's role grouping, so
  *    Tasks keeps the built list and Workers is the role-grouped worker view.
@@ -49,8 +48,8 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type {
-  AgentModeSnapshot,
-  AgentModeWorkerItem,
+  LiveWorkersSnapshot,
+  LiveWorkerItem,
   LeaseOwnerRow,
   LeaseSnapshot,
   TaskSnapshotItem,
@@ -71,12 +70,12 @@ import {
 import { useAgentFaceRegistry } from './agentFace.js'
 import {
   deriveWorkerOwner,
-  orchestratorWorkerState,
+  workerState,
   selectWorkerById,
   selectWorkerDisplayName,
-  summarizeOrchestratorWorkers,
+  summarizeWorkers,
   workerAccessibleLabel,
-} from './orchestratorState.js'
+} from './workersState.js'
 import type { LeaseAccountGroup, LeaseAgentRow } from './leaseState.js'
 import {
   leaseAccountLabel,
@@ -113,7 +112,7 @@ export function TasksDialog({
   hasActiveSession,
   onStopTask,
   onDismissTask,
-  agentMode = null,
+  workers: workersSnapshot = null,
   leases = null,
   focusAgentId = null,
   now,
@@ -137,13 +136,13 @@ export function TasksDialog({
    * the task list does not offer it, because the row that needs it is a worker.
    */
   onDismissTask?: (taskId: string) => void
-  /** P4-32b — the active session's orchestrator roster, source of the Workers tab. */
-  agentMode?: AgentModeSnapshot | null
+  /** P4-32b — the active session's worker roster, source of the Workers tab. */
+  workers?: LiveWorkersSnapshot | null
   /** P4-32b — the active session's Codex lease snapshot, source of the Leases tab. */
   leases?: LeaseSnapshot | null
   /**
    * CC-84 — open ON this worker instead of the task list. Set only when the
-   * docked roster raised a specific `agentId` (`OrchestratorRoster.tsx`); every
+   * docked roster raised a specific `agentId` (`WorkerRoster.tsx`); every
    * other entry point passes null and gets the Tasks tab as before.
    *
    * An id that is not in the current snapshot degrades to the Workers LIST, not
@@ -172,10 +171,10 @@ export function TasksDialog({
     [snapshot],
   )
   const flat = useMemo(() => [...active, ...completed], [active, completed])
-  const workers = agentMode?.workers ?? []
+  const workers = workersSnapshot?.workers ?? []
   // A focused worker that vanished from the snapshot degrades back to the list
   // rather than rendering a stale row (`selectWorkerById`'s contract).
-  const selectedWorker = selectWorkerById(agentMode, selectedWorkerId)
+  const selectedWorker = selectWorkerById(workersSnapshot, selectedWorkerId)
   // Same contract for the task highlight: the selection is a task id, resolved
   // against the list being rendered, and -1 (no highlight) once it is gone.
   const selected = selectedTaskIndex(flat, selectedTaskId)
@@ -204,7 +203,7 @@ export function TasksDialog({
       }
       // Selection and stop address the TASK list, so they are inert on the
       // Workers/Leases tabs: there is no selected task to move or kill there, and
-      // a worker is stopped from its own detail button (P4-32b).
+      // a worker is stopped from its own detail button.
       if (tab !== 'tasks') return
       if (action === 'next') {
         event.preventDefault()
@@ -284,7 +283,7 @@ export function TasksDialog({
           </button>
         </div>
 
-        {/* Workers | Leases tabs (prototype `TasksPanel`, `OrchestratorMode.jsx:744`).
+        {/* Workers | Leases tabs (prototype `TasksPanel`).
             Hidden inside the worker drilldown, as the prototype hides them there. */}
         {selectedWorker ? null : (
           <div className="flex shrink-0 gap-1 border-b border-shell-seam px-3.5 pt-2">
@@ -355,7 +354,7 @@ export function TasksDialog({
           )}
         </div>
 
-        {/* Footer hint, contextual per panel (prototype `OrchestratorMode.jsx:810`).
+        {/* Footer hint, contextual per panel.
             The task-list chords are only advertised where they do something. */}
         <div className="flex gap-3.5 border-t border-shell-seam px-4 py-2 font-mono text-[10.5px] text-text-subtle">
           {selectedWorker ? (
@@ -431,19 +430,19 @@ function DialogTabButton({
 }
 
 /**
- * Workers tab — the role-grouped roster (prototype `OrchestratorMode.jsx:786-800`)
- * over the REAL `agent-mode.snapshot` workers. The counts strip above it uses the
- * two-axis summary (`summarizeOrchestratorWorkers`), so a blocked worker counts as
+ * Workers tab — the role-grouped roster (prototype `worker prototype`)
+ * over the REAL `workers.snapshot` workers. The counts strip above it uses the
+ * two-axis summary (`summarizeWorkers`), so a blocked worker counts as
  * assistant-owned and never alarms the user.
  */
 export function WorkerRosterPanel({
   workers,
   onSelect,
 }: {
-  workers: readonly AgentModeWorkerItem[]
+  workers: readonly LiveWorkerItem[]
   onSelect: (agentId: string) => void
 }) {
-  const summary = summarizeOrchestratorWorkers(workers)
+  const summary = summarizeWorkers(workers)
   const groups = groupWorkersByRole(workers)
 
   if (workers.length === 0) {
@@ -474,10 +473,10 @@ export function WorkerRosterPanel({
             {summary.background} in background
           </span>
         ) : null}
-        {summary.orchestrator > 0 ? (
+        {summary.assistant > 0 ? (
           <span className="inline-flex items-center gap-1.5 text-purple-400">
             <AgentPip size="xs" state="waiting" />
-            {summary.orchestrator} on the assistant
+            {summary.assistant} on the assistant
           </span>
         ) : null}
         {summary.done > 0 ? (
@@ -520,10 +519,10 @@ function WorkerRow({
   worker,
   onSelect,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   onSelect: () => void
 }) {
-  const state = orchestratorWorkerState(worker)
+  const state = workerState(worker)
   const name = selectWorkerDisplayName(worker)
   const face = useAgentFaceRegistry().faceFor(worker.agentId, name)
   return (
@@ -567,14 +566,14 @@ export function WorkerDetailPanel({
   onDismissTask,
   nowMs,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   lease: LeaseOwnerRow | null
   onBack: () => void
   onStopTask?: (taskId: string) => void
   onDismissTask?: (taskId: string) => void
   nowMs?: number
 }) {
-  const state = orchestratorWorkerState(worker)
+  const state = workerState(worker)
   const name = selectWorkerDisplayName(worker)
   const face = useAgentFaceRegistry().faceFor(worker.agentId, name)
   const result = selectWorkerResult(worker)
@@ -630,9 +629,11 @@ export function WorkerDetailPanel({
         {/* Result policy Q2: a worker's own conclusion appears HERE only. */}
         {result ? (
           <div>
-            <AgentSectionLabel>{result.label}</AgentSectionLabel>
+            <AgentSectionLabel>{result.verdict ? 'Verdict' : 'Result'}</AgentSectionLabel>
             <div className="mt-1 rounded-md border border-shell-seam bg-white/[0.02] px-3 py-2.5 text-[12.5px] leading-relaxed text-text-muted">
-              {result.text}
+              {result.verdict && result.summary
+                ? `${result.verdict}: ${result.summary}`
+                : (result.verdict ?? result.summary)}
             </div>
           </div>
         ) : null}
@@ -661,9 +662,9 @@ export function WorkerDetailPanel({
 }
 
 /**
- * The surviving half of the prototype's `WMeta` line (`OrchestratorMode.jsx:53`).
+ * The surviving half of the prototype's `WMeta` line (`worker prototype`).
  * WAIVED, not mocked: model, elapsed, tool count, token traffic and cost have no
- * field on `AgentModeWorkerItem` and no engine seam behind them. What renders is
+ * field on `LiveWorkerItem` and no engine seam behind them. What renders is
  * real: the lease's account, its failover count, and the worker's own origin /
  * background flags.
  */
@@ -672,7 +673,7 @@ function WorkerMetaLine({
   lease,
   nowMs,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   lease: LeaseOwnerRow | null
   nowMs?: number
 }) {
@@ -682,9 +683,6 @@ function WorkerMetaLine({
     bits.push(`held ${leaseHeldLabel(lease.createdAt, nowMs ?? Date.now())}`)
   }
   if (worker.isBackgrounded) bits.push('backgrounded')
-  if (worker.origin === 'prior') {
-    bits.push(worker.resumable ? 'resumable' : 'from an earlier session')
-  }
   const failover = lease && lease.failoverCount > 0 ? lease : null
   if (bits.length === 0 && !failover) return null
 
@@ -711,7 +709,7 @@ function WorkerMetaLine({
 
 /**
  * Accounts tab (lease option **L1**) — this session's Codex agents, grouped by the
- * account each one holds (prototype `LeaseRoster`, `OrchestratorMode.jsx:643`, over
+ * account each one holds (prototype `LeaseRoster`, `worker prototype`, over
  * the real `lease.snapshot`). The prototype's failover/rotation EVENT strip is CUT:
  * the engine exposes current lease state, not an event history (§10).
  *
@@ -726,8 +724,8 @@ export function LeaseRosterPanel({
   nowMs,
 }: {
   snapshot: LeaseSnapshot | null
-  /** The orchestrator roster, joined on `ownerId === agentId` for real worker names. */
-  workers?: readonly AgentModeWorkerItem[]
+  /** The worker roster, joined on `ownerId === agentId` for real worker names. */
+  workers?: readonly LiveWorkerItem[]
   nowMs?: number
 }) {
   const groups = selectLeaseGroups(snapshot, workers, nowMs ?? Date.now())

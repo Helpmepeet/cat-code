@@ -8,7 +8,6 @@ import {
 } from '../bootstrap/state.js'
 import { getTools } from '../tools.js'
 import {
-  getAgentModeSystemPromptSections,
   getDefaultAgentPrompt,
   getSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -147,40 +146,6 @@ describe('provider and prompt regressions', () => {
 
     expect(prompt).toContain("OpenAI's Codex/GPT models")
     expect(prompt).not.toContain('powered by Claude')
-  })
-
-  test('OpenAI agent-mode instructions retain the non-interactive identity prefix', async () => {
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      setSessionProvider('openai')
-      setIsInteractive(false)
-
-      const systemPrompt = await getAgentModeSystemPromptSections(
-        [],
-        'gpt-5.6-luna',
-        [],
-        [],
-      )
-      const assembly = buildProviderInstructionAssembly({
-        provider: 'openai',
-        messages: [],
-        systemPrompt,
-        userContext: {},
-        systemContext: {},
-      })
-
-      expect(assembly.openAIInstructionAssembly?.instructions).toStartWith(
-        'You are an agent for Cat Code.',
-      )
-    } finally {
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
   })
 
   test('an OpenAI worker on an ambiguous model gets the OpenAI prompt style', async () => {

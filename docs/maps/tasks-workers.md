@@ -11,7 +11,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 - `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `runAgent.ts`, `resumeAgent.ts`, and `loadAgentsDir.ts` for local-agent work and definition loading.
 - `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, and `src/utils/swarm/inProcessRunner.ts` for teammate routing.
 - `src/components/tasks/`, `src/screens/REPL.tsx`, `src/hooks/useBackgroundTaskNavigation.ts`, and `src/state/selectors.ts` for terminal task UI.
-- `src/agent-mode/sessionState.ts` and the worker-control tool directories for durable Agent Mode worker state.
+- `src/coordinator/` and `src/tasks/` for coordinator-safe worker state and persistence.
 
 ## Entry Points
 
@@ -46,11 +46,11 @@ Start with `src/tools/AgentTool/AgentTool.tsx` for launch decisions:
 - Synchronous subagents can register a foreground local-agent task, show a background hint after `PROGRESS_THRESHOLD_MS`, and then background via `backgroundAgentTask()` or `backgroundAll()`.
 - `name` plus team context routes to teammate spawn instead of a local async agent.
 - In-process teammates are blocked from spawning background agents.
-- Agent Mode/coordinator worker state is recorded through session-state tracking helpers in `src/agent-mode/sessionState.ts`.
+- Coordinator worker state is recorded through the neutral worker-state tracking helpers used by `src/tools/AgentTool/`.
 
 Then inspect:
 
-- `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, partial-result extraction, and terminal Agent Mode worker records.
+- `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, and partial-result extraction.
 - `src/tools/AgentTool/runAgent.ts` for sidechain transcript writes, agent-specific MCP/hook/skill setup, subagent context isolation, and cleanup of agent-scoped shell/monitor tasks when an agent exits.
 - `src/tools/AgentTool/resumeAgent.ts` for resuming a retained/completed local agent in the background from its transcript and metadata.
 - `src/tools/AgentTool/loadAgentsDir.ts` for custom-agent parsing shared by on-disk definitions, `--agents`, and structured initialization; callers must surface its errors rather than treating a rejected payload as an empty list.

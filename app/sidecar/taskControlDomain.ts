@@ -1,17 +1,17 @@
 /**
- * Task-control write-seam (P4-8b) — the deferred orchestrator worker Stop/kill
+ * Task-control write-seam (P4-8b) — the deferred worker Stop/kill
  * action, wired to the engine's OWN task-abort machinery. P4-8's roster/detail/
  * focus surfaces shipped read-only because "Stop/kill a worker needs an inbound
- * write verb" (`decisions/AGENT-CHROME.md` §2, PARITY-LEDGER §20 "WorkerDetail
- * Stop button" + §21 TasksPage "K → stop"); this domain is that verb's engine side.
+ * write verb" (PARITY-LEDGER §20 "WorkerDetail Stop button" + §21 TasksPage
+ * "K → stop"); this domain is that verb's engine side.
  *
  * The real abort call is `stopTask` (`src/tasks/stopTask.ts:58`) — the SAME
  * function `TaskStopTool` and the SDK `stop_task` control use. It looks the task up
- * by id in THIS session's `AppState.tasks` (the SAME store the tasks/agent-mode
+ * by id in THIS session's `AppState.tasks` (the SAME store the tasks/workers
  * read-seams read), validates it is running, and dispatches the per-type
  * `Task.kill`: a `local_agent` worker → `killAsyncAgent` (`LocalAgentTask.tsx:368`
  * — aborts the worker's `AbortController` + releases its Codex lease). The store
- * mutation drives the existing `tasks.snapshot` / `agent-mode.snapshot`
+ * mutation drives the existing `tasks.snapshot` / `workers.snapshot`
  * re-broadcasts (no synthetic frame — the live path any engine-side kill takes).
  *
  * Fail-closed: the renderer names a `taskId` only; `stopTask` re-resolves it
@@ -19,7 +19,7 @@
  * terminal / unsupported target, which becomes an `ok:false` result with NO side
  * effect. secretGuard-clean by construction — the result carries a redacted human
  * string, never a token. A test injects a fake executor so the SERVER boundary is
- * exercised without the engine round-trip (the accountsDomain / agentModeDomain
+ * exercised without the engine round-trip (the accountsDomain / workersDomain
  * executor-seam idiom).
  *
  * DISMISS (2026-08-09, the CC-32 follow-up) is the terminal counterpart, and it

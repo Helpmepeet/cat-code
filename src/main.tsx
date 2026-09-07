@@ -75,7 +75,7 @@ const getTeammateModeSnapshot = () => require('./utils/swarm/backends/teammateMo
 // Dead code elimination: conditional import for COORDINATOR_MODE
 /* eslint-disable @typescript-eslint/no-require-imports */
 const coordinatorModeModule = feature('COORDINATOR_MODE') ? require('./coordinator/coordinatorMode.js') as typeof import('./coordinator/coordinatorMode.js') : null;
-const agentModeModule = feature('COORDINATOR_MODE') ? require('./agent-mode/agentMode.js') as typeof import('./agent-mode/agentMode.js') : null;
+const sessionModeModule = feature('COORDINATOR_MODE') ? require('./coordinator/coordinatorMode.js') as typeof import('./coordinator/coordinatorMode.js') : null;
 /* eslint-enable @typescript-eslint/no-require-imports */
 // Dead code elimination: conditional import for KAIROS (assistant mode)
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -506,7 +506,7 @@ function initializeEntrypoint(isNonInteractive: boolean): void {
     return;
   }
 
-  // Note: 'local-agent' entrypoint is set by the local agent mode launcher
+  // Note: the 'local-agent' entrypoint is set by the local-agent launcher
   // via CLAUDE_CODE_ENTRYPOINT env var (handled by early return above)
 
   // Set based on interactive status
@@ -994,7 +994,7 @@ async function run(): Promise<CommanderCommand> {
       throw new InvalidArgumentError(`It must be one of: ${allowed.join(', ')}`);
     }
     return value;
-  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--agent-mode', 'Start the session with agent mode enabled.', () => true).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
+  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
   // gh-33508: <paths...> (variadic) consumed everything until the next
   // --flag. `claude --plugin-dir /path mcp add --transport http` swallowed
   // `mcp` and `add` as paths, then choked on --transport as an unknown
@@ -2293,7 +2293,7 @@ async function run(): Promise<CommanderCommand> {
         }
       }
 
-      // Check for pending agent memory snapshot updates (only for --agent mode, ant-only)
+      // Check for pending agent memory snapshot updates for custom agents.
       if (feature('AGENT_MEMORY_SNAPSHOT') && mainThreadAgentDefinition && isCustomAgent(mainThreadAgentDefinition) && mainThreadAgentDefinition.memory && mainThreadAgentDefinition.pendingSnapshotUpdate) {
         const agentDef = mainThreadAgentDefinition;
         const choice = await launchSnapshotUpdateDialog(root, {
@@ -3171,7 +3171,7 @@ async function run(): Promise<CommanderCommand> {
 
     // Shared context for processResumedConversation calls
     const resumeContext = {
-      modeApi: agentModeModule,
+      modeApi: sessionModeModule,
       mainThreadAgentDefinition,
       agentDefinitions,
       currentCwd,
@@ -3857,7 +3857,7 @@ async function run(): Promise<CommanderCommand> {
       maybeActivateBrief(options);
       // Persist the current mode for fresh sessions so future resumes know what mode was used
       if (feature('COORDINATOR_MODE')) {
-        saveMode(agentModeModule?.getCurrentSessionMode() ?? 'normal');
+        saveMode(sessionModeModule?.getCurrentSessionMode() ?? 'normal');
       }
 
       // If launched via a deep link, show a provenance banner so the user

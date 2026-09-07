@@ -584,7 +584,6 @@ test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no row
       accounts={pool([
         account({ id: 'main', alias: 'nightowl', isDefault: true, usagePrimary: 20 }),
       ])}
-      orchestratorActive
       cwd="/w/cat-code"
     />,
   )
@@ -602,25 +601,6 @@ test('renders the rich WelcomeScreen (hero + real Codex table + cwd) when no row
   expect(html).toContain('/w/cat-code')
   expect(html).not.toContain('<button')
   expect(html).not.toContain('Open a project')
-  // Orchestrator reflect is read-only and mirrors the passed active flag.
-  expect(html).toContain('aria-readonly="true"')
-  expect(html).toContain('>On<')
-})
-
-test('P4-8b — threads onToggleOrchestrator to the empty-state WelcomeScreen (interactive switch)', () => {
-  // Proves the full renderer path App→…→TranscriptRowsView→WelcomeScreen: when the
-  // toggle callback is threaded, the in-session Orchestrator becomes a real button.
-  const html = renderToStaticMarkup(
-    <TranscriptRowsView
-      rows={[]}
-      orchestratorActive={false}
-      cwd="/w/cat-code"
-      onToggleOrchestrator={() => {}}
-    />,
-  )
-  expect(html).toContain('role="switch"')
-  expect(html).toContain('<button')
-  expect(html).not.toContain('aria-readonly="true"')
 })
 
 test('the empty state degrades honestly with no pool snapshot and no cwd (no fabrication)', () => {

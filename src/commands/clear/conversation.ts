@@ -237,7 +237,7 @@ export async function clearConversation({
     const { saveMode } = require('../../utils/sessionStorage.js')
     const {
       getCurrentSessionMode,
-    } = require('../../agent-mode/agentMode.js')
+    } = require('../../coordinator/coordinatorMode.js')
     /* eslint-enable @typescript-eslint/no-require-imports */
     saveMode(getCurrentSessionMode())
   }

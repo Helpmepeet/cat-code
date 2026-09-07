@@ -18,7 +18,7 @@ import { getChicagoCoordinateMode } from './gates.js'
  * tool names and emits a CU availability hint into the system prompt
  * (COMPUTER_USE_MCP_AVAILABILITY_HINT in the anthropic repo). Built-in tools
  * with different names wouldn't trigger it. Cowork uses the same names for the
- * same reason (apps/desktop/src/main/local-agent-mode/systemPrompt.ts:314).
+ * same reason.
  */
 export function setupComputerUseMCP(): {
   mcpConfig: Record<string, ScopedMcpServerConfig>

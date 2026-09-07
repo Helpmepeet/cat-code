@@ -40,11 +40,6 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain(
     'workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void',
   )
-  // P4-8b — agent-mode set sender rides its own fixed channel (HC3).
-  expect(channels).toContain("export const CH_AGENT_MODE_SET = 'catcode:agent-mode-set'")
-  expect(source).toContain(
-    'setAgentMode(sessionId: SessionId, active: boolean): void',
-  )
   // P4-13 — RemoteSettings verb sender rides its own fixed channel (HC3).
   expect(channels).toContain(
     "export const CH_REMOTE_SETTINGS_VERB = 'catcode:remote-settings-verb'",
@@ -92,9 +87,9 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_OPEN_HISTORY = 'catcode:host:open-history'",
   )
   expect(source).toContain('openHistorySession(')
-  // 20 frame-plane senders (including the fixed metadata-only delivery ack; no
+  // 19 frame-plane senders (including the fixed metadata-only delivery ack; no
   // generic logging IPC) (incl. P4-5 accountVerb + P4-15 workspaceTrustVerb +
-  // P4-8b setAgentMode + P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
+  // P4-8b taskControlVerb + P4-13 remoteSettingsVerb + P4-19
   // settingsVerb + P4-24c runControlVerb + P4-6b sessionActionVerb + C5/P4-20
   // answerQuestions + contextBreakdownVerb + D1b recallPrompts + loadEarlierHistory) + 11 payload-bearing control-plane
   // senders plus openWorkspaceFile + the DEV-only
@@ -132,7 +127,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(45)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(44)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -163,7 +158,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
   expect(source).toContain('target?: OpenWorkspaceFileTarget')
 })
 
-// The two ends of every channel used to be two hand-copied lists of the same 47
+// The two ends of every channel used to be two hand-copied lists of the same
 // literals. A one-character drift in either sent a renderer verb to a channel
 // nobody listened on, and nothing anywhere reported it: no error, no log, just a
 // dead button. Both ends now import the one list, so that drift is a compile
@@ -176,7 +171,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(47)
+  expect(names.length).toBe(46)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")

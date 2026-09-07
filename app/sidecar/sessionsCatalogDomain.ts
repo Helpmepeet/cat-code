@@ -43,6 +43,7 @@ import {
   loadAllProjectsMessageLogsProgressive,
   type SessionLogResult,
 } from '../../src/utils/sessionStorage.js'
+import { normalizeSessionMode } from '../../src/types/logs.js'
 import type { LogOption } from '../../src/types/logs.js'
 import type { SessionCatalogEntry, SessionsCatalogSnapshot } from '../shared/protocol.js'
 
@@ -212,7 +213,7 @@ export function mapLogOptionToCatalogEntry(
     messageCount: log.messageCount ?? 0,
     gitBranch: nonEmpty(log.gitBranch),
     tag: nonEmpty(log.tag),
-    mode: log.mode ?? null,
+    mode: normalizeSessionMode(log.mode) ?? null,
     agentSetting: nonEmpty(log.agentSetting),
     prNumber: log.prNumber ?? null,
     prRepository: nonEmpty(log.prRepository),

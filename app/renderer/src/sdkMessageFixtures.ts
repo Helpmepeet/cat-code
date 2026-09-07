@@ -786,7 +786,7 @@ export const SDK_MESSAGE_FIXTURE: {
     {
       name: 'user: tool_result for a subagent-scoped tool_use (D2 nesting — parent_tool_use_id non-null)',
       anchor:
-        'src/utils/queryHelpers.ts:141-153 (agent/skill progress re-emit — same subagent path P2-0 found for assistant frames, `parent_tool_use_id: message.parentToolUseID`); D2 decisions/AGENT-CHROME.md C4 nests, never interleaves',
+        'src/utils/queryHelpers.ts:141-153 (agent/skill progress re-emit — same subagent path P2-0 found for assistant frames, `parent_tool_use_id: message.parentToolUseID`); worker display nests, never interleaves',
       reach: 'app-seam',
       expectRows: 0,
       message: {
@@ -912,7 +912,7 @@ export const SDK_MESSAGE_FIXTURE: {
       },
     },
     {
-      name: 'user: coordinator origin (orchestrator message to a worker)',
+      name: 'user: coordinator origin (parent message to a worker)',
       anchor:
         'src/utils/attachments.ts:1107-1112 (getAgentPendingMessageAttachments)',
       reach: 'app-seam',
@@ -2301,7 +2301,7 @@ export const AGENT_WITH_NESTED_SUBAGENT_TURN: {
 
 /**
  * D2/§3 DelegateGroup turn (P4-8c grouping fixture): TWO Agent tool_use blocks
- * the orchestrator launched in parallel. The streaming producer emits one frame
+ * the parent launched in parallel. The streaming producer emits one frame
  * per stopped block, so both carry the SAME `message.id` (`msg_delegate8c`) —
  * the seam's only "co-spawned" signal (`src/utils/groupToolUses.ts:76`, groups
  * by `${message.id}:${tool_name}` when 2+). `groupAgentDelegates` coalesces them

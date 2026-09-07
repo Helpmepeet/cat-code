@@ -1,6 +1,6 @@
 import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../tools/AskParentSessionTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 
 /**
@@ -14,7 +14,7 @@ export type WorkerCapabilities = {
   /** Worker holds the in-process Agent tool. */
   mayDelegateInternally: boolean
   /** Escalation channels present in the worker's resolved pool. */
-  canAskOrchestrator: boolean
+  canAskParentSession: boolean
   canSendMessage: boolean
 }
 
@@ -31,7 +31,7 @@ export function resolveWorkerCapabilities(
   return {
     mayDelegateExternally: names.has(CLAUDE_CLI_TOOL_NAME),
     mayDelegateInternally: names.has(AGENT_TOOL_NAME),
-    canAskOrchestrator: names.has(ASK_ORCHESTRATOR_TOOL_NAME),
+    canAskParentSession: names.has(ASK_PARENT_SESSION_TOOL_NAME),
     canSendMessage: names.has(SEND_MESSAGE_TOOL_NAME),
   }
 }
@@ -68,8 +68,8 @@ export function getWorkerCapabilityPromptLine(
       ? `you may ${grants.join(' and ')}, and the assigned work stays yours to finish.`
       : `you have no tool that starts another agent, and you MUST NOT launch one through a shell, so do the work yourself.`
 
-  const escalation = capabilities.canAskOrchestrator
-    ? `If you are blocked on a decision only the orchestrator can make, call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run and hands the question over.`
+  const escalation = capabilities.canAskParentSession
+    ? `If you are blocked on a decision only the parent session can make, call ${ASK_PARENT_SESSION_TOOL_NAME} with the exact question: it ends your run and hands the question over.`
     : `If you are blocked, stop your turn and return a blocked result naming the exact question.`
 
   const sideways = capabilities.canSendMessage

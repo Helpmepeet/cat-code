@@ -7,11 +7,10 @@ import { z } from 'zod/v4';
 import type { BetaJSONOutputFormat } from '@anthropic-ai/sdk/resources/index.mjs';
 import { clearInvokedSkillsForAgent, getSessionId, getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js';
 import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../constants/prompts.js';
-import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
-import { isAgentMode } from '../../agent-mode/agentMode.js';
+import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
-import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
-import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryReserveWorkerName } from '../../agent-mode/workerNames.js';
+import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../utils/workerState.js';
+import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryReserveWorkerName } from '../../utils/workerNames.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
@@ -74,20 +73,9 @@ import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorM
 const proactiveModule = feature('PROACTIVE') || feature('KAIROS') ? require('../../proactive/index.js') as typeof import('../../proactive/index.js') : null;
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-export function deriveSessionStateTrackingObjective({
-  threadGoalObjective,
-  description,
-}: {
-  threadGoalObjective?: string
-  description?: string
-}): string {
-  return threadGoalObjective ?? description ?? 'Continue current objective'
-}
-
 export type AgentSessionStateTracking = {
   sessionId: string
   mode: Exclude<ReturnType<typeof getCurrentSessionMode>, 'normal'>
-  objective: string
   statePath: string
 }
 
@@ -112,25 +100,17 @@ export async function continueAgentIterator(
 export function buildAgentSessionStateTracking({
   sessionMode,
   sessionId,
-  threadGoalObjective,
-  description,
 }: {
   sessionMode: ReturnType<typeof getCurrentSessionMode>
   sessionId: string
-  threadGoalObjective?: string
-  description?: string
 }): AgentSessionStateTracking | undefined {
-  if (sessionMode !== 'agent' && sessionMode !== 'coordinator') {
+  if (sessionMode !== 'coordinator') {
     return undefined
   }
 
   return {
     sessionId,
     mode: sessionMode,
-    objective: deriveSessionStateTrackingObjective({
-      threadGoalObjective,
-      description,
-    }),
     statePath: getSessionStatePathFromTranscriptPath(getTranscriptPath()),
   }
 }
@@ -167,14 +147,12 @@ export async function finalizeFailedAgentLaunch({
   const errMsg = errorMessage(error)
 
   if (sessionStateTracking) {
-    const reservedWorkerHandles = (
-      (
-        await readSessionState(
-          sessionStateTracking.sessionId,
-          sessionStateTracking.statePath,
-        )
-      )?.knownWorkers ??
-      []
+    const trackedState = await readSessionState(
+      sessionStateTracking.sessionId,
+      sessionStateTracking.statePath,
+    )
+    const reservedWorkerHandles = Object.values(
+      trackedState?.knownWorkers ?? {},
     )
       .map(worker => worker.handle)
       .filter((handle): handle is string => Boolean(handle && handle.length > 0))
@@ -186,7 +164,6 @@ export async function finalizeFailedAgentLaunch({
       await recordSpawn({
         sessionId: sessionStateTracking.sessionId,
         mode: sessionStateTracking.mode,
-        objective: sessionStateTracking.objective,
         ...(sessionStateTracking.statePath
           ? { statePath: sessionStateTracking.statePath }
           : {}),
@@ -197,18 +174,16 @@ export async function finalizeFailedAgentLaunch({
         worktreePath: worktreePath ?? null,
         spawnedAt,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker spawn failure: ${_err}`),
+        logForDebugging(`Failed to record worker spawn failure: ${_err}`),
       )
 
       await recordTerminal({
         sessionId: sessionStateTracking.sessionId,
         agentId,
         status: 'failed',
-        error: errMsg,
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
+        logForDebugging(`Failed to record worker launch failure: ${_err}`),
       )
     } finally {
       if (workerName) releaseWorkerName(workerName)
@@ -376,7 +351,7 @@ async function getReservedSubagentNames({
       sessionStateTracking.sessionId,
       sessionStateTracking.statePath,
     )
-    for (const worker of trackedState?.knownWorkers ?? []) {
+    for (const worker of Object.values(trackedState?.knownWorkers ?? {})) {
       if (worker.handle) reserved.add(worker.handle)
     }
   }
@@ -710,7 +685,6 @@ export const AgentTool = buildTool({
     // Use inline env check instead of coordinatorModule to avoid circular
     // dependency issues during test module loading.
     const isCoordinator = feature('COORDINATOR_MODE') ? isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE) : false;
-    const isAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
     // Derived from the SAME resolved tool array this invocation's own API
     // tool definitions come from — never re-derived elsewhere — so the
     // continuation guidance below can't advertise a tool this context
@@ -721,7 +695,6 @@ export const AgentTool = buildTool({
       isCoordinator,
       allowedAgentTypes,
       provider,
-      isAgentMode,
       capabilities,
     );
   },
@@ -1093,8 +1066,6 @@ export const AgentTool = buildTool({
     const sessionStateTracking = buildAgentSessionStateTracking({
       sessionMode: getCurrentSessionMode(),
       sessionId: parentSessionId,
-      threadGoalObjective: appState.threadGoal?.objective,
-      description,
     });
     const {
       agentName,
@@ -1694,11 +1665,9 @@ export const AgentTool = buildTool({
                         sessionId: parentSessionId,
                         agentId: backgroundedTaskId,
                         status: 'failed',
-                        error: apiErrorMsg,
-                        outputSummary: description,
                         createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
-                        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+                        logForDebugging(`Failed to record worker failure: ${_err}`),
                       );
                       unregisterActiveSubagent(backgroundedTaskId);
                       enqueueAgentNotification({
@@ -1759,10 +1728,9 @@ export const AgentTool = buildTool({
                       sessionId: parentSessionId,
                       agentId: backgroundedTaskId,
                       status: 'completed',
-                      outputSummary: description,
                       createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
-                      logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
+                    logForDebugging(`Failed to record worker completion: ${_err}`),
                     );
                     unregisterActiveSubagent(backgroundedTaskId);
                     enqueueAgentNotification({
@@ -1804,10 +1772,9 @@ export const AgentTool = buildTool({
                         sessionId: parentSessionId,
                         agentId: backgroundedTaskId,
                         status: 'killed',
-                        outputSummary: description,
                         createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
-                        logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+                        logForDebugging(`Failed to record worker kill: ${_err}`),
                       );
                       unregisterActiveSubagent(backgroundedTaskId);
                       const worktreeResult = await cleanupWorktreeIfNeeded();
@@ -1843,11 +1810,9 @@ export const AgentTool = buildTool({
                       sessionId: parentSessionId,
                       agentId: backgroundedTaskId,
                       status: 'failed',
-                      error: errMsg,
-                      outputSummary: description,
                       createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
-                      logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+                      logForDebugging(`Failed to record worker failure: ${_err}`),
                     );
                     unregisterActiveSubagent(backgroundedTaskId);
                     const worktreeResult = await cleanupWorktreeIfNeeded();
@@ -2005,10 +1970,9 @@ export const AgentTool = buildTool({
               sessionId: parentSessionId,
               agentId: syncAgentId,
               status: 'killed',
-              outputSummary: description,
               createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
-              logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+              logForDebugging(`Failed to record worker kill: ${_err}`),
             );
             unregisterActiveSubagent(syncAgentId);
             throw error;
@@ -2119,10 +2083,9 @@ export const AgentTool = buildTool({
             sessionId: parentSessionId,
             agentId: syncAgentId,
             status: 'killed',
-            outputSummary: description,
             createStateIfMissing: runAgentParams.sessionStateTracking,
           }).catch(_err =>
-            logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+            logForDebugging(`Failed to record worker kill: ${_err}`),
           );
           unregisterActiveSubagent(syncAgentId);
           throw new AbortError();
@@ -2148,11 +2111,9 @@ export const AgentTool = buildTool({
               sessionId: parentSessionId,
               agentId: syncAgentId,
               status: 'failed',
-              error: syncAgentError.message,
-              outputSummary: description,
               createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
-              logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+          logForDebugging(`Failed to record worker failure: ${_err}`),
             );
             unregisterActiveSubagent(syncAgentId);
             throw syncAgentError;
@@ -2216,10 +2177,9 @@ export const AgentTool = buildTool({
           agentId: syncAgentId,
           status: completedWithError ? 'failed' : 'completed',
           ...(terminalError ? { error: terminalError } : {}),
-          outputSummary: description,
           createStateIfMissing: runAgentParams.sessionStateTracking,
         }).catch(_err =>
-          logForDebugging(`Failed to record Agent Mode worker terminal state: ${_err}`),
+          logForDebugging(`Failed to record worker terminal state: ${_err}`),
         );
         unregisterActiveSubagent(syncAgentId);
         return {
@@ -2303,8 +2263,7 @@ The agent is now running and will receive instructions via mailbox.`
     if (data.status === 'async_launched') {
       const oneShotAsync =
         data.agentType &&
-        ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) &&
-        !isAgentMode()
+        ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType)
       const target = data.agentName ? `@${data.agentName}` : data.agentId
       const nameLine = data.agentName ? `\nagentName: ${data.agentName}` : ''
       // Historical results persisted before this field existed render
@@ -2354,7 +2313,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
       // 34M Explore runs/week ≈ 1-2 Gtok/week). Telemetry doesn't parse this
       // block (it uses logEvent in finalizeAgentTool), so dropping is safe.
       // agentType is optional for resume compat — missing means show trailer.
-      if (!isAgentMode() && data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
+      if (data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
@@ -2371,7 +2330,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
           : ` (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`
         : ''
       const continuationText =
-        data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
+        data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType)
           ? `agentId: ${data.agentId}`
           : data.agentName
             ? `agentId: ${data.agentId}\nagentName: ${data.agentName}${resumeHint}`

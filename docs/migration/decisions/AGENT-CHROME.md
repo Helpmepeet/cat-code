@@ -1,6 +1,6 @@
 # D2 — Which Agent-Mode chrome survives
 
-**Status: DECIDED 2026-07-04 (Phase-4 pre-work, parallel to Phase 2 / Phase-3 backlog).** This
+**Status: SUPERSEDED 2026-09-07.** This
 settles INVENTORY's D2 — which of the prototype's orchestrator/agent display chrome
 (`OrchestratorMode.jsx`: `OrchestratorModeWorkerRoster` / `WorkerDetail` / `WorkerFocusView` /
 `AgentToolCard` / `DelegateGroup` / `BackgroundTaskStatus` / `deriveWorker` / `summarizeWorkers`;
@@ -8,6 +8,13 @@ settles INVENTORY's D2 — which of the prototype's orchestrator/agent display c
 a real source shape (keep/adapt) vs. is invention with no backing (cut/redesign). Same class of
 call as D1: architecture, decidable from source — decided, not deferred. All anchors verified
 against the working tree 2026-07-04; where this doc and source disagree, source wins.
+
+**Retirement amendment 2026-09-07.** Agent Mode chrome and its persisted Agent Mode
+state are retired. Generic worker roster, inspection, task controls, transcript
+cards, permission identity, and Codex lease joins remain, driven by an outbound-only
+live-worker snapshot with bounded result summaries. The desktop Agent Mode inbound
+verb and mode badge are removed. The transport, N-process topology, raw-event
+fidelity, die-with-window lifetime, and two-id model remain locked.
 Companions: STATUS P2-0 note (subagent-frame findings), `specs/2026-07-03-S1-streaming.md`
 (subagent deltas never arrive), PROGRAM-PLAN §5 (projector derives, never expects cards).
 

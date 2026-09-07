@@ -61,10 +61,7 @@ import {
   type SidecarTaskControlDomain,
   type TaskDismissResult,
 } from './taskControlDomain.js'
-import {
-  createSidecarAgentModeDomain,
-  type SidecarAgentModeDomain,
-} from './agentModeDomain.js'
+import { createSidecarWorkersDomain, workersSnapshot } from './workersDomain.js'
 import {
   createSidecarLeaseDomain,
   type LeaseReader,
@@ -960,7 +957,7 @@ test('IDLE-PARK gate — app.park is DECLINED while a task is running (no exit)'
 
 test('IDLE-PARK gate — app.park is DECLINED while a FOREGROUNDED local_agent runs (the display-snapshot hole)', () => {
   const store = makePermissionStore()
-  // A running agent-mode worker the user has FOREGROUNDED to watch. This is the
+  // A running local_agent worker the user has FOREGROUNDED to watch. This is the
   // exact hole: `activeTurn` is only set by handleSubmit (false here), and the
   // DISPLAY snapshot filters out the foregrounded local_agent — so a gate reading
   // getSnapshot().items would see NOTHING and park over a live worker (turn loss).
@@ -3166,13 +3163,13 @@ test('P4-9 — emits the live tasks snapshot on attach and store change', () => 
   expect(latest?.tasks.items).toHaveLength(0)
 })
 
-test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-clean', async () => {
+test('workers.snapshot contains live worker state on attach and after a task change', () => {
   const store = makePermissionStore()
-  const blockedWorker = {
+  const worker = {
     ...createTaskStateBase('a1', 'local_agent', 'Wire the auth flow'),
     type: 'local_agent' as const,
-    status: 'completed' as const,
-    agentId: 'w-blocked',
+    status: 'running' as const,
+    agentId: 'w-live',
     prompt: 'Wire the auth flow',
     agentType: 'implementor',
     agentName: 'Turing',
@@ -3183,354 +3180,100 @@ test('P4-8 — emits a joined agent-mode.snapshot on attach that is secretGuard-
     pendingMessages: [],
     retain: false,
     diskLoaded: false,
-    handoffStatus: 'blocked' as const,
-    blockReason: 'Which auth strategy should I use?',
   }
-  store.setState(prev => ({ ...prev, tasks: { a1: blockedWorker } }))
+  store.setState(prev => ({ ...prev, tasks: { a1: worker } as never }))
   const { received } = connect(new AppSessionController(probeAdapter()), {
-    agentMode: createSidecarAgentModeDomain(store),
+    workers: createSidecarWorkersDomain(store),
   })
 
-  // sendAgentModeSnapshot is async (the session plane is a file-backed engine
-  // read), fired-and-forgotten on attach — poll for the emitted frame.
-  const findFrame = () =>
-    received.find(
-      (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
-        frame.kind === 'agent-mode.snapshot',
-    )
-  for (let i = 0; i < 100 && !findFrame(); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
+  const attach = received.find(
+    (frame): frame is Extract<ServerFrame, { kind: 'workers.snapshot' }> =>
+      frame.kind === 'workers.snapshot',
+  )
+  expect(attach?.workers.workers).toEqual([
+    {
+      agentId: 'w-live',
+      handle: 'Turing',
+      role: 'implementor',
+      status: 'running',
+      description: 'Wire the auth flow',
+      isBackgrounded: true,
+    },
+  ])
 
-  const snapshot = findFrame()
-  expect(snapshot?.kind).toBe('agent-mode.snapshot')
-  // The desktop sidecar must read only the current engine session. A continuity
-  // union here would leak workers from another session sharing this project.
-  expect(snapshot?.agentMode.workers).toHaveLength(1)
-  const liveWorker = snapshot?.agentMode.workers[0]
-  expect(liveWorker).toMatchObject({
-    agentId: 'w-blocked',
-    handle: 'Turing',
-    role: 'implementor',
+  store.setState(prev => ({
+    ...prev,
+    tasks: {
+      a1: {
+        ...worker,
+        status: 'completed',
+        handoffStatus: 'done',
+        result: {
+          content: [{ type: 'text', text: 'Completed the auth flow.' }],
+        },
+      },
+    } as never,
+  }))
+
+  const latest = received
+    .filter(
+      (frame): frame is Extract<ServerFrame, { kind: 'workers.snapshot' }> =>
+        frame.kind === 'workers.snapshot',
+    )
+    .at(-1)
+  expect(latest?.workers.workers[0]).toMatchObject({
     status: 'completed',
-    handoffStatus: 'blocked',
-    blockReason: 'Which auth strategy should I use?',
+    handoffStatus: 'done',
+    resultSummary: 'Completed the auth flow.',
   })
-  expect(snapshot && scanForSecrets(snapshot).ok).toBe(true)
+  expect(latest && scanForSecrets(latest).ok).toBe(true)
 })
 
-/* ------------------------------------------------------------------------- *
- * P4-8b — agent-mode SET verb (the in-session Orchestrator toggle) boundary
- * ------------------------------------------------------------------------- *
- * Exercises the SERVER boundary (checkStrictKeys + Zod schema + dispatch +
- * result frame + async snapshot re-broadcast) with a FAKE domain, so the engine
- * `matchSessionMode`/`process.env` round-trip is not touched here (that is proven
- * in agentModeDomain.test.ts).
- */
-function fakeAgentModeDomain(
-  override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
-): {
-  domain: SidecarAgentModeDomain
-  calls: boolean[]
-  dismissed: string[]
-  snapshotReads: boolean[]
-} {
-  const calls: boolean[] = []
-  const dismissed: string[] = []
-  const snapshotReads: boolean[] = []
-  let active = false
-  const domain: SidecarAgentModeDomain = {
-    async getSnapshot() {
-      snapshotReads.push(active)
-      return { active, objective: '', phase: 'planning', workers: [] }
-    },
-    setActive(next: boolean) {
-      calls.push(next)
-      if (override) return override(next)
-      const changed = next !== active
-      active = next
-      return { ok: true, message: next ? 'on' : 'off', changed }
-    },
-    noteWorkerDismissed(agentId: string) {
-      dismissed.push(agentId)
-    },
-    subscribe() {
-      return () => {}
-    },
-  }
-  return { domain, calls, dismissed, snapshotReads }
-}
+test('worker result summaries are text-only, bounded, and omitted when the result has a secret key', () => {
+  const longText = 'x'.repeat(3_000)
+  const bounded = workersSnapshot({
+    bounded: {
+      ...createTaskStateBase('bounded', 'local_agent', 'Bound the result'),
+      type: 'local_agent',
+      status: 'completed',
+      agentId: 'bounded',
+      agentType: 'general-purpose',
+      isBackgrounded: false,
+      result: { content: [{ type: 'text', text: longText }] },
+    } as never,
+    unsafe: {
+      ...createTaskStateBase('unsafe', 'local_agent', 'Drop the unsafe result'),
+      type: 'local_agent',
+      status: 'completed',
+      agentId: 'unsafe',
+      agentType: 'general-purpose',
+      isBackgrounded: false,
+      result: {
+        content: [{ type: 'text', text: 'not safe to publish' }],
+        accessToken: 'secret',
+      },
+    } as never,
+  })
 
-function makeAgentModeServer(
-  override?: (active: boolean) => { ok: boolean; message: string; changed: boolean },
-): { server: SidecarServer; calls: boolean[] } {
-  const { domain, calls } = fakeAgentModeDomain(override)
-  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
-  return { server, calls }
-}
-
-test('agent-mode snapshots cannot regress when an older persisted read finishes last', async () => {
-  type Snapshot = Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>
-  const reads: Array<{
-    resolve: (snapshot: Snapshot) => void
-  }> = []
-  let notify: (() => void) | undefined
-  const domain: SidecarAgentModeDomain = {
-    getSnapshot() {
-      return new Promise(resolve => {
-        reads.push({ resolve })
-      })
-    },
-    setActive() {
-      return { ok: true, message: 'unchanged', changed: false }
-    },
-    noteWorkerDismissed() {},
-    subscribe(listener) {
-      notify = listener
-      return () => {
-        notify = undefined
-      }
-    },
-  }
-  const { received } = connect(new AppSessionController(probeAdapter()), { agentMode: domain })
-
-  expect(reads).toHaveLength(1)
-  reads.shift()!.resolve({ active: false, objective: 'initial', phase: 'planning', workers: [] })
-  await Promise.resolve()
-  received.length = 0
-
-  notify?.()
-  notify?.()
-  expect(reads).toHaveLength(2)
-  reads[1]!.resolve({ active: true, objective: 'new', phase: 'executing', workers: [] })
-  await Promise.resolve()
-  reads[0]!.resolve({ active: false, objective: 'old', phase: 'planning', workers: [] })
-  await Promise.resolve()
-
-  const snapshots = received.filter(
-    (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
-      frame.kind === 'agent-mode.snapshot',
+  expect(bounded.workers.find(worker => worker.agentId === 'bounded')?.resultSummary).toHaveLength(2_048)
+  expect(bounded.workers.find(worker => worker.agentId === 'unsafe')).not.toHaveProperty(
+    'resultSummary',
   )
-  expect(snapshots).toHaveLength(1)
-  expect(snapshots[0]?.agentMode.objective).toBe('new')
+  expect(scanForSecrets(bounded).ok).toBe(true)
 })
 
-test('agent-mode attach reads are connection-local and a newer broadcast supersedes stale attach data', async () => {
-  type Snapshot = Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>
-  const reads: Array<{ resolve: (snapshot: Snapshot) => void }> = []
-  let notify: (() => void) | undefined
-  const domain: SidecarAgentModeDomain = {
-    getSnapshot() {
-      return new Promise(resolve => {
-        reads.push({ resolve })
-      })
-    },
-    setActive() {
-      return { ok: true, message: 'unchanged', changed: false }
-    },
-    noteWorkerDismissed() {},
-    subscribe(listener) {
-      notify = listener
-      return () => {
-        notify = undefined
-      }
-    },
-  }
-  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
-  const first = makeSocket()
-  const second = makeSocket()
-  server.addConnection(first.socket)
-  server.addConnection(second.socket)
-  expect(reads).toHaveLength(2)
+test('a removed agent-mode.set message is rejected as an unknown inbound type', () => {
+  const { received, conn } = connect(new AppSessionController(probeAdapter()))
 
-  // The second connection starting an attach read must not suppress the first.
-  reads[0]!.resolve({ active: false, objective: 'first attach', phase: 'planning', workers: [] })
-  await Promise.resolve()
-  expect(
-    first.received.some(
-      frame =>
-        frame.kind === 'agent-mode.snapshot' &&
-        frame.agentMode.objective === 'first attach',
-    ),
-  ).toBe(true)
-
-  // A broadcast requested after the second attach supersedes that older read for
-  // the second connection and publishes one current snapshot to both.
-  notify?.()
-  expect(reads).toHaveLength(3)
-  reads[2]!.resolve({ active: true, objective: 'current', phase: 'executing', workers: [] })
-  await Promise.resolve()
-  reads[1]!.resolve({ active: false, objective: 'stale attach', phase: 'planning', workers: [] })
-  await Promise.resolve()
-
-  for (const received of [first.received, second.received]) {
-    const snapshots = received.filter(
-      (frame): frame is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
-        frame.kind === 'agent-mode.snapshot',
-    )
-    expect(snapshots.at(-1)?.agentMode.objective).toBe('current')
-    expect(
-      snapshots.some(frame => frame.agentMode.objective === 'stale attach'),
-    ).toBe(false)
-  }
-})
-
-test('P4-8b — a valid agent-mode.set{active:true} switches the domain + re-broadcasts the snapshot', async () => {
-  const { server, calls } = makeAgentModeServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-  // Wait out the fire-and-forget attach snapshot so the re-broadcast is isolable.
-  for (let i = 0; i < 50 && !received.some(f => f.kind === 'agent-mode.snapshot'); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
-
+  const server = servers.at(-1)!
   server.handleData(
     conn,
-    rawFrame({
-      type: 'agent-mode.set',
-      requestId: 'am1',
-      active: true,
-    }),
+    rawFrame({ type: 'agent-mode.set', requestId: 'legacy-1', active: true }),
   )
 
-  // The result ack is synchronous.
-  const result = received.find(f => f.kind === 'agent-mode.set.result')
-  expect(result && result.kind === 'agent-mode.set.result' && result.ok).toBe(true)
-  expect(result && result.kind === 'agent-mode.set.result' && result.requestId).toBe('am1')
-  expect(calls).toEqual([true])
-
-  // The snapshot re-broadcast is async (file-backed session-plane read) — poll.
-  for (
-    let i = 0;
-    i < 50 && received.filter(f => f.kind === 'agent-mode.snapshot').length <= before;
-    i += 1
-  ) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  const after = received.filter(
-    (f): f is Extract<ServerFrame, { kind: 'agent-mode.snapshot' }> =>
-      f.kind === 'agent-mode.snapshot',
-  )
-  expect(after.length).toBeGreaterThan(before)
-  // The freshly re-broadcast snapshot reflects the flipped mode.
-  expect(after[after.length - 1]?.agentMode.active).toBe(true)
-})
-
-test('P4-8b — one agent-mode snapshot read fans out to every attached connection', async () => {
-  const { domain, snapshotReads } = fakeAgentModeDomain()
-  const server = makeServer(new AppSessionController(probeAdapter()), { agentMode: domain })
-  const first = makeSocket()
-  const second = makeSocket()
-  const firstConnection = server.addConnection(first.socket)
-  server.addConnection(second.socket)
-
-  for (
-    let i = 0;
-    i < 50 &&
-    (first.received.some(f => f.kind === 'agent-mode.snapshot') === false ||
-      second.received.some(f => f.kind === 'agent-mode.snapshot') === false);
-    i += 1
-  ) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  const readsBefore = snapshotReads.length
-  const firstBefore = first.received.filter(f => f.kind === 'agent-mode.snapshot').length
-  const secondBefore = second.received.filter(f => f.kind === 'agent-mode.snapshot').length
-
-  server.handleData(
-    firstConnection,
-    rawFrame({
-      type: 'agent-mode.set',
-      requestId: 'am-fanout',
-      active: true,
-    }),
-  )
-
-  for (
-    let i = 0;
-    i < 50 &&
-    (snapshotReads.length <= readsBefore ||
-      first.received.filter(f => f.kind === 'agent-mode.snapshot').length <= firstBefore ||
-      second.received.filter(f => f.kind === 'agent-mode.snapshot').length <= secondBefore);
-    i += 1
-  ) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-
-  expect(snapshotReads).toHaveLength(readsBefore + 1)
-  expect(first.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
-    firstBefore,
-  )
-  expect(second.received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(
-    secondBefore,
-  )
-})
-
-test('P4-8b — an idempotent agent-mode.set (no change) acks ok but does NOT re-broadcast', async () => {
-  const { server } = makeAgentModeServer(() => ({ ok: true, message: 'already off', changed: false }))
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-  for (let i = 0; i < 50 && !received.some(f => f.kind === 'agent-mode.snapshot'); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 10))
-  }
-  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'agent-mode.set', requestId: 'am2', active: false }),
-  )
-
-  expect(received.some(f => f.kind === 'agent-mode.set.result' && f.ok)).toBe(true)
-  // Give any (unexpected) async broadcast a chance, then assert none fired.
-  await new Promise(resolve => setTimeout(resolve, 30))
-  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBe(before)
-})
-
-test('P4-8b — rejects agent-mode.set with a NON-boolean active (Zod boundary), no domain call', () => {
-  const { server, calls } = makeAgentModeServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'agent-mode.set', requestId: 'am3', active: 'yes' }),
-  )
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
-  expect(calls).toEqual([])
-})
-
-test('P4-8b — rejects agent-mode.set missing requestId at the schema boundary, no domain call', () => {
-  const { server, calls } = makeAgentModeServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'agent-mode.set', active: true }),
-  )
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
-  expect(calls).toEqual([])
-})
-
-test('P4-8b — rejects agent-mode.set carrying an unexpected key (checkStrictKeys), no domain call', () => {
-  const { server, calls } = makeAgentModeServer()
-  const { socket, received } = makeSocket()
-  const conn = server.addConnection(socket)
-
-  server.handleData(
-    conn,
-    // A renderer-supplied extra key is rejected before the verb reaches the domain.
-    rawFrame({ type: 'agent-mode.set', requestId: 'am4', active: true, sessionMode: 'coordinator' }),
-  )
-
-  expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
-  expect(received.some(f => f.kind === 'agent-mode.set.result')).toBe(false)
-  expect(calls).toEqual([])
+  const rejection = received.find(frame => frame.kind === 'error')
+  expect(rejection?.code).toBe('bad_request')
+  expect(rejection?.message).toContain('unknown message type: agent-mode.set')
 })
 
 /* ------------------------------------------------------------------------- *
@@ -4009,93 +3752,6 @@ test('CC-32 — LIVE PATH: a real task.dismiss retires a blocked worker the reap
   )
   expect(snaps.length).toBeGreaterThan(before)
   expect(snaps[snaps.length - 1]?.tasks.items.find(i => i.id === 'g1')).toBeUndefined()
-})
-
-test('CC-32 — a SUCCESSFUL dismiss records the worker with the agent-mode domain (so the persisted twin cannot re-supply the row) and re-broadcasts', async () => {
-  const { domain: taskControl } = fakeTaskControlDomain()
-  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
-    agentMode,
-    taskControl,
-  })
-  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'task.dismiss', requestId: 'td6', taskId: 'w-live' }),
-  )
-
-  for (
-    let i = 0;
-    i < 50 &&
-    (dismissed.length === 0 ||
-      received.filter(f => f.kind === 'agent-mode.snapshot').length <= before);
-    i += 1
-  ) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  expect(dismissed).toEqual(['w-live'])
-  // The eviction's own store re-broadcast went out BEFORE the domain knew, so the
-  // explicit re-broadcast is what actually carries the suppressed row to the UI.
-  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
-})
-
-test('CC-32 — a PERSISTED-ONLY worker (no live task) is dismissible: not_found suppresses the row and acks ok, instead of a dead control', async () => {
-  // The commonest stale row there is: the reaper already evicted the live task, so
-  // the row now comes from the persisted plane alone and `readSessionState` stamps
-  // it `origin: 'current'`. Refusing here left Dismiss visible but inert.
-  const { domain: taskControl } = fakeTaskControlDomain(() => ({
-    ok: false,
-    refusal: 'not_found' as const,
-    message: 'That worker is already gone.',
-  }))
-  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
-    agentMode,
-    taskControl,
-  })
-  const before = received.filter(f => f.kind === 'agent-mode.snapshot').length
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'task.dismiss', requestId: 'td8', taskId: 'w-persisted' }),
-  )
-
-  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  const result = received.find(f => f.kind === 'task-control.result')
-  // The operator sees the row go, so the ack must not read as a failure.
-  expect(result && result.kind === 'task-control.result' && result.ok).toBe(true)
-  expect(dismissed).toEqual(['w-persisted'])
-  // No store mutated on this path, so no subscription fired: the explicit
-  // re-broadcast is the ONLY thing carrying the suppression to the renderer.
-  expect(received.filter(f => f.kind === 'agent-mode.snapshot').length).toBeGreaterThan(before)
-})
-
-test('CC-32 — a REFUSED dismiss records nothing: a row the engine kept must not be suppressed in the other plane', async () => {
-  const { domain: taskControl } = fakeTaskControlDomain(() => ({
-    ok: false,
-    refusal: 'still_running' as const,
-    message: 'That worker is still running. Stop it first.',
-  }))
-  const { domain: agentMode, dismissed } = fakeAgentModeDomain()
-  const { server, received, conn } = connect(new AppSessionController(probeAdapter()), {
-    agentMode,
-    taskControl,
-  })
-
-  server.handleData(
-    conn,
-    rawFrame({ type: 'task.dismiss', requestId: 'td7', taskId: 'w-live' }),
-  )
-
-  for (let i = 0; i < 50 && !received.some(f => f.kind === 'task-control.result'); i += 1) {
-    await new Promise(resolve => setTimeout(resolve, 5))
-  }
-  const result = received.find(f => f.kind === 'task-control.result')
-  expect(result && result.kind === 'task-control.result' && result.ok).toBe(false)
-  expect(dismissed).toEqual([])
 })
 
 /* ------------------------------------------------------------------------- *
@@ -8554,8 +8210,8 @@ test('production app.submit order: the echoed user message, THEN turn.status(tru
 })
 
 /* ── P4-32b — the Codex lease read seam at the transport boundary ──────────────
- * The seam is OUTBOUND ONLY (`decisions/ORCHESTRATOR-IN-SESSION.md` §7 L1, ruled
- * §10), so the boundary property to prove is the absence of an inbound surface:
+ * The seam is OUTBOUND ONLY (L1, ruled 2026-07-30), so the boundary property to
+ * prove is the absence of an inbound surface:
  * the closed inbound allowlist did NOT grow, and a plausible lease verb is
  * rejected fail-closed. The outbound half proves emission + redaction + the
  * degrade-to-nothing path.
@@ -8592,7 +8248,7 @@ function leaseServerFixture(leases?: SidecarLeaseDomain) {
   return server
 }
 
-test('P4-32b — attach emits a lease.snapshot right after agent-mode.snapshot', () => {
+test('P4-32b — attach emits a lease.snapshot right after workers.snapshot', () => {
   const store = createStore({ ...getDefaultAppState(), tasks: {} })
   const server = leaseServerFixture(
     createSidecarLeaseDomain(store, { reader: fakeLeaseReader() }),

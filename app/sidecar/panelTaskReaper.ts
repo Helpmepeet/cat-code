@@ -48,7 +48,7 @@
  * immediate eviction. `docs/migration/STATUS.md` CC-32 carries the full record.
  *
  * Evicting the task is what makes the row disappear: the store mutation drives
- * the existing `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts, and the
+ * the existing `tasks.snapshot` / `workers.snapshot` re-broadcasts, and the
  * roster renders nothing once its worker list empties.
  */
 import { isPanelAgentTask } from '../../src/tasks/LocalAgentTask/LocalAgentTask.js'

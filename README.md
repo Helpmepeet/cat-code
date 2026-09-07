@@ -66,34 +66,12 @@ and non-interactive denial when approval would otherwise be required. Explicit
 safety checks and denies remain meaningful even when a more permissive mode is
 selected.
 
-### Agents and Agent Mode
+### Agents and workers
 
 The `Agent` tool delegates bounded work to specialized workers. Workers can run
 in the foreground or background, use their own model and tool policy, preserve
 status beside the parent session, resume after stopping, and optionally isolate
 implementation in a Git worktree.
-
-Agent Mode turns the main session into a worker-first orchestrator:
-
-```bash
-cd /path/to/cat-code && ./cli-dev --agent-mode
-```
-
-It can also be toggled from an interactive session:
-
-```text
-/agent
-```
-
-Agent Mode does not impose a mandatory plan-approval-execute ceremony. The main
-conversation remains responsible for assigning work, checking evidence,
-course-correcting workers, and synthesizing results.
-
-Agent Mode execution and worker state do not require the legacy coordinator
-runtime. Some fresh-session mode metadata and automatic mode restoration still
-sit behind the legacy `COORDINATOR_MODE` build gate, which is not part of
-`build:dev:full`; after resuming a session, re-enter Agent Mode if the mode was
-not restored.
 
 ### Sessions, instructions, and memory
 
@@ -277,7 +255,7 @@ Supporting systems surround that loop:
 |---|---|
 | Built-in tools and exposure | `src/tools.ts`, `src/tools/` |
 | Commands and skills | `src/commands.ts`, `src/commands/`, `src/skills/` |
-| Agent Mode and workers | `src/agent-mode/`, `src/tools/AgentTool/`, `src/tasks/` |
+| Agents and workers | `src/tools/AgentTool/`, `src/tasks/`, `src/coordinator/` |
 | Provider routing | `src/utils/model/providers.ts`, `src/services/api/` |
 | Settings and persistence | `src/utils/settings/`, `src/utils/config.ts`, `src/utils/sessionStorage.ts` |
 | Memory | `src/memdir/`, `src/services/SessionMemory/` |

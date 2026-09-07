@@ -1,7 +1,7 @@
 /**
  * WelcomeScreen (P4-17) — the first-run / empty-session launcher (`Welcome.jsx`),
  * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a neon-cat
- * hero + wordmark, an interactive meta strip (Project · Start-in · Orchestrator),
+ * hero + wordmark, an interactive meta strip (Project · Start-in),
  * and the read-only Codex pool table. It replaces the minimal `EmptyShell`.
  *
  * It is PURELY PRESENTATIONAL — it reads props App wires from the EXISTING domain
@@ -12,10 +12,6 @@
  *  - trust    = best-effort per-cwd flags App joins from live sessions'
  *               `workspace-trust.snapshot` (P4-15) — the per-session-create trust
  *               GATE itself fires post-spawn on `onOpenFolder`, the real flow;
- *  - orchestrator = the P4-5/agent-mode `active` flag. INTERACTIVE in the session
- *               variant (P4-8b `onToggleOrchestrator` → the `agent-mode.set` verb →
- *               the engine's own `matchSessionMode`, a live per-session env switch);
- *               READ-ONLY in the launcher variant (no session yet to toggle).
  *
  * HC1: the renderer authors no path. A recent with an `appSessionId` opens/restores
  * that registry row; a history-only project (no app id) is browse-only (the P4-6b
@@ -95,14 +91,13 @@ const welcomeCat = welcomeCats[Math.floor(Math.random() * welcomeCats.length)]!
  *    session-create and the renderer authors no path, so Project is READ-ONLY
  *    context (the session's real cwd), not a picker, and the recents launcher /
  *    "Open folder…" is absent — you are already in a project. The hero, Codex
- *    pool table, and orchestrator reflect are identical to the launcher.
+ *    pool table are identical to the launcher.
  */
 type WelcomeScreenProps =
   | {
       variant?: 'launcher'
       recents: readonly RecentWorkspace[]
       accounts: AccountsSnapshot | null
-      orchestratorActive: boolean
       /** Open/restore a recent project's most-recent openable session (HC1: id-only). */
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
@@ -125,20 +120,10 @@ type WelcomeScreenProps =
        * worktree option is cut. */
       sandboxed?: boolean
       accounts: AccountsSnapshot | null
-      orchestratorActive: boolean
-      /**
-       * P4-8b — set THIS session's agent mode on/off (the in-session Orchestrator
-       * toggle). Present only in the session variant (there IS a session to
-       * toggle); when supplied the control is interactive, else it stays a
-       * read-only reflect. The launcher variant never gets it (no session yet).
-       */
-      onToggleOrchestrator?: (next: boolean) => void
     }
 
 export function WelcomeScreen(props: WelcomeScreenProps) {
-  const { accounts, orchestratorActive } = props
-  const onToggleOrchestrator =
-    props.variant === 'session' ? props.onToggleOrchestrator : undefined
+  const { accounts } = props
   // The sign-in card's OWN predicate, read against the session-free pool view
   // the launcher already gets, so the line promises a sign-in step on exactly
   // the states that produce one: a configured Anthropic route or any pooled
@@ -221,13 +206,6 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                   </MetaCol>
                 </>
               ) : null}
-              <div className="w-px bg-shell-seam" />
-              <MetaCol icon={<AgentIcon />} label="Orchestrator">
-                <OrchestratorReflect
-                  active={orchestratorActive}
-                  onToggle={onToggleOrchestrator}
-                />
-              </MetaCol>
             </div>
           </div>
         </div>
@@ -395,7 +373,7 @@ function ProjectPicker({
 /**
  * One recent-project row. Exported so its openable/unopenable rendering can be
  * asserted directly: the dropdown is closed on first paint, so the rows never
- * appear in this package's SSR markup (the `OrchestratorReflect` convention).
+ * appear in this package's SSR markup while the menu is closed.
  */
 export function RecentItem({
   recent,
@@ -458,79 +436,6 @@ export function RecentItem({
     >
       {body}
     </div>
-  )
-}
-
-/**
- * The orchestrator (Agent Mode) switch. INTERACTIVE when `onToggle` is supplied
- * (P4-8b — the in-session `variant:'session'` case: clicking calls the callback
- * with the negated `active`, which drives `setAgentMode` → the engine's own
- * `matchSessionMode`, a live env switch that the NEXT turn picks up — no respawn).
- * READ-ONLY otherwise (the launcher variant: there is no session to toggle, so the
- * element stays an honest `aria-readonly` reflect of the focused session's
- * `agentMode.active`, ledger §29). Exported for the DOM-free handler test (this
- * package has no click harness — AccountsPage.test.tsx convention).
- */
-export function OrchestratorReflect({
-  active,
-  onToggle,
-}: {
-  active: boolean
-  onToggle?: (next: boolean) => void
-}) {
-  const visual = (
-    <>
-      <span
-        className={
-          'relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors ' +
-          (active
-            ? 'border-accent/45 bg-accent/20'
-            : 'border-white/10 bg-white/[0.07]')
-        }
-      >
-        <span
-          className={
-            'absolute top-1 h-3 w-3 rounded-full transition-all ' +
-            (active ? 'left-[18px] bg-accent-soft' : 'left-1 bg-text-subtle')
-          }
-        />
-      </span>
-      <span
-        className={
-          'text-[13px] font-medium ' +
-          (active ? 'font-mono text-accent-soft' : 'text-text-subtle')
-        }
-      >
-        {active ? 'On' : 'Off'}
-      </span>
-    </>
-  )
-
-  if (onToggle) {
-    return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={active}
-        onClick={() => onToggle(!active)}
-        title="Toggle this session's Agent Mode. Takes effect on the next turn."
-        className="inline-flex items-center gap-2.5"
-      >
-        {visual}
-      </button>
-    )
-  }
-
-  return (
-    <span
-      role="switch"
-      aria-checked={active}
-      aria-readonly="true"
-      title="Reflects the focused session's Agent Mode, which is set at session start."
-      className="inline-flex items-center gap-2.5"
-    >
-      {visual}
-    </span>
   )
 }
 
@@ -721,17 +626,6 @@ function MonitorIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.7" />
       <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function AgentIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="5" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="5" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="19" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M12 7.4v3.6M12 11l-6 5M12 11l6 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

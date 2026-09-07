@@ -48,23 +48,12 @@ const createdFiles: string[] = []
 function getSessionStatePath(sessionId: string): string {
   return getTranscriptPathForSession(sessionId).replace(
     /\.jsonl$/,
-    '.agent-mode-state.json',
+    '.worker-state.json',
   )
 }
 
 function writeSessionState(sessionId: string, state: unknown): void {
   const path = getSessionStatePath(sessionId)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(state), 'utf-8')
-  createdFiles.push(path)
-}
-
-function writePriorSessionState(
-  projectDir: string,
-  sessionId: string,
-  state: unknown,
-): void {
-  const path = join(projectDir, `${sessionId}.agent-mode-state.json`)
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify(state), 'utf-8')
   createdFiles.push(path)
@@ -155,22 +144,6 @@ function writeAgentTranscriptWithUsage({
       }),
       '',
     ].join('\n'),
-    'utf-8',
-  )
-  createdFiles.push(path)
-}
-
-function writePriorAgentMetadata(
-  projectDir: string,
-  sessionId: string,
-  agentId: string,
-  description: string,
-): void {
-  const path = join(projectDir, sessionId, 'subagents', `agent-${agentId}.meta.json`)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(
-    path,
-    JSON.stringify({ agentType: 'general-purpose', description }),
     'utf-8',
   )
   createdFiles.push(path)
@@ -301,8 +274,7 @@ describe('ResumeAgentTool', () => {
     })) as never)
     writeSessionState(sessionId, {
       sessionId,
-      mode: 'agent',
-      objective: 'Current target',
+      mode: 'coordinator',
       activeWorkers: {},
       knownWorkers: {
         'agent-current': {
@@ -310,7 +282,6 @@ describe('ResumeAgentTool', () => {
           role: 'explorer',
           description: 'Current durable worker',
           status: 'completed',
-          resumable: true,
           worktreePath: null,
           handle: 'explore-current',
         },
@@ -331,130 +302,6 @@ describe('ResumeAgentTool', () => {
         sourceSessionId: sessionId,
       }),
     )
-  })
-
-  test('resolves durable prior-session handles and raw IDs', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    const priorAgentId = createAgentId()
-    switchSession(freshSessionId, tempDir)
-    sessionId = freshSessionId
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior target',
-      activeWorkers: {},
-      knownWorkers: {
-        [priorAgentId]: {
-          agentId: priorAgentId,
-          role: 'explorer',
-          description: 'Prior durable worker',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writeAgentTranscript(priorAgentId, priorSessionId, tempDir)
-    writePriorAgentMetadata(
-      tempDir,
-      priorSessionId,
-      priorAgentId,
-      'Prior metadata worker',
-    )
-    const resumeAgentBackground = spyOn(
-      resumeAgentModule,
-      'resumeAgentBackground',
-    ).mockImplementation(mock(async () => ({
-      agentId: priorAgentId,
-      description: 'Prior metadata worker',
-      outputFile: join(tempDir, 'output.txt'),
-    })) as never)
-    const { context } = createToolUseContext()
-
-    await ResumeAgentTool.call(
-      { agentId: 'explore-prior', prompt: 'continue prior handle' },
-      context,
-      undefined as never,
-      { requestId: 'req-prior-handle' } as never,
-    )
-    await ResumeAgentTool.call(
-      { agentId: priorAgentId, prompt: 'continue prior raw' },
-      context,
-      undefined as never,
-      { requestId: 'req-prior-raw' } as never,
-    )
-
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: priorAgentId,
-        prompt: 'continue prior handle',
-        sourceSessionId: priorSessionId,
-      }),
-    )
-    expect(resumeAgentBackground).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: priorAgentId,
-        prompt: 'continue prior raw',
-        sourceSessionId: priorSessionId,
-      }),
-    )
-  })
-
-  test('resumes prior-session handles through the real resume scheduler', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    const priorAgentId = createAgentId()
-    switchSession(freshSessionId, tempDir)
-    sessionId = freshSessionId
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior target',
-      activeWorkers: {},
-      knownWorkers: {
-        [priorAgentId]: {
-          agentId: priorAgentId,
-          role: 'explorer',
-          description: 'Prior durable worker',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writeAgentTranscript(priorAgentId, priorSessionId, tempDir)
-    writePriorAgentMetadata(
-      tempDir,
-      priorSessionId,
-      priorAgentId,
-      'Prior metadata worker',
-    )
-    const runAsyncAgentLifecycle = spyOn(
-      agentToolUtils,
-      'runAsyncAgentLifecycle',
-    ).mockImplementation(mock(async () => {}) as never)
-    const { context, getState } = createToolUseContext()
-
-    const result = await ResumeAgentTool.call(
-      { agentId: 'explore-prior', prompt: 'continue prior real' },
-      context,
-      undefined as never,
-      { requestId: 'req-prior-real' } as never,
-    )
-
-    expect(result.data).toEqual({
-      success: true,
-      message: 'Resumed "Prior metadata worker" in the background.',
-    })
-    expect(getState().tasks[priorAgentId]).toMatchObject({
-      status: 'running',
-      prompt: 'continue prior real',
-      description: 'Prior metadata worker',
-    })
-    expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)
   })
 
   test('returns not found for unresolved targets', async () => {

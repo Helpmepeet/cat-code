@@ -1,7 +1,15 @@
-# P4-32 — Orchestrator chrome belongs to the ordinary session
+# P4-32 — superseded Orchestrator chrome decision
 
-**Status: PROPOSED — operator ruling required. No implementation is authorized by this
-document.**
+**Status: SUPERSEDED 2026-09-07.** Agent Mode and its Orchestrator chrome are
+retired. This historical proposal is not an active implementation contract.
+
+**Retirement amendment 2026-09-07.** The generic worker surfaces that remain are
+the worker roster and inspection, Tasks Workers tab, permission identity, task
+stop/dismiss/background controls, transcript cards, and Codex lease joins. They
+consume the outbound-only live-worker snapshot; the mode badge, toggle, and
+Orchestrator-specific state are removed. The desktop inbound Agent Mode verb is
+removed and rejected by the sidecar vocabulary. Locked transport, N-process,
+raw-event, die-with-window, and two-id decisions are unchanged.
 
 This proposal is the Phase-1 deliverable for P4-32. It re-audits the complete 903-line
 prototype, current app/engine source, D2, and the UI-drift review after the invented

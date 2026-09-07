@@ -1,27 +1,9 @@
-import { recipientNameKey } from '../utils/recipientIdentity.js'
-
-const CODING_WORKER_NAMES = [
-  'Turing', 'Hopper', 'Curie', 'Galileo', 'Kepler', 'Lovelace', 'Ramanujan',
-  'Darwin', 'Faraday', 'Pasteur', 'Tesla', 'Euclid', 'Archimedes', 'Euler',
-  'Gauss', 'Feynman', 'Bohr', 'Sagan', 'Franklin', 'Bell',
-]
-
-const VERIFIER_NAMES = [
-  'Noether', 'Heisenberg', 'Hypatia', 'Shannon', 'Hamming', 'Knuth',
-  'Tarski', 'Godel', 'Liskov', 'Lamport', 'BernersLee', 'Dijkstra',
-  'Torvalds', 'McCarthy', 'Babbage', 'Minsky', 'Khayyam', 'Poincare',
-]
+import { recipientNameKey } from './recipientIdentity.js'
 
 const GENERIC_WORKER_NAMES = [
   'Ada', 'Katherine', 'Johnson', 'Hamilton', 'Ritchie', 'Kay',
   'Wilkes', 'Goldstine', 'Backus', 'Engelbart', 'Cerf', 'Barton',
 ]
-
-const NAME_POOLS: Record<string, string[]> = {
-  'agent-mode-coding-worker': CODING_WORKER_NAMES,
-  implementor: CODING_WORKER_NAMES,
-  'agent-mode-verifier': VERIFIER_NAMES,
-}
 
 const activeNames = new Set<string>()
 const poolCursors = new Map<string[], number>()
@@ -97,15 +79,11 @@ export function tryReserveWorkerName(name: string): boolean {
  * candidate, since another caller could claim it first.
  */
 export function selectWorkerNameCandidate(
-  agentType: string,
+  _agentType: string,
   reservedNames: Iterable<string> = [],
-  options: { allowGeneric?: boolean } = {},
+  _options: { allowGeneric?: boolean } = {},
 ): string | null {
-  const pool = NAME_POOLS[agentType] ?? (
-    options.allowGeneric ? GENERIC_WORKER_NAMES : null
-  )
-  if (!pool) return null
-  return pickNext(pool, reservedNames)
+  return pickNext(GENERIC_WORKER_NAMES, reservedNames)
 }
 
 export function allocateWorkerName(

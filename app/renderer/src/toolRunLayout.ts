@@ -8,9 +8,9 @@
  * `ReadGroupRow`s and a run of searches as ONE `GrepCard` over a list of
  * pattern rows, both dispatched by `GroupedToolGroup` on `groupKind`
  * (`~/catcode_prototype/cat-app/Messages.jsx:580-610`, `:672-698`, `:1057-1091`).
- * D2 ruled the `grouped` MESSAGE TYPE cut while the grouping survives "as a
- * projector/selector-level grouping over correlated tool rows, zero new frame
- * types" (`decisions/AGENT-CHROME.md:75`). So this is a derivation over
+ * The grouped message type was cut while grouping survives as a
+ * projector/selector-level grouping over correlated tool rows, with zero new
+ * frame types. So this is a derivation over
  * already-projected rows, never a frame, a row mutation, or a new message kind —
  * the same C3 rule `groupAgentDelegates` and `groupReasoningRuns` already follow.
  *

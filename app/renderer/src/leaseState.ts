@@ -1,6 +1,6 @@
 /**
- * Codex lease state (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7,
- * ruled 2026-07-30 §10): the renderer half of the read-only `lease.snapshot`
+ * Codex lease state (P4-32b, L1, ruled 2026-07-30): the renderer half of the
+ * read-only `lease.snapshot`
  * seam. Per-session snapshots plus read-time selectors; nothing is stored derived
  * and nothing is ever renderer-authored (there is no lease verb).
  *
@@ -11,7 +11,7 @@
 import type {
   AccountsSnapshot,
   AccountStatus,
-  AgentModeWorkerItem,
+  LiveWorkerItem,
   LeaseOwnerRow,
   LeaseSelectionKind,
   LeaseSnapshot,
@@ -26,7 +26,7 @@ import {
   selectLastAccountsSnapshot,
   type AccountsState,
 } from './accountsState.js'
-import { selectWorkerDisplayName } from './orchestratorState.js'
+import { selectWorkerDisplayName } from './workersState.js'
 
 export type LeaseStateStore = {
   bySession: Record<SessionId, LeaseSnapshot | undefined>
@@ -81,7 +81,7 @@ export function selectLeaseSnapshot(
 
 /**
  * The lease held by one owner, or null. `ownerId` is the subagent's `agentId`
- * (the roster's `AgentModeWorkerItem.agentId`) or `'main-thread'`; see the
+ * (the roster's `LiveWorkerItem.agentId`) or `'main-thread'`; see the
  * protocol JOIN KEY note. Null is the ordinary case for an Anthropic-path
  * session or a worker that has not made a Codex request yet.
  */
@@ -409,7 +409,7 @@ function leaseGroupLabel(owner: LeaseOwnerRow): string {
 
 function toLeaseAgentRow(
   owner: LeaseOwnerRow,
-  workersById: ReadonlyMap<string, AgentModeWorkerItem>,
+  workersById: ReadonlyMap<string, LiveWorkerItem>,
   nowMs: number,
 ): LeaseAgentRow {
   const isMain = owner.ownerType === 'main'
@@ -444,7 +444,7 @@ function toLeaseAgentRow(
  */
 export function selectLeaseGroups(
   snapshot: LeaseSnapshot | null,
-  workers: readonly AgentModeWorkerItem[],
+  workers: readonly LiveWorkerItem[],
   nowMs: number,
 ): LeaseAccountGroup[] {
   if (!snapshot) return []

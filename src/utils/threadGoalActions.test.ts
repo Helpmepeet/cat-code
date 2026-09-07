@@ -26,7 +26,7 @@ import {
 // No module mocking here on purpose. `withSession` points the session at a
 // temp project dir, so the real `updateSessionObjective` runs against it.
 // Stubbing it would have been a second file in this suite mocking
-// `agent-mode/sessionState.js`, and `mock.module` is process-global: the last
+// `utils/workerState.js`, and `mock.module` is process-global: the last
 // registration in a run wins and silently disarms the others.
 //
 // These tests therefore assert the goal state each action owns, NOT the Agent

@@ -96,7 +96,6 @@ import {
 } from '../shared/limits.js'
 import {
   ACCOUNT_VERB_TYPES,
-  AGENT_MODE_VERB_TYPES,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
   PROMPT_FORCE_VERB_TYPES,
@@ -151,12 +150,11 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
-import type { SidecarAgentModeDomain } from './agentModeDomain.js'
+import type { SidecarWorkersDomain } from './workersDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
 import type {
   SidecarTaskControlDomain,
-  TaskDismissResult,
 } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
@@ -322,14 +320,13 @@ export type SidecarServerOptions = {
    */
   tasks?: SidecarTasksDomain
   /**
-   * Agent-mode / Orchestrator read-seam (P4-8). When present, an
-   * `agent-mode.snapshot` frame is emitted on attach and re-broadcast on store
-   * change; when absent, no orchestrator frame is emitted.
+   * Live worker read-seam. When present, a `workers.snapshot` frame is emitted
+   * on attach and re-broadcast on task changes.
    */
-  agentMode?: SidecarAgentModeDomain
+  workers?: SidecarWorkersDomain
   /**
    * Codex lease read-seam (P4-32b, L1). When present, a `lease.snapshot` frame is
-   * emitted on attach and re-broadcast on the same store change as agent-mode;
+   * emitted on attach and re-broadcast on the same store change as workers;
    * when absent, no lease frame is emitted. Outbound only, no lease verb.
    */
   leases?: SidecarLeaseDomain
@@ -337,7 +334,7 @@ export type SidecarServerOptions = {
    * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb. When
    * present, a `task.stop` verb dispatches the engine's own `stopTask`; when
    * absent, the verb fails closed (`internal_error`). Read-only, no snapshot of its
-   * own — the kill's store mutation drives the `tasks`/`agent-mode` re-broadcasts.
+   * own — the kill's store mutation drives the `tasks`/`workers` re-broadcasts.
    */
   taskControl?: SidecarTaskControlDomain
   /**
@@ -527,7 +524,7 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
-  private readonly agentMode: SidecarAgentModeDomain | null
+  private readonly workers: SidecarWorkersDomain | null
   private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
   private readonly panelTaskReaper: SidecarPanelTaskReaper | null
@@ -596,7 +593,7 @@ export class SidecarServer {
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
-  private unsubscribeAgentModeSnapshot: (() => void) | null = null
+  private unsubscribeWorkersSnapshot: (() => void) | null = null
   private unsubscribeLeaseSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
@@ -759,10 +756,6 @@ export class SidecarServer {
   private inFlightDurableWrites = 0
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
-  /** Latest agent snapshot publication requested for each attached connection. */
-  private agentModeSnapshotGeneration = 0
-  private readonly agentModeSnapshotGenerationByConnection =
-    new WeakMap<Connection, number>()
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -776,7 +769,7 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
-    this.agentMode = options.agentMode ?? null
+    this.workers = options.workers ?? null
     this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
     this.panelTaskReaper = options.panelTaskReaper ?? null
@@ -937,9 +930,9 @@ export class SidecarServer {
         this.broadcastTasksSnapshot()
       })
     }
-    if (this.agentMode) {
-      this.unsubscribeAgentModeSnapshot = this.agentMode.subscribe(() => {
-        void this.broadcastAgentModeSnapshot()
+    if (this.workers) {
+      this.unsubscribeWorkersSnapshot = this.workers.subscribe(() => {
+        void this.broadcastWorkersSnapshot()
       })
     }
     // P4-32b — the lease seam fans its own subscription out over the app-state
@@ -1074,11 +1067,9 @@ export class SidecarServer {
     // snapshots and before replay; no new inbound vocabulary or renderer-
     // authored task state.
     this.sendTasksSnapshot(connection)
-    // P4-8 — read-only orchestrator worker snapshot (persisted agent-mode state ∪
-    // live local_agent workers), alongside the P4-9 tasks snapshot. Async + best-
-    // effort (a non-agent-mode session degrades to an empty roster); fire-and-forget
-    // since a read-only snapshot has no ordering dependency on history replay.
-    void this.sendAgentModeSnapshot(connection)
+    // Live worker snapshot, alongside the P4-9 tasks snapshot. It is read-only
+    // and has no ordering dependency on history replay.
+    this.sendWorkersSnapshot(connection)
     // P4-32b — read-only Codex lease snapshot (which account each agent in this
     // session's swarm is leasing), right after the worker roster it joins to.
     // Outbound only: there is no lease verb and no new inbound vocabulary.
@@ -1329,8 +1320,8 @@ export class SidecarServer {
     this.unsubscribeMemorySnapshot = null
     this.unsubscribeTasksSnapshot?.()
     this.unsubscribeTasksSnapshot = null
-    this.unsubscribeAgentModeSnapshot?.()
-    this.unsubscribeAgentModeSnapshot = null
+    this.unsubscribeWorkersSnapshot?.()
+    this.unsubscribeWorkersSnapshot = null
     this.unsubscribeLeaseSnapshot?.()
     this.unsubscribeLeaseSnapshot = null
     this.unsubscribeRunControlsSnapshot?.()
@@ -1461,12 +1452,6 @@ export class SidecarServer {
         WORKSPACE_TRUST_VERB_TYPES,
         (server, connection, message) =>
           server.handleWorkspaceTrustVerb(connection, message),
-      ],
-      // P4-8b agent-mode set verb, dispatched to the engine's OWN
-      // `matchSessionMode` (a live env switch, no respawn).
-      [
-        AGENT_MODE_VERB_TYPES,
-        (server, connection, message) => server.handleAgentModeSet(connection, message),
       ],
       // P4-8b task-control verbs, dispatched to the engine's own stop, dismiss,
       // or background machinery.
@@ -2821,7 +2806,7 @@ export class SidecarServer {
    *   3. no running/pending task, read from the SAME tasks domain the server
    *      already holds. `hasLiveWork()` reads the RAW task store, FOREGROUND-
    *      inclusive — NOT the display snapshot, which filters out a foregrounded
-   *      local_agent (parking over a running foregrounded agent-mode worker would
+   *      local_agent (parking over a running foregrounded worker would
    *      kill a live turn — a no-turn-loss breach). Covers background + foreground
    *      workers alike. Do not re-derive.
    *
@@ -3118,46 +3103,12 @@ export class SidecarServer {
   }
 
   /**
-   * P4-8b — the agent-mode set verb (protocol.ts: AGENT_MODE_VERB_TYPES;
-   * `decisions/AGENT-MODE-TOGGLE.md`). Same fail-closed order as
-   * `handleWorkspaceTrustVerb`: sidecar-LOCAL structural schema → domain presence
-   * → dispatch to the domain (which switches mode through the engine's OWN
-   * `matchSessionMode` — a live env switch, no respawn) → `agent-mode.set.result`
-   * frame → re-broadcast the `agent-mode.snapshot` when the mode changed. The
-   * renderer authors only the boolean intent; no path, no token crosses.
-   */
-  private handleAgentModeSet(connection: Connection, rawMessage: unknown): void {
-    const parsed = this.parseVerbMessage(connection, rawMessage, agentModeSetMessageSchema, 'invalid agent-mode verb')
-    if (!parsed) {
-      return
-    }
-    const agentMode = this.requireDomain(connection, parsed.requestId, this.agentMode, 'agent-mode')
-    if (!agentMode) return
-
-    const result = agentMode.setActive(parsed.active)
-    this.send(connection, {
-      kind: 'agent-mode.set.result',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      requestId: parsed.requestId,
-      ok: result.ok,
-      message: result.message,
-    })
-    // The snapshot broadcast is async (the session plane is a file-backed engine
-    // read); fire-and-forget after the synchronous result ack, mirroring the
-    // subscribe-driven re-broadcast path.
-    if (result.changed) {
-      void this.broadcastAgentModeSnapshot()
-    }
-  }
-
-  /**
    * P4-8b — the task-control STOP verb (protocol.ts: TASK_CONTROL_VERB_TYPES;
-   * `decisions/AGENT-CHROME.md` §2 / PARITY-LEDGER §20 "WorkerDetail Stop"). Same
+   * PARITY-LEDGER §20 "WorkerDetail Stop"). Same
    * fail-closed order as the other verbs: sidecar-LOCAL structural schema → domain
    * presence → dispatch to the domain (which runs the engine's OWN `stopTask`
    * against THIS session's store — a live kill, no respawn) → `task-control.result`
-   * frame. The `tasks.snapshot` / `agent-mode.snapshot` re-broadcast is NOT emitted
+   * frame. The `tasks.snapshot` / `workers.snapshot` re-broadcast is NOT emitted
    * here: `stopTask` mutates the app-state store, whose subscription (constructor)
    * re-broadcasts the fresh snapshots to every connection — the SAME live path any
    * engine-side kill takes, not an action-driven synthetic one. Async because
@@ -3187,7 +3138,7 @@ export class SidecarServer {
         : verb.type === 'task.background.one'
           ? await taskControl.backgroundOne(verb.toolUseId)
           : verb.type === 'task.dismiss'
-            ? await this.dismissWorker(verb.taskId)
+              ? await taskControl.dismiss(verb.taskId)
             : await taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
@@ -3199,44 +3150,8 @@ export class SidecarServer {
       message: result.message,
     })
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
-    // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
-    // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
-    // A dismiss needs one more step, which `dismissWorker` owns.
-  }
-
-  /**
-   * The two-plane half of a dismiss (CC-32 follow-up). `taskControl` can only see
-   * the LIVE `AppState.tasks`, but a worker's roster row has a second source: the
-   * persisted agent-mode plane, which `agentModeSnapshot` unions in whenever no
-   * live worker MASKS it by handle (`agentModeDomain.ts` union policy). Retiring
-   * the row therefore takes both planes, and only this layer sees both.
-   *
-   * `not_found` is consequently NOT a failed dismiss. It means nothing live holds
-   * the row, which leaves the persisted twin as the only thing still rendering it
-   * — exactly what the suppression below retires. Treating it as a refusal made
-   * the control dead on the commonest shape there is: `readSessionState` stamps
-   * `origin: worker.origin ?? 'current'` (`src/agent-mode/sessionState.ts:672`), so
-   * every worker the reaper has already evicted comes back as a persisted row that
-   * looks current, offers Dismiss, and refused it. `still_running` and
-   * `unsupported_type` stay refusals: there the engine holds real state, and
-   * hiding a row it still owns would be a display lie.
-   *
-   * The explicit re-broadcast is required rather than redundant: on this path no
-   * store mutation happens at all, so no subscription fires and nothing else would
-   * carry the suppression to the renderer.
-   */
-  private async dismissWorker(taskId: string): Promise<TaskDismissResult> {
-    if (!this.taskControl) {
-      return { ok: false, message: 'Could not dismiss the worker.' }
-    }
-    const result = await this.taskControl.dismiss(taskId)
-    const retiresRow = result.ok || result.refusal === 'not_found'
-    if (!retiresRow || !this.agentMode) {
-      return result
-    }
-    this.agentMode.noteWorkerDismissed(taskId)
-    void this.broadcastAgentModeSnapshot()
-    return result.ok ? result : { ok: true, message: 'Dismissed worker.' }
+    // Mutations to the live task store drive the tasks/workers subscriptions in
+    // the constructor, so no action-driven snapshot is synthesized here.
   }
 
   /**
@@ -3875,7 +3790,7 @@ export class SidecarServer {
     // The requestId is read BEFORE schema validation so a rejected answer still
     // correlates back to its request — without it the renderer cannot clear its
     // in-flight guard and an honest over-long answer strands the pending
-    // request forever. Same shape as handleAgentModeSet / handleRunControlVerb.
+    // request forever. Same shape as the other request handlers.
     const raw = rawMessage as { requestId?: unknown }
     const requestId =
       typeof raw.requestId === 'string' ? raw.requestId : undefined
@@ -4280,82 +4195,24 @@ export class SidecarServer {
   }
 
   /**
-   * P4-8 — read-only orchestrator worker snapshot (D2 `decisions/AGENT-CHROME.md`).
-   * Async because the session plane is a file-backed engine read
-   * (`readSessionState`); the shared send path still applies
-   * clone/JSON checks, secretGuard, and size caps.
+   * Live worker snapshot over the engine's current task store. The shared send
+   * path applies clone/JSON checks, secretGuard, and the outbound size cap.
    */
-  private async sendAgentModeSnapshot(connection: Connection): Promise<void> {
-    if (!this.agentMode) {
-      return
-    }
-    const generation = ++this.agentModeSnapshotGeneration
-    this.agentModeSnapshotGenerationByConnection.set(connection, generation)
-    try {
-      const raw = await this.agentMode.getSnapshot()
-      if (
-        this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
-      ) {
-        return
-      }
-      this.sendAgentModeSnapshotPayload(connection, raw)
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-mode.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
-  }
-
-  private sendAgentModeSnapshotPayload(
-    connection: Connection,
-    raw: Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>,
-  ): void {
-    const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
-    if (!snapshot) {
-      return
-    }
-    this.send(connection, {
-      kind: 'agent-mode.snapshot',
+  private sendWorkersSnapshot(connection: Connection): void {
+    this.sendDomainSnapshot(connection, this.workers, 'workers.snapshot', workers => ({
+      kind: 'workers.snapshot',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      agentMode: snapshot,
-    })
+      workers,
+    }))
   }
 
-  private async broadcastAgentModeSnapshot(): Promise<void> {
-    if (!this.agentMode || this.connections.size === 0) {
-      return
-    }
-    const generation = ++this.agentModeSnapshotGeneration
-    const connections = [...this.connections]
-    for (const connection of connections) {
-      this.agentModeSnapshotGenerationByConnection.set(connection, generation)
-    }
-    try {
-      const raw = await this.agentMode.getSnapshot()
-      for (const connection of connections) {
-        if (
-          !this.connections.has(connection) ||
-          this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
-        ) {
-          continue
-        }
-        this.sendAgentModeSnapshotPayload(connection, raw)
-      }
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-mode.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+  private broadcastWorkersSnapshot(): void {
+    this.broadcastToConnections(connection => this.sendWorkersSnapshot(connection))
   }
 
   /**
-   * P4-32b — read-only Codex lease snapshot (L1,
-   * `decisions/ORCHESTRATOR-IN-SESSION.md` §7). Sync: the lease map and the pool
+   * P4-32b — read-only Codex lease snapshot (L1). Sync: the lease map and the pool
    * are in-memory engine singletons. The shared `send` path applies clone/JSON
    * checks, the outbound secret guard and the size cap; the whole read is wrapped
    * so a failure can never strand the attaching connection.
@@ -5856,9 +5713,6 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
-    // P4-8b agent-mode set verb (app-owned; see AGENT_MODE_VERB_TYPES). The
-    // renderer authors ONLY the boolean intent — any other key is rejected.
-    ['agent-mode.set', new Set(['type', 'requestId', 'active'])],
     // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the target taskId — any other key is rejected.
     ['task.stop', new Set(['type', 'requestId', 'taskId'])],
@@ -6291,19 +6145,6 @@ const CONTEXT_BREAKDOWN_MIN_INTERVAL_MS = 15_000
 const contextBreakdownMessageSchema = z.object({
   type: z.literal('context-breakdown.request'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-})
-
-/**
- * P4-8b — sidecar-LOCAL schema for the agent-mode set verb (protocol.ts:
- * AGENT_MODE_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
- * Structural only: shape + a bounded `requestId` + a strict boolean `active`.
- * A non-boolean `active` is rejected here fail-closed before the domain switches
- * mode; the renderer never authors anything but the boolean intent.
- */
-const agentModeSetMessageSchema = z.object({
-  type: z.literal('agent-mode.set'),
-  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  active: z.boolean(),
 })
 
 /**

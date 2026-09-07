@@ -18,6 +18,11 @@ import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/Synthet
 import { TASK_STOP_TOOL_NAME } from '../tools/TaskStopTool/prompt.js'
 import { TEAM_CREATE_TOOL_NAME } from '../tools/TeamCreateTool/constants.js'
 import { TEAM_DELETE_TOOL_NAME } from '../tools/TeamDeleteTool/constants.js'
+import {
+  normalizeSessionMode,
+  type LegacySessionMode,
+  type SessionMode,
+} from '../types/logs.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 
 // Checks the same gate as isScratchpadEnabled() in
@@ -45,6 +50,10 @@ export function isCoordinatorMode(): boolean {
   return false
 }
 
+export function getCurrentSessionMode(): SessionMode {
+  return isCoordinatorMode() ? 'coordinator' : 'normal'
+}
+
 /**
  * Checks if the current coordinator mode matches the session's stored mode.
  * If mismatched, flips the environment variable so isCoordinatorMode() returns
@@ -52,32 +61,27 @@ export function isCoordinatorMode(): boolean {
  * the mode was switched, or undefined if no switch was needed.
  */
 export function matchSessionMode(
-  sessionMode: 'agent' | 'coordinator' | 'normal' | undefined,
+  sessionMode: LegacySessionMode | undefined,
 ): string | undefined {
-  // No stored mode (old session before mode tracking) — do nothing
-  if (!sessionMode) {
+  const normalizedMode = normalizeSessionMode(sessionMode)
+  if (!normalizedMode) return undefined
+
+  const currentMode = getCurrentSessionMode()
+  if (currentMode === normalizedMode) {
     return undefined
   }
 
-  const currentIsCoordinator = isCoordinatorMode()
-  const sessionIsCoordinator = sessionMode === 'coordinator'
-
-  if (currentIsCoordinator === sessionIsCoordinator) {
-    return undefined
-  }
-
-  // Flip the env var — isCoordinatorMode() reads it live, no caching
-  if (sessionIsCoordinator) {
+  if (normalizedMode === 'coordinator') {
     process.env.CLAUDE_CODE_COORDINATOR_MODE = '1'
   } else {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
   }
 
   logEvent('tengu_coordinator_mode_switched', {
-    to: sessionMode as unknown as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+    to: normalizedMode as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   })
 
-  return sessionIsCoordinator
+  return normalizedMode === 'coordinator'
     ? 'Entered coordinator mode to match resumed session.'
     : 'Exited coordinator mode to match resumed session.'
 }

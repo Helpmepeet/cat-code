@@ -52,8 +52,11 @@ import {
   type DeferredContinuationResultEntryV1,
   type Entry,
   type FileHistorySnapshotMessage,
+  type LegacySessionMode,
   type LogOption,
   type PersistedWorktreeSession,
+  normalizeSessionMode,
+  type SessionMode,
   type SerializedMessage,
   sortLogs,
   type SubagentSpawnedMessage,
@@ -1110,7 +1113,7 @@ class Project {
   currentSessionAgentColor: string | undefined
   currentSessionLastPrompt: string | undefined
   currentSessionAgentSetting: string | undefined
-  currentSessionMode: 'agent' | 'coordinator' | 'normal' | undefined
+  currentSessionMode: SessionMode | undefined
   // Tri-state: undefined = no goal metadata seen yet, null = cleared,
   // object = current goal state. reAppendSessionMetadata writes null so
   // resume preserves a cleared goal across compaction and exit.
@@ -3818,7 +3821,7 @@ export function restoreSessionMetadata(meta: {
   agentName?: string
   agentColor?: string
   agentSetting?: string
-  mode?: 'agent' | 'coordinator' | 'normal'
+  mode?: LegacySessionMode
   threadGoal?: ThreadGoal | null
   worktreeSession?: PersistedWorktreeSession | null
   prNumber?: number
@@ -3833,7 +3836,8 @@ export function restoreSessionMetadata(meta: {
   if (meta.agentName) project.currentSessionAgentName = meta.agentName
   if (meta.agentColor) project.currentSessionAgentColor = meta.agentColor
   if (meta.agentSetting) project.currentSessionAgentSetting = meta.agentSetting
-  if (meta.mode) project.currentSessionMode = meta.mode
+  const mode = normalizeSessionMode(meta.mode)
+  if (mode) project.currentSessionMode = mode
   if (meta.threadGoal !== undefined)
     project.currentSessionThreadGoal = meta.threadGoal
   if (meta.worktreeSession !== undefined)
@@ -3937,7 +3941,7 @@ export function cacheSessionTitle(customTitle: string): void {
  * first user message, and re-stamped by reAppendSessionMetadata on exit.
  * Cache-only here to avoid creating metadata-only session files at startup.
  */
-export function saveMode(mode: 'agent' | 'coordinator' | 'normal'): void {
+export function saveMode(mode: SessionMode): void {
   getProject().currentSessionMode = mode
 }
 
@@ -4072,7 +4076,7 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       agentName: sessionId ? agentNames.get(sessionId) : log.agentName,
       agentColor: sessionId ? agentColors.get(sessionId) : log.agentColor,
       agentSetting: sessionId ? agentSettings.get(sessionId) : log.agentSetting,
-      mode: sessionId ? (modes.get(sessionId) as LogOption['mode']) : log.mode,
+      mode: sessionId ? modes.get(sessionId) : normalizeSessionMode(log.mode),
       worktreeSession:
         sessionId && worktreeStates.has(sessionId)
           ? worktreeStates.get(sessionId)
@@ -4654,7 +4658,7 @@ export async function loadTranscriptFile(
   prNumbers: Map<UUID, number>
   prUrls: Map<UUID, string>
   prRepositories: Map<UUID, string>
-  modes: Map<UUID, string>
+  modes: Map<UUID, SessionMode>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
@@ -4680,7 +4684,7 @@ export async function loadTranscriptFile(
   const prNumbers = new Map<UUID, number>()
   const prUrls = new Map<UUID, string>()
   const prRepositories = new Map<UUID, string>()
-  const modes = new Map<UUID, string>()
+  const modes = new Map<UUID, SessionMode>()
   const threadGoals = new Map<UUID, ThreadGoal | null>()
   const worktreeStates = new Map<UUID, PersistedWorktreeSession | null>()
   const fileHistorySnapshots = new Map<UUID, FileHistorySnapshotMessage>()
@@ -4722,7 +4726,8 @@ export async function loadTranscriptFile(
     } else if (entry.type === 'agent-setting' && entry.sessionId) {
       setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
     } else if (entry.type === 'mode' && entry.sessionId) {
-      setLatestMapValue(modes, entry.sessionId, entry.mode)
+      const mode = normalizeSessionMode(entry.mode)
+      if (mode) setLatestMapValue(modes, entry.sessionId, mode)
     } else if (
       entry.type === 'thread-goal-updated' ||
       entry.type === 'thread-goal-cleared'
@@ -5157,7 +5162,7 @@ async function loadSessionFile(
   agentSettings: Map<UUID, string>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
-  modes: Map<UUID, string>
+  modes: Map<UUID, SessionMode>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
   contentReplacements: Map<UUID, ContentReplacementRecord[]>
@@ -5340,9 +5345,7 @@ export async function getLastSessionLog(
     messageCount: countVisibleMessages(transcript),
     leafUuid: lastMessage?.uuid,
     mode: messages.values().next().value?.type
-      ? (getLatestSessionScopedValue(modes) as
-          | LogOption['mode']
-          | undefined)
+      ? getLatestSessionScopedValue(modes)
       : undefined,
     worktreeSession: getLatestSessionScopedValue(worktreeStates),
     contextCollapseCommits: contextCollapseCommits.filter(
@@ -6151,7 +6154,7 @@ export async function loadAllLogsFromSessionFile(
       agentName: agentNames.get(sessionId),
       agentColor: agentColors.get(sessionId),
       agentSetting: agentSettings.get(sessionId),
-      mode: modes.get(sessionId) as LogOption['mode'],
+      mode: modes.get(sessionId),
       prNumber: prNumbers.get(sessionId),
       prUrl: prUrls.get(sessionId),
       prRepository: prRepositories.get(sessionId),

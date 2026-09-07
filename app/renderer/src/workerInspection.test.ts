@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 import { agentTranscriptStateWord, type AgentStateKey } from './agentIdentity.js'
 import {
   groupWorkersByRole,
@@ -9,19 +9,18 @@ import {
   workerRoleGroupLabel,
 } from './workerInspection.js'
 
-function worker(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+function worker(over: Partial<LiveWorkerItem> = {}): LiveWorkerItem {
   return {
     agentId: 'agent_a',
     handle: '@scout',
     role: 'coding-worker',
     status: 'running',
     description: 'audit the auth path',
-    origin: 'current',
     ...over,
   }
 }
 
-test('known orchestrator roles lead, unknown roles keep their first-seen order', () => {
+test('known roles lead, unknown roles keep their first-seen order', () => {
   const groups = groupWorkersByRole([
     worker({ agentId: '1', role: 'Explore' }),
     worker({ agentId: '2', role: 'verification' }),
@@ -39,7 +38,7 @@ test('known orchestrator roles lead, unknown roles keep their first-seen order',
 })
 
 test('an unknown role is grouped and labelled, never dropped', () => {
-  // A non-orchestrator session's workers carry arbitrary real agent types; losing
+  // A non-coordinator session's workers carry arbitrary real agent types; losing
   // one would make the roster silently under-report the swarm.
   const groups = groupWorkersByRole([worker({ role: 'my-custom-agent' })])
   expect(groups).toHaveLength(1)
@@ -64,16 +63,14 @@ test('an empty roster produces no groups', () => {
   expect(groupWorkersByRole([])).toEqual([])
 })
 
-test('stop targets a RUNNING current-session worker only, by its agentId', () => {
+test('stop targets a RUNNING worker only, by its agentId', () => {
   expect(selectWorkerStopTargetId(worker())).toBe('agent_a')
   expect(selectWorkerStopTargetId(worker({ status: 'completed' }))).toBeNull()
   expect(selectWorkerStopTargetId(worker({ status: 'failed' }))).toBeNull()
   expect(selectWorkerStopTargetId(worker({ status: 'killed' }))).toBeNull()
-  // A worker marked prior has no live task in this process.
-  expect(selectWorkerStopTargetId(worker({ origin: 'prior' }))).toBeNull()
 })
 
-test('CC-32 — dismiss is the exact complement of stop: FINISHED current-session workers only, same id', () => {
+test('CC-32 — dismiss is the exact complement of stop: FINISHED workers only, same id', () => {
   // The shape the verb exists for: a finished worker with a blocked handoff, which
   // the engine stamps with no eviction deadline and therefore never retires.
   expect(
@@ -85,8 +82,6 @@ test('CC-32 — dismiss is the exact complement of stop: FINISHED current-sessio
   expect(selectWorkerDismissTargetId(worker({ status: 'killed' }))).toBe('agent_a')
   // Still running is task.stop's job, not this one.
   expect(selectWorkerDismissTargetId(worker())).toBeNull()
-  // A prior-session worker has no live task to dismiss in this process.
-  expect(selectWorkerDismissTargetId(worker({ origin: 'prior' }))).toBeNull()
 })
 
 test('CC-32 — stop and dismiss are never both offered for the same worker', () => {
@@ -106,17 +101,17 @@ test('a blocked worker is still stoppable (it is running, waiting on a handoff)'
   ).toBe('agent_a')
 })
 
-test('Q2 result: a verdict wins, then an output summary, else nothing', () => {
+test('Q2 result: verdict and summary stay separate display fields', () => {
   expect(selectWorkerResult(worker({ verdict: 'PASS' }))).toEqual({
-    label: 'Verdict',
-    text: 'PASS',
+    summary: null,
+    verdict: 'PASS',
   })
   expect(
-    selectWorkerResult(worker({ verdict: 'FAIL', outputSummary: 'two tests red' })),
-  ).toEqual({ label: 'Verdict', text: 'FAIL: two tests red' })
-  expect(selectWorkerResult(worker({ outputSummary: 'wrote the adapter' }))).toEqual({
-    label: 'Result',
-    text: 'wrote the adapter',
+    selectWorkerResult(worker({ verdict: 'FAIL', resultSummary: 'two tests red' })),
+  ).toEqual({ summary: 'two tests red', verdict: 'FAIL' })
+  expect(selectWorkerResult(worker({ resultSummary: 'wrote the adapter' }))).toEqual({
+    summary: 'wrote the adapter',
+    verdict: null,
   })
   // No engine-backed conclusion means no section, never a placeholder.
   expect(selectWorkerResult(worker())).toBeNull()

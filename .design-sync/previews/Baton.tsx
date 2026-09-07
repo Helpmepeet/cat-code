@@ -11,18 +11,18 @@ function Frame({ children }: { children: React.ReactNode }) {
 
 /**
  * Who owns the next action. Lifecycle and ownership are separate axes, so a blocked worker
- * is neutral while an orchestrator can pick it up, and amber only when nobody else can.
+ * is neutral while the assistant can pick it up.
  */
 export function Owners() {
   return (
     <Frame>
       <span className="inline-flex items-center gap-2">
-        <Baton owner="orchestrator" />
+        <Baton owner="assistant" />
         <span className="font-mono text-[11px] text-text-subtle">the assistant will handle it</span>
       </span>
       <span className="inline-flex items-center gap-2">
-        <Baton owner="user" />
-        <span className="font-mono text-[11px] text-text-subtle">only you can unblock it</span>
+        <Baton owner="assistant" />
+        <span className="font-mono text-[11px] text-text-subtle">the assistant will handle it</span>
       </span>
     </Frame>
   )
@@ -50,7 +50,7 @@ export function OnARow() {
         <span className="flex-1 truncate text-[11.5px] text-text-subtle">
           Blocked on a missing credential
         </span>
-        <Baton owner="user" />
+        <Baton owner="assistant" />
       </div>
     </div>
   )

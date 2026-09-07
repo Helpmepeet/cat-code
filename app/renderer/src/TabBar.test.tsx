@@ -173,12 +173,10 @@ test('no session-actions ⋯ renders when the TabBar is not wired for it', () =>
   expect(html).not.toContain('Session actions for')
 })
 
-test('no tab carries Orchestrator-mode chrome', () => {
-  // The mode switch was removed from the tab: a tab names a session, and the
-  // mode belongs to the surfaces that own it (the empty-state reflect and the
-  // footer strip), not to every tab in the bar.
+test('no tab carries worker chrome', () => {
+  // A tab names a session. Worker surfaces belong to the session body, not to
+  // every tab in the bar.
   const html = render([tab('a'), tab('b')], 'a')
-  expect(html).not.toContain('Orchestrator')
   expect(html).not.toContain('aria-pressed=')
 })
 

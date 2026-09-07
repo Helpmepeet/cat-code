@@ -135,7 +135,7 @@ describe('session storage', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('last session log restores saved mode', async () => {
+  test('last session log normalizes legacy `agent` mode', async () => {
     const messageUuid = randomUUID()
     const timestamp = '2026-06-18T00:00:00.000Z'
     const transcript = [
@@ -163,8 +163,39 @@ describe('session storage', () => {
     await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
 
     await expect(getLastSessionLog(sessionId as UUID)).resolves.toMatchObject({
-      mode: 'agent',
+      mode: 'normal',
       firstPrompt: 'resume me',
+    })
+    expect(readFileSync(getTranscriptPathForSession(sessionId), 'utf8')).toContain(
+      '"mode":"agent"',
+    )
+  })
+
+  test('last session log preserves coordinator mode', async () => {
+    const messageUuid = randomUUID()
+    const timestamp = '2026-06-18T00:00:00.000Z'
+    const transcript = [
+      { type: 'mode', sessionId, mode: 'coordinator' },
+      {
+        type: 'user',
+        uuid: messageUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp,
+        message: { role: 'user', content: 'resume coordinator' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+
+    await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
+
+    await expect(getLastSessionLog(sessionId as UUID)).resolves.toMatchObject({
+      mode: 'coordinator',
     })
   })
 
@@ -625,7 +656,7 @@ describe('session storage', () => {
       customTitle: 'title after login',
       tag: 'after-login',
       agentSetting: 'plan',
-      mode: 'agent',
+      mode: 'normal',
     })
     expect(log?.contentReplacements).toEqual([
       { kind: 'tool-result', toolUseId: 'before', replacement: 'old stub' },

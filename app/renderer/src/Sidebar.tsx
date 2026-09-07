@@ -253,8 +253,8 @@ type NavItem = {
 }
 
 // The design source's destination list (Chat/Sessions/Goals/Accounts/Settings).
-// Orchestrator is a per-session chat mode, not a nav destination, so it has no
-// rail entry (the standalone Orchestrator page was removed 2026-07-14).
+// Worker surfaces are per-session chat affordances, not nav destinations, so
+// they have no rail entry.
 const NAV: NavItem[] = [
   { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },

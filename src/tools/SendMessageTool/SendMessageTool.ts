@@ -290,7 +290,7 @@ async function routeToTeammate(
 }
 
 /**
- * Resolves a target against running/resumable local subagents (registered
+ * Resolves a target against running or previously recorded local subagents (registered
  * alias, durable worker handle, or raw agent ID) — used both for explicit
  * `@name` targets (which never consult the team roster) and as the fallback
  * for a bare name with no active-teammate match. Returns `null` when there is
@@ -885,7 +885,7 @@ async function handlePlanDecision(
 export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
   buildTool({
     name: SEND_MESSAGE_TOOL_NAME,
-    searchHint: 'send messages to subagents, Agent Mode workers, or agent teammates',
+    searchHint: 'send messages to subagents or agent teammates',
     maxResultSizeChars: 100_000,
 
     userFacingName() {
@@ -1293,7 +1293,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No running subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
+            message: `No running subagent found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
           },
         }
       }
@@ -1305,7 +1305,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No running subagent, Agent Mode worker, or active teammate found for "${input.to}".`,
+            message: `No running subagent or active teammate found for "${input.to}".`,
           },
         }
       }

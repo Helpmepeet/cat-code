@@ -4,7 +4,7 @@ import {
   agentStateMeta,
   agentTypeMeta,
   deriveAgentDisplayVocabulary,
-  deriveAgentModeWorkerState,
+  deriveWorkerState,
   deriveAgentState,
   deriveAgentToolState,
   deriveTaskAgentState,
@@ -40,10 +40,9 @@ test('maps known real agent types and leaves fixture-only or future types neutra
     label: 'Explore',
     color: '#7dd3fc',
   })
-  expect(agentTypeMeta('agent-mode-coding-worker')).toMatchObject({
+  expect(agentTypeMeta('coding-worker')).toMatchObject({
     label: 'Coding worker',
     color: '#a78bfa',
-    compressedFrom: 'agent-mode-coding-worker',
   })
   expect(agentTypeMeta('Plan')).toMatchObject({
     label: 'Plan',
@@ -81,13 +80,13 @@ test('resolves identity from real worker, local-agent task, teammate, and Agent 
     resolveAgentIdentity({
       agentId: 'agent-123',
       handle: '@Ada',
-      role: 'agent-mode-coding-worker',
+      role: 'coding-worker',
       description: 'Patch renderer state',
     }),
   ).toEqual({
     hasName: true,
     name: 'Ada',
-    type: 'agent-mode-coding-worker',
+    type: 'coding-worker',
     description: 'Patch renderer state',
     id: 'agent-123',
   })
@@ -153,63 +152,47 @@ test('identity offers no at-signed form of a name, whatever the wire sent', () =
   }
 })
 
-test('compresses durable Agent Mode worker sessions using workerUxSummary semantics', () => {
+test('compresses live worker sessions from status, handoff and backgrounding alone', () => {
   const base = {
     agentId: 'agent-a',
     handle: 'Ada',
-    role: 'agent-mode-coding-worker',
+    role: 'coding-worker',
     description: 'Patch renderer state',
-    worktreePath: null,
   }
 
-  expect(deriveAgentModeWorkerState({ ...base, status: 'running' })).toBe('running')
+  expect(deriveWorkerState({ ...base, status: 'running' })).toBe('running')
+  // A blocked handoff outranks every other input: the worker is parked waiting
+  // on its parent loop, whatever its own run status says.
   expect(
-    deriveAgentModeWorkerState({
+    deriveWorkerState({
       ...base,
-      status: 'completed',
-      synthesisStatus: 'pending',
+      status: 'running',
+      handoffStatus: 'blocked',
     }),
-  ).toBe('result-ready')
+  ).toBe('waiting')
   expect(
-    deriveAgentModeWorkerState({
+    deriveWorkerState({
       ...base,
       status: 'completed',
-      synthesisStatus: 'synthesized',
+      handoffStatus: 'blocked',
     }),
-  ).toBe('reviewed')
+  ).toBe('waiting')
   expect(
-    deriveAgentModeWorkerState({
+    deriveWorkerState({
       ...base,
-      status: 'completed',
-      origin: 'prior',
-      resumable: true,
+      status: 'running',
+      isBackgrounded: true,
     }),
-  ).toBe('resumable')
+  ).toBe('background')
   expect(
-    deriveAgentModeWorkerState({
+    deriveWorkerState({
       ...base,
       status: 'completed',
-      origin: 'prior',
-      resumable: false,
-    }),
-  ).toBe('stale')
-  expect(
-    deriveAgentModeWorkerState({
-      ...base,
-      status: 'completed',
-      origin: 'prior',
+      handoffStatus: 'done',
     }),
   ).toBe('completed')
-  expect(
-    deriveAgentModeWorkerState({
-      ...base,
-      status: 'completed',
-      origin: 'prior',
-      synthesisStatus: 'pending',
-    }),
-  ).toBe('result-ready')
-  expect(deriveAgentModeWorkerState({ ...base, status: 'failed' })).toBe('failed')
-  expect(deriveAgentModeWorkerState({ ...base, status: 'killed' })).toBe('stopped')
+  expect(deriveWorkerState({ ...base, status: 'failed' })).toBe('failed')
+  expect(deriveWorkerState({ ...base, status: 'killed' })).toBe('stopped')
 })
 
 test('maps a blocked local_agent task to waiting-on-the-assistant, never to needs-you', () => {
@@ -425,17 +408,16 @@ test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {
   const display = deriveAgentDisplayVocabulary({
     agentId: 'agent-a',
     handle: 'Ada',
-    role: 'agent-mode-coding-worker',
+    role: 'coding-worker',
     description: 'Patch renderer state',
     status: 'completed',
-    synthesisStatus: 'pending',
-    worktreePath: null,
+    handoffStatus: 'done',
   })
 
   expect(display).toMatchObject({
     identity: {
       name: 'Ada',
-      type: 'agent-mode-coding-worker',
+      type: 'coding-worker',
       description: 'Patch renderer state',
     },
     type: {
@@ -443,9 +425,9 @@ test('returns complete display vocabulary for P4-8 and P4-9 consumers', () => {
       color: '#a78bfa',
     },
     state: {
-      label: 'Result ready',
-      icon: 'pip-ring',
-      attention: true,
+      label: 'Completed',
+      icon: 'pip-fill',
+      attention: false,
     },
   })
 })
@@ -455,7 +437,7 @@ test('declares prototype-only fields that must not become vocabulary inputs', ()
     deriveAgentState({
       agentId: 'agent-a',
       handle: 'Ada',
-      role: 'agent-mode-coding-worker',
+      role: 'coding-worker',
       description: 'Ignores prototype extras',
       status: 'running',
       worktreePath: null,

@@ -17,8 +17,8 @@ import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { TasksDialog } from './TasksDialog.js'
 import type {
-  AgentModeSnapshot,
-  AgentModeWorkerItem,
+  LiveWorkersSnapshot,
+  LiveWorkerItem,
 } from '../../shared/protocol.js'
 
 let harness: DomTestHarness
@@ -37,22 +37,18 @@ afterAll(async () => {
 
 const noop = () => {}
 
-function worker(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+function worker(over: Partial<LiveWorkerItem> = {}): LiveWorkerItem {
   return {
     agentId: 'agent_a',
     handle: '@scout',
     role: 'coding-worker',
     status: 'running',
     description: 'audit the auth path',
-    origin: 'current',
     ...over,
   }
 }
 
-const agentMode: AgentModeSnapshot = {
-  active: true,
-  objective: '',
-  phase: 'executing',
+const workersSnapshot: LiveWorkersSnapshot = {
   workers: [
     worker(),
     worker({
@@ -77,7 +73,7 @@ const snapshot = {
 
 function dialog(props: { open: boolean; focusAgentId?: string | null }) {
   return createElement(TasksDialog, {
-    agentMode,
+    workers: workersSnapshot,
     hasActiveSession: true,
     onClose: noop,
     snapshot,

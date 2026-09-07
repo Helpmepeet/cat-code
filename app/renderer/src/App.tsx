@@ -279,12 +279,12 @@ import {
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { TasksDialog } from './TasksDialog.js'
 import {
-  createOrchestratorState,
-  orchestratorPill,
-  reduceOrchestratorState,
-  selectAgentModeSnapshot,
-  summarizeOrchestratorWorkers,
-} from './orchestratorState.js'
+  createWorkersState,
+  workersPill,
+  reduceWorkersState,
+  selectLiveWorkersSnapshot,
+  summarizeWorkers,
+} from './workersState.js'
 import {
   AgentFaceRegistryContext,
   AgentFaceRegistryStoreContext,
@@ -296,7 +296,7 @@ import {
   selectLeaseSnapshot,
   selectSessionCodexAccount,
 } from './leaseState.js'
-import { OrchestratorRoster } from './OrchestratorRoster.js'
+import { WorkerRoster } from './WorkerRoster.js'
 import { GoalsPage } from './GoalsPage.js'
 import { AccountsPage } from './AccountsPage.js'
 import {
@@ -363,7 +363,7 @@ import type { SettingWriteInput } from './SettingsEditors.js'
 import { PROTOCOL_VERSION } from '../../shared/protocol.js'
 import type {
   AccountVerbMessage,
-  AgentModeWorkerItem,
+  LiveWorkerItem,
   PermissionResponseInput,
   RecalledPrompt,
   RemoteVerbMessage,
@@ -408,7 +408,7 @@ const reduceAgentConfigStateBatched = withBatch(reduceAgentConfigState)
 const reduceExtensionsStateBatched = withBatch(reduceExtensionsState)
 const reduceGoalMemoryStateBatched = withBatch(reduceGoalMemoryState)
 const reduceTasksStateBatched = withBatch(reduceTasksState)
-const reduceOrchestratorStateBatched = withBatch(reduceOrchestratorState)
+const reduceWorkersStateBatched = withBatch(reduceWorkersState)
 const reduceLeaseStateBatched = withBatch(reduceLeaseState)
 const reduceAccountsStateBatched = withBatch(reduceAccountsState)
 const reduceWorkspaceTrustStateBatched = withBatch(reduceWorkspaceTrustState)
@@ -419,9 +419,9 @@ const reduceSlashCatalogStateBatched = withBatch(reduceSlashCatalogState)
 const reduceQueuedPromptsStateBatched = withBatch(reduceQueuedPromptsState)
 /** Stable empty notice list so a healthy pool re-renders nothing (P4-50). */
 const EMPTY_BANNERS: readonly BannerNotice[] = []
-/** Stable identity so a session with no orchestrator snapshot never re-renders. */
-const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
-/** Stable identity for the pre-first-turn map, so the initial state is one object. */
+/** Stable identity so a session with no worker snapshot never re-renders. */
+const EMPTY_WORKERS: readonly LiveWorkerItem[] = []
+  /** Stable identity for the pre-first-turn map, so the initial state is one object. */
 const EMPTY_TURN_STARTS: ReadonlyMap<SessionId, number> = new Map()
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
@@ -825,10 +825,10 @@ export function App() {
     undefined,
     createVerbAckResultState,
   )
-  const [orchestrator, dispatchOrchestrator] = useReducer(
-    reduceOrchestratorStateBatched,
+  const [workersState, dispatchWorkers] = useReducer(
+    reduceWorkersStateBatched,
     undefined,
-    createOrchestratorState,
+    createWorkersState,
   )
   // P4-32b — the read-only Codex lease seam (L1). Session-scoped: which account
   // each agent in this session's swarm is leasing right now.
@@ -839,7 +839,7 @@ export function App() {
   )
   const [tasksOpen, setTasksOpen] = useState(false)
   // CC-84 — which worker the tasks dialog should open ON, or null for the plain
-  // list. The docked roster raises its `agentId` (`OrchestratorRoster.tsx`
+  // list. The docked roster raises its `agentId` (`WorkerRoster.tsx`
   // `WorkerRow`) and App used to drop it, so clicking a worker landed on the
   // generic list. This carries it to the EXISTING P4-32b drilldown; no new
   // surface, and it is cleared with the dialog.
@@ -1034,7 +1034,7 @@ export function App() {
               dispatchExtensions,
               dispatchGoalMemory,
               dispatchTasks,
-              dispatchOrchestrator,
+              dispatchWorkers,
               dispatchLease,
               dispatchAccounts,
               dispatchWorkspaceTrust,
@@ -1264,7 +1264,7 @@ export function App() {
         dispatchConnection({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchTasks({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchLease({ type: 'session-removed', sessionId: event.appSessionId })
-        dispatchOrchestrator({ type: 'session-removed', sessionId: event.appSessionId })
+        dispatchWorkers({ type: 'session-removed', sessionId: event.appSessionId })
         dispatchSessionActionRuntime({ type: 'session-removed', sessionId: event.appSessionId })
         removedIdsRef.current.add(event.appSessionId)
         lazyRestoreClaimsRef.current.delete(event.appSessionId)
@@ -1428,11 +1428,10 @@ export function App() {
       }),
     [shell, connection, permissions, activeSessionId, sessionCatalogSnapshot],
   )
-  // P4-32a — the active session's orchestrator snapshot, read once for the docked
-  // roster and the footer strip so both read one truth (never two derivations of
-  // the same workers).
-  const activeAgentModeSnapshot = selectAgentModeSnapshot(
-    orchestrator,
+  // The active session's worker snapshot, read once for the docked roster and
+  // footer strip so both read one truth.
+  const activeLiveWorkersSnapshot = selectLiveWorkersSnapshot(
+    workersState,
     activeSessionId,
   )
   const paneSessionIds = useMemo(
@@ -1830,7 +1829,7 @@ export function App() {
   }, [activeSessionId])
 
   // P4-8b — stop/kill a running task in the active session (the deferred worker
-  // Stop/kill action; primary case: an orchestrator `local_agent` worker). The
+  // Stop/kill action for a running `local_agent` worker. The
   // renderer NAMES only the target taskId; the sidecar re-resolves it against the
   // live store and dispatches the engine's own `stopTask`. The kill's store
   // mutation drives the `tasks.snapshot` re-broadcast, which re-renders the row as
@@ -1851,7 +1850,7 @@ export function App() {
   // its own (a blocked handoff carries no `evictAfter`). Same trust shape as the
   // stop above: the renderer names only the taskId, and the sidecar runs the
   // engine's own dismiss + eviction. The row's disappearance rides the resulting
-  // `agent-mode.snapshot` re-broadcast, not this call.
+  // `workers.snapshot` re-broadcast, not this call.
   const sendDismissTask = useCallback(
     (taskId: string) => {
       if (!activeSessionId) return
@@ -3215,17 +3214,12 @@ export function App() {
 	        connectionStatus: sessionConnection.status,
 	        sessionId,
 	      })
-	      // In-session empty-state Welcome context (read-only): the pool view for
-	      // THIS pane, freshest-first (see `railAccounts` for why a pane with no
-	      // engine reads the polled global feed rather than its own frozen copy) +
-	      // its agent-mode active flag. Both are the SAME domain seams the reauth
-	      // banner / WelcomeScreen already read.
+		      // In-session empty-state Welcome context (read-only): the pool view for
+		      // THIS pane, freshest-first (see `railAccounts` for why a pane with no
+		      // engine reads the polled global feed rather than its own frozen copy).
 	      const panelAccounts = rail.accountsSnapshot
-	      const panelAgentMode = selectAgentModeSnapshot(orchestrator, sessionId)
-	      const panelOrchestratorActive = panelAgentMode?.active ?? false
-	      // P4-32a — this panel's OWN workers (never the globally-active session's),
-	      // mirroring how the mode toggle dispatches per panel.
-	      const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS
+		      const panelWorkersSnapshot = selectLiveWorkersSnapshot(workersState, sessionId)
+		      const panelWorkers = panelWorkersSnapshot?.workers ?? EMPTY_WORKERS
           const panelTasks = selectTasksSnapshot(tasks, sessionId)
 	      // Read-only git branch for the empty-state meta strip. The SESSION's own
 	      // snapshot leads: the catalog's `gitBranch` is only written when a
@@ -3447,8 +3441,7 @@ export function App() {
                 )
 	              }
 	            }}
-	            orchestratorActive={panelOrchestratorActive}
-		            orchestratorWorkers={panelOrchestratorWorkers}
+			            workers={panelWorkers}
 		            tasksSnapshot={panelTasks}
 		            onBackgroundSubagent={toolUseId => {
 		              try {
@@ -3467,28 +3460,6 @@ export function App() {
 		              }
 		            }}
 	            onOpenTasks={openTasksDialog}
-		            onToggleOrchestrator={next => {
-		              // P4-8b — toggle THIS panel's session (its own sessionId, not
-		              // the globally-active one), mirroring setPermissionMode's
-		              // per-panel dispatch. The sidecar re-broadcasts
-		              // agent-mode.snapshot, which flips the reflected `active`.
-		              //
-		              // Gated on there being an engine to ask. Every sibling control
-		              // is gated implicitly, by going dead when its per-session
-		              // snapshot nulls out on the lifecycle frame; this one is
-		              // supplied unconditionally, so on an idle-PARKED pane (whose
-		              // composer is deliberately live) it was the one click that
-		              // could still reach a session with no process behind it.
-		              if (!connectionHasEngine(sessionConnection.status)) return
-		              try {
-		                getBridge().setAgentMode(sessionId, next)
-		                setTransportErrors(prev => reduceTransportErrorCleared(prev, sessionId))
-		              } catch (error) {
-		                setTransportErrors(prev =>
-                  reduceTransportErrorSet(prev, sessionId, errorMessage(error)),
-                )
-		              }
-		            }}
 	            allowPermission={(requestId, applySuggestions = []) => {
 	              const item = sessionPermissionQueue.find(
 	                candidate => candidate.request.requestId === requestId,
@@ -4364,15 +4335,12 @@ export function App() {
             </div>
           ) : workspacePanels.length === 0 || !activeSessionId ? (
             // P4-17 — the rich launcher replaces the minimal empty shell. Reads
-            // derived recents (D5) + the P4-5 pool + agent-mode, wires open/restore/
+            // derived recents (D5) + the P4-5 pool, and wires open/restore/
             // open-from-history (HC1 id-only, P4-40) and the HC1 folder picker
             // (post-spawn trust gate).
             <WelcomeScreen
               recents={welcomeRecents}
               accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
-              orchestratorActive={
-                selectAgentModeSnapshot(orchestrator, activeSessionId)?.active ?? false
-              }
               onOpenRecent={openRecentWorkspace}
               onOpenFolder={() => void newSession()}
               rosterFailure={
@@ -4414,15 +4382,14 @@ export function App() {
           )}
 
           {/* In-session background-task strip (P4-9). The prototype's `TasksPanel`
-           * (OrchestratorMode.jsx) is unanchored GUI (⚓0, INVENTORY §W4) — it's
-           * really P4-8's unbuilt orchestrator worker/lease roster, not this
-           * dialog's entry point. This pill is the grounded analog: the real
+           * is unanchored GUI (⚓0, INVENTORY §W4), not this dialog's entry point.
+           * This pill is the grounded analog: the real
            * footer summary pill (`BackgroundTaskStatus.tsx`, `getPillLabel`),
            * scoped to the active session, opening the same TasksDialog ⌘K does. */}
           {activeView === 'chat' && activeSessionId ? (
             <TasksStrip
               snapshot={selectTasksSnapshot(tasks, activeSessionId)}
-              workers={activeAgentModeSnapshot?.workers ?? EMPTY_WORKERS}
+              workers={activeLiveWorkersSnapshot?.workers ?? EMPTY_WORKERS}
               onOpen={() => openTasksDialog()}
             />
           ) : null}
@@ -4453,7 +4420,7 @@ export function App() {
           /* P4-32b — the Workers + Leases tabs of the same dialog: the read-only
            * worker drilldown (inspection ruling D1) and the session-scoped Codex
            * lease roster (L1). Both are read seams; no verb rides them. */
-          agentMode={selectAgentModeSnapshot(orchestrator, activeSessionId)}
+          workers={selectLiveWorkersSnapshot(workersState, activeSessionId)}
           leases={selectLeaseSnapshot(leases, activeSessionId)}
           /* CC-84 — the worker the docked roster was clicked on, so the dialog
            * opens on that worker's detail instead of the generic list. Null for
@@ -4474,18 +4441,17 @@ export function App() {
  *
  * P4-32a (ruling P1) — this ONE strip also carries the prototype's `bgTaskPill`
  * attention semantics; the slot has an owner, so there is no second pill (CC-5
- * rule #10). Amber ONLY when the human owns the next action: a worker waiting on
- * an active orchestrator is that orchestrator's problem and stays neutral (D2 C2).
+ * rule #10). A worker waiting on the assistant stays neutral.
  *
  * The two feeds overlap, so they are reconciled rather than summed: a delegated
- * `local_agent` shows up in the tasks snapshot AND in the agent-mode worker list,
+ * `local_agent` shows up in the tasks snapshot AND in the worker list,
  * so the task half counts only NON-worker task types and the worker half comes
  * from the worker feed alone. Nothing is counted twice.
  *
  * Two prototype gaps are inherited from the P4-9 shell that P1 said to KEEP, and
  * are recorded on the ledger row rather than fixed here: the prototype's pill
  * inverts on hover (fills with its own colour, text going dark,
- * `OrchestratorMode.jsx:396-397`) where this one only lifts its text; and its
+ * `TasksPanel` hover treatment) where this one only lifts its text; and its
  * neutral tone is the agent purple `#c084fc` where this one uses the theme
  * `accent`. Changing either would restyle P4-9's button, not extend its semantics.
  */
@@ -4495,12 +4461,12 @@ export function TasksStrip({
   onOpen,
 }: {
   snapshot: ReturnType<typeof selectTasksSnapshot>
-  workers: readonly AgentModeWorkerItem[]
+  workers: readonly LiveWorkerItem[]
   onOpen: () => void
 }) {
-  const pill = orchestratorPill(workers)
+  const pill = workersPill(workers)
   const hasBackgroundWorker =
-    summarizeOrchestratorWorkers(workers).background > 0
+    summarizeWorkers(workers).background > 0
   const backgroundTasks = groupTaskItems(snapshot).active.filter(
     item => item.type !== 'local_agent',
   )

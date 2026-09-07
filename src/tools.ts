@@ -13,7 +13,6 @@ import { GlobTool } from './tools/GlobTool/GlobTool.js'
 import { NotebookEditTool } from './tools/NotebookEditTool/NotebookEditTool.js'
 import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
 import { TaskStopTool } from './tools/TaskStopTool/TaskStopTool.js'
-import { CancelWorkerTool } from './tools/CancelWorkerTool/CancelWorkerTool.js'
 import { BriefTool } from './tools/BriefTool/BriefTool.js'
 import { ClaudeCliTool } from './tools/ClaudeCliTool/ClaudeCliTool.js'
 // Dead code elimination: conditional import for ant-only tools
@@ -57,9 +56,6 @@ const SubscribePRTool = feature('KAIROS_GITHUB_WEBHOOKS')
   : null
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import { TaskOutputTool } from './tools/TaskOutputTool/TaskOutputTool.js'
-import { GetWorkerResultTool } from './tools/GetWorkerResultTool/GetWorkerResultTool.js'
-import { ListWorkersTool } from './tools/ListWorkersTool/ListWorkersTool.js'
-import { WaitWorkersTool } from './tools/WaitWorkersTool/WaitWorkersTool.js'
 import { WebSearchTool } from './tools/WebSearchTool/WebSearchTool.js'
 import { TodoWriteTool } from './tools/TodoWriteTool/TodoWriteTool.js'
 import { ExitPlanModeV2Tool } from './tools/ExitPlanModeTool/ExitPlanModeV2Tool.js'
@@ -82,7 +78,7 @@ const getResumeAgentTool = () =>
     .ResumeAgentTool as typeof import('./tools/ResumeAgentTool/ResumeAgentTool.js').ResumeAgentTool
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
-import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
+import { AskParentSessionTool } from './tools/AskParentSessionTool/AskParentSessionTool.js'
 import { GetGoalTool } from './tools/GetGoalTool/GetGoalTool.js'
 import { CreateGoalTool } from './tools/CreateGoalTool/CreateGoalTool.js'
 import { LSPTool } from './tools/LSPTool/LSPTool.js'
@@ -231,11 +227,7 @@ export function getAllBaseTools(): Tools {
     WebSearchTool,
     ClaudeCliTool,
     TaskStopTool,
-    ListWorkersTool,
-    WaitWorkersTool,
-    GetWorkerResultTool,
-    CancelWorkerTool,
-    AskOrchestratorTool,
+    AskParentSessionTool,
     AskUserQuestionTool,
     SkillTool,
     EnterPlanModeTool,

@@ -318,8 +318,6 @@ export const TranscriptView = memo(function TranscriptView({
   compacting,
   activeSessionId,
   accounts,
-  orchestratorActive,
-  onToggleOrchestrator,
   cwd,
   branch,
   sandboxed,
@@ -337,13 +335,8 @@ export const TranscriptView = memo(function TranscriptView({
   /** A compaction is running in this session (`selectIsCompacting`). */
   compacting?: boolean
   activeSessionId: SessionId | null
-  /** In-session empty-state Welcome context (Chat.jsx:1272) — the real P4-5 Codex
-   * pool snapshot + agent-mode active flag + fixed cwd + git branch; read-only (HC1). */
+  /** In-session empty-state Welcome context (Chat.jsx:1272). */
   accounts?: AccountsSnapshot | null
-  orchestratorActive?: boolean
-  /** P4-8b — toggle THIS session's agent mode from the empty-state Orchestrator
-   * switch (the session variant is interactive; the launcher stays read-only). */
-  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
   /** Whether this session's tools run sandboxed, read by the empty state's
@@ -386,8 +379,6 @@ export const TranscriptView = memo(function TranscriptView({
       )}
       compacting={compacting ?? false}
       accounts={accounts ?? null}
-      orchestratorActive={orchestratorActive ?? false}
-      onToggleOrchestrator={onToggleOrchestrator}
       cwd={cwd ?? null}
       branch={branch ?? null}
       sandboxed={sandboxed ?? false}
@@ -408,8 +399,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   compacting = false,
   leases = null,
   accounts = null,
-  orchestratorActive = false,
-  onToggleOrchestrator,
   cwd = null,
   branch = null,
   sandboxed = false,
@@ -430,8 +419,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
   agentBackground?: AgentBackgroundControl | null
   accounts?: AccountsSnapshot | null
-  orchestratorActive?: boolean
-  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
   sandboxed?: boolean
@@ -515,7 +502,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       ) : (
         // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
         // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex
-        // pool table (P4-5) + the orchestrator reflect. HC1 session variant —
+        // pool table (P4-5). HC1 session variant —
         // Project is the read-only cwd (no picker), and no recents launcher/"Open
         // folder…" (you are already in a project). Real data only: a null pool
         // snapshot degrades to "No Codex account data for this view yet.", never a
@@ -526,8 +513,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           branch={branch}
           sandboxed={sandboxed}
           accounts={accounts}
-          orchestratorActive={orchestratorActive}
-          onToggleOrchestrator={onToggleOrchestrator}
         />
       )
   } else {
@@ -3179,7 +3164,7 @@ function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null
  * from THIS row: the `tool_use` `input` (`subagent_type`/`description`/`prompt`/
  * `run_in_background`, the real Agent-tool input keys — `AgentTool/UI.tsx`) and
  * the read-time correlated `status`. It NEVER reads the session-plane
- * `agent-mode.snapshot` (`orchestratorState.ts`) — that cross-plane read is the
+ * `workers.snapshot` (`workersState.ts`) — that cross-plane read is the
  * D2 §4 sin the decision forbids.
  */
 function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
@@ -3569,8 +3554,8 @@ function AgentIdentityLine({
  * the worker ran on, and no such fact exists on the transcript plane. The only
  * account fact the app holds is `LeaseOwnerRow.accountAlias` on the session-plane
  * `lease.snapshot` (Codex-only, and gone with the engine process), and joining
- * that onto a transcript card is exactly the cross-plane read
- * `decisions/AGENT-CHROME.md` §4 forbids. Surfacing it needs a transcript-plane
+ * that onto a transcript card would cross the transcript/session boundary.
+ * Surfacing it needs a transcript-plane
  * field, which is a protocol decision, not a render choice.
  */
 function AgentTaskLine({
@@ -3674,8 +3659,7 @@ function RejectedResumeCard({
 }
 
 /**
- * D2/C4 inline Agent card — the Agent member of the P2-2 tool-card family
- * (`decisions/AGENT-CHROME.md` §2), fed from TRANSCRIPT-derived data only
+ * Inline Agent card, fed from TRANSCRIPT-derived data only
  * (`agentToolSourceOf`): identity from the row's `input` and its nested frames,
  * state from its read-time `status` (`deriveAgentToolState`), activity and cost
  * from its children and its structured result.
@@ -3914,7 +3898,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
 }
 
 /**
- * D2/§3 DelegateGroup — parallel agents the orchestrator co-spawned in one turn
+ * DelegateGroup — parallel agents co-spawned in one turn
  * (same `message.id` — `src/utils/groupToolUses.ts:76`) render as ONE grouped
  * card instead of N sibling cards; a member never also appears on its own
  * elsewhere. Grouping is a read-time DERIVATION (`groupAgentDelegates`), never a

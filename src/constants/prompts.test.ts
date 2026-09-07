@@ -1,9 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import {
-  getAgentModeSystemPromptSections,
-  getAgentModeWorkerControlGuidance,
-  getSystemPrompt,
-} from './prompts.js'
+import { getSystemPrompt } from './prompts.js'
 import {
   getGPTIntroSection,
   getGPTToneAndStyleSection,
@@ -11,100 +7,13 @@ import {
 } from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 
-describe('Agent Mode dynamic prompt guidance', () => {
-  test('uses the orchestrator prompt as the single owner of worker-first guidance', async () => {
-    const originalOpenAiApiKey = process.env.OPENAI_API_KEY
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.OPENAI_API_KEY = originalOpenAiApiKey ?? 'test-key'
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      const sections = await getAgentModeSystemPromptSections(
-        [
-          { name: 'Agent' },
-          { name: 'ListWorkers' },
-          { name: 'WaitWorkers' },
-          { name: 'GetWorkerResult' },
-          { name: 'CancelWorker' },
-        ] as any,
-        'gpt-5.6-terra',
-        [],
-        [],
-      )
-      const prompt = sections.join('\n')
-
-      expect(prompt).toContain('## Delegation rules')
-      expect(prompt).toContain('default to a coding worker')
-      expect(prompt).toContain('AGENT MODE: Agent is available for bounded delegated work. Follow the Agent Mode doctrine above.')
-      expect(prompt).not.toContain(
-        'If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file',
-      )
-      expect(prompt).toContain(
-        'Agent Mode should feel different from normal chat because execution pressure moves outward sooner',
-      )
-    } finally {
-      if (originalOpenAiApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY
-      } else {
-        process.env.OPENAI_API_KEY = originalOpenAiApiKey
-      }
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
-  })
-
-  test('includes worker-control guidance when worker-control tools are present', async () => {
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      const sections = await getAgentModeSystemPromptSections(
-        [
-          { name: 'Agent' },
-          { name: 'ListWorkers' },
-          { name: 'WaitWorkers' },
-          { name: 'GetWorkerResult' },
-          { name: 'CancelWorker' },
-        ] as any,
-        'claude-sonnet-4-6',
-        [],
-        [],
-      )
-      const prompt = sections.join('\n')
-
-      expect(prompt).toContain('before spawning more workers when prior workers may exist.')
-      expect(prompt).toContain('after launching parallel workers so convergence is explicit')
-      expect(prompt).toContain('synthesized only after actually using it')
-      expect(prompt).toContain('no-longer-needed workers.')
-      expect(prompt).toContain(
-        'Worker-control tools available in this session: ListWorkers, WaitWorkers, GetWorkerResult, CancelWorker.',
-      )
-      expect(prompt).toContain('Follow the Worker control tools doctrine above.')
-      expect(prompt).toContain('Do not both spawn Explore and then keep investigating the same area yourself')
-      expect(prompt).toContain('Prefer worker handles over raw task IDs')
-    } finally {
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
-  })
-
-  test('omits worker-control guidance when worker-control tools are absent', async () => {
-    expect(getAgentModeWorkerControlGuidance(new Set(['Agent']))).toBeNull()
-  })
-})
 
 const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
 ).text()
 
 describe('Normal mode static delegation guidance', () => {
-  test('suggests implementor and verification without Agent Mode worker doctrine', () => {
+  test('suggests implementor and verification without a worker-first mandate', () => {
     expect(promptsSource).toContain('available-agent list includes implementor or verification')
     expect(promptsSource).not.toContain(
       'In normal mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files',
@@ -237,29 +146,6 @@ describe('GPT section boundaries', () => {
     expect(prompt).toContain('Escalate to the user with')
   })
 
-  // Agent Mode is the assembly the redraw actually changed: the elaborated
-  // self-direction text reached it for the first time and contradicted the
-  // orchestrator doctrine emitted in the same prompt. Nothing else in the repo
-  // builds a non-default assembly, so that regression was invisible to every
-  // battery. The risky half must survive here; only the elaboration is dropped.
-  test('Agent Mode gets the risk classification without the self-direction push', async () => {
-    const saved = process.env.CLAUDE_CODE_AGENT_MODE
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
-    try {
-      clearSystemPromptSections()
-      const prompt = (
-        await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')
-      ).join('\n')
-
-      expect(prompt).toContain('STOP and confirm with the user first')
-      expect(prompt).toContain('RISKY ACTIONS')
-      expect(prompt).not.toContain('take the natural next action')
-    } finally {
-      if (saved === undefined) delete process.env.CLAUDE_CODE_AGENT_MODE
-      else process.env.CLAUDE_CODE_AGENT_MODE = saved
-      clearSystemPromptSections()
-    }
-  })
 })
 
 describe('GPT copyable text guidance', () => {
@@ -474,18 +360,13 @@ describe('system prompt section cache keying', () => {
   const withCleanPromptEnv = async (run: () => Promise<void>) => {
     const saved = {
       simple: process.env.CLAUDE_CODE_SIMPLE,
-      agentMode: process.env.CLAUDE_CODE_AGENT_MODE,
     }
     delete process.env.CLAUDE_CODE_SIMPLE
-    delete process.env.CLAUDE_CODE_AGENT_MODE
     try {
       await run()
     } finally {
       if (saved.simple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
       else process.env.CLAUDE_CODE_SIMPLE = saved.simple
-      if (saved.agentMode === undefined)
-        delete process.env.CLAUDE_CODE_AGENT_MODE
-      else process.env.CLAUDE_CODE_AGENT_MODE = saved.agentMode
     }
   }
 
@@ -542,9 +423,8 @@ describe('session guidance keying across the two prompt builds', () => {
   })
 
   test('a GPT build is not served the Claude-style guidance cached before it', async () => {
-    // session_guidance is the most heavily branched section: it selects among
-    // four compute functions on (gpt x agentMode). Warm on Claude, then build
-    // GPT. Under name-only keying the GPT build served the Claude text.
+    // session_guidance selects provider-specific guidance. Warm on Claude, then
+    // build GPT. Under name-only keying the GPT build served the Claude text.
     const tools = [
       { name: 'Agent' },
       { name: 'AskUserQuestion' },

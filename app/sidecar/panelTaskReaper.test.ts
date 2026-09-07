@@ -5,7 +5,7 @@
  * rendering its row above the composer. The engine stamps the deadline; the
  * terminal REPL's panel tick honours it; the desktop had no owner for it.
  *
- * These are deliberately end-state assertions over `agentModeSnapshot` as well as
+ * These are deliberately end-state assertions over `workersSnapshot` as well as
  * the store, because the roster is what the operator sees: an evicted task must
  * leave the worker list the roster renders from, not merely the map.
  */
@@ -14,7 +14,7 @@ import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { createStore } from '../../src/state/store.js'
 import { createTaskStateBase } from '../../src/Task.js'
 import type { TaskState } from '../../src/tasks/types.js'
-import { agentModeSnapshot } from './agentModeDomain.js'
+import { workersSnapshot } from './workersDomain.js'
 import { createSidecarPanelTaskReaper } from './panelTaskReaper.js'
 
 /** A backgrounded worker that has finished — the shape the engine leaves behind. */
@@ -84,12 +84,12 @@ test('a finished worker leaves the store AND the roster snapshot once its evictA
   }))
   // Before the deadline the row is still the operator's to see (the engine's own
   // grace period, `PANEL_GRACE_MS`) — the reaper must not evict early.
-  expect(agentModeSnapshot(store.getState().tasks, null, true).workers).toHaveLength(1)
+  expect(workersSnapshot(store.getState().tasks).workers).toHaveLength(1)
 
   await Bun.sleep(150)
 
   expect(store.getState().tasks.w1).toBeUndefined()
-  expect(agentModeSnapshot(store.getState().tasks, null, true).workers).toHaveLength(0)
+  expect(workersSnapshot(store.getState().tasks).workers).toHaveLength(0)
   stop()
 })
 
@@ -101,7 +101,7 @@ test('a still-running worker (no deadline stamped) is never evicted', async () =
   await Bun.sleep(150)
 
   expect(store.getState().tasks.w1?.status).toBe('running')
-  expect(agentModeSnapshot(store.getState().tasks, null, true).workers).toHaveLength(1)
+  expect(workersSnapshot(store.getState().tasks).workers).toHaveLength(1)
   stop()
 })
 

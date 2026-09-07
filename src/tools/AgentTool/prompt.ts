@@ -18,7 +18,7 @@ import { type APIProvider } from '../../utils/model/providers.js'
 
 function getToolsDescription(agent: AgentDefinition): string {
   if (agent.agentType === 'verification') {
-    return 'Read-only async verification tools when available: Bash, Read, search, web, and MCP tools; excludes edit/write, orchestrator, recursive-agent, and worker-control tools'
+    return 'Read-only async verification tools when available: Bash, Read, search, web, and MCP tools; excludes edit/write, recursive-agent, and worker-control tools'
   }
 
   const { tools, disallowedTools } = agent
@@ -76,7 +76,6 @@ export async function getPrompt(
   isCoordinator?: boolean,
   allowedAgentTypes?: string[],
   provider?: APIProvider,
-  isAgentMode?: boolean,
   capabilities?: AgentContinuationCapabilities,
 ): Promise<string> {
   // Undefined capabilities means an older call site that hasn't been wired
@@ -251,79 +250,6 @@ ${
     ? `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type to use a specialized agent, or omit it to fork yourself — a fork inherits your full conversation context.`
     : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
 }`
-
-  const agentModeWorkerControlGuidance = [
-    canStopTask
-      ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.`
-      : null,
-    canResumeAgent
-      ? `- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context.`
-      : null,
-    canSendMessage
-      ? `- Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. ${SEND_MESSAGE_TOOL_NAME} does not cancel or interrupt the worker.`
-      : null,
-    '- Otherwise spawn a fresh worker with a cleaner brief.',
-  ]
-    .filter((line): line is string => line !== null)
-    .join('\n')
-
-  const agentModeShared = isGPTPromptStyle
-    ? [
-        `Launch a delegated worker for a bounded part of the run.
-
-TOOL PURPOSE:
-- Use the ${AGENT_TOOL_NAME} tool when delegation improves the run: broader codebase investigation via Explore, implementation passes, or independent verification.
-- Delegate selectively. The orchestrator owns synthesis, approval, recovery, and what the user sees.
-
-${agentListSection}
-
-AGENT SELECTION:`,
-        forkEnabled
-          ? '- Set `subagent_type` to use a specialized worker.\n- Omit `subagent_type` to fork yourself when inherited context is the cleanest fit.'
-          : '- Set `subagent_type` to select which worker role to use.\n- If you omit it, the general-purpose agent is used.',
-        `
-
-USAGE RULES:
-- Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
-- Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
-- In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
-- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
-- A real implementation phase should usually belong to a coding worker, not the orchestrator.
-- After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
-- After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
-- Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
-- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
-- Parallel work only when ownership is clear and the results will join cleanly.
-${agentModeWorkerControlGuidance}`,
-      ].join('\n')
-    : `Launch a delegated worker for a bounded part of the run.
-
-The ${AGENT_TOOL_NAME} tool launches workers that handle a scoped part of the run. Use it for broader codebase investigation via Explore, implementation passes, or independent verification — not as a substitute for your own planning or synthesis.
-
-${agentListSection}
-
-${forkEnabled
-  ? `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type to use a specialized worker, or omit it to fork yourself when inherited context is the cleanest fit.`
-  : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which worker role to use. If omitted, the general-purpose agent is used.`}
-
-Usage notes:
-- Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
-- Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
-- In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
-- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
-- A real implementation phase should usually belong to a coding worker, not the orchestrator.
-- After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
-- After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
-- Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
-- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
-- Parallel work only when ownership is clear and the results will join cleanly.
-${agentModeWorkerControlGuidance}`
-
-  // Coordinator mode and Agent mode both get slim prompts because their
-  // system prompts already carry the main behavior contract.
-  if (isAgentMode) {
-    return agentModeShared
-  }
 
   if (isCoordinator) {
     return shared

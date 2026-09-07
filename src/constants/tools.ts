@@ -7,7 +7,6 @@ import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../tools/ResumeAgentTool/constants.js'
 import { ASK_USER_QUESTION_TOOL_NAME } from '../tools/AskUserQuestionTool/prompt.js'
 import { TASK_STOP_TOOL_NAME } from '../tools/TaskStopTool/prompt.js'
-import { CANCEL_WORKER_TOOL_NAME } from '../tools/CancelWorkerTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../tools/FileReadTool/prompt.js'
 import { WEB_SEARCH_TOOL_NAME } from '../tools/WebSearchTool/prompt.js'
 import { TODO_WRITE_TOOL_NAME } from '../tools/TodoWriteTool/constants.js'
@@ -19,21 +18,18 @@ import { FILE_EDIT_TOOL_NAME } from '../tools/FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../tools/FileWriteTool/prompt.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../tools/NotebookEditTool/constants.js'
-import { GET_WORKER_RESULT_TOOL_NAME } from '../tools/GetWorkerResultTool/constants.js'
 import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
-import { LIST_WORKERS_TOOL_NAME } from '../tools/ListWorkersTool/constants.js'
 import { TASK_CREATE_TOOL_NAME } from '../tools/TaskCreateTool/constants.js'
 import { TASK_GET_TOOL_NAME } from '../tools/TaskGetTool/constants.js'
 import { TASK_LIST_TOOL_NAME } from '../tools/TaskListTool/constants.js'
-import { WAIT_WORKERS_TOOL_NAME } from '../tools/WaitWorkersTool/constants.js'
 import { TASK_UPDATE_TOOL_NAME } from '../tools/TaskUpdateTool/constants.js'
 import { TOOL_SEARCH_TOOL_NAME } from '../tools/ToolSearchTool/prompt.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import { ENTER_WORKTREE_TOOL_NAME } from '../tools/EnterWorktreeTool/constants.js'
 import { EXIT_WORKTREE_TOOL_NAME } from '../tools/ExitWorktreeTool/constants.js'
 import { WORKFLOW_TOOL_NAME } from '../tools/WorkflowTool/constants.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../tools/AskParentSessionTool/prompt.js'
 import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { isTodoV2Enabled } from '../utils/tasks.js'
 import { getAPIProvider } from '../utils/model/providers.js'
@@ -56,10 +52,6 @@ export const ALL_AGENT_DISALLOWED_TOOLS = new Set([
   ...(process.env.USER_TYPE === 'ant' ? [] : [RESUME_AGENT_TOOL_NAME]),
   ASK_USER_QUESTION_TOOL_NAME,
   TASK_STOP_TOOL_NAME,
-  LIST_WORKERS_TOOL_NAME,
-  WAIT_WORKERS_TOOL_NAME,
-  GET_WORKER_RESULT_TOOL_NAME,
-  CANCEL_WORKER_TOOL_NAME,
   // Prevent recursive workflow execution inside subagents.
   ...(feature('WORKFLOW_SCRIPTS') ? [WORKFLOW_TOOL_NAME] : []),
 ])
@@ -91,7 +83,7 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
   ...SHELL_TOOL_NAMES,
   FILE_WRITE_TOOL_NAME,
   NOTEBOOK_EDIT_TOOL_NAME,
-  ASK_ORCHESTRATOR_TOOL_NAME,
+  ASK_PARENT_SESSION_TOOL_NAME,
   SYNTHETIC_OUTPUT_TOOL_NAME,
   TOOL_SEARCH_TOOL_NAME,
   ENTER_WORKTREE_TOOL_NAME,
@@ -100,12 +92,12 @@ const ASYNC_AGENT_BASE_ALLOWED_TOOLS = [
 
 /**
  * Tools an async agent does NOT get by default but MAY receive when its own
- * agent definition names them in its `tools` list. Skill is orchestrator-only
- * by default so the orchestrator doctrine ("workers do not have Skill access")
- * is true unless a role explicitly grants it (owner decision 2026-07-30, C10).
+   * agent definition names them in its `tools` list. Skill is coordinator-only
+   * by default so workers do not have Skill access unless a role explicitly
+   * grants it (owner decision 2026-07-30, C10).
  * ClaudeCli launches a nested external Claude CLI agent loop, so it is a
- * narrow advisory tool for a role that names it (the Agent Mode coding
- * worker), not a default grant for every worker — a wildcard `tools: ['*']`
+   * narrow advisory tool for a role that names it (a coordinator coding
+   * worker), not a default grant for every worker — a wildcard `tools: ['*']`
  * definition does not count as naming it (see resolveAgentTools).
  * ALL_AGENT_DISALLOWED_TOOLS stays absolute: this escape hatch never reopens a
  * recursion or authorization boundary.

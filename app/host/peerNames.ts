@@ -6,7 +6,7 @@
  * registry row, so allocation happens HERE, against the names already on rows —
  * not in an engine process, which sees only itself.
  *
- * **This is a deliberate COPY of `src/agent-mode/workerNames.ts` `pickNext`
+ * **This is a deliberate COPY of `src/utils/workerNames.ts` `pickNext`
  * (`:51-79`), flagged against CLAUDE.md §8 rule 10.** The engine module cannot
  * be reused: it keeps its reservations in a process-local `Set` (`:26`) that its
  * picker always consults (`:52`), so it cannot coordinate N processes; and the

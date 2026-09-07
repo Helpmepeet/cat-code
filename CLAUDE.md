@@ -52,7 +52,7 @@ build/test/typecheck battery applies (§3). Never mix them.**
 
 | Area | What it is |
 |---|---|
-| `src/`, `scripts/` | The terminal agent engine (the Claude Code fork): CLI, REPL, tools, query pipeline, providers, Codex core, Agent Mode. Root package. |
+| `src/`, `scripts/` | The terminal agent engine (the Claude Code fork): CLI, REPL, tools, query pipeline, providers, and Codex core. Root package. |
 | `app/` | The Electron desktop app (active migration program). Own package `@cat-code/desktop` with own scripts. Sub-folders are trust boundaries: `renderer/` `preload/` `main/` `supervisor/` (Electron-free) `host/` (Electron-free host plane: durable registry + typed control-plane API) `sidecar/` (runs the real engine) `shared/` (wire protocol). |
 | `renderer-theme/`, `scripts/typecheck/renderer-engine-types/` | Temporary migration harnesses. Do not extend. |
 | `docs/` | Plans, maps, reports. Dated filenames (`2026-05-12-…`) are historical records, NOT current truth. Two exceptions are kept current: `docs/maps/` (undated, each map stamped with its own `Last refreshed`) and `docs/migration/STATUS.md`. |
@@ -353,9 +353,10 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
 `src/entrypoints/cli.tsx` → `src/main.tsx` → `src/screens/REPL.tsx` (UI/session
 loop) → `src/QueryEngine.ts` / `src/query.ts` → `src/services/api/` → provider.
 Tools: `src/tools.ts` + `src/tools/<Name>Tool/`. Commands: `src/commands.ts` +
-`src/commands/`. Agent/subagents: `src/agent-mode/`, `src/tools/AgentTool/`,
-`src/tasks/`. Config/persistence: `src/utils/settings/`, `src/utils/config.ts`,
-`src/utils/sessionStorage.ts`, `src/memdir/`. User state: `~/.cat-code/`.
+`src/commands/`. Agents and tasks: `src/tools/AgentTool/`, `src/tasks/`,
+`src/coordinator/`. Config/persistence: `src/utils/settings/`,
+`src/utils/config.ts`, `src/utils/sessionStorage.ts`, `src/memdir/`. User state:
+`~/.cat-code/`.
 
 ### Feature gates
 

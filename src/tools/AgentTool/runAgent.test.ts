@@ -10,7 +10,7 @@ import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import {
   allocateWorkerName,
   resetWorkerNamesForTests,
-} from '../../agent-mode/workerNames.js'
+} from '../../utils/workerNames.js'
 import { asSessionId } from '../../types/ids.js'
 import { getEmptyToolPermissionContext, type ToolUseContext } from '../../Tool.js'
 import type { Message } from '../../types/message.js'
@@ -22,7 +22,7 @@ import {
 } from '../../utils/messages.js'
 import { createAgentId } from '../../utils/uuid.js'
 import { AGENT_TOOL_NAME } from './constants.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../AskOrchestratorTool/prompt.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../AskParentSessionTool/prompt.js'
 import { CLAUDE_CLI_TOOL_NAME } from '../ClaudeCliTool/constants.js'
 import { _claudeCliToolInternalsForTest } from '../ClaudeCliTool/ClaudeCliTool.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
@@ -180,10 +180,10 @@ function runFailingSetup(harness: ReturnType<typeof createAppStateHarness>) {
 }
 
 function expectNoLeakedWorkerName() {
-  // The implementor pool holds 20 distinct names. If a finished run kept its
-  // reservation, one of these 20 allocations has to fall back to a suffixed
-  // name (`Turing-2`), which is what a leak looks like from the outside.
-  const names = Array.from({ length: 20 }, () =>
+  // Every role now draws from one pool of 12 distinct names. If a finished run
+  // kept its reservation, one of these 12 allocations has to fall back to a
+  // suffixed name (`Ada-2`), which is what a leak looks like from the outside.
+  const names = Array.from({ length: 12 }, () =>
     allocateWorkerName('implementor'),
   )
   expect(names.filter(name => name?.includes('-'))).toEqual([])
@@ -428,7 +428,7 @@ describe('runAgent terminal escalation', () => {
           {
             type: 'tool_use',
             id: 'toolu_escalate',
-            name: ASK_ORCHESTRATOR_TOOL_NAME,
+            name: ASK_PARENT_SESSION_TOOL_NAME,
             input: ESCALATION,
           },
         ] as never,
@@ -438,7 +438,7 @@ describe('runAgent terminal escalation', () => {
           {
             type: 'tool_result',
             tool_use_id: 'toolu_escalate',
-            content: 'Handed to the orchestrator.',
+            content: 'Handed to the parent session.',
             ...(isError ? { is_error: true } : {}),
           },
         ],
@@ -505,7 +505,7 @@ describe('runAgent terminal escalation', () => {
     expect(result.error).toBeUndefined()
   })
 
-  // A denied or failed call is not an escalation the orchestrator ever
+  // A denied or failed call is not an escalation the parent session ever
   // received, so stopping the worker on it would strand the question.
   test('keeps running when the escalation call itself failed', async () => {
     const collected = await collectEscalatingRun({ isError: true })
@@ -620,7 +620,7 @@ describe('runAgent worker capability line', () => {
   // SendMessage as a route back to the spawner (SendMessageTool's own
   // fall-through says it can only reach running workers and agent IDs).
   test('reflects the escalation channel each spawn shape actually has', async () => {
-    const pool = ['Read', SEND_MESSAGE_TOOL_NAME, ASK_ORCHESTRATOR_TOOL_NAME]
+    const pool = ['Read', SEND_MESSAGE_TOOL_NAME, ASK_PARENT_SESSION_TOOL_NAME]
 
     const foreground = await systemPromptFor(pool, { isAsync: false })
     expect(foreground).toContain(
@@ -630,7 +630,7 @@ describe('runAgent worker capability line', () => {
     const background = await systemPromptFor(pool, { isAsync: true })
     expect(background).not.toContain(SEND_MESSAGE_TOOL_NAME)
     expect(background).toContain(
-      `call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run`,
+      `call ${ASK_PARENT_SESSION_TOOL_NAME} with the exact question: it ends your run`,
     )
   })
 
@@ -638,7 +638,7 @@ describe('runAgent worker capability line', () => {
   // harness stops it. A line that still told it to would be a rule the run
   // contradicts, which is how the old contract failed in the first place.
   test('does not ask the worker to stop its own turn after escalating', async () => {
-    const prompt = await systemPromptFor(['Read', ASK_ORCHESTRATOR_TOOL_NAME], {
+    const prompt = await systemPromptFor(['Read', ASK_PARENT_SESSION_TOOL_NAME], {
       isAsync: false,
     })
 

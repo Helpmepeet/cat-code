@@ -42,22 +42,7 @@ function recallAnswer(
   }
 }
 
-/* ── frame builders (the four previously-unconsumed verb-ack results) ──────── */
-
-function agentModeResult(
-  sessionId: string,
-  ok: boolean,
-  message: string,
-): VerbAckResultFrame {
-  return {
-    kind: 'agent-mode.set.result',
-    protocolVersion: 1,
-    sessionId,
-    requestId: `agent-${sessionId}-${ok}`,
-    ok,
-    message,
-  }
-}
+/* ── frame builders ────────────────────────────────────────────────────────── */
 
 function taskControlResult(
   sessionId: string,
@@ -139,7 +124,6 @@ function correlatedBadRequest(
 }
 
 const BUILDERS = [
-  ['agent-mode.set.result', agentModeResult],
   ['task-control.result', taskControlResult],
   ['run-control.result', runControlResult],
   ['settings.result', settingsResult],
@@ -200,7 +184,7 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   let state = createVerbAckResultState()
   state = reduceVerbAckResultState(state, {
     type: 'frame',
-    frame: agentModeResult('s1', false, 'boom'),
+    frame: taskControlResult('s1', false, 'boom'),
   })
   const before = state
   state = reduceVerbAckResultState(state, {

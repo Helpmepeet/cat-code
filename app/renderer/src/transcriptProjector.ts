@@ -26,7 +26,7 @@
  * frames (the client round-trip) and result blocks riding inline on a later
  * `assistant` frame (server-executed tools — `server_tool_use`/
  * `mcp_tool_use`/… never get a `user` reply). D2/C4 subagent nesting
- * (`decisions/AGENT-CHROME.md`) is a separate read-time transform,
+ * is a separate read-time transform,
  * `selectNestedTranscriptRows` — rows with a non-null `parentToolUseId`
  * never interleave at top level.
  *
@@ -202,7 +202,7 @@ export type ToolResultProjection = {
    * `diff` is narrowed out of (`AgentToolResult.agentName`,
    * `src/tools/AgentTool/agentToolUtils.ts:727`). Transcript plane: it is this
    * row's own result frame, so it replays from history like every other field
-   * here, and no session-plane read is involved (`decisions/AGENT-CHROME.md` §4).
+   * here, and no session-plane read is involved.
    *
    * OPTIONAL rather than nullable, unlike `diff`: any tool can produce a diff,
    * but only the Agent tool ever produces a name, so absence is the ordinary
@@ -1148,7 +1148,7 @@ export type NestedToolUseRow = Extract<NestedTranscriptRow, { kind: 'tool-use' }
  * D2/§3/C3 DelegateGroup: parallel agent tool_use rows launched together render
  * as ONE grouped card, NOT as a new frame or message type. This models the read
  * output as a flat list of display items — either a single top-level row, or a
- * group of ≥2 sibling agent rows the orchestrator co-spawned. Grouping is a pure
+ * group of ≥2 sibling agent rows co-spawned in one turn. Grouping is a pure
  * read-time DERIVATION over already-correlated rows; nothing is stored, no wire
  * vocabulary is added (C3: "grouping stays a projector derivation, not a frame").
  */
@@ -1247,7 +1247,7 @@ export function groupAgentDelegates(
  * Read-time transcript display list: the C4-nested top-level rows with parallel
  * agents coalesced into DelegateGroups. Session/transcript plane separation
  * holds — this reads ONLY the transcript slice (via `selectNestedTranscriptRows`),
- * never the session-plane agent-mode snapshot (D2 §4 keeps-honest rule).
+ * never the session-plane workers snapshot.
  */
 export function selectTranscriptDisplayItems(
   state: TranscriptState,

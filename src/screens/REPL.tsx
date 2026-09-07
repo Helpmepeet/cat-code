@@ -71,7 +71,7 @@ import { SkillImprovementSurvey } from '../components/SkillImprovementSurvey.js'
 import { useSkillImprovementSurvey } from '../hooks/useSkillImprovementSurvey.js';
 import { useMoreRight } from '../moreright/useMoreRight.js';
 import { SpinnerWithVerb, BriefIdleStatus, type SpinnerMode } from '../components/Spinner.js';
-import { getAgentModeSystemPromptSections, getSystemPrompt } from '../constants/prompts.js';
+import { getSystemPrompt } from '../constants/prompts.js';
 import { buildEffectiveSystemPrompt } from '../utils/systemPrompt.js';
 import { getSystemContext, getUserContext } from '../context.js';
 import { getMemoryFiles } from '../utils/claudemd.js';
@@ -115,12 +115,6 @@ const getCoordinatorUserContext: (mcpClients: ReadonlyArray<{
 }>, scratchpadDir?: string) => {
   [k: string]: string;
 } = feature('COORDINATOR_MODE') ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext : () => ({});
-const getAgentModeUserContext: (
-  mcpClients: ReadonlyArray<{ name: string }>,
-  scratchpadDir?: string,
-) => Promise<{ [k: string]: string }> = require('../agent-mode/agentMode.js')
-  .getAgentModeUserContext
-const isAgentMode: () => boolean = require('../agent-mode/agentMode.js').isAgentMode;
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import useCanUseTool from '../hooks/useCanUseTool.js';
 import type { ToolPermissionContext, Tool } from '../Tool.js';
@@ -159,9 +153,6 @@ import { useManagePlugins } from '../hooks/useManagePlugins.js';
 import { Messages } from '../components/Messages.js';
 import { TaskListV2 } from '../components/TaskListV2.js';
 import { TeammateViewHeader } from '../components/TeammateViewHeader.js';
-import { AgentModeWorkerRoster } from '../agent-mode/AgentModeWorkerRoster.js';
-import type { AgentModeSessionState } from '../agent-mode/sessionState.js';
-import { summarizeAgentModeWorkers } from '../agent-mode/workerUxSummary.js';
 import { useTasksV2WithCollapseEffect } from '../hooks/useTasksV2.js';
 import { maybeMarkProjectOnboardingComplete } from '../projectOnboardingState.js';
 import type { MCPServerConnection } from '../services/mcp/types.js';
@@ -1021,7 +1012,6 @@ export function REPL({
       },
       canStartAutomaticTurn: () => goalGateRef.current.canStartAutomaticTurn,
       getUnresolvedDependencies: () => goalDependenciesRef.current.read(),
-      isAgentMode: () => isAgentMode(),
       startTurn: ({ prompt }) =>
         handleIncomingPromptRef.current?.(prompt, { isMeta: true }) ?? false
     });
@@ -1243,43 +1233,11 @@ export function REPL({
     resolve: (response: PromptResponse) => void;
     reject: (error: Error) => void;
   }>>([]);
-  const agentModeRunRef = useRef<{
-    cancel: (reason: string) => Promise<void>;
-  } | null>(null);
   const activeRemoteRef = useRef<{ isRemoteMode: boolean; cancelRequest: () => void } | null>(null);
   const canUseToolRef = useRef<ReturnType<typeof useCanUseTool> | null>(null);
   const getToolUseContextRef = useRef<((messages: MessageType[], newMessages: MessageType[], abortController: AbortController, mainLoopModel: string) => ProcessUserInputContext) | null>(null);
   const setConversationIdRef = useRef<((id: string) => void) | null>(null);
   const setMessagesRef = useRef<((action: React.SetStateAction<MessageType[]>) => void) | null>(null);
-  const [agentModeAbortPending, setAgentModeAbortPending] = useState(false);
-
-  const enterAgentModeSession = useCallback(async (): Promise<void> => {
-    if (activeRemoteRef.current?.isRemoteMode) {
-      return;
-    }
-    const agentModeModule = require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js');
-    agentModeModule.matchSessionMode('agent');
-    const {
-      clearConversation
-    } = await import('../commands/clear/conversation.js');
-    await clearConversation({
-      setMessages: setMessagesRef.current!,
-      readFileState: readFileState.current,
-      discoveredSkillNames: discoveredSkillNamesRef.current,
-      loadedNestedMemoryPaths: loadedNestedMemoryPathsRef.current,
-      getAppState: () => store.getState(),
-      setAppState,
-      setConversationId: setConversationIdRef.current!
-    });
-    agentModeRunRef.current = null;
-    setAbortController(null);
-    setAgentModeAbortPending(false);
-    haikuTitleAttemptedRef.current = false;
-    setHaikuTitle(undefined);
-    bashTools.current.clear();
-    bashToolsProcessedIdx.current = 0;
-  }, [setAppState, store]);
-
   // Track bridge cleanup functions for sandbox permission requests so the
   // local dialog handler can cancel the remote prompt when the local user
   // responds first. Keyed by host to support concurrent same-host requests.
@@ -1974,9 +1932,9 @@ export function REPL({
       // Match coordinator/normal mode to the resumed session
       if (feature('COORDINATOR_MODE')) {
         /* eslint-disable @typescript-eslint/no-require-imports */
-        const agentModeModule = require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js');
+        const sessionModeModule = require('../coordinator/coordinatorMode.js') as typeof import('../coordinator/coordinatorMode.js');
         /* eslint-enable @typescript-eslint/no-require-imports */
-        const warning = agentModeModule.matchSessionMode(log.mode);
+        const warning = sessionModeModule.matchSessionMode(log.mode);
         if (warning) {
           // Re-derive agent definitions after mode switch so built-in agents
           // reflect the new coordinator/normal mode
@@ -2131,7 +2089,7 @@ export function REPL({
         } = require('../utils/sessionStorage.js');
         const {
           getCurrentSessionMode
-        } = require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js');
+        } = require('../coordinator/coordinatorMode.js') as typeof import('../coordinator/coordinatorMode.js');
         /* eslint-enable @typescript-eslint/no-require-imports */
         saveMode(getCurrentSessionMode());
       }
@@ -2427,15 +2385,6 @@ export function REPL({
       // Elicitation dialog handles its own Escape, and closing it shouldn't affect any loading state.
       return;
     }
-    if (agentModeAbortPending) {
-      setAgentModeAbortPending(false);
-      return;
-    }
-    const activeAgentModeRun = isAgentMode() && agentModeRunRef.current !== null;
-    if (activeAgentModeRun) {
-      setAgentModeAbortPending(true);
-      return;
-    }
     logForDebugging(`[onCancel] focusedInputDialog=${focusedInputDialog} streamMode=${streamMode}`);
 
     // Pause proactive mode so the user gets control back.
@@ -2504,22 +2453,6 @@ export function REPL({
     // forceEnd() skips the finally path — fire directly (aborted=true).
     void mrOnTurnComplete(messagesRef.current, true);
   }
-
-  useInput((input, key, event) => {
-    if (!agentModeAbortPending || key.ctrl || key.meta) return;
-    if (input === 'a') {
-      setAgentModeAbortPending(false);
-      abortController?.abort('user-cancel');
-      event.stopImmediatePropagation();
-      return;
-    }
-    if (key.escape) {
-      setAgentModeAbortPending(false);
-      event.stopImmediatePropagation();
-    }
-  }, {
-    isActive: agentModeAbortPending
-  });
 
   // Function to handle queued command when canceling a permission request
   const handleQueuedCommandOnCancel = useCallback(() => {
@@ -2842,7 +2775,6 @@ export function REPL({
       },
 	      onChangeDynamicMcpConfig,
 	      onInstallIDEExtension: setIDEToInstallExtension,
-	      enterAgentModeSession,
       nestedMemoryAttachmentTriggers: new Set<string>(),
       loadedNestedMemoryPaths: loadedNestedMemoryPathsRef.current,
       dynamicSkillDirTriggers: new Set<string>(),
@@ -2886,7 +2818,7 @@ export function REPL({
       requestPrompt: feature('HOOK_PROMPTS') ? requestPrompt : undefined,
       contentReplacementState: contentReplacementStateRef.current
     };
-	  }, [commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, enterAgentModeSession, queryGuard]);
+	  }, [commands, combinedInitialTools, mainThreadAgentDefinition, debug, initialMcpClients, ideInstallationStatus, dynamicMcpConfig, theme, allowedAgentTypes, store, setAppState, reverify, addNotification, setMessages, onChangeDynamicMcpConfig, resume, requestPrompt, disabled, customSystemPrompt, appendSystemPrompt, setConversationId, queryGuard]);
   getToolUseContextRef.current = getToolUseContext;
 
   // Session backgrounding (Ctrl+B to background/foreground)
@@ -2900,7 +2832,6 @@ export function REPL({
     void (async () => {
       const toolUseContext = getToolUseContext(messagesRef.current, [], new AbortController(), mainLoopModel);
       const bgAdditionalDirs = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
-      const bgIsAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
       const bgRuntimePermissionMode = toolUseContext.getAppState().toolPermissionContext.mode;
       const bgRuntimeMainLoopModel = getRuntimeMainLoopModel({
         permissionMode: bgRuntimePermissionMode,
@@ -2909,14 +2840,13 @@ export function REPL({
           bgRuntimePermissionMode === 'plan' &&
           doesMostRecentAssistantMessageExceed200k(messagesRef.current),
       });
-      const [defaultSystemPrompt, agentModePromptSectionsBg, userContext, systemContext] = await Promise.all([getSystemPrompt(toolUseContext.options.tools, bgRuntimeMainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients), bgIsAgentMode && !customSystemPrompt ? getAgentModeSystemPromptSections(toolUseContext.options.tools, bgRuntimeMainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients) : Promise.resolve(undefined), getUserContext(), getSystemContext()]);
+      const [defaultSystemPrompt, userContext, systemContext] = await Promise.all([getSystemPrompt(toolUseContext.options.tools, bgRuntimeMainLoopModel, bgAdditionalDirs, toolUseContext.options.mcpClients), getUserContext(), getSystemContext()]);
       const systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition,
         toolUseContext,
         customSystemPrompt,
         defaultSystemPrompt,
         appendSystemPrompt,
-        agentModePromptSections: agentModePromptSectionsBg,
       });
       toolUseContext.renderedSystemPrompt = systemPrompt;
       const notificationAttachments = await getQueuedCommandAttachments(removedNotifications).catch(() => []);
@@ -3201,7 +3131,6 @@ export function REPL({
       });
     }
     queryCheckpoint('query_context_loading_start');
-    const isAgentModeActive = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
     const runtimePermissionMode = toolUseContext.getAppState().toolPermissionContext.mode;
     const runtimeMainLoopModel = getRuntimeMainLoopModel({
       permissionMode: runtimePermissionMode,
@@ -3211,8 +3140,8 @@ export function REPL({
         doesMostRecentAssistantMessageExceed200k(messagesIncludingNewMessages),
     });
     const additionalWorkingDirectories = Array.from(toolPermissionContext.additionalWorkingDirectories.keys());
-    logForDebugging(`[REPL:query-setup] context loading start toolCount=${freshTools.length} mcpClientCount=${freshMcpClients.length} additionalWorkingDirectoryCount=${additionalWorkingDirectories.length} hasCustomSystemPrompt=${Boolean(customSystemPrompt)} isAgentModeActive=${isAgentModeActive}`);
-    const [,, defaultSystemPrompt, agentModePromptSections, baseUserContext, systemContext] = await Promise.all([
+    logForDebugging(`[REPL:query-setup] context loading start toolCount=${freshTools.length} mcpClientCount=${freshMcpClients.length} additionalWorkingDirectoryCount=${additionalWorkingDirectories.length} hasCustomSystemPrompt=${Boolean(customSystemPrompt)}`);
+    const [,, defaultSystemPrompt, baseUserContext, systemContext] = await Promise.all([
     // IMPORTANT: do this after setMessages() above, to avoid UI jank
     checkAndDisableBypassPermissionsIfNeeded(toolPermissionContext, setAppState).then(result => {
       logForDebugging(`[REPL:query-setup] bypass permission check complete`);
@@ -3227,10 +3156,6 @@ export function REPL({
       logForDebugging(`[REPL:query-setup] getSystemPrompt complete sectionCount=${result.length}`);
       return result;
     }),
-    isAgentModeActive && !customSystemPrompt ? getAgentModeSystemPromptSections(freshTools, runtimeMainLoopModel, additionalWorkingDirectories, freshMcpClients).then(result => {
-      logForDebugging(`[REPL:query-setup] getAgentModeSystemPromptSections complete sectionCount=${result?.length ?? 0}`);
-      return result;
-    }) : Promise.resolve(undefined),
     getUserContext().then(result => {
       logForDebugging(`[REPL:query-setup] getUserContext complete keyCount=${Object.keys(result).length}`);
       return result;
@@ -3242,7 +3167,6 @@ export function REPL({
     const userContext = {
       ...baseUserContext,
       ...getCoordinatorUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined),
-      ...(await getAgentModeUserContext(freshMcpClients, isScratchpadEnabled() ? getScratchpadDir() : undefined)),
       ...((feature('PROACTIVE') || feature('KAIROS')) && proactiveModule?.isProactiveActive() && !terminalFocusRef.current ? {
         terminalFocus: 'The terminal is unfocused \u2014 the user is not actively watching.'
       } : {})
@@ -3255,7 +3179,6 @@ export function REPL({
       customSystemPrompt,
       defaultSystemPrompt,
       appendSystemPrompt,
-      agentModePromptSections,
     });
     toolUseContext.renderedSystemPrompt = systemPrompt;
     queryCheckpoint('query_query_start');
@@ -3623,9 +3546,7 @@ export function REPL({
           setAppState,
           setConversationId: (id: string) => setConversationIdRef.current?.(id),
         });
-        agentModeRunRef.current = null;
         setAbortController(null);
-        setAgentModeAbortPending(false);
         haikuTitleAttemptedRef.current = false;
         setHaikuTitle(undefined);
         bashTools.current.clear();
@@ -5064,8 +4985,6 @@ export function REPL({
     // persists at its last screen coords after ctrl-c exits transcript.
     if (!inTranscript) setPositions(null);
   }, [inTranscript, searchQuery, setHighlight, setPositions]);
-  const [agentModeSessionState, setAgentModeSessionState] = useState<AgentModeSessionState | null>(null);
-  const [agentModeSessionStateLoaded, setAgentModeSessionStateLoaded] = useState(false);
   const globalKeybindingProps = {
     screen,
     setScreen,
@@ -5096,33 +5015,6 @@ export function REPL({
   });
   // Auto-exit viewing mode when teammate completes or errors
   useTeammateViewAutoExit();
-  const agentModeActive = isAgentMode();
-  useEffect(() => {
-    if (!agentModeActive) {
-      setAgentModeSessionState(null);
-      setAgentModeSessionStateLoaded(false);
-      return;
-    }
-    let cancelled = false;
-    void import('../agent-mode/sessionState.js').then(({
-      readSessionStateWithContinuity
-    }) => readSessionStateWithContinuity(getSessionId())).then(state => {
-      if (!cancelled) {
-        setAgentModeSessionState(state);
-        setAgentModeSessionStateLoaded(true);
-      }
-    }).catch(error => {
-      logForDebugging(`Failed to read Agent Mode session state: ${error}`);
-      if (!cancelled) {
-        setAgentModeSessionState(null);
-        setAgentModeSessionStateLoaded(true);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [agentModeActive, tasks, messages.length]);
-  const agentModeWorkerSummary = useMemo(() => agentModeActive ? summarizeAgentModeWorkers(agentModeSessionState) : null, [agentModeActive, agentModeSessionState]);
   if (screen === 'transcript') {
     // Virtual scroll replaces the 30-message cap: everything is scrollable
     // and memory is bounded by the viewport. Without it, wrapping transcript
@@ -5335,7 +5227,6 @@ export function REPL({
               {feature('WEB_BROWSER_TOOL') ? WebBrowserPanelModule && <WebBrowserPanelModule.WebBrowserPanel /> : null}
               <Box flexGrow={1} />
 	              {showSpinner && <SpinnerWithVerb mode={streamMode} spinnerTip={spinnerTip} responseLengthRef={responseLengthRef} apiMetricsRef={apiMetricsRef} overrideMessage={spinnerMessage} spinnerSuffix={stopHookSpinnerSuffix} verbose={verbose} loadingStartTimeRef={loadingStartTimeRef} totalPausedMsRef={totalPausedMsRef} pauseStartTimeRef={pauseStartTimeRef} overrideColor={spinnerColor} overrideShimmerColor={spinnerShimmerColor} hasActiveTools={inProgressToolUseIDs.size > 0} leaderIsIdle={!isLoading} />}
-	              {agentModeAbortPending ? <Box width="100%"><Text color="warning">Worker running — [a] abort and cancel run  [Esc] let it finish</Text></Box> : null}
               {!showSpinner && !isLoading && !userInputOnProcessing && !hasRunningTeammates && isBriefOnly && !viewedAgentTask && <BriefIdleStatus />}
               {isFullscreenEnvEnabled() && <PromptInputQueuedCommands />}
             </>} bottom={<Box flexDirection={feature('BUDDY') && companionNarrow ? 'column' : 'row'} width="100%" alignItems={feature('BUDDY') && companionNarrow ? undefined : 'flex-end'}>
@@ -5542,9 +5433,7 @@ export function REPL({
                 setAppState,
                 setConversationId
               });
-              agentModeRunRef.current = null;
               setAbortController(null);
-              setAgentModeAbortPending(false);
               haikuTitleAttemptedRef.current = false;
               setHaikuTitle(undefined);
               bashTools.current.clear();
@@ -5682,7 +5571,6 @@ export function REPL({
                       {/* Skill improvement survey - appears when improvements detected (ant-only) */}
                       {"external" === 'ant' && skillImprovementSurvey.suggestion && <SkillImprovementSurvey isOpen={skillImprovementSurvey.isOpen} skillName={skillImprovementSurvey.suggestion.skillName} updates={skillImprovementSurvey.suggestion.updates} handleSelect={skillImprovementSurvey.handleSelect} inputValue={inputValue} setInputValue={setInputValue} />}
                       {showIssueFlagBanner && <IssueFlagBanner />}
-                      {agentModeActive ? <AgentModeWorkerRoster loaded={agentModeSessionStateLoaded} summary={agentModeWorkerSummary} compact={showSpinner} /> : null}
                       {}
                       <PromptInput debug={debug} ideSelection={ideSelection} hasSuppressedDialogs={hasSuppressedDialogs} isLocalJSXCommandActive={isShowingLocalJSXCommand} getToolUseContext={getToolUseContext} toolPermissionContext={toolPermissionContext} setToolPermissionContext={setToolPermissionContext} apiKeyStatus={apiKeyStatus} commands={commands} agents={agentDefinitions.activeAgents} isLoading={isLoading} onExit={handleExit} verbose={verbose} messages={messages} threadGoalDisplay={threadGoalDisplay} onAutoUpdaterResult={setAutoUpdaterResult} autoUpdaterResult={autoUpdaterResult} input={inputValue} onInputChange={setInputValue} mode={inputMode} onModeChange={setInputMode} stashedPrompt={stashedPrompt} setStashedPrompt={setStashedPrompt} submitCount={submitCount} onShowMessageSelector={handleShowMessageSelector} onMessageActionsEnter={
             // Works during isLoading — edit cancels first; uuid selection survives appends.

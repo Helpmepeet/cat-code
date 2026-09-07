@@ -224,8 +224,8 @@ function isTrustedBypassParentMode(context: Pick<ToolUseContext, 'getAppState'>)
 }
 
 // Permission modes that let the delegated Claude CLI process apply edits
-// without asking. rolePrompts.ts tells the Agent Mode coding worker never to
-// pass either of these to a delegated run; this enforces that in code rather
+// without asking. Worker instructions never pass either of these to a delegated
+// run; this enforces that in code rather
 // than relying on the worker to comply. 'dontAsk' and 'auto' are excluded on
 // purpose: 'dontAsk' converts an ask into a deny (permissions.ts, dontAsk mode
 // transformation) and 'auto' still routes through the classifier, so neither

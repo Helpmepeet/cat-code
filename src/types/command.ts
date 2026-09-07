@@ -97,7 +97,6 @@ export type LocalJSXCommandContext = ToolUseContext & {
     log: LogOption,
     entrypoint: ResumeEntrypoint,
   ) => Promise<void>
-  enterAgentModeSession?: () => Promise<void>
 }
 
 export type ResumeEntrypoint =

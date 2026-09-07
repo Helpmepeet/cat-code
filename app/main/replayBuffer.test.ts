@@ -31,7 +31,7 @@ const SID: SessionId = 'sess-1'
  * a test failure, not a silently agreeing constant.
  *
  * This is CALL order, not arrival order: the two `void`-invoked async sends
- * (`agent-mode`, `stats.usage`) await before their first send, so their frames
+ * (`stats.usage`) awaits before its first send, so that frame
  * land after the synchronous burst. The buffer keys on arrival, and this suite
  * supplies arrival itself, so call order is what the list can honestly mirror.
  *
@@ -48,7 +48,7 @@ const ATTACH_BURST_KINDS = [
   'thread-goal.snapshot',
   'memory.snapshot',
   'tasks.snapshot',
-  'agent-mode.snapshot',
+  'workers.snapshot',
   'lease.snapshot',
   'run-controls.snapshot',
   'context-breakdown.snapshot',

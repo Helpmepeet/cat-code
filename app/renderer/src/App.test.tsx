@@ -55,7 +55,7 @@ import {
   SLASH_COMMAND_LISTBOX_ID,
   slashCommandOptionId,
 } from './composerTypeaheadA11y.js'
-import { OrchestratorRoster } from './OrchestratorRoster.js'
+import { WorkerRoster } from './WorkerRoster.js'
 import { idleSessionPaneProps } from './sessionPaneTestProps.js'
 import {
   createTranscriptState,
@@ -68,7 +68,7 @@ import {
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
   type AccountsSnapshot,
   type AccountStatus,
-  type AgentModeWorkerItem,
+  type LiveWorkerItem,
   type RunControlsSnapshot,
   type ServerFrame,
   type TaskSnapshotItem,
@@ -636,7 +636,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
     <SessionPane
       accountsSnapshot={null}
       accountsLastResult={null}
-      orchestratorActive={false}
+
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -763,7 +763,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
     <SessionPane
       accountsSnapshot={null}
       accountsLastResult={null}
-      orchestratorActive={false}
+
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -853,7 +853,6 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'connecting', inputEnabled: false },
     activeDescriptor: undefined,
     activeLog: {
@@ -929,7 +928,6 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'ready', inputEnabled: false },
     activeDescriptor: undefined,
     activeLog: {
@@ -1284,7 +1282,6 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'failed', inputEnabled: false },
     activeDescriptor: undefined,
     activeLog: {
@@ -1553,7 +1550,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
       model="gpt-5.6-terra"
       reasoningEffort="high"
       fastMode={false}
-      orchestratorActive={false}
+
       copyForLlm={() => {}}
       denyPermission={() => {}}
       history={[]}
@@ -1590,7 +1587,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
     <SessionPane
       accountsSnapshot={null}
       accountsLastResult={null}
-      orchestratorActive={false}
+
       activeConnection={{ status: 'ready', inputEnabled: false }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -1849,7 +1846,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
     <SessionPane
       accountsSnapshot={null}
       accountsLastResult={null}
-      orchestratorActive={false}
+
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -1920,7 +1917,7 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
     <SessionPane
       accountsSnapshot={null}
       accountsLastResult={null}
-      orchestratorActive={false}
+
       activeConnection={{ status: 'ready', inputEnabled: true }}
       activeDescriptor={{
         appSessionId: 'session-1',
@@ -2131,7 +2128,6 @@ test('a previewed pane shows what the cached session really ran on', () => {
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'dead', inputEnabled: false },
     activeDescriptor: undefined,
     activeLog: {
@@ -2203,7 +2199,6 @@ test('a previewed pane with an empty cache claims nothing', () => {
   const props = {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'dead', inputEnabled: false },
     activeDescriptor: undefined,
     activeLog: {
@@ -2283,12 +2278,12 @@ function tasksSnapshotForTest(
 }
 
 function agentWorkerForTest(
-  over: Partial<AgentModeWorkerItem> = {},
-): AgentModeWorkerItem {
+  over: Partial<LiveWorkerItem> = {},
+): LiveWorkerItem {
   return {
     agentId: 'w-1',
     handle: 'Turing',
-    role: 'agent-mode-coding-worker',
+    role: 'coding-worker',
     status: 'running',
     description: 'Port the roster',
     ...over,
@@ -2370,8 +2365,8 @@ test('a foreground subagent is handed to the transcript, and a backgrounded one 
 })
 
 test('P4-32a — a blocked worker never turns the strip amber', () => {
-  // It used to read "1 needs you" whenever this session was not in agent mode,
-  // which is every ordinary session. The handoff goes to the assistant.
+  // The handoff goes to the assistant, so a blocked worker never claims the
+  // human owns the next action.
   const html = renderStrip({
     workers: [agentWorkerForTest({ status: 'completed', handoffStatus: 'blocked' })],
   })
@@ -2412,8 +2407,7 @@ test('P4-32a — real workers reach the composer dock, above the permission stac
   const html = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
-      orchestratorActive
-      orchestratorWorkers={[
+      workers={[
         agentWorkerForTest({ handle: 'Turing', description: 'Wire the dock' }),
       ]}
     />,
@@ -2437,11 +2431,10 @@ test('P4-32a — the dock retires settled workers but keeps unresolved ones', ()
   const settled = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
-      orchestratorWorkers={[
+      workers={[
         agentWorkerForTest({
           description: 'Completed worker',
           status: 'completed',
-          synthesisStatus: 'synthesized',
         }),
       ]}
     />,
@@ -2451,7 +2444,7 @@ test('P4-32a — the dock retires settled workers but keeps unresolved ones', ()
   const failed = renderToStaticMarkup(
     <SessionPane
       {...idleSessionPaneProps()}
-      orchestratorWorkers={[
+      workers={[
         agentWorkerForTest({ description: 'Failed worker', status: 'failed' }),
       ]}
     />,
@@ -2459,29 +2452,25 @@ test('P4-32a — the dock retires settled workers but keeps unresolved ones', ()
   expect(failed).toContain('Failed worker')
 })
 
-test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for the mode joins', () => {
+test('P4-32a — WIRING TRIPWIRE (source text, NOT reachability) for worker joins', () => {
   // Read this for what it is: a source-TEXT assertion. It fires if someone deletes
   // or renames these joins, and it proves NOTHING about whether the handler can be
   // reached at runtime.
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
 
-  // The tab bar carries NO orchestrator chrome: a tab names a session, and the
-  // mode belongs to the surfaces that own it. Pinned so the badge and its
-  // per-tab snapshot read cannot drift back onto the tab.
+  // The tab bar carries no worker roster: a tab names a session, and the worker
+  // list belongs to the surfaces that own it.
   const tabsStart = source.indexOf('const tabs: TabModel[] = useMemo(')
-  const tabsEnd = source.indexOf('const activeAgentModeSnapshot', tabsStart)
+  const tabsEnd = source.indexOf('const activeLiveWorkersSnapshot', tabsStart)
   const tabsBody = source.slice(tabsStart, tabsEnd)
-  expect(tabsBody).not.toContain('orchestratorActive:')
-  expect(tabsBody).not.toContain('selectAgentModeSnapshot(orchestrator, sessionId)')
-
   const barStart = source.indexOf('<TabBar')
   const barBody = source.slice(barStart, source.indexOf('/>', barStart))
-  expect(barBody).not.toContain('Orchestrator')
+  expect(barBody).not.toContain('workers=')
 
   // Each pane docks ITS panel's workers, not the globally-active session's.
-  expect(source).toContain('orchestratorWorkers={panelOrchestratorWorkers}')
+  expect(source).toContain('workers={panelWorkers}')
   expect(source).toContain(
-    'const panelOrchestratorWorkers = panelAgentMode?.workers ?? EMPTY_WORKERS',
+    'const panelWorkers = panelWorkersSnapshot?.workers ?? EMPTY_WORKERS',
   )
 })
 
@@ -2506,7 +2495,7 @@ test('two panes on two sessions never spend one face pool, and one session agree
   // were spent across unrelated transcripts and a worker's face depended on what
   // some other session had drawn first.
   //
-  // Colour is the discriminator, the same recipe OrchestratorRoster.test uses:
+  // Colour is the discriminator, the same recipe WorkerRoster.test uses:
   // the pane that renders FIRST draws a worker whose colour is the one the
   // second pane's worker hashes to. A shared pool must therefore move the second
   // worker off that colour; a per-session pool cannot know to.
@@ -2524,7 +2513,7 @@ test('two panes on two sessions never spend one face pool, and one session agree
         <SessionPane
           {...idleSessionPaneProps()}
           activeSessionId="session-b"
-          orchestratorWorkers={[
+          workers={[
             agentWorkerForTest({
               agentId: faceSquatterId(adaFill),
               handle: 'Bo',
@@ -2535,13 +2524,13 @@ test('two panes on two sessions never spend one face pool, and one session agree
         <SessionPane
           {...idleSessionPaneProps()}
           activeSessionId="session-a"
-          orchestratorWorkers={[ada]}
+          workers={[ada]}
         />
         {/* The shell's own furniture follows the ACTIVE session, which is A. It
          * has to draw the very face that pane just drew — the regression the
          * registry was lifted out of the transcript to fix. */}
         <AgentFaceRegistryContext.Provider value={store.registryFor('session-a')}>
-          <OrchestratorRoster workers={[ada]} />
+          <WorkerRoster workers={[ada]} />
         </AgentFaceRegistryContext.Provider>
       </>
     </AgentFaceRegistryStoreContext.Provider>,

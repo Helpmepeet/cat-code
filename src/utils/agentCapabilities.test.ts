@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { CLAUDE_CLI_TOOL_NAME } from '../tools/ClaudeCliTool/constants.js'
 import { AGENT_TOOL_NAME } from '../tools/AgentTool/constants.js'
-import { ASK_ORCHESTRATOR_TOOL_NAME } from '../tools/AskOrchestratorTool/prompt.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../tools/AskParentSessionTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../tools/SendMessageTool/constants.js'
 import {
   getWorkerCapabilityPromptLine,
@@ -13,7 +13,7 @@ describe('resolveWorkerCapabilities', () => {
     expect(resolveWorkerCapabilities([])).toEqual({
       mayDelegateExternally: false,
       mayDelegateInternally: false,
-      canAskOrchestrator: false,
+      canAskParentSession: false,
       canSendMessage: false,
     })
   })
@@ -38,14 +38,14 @@ describe('resolveWorkerCapabilities', () => {
 
   test('flags the two escalation channels independently', () => {
     const both = resolveWorkerCapabilities([
-      ASK_ORCHESTRATOR_TOOL_NAME,
+      ASK_PARENT_SESSION_TOOL_NAME,
       SEND_MESSAGE_TOOL_NAME,
     ])
-    expect(both.canAskOrchestrator).toBe(true)
+    expect(both.canAskParentSession).toBe(true)
     expect(both.canSendMessage).toBe(true)
 
     const neither = resolveWorkerCapabilities(['Read'])
-    expect(neither.canAskOrchestrator).toBe(false)
+    expect(neither.canAskParentSession).toBe(false)
     expect(neither.canSendMessage).toBe(false)
   })
 
@@ -90,7 +90,7 @@ describe('getWorkerCapabilityPromptLine', () => {
   // line must never offer it as a way back to the spawner.
   test('describes SendMessage as sideways-only, and only when the worker has it', () => {
     const foreground = getWorkerCapabilityPromptLine([
-      ASK_ORCHESTRATOR_TOOL_NAME,
+      ASK_PARENT_SESSION_TOOL_NAME,
       SEND_MESSAGE_TOOL_NAME,
     ])
     expect(foreground).toContain(
@@ -98,15 +98,15 @@ describe('getWorkerCapabilityPromptLine', () => {
     )
 
     const background = getWorkerCapabilityPromptLine([
-      ASK_ORCHESTRATOR_TOOL_NAME,
+      ASK_PARENT_SESSION_TOOL_NAME,
     ])
     expect(background).not.toContain(SEND_MESSAGE_TOOL_NAME)
   })
 
-  test('routes escalation through ask_orchestrator only when it is in the pool', () => {
-    const withTool = getWorkerCapabilityPromptLine([ASK_ORCHESTRATOR_TOOL_NAME])
+  test('routes escalation through ask_parent_session only when it is in the pool', () => {
+    const withTool = getWorkerCapabilityPromptLine([ASK_PARENT_SESSION_TOOL_NAME])
     expect(withTool).toContain(
-      `call ${ASK_ORCHESTRATOR_TOOL_NAME} with the exact question: it ends your run and hands the question over`,
+      `call ${ASK_PARENT_SESSION_TOOL_NAME} with the exact question: it ends your run and hands the question over`,
     )
     // runAgent ends the loop on the call now. Asking the worker to stop as
     // well is the instruction the run contradicts, and the volunteered stop
@@ -114,7 +114,7 @@ describe('getWorkerCapabilityPromptLine', () => {
     expect(withTool).not.toContain('then stop your turn')
 
     const withoutTool = getWorkerCapabilityPromptLine(['Read'])
-    expect(withoutTool).not.toContain(ASK_ORCHESTRATOR_TOOL_NAME)
+    expect(withoutTool).not.toContain(ASK_PARENT_SESSION_TOOL_NAME)
     expect(withoutTool).toContain(
       'If you are blocked, stop your turn and return a blocked result naming the exact question.',
     )
@@ -124,7 +124,7 @@ describe('getWorkerCapabilityPromptLine', () => {
     const widest = getWorkerCapabilityPromptLine([
       AGENT_TOOL_NAME,
       CLAUDE_CLI_TOOL_NAME,
-      ASK_ORCHESTRATOR_TOOL_NAME,
+      ASK_PARENT_SESSION_TOOL_NAME,
       SEND_MESSAGE_TOOL_NAME,
     ])
 

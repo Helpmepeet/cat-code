@@ -7,7 +7,7 @@
 - **S2 Permission round-trip:** real control permission request/response/update protocol; prototype used a mock queue.
 - **S3 Multi-session process model:** one desktop window managing N Bun engine processes plus an app-owned registry; prototype used in-page mock state.
 - **S4 Session catalog:** real file-backed `LogOption` / transcript metadata; prototype used simplified session fixtures.
-- **S5 Agent Mode / tasks:** real `LocalAgentTask` / Agent Mode worker state; prototype used mock workers and display groupings.
+- **S5 Agents / tasks:** real `LocalAgentTask` and coordinator-safe worker state; prototype used mock workers and display groupings.
 - **S6 Startup/resume/auth:** real trust/OAuth/resume primitives; prototype added GUI gates and overlays.
 - **S7 Settings/remote:** real settings, MCP, plugin, skill, hook, bridge, and remote state; prototype flattens these domains.
 - **S8 Goal/memory/accounts:** real thread-goal, memdir, and Codex account/pool state; prototype uses simplified rosters/dialogs.
@@ -75,7 +75,7 @@
 | `SessionActionsMenu` + message-level Copy/Edit/Branch + `ExportDialog` | `SessionActions.jsx` | 6 | partial (**S4**) | adapt (operator ruling 2026-08-24: Branch/Rewind target user messages, execute immediately, and leave files unchanged; Rename/Export remain session actions) |
 | `MetadataInspector` | `MetadataInspector.jsx` | 1 | yes (**S4**) | adapt (read-only metadata inspector over real log/message fields; no per-message account field) |
 | **Agents config** `AgentsPage` | `AgentsPage.jsx` | 3 | yes (**S5**) | adapt (real agent/runtime model is broader than the prototype editor) |
-| **Orchestrator** roster/detail/focus: `OrchestratorModeWorkerRoster`, `WorkerDetail`, `WorkerFocusView`, `AgentToolCard`, `DelegateGroup`, `BackgroundTaskStatus`, `deriveWorker`, `summarizeWorkers` | `OrchestratorMode.jsx` | 8 | yes (**S5**) | **✅ D2 DECIDED 2026-07-04** (`decisions/AGENT-CHROME.md`): ALL eight adapt over real shapes (roster `AgentModeWorkerRoster.tsx:30`, panel `BackgroundTasksDialog.tsx:131`, focus = teammate view, pill `BackgroundTaskStatus.tsx:25`, derivations `workerUxSummary.ts:72-112`); inline `AgentToolCard`/`DelegateGroup` KEPT (inline agent cards are the real idiom — `AgentTool/UI.tsx:458,740`), their fixture data feeds CUT; subagent frames NEST under the owning card (never interleave) |
+| **Worker** roster/detail/focus: `WorkerRoster`, `WorkerDetail`, `WorkerFocusView`, `AgentToolCard`, `DelegateGroup`, `BackgroundTaskStatus`, `deriveWorker`, `summarizeWorkers` | `OrchestratorMode.jsx` | 8 | yes (**S5**) | **✅ D2 RETIRED 2026-09-07** (`decisions/AGENT-CHROME.md`): generic worker roster, inspection, task controls, transcript cards, permission identity, and lease joins remain over current live-worker data; the mode-specific toggle, badge, state, and fixture feeds are cut. |
 | **Tasks** `BgTasksDialog` / `TasksPanel` | `TasksPage.jsx` / `OrchestratorMode.jsx` | 4 / 0 | yes (**S5**) | adapt; `BgTasksDialog` is grounded, `TasksPanel` is unanchored GUI |
 | `GoalsPage` + `GoalDetail` + create/replace dialogs | `GoalsPage.jsx` / `Surfaces.jsx` | 1 / 0 | yes (**S8**) | adapt (real thread goal is per-thread persisted state; roster/dialogs are GUI wrappers) |
 | `MemoryPanel` (`/memory`) | `MemoryPage.jsx` | 1 | yes (**S8**) | adapt; anchor line range was stale, real memory types are `src/memdir/memoryTypes.ts:14-21` |

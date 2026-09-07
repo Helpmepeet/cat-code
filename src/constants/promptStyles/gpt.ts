@@ -28,8 +28,6 @@ import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
-import { TODO_WRITE_TOOL_NAME } from '../../tools/TodoWriteTool/constants.js'
-import { TASK_CREATE_TOOL_NAME } from '../../tools/TaskCreateTool/constants.js'
 import type { Tools } from '../../Tool.js'
 import type { Command } from '../../types/command.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
@@ -46,7 +44,6 @@ import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents
 import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
 import { isForkSubagentEnabled } from '../../tools/AgentTool/forkSubagent.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
-import { isEnvTruthy } from '../../utils/envUtils.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import {
@@ -174,15 +171,7 @@ export function getGPTDoingTasksSection(enabledTools: Set<string>): string {
 // ---------------------------------------------------------------------------
 
 export function getGPTActionsSection(): string {
-  // Agent Mode keeps this section for the risky-action consent rule, but its
-  // orchestrator doctrine (agent-mode/orchestratorPrompt.ts) tells the main
-  // thread to delegate rather than take the next implementation step itself, so
-  // the self-direction elaboration is dropped there. The reversible/risky
-  // classification is a permission rule and stays in every assembly. Same switch
-  // prompts.ts reads for the same decision (isAgentModePromptActive).
-  const selfDirection = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-    ? ''
-    : ` Do not stop after a step and wait to be pushed forward; take the natural next action. Use tools to discover missing details rather than asking about them.`
+  const selfDirection = ` Do not stop after a step and wait to be pushed forward; take the natural next action. Use tools to discover missing details rather than asking about them.`
 
   return `# Acting and Asking
 
@@ -330,25 +319,6 @@ export function getGPTToneAndStyleSection(): string {
 // 7. Output efficiency section
 // ---------------------------------------------------------------------------
 
-export function getGPTAgentModeUsingToolsSection(enabledTools: Set<string>): string {
-  const taskToolName = [TASK_CREATE_TOOL_NAME, TODO_WRITE_TOOL_NAME].find(n =>
-    enabledTools.has(n),
-  )
-
-  const items = [
-    taskToolName
-      ? `TASK TRACKING: Use ${taskToolName} to track the run. Mark each task complete as soon as it is done. Do not batch completions.`
-      : null,
-    enabledTools.has(AGENT_TOOL_NAME)
-      ? `DELEGATION: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    `CONTEXT SHAPE: Keep context small and decision-focused. Prefer compact evidence and short handoffs over carrying raw tool output forward.`,
-    `PARALLELISM: Use parallel tool calls only when ownership is clear and the results will join cleanly.`,
-  ].filter(item => item !== null)
-
-  return [`# Using Your Tools`, ...prependBullets(items)].join('\n')
-}
-
 export function getGPTOutputSection(): string {
   return `# Communicating with the User
 
@@ -383,63 +353,6 @@ Only suggest next steps when the user explicitly asks for options or direction.`
 // ---------------------------------------------------------------------------
 // 8. Session-specific guidance section
 // ---------------------------------------------------------------------------
-
-export function getGPTAgentModeSessionGuidanceSection(
-  enabledTools: Set<string>,
-  skillToolCommands: Command[],
-): string | null {
-  const hasAskUserQuestionTool = enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
-  const hasSkills =
-    skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
-  const hasAgentTool = enabledTools.has(AGENT_TOOL_NAME)
-
-  const discoverSkillsRule =
-    DISCOVER_SKILLS_TOOL_NAME !== null &&
-    hasSkills &&
-    enabledTools.has(DISCOVER_SKILLS_TOOL_NAME) &&
-    feature('EXPERIMENTAL_SKILL_SEARCH') &&
-    skillSearchFeatureCheck?.isSkillSearchEnabled()
-      ? `SKILL DISCOVERY: Relevant skills are automatically surfaced each turn as "Skills relevant to your task:" reminders. If your next action is not covered — mid-task pivot, unusual workflow, multi-step plan — call ${DISCOVER_SKILLS_TOOL_NAME} with a specific description. Already-visible or loaded skills are filtered automatically. Skip this if surfaced skills already cover your next action.`
-      : null
-
-  const items = [
-    hasAskUserQuestionTool
-      ? `DENIED TOOL: If you do not understand why the user denied a tool call, use ${ASK_USER_QUESTION_TOOL_NAME} to ask.`
-      : null,
-    getIsNonInteractiveSession()
-      ? null
-      : `SHELL COMMANDS: If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands in the conversation.`,
-    hasAgentTool
-      ? `AGENT MODE: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    getGPTAgentModeWorkerControlGuidance(enabledTools),
-    hasSkills
-      ? `SKILLS: /<skill-name> (e.g., /commit) is shorthand for users to invoke skills. When executed, the skill expands to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section — do not guess or use built-in CLI commands.`
-      : null,
-    hasSkills
-      ? `HANDOFF PROMPTS: When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
-      : null,
-    discoverSkillsRule,
-  ].filter(item => item !== null)
-
-  if (items.length === 0) return null
-  return ['# Session-Specific Guidance', ...prependBullets(items)].join('\n')
-}
-
-function getGPTAgentModeWorkerControlGuidance(
-  enabledTools: Set<string>,
-): string | null {
-  const available = [
-    enabledTools.has('ListWorkers') ? 'ListWorkers' : null,
-    enabledTools.has('WaitWorkers') ? 'WaitWorkers' : null,
-    enabledTools.has('GetWorkerResult') ? 'GetWorkerResult' : null,
-    enabledTools.has('CancelWorker') ? 'CancelWorker' : null,
-  ].filter(item => item !== null)
-
-  if (available.length === 0) return null
-
-  return `WORKER-CONTROL TOOLS AVAILABLE: ${available.join(', ')}. Follow the Worker control tools doctrine above.`
-}
 
 export function getGPTSessionGuidanceSection(
   enabledTools: Set<string>,

@@ -159,6 +159,7 @@ export function parseSessionCatalogEntry(
   if (!entry) return null
   return {
     ...entry,
+    mode: entry.mode === 'agent' ? 'normal' : entry.mode,
     forked: entry.forked === true,
     isInteractive: entry.isInteractive,
     cwdExists: entry.cwdExists ?? true,

@@ -1,10 +1,18 @@
 # D5 — Does welcome-launcher state persist?
 
-**Status: ARCHITECTURE RULED 2026-07-04 — PRODUCT CALL PENDING OPERATOR (§4).** This rules
+**Status: SUPERSEDED FOR AGENT MODE 2026-09-07; ARCHITECTURE RULED 2026-07-04 FOR
+THE REMAINING LAUNCHER.** This rules
 the architecture half of INVENTORY's D5 — whether the `WelcomeScreen` launcher's state
 (project recents, branch chooser, "start in") needs desktop-owned persistence — and surfaces
 the product half. The row stays open until the operator answers §4. All anchors verified
 against the working tree 2026-07-04; where this doc and source disagree, source wins.
+
+**Retirement amendment 2026-09-07.** The Agent Mode Orchestrator toggle and its
+desktop mode-switch path were retired. The remaining WelcomeScreen launcher uses
+the derived recents and trust decisions below; generic worker UI is not a
+launcher concern. The removed inbound mode verb is rejected by the sidecar, and
+the locked transport, N-process, raw-event, die-with-window, and two-id decisions
+are unchanged.
 
 | # | Question | Verdict |
 |---|---|---|
@@ -53,7 +61,7 @@ plain "start locally," which needs nothing.
 | "Start in: locally" | **adapt** | just spawn-config cwd (P3-1) |
 | "Start in: new worktree" | **defer pending §4** | real (`worktree.ts:703`, `main.tsx:1182-1185`) but new desktop scope |
 | Branch chooser | **cut as standalone; keep as worktree name/base input if worktree ships** | W4 — no general branch-start primitive exists |
-| Codex table / orchestrator toggle | **not D5's** | W4-Accounts (S8) / Agent Mode rows own them |
+| Codex table | **not D5's** | W4-Accounts (S8) owns the account surface; the retired mode toggle has no replacement launcher control |
 | Persisted ordered recents store | **do not build in v1** (recommendation; §4) | W1 — nothing to adapt; derivation covers the need |
 
 ## 4. Product question for the operator (blocks closing this row)

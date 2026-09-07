@@ -901,7 +901,6 @@ export type SidecarClientMessage =
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
-  | AgentModeSetMessage
   | TaskControlVerbMessage
   | RunControlVerbMessage
   | SessionActionVerbMessage
@@ -1677,90 +1676,54 @@ export type TasksSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * Agent-mode / Orchestrator read-seam (P4-8, D2 `decisions/AGENT-CHROME.md`)
+ * Live worker read-seam
  * ------------------------------------------------------------------------- *
  *
- * The orchestrator surfaces the real worker roster/state. Per D2 §4 there are two
- * real engine feeds, joined at the sidecar trust boundary and served as ONE
- * redacted display snapshot (never a mock worker object — D2 C5):
- *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state
- *      (`<transcript>.agent-mode-state.json`, `src/agent-mode/sessionState.ts:68`),
- *      read through the engine's OWN exact-session `readSessionState` entry point
- *      (`sessionState.ts`) — objective, run phase, and persisted workers for the
- *      current engine session. Cross-session continuity stays inside the engine's
- *      resume machinery and is not part of this desktop snapshot.
- *   2. Live plane — the `local_agent` workers the current session delegated via the
- *      Agent tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads),
- *      carrying the real handoff gate: `handoffStatus:'blocked'` is the "waiting on
- *      orchestrator" state (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:184`), not
- *      a fixture field — plus its `blockReason` and verification `verdict`.
- * Outbound-only, read-only, no new inbound vocabulary. secretGuard-clean by
- * construction: identity/role/status/description text only, never a token.
+ * This is a read-only projection of the current session's live `local_agent`
+ * task records. It is outbound-only: worker lifecycle controls continue to use
+ * the generic task-control verbs, and no mode toggle or persisted worker ledger
+ * crosses the desktop boundary.
  */
 
-/** Run phase mirrored from the engine's `AgentModeRunPhase` (`sessionState.ts:7`). */
-export type AgentModeRunPhase =
-  | 'planning'
-  | 'awaiting_approval'
-  | 'executing'
-  | 'verifying'
-  | 'completed'
-  | 'blocked'
-  | 'cancelled'
-
-export type AgentModeWorkerItem = {
-  /** Stable worker id — persisted `AgentModeWorkerSession.agentId`, else the live task id. */
+export type LiveWorkerItem = {
+  /** Stable worker id from the live task record. */
   agentId: string
-  /** Display handle (persisted `handle` / live task `agentName`); null when unnamed. */
+  /** Display handle from the live task; null when unnamed. */
   handle: string | null
-  /** Role / subagent type (persisted `role` / live task `agentType`); null when unknown. */
+  /** Role / subagent type from the live task; null when unknown. */
   role: string | null
-  /** Lifecycle status. Live task `pending` folds to `running` (in-flight). */
+  /** Lifecycle status. A live task `pending` folds to `running` (in-flight). */
   status: 'running' | 'completed' | 'failed' | 'killed'
-  /** Delegated task/prompt text (persisted `description` / live task `label`); null when absent. */
+  /** Delegated task text; null when absent. */
   description: string | null
-  /** Persisted synthesis gate (result-ready / reviewed) — agent-mode session plane only. */
-  synthesisStatus?: 'pending' | 'synthesized'
-  /** Engine-origin metadata; the desktop sidecar's exact-session read normally yields `current`. */
-  origin?: 'current' | 'prior'
-  /** Persisted resumability (meaningful for `prior`-origin workers). */
-  resumable?: boolean
-  /**
-   * Live `local_agent` handoff gate. `blocked` is the real "waiting on orchestrator"
-   * state (orchestrator-owned, neutral) — the source of the `waiting` display state.
-   */
+  /** Live handoff gate. */
   handoffStatus?: 'done' | 'blocked'
-  /** Live `local_agent` block reason (only present when `handoffStatus === 'blocked'`). */
+  /** Live block reason, only present when the handoff is blocked. */
   blockReason?: string
-  /** Live `local_agent` verification verdict, when the worker is a verifier. */
+  /** Live verification verdict, when the worker is a verifier. */
   verdict?: 'PASS' | 'FAIL' | 'PARTIAL'
-  /** Live `local_agent` backgrounded flag. */
+  /** Whether the live worker runs in the background. */
   isBackgrounded?: boolean
-  /** Persisted agent output summary (agent-mode session plane), when present. */
-  outputSummary?: string
+  /**
+   * Bounded text-only content from the live task result. The sidecar omits this
+   * field when the result is unavailable or fails its secret scan.
+   */
+  resultSummary?: string
 }
 
-export type AgentModeSnapshot = {
-  /** Process-level agent-mode flag (`isAgentMode()`); false = a normal delegating session. */
-  active: boolean
-  /** Objective from the persisted agent-mode ledger; '' when none. */
-  objective: string
-  /** Derived run phase from the persisted state; 'planning' when none. */
-  phase: AgentModeRunPhase
-  /** Unified worker list: live `local_agent` workers ∪ this session's persisted workers. */
-  workers: AgentModeWorkerItem[]
+export type LiveWorkersSnapshot = {
+  workers: LiveWorkerItem[]
 }
 
-export type AgentModeSnapshotFrame = {
-  kind: 'agent-mode.snapshot'
+export type WorkersSnapshotFrame = {
+  kind: 'workers.snapshot'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
-  agentMode: AgentModeSnapshot
+  workers: LiveWorkersSnapshot
 }
 
 /* ------------------------------------------------------------------------- *
- * Codex lease read-seam (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7
- * + §10 ruling 2026-07-30)
+ * Codex lease read-seam (P4-32b, L1, 2026-07-30 ruling)
  * ------------------------------------------------------------------------- *
  *
  * "Which Codex account is each agent in this swarm leasing right now?" is real
@@ -1787,8 +1750,8 @@ export type AgentModeSnapshotFrame = {
  * (`src/query.ts:325`). A `local_agent` task's id IS that same agentId
  * (`createTaskStateBase(agentId, 'local_agent', …)`,
  * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:618`), and the roster carries it as
- * `AgentModeWorkerItem.agentId` (`app/sidecar/agentModeDomain.ts:212`). So
- * `ownerId === AgentModeWorkerItem.agentId` needs no new field on either side.
+ * `LiveWorkerItem.agentId` (`app/sidecar/workersDomain.ts`). So
+ * `ownerId === LiveWorkerItem.agentId` needs no new field on either side.
  *
  * CUT (§10): the prototype's failover/rotation EVENT strip. The engine exposes
  * current lease/failover state (`failoverCount` + `lastFailureReason`), not an
@@ -1833,7 +1796,7 @@ export type LeaseMovedFrom = {
 /** One owner→account lease row, projected from the engine's `CodexLease` (`codexAccountLeaseManager.ts:24-37`). */
 export type LeaseOwnerRow = {
   leaseId: string
-  /** `'main-thread'` for the main lease, else the subagent `agentId` (joins `AgentModeWorkerItem.agentId`). */
+  /** `'main-thread'` for the main lease, else the subagent `agentId` (joins `LiveWorkerItem.agentId`). */
   ownerId: string
   ownerType: 'main' | 'subagent'
   /** Engine-authored label: `'Main thread'` or the delegated task description. */
@@ -1882,9 +1845,9 @@ export type LeaseSnapshot = {
 }
 
 /**
- * P4-32b outbound frame. Emitted on attach beside the other read-seam snapshots
- * and re-broadcast on the same app-state store change that re-broadcasts
- * `agent-mode.snapshot` (a worker spawn/finish is exactly when leases move).
+ * Outbound frame. Emitted on attach beside the other read-seam snapshots and
+ * re-broadcast on the same app-state store change as the worker roster (a worker
+ * spawn/finish is exactly when leases move).
  * Read-only: there is no lease verb.
  */
 export type LeaseSnapshotFrame = {
@@ -1895,65 +1858,17 @@ export type LeaseSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * P4-8b — agent-mode WRITE verb (the in-session Orchestrator toggle's set)
- * ------------------------------------------------------------------------- *
- *
- * The WelcomeScreen's Orchestrator control was a read-only reflect of
- * `AgentModeSnapshot.active`; this verb makes the in-session (`variant:'session'`)
- * toggle ACTUALLY switch the addressed session's agent mode. Like the P4-5
- * account verbs, the P4-15 workspace-trust accept, and the P4-19 settings write,
- * it is app-owned inbound vocabulary the engine's shared `appClientMessageSchema`
- * does NOT carry — it is validated by a sidecar-LOCAL Zod schema at the trust
- * boundary and dispatched to the engine's OWN runtime mode switch
- * `matchSessionMode` (`src/agent-mode/agentMode.ts:102`), the SAME function the
- * `/agent` command uses. It sets/clears `CLAUDE_CODE_AGENT_MODE` in THIS session's
- * sidecar process only (N-process, LOCKED) and logs `tengu_agent_mode_switched`;
- * `isAgentMode()` is a live env read (`agentMode.ts:37`), so the NEXT turn's system
- * prompt (`src/utils/queryContext.ts:66`) runs in the new mode. NO engine respawn,
- * NO session-lifecycle change (`decisions/AGENT-MODE-TOGGLE.md`).
- *
- *  - The renderer authors ONLY the boolean intent; the sidecar calls the engine
- *    function and re-reads `isAgentMode()`. No path, no token crosses either way.
- *  - T5a-analog — the verb carries a `requestId` echoed on `agent-mode.set.result`.
- *  - T7 — the existing inbound size/rate caps apply unchanged.
- */
-export const AGENT_MODE_VERB_TYPES = ['agent-mode.set'] as const
-
-export type AgentModeVerbType = (typeof AGENT_MODE_VERB_TYPES)[number]
-
-/** Set the addressed session's agent mode on/off (live env switch; no respawn). */
-export type AgentModeSetMessage = {
-  type: 'agent-mode.set'
-  requestId: string
-  active: boolean
-}
-
-/**
- * P4-8b outbound result echoing the verb's `requestId`, followed by an updated
- * `agent-mode.snapshot` (with the new `active`) when the switch changed the mode.
- */
-export type AgentModeSetResultFrame = {
-  kind: 'agent-mode.set.result'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  requestId: string
-  ok: boolean
-  /** Redacted, human-readable outcome; NEVER carries token material. */
-  message: string
-}
-
-/* ------------------------------------------------------------------------- *
  * P4-8b — task/worker lifecycle verbs
  * ------------------------------------------------------------------------- *
  *
- * P4-8's orchestrator roster/detail/focus surfaces landed READ-ONLY; the
- * `WorkerDetail` Stop button (`decisions/AGENT-CHROME.md` §2 keep/adapt +
- * PARITY-LEDGER §20 row "`WorkerDetail` Stop button", and the TasksPage
+ * P4-8's worker roster/detail/focus surfaces landed READ-ONLY; the
+ * `WorkerDetail` Stop button, the PARITY-LEDGER §20 row
+ * "`WorkerDetail` Stop button", and the TasksPage
  * `K → stop` deferral in PARITY-LEDGER §21) was DEFERRED as "needs an inbound
  * write verb". This is that verb. Like the P4-5 account verbs, the P4-8b
- * agent-mode set, the P4-15 workspace-trust accept, the P4-19 settings write,
- * and the P4-24c run-controls, it is app-owned inbound vocabulary the engine's
- * shared `appClientMessageSchema` does NOT carry — validated by a sidecar-LOCAL
+ * P4-15 workspace-trust accept, the P4-19 settings write, and the P4-24c
+ * run-controls, it is app-owned inbound vocabulary the engine's shared
+ * `appClientMessageSchema` does NOT carry — validated by a sidecar-LOCAL
  * Zod schema at the trust boundary and dispatched to the engine's OWN task-abort
  * machinery `stopTask` (`src/tasks/stopTask.ts:58` — the SAME function
  * `TaskStopTool` and the SDK `stop_task` control use). `stopTask` looks the task
@@ -1971,7 +1886,7 @@ export type AgentModeSetResultFrame = {
  *  - T5a-analog — the verb carries a `requestId` echoed on `task-control.result`.
  *  - T7 — the existing inbound size/rate caps apply unchanged.
  *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
- *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
+ *    `tasks.snapshot` / `workers.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
  *
  * `task.background` is the terminal Ctrl+B operation. It carries no task id:
@@ -1993,7 +1908,7 @@ export type AgentModeSetResultFrame = {
  * (`src/state/teammateViewHelpers.ts:116`, wired at
  * `src/components/PromptInput/PromptInput.tsx:1872`), which sets `evictAfter: 0`.
  * This verb is that same escape hatch, reached from the worker detail's controls
- * (`decisions/AGENT-CHROME.md` §2 `WorkerDetail` adapt; PARITY-LEDGER §20 sits the
+ * (`WorkerDetail` adapt; PARITY-LEDGER §20 sits the
  * Stop control there already). The full diagnosis is the CC-32 row in
  * `docs/migration/STATUS.md`.
  *
@@ -2080,7 +1995,7 @@ export type TaskControlVerbMessage =
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
- * `tasks.snapshot` / `agent-mode.snapshot` follow from the store subscription, not
+ * `tasks.snapshot` / `workers.snapshot` follow from the store subscription, not
  * from here. `ok:false` when the task was gone or already terminal (fail-closed).
  */
 export type TaskControlResultFrame = {
@@ -2099,10 +2014,10 @@ export type TaskControlResultFrame = {
  * ------------------------------------------------------------------------- *
  *
  * The composer's Model / Reasoning-effort / Fast faces (P4-24, read-only) become
- * interactive. Like the P4-5 account verbs, the P4-8b agent-mode set, the P4-15
- * workspace-trust accept, and the P4-19 settings write, these are app-owned
- * inbound vocabulary the engine's shared `appClientMessageSchema` does NOT carry
- * — each is validated by a sidecar-LOCAL Zod schema at the trust boundary and
+ * interactive. Like the P4-5 account verbs, the P4-15 workspace-trust accept,
+ * and the P4-19 settings write, these are app-owned inbound vocabulary the
+ * engine's shared `appClientMessageSchema` does NOT carry — each is validated by
+ * a sidecar-LOCAL Zod schema at the trust boundary and
  * dispatched to the engine's OWN per-session setters (`decisions/
  * COMPOSER-RUN-CONTROLS.md`), a LIVE per-session change with NO respawn:
  *
@@ -2348,10 +2263,10 @@ export type RunControlsSnapshotFrame = {
  * ------------------------------------------------------------------------- *
  *
  * Session-scoped mutations share one result family. Like the P4-5
- * account verbs, the P4-8b agent-mode set, the P4-15 workspace-trust accept, the
- * P4-19 settings write, and the P4-24c run-controls, these are app-owned inbound
- * vocabulary the engine's shared `appClientMessageSchema` does NOT carry — each is
- * validated by a sidecar-LOCAL Zod schema at the trust boundary + the closed
+ * account verbs, the P4-15 workspace-trust accept, the P4-19 settings write, and
+ * the P4-24c run-controls, these are app-owned inbound vocabulary the engine's
+ * shared `appClientMessageSchema` does NOT carry — each is validated by a
+ * sidecar-LOCAL Zod schema at the trust boundary + the closed
  * `checkStrictKeys` allowlist, then dispatched to the engine's OWN machinery for
  * THIS session (the sidecar is one process per session, N-process LOCKED):
  *
@@ -3291,8 +3206,12 @@ export type SessionCatalogEntry = {
   gitBranch: string | null
   /** The single searchable tag on the session, else null. */
   tag: string | null
-  /** Session mode (agent/coordinator/normal), else null. */
-  mode: 'agent' | 'coordinator' | 'normal' | null
+  /**
+   * Session mode, else null. The sidecar normalizes before emitting, so a
+   * legacy transcript recorded with mode `agent` arrives as
+   * `normal` rather than as a third value no current surface can render.
+   */
+  mode: 'coordinator' | 'normal' | null
   /** The `--agents` setting string, else null. */
   agentSetting: string | null
   /** PR number + repository (owner/repo#N chip), else null. */
@@ -3729,9 +3648,8 @@ export type ServerFramePayload =
   | MemorySnapshotFrame
   | ContextBreakdownSnapshotFrame
   | TasksSnapshotFrame
-  | AgentModeSnapshotFrame
+  | WorkersSnapshotFrame
   | LeaseSnapshotFrame
-  | AgentModeSetResultFrame
   | TaskControlResultFrame
   | RunControlsSnapshotFrame
   | RunControlResultFrame
@@ -3792,8 +3710,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'memory.snapshot': true,
   'context-breakdown.snapshot': true,
   'tasks.snapshot': true,
-  'agent-mode.snapshot': true,
-  'agent-mode.set.result': true,
+  'workers.snapshot': true,
   'lease.snapshot': true,
   'task-control.result': true,
   'run-controls.snapshot': true,
@@ -3993,17 +3910,8 @@ export type CatCodeBridge = {
    */
   workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void
   /**
-   * P4-8b — set the addressed session's agent mode on/off (the in-session
-   * WelcomeScreen Orchestrator toggle). The renderer authors ONLY the boolean
-   * intent; the sidecar calls the engine's own `matchSessionMode` (a live
-   * `CLAUDE_CODE_AGENT_MODE` env switch in THIS session's process — no respawn,
-   * no lifecycle change) and re-broadcasts `agent-mode.snapshot`. main mints the
-   * `requestId`; the outcome arrives as an `agent-mode.set.result` frame.
-   */
-  setAgentMode(sessionId: SessionId, active: boolean): void
-  /**
    * P4-8b — stop/kill a running task on the addressed session's sidecar (the
-   * deferred worker-control action; primary case: an orchestrator `local_agent`
+   * deferred worker-control action; primary case: a delegated `local_agent`
    * worker). The renderer authors ONLY the target `taskId` (a `TaskSnapshotItem.id`
    * already on the wire) + a `requestId`; the sidecar re-resolves it against the
    * LIVE `AppState.tasks` and dispatches the engine's OWN `stopTask` — no path, no

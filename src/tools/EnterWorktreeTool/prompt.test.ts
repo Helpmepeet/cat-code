@@ -6,8 +6,8 @@ describe('EnterWorktree prompt', () => {
     const prompt = getEnterWorktreeToolPrompt()
 
     expect(prompt).toContain('isolated workspace for this attempt')
-    expect(prompt).toContain('main workspace stays untouched')
-    expect(prompt).toContain('Agent Mode')
+    expect(prompt).toContain('main workspace untouched')
+    expect(prompt).toContain('Use isolation for parallel edits')
     expect(prompt).toContain('Do not ask the user to remember the worktree path or branch')
   })
 

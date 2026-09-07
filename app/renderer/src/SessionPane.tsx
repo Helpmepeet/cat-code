@@ -119,13 +119,13 @@ import {
   type ConnectionSnapshot,
 } from './connectionState.js'
 import {
-  selectDockedOrchestratorWorkers,
-} from './orchestratorState.js'
+  selectDockedWorkers,
+} from './workersState.js'
 import {
   AgentFaceRegistryContext,
   AgentFaceRegistryStoreContext,
 } from './agentFace.js'
-import { OrchestratorRoster } from './OrchestratorRoster.js'
+import { WorkerRoster } from './WorkerRoster.js'
 import {
   resultToastTone,
   switchVerb,
@@ -136,7 +136,7 @@ import type {
   AccountsSnapshot,
   AnthropicAccountStatus,
   AccountSwitchMessage,
-  AgentModeWorkerItem,
+  LiveWorkerItem,
   AskUserQuestionAnswer,
   LeaseSnapshot,
   PermissionSetModeMode,
@@ -164,8 +164,8 @@ import { errorMessage } from './appModel.js'
 const EMPTY_QUEUED_PROMPTS: readonly QueuedPromptItem[] = []
 /** Stable empty catalog so an omitted `slashCatalog` prop keeps one identity. */
 const EMPTY_SLASH_CATALOG: readonly SlashCatalogEntry[] = []
-/** Stable identity so a session with no orchestrator snapshot never re-renders. */
-const EMPTY_WORKERS: readonly AgentModeWorkerItem[] = []
+/** Stable identity so a session with no worker snapshot never re-renders. */
+const EMPTY_WORKERS: readonly LiveWorkerItem[] = []
 
 /** Renderer-minted correlation id for a run-control verb (T5a-analog; echoed on
  * `run-control.result`). A UX field, not a security one — the sidecar bounds it.
@@ -232,9 +232,7 @@ export function SessionPane({
   askPendingCount,
   onAnswerQuestions,
   onCancelQuestions,
-  orchestratorActive,
-  onToggleOrchestrator,
-  orchestratorWorkers = EMPTY_WORKERS,
+  workers = EMPTY_WORKERS,
   onOpenTasks,
   onBackgroundSubagent,
   tasksSnapshot = null,
@@ -1152,8 +1150,6 @@ export function SessionPane({
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
             sandboxed={sandboxed}
-            orchestratorActive={orchestratorActive}
-            onToggleOrchestrator={onToggleOrchestrator}
             restorePhase={restorePhase}
             revealHidden={revealHidden}
             state={transcript}
@@ -1347,19 +1343,19 @@ export function SessionPane({
        * composer is `shrink-0`, the roster and activity rows stop at their own
        * min-content), so squeeze lands there and turns into scroll. */}
       <div className="mx-auto flex min-h-0 w-full max-w-[var(--transcript-width)] flex-col">
-      {/* P4-32a (R1) — the orchestrator worker roster is the prototype's declared
-       * host for this block: above the composer, in the transcript's own measure,
-       * ahead of the permission/question stack. It dims while the assistant is
-       * itself generating, and renders nothing when there are no workers.
+      {/* The worker roster stays above the composer, in the transcript's own
+       * measure, ahead of the permission/question stack. It dims while the
+       * assistant is itself generating, and renders nothing when there are no
+       * workers.
        *
        * OUTSIDE the scrolling region below, deliberately: it is at most one row
        * tall (a second worker collapses it to a summary line), and its full
        * roster opens as an `absolute bottom-full` popover that a scroll
        * container would clip. */}
-      <OrchestratorRoster
+      <WorkerRoster
         compact={generating}
         onOpen={onOpenTasks}
-        workers={selectDockedOrchestratorWorkers(orchestratorWorkers)}
+        workers={selectDockedWorkers(workers)}
       />
 
       {/* Everything docked that can grow without limit — the question card, the
@@ -1395,7 +1391,7 @@ export function SessionPane({
         onDeny={denyPermission}
         onRestore={restorePermission}
         onSnooze={snoozePermission}
-        workers={orchestratorWorkers}
+        workers={workers}
       />
 
       {showLogError ? (
@@ -2034,14 +2030,8 @@ type SessionPaneProps = {
   onSetFast?: (active: boolean) => void
   copyForLlm: () => void
   denyPermission: (requestId: string, message?: string) => void
-  /** This session's agent-mode active flag, shown in the empty Welcome. */
-  orchestratorActive: boolean
-  /** P4-8b — toggle THIS session's agent mode from the empty-state Orchestrator
-   * switch (renderer authors the boolean intent → the `agent-mode.set` verb).
-   * Optional: when absent the empty-state toggle degrades to a read-only reflect. */
-  onToggleOrchestrator?: (next: boolean) => void
-  /** P4-32a (R1) — this session's real worker roster, docked above the composer. */
-  orchestratorWorkers?: readonly AgentModeWorkerItem[]
+  /** This session's live worker roster, docked above the composer. */
+  workers?: readonly LiveWorkerItem[]
   /** P4-32a — open the workers/tasks list (the roster's click-through). */
   onOpenTasks?: (agentId?: string) => void
   /** Live engine task mode. Kept outside transcript cards so task state never mutates transcript history. */

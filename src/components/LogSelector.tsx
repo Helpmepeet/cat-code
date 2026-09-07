@@ -107,7 +107,7 @@ function extractSnippet(text: string, query: string, contextChars: number): Snip
     after: afterRaw.replace(/\s+/g, ' ').trimEnd() + (snippetEnd < text.length ? '…' : '')
   };
 }
-function buildLogLabel(log: LogOption, maxLabelWidth: number, options?: {
+export function buildLogLabel(log: LogOption, maxLabelWidth: number, options?: {
   isGroupHeader?: boolean;
   isChild?: boolean;
   forkCount?: number;
@@ -120,12 +120,11 @@ function buildLogLabel(log: LogOption, maxLabelWidth: number, options?: {
 
   // TreeSelect will add the prefix, so we just need to account for its width
   const prefixWidth = isGroupHeader && forkCount > 0 ? PARENT_PREFIX_WIDTH : isChild ? CHILD_PREFIX_WIDTH : 0;
-  const modeSuffix = log.mode === 'agent' ? ' [agent]' : '';
   const sessionCountSuffix = isGroupHeader && forkCount > 0 ? ` (+${forkCount} other ${forkCount === 1 ? 'session' : 'sessions'})` : '';
   const sidechainSuffix = log.isSidechain ? ' (sidechain)' : '';
-  const maxSummaryWidth = maxLabelWidth - prefixWidth - modeSuffix.length - sidechainSuffix.length - sessionCountSuffix.length;
+  const maxSummaryWidth = maxLabelWidth - prefixWidth - sidechainSuffix.length - sessionCountSuffix.length;
   const truncatedSummary = normalizeAndTruncateToWidth(getLogDisplayTitle(log), maxSummaryWidth);
-  return `${truncatedSummary}${modeSuffix}${sidechainSuffix}${sessionCountSuffix}`;
+  return `${truncatedSummary}${sidechainSuffix}${sessionCountSuffix}`;
 }
 function buildLogMetadata(log: LogOption, options?: {
   isChild?: boolean;

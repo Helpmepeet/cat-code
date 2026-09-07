@@ -1,13 +1,13 @@
 /**
  * P4-32a — the docked worker roster (ruling R1). Renders every prototype UX state
- * over the REAL `AgentModeWorkerItem` shape; the two-axis invariant (D2 C2) is
+ * over the REAL `LiveWorkerItem` shape; the two-axis invariant (D2 C2) is
  * asserted at the surface, not only in the selector, so a regression that colours
  * an assistant-owned worker amber, or points its baton at the user, fails here.
  */
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { OrchestratorRoster } from './OrchestratorRoster.js'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import { WorkerRoster } from './WorkerRoster.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 import {
   AgentFaceRegistryContext,
   createAgentFaceRegistry,
@@ -19,11 +19,11 @@ import { AGENT_FACE_IDENTITY_FILL } from './agentChromeModel.js'
 /** The baton's rendered text, matched literally so a tone swap cannot hide. */
 const BATON_ASSISTANT = '→</span>assistant'
 
-function worker(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
+function worker(over: Partial<LiveWorkerItem> = {}): LiveWorkerItem {
   return {
     agentId: 'w-1',
     handle: 'Turing',
-    role: 'agent-mode-coding-worker',
+    role: 'coding-worker',
     status: 'running',
     description: 'Port the roster',
     ...over,
@@ -32,13 +32,13 @@ function worker(over: Partial<AgentModeWorkerItem> = {}): AgentModeWorkerItem {
 
 test('no workers renders nothing (the roster never occupies the composer dock idly)', () => {
   expect(
-    renderToStaticMarkup(<OrchestratorRoster workers={[]} />),
+    renderToStaticMarkup(<WorkerRoster workers={[]} />),
   ).toBe('')
 })
 
 test('one worker renders the named row: handle, task, normalized type, and lifecycle pip', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster workers={[worker()]} />,
+    <WorkerRoster workers={[worker()]} />,
   )
   expect(html).toContain('Turing')
   expect(html).toContain('Port the roster')
@@ -63,7 +63,7 @@ test('one worker renders the named row: handle, task, normalized type, and lifec
 
 test('several quiet workers render the resting line: counts, no privileged name', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[
         worker({ agentId: 'w-1' }),
         worker({ agentId: 'w-2', handle: 'Hopper' }),
@@ -71,7 +71,7 @@ test('several quiet workers render the resting line: counts, no privileged name'
           agentId: 'w-3',
           handle: 'Bell',
           status: 'completed',
-          synthesisStatus: 'synthesized',
+          isBackgrounded: true,
         }),
       ]}
     />,
@@ -87,7 +87,7 @@ test('several quiet workers render the resting line: counts, no privileged name'
 
 test('a swarm with news promotes one worker and keeps the rest as neutral counts', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[
         worker({ agentId: 'w-run' }),
         worker({ agentId: 'w-fail', handle: 'Hopper', status: 'failed' }),
@@ -105,7 +105,7 @@ test('a swarm with news promotes one worker and keeps the rest as neutral counts
 
 test('an unnamed promoted worker leads with its task description and keeps count context accessible', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[
         worker({ agentId: 'w-run', handle: null, role: 'general-purpose' }),
         worker({
@@ -127,7 +127,7 @@ test('an unnamed promoted worker leads with its task description and keeps count
 test('a blocked worker is neutral and hands the baton to the assistant, never to you', () => {
   const blocked = [worker({ status: 'completed', handoffStatus: 'blocked' })]
 
-  const html = renderToStaticMarkup(<OrchestratorRoster workers={blocked} />)
+  const html = renderToStaticMarkup(<WorkerRoster workers={blocked} />)
   expect(html).toContain('status Waiting on the assistant')
   expect(html).not.toContain('>Waiting on the assistant<')
   expect(html).toContain(BATON_ASSISTANT)
@@ -141,10 +141,10 @@ test('a blocked worker is neutral and hands the baton to the assistant, never to
 test('the compact state dims the resting header only (the counts stay legible)', () => {
   const workers = [worker({ agentId: 'w-1' }), worker({ agentId: 'w-2' })]
   const resting = renderToStaticMarkup(
-    <OrchestratorRoster workers={workers} />,
+    <WorkerRoster workers={workers} />,
   )
   const compact = renderToStaticMarkup(
-    <OrchestratorRoster compact workers={workers} />,
+    <WorkerRoster compact workers={workers} />,
   )
   expect(resting).toContain('text-text-subtle">2 subagents')
   expect(compact).toContain('text-text-faint">2 subagents')
@@ -156,7 +156,7 @@ test('an unnamed worker omits its name and puts the normalized type on the right
   // must not print a word the engine never supplied, and must not dress a role up
   // in the `@handle` styling.
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[worker({ handle: null, role: 'Explore', description: null })]}
     />,
   )
@@ -167,7 +167,7 @@ test('an unnamed worker omits its name and puts the normalized type on the right
 
 test('a worker with neither handle nor role still renders an honest row', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[worker({ handle: null, role: null, description: 'Do the thing' })]}
     />,
   )
@@ -179,7 +179,7 @@ test('a worker with neither handle nor role still renders an honest row', () => 
 
 test('a legacy handle equal to the worker id never leaks through the roster', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[worker({ agentId: 'internal-agent-id', handle: 'internal-agent-id' })]}
     />
   )
@@ -188,31 +188,29 @@ test('a legacy handle equal to the worker id never leaks through the roster', ()
   expect(html).toContain('Coding worker')
 })
 
-test('compact rows hide Resumable as a word while retaining it in accessible status text', () => {
+test('completed workers stay quiet and do not expose retired lifecycle vocabulary', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[
         worker({
-          agentId: 'legacy-resumable-id',
-          handle: 'legacy-resumable-id',
+          agentId: 'completed-id',
+          handle: 'completed-id',
           role: 'general-purpose',
           status: 'completed',
-          origin: 'prior',
-          resumable: true,
-          description: 'Resume the investigation',
+          description: 'Completed investigation',
         }),
       ]}
     />,
   )
   expect(html).toContain('General-purpose')
-  expect(html).toContain('status Resumable')
-  expect(html).not.toContain('>Resumable<')
-  expect(html).not.toContain('legacy-resumable-id')
+  expect(html).toContain('status Completed')
+  expect(html).not.toContain('Resumable')
+  expect(html).not.toContain('completed-id')
 })
 
 test('the mention sigil is stripped from a handle for display', () => {
   const html = renderToStaticMarkup(
-    <OrchestratorRoster workers={[worker({ handle: '@Turing' })]} />,
+    <WorkerRoster workers={[worker({ handle: '@Turing' })]} />,
   )
   expect(html).toContain('>Turing<')
   expect(html).not.toContain('@Turing')
@@ -238,7 +236,7 @@ test('a roster row draws its worker from the SHELL registry, not the raw hash', 
 
   const html = renderToStaticMarkup(
     <AgentFaceRegistryContext.Provider value={registry}>
-      <OrchestratorRoster workers={[worker()]} />
+      <WorkerRoster workers={[worker()]} />
     </AgentFaceRegistryContext.Provider>,
   )
 
@@ -251,7 +249,7 @@ test('an unnamed worker still gets its own face, keyed on the agent id', () => {
   // name is what stops the column becoming a run of identical featureless
   // stamps, which would read worse than no stamp at all.
   const html = renderToStaticMarkup(
-    <OrchestratorRoster
+    <WorkerRoster
       workers={[
         worker({ agentId: 'w-1', handle: null }),
         worker({ agentId: 'w-2', handle: null }),

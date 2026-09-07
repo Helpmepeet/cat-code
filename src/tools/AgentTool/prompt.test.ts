@@ -3,10 +3,9 @@ import { getBuiltInAgents } from './builtInAgents.js'
 import { VERIFICATION_WHEN_TO_USE } from './built-in/verificationAgent.js'
 import { getPrompt } from './prompt.js'
 
-describe('Agent tool prompt in Agent Mode', () => {
+describe('Agent tool prompt', () => {
   const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
   const originalOpenAiApiKey = process.env.OPENAI_API_KEY
-  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalAgentListInMessages =
     process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES
 
@@ -28,12 +27,6 @@ describe('Agent tool prompt in Agent Mode', () => {
       process.env.OPENAI_API_KEY = originalOpenAiApiKey
     }
 
-    if (originalAgentMode === undefined) {
-      delete process.env.CLAUDE_CODE_AGENT_MODE
-    } else {
-      process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
-    }
-
     if (originalAgentListInMessages === undefined) {
       delete process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES
     } else {
@@ -43,7 +36,6 @@ describe('Agent tool prompt in Agent Mode', () => {
   })
 
   test('advertises normal-mode implementor and verification agent types', async () => {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
     process.env.CLAUDE_CODE_AGENT_LIST_IN_MESSAGES = 'false'
 
     const prompt = await getPrompt(
@@ -51,26 +43,12 @@ describe('Agent tool prompt in Agent Mode', () => {
       false,
       undefined,
       'openai',
-      false,
     )
 
     expect(prompt).toContain('- implementor:')
     expect(prompt).toContain('- verification:')
     expect(prompt).toContain('Read-only async verification tools')
     expect(prompt).not.toContain(`- verification: ${VERIFICATION_WHEN_TO_USE} (Tools: All tools except`)
-    expect(prompt).not.toContain('- agent-mode-coding-worker:')
-    expect(prompt).not.toContain('- agent-mode-verifier:')
-  })
-
-  test('makes worker-first execution and verifier use more concrete at runtime', async () => {
-    const prompt = await getPrompt([], false, undefined, 'openai', true)
-
-    expect(prompt).toContain('prefer a worker over main-thread execution for any implementation expected to touch multiple files')
-    expect(prompt).toContain('If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file')
-    expect(prompt).toContain('After launching Explore on a question, do not keep doing the same search on the main thread')
-    expect(prompt).toContain('A real implementation phase should usually belong to a coding worker, not the orchestrator')
-    expect(prompt).toContain('If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default')
-    expect(prompt).toContain('prompt, session-state, worker-control, or orchestration behavior changed')
   })
 
   test('gates normal-mode worker control guidance by caller capabilities', async () => {
@@ -79,7 +57,6 @@ describe('Agent tool prompt in Agent Mode', () => {
       false,
       undefined,
       'openai',
-      false,
       {
         canSendMessage: true,
         canResumeAgent: false,
@@ -95,7 +72,6 @@ describe('Agent tool prompt in Agent Mode', () => {
       false,
       undefined,
       'openai',
-      false,
       {
         canSendMessage: true,
         canResumeAgent: true,
@@ -120,7 +96,6 @@ describe('Agent tool prompt in Agent Mode', () => {
         false,
         undefined,
         provider,
-        false,
       )
 
       expect(prompt).toContain('**Foreground vs background**')
@@ -139,7 +114,6 @@ describe('Agent tool prompt in Agent Mode', () => {
         false,
         undefined,
         provider,
-        false,
       )
 
       expect(prompt).toContain(
@@ -151,42 +125,4 @@ describe('Agent tool prompt in Agent Mode', () => {
     }
   })
 
-  test('gates Agent Mode worker control guidance by caller capabilities', async () => {
-    const restricted = await getPrompt(
-      getBuiltInAgents(),
-      false,
-      undefined,
-      'openai',
-      true,
-      {
-        canSendMessage: false,
-        canResumeAgent: false,
-        canSpawnAgent: true,
-        canStopTask: false,
-      },
-    )
-    expect(restricted).not.toContain('Use ResumeAgent')
-    expect(restricted).not.toContain('Use SendMessage')
-    expect(restricted).not.toContain('use TaskStop')
-
-    const full = await getPrompt(
-      getBuiltInAgents(),
-      false,
-      undefined,
-      'openai',
-      true,
-      {
-        canSendMessage: true,
-        canResumeAgent: true,
-        canSpawnAgent: true,
-        canStopTask: true,
-      },
-    )
-    expect(full).toContain(
-      'use TaskStop with `task_id` set to the `agentId` returned by Agent',
-    )
-    expect(full).toContain('Use ResumeAgent')
-    expect(full).toContain('Use SendMessage')
-    expect(full).toContain('does not cancel or interrupt the worker')
-  })
 })

@@ -11,7 +11,7 @@
 
 import { feature } from 'bun:bundle'
 import type { Command } from '../commands.js'
-import { getAgentModeSystemPromptSections, getSystemPrompt } from '../constants/prompts.js'
+import { getSystemPrompt } from '../constants/prompts.js'
 import { getSystemContext, getUserContext } from '../context.js'
 import type { MCPServerConnection } from '../services/mcp/types.js'
 import type { AppState } from '../state/AppStateStore.js'
@@ -19,7 +19,6 @@ import type { Tools, ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { Message } from '../types/message.js'
 import { createAbortController } from './abortController.js'
-import { isEnvTruthy } from './envUtils.js'
 import type { FileStateCache } from './fileStateCache.js'
 import type { CacheSafeParams } from './forkedAgent.js'
 import { getMainLoopModel } from './model/model.js'
@@ -43,7 +42,7 @@ import {
  *
  * Callers assemble the final systemPrompt from defaultSystemPrompt (or
  * customSystemPrompt) + optional extras + appendSystemPrompt. QueryEngine
- * injects coordinator/agent-mode userContext and memory-mechanics prompt on top;
+ * injects coordinator userContext and memory-mechanics prompt on top;
  * sideQuestion's fallback mirrors the same effective prompt selection as closely
  * as possible.
  */
@@ -61,12 +60,10 @@ export async function fetchSystemPromptParts({
   customSystemPrompt: string | undefined
 }): Promise<{
   defaultSystemPrompt: string[]
-  agentModePromptSections: string[] | undefined
   userContext: { [k: string]: string }
   systemContext: { [k: string]: string }
 }> {
-  const isAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-  const [defaultSystemPrompt, agentModePromptSections, userContext, systemContext] = await Promise.all([
+  const [defaultSystemPrompt, userContext, systemContext] = await Promise.all([
     customSystemPrompt !== undefined
       ? Promise.resolve([])
       : getSystemPrompt(
@@ -75,13 +72,10 @@ export async function fetchSystemPromptParts({
           additionalWorkingDirectories,
           mcpClients,
         ),
-    isAgentMode && customSystemPrompt === undefined
-      ? getAgentModeSystemPromptSections(tools, mainLoopModel, additionalWorkingDirectories, mcpClients)
-      : Promise.resolve(undefined),
     getUserContext(),
     customSystemPrompt !== undefined ? Promise.resolve({}) : getSystemContext(),
   ])
-  return { defaultSystemPrompt, agentModePromptSections, userContext, systemContext }
+  return { defaultSystemPrompt, userContext, systemContext }
 }
 
 /**
@@ -125,7 +119,7 @@ export async function buildSideQuestionFallbackParams({
   const mainLoopProvider = resolveRequestProvider(mainLoopModel)
   const appState = getAppState()
 
-  const { defaultSystemPrompt, agentModePromptSections, userContext: baseUserContext, systemContext } =
+  const { defaultSystemPrompt, userContext: baseUserContext, systemContext } =
     await fetchSystemPromptParts({
       tools,
       mainLoopModel,
@@ -146,21 +140,12 @@ const getCoordinatorUserContext: (
 ) => { [k: string]: string } = feature('COORDINATOR_MODE')
   ? require('../coordinator/coordinatorMode.js').getCoordinatorUserContext
   : () => ({})
-const getAgentModeUserContext: (
-  mcpClients: ReadonlyArray<{ name: string }>,
-  scratchpadDir?: string,
-) => Promise<{ [k: string]: string }> = require('../agent-mode/agentMode.js').getAgentModeUserContext
-
   const userContext = {
     ...baseUserContext,
     ...getCoordinatorUserContext(
       mcpClients,
       isScratchpadEnabled() ? getScratchpadDir() : undefined,
     ),
-    ...(await getAgentModeUserContext(
-      mcpClients,
-      isScratchpadEnabled() ? getScratchpadDir() : undefined,
-    )),
   }
 
   const toolUseContextBase: ToolUseContext = {
@@ -200,7 +185,6 @@ const getAgentModeUserContext: (
     customSystemPrompt,
     defaultSystemPrompt,
     appendSystemPrompt,
-    agentModePromptSections,
   })
 
   // Strip in-progress assistant message (stop_reason === null) — same guard

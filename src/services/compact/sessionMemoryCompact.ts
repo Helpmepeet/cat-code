@@ -2,8 +2,6 @@
  * EXPERIMENT: Session memory compaction
  */
 
-import { getSessionId } from '../../bootstrap/state.js'
-import { readSessionState, type AgentSessionState } from '../../agent-mode/sessionState.js'
 import type { AgentId } from '../../types/ids.js'
 import type { HookResultMessage, Message } from '../../types/message.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -45,9 +43,7 @@ import { estimateMessageTokens } from './microCompact.js'
 import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactUserSummaryMessage,
-  toAgentModeCompactState,
 } from './prompt.js'
-import type { AgentModeCompactState } from './prompt.js'
 
 /**
  * Configuration for session memory compaction thresholds
@@ -454,7 +450,6 @@ function createCompactionResultFromSessionMemory(
   hookResults: HookResultMessage[],
   transcriptPath: string,
   agentId?: AgentId,
-  agentModeState?: AgentModeCompactState | null,
 ): CompactionResult {
   const preCompactTokenCount = tokenCountFromLastAPIResponse(messages)
 
@@ -481,7 +476,6 @@ function createCompactionResultFromSessionMemory(
     transcriptPath,
     true,
     resolveRequestProvider(getMainLoopModel(), getAPIProvider()),
-    agentModeState ?? undefined,
   )
 
   if (wasTruncated) {
@@ -533,7 +527,7 @@ export async function trySessionMemoryCompaction(
   messages: Message[],
   agentId?: AgentId,
   autoCompactThreshold?: number,
-  agentModeState?: AgentModeCompactState | null,
+  _unused?: null,
 ): Promise<CompactionResult | null> {
   if (!shouldUseSessionMemoryCompaction()) {
     return null
@@ -562,7 +556,6 @@ export async function trySessionMemoryCompaction(
   }
 
   try {
-    const sessionState = agentId ? null : await readSessionState(getSessionId())
     let lastSummarizedIndex: number
 
     if (lastSummarizedMessageId) {
@@ -615,7 +608,6 @@ export async function trySessionMemoryCompaction(
       hookResults,
       transcriptPath,
       agentId,
-      agentModeState ?? toAgentModeCompactState(sessionState),
     )
 
     const postCompactMessages = buildPostCompactMessages(compactionResult)

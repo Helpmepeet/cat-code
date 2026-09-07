@@ -1,32 +1,6 @@
 /**
- * Docked orchestrator worker roster (P4-32a, ruling R1 in
- * `decisions/ORCHESTRATOR-IN-SESSION.md` §10) — the prototype's
- * `OrchestratorModeWorkerRoster` (OrchestratorMode.jsx:237-373), mounted in the
- * existing max-740px column immediately above the composer so it shares the
- * transcript's measure. It is NOT the terminal worker tree and NOT a page: the
- * ruling is explicit that orchestrator mode is a mode of the ordinary session.
- *
- * Read-only over the real `agent-mode.snapshot` seam. Every field rendered here
- * crosses the wire from an engine feed (`app/sidecar/agentModeDomain.ts`):
- * handle ← `LocalAgentTask.tsx:152` `agentName` / persisted `handle`
- * (`src/agent-mode/sessionState.ts:28`), role ← `:155` `agentType` / persisted
- * `role` (`:31`), task text ← `src/Task.ts:49` `description` / persisted `:32`,
- * lifecycle ← `status` + `synthesisStatus`/`origin`/`resumable` (`:33-35`) and
- * the real handoff gate `handoffStatus` (`LocalAgentTask.tsx:184`). The
- * prototype's `elapsed`, `model`, `tools`, `acct`, `↑/↓` and `cost` subfields
- * have no field on this seam and are ruled cut/waived (§10) — they are not mocked.
- *
- * Lifecycle vs owner stay two independent axes (D2 §1): a blocked worker is
- * NEUTRAL and its baton points at the assistant, never at the user.
- *
- * The drift this header used to flag was ruled on 2026-08-09 and fixed in
- * `orchestratorState.ts`: the escalation keyed on `AgentModeSnapshot.active`
- * (`isAgentMode()`), but a blocked worker's handoff is queued to its PARENT loop
- * unconditionally — `handoffStatus` is parsed from the subagent's own result text
- * (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:501,520`) and the notification goes
- * to the spawning conversation whether or not that session is in Agent Mode. So a
- * normal delegating session read a blocked worker as user-owned when the assistant
- * on that thread actually owned it. There is no `active` axis on this surface now.
+ * Read-only live worker roster. The sidecar projects local-agent tasks into the
+ * `workers.snapshot` frame, while lifecycle and owner remain independent axes.
  */
 import {
   AgentFace,
@@ -38,14 +12,14 @@ import {
 import { useAgentFaceRegistry } from './agentFace.js'
 import {
   deriveWorkerOwner,
-  orchestratorWorkerState,
-  selectOrchestratorRosterLine,
+  workerState,
+  selectWorkerRosterLine,
   selectWorkerDisplayName,
   workerAccessibleLabel,
   type RosterCount,
-} from './orchestratorState.js'
+} from './workersState.js'
 import { agentTypeMeta } from './agentIdentity.js'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 
 /** Count tones as literal classes — never an interpolated arbitrary value. */
 const COUNT_TONE_CLASS: Record<RosterCount['tone'], string> = {
@@ -57,12 +31,12 @@ const COUNT_TONE_CLASS: Record<RosterCount['tone'], string> = {
 const ROW_CLASS =
   'flex w-full items-center gap-2 rounded-[7px] border border-transparent px-[7px] py-[5px] text-left transition-colors hover:border-white/[0.06] hover:bg-white/[0.035]'
 
-export function OrchestratorRoster({
+export function WorkerRoster({
   workers,
   compact = false,
   onOpen,
 }: {
-  workers: readonly AgentModeWorkerItem[]
+  workers: readonly LiveWorkerItem[]
   /** Dimmer resting header while the assistant itself is generating. */
   compact?: boolean
   /** Open the workers list; carries the news-bearing worker's id when there is one. */
@@ -80,7 +54,7 @@ export function OrchestratorRoster({
     )
   }
 
-  const { lead, tail, anyWorking } = selectOrchestratorRosterLine(workers)
+  const { lead, tail, anyWorking } = selectWorkerRosterLine(workers)
 
   return (
     <div className="group relative mx-1 mb-0.5 rounded-[10px] bg-app-bg px-1 py-[3px]">
@@ -144,10 +118,10 @@ function PromotedLead({
   worker,
   tail,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   tail: RosterCount[]
 }) {
-  const state = orchestratorWorkerState(worker)
+  const state = workerState(worker)
   const name = selectWorkerDisplayName(worker)
   return (
     <>
@@ -173,13 +147,13 @@ function PromotedLead({
  * dot rather than joining it: both are identity marks in the row's leading slot,
  * and the normalized type is still spelled out in text further along.
  * The prototype's `elapsed` subfield is a ruled waiver (§10 waiver 8): no
- * elapsed field crosses `AgentModeWorkerItem`, and inventing one would be a mock.
+ * elapsed field crosses `LiveWorkerItem`, and inventing one would be a mock.
  */
 function WorkerRow({
   worker,
   onOpen,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   onOpen?: (agentId?: string) => void
 }) {
   const role = agentTypeMeta(worker.role)
@@ -203,7 +177,7 @@ function WorkerRow({
       ) : (
         <span className="flex-1" />
       )}
-      <AgentPip state={orchestratorWorkerState(worker)} />
+      <AgentPip state={workerState(worker)} />
       <AgentTypeLabel role={worker.role} />
       <Baton owner={deriveWorkerOwner(worker)} />
     </button>
@@ -218,7 +192,7 @@ function WorkerRow({
  *   - null, blank, or legacy `handle === agentId` → nothing;
  *   - the task description and normalized type remain separate row fields.
  */
-function WorkerName({ worker }: { worker: AgentModeWorkerItem }) {
+function WorkerName({ worker }: { worker: LiveWorkerItem }) {
   const name = selectWorkerDisplayName(worker)
   return name ? <AgentHandle name={name} /> : null
 }
@@ -237,7 +211,7 @@ function WorkerFace({
   worker,
   size,
 }: {
-  worker: AgentModeWorkerItem
+  worker: LiveWorkerItem
   size: 19 | 15
 }) {
   const face = useAgentFaceRegistry().faceFor(
@@ -248,7 +222,7 @@ function WorkerFace({
 }
 
 function rosterAccessibleLabel(
-  lead: AgentModeWorkerItem | null,
+  lead: LiveWorkerItem | null,
   tail: readonly RosterCount[],
   workerCount: number,
 ): string {

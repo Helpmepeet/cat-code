@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 import { agentTypeMeta, resolveAgentIdentity } from './agentIdentity.js'
 import { AgentFace } from './AgentChrome.js'
 import { useAgentFaceRegistry } from './agentFace.js'
@@ -86,7 +86,7 @@ export function PermissionPrompt({
 }: {
   request: PermissionRequest
   /** Engine-sourced worker snapshot used only to label a relayed request. */
-  workers?: readonly AgentModeWorkerItem[]
+  workers?: readonly LiveWorkerItem[]
   /** True while an answer for this card is in flight. */
   submitted?: boolean
   /** Hide every allow path: this request can only be answered by denying it. */
@@ -576,7 +576,7 @@ function KickerIcon({
   switch (permissionKickerForTool(toolName, relayed)) {
     case 'Worker request':
       // The prototype's worker glyph (`Permissions.jsx:41`): a branch, the same
-      // vocabulary the orchestrator surfaces use for a delegated agent.
+      // vocabulary the worker surfaces use for a delegated agent.
       return (
         <KickerGlyph>
           <line x1="6" y1="3" x2="6" y2="15" />

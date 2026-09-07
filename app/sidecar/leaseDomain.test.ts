@@ -1,16 +1,15 @@
 /**
- * P4-32b — the Codex lease read seam (L1, `decisions/ORCHESTRATOR-IN-SESSION.md`
- * §7, ruled §10).
+ * P4-32b — the Codex lease read seam (L1, ruled 2026-07-30).
  *
  * Two things are load-bearing here and both get a live-path test rather than a
  * shape test:
  *
  *  1. **The join key.** `LeaseOwnerRow.ownerId` must equal the roster's
- *     `AgentModeWorkerItem.agentId`, or the worker detail renders someone else's
+ *     `LiveWorkerItem.agentId`, or the worker detail renders someone else's
  *     account. So the round-trip below puts a lease in the ENGINE's own map under
  *     the id `AgentTool` registers, looks it up through the engine's own
  *     `getCodexLeaseForOwner`, builds the roster with the REAL
- *     `agentModeSnapshot`, and asserts the two ids meet.
+ *     `workersSnapshot`, and asserts the two ids meet.
  *  2. **Redaction.** The projection must be `secretGuard`-clean even when the pool
  *     holds tokens.
  */
@@ -28,7 +27,7 @@ import type { TaskState } from '../../src/tasks/types.js'
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import type { LeaseSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import { agentModeSnapshot } from './agentModeDomain.js'
+import { workersSnapshot } from './workersDomain.js'
 import {
   createSidecarLeaseDomain,
   leaseSnapshot,
@@ -458,7 +457,7 @@ describe('the join key against the real engine lease manager', () => {
     })
 
     const tasks = { [agentId]: localAgentTask({ agentId }) }
-    const roster = agentModeSnapshot(tasks, null, true)
+    const roster = workersSnapshot(tasks)
     expect(roster.workers).toHaveLength(1)
     const workerAgentId = roster.workers[0]!.agentId
 

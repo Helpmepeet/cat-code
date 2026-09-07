@@ -1,6 +1,5 @@
 import type { Anthropic } from '@anthropic-ai/sdk'
 import {
-  getAgentModeSystemPromptSections,
   getSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 } from 'src/constants/prompts.js'
@@ -1043,23 +1042,12 @@ export async function analyzeContextUsage(
   const additionalWorkingDirectories = Array.from(
     toolPermissionContext.additionalWorkingDirectories.keys(),
   )
-  const isAgentModeActive = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-  const [defaultSystemPrompt, agentModePromptSections] = await Promise.all([
-    getSystemPrompt(
-      tools,
-      runtimeModel,
-      additionalWorkingDirectories,
-      toolUseContext?.options.mcpClients,
-    ),
-    isAgentModeActive && !toolUseContext?.options.customSystemPrompt
-      ? getAgentModeSystemPromptSections(
-          tools,
-          runtimeModel,
-          additionalWorkingDirectories,
-          toolUseContext?.options.mcpClients,
-        )
-      : Promise.resolve(undefined),
-  ])
+  const defaultSystemPrompt = await getSystemPrompt(
+    tools,
+    runtimeModel,
+    additionalWorkingDirectories,
+    toolUseContext?.options.mcpClients,
+  )
   const effectiveSystemPrompt = buildEffectiveSystemPrompt({
     mainThreadAgentDefinition,
     toolUseContext: toolUseContext ?? {
@@ -1068,7 +1056,6 @@ export async function analyzeContextUsage(
     customSystemPrompt: toolUseContext?.options.customSystemPrompt,
     defaultSystemPrompt,
     appendSystemPrompt: toolUseContext?.options.appendSystemPrompt,
-    agentModePromptSections,
   })
 
   // Critical operations that should not fail due to skills

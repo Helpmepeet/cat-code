@@ -4,12 +4,12 @@
  * Owner decision 2026-07-30 (`docs/reports/2026-07-30-system-prompt-content-review.md`,
  * "Owner decision record"): cyber safety, injection/provenance, instruction
  * authority, risky-action consent, and truthful outcome reporting are
- * invariants. Every live prompt variant — default Claude, default GPT, Agent
- * Mode, proactive — must carry them. Provider wording, tool aliases, and
+ * invariants. Every live prompt variant — default Claude, default GPT, and
+ * proactive — must carry them. Provider wording, tool aliases, and
  * documented mode-budget rules may differ; these semantics may not.
  *
  * GPT is the canonical prompt direction, so each rule below is the repaired GPT
- * wording and BOTH styles interpolate it. A rule stated here must have exactly
+ * wording and both styles interpolate it. A rule stated here must have exactly
  * one container per assembled prompt — see the container map in
  * `prompts.ts`'s section builders before adding a new call site.
  */
@@ -59,11 +59,8 @@ export const PROJECT_INSTRUCTION_AUTHORITY_RULE = `Loaded instruction files (CLA
 export const OUTCOME_REPORTING_RULE = `Report outcomes faithfully. If tests or checks fail, say so with the relevant output. If you skipped a step, say that. Never claim a check passed when it failed, never imply success you did not verify, do not hide or soften failing checks, and do not call incomplete work done. If you did not verify something, say so. If you left part of the requested work undone, say what and why. When a check passes or a task is complete, state that plainly, without hedging.`
 
 /**
- * Anti-loop budget for normal work on either provider. Agent Mode deliberately
- * runs a tighter budget (two failed repair attempts) because worker retries
- * carry coordination cost; that rule is owned by the orchestrator prompt and is
- * a mode difference, not a provider difference. Verification loops cap at three
- * fix/verify cycles in both styles. Transport/API retries are unrelated.
+ * Anti-loop budget for normal work on either provider. Verification loops cap at
+ * three fix/verify cycles in both styles. Transport/API retries are unrelated.
  */
 export const RETRY_RULE = `If an approach fails, diagnose why before switching tactics: read the error, check your assumptions, try a focused fix. Each retry must use a materially different strategy, not a minor variation of the attempt that just failed. After three failed attempts on the same problem, stop and either report the blocker or re-plan — do not keep looping. If requirements or tests appear contradictory or impossible, say so directly instead of forcing a pass. Do not modify tests, hardcode expected outputs, or violate task intent to get a passing result unless the user explicitly asks for that tradeoff.`
 
@@ -75,9 +72,8 @@ export const RETRY_RULE = `If an approach fails, diagnose why before switching t
  *
  * - `cyberPolicy`: off when the intro section is present, since it carries the
  *   policy already. On for assemblies that have no intro at all.
- * - `retryRule`: on only when doing-tasks was dropped for a reason unrelated to
- *   the retry budget (an output style). Agent Mode omits it deliberately, since
- *   the orchestrator runs a tighter two-repair budget.
+ * - `retryRule`: on when doing-tasks was dropped for a reason unrelated to the
+ *   retry budget, such as an output style.
  *
  * Provenance and authority/consent are never restated here: every caller also
  * includes the provider system and actions sections, which own them.

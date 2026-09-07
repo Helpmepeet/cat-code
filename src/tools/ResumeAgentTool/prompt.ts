@@ -9,7 +9,7 @@ export function getPrompt(): string {
   return `
 # ${RESUME_AGENT_TOOL_NAME}
 
-Restart a stopped subagent or Agent Mode worker with a new prompt. It resumes from the agent's prior transcript after API-validity cleanup (unresolved tool calls from an interrupted run are dropped).
+Restart a stopped subagent with a new prompt. It resumes from the agent's prior transcript after API-validity cleanup (unresolved tool calls from an interrupted run are dropped).
 
 \`\`\`json
 {"agentId": "agent-a1b", "prompt": "Continue from your previous findings and patch src/auth/validate.ts. Run the focused auth tests and report the result."}

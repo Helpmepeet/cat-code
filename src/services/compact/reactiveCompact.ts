@@ -1,7 +1,6 @@
 import { feature } from 'bun:bundle'
 import type { UUID } from 'crypto'
-import { readSessionState } from '../../agent-mode/sessionState.js'
-import { getSessionId, markPostCompaction } from '../../bootstrap/state.js'
+import { markPostCompaction } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type {
   AssistantMessage,
@@ -81,7 +80,6 @@ import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactPrompt,
   getCompactUserSummaryMessage,
-  toAgentModeCompactState,
 } from './prompt.js'
 import { adjustIndexToPreserveAPIInvariants } from './sessionMemoryCompact.js'
 
@@ -325,9 +323,6 @@ export async function reactiveCompactOnPromptTooLong(
 
   const preCompactTokenCount = tokenCountWithEstimation(messages)
   const appState = context.getAppState()
-  const sessionState = context.agentId
-    ? null
-    : await readSessionState(getSessionId())
   const provider = resolveRequestProvider(
     context.options.mainLoopModel,
     context.options.mainLoopProvider,
@@ -336,7 +331,6 @@ export async function reactiveCompactOnPromptTooLong(
     content: getCompactPrompt(
       options.customInstructions,
       provider,
-      !!sessionState,
     ),
   })
 
@@ -536,7 +530,6 @@ export async function reactiveCompactOnPromptTooLong(
         getTranscriptPath(),
         messagesToKeep.length > 0,
         provider,
-        toAgentModeCompactState(sessionState),
       ),
       isCompactSummary: true,
       summarizedRelayedInput: summarizedRelayedInput(summarized),

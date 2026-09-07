@@ -176,12 +176,12 @@ paths.
 | Runtime undefined-name regressions | `bun run lint:undefined-names` | Zero TS2304/TS2503 diagnostics is required even though the root typecheck has a broader known-red baseline. |
 | Codex account pool, lease, refresh, usage | `bun test src/services/api/codexAccountPool.test.ts src/services/api/codexAccountLeaseManager.test.ts src/services/api/codexTokenRefresh.test.ts src/services/api/codexUsage.test.ts` |
 | Minimal Codex core | `bun test src/codex-core/request.test.ts` plus the `scripts/test-codex-*.ts` smoke scripts when real account access is relevant. |
-| Agent Mode behavior | `bun test src/agent-mode/*.test.ts src/agent-mode/*.test.tsx src/tools/AgentTool/*.test.ts` with narrower paths preferred for small changes. |
+| Agents and worker behavior | `bun test src/tools/AgentTool/*.test.ts src/tasks/LocalAgentTask/LocalAgentTask.test.ts` with narrower paths preferred for small changes. |
 | Tasks and workers | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
 | P5-5c cross-process contention probes | `src/utils/atomicFile.probe.test.ts`, `src/utils/transcriptLease.probe.test.ts`, `src/migrations/runEngineMigrations.probe.test.ts`, `src/codex-core/accountRefreshContention.probe.test.ts`, `src/utils/secureStorage/crossProcessStorage.probe.test.ts`, `src/services/autoDream/consolidationLock.probe.test.ts`, `src/services/teamMemorySync/teamMemorySync.probe.test.ts` | Run `bun test src/utils/atomicFile.probe.test.ts src/utils/transcriptLease.probe.test.ts src/migrations/runEngineMigrations.probe.test.ts src/codex-core/accountRefreshContention.probe.test.ts src/utils/secureStorage/crossProcessStorage.probe.test.ts src/services/autoDream/consolidationLock.probe.test.ts src/services/teamMemorySync/teamMemorySync.probe.test.ts` with synthetic isolated files and no live account/network access. |
-| Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
+| Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
 
 Colocated tests use `bun:test` imports (`describe`, `test`, `expect`,

@@ -25,7 +25,7 @@ const inputSchema = lazySchema(() =>
     agentId: z
       .string()
       .describe(
-        'Which stopped subagent to restart, identified by its friendly name/alias, Agent Mode worker handle, or raw agent ID. Only local subagents/workers are accepted — not teammate names, "*", or uds:/bridge: targets. Use SendMessage instead if the target is still running.',
+        'Which stopped subagent to restart, identified by its friendly name/alias, worker handle, or raw agent ID. Only local subagents/workers are accepted — not teammate names, "*", or uds:/bridge: targets. Use SendMessage instead if the target is still running.',
       ),
     prompt: z.string().describe('New prompt to send to the resumed subagent'),
   }),

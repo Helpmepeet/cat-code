@@ -644,10 +644,8 @@ function SessionRow({
 
   const inner = (
     <>
-      {/* Leading icon that doubles as the selection checkbox — a check when
-       * selected, the mode icon otherwise (the prototype's blank-on-hover fourth
-       * state is dropped: a control that vanishes under the pointer about to
-       * click it is worse than one that stays legible). */}
+      {/* Leading icon doubles as the selection checkbox. A control that vanishes
+       * under the pointer about to click it is worse than one that stays legible. */}
       <button
         type="button"
         onClick={event => {
@@ -661,15 +659,11 @@ function SessionRow({
           'mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md border transition-colors ' +
           (selected
             ? 'border-accent bg-accent text-shell-base'
-            : row.mode === 'agent'
-              ? 'border-accent/20 bg-accent/10 text-accent hover:border-white/30'
-              : 'border-white/[0.07] bg-white/[0.04] text-text-subtle hover:border-white/30')
+            : 'border-white/[0.07] bg-white/[0.04] text-text-subtle hover:border-white/30')
         }
       >
         {selected ? (
           <CheckIcon />
-        ) : row.mode === 'agent' ? (
-          <RobotIcon />
         ) : (
           <MessageIcon />
         )}
@@ -715,13 +709,9 @@ function SessionRow({
             )
           )}
           <StatusBadge row={row} />
-          {row.mode === 'agent' ? (
-            <Chip tone="accent" label="orchestrating" />
-          ) : null}
           {/* Prototype paints cross-project rows BLUE; the shell palette has no
-           * distinct blue (`--tone-info` aliases the pink accent), so this uses a
-           * neutral chip to avoid colliding with the pink "orchestrating" badge
-           * (§0 adaptation: no blue token). */}
+           * distinct blue (`--tone-info` aliases the pink accent), so this uses
+           * a neutral chip instead. */}
           {crossProject ? <Chip tone="default" label="other workspace" /> : null}
         </span>
         <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-text-subtle">
@@ -1301,15 +1291,6 @@ function MessageIcon() {
         strokeWidth="1.8"
         strokeLinejoin="round"
       />
-    </svg>
-  )
-}
-
-function RobotIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <rect x="4" y="8" width="16" height="11" rx="2" stroke="currentColor" strokeWidth="1.8" />
-      <path d="M12 4v4M9 13h.01M15 13h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
 }

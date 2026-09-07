@@ -1,7 +1,7 @@
 /**
  * Agent chrome primitives (P4-8, D2) — the web-native React port of the
  * prototype's shared worker vocabulary components (AgentIdentity.jsx:
- * `AgentPip`/`AgentTypeChip`/`AgentHandle`/`AgentStateLabel`, OrchestratorMode.jsx:
+ * `AgentPip`/`AgentTypeChip`/`AgentHandle`/`AgentStateLabel`, worker prototype:
  * `LifeDot`/`Baton`). Presentation only over the P4-2 `agentIdentity` vocabulary;
  * no engine data of its own.
  *
@@ -19,7 +19,7 @@ import {
   type AgentStateKey,
 } from './agentIdentity.js'
 import { faceRects, type FaceAxes } from './agentFace.js'
-import type { WorkerOwner } from './orchestratorState.js'
+import type { WorkerOwner } from './workersState.js'
 import {
   ACTION_BUTTON_TONE_CLASS,
   AGENT_FACE_IDENTITY_FILL,
@@ -122,7 +122,7 @@ export function AgentPip({
 
 /**
  * Role/type dot coloured by the agent type — the prototype's roster row leader
- * (`OrchestratorMode.jsx:262`, a 6px role-coloured dot).
+ * (`worker prototype`, a 6px role-coloured dot).
  *
  * NOT RENDERED ANYWHERE as of `bbec14cd`: the roster row leads with the worker's
  * face now, both being identity marks competing for one leading slot, and that
@@ -227,13 +227,13 @@ export function AgentStateWord({ state }: { state: AgentStateKey }) {
 
 /**
  * Uppercase section caption (P4-32b) — the prototype's `WLabel`
- * (`OrchestratorMode.jsx:90`) and `AgentTranscriptLabel`
+ * (`worker prototype`) and `AgentTranscriptLabel`
  * (`AgentIdentity.jsx:160`), which are the same primitive at the same size in two
  * files. One component serves both so a caption cannot drift between the
  * inspection panel and an agent card.
  *
  * `tone` picks the caption colour for the sections that carry one in the
- * prototype (purple for the orchestrator-owned block note, teal for the lease
+ * prototype (purple for the assistant-owned block note, teal for the lease
  * rollup); default is the muted caption.
  */
 export function AgentSectionLabel({
@@ -255,7 +255,7 @@ export function AgentSectionLabel({
 
 /**
  * Outline action button (P4-32b) — the prototype's `WBtn`
- * (`OrchestratorMode.jsx:93`). The only production tone in use is `danger`
+ * (`worker prototype`). The only production tone in use is `danger`
  * (the worker Stop control); `neutral`/`accent` exist because the primitive is
  * shared and the prototype defines all three.
  */
@@ -284,106 +284,9 @@ export function AgentActionButton({
 }
 
 /**
- * Orchestrator-mode marker (the prototype's `OrchestratorBadge`,
- * OrchestratorMode.jsx:410-417).
- *
- * NOT RENDERED ANYWHERE, and kept for the same two reasons `AgentRoleDot` above
- * is: it is this row's prototype element in the parity ledger, and it is one of
- * the eleven exports the design-system sync pins BY NAME
- * (`.design-sync/config.json` `componentSrcMap`). Deleting it flips a built
- * parity row to unbuilt and breaks that sync, which is the operator's call, not
- * a sweep item. (This comment used to say the badge "rides the session TAB next
- * to the title (B1)" and "with `onToggle` it IS the mode switch (M1)"; the tab
- * placement was removed on operator ruling, and what actually renders in the
- * empty state is `OrchestratorReflect`, `WelcomeScreen.tsx:474`. Two reviews
- * chased that stale placement claim.)
- *
- * Off + interactive collapses to the icon alone: a lit "Orchestrator" pill on a
- * session that is not in the mode would name a state the user did not choose.
- * Off + passive renders nothing at all.
- *
- * `stopPropagation` is deliberate: the host row (a tab) is itself clickable, so
- * without it toggling the mode would also re-select the tab.
- */
-export function OrchestratorBadge({
-  active,
-  onToggle,
-  sessionLabel,
-}: {
-  active: boolean
-  onToggle?: (next: boolean) => void
-  sessionLabel?: string
-}) {
-  if (!active && !onToggle) return null
-  const icon = <OrchestratorGlyph />
-  const forSession = sessionLabel ? ` for session ${sessionLabel}` : ''
-
-  if (!onToggle) {
-    return (
-      <span
-        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border border-purple-400/25 bg-purple-400/10 px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] text-purple-300"
-        title="Orchestrator mode is on"
-      >
-        {icon}
-        Orchestrator
-      </span>
-    )
-  }
-
-  const action = active ? 'Turn off Orchestrator mode' : 'Turn on Orchestrator mode'
-  return (
-    <button
-      type="button"
-      aria-pressed={active}
-      aria-label={`${action}${forSession}`}
-      title={action}
-      onClick={event => {
-        event.stopPropagation()
-        onToggle(!active)
-      }}
-      onKeyDown={event => {
-        if (event.key === 'Enter' || event.key === ' ') event.stopPropagation()
-      }}
-      className={
-        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[5px] border px-1.5 py-px font-mono text-[10px] font-semibold tracking-[0.04em] transition-colors ' +
-        (active
-          ? 'border-purple-400/25 bg-purple-400/10 text-purple-300'
-          : 'border-transparent bg-transparent text-text-ghost hover:border-purple-400/25 hover:text-purple-300')
-      }
-    >
-      {icon}
-      {active ? 'Orchestrator' : null}
-    </button>
-  )
-}
-
-/** The prototype's orchestrator glyph: one branch handing off to another. */
-function OrchestratorGlyph() {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2.2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-      className="shrink-0"
-    >
-      <line x1="6" y1="3" x2="6" y2="15" />
-      <circle cx="18" cy="6" r="3" />
-      <circle cx="6" cy="18" r="3" />
-      <path d="M18 9a9 9 0 0 1-9 9" />
-    </svg>
-  )
-}
-
-/**
  * Attention baton — the owner chip. Always neutral (→assistant): no worker on
  * this seam can put the next action on the human, so the amber →you face was
- * removed with the `user` owner it rendered (see `orchestratorState.ts`).
+ * removed with the `user` owner it rendered (see `workersState.ts`).
  */
 export function Baton({ owner }: { owner: WorkerOwner }) {
   if (owner === 'none') return null

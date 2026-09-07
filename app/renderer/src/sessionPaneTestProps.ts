@@ -19,7 +19,6 @@ export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
   return {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'ready', inputEnabled: true },
     activeDescriptor: undefined,
     activeLog: {

@@ -21,27 +21,27 @@ import {
 } from './peerNames.js'
 
 /**
- * The engine's three subagent pools, read as TEXT rather than imported.
+ * The engine's subagent name pool, read as TEXT rather than imported.
  * `app/tsconfig.json` deliberately cannot resolve `src/*` (that is the whole
  * reason `peerNames.ts` is a copy), so an import here would not typecheck — and
  * a hand-copied list would stop tracking the engine the moment someone appends
  * a name there, which is exactly the regression this test exists to catch.
  */
 function engineSubagentNames(): string[] {
-  const path = join(import.meta.dir, '../../src/agent-mode/workerNames.ts')
+  const path = join(import.meta.dir, '../../src/utils/workerNames.ts')
   const source = readFileSync(path, 'utf8')
   const arrays = [
     ...source.matchAll(
-      /const (?:CODING_WORKER_NAMES|VERIFIER_NAMES|GENERIC_WORKER_NAMES) = \[([^\]]*)\]/g,
+      /const GENERIC_WORKER_NAMES = \[([^\]]*)\]/g,
     ),
   ]
   // Fail loudly if the engine file is restructured: a silently-empty match would
   // turn the disjointness assertion below into a no-op that always passes.
-  expect(arrays.length).toBe(3)
+  expect(arrays.length).toBe(1)
   const names = arrays.flatMap(match =>
     [...match[1]!.matchAll(/'([^']+)'/g)].map(quoted => quoted[1]!),
   )
-  expect(names.length).toBeGreaterThan(40)
+  expect(names.length).toBeGreaterThan(10)
   return names
 }
 
