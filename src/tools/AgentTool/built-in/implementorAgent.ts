@@ -20,7 +20,7 @@ import { MAP_ROUTING_GUIDANCE } from './mapRoutingGuidance.js'
 
 const SYNTHETIC_OUTPUT_TOOL_NAME = 'StructuredOutput'
 
-function getImplementorSystemPrompt(provider: APIProvider): string {
+export function getImplementorSystemPrompt(provider: APIProvider): string {
   const embedded = hasEmbeddedSearchTools()
 
   if (provider === 'openai') {
