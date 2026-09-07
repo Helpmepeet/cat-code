@@ -121,6 +121,110 @@ show it was deliberately skipped.
 distinct ones are 5.4-mini, 5.5, the 5.6 family, and astra. In this repo luna is
 the cheap model for migration test turns, so its difference from sol is cost.
 
+## 2c. OpenAI's published guidance for this family, read fresh
+
+Source: `https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6`,
+"GPT-5.6 Sol Prompting Guidance", fetched 2026-09-07. This repo first read it on
+2026-07-11 (F3 in `2026-07-11-gpt-instruction-stack-audit.md`) and has quoted it
+from that reading ever since without going back. The current page carries two
+sections the July note never captured, quoted in full below, and one of them
+contradicts the shape of the rebuild.
+
+**The layout it recommends.** Thirteen sections, of which this is the skeleton:
+
+> Role: [the model's function and context]
+> Personality: [tone and collaboration style]
+> Goal: [user-visible outcome]
+> Success criteria: [what must be true before the final answer]
+> Constraints: [policy, safety, business, evidence, and side-effect limits]
+> Tools: [which tools to use, when, and what not to use]
+> Output: [sections, length, format, and tone]
+> Stop rules: [when to retry, fallback, abstain, ask, or stop]
+
+with "Add detail only where it changes behavior." Every slot there has one job,
+which is the same property section 2 found in Codex 5.6 and found missing in ours.
+Two of the eight slots have no counterpart in our prompt at all: we state no
+success criteria and no stop rules.
+
+**The migration workflow it recommends, and the conflict.** Five ordered steps:
+
+> 1. Switch the model and preserve the current reasoning effort.
+> 2. Run representative evals before changing the prompt.
+> 3. Remove obsolete scaffolding, repeated instructions, and irrelevant tools.
+> 4. Add only the smallest targeted instruction that fixes a measured regression.
+> 5. Re-run evals after each prompt or reasoning change.
+
+It warns against rewriting a whole prompt stack at once, because that makes it
+impossible to tell whether "a behavior change came from the model, reasoning
+setting, prompt, tool set, or runtime," and prescribes debugging from real traces
+followed by surgical edits.
+
+**Steps 2 and 5 are unavailable here.** This repo has no eval harness: no
+`src/evals` or `scripts/evals`, and the only script matching `eval` is
+`scripts/bridge-claude-subscription.test.ts`, which is unrelated. Section 7
+already records that no ablation was ever run. So a rebuild cannot satisfy the
+workflow it is citing, and cannot detect a regression it causes. That is not an
+argument against rebuilding. It is the reason the rebuild's own claims stay
+structural, exactly as section 7 states them, and it puts a floor under how much
+confidence any before/after comparison can carry.
+
+**Register.** Absolute language is reserved, not default:
+
+> Use ALWAYS, NEVER, must, and only for true invariants such as safety rules,
+> required fields, or actions that should never happen.
+
+> For judgment calls, such as when to search, ask, use a tool, or keep iterating,
+> prefer decision rules.
+
+**Contradiction costs more than omission.**
+
+> GPT-5-class models follow prompt contracts closely, so conflicting rules can
+> create more instability than missing detail.
+
+Each rule stated once, and specifically: repeating approval instructions "can
+cause unnecessary approval requests for safe, expected actions." Our permission
+material is stated in more than one place, which is the exact failure named.
+
+**Subtraction has a measured payoff, in their evals not ours.**
+
+> In a sample of internal coding-agent eval runs, configurations with leaner
+> system prompts improved evaluation scores by roughly 10–15% while reducing total
+> tokens by 41–66%.
+
+Remove: repeated statements, style instructions that do not change behavior,
+examples that do not change behavior, process instructions for reliable behaviors,
+unrelated tools. Keep: user-visible outcomes, success criteria, stopping
+conditions, safety and business constraints, output shape requirements. Avoid
+blanket language rules such as "always respond in the user's language," and
+"universal defaults, keyword maps, and broad semantic shortcuts."
+
+**Their autonomy policy, which we should compare against ours rather than adopt
+blind:**
+
+> For requests to answer, explain, review, diagnose, or plan, inspect the relevant
+> materials and report the result. Do not implement changes unless the request also
+> asks for them. For requests to change, build, or fix, make the requested in-scope
+> local changes and run relevant non-destructive validation without asking first.
+> Require confirmation for external writes, destructive actions, purchases, or a
+> material expansion of scope.
+
+**Stopping** is framed as a budget with a correctness override: resolve in the
+fewest useful tool loops, but never let loop minimization outrank correctness,
+required evidence, calculations or citations.
+
+**Preambles.** A short visible preamble before the first tool call, then sparse
+outcome-based updates at major phase changes, each stating one concrete outcome
+and the next step. Do not ask the model to narrate routine tool calls.
+
+**Verbosity.** 5.6 "tends to be more concise by default than GPT-5.5," so broad
+brevity instructions carried over from an older model may now be dead weight;
+check each one. Prefer naming what must be preserved and what may be omitted over
+a blanket "be concise."
+
+**Reasoning effort.** Before raising it, audit the prompt for missing success
+criteria, dependency rules, tool-routing rules or verification loops. High effort
+only where evals show a gain; max is not a global recommendation.
+
 ## 3. Constraints, all from operator rulings this session
 
 - **The prompt must stand alone.** What a loaded instruction file happens to
@@ -392,3 +496,6 @@ kept, or not yet examined; sections 4 and 5 say which.
   before/after text of the twelve items applied today.
 - [Craft-coaching decision](2026-09-06-gpt-craft-coaching-decision.md) — per-
   sentence verdicts for the five sections cut from the work bucket.
+- [GPT-5.6 Sol Prompting Guidance](https://developers.openai.com/api/docs/guides/prompt-guidance-gpt-5p6)
+  — the vendor standard quoted in section 2c; re-read it rather than trusting a
+  quote, it has changed since 2026-07-11.
