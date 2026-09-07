@@ -324,12 +324,13 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
   the full integration battery. Before waiting for another worker or ending a
   turn, commit the finished work you own. A verification failure in an unrelated
   concurrent slice is not a reason to leave your verified slice raw.
-- **A shared-tree implementation worker owns its commit.** Do not tell a worker
-  editing this shared tree "do not commit" and transfer the checkpoint to its
-  parent. The worker commits its explicit owned paths before returning; the parent
-  reviews that commit and adds follow-up commits if needed. If a slice cannot yet
-  be a normal commit, make an explicit `wip(scope): ...` checkpoint before waiting
-  or stopping rather than leaving it only in the working tree.
+- **Be cautious when telling a shared-tree implementation worker not to commit.**
+  That transfers checkpoint ownership to the parent and leaves the worker's edits
+  fragile until the parent commits them. Use it when the parent genuinely needs
+  to integrate or review the slice before commit, then checkpoint accepted work
+  promptly; otherwise let the worker commit its explicit owned paths. If a slice
+  cannot yet be a normal commit, consider an explicit `wip(scope): ...`
+  checkpoint rather than leaving it only in the working tree.
 - These rules are incident-backed. On 2026-09-07 the Agent Mode retirement parent
   told two shared-tree implementors not to commit, made 40 patch operations of its
   own, postponed every checkpoint until final integration, then exited while
