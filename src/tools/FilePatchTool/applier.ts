@@ -307,6 +307,54 @@ function isTouchingEndOfFile(
   return addedLines.length > 0 || hunkLines.some(line => line.kind === 'delete')
 }
 
+// The fuzzy ladder ported from Codex seek_sequence, widest tolerance last.
+// Anything asking "would the matcher have accepted this line?" — placement and
+// the failure diagnostics alike — has to ask it of the same ladder, or the
+// diagnosis contradicts the decision it is explaining.
+const MATCH_TIERS: Array<(a: string, b: string) => boolean> = [
+  (a, b) => a === b,
+  (a, b) => a.trimEnd() === b.trimEnd(),
+  (a, b) => a.trim() === b.trim(),
+  (a, b) => unicodeNormalize(a) === unicodeNormalize(b),
+]
+
+/**
+ * Why a fingerprint failed to anchor, read off the fingerprint's own lines.
+ * A line the file does not hold at any tier is a mis-transcription and names
+ * itself; a fingerprint whose lines are all present has instead lost a line
+ * that sits between them. The two need opposite corrections, so a message that
+ * cannot tell them apart sends half of them the wrong way.
+ */
+function describeFingerprintMiss(
+  fileLines: string[],
+  fingerprint: string[],
+  path: string,
+): { kind: 'absent' | 'scattered'; clause: string } {
+  const absent = fingerprint.filter(
+    text =>
+      !MATCH_TIERS.some(
+        matchFn => findAllMatches(fileLines, [text], 0, matchFn).length > 0,
+      ),
+  )
+
+  if (absent.length === 0) {
+    return {
+      kind: 'scattered',
+      clause: `Every line of this hunk does appear in ${path}, just never all in a row, so the hunk is missing a line that sits between them.`,
+    }
+  }
+
+  const remaining = absent.length - 1
+  const others =
+    remaining > 0
+      ? ` ${remaining} other line${remaining > 1 ? 's' : ''} in this hunk ${remaining > 1 ? 'are' : 'is'} missing from the file too.`
+      : ''
+  return {
+    kind: 'absent',
+    clause: `The line ${JSON.stringify(absent[0])} does not appear anywhere in ${path}.${others}`,
+  }
+}
+
 function findHunkPosition(
   fileLines: string[],
   hunk: FilePatchHunk,
@@ -338,12 +386,7 @@ function findHunkPosition(
     )
   }
 
-  const matchFns: Array<(a: string, b: string) => boolean> = [
-    (a, b) => a === b,
-    (a, b) => a.trimEnd() === b.trimEnd(),
-    (a, b) => a.trim() === b.trim(),
-    (a, b) => unicodeNormalize(a) === unicodeNormalize(b),
-  ]
+  const matchFns = MATCH_TIERS
 
   // EOF-anchored: try all tiers tail-first, then fall back to a full scan if
   // nothing matched at the tail (mirrors Codex seek_sequence eof behavior).
@@ -407,12 +450,7 @@ function findHunkPosition(
   // Check whether the cached (previously-read) version of the file would have matched.
   // If so, the file changed on disk after the last read — say that explicitly.
   if (cachedLines !== undefined) {
-    for (const matchFn of [
-      (a: string, b: string) => a === b,
-      (a: string, b: string) => a.trimEnd() === b.trimEnd(),
-      (a: string, b: string) => a.trim() === b.trim(),
-      (a: string, b: string) => unicodeNormalize(a) === unicodeNormalize(b),
-    ]) {
+    for (const matchFn of MATCH_TIERS) {
       const cacheMatches = findAllMatches(cachedLines, fingerprint, 0, matchFn)
       if (cacheMatches.length > 0) {
         throw new FilePatchError(
@@ -427,9 +465,15 @@ function findHunkPosition(
   // matches neither the file nor what was last read from it, so naming
   // staleness here sends the model hunting a concurrent editor that does not
   // exist — a costly wrong turn on a shared tree.
+  const miss = describeFingerprintMiss(fileLines, fingerprint, path)
+  const repair =
+    miss.kind === 'absent'
+      ? 'Fix that line first, then check the rest against the file: wording, whitespace, and where each line wraps must all match.'
+      : 'Re-read that region and give the hunk every line of the run, blank lines included.'
+
   if (cachedLines !== undefined) {
     throw new FilePatchError(
-      `Patch anchor not found in ${path}${hunkLabel} — the hunk's context and delete lines match neither the current file nor the content you last read from it, so they were most likely transcribed inaccurately. Compare them against the file line for line: wording, whitespace, and where each line wraps must all match. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+      `Patch anchor not found in ${path}${hunkLabel} — the hunk's context and delete lines match neither the current file nor the content you last read from it. ${miss.clause} ${repair} To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
       { code: 'PATCH_ANCHOR_NOT_FOUND', path },
     )
   }
@@ -440,7 +484,7 @@ function findHunkPosition(
   // equally absent when the read was evicted from the read-state cache or
   // happened on another thread — neither says the file changed.
   throw new FilePatchError(
-    `Patch anchor not found in ${path}${hunkLabel} — there is no recorded read of this file to compare against, so whether it changed on disk or the context was transcribed inaccurately cannot be told apart here. Re-read the file and rebuild the hunk from what it actually contains. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+    `Patch anchor not found in ${path}${hunkLabel} — there is no recorded read of this file to compare against, so whether it changed on disk or the context was transcribed inaccurately cannot be told apart here. ${miss.clause} ${repair} To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
     { code: 'PATCH_ANCHOR_NOT_FOUND', path },
   )
 }

@@ -1615,8 +1615,44 @@ describe('patch failure diagnostics', () => {
       ),
     )
 
-    expect(message).toContain('transcribed inaccurately')
+    // The reflow moved a word across the break, so both of the hunk's lines
+    // are absent. Naming the first one is the whole repair.
+    expect(message).toContain(
+      'The line " * a wrapped sentence that ends" does not appear anywhere in',
+    )
+    expect(message).toContain('1 other line in this hunk is missing')
     expect(message).not.toContain('the file has since changed on disk')
+  })
+
+  test('says the lines are scattered, not mis-transcribed, when each one exists', () => {
+    // Every line is transcribed correctly; the hunk just drops the one between
+    // them, so telling the model to check its wording sends it the wrong way.
+    const dropsAnInterveningLine: FilePatchOperation = {
+      type: 'update',
+      path: TARGET,
+      hunks: [
+        hunk({
+          lines: [
+            { kind: 'context', text: ' * a wrapped sentence that ends here' },
+            { kind: 'delete', text: ' * and a third.' },
+            { kind: 'add', text: ' * rewritten.' },
+          ],
+        }),
+      ],
+    }
+    const threeLines = `${CONTENT} * and a third.\n`
+
+    const message = failureMessage(() =>
+      applyPatchToBuffers(
+        [dropsAnInterveningLine],
+        new Map([[TARGET, fileState(TARGET, threeLines)]]),
+        new Map([[TARGET, threeLines]]),
+      ),
+    )
+
+    expect(message).toContain('just never all in a row')
+    expect(message).toContain('blank lines included')
+    expect(message).not.toContain('does not appear anywhere in')
   })
 
   test('claims neither staleness nor transcription when there is no cached read', () => {
