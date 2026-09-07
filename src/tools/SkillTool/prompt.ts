@@ -189,7 +189,7 @@ BINDING CONSTRAINTS:
 - Available skills are listed in system-reminder messages in the conversation.
 - A skill the user names or invokes is a BLOCKING REQUIREMENT: call this tool before generating any other response about the task.
 - Otherwise call this tool first when the task at hand is one a listed skill covers. Judge that on the task, not on a keyword match, superficial relevance, or mere availability.
-- Naming a skill is not invoking it. You may say that a skill exists, or that one does not fit, without calling this tool.
+- Your own mention of a skill is not an invocation of it. You may say that a skill exists, or that one does not fit, without calling this tool.
 - Do not invoke a skill whose instructions are already in this conversation, including for a later task in the same session. Invoking re-injects the full skill text verbatim, so a second call costs tokens and adds nothing. If you can no longer see those instructions, loading it again is correct.
 - Do not use this tool for built-in CLI commands such as /help or /clear.
 - If you see a <${COMMAND_NAME_TAG}> tag in the current conversation turn, the skill has already been loaded. In that case, follow the loaded instructions directly instead of calling this tool again.`
@@ -209,7 +209,7 @@ Important:
 - Available skills are listed in system-reminder messages in the conversation
 - A skill the user names or invokes is a BLOCKING REQUIREMENT: call this tool before generating any other response about the task
 - Otherwise call this tool first when the task at hand is one a listed skill covers. Judge that on the task, not on a keyword match, superficial relevance, or mere availability
-- Naming a skill is not invoking it. You may say that a skill exists, or that one does not fit, without calling this tool
+- Your own mention of a skill is not an invocation of it. You may say that a skill exists, or that one does not fit, without calling this tool
 - Do not invoke a skill whose instructions are already in this conversation, including for a later task in the same session. Invoking re-injects the full skill text verbatim, so a second call costs tokens and adds nothing. If you can no longer see those instructions, loading it again is correct
 - Do not use this tool for built-in CLI commands (like /help, /clear, etc.)
 - If you see a <${COMMAND_NAME_TAG}> tag in the current conversation turn, the skill has ALREADY been loaded - follow the instructions directly instead of calling this tool again

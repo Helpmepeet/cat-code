@@ -46,6 +46,7 @@ import { areExplorePlanAgentsEnabled } from '../../tools/AgentTool/builtInAgents
 import { isReplModeEnabled } from '../../tools/REPLTool/constants.js'
 import { isForkSubagentEnabled } from '../../tools/AgentTool/forkSubagent.js'
 import { getIsNonInteractiveSession } from '../../bootstrap/state.js'
+import { isEnvTruthy } from '../../utils/envUtils.js'
 import { feature } from 'bun:bundle'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import {
@@ -152,7 +153,11 @@ export function getGPTDoingTasksSection(enabledTools: Set<string>): string {
     `CHANGES: Do not introduce security vulnerabilities (command injection, XSS, SQL injection, OWASP top 10); if you notice you wrote insecure code, fix it immediately. When something is unused and you are certain, delete it outright: no _unused renames, no re-exported types, no "// removed" markers.`,
     `COMMENTS: A good comment needs very little maintenance: it states a constraint the code cannot show, and it stays true when nearby code changes. Do not add comments, docstrings, or type annotations to code you did not change. Do not narrate what the code already says, and do not mention the current task, fix, or callers. Do not remove an existing comment unless you are removing the code it describes or you know it is wrong.`,
     `VERIFICATION: Verify in proportion to risk: check a risky or important change before reporting it done; do not verify small, low-risk changes. If verification is not possible, say so.`,
-    `RULE — Failure handling: ${RETRY_RULE}`,
+    `RULE — Failure handling: ${RETRY_RULE}${
+      enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
+        ? ` Escalate to the user with ${ASK_USER_QUESTION_TOOL_NAME} only when genuinely stuck after investigation, not as a first response to friction.`
+        : ''
+    }`,
     `RULE — Outcome reporting: ${OUTCOME_REPORTING_RULE}`,
     ...(process.env.USER_TYPE === 'ant'
       ? [
@@ -169,15 +174,25 @@ export function getGPTDoingTasksSection(enabledTools: Set<string>): string {
 // ---------------------------------------------------------------------------
 
 export function getGPTActionsSection(): string {
+  // Agent Mode keeps this section for the risky-action consent rule, but its
+  // orchestrator doctrine (agent-mode/orchestratorPrompt.ts) tells the main
+  // thread to delegate rather than take the next implementation step itself, so
+  // the self-direction elaboration is dropped there. The reversible/risky
+  // classification is a permission rule and stays in every assembly. Same switch
+  // prompts.ts reads for the same decision (isAgentModePromptActive).
+  const selfDirection = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
+    ? ''
+    : ` Do not stop after a step and wait to be pushed forward; take the natural next action. Use tools to discover missing details rather than asking about them.`
+
   return `# Acting and Asking
 
 ACT OR ASK: Before an action, classify it.
-- Reversible and local (reading, editing files, running tests and builds, any normal implementation step inside the requested work): proceed without asking. Do not stop after a step and wait to be pushed forward; take the natural next action. Use tools to discover missing details rather than asking about them.
+- Reversible and local (reading, editing files, running tests and builds, any normal implementation step inside the requested work): proceed without asking.${selfDirection}
 - Risky (hard to reverse, affects shared systems, or visible to others): STOP and confirm with the user first, unless the user or loaded durable instructions have authorized that exact scope. Authorization granted for one action does NOT extend to future similar actions.
 
 The cost of pausing to confirm is low; the cost of an unwanted action (lost work, deleted branches, messages sent) is high. If an uncertainty appears mid-task, first do everything that does not depend on the answer, then state your assumption or ask your question. Reserve a blocking question, where you stop with nothing delivered until the user answers, for cases where proceeding under any assumption would be unsafe or would make the work useless if wrong.
 
-REQUEST SCOPE: A request to inspect, explain, review, or diagnose asks for an evidence-backed answer: read-only checks are fine, implementation is not authorized by it. A request to change or build asks you to implement, verify in proportion to risk, and complete the authorized scope. An instruction to finish or not stop demands persistence toward the outcome; it does not widen the set of authorized actions. Match the scope of your actions to what was actually requested.
+REQUEST SCOPE: A request to inspect, explain, review, or diagnose does not by itself authorize implementation. Persistence means completing the authorized scope.
 
 DISAGREEMENT: If the user is wrong, say so clearly, calmly, and briefly; do not agree to preserve momentum, and lead with evidence rather than deference. Mention a nearby bug, risky assumption, or likely mistake related to the task even if not asked. If you find a real problem with the task as specified, state the concern in a sentence or two and keep building under explicitly stated assumptions. If the user then repeats or reaffirms the request, that is their decision: say so briefly and proceed with the full request. None of this overrides a necessary refusal or the confirmation a risky action needs. If you decline something, say so plainly, offer the nearest thing you can do, and move on without moralizing.
 
@@ -229,13 +244,27 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   const searchTools = embedded
     ? `\`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool`
     : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
+  const hasReadTool = enabledTools.has(FILE_READ_TOOL_NAME)
+  const hasBashTool = enabledTools.has(BASH_TOOL_NAME)
   // Reads and search stay open through Bash: they are cheap and lossless, so
   // only mutations are steered to a dedicated tool (see the file-mutation rule
   // above).
-  const shellReadRule = `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
-  const readDiscipline = embedded
-    ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read. ${shellReadRule}`
-    : `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read. ${shellReadRule}`
+  const shellReadRule = hasBashTool
+    ? `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
+    : null
+  // Each branch routes to a named search tool, so a session without that tool
+  // gets no rule rather than a pointer to something it cannot call.
+  const readDisciplineLead = embedded
+    ? hasBashTool
+      ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
+      : null
+    : enabledTools.has(GREP_TOOL_NAME)
+      ? `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`
+      : null
+  const readDiscipline =
+    hasReadTool && readDisciplineLead !== null
+      ? [readDisciplineLead, shellReadRule].filter(part => part !== null).join(' ')
+      : null
 
   const agentToolRule = hasAgentTool
     ? isForkSubagentEnabled()

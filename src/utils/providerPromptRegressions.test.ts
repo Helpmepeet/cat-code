@@ -598,15 +598,24 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('restricted GPT tool sets do not leak mutation or unheld routing rules', () => {
+  test('restricted GPT tool sets only emit rules for the tools they hold', () => {
     const restrictedSection = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
-    expect(restrictedSection).not.toContain('File editing →')
-    expect(restrictedSection).not.toContain('File creation →')
-    expect(restrictedSection).not.toContain('File search →')
-    expect(restrictedSection).not.toContain('Content search →')
+    // Every rule keyed on a tool this set does not hold stays out: no edit
+    // tool, no Agent tool, no task-tracking tool.
     expect(restrictedSection).not.toContain('RULE — File mutations')
     expect(restrictedSection).not.toContain('PATHS:')
+    expect(restrictedSection).not.toContain('AGENT TOOL:')
+    expect(restrictedSection).not.toContain('AGENT FORK:')
+    expect(restrictedSection).not.toContain('AGENT TYPES:')
+    expect(restrictedSection).not.toContain('EXPLORE RULE:')
+    expect(restrictedSection).not.toContain('TASK TRACKING:')
+    // Deliberate tripwire: the `RULE — Tool routing` block that named a tool
+    // per file operation was deleted, so no arrow routing line may return.
+    expect(restrictedSection).not.toContain('File editing →')
+    // The rules that hold for any tool set still ship.
     expect(restrictedSection).toContain('READ DISCIPLINE:')
     expect(restrictedSection).toContain('through the Bash tool')
+    expect(restrictedSection).toContain('RULE — Show the diff:')
+    expect(restrictedSection).toContain('PARALLELISM:')
   })
 })

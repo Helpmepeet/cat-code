@@ -182,6 +182,15 @@ describe('GPT read discipline guidance', () => {
 })
 
 describe('GPT section boundaries', () => {
+  const GPT_TOOLS = [
+    { name: 'Agent' },
+    { name: 'AskUserQuestion' },
+    { name: 'Bash' },
+    { name: 'Read' },
+    { name: 'Grep' },
+    { name: 'Apply_patch' },
+  ] as unknown as Parameters<typeof getSystemPrompt>[0]
+
   afterEach(() => {
     clearSystemPromptSections()
   })
@@ -191,16 +200,7 @@ describe('GPT section boundaries', () => {
   // block, so an assembly that drops session guidance lost them and the
   // always-present actions section never stated when to proceed alone.
   test('the GPT assembly files each moved rule under the section that owns it', async () => {
-    const tools = [
-      { name: 'Agent' },
-      { name: 'AskUserQuestion' },
-      { name: 'Bash' },
-      { name: 'Read' },
-      { name: 'Grep' },
-      { name: 'Apply_patch' },
-    ] as unknown as Parameters<typeof getSystemPrompt>[0]
-
-    const prompt = (await getSystemPrompt(tools, 'gpt-5.6-terra')).join('\n')
+    const prompt = (await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')).join('\n')
     const sectionNamed = (heading: string) => {
       const start = prompt.indexOf(`${heading}\n`)
       expect(start).toBeGreaterThan(-1)
@@ -221,6 +221,44 @@ describe('GPT section boundaries', () => {
     expect(sessionGuidance).not.toContain('INVESTIGATION:')
     expect(sessionGuidance).not.toContain('READ DISCIPLINE:')
     expect(sessionGuidance).not.toContain('AGENT TOOL:')
+  })
+
+  // The placement assertions above pass with every rule body emptied, so they
+  // pin where a rule lives and not what it says. These pin the substance of the
+  // two rules that decide what a session may do without asking.
+  test('the moved permission rules still carry their content, not just their labels', async () => {
+    const prompt = (await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')).join('\n')
+
+    expect(prompt).toContain('take the natural next action')
+    expect(prompt).toContain('STOP and confirm with the user first')
+    expect(prompt).toContain(
+      'does not by itself authorize implementation',
+    )
+    expect(prompt).toContain('Escalate to the user with')
+  })
+
+  // Agent Mode is the assembly the redraw actually changed: the elaborated
+  // self-direction text reached it for the first time and contradicted the
+  // orchestrator doctrine emitted in the same prompt. Nothing else in the repo
+  // builds a non-default assembly, so that regression was invisible to every
+  // battery. The risky half must survive here; only the elaboration is dropped.
+  test('Agent Mode gets the risk classification without the self-direction push', async () => {
+    const saved = process.env.CLAUDE_CODE_AGENT_MODE
+    process.env.CLAUDE_CODE_AGENT_MODE = '1'
+    try {
+      clearSystemPromptSections()
+      const prompt = (
+        await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')
+      ).join('\n')
+
+      expect(prompt).toContain('STOP and confirm with the user first')
+      expect(prompt).toContain('RISKY ACTIONS')
+      expect(prompt).not.toContain('take the natural next action')
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CODE_AGENT_MODE
+      else process.env.CLAUDE_CODE_AGENT_MODE = saved
+      clearSystemPromptSections()
+    }
   })
 })
 

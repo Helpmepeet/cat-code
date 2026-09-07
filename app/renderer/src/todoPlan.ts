@@ -6,33 +6,33 @@ import type { NestedTranscriptRow } from './transcriptProjector.js'
  *
  * ## Why this is a derivation and not a frame
  *
- * `TodoWriteTool` carries the WHOLE list on every call: its input schema is
- * `{ todos: TodoList }` (`src/tools/TodoWriteTool/TodoWriteTool.ts:14-17`) and
- * the engine replaces rather than patches (`:66-95` reads `oldTodos`, writes
- * `newTodos`). So the newest call's `input.todos` IS the current plan, and the
+ * `TodoWriteTool` carries the WHOLE list on every call: its `inputSchema` is
+ * `{ todos: TodoList }` (`src/tools/TodoWriteTool/TodoWriteTool.ts`) and its
+ * `call` replaces rather than patches (it reads `oldTodos`, writes `newTodos`).
+ * So the newest call's `input.todos` IS the current plan, and the
  * projector already stores tool input verbatim on the row
  * (`transcriptProjector.ts` `ToolUseRow.input`). No protocol change, no new
  * frame kind, no sidecar validation surface — the same C3 read-time rule
  * `groupToolRuns` and `selectPlanReview` already follow.
  *
  * The tool result is deliberately NOT read. It is a fixed acknowledgement
- * sentence ("Todos have been modified successfully…",
- * `TodoWriteTool.ts:104`) that carries no list, so a plan is legible the moment
+ * sentence ("Todos have been modified successfully…", returned by that same
+ * `call`) that carries no list, so a plan is legible the moment
  * the call is projected rather than after it settles.
  *
  * ## Why the desktop only ever sees `TodoWrite`
  *
- * The engine gates the V1 tool on `!isTodoV2Enabled()` (`TodoWriteTool.ts:50`)
+ * The engine gates the V1 tool on `!isTodoV2Enabled()` (`TodoWriteTool.isEnabled`)
  * and the V2 `TaskCreate/TaskUpdate/TaskList` set on `isTodoV2Enabled()`
- * (`src/tools.ts:252-254`), which resolves to `CLAUDE_CODE_ENABLE_TASKS` or
- * session interactivity (`src/utils/tasks.ts:133-139`). The sidecar never calls
- * `setIsInteractive` — the only call site is `src/main.tsx:786` — so
- * `STATE.isInteractive` keeps its `false` default (`src/bootstrap/state.ts:315`)
+ * (`src/tools.ts` `getAllBaseTools`), which resolves to `CLAUDE_CODE_ENABLE_TASKS` or
+ * session interactivity (`src/utils/tasks.ts` `isTodoV2Enabled`). The sidecar
+ * never calls `setIsInteractive` — the only call site is `src/main.tsx` — so
+ * `STATE.isInteractive` keeps its `false` default (`src/bootstrap/state.ts`)
  * and every desktop session gets `TodoWrite`. One tool to read, not two.
  *
  * ## Top-level rows only
  *
- * A subagent keys its own list by `context.agentId` (`TodoWriteTool.ts:69`), so a
+ * A subagent keys its own list by `context.agentId` (in `TodoWriteTool.call`), so a
  * nested `TodoWrite` belongs to that worker and not to this thread. Scanning only
  * top-level rows keeps the two apart, the same scope `deriveActivity` uses.
  */
