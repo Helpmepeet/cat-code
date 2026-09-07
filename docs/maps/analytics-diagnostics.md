@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-08-24
+Last refreshed: 2026-09-06
 
 ## Purpose
 
@@ -20,7 +20,7 @@ active local features.
 |---|---|---|---|
 | Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; inspect metadata redaction and gate/config fallbacks before changing a call site. |
 | Local telemetry and tracing | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/perfettoTracing.ts` | `src/utils/telemetry/{events,sessionTracing,betaSessionTracing}.ts`, `src/entrypoints/init.ts` | OTEL entrypoints are inert in this build; Perfetto remains the env-enabled local trace writer. |
-| Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. |
+| Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. Turn lifecycle is priority-preserved and exempt from short rate dedupe; peer-routing records are metadata-only with no message-text field. |
 | Desktop usage statistics | `app/sidecar/statsDomain.ts`, `app/shared/protocol.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/{App,AccountsPage,AccountsUsageSection}.tsx`, `app/renderer/src/statsState.ts`, `src/utils/stats.ts` | The sidecar projects real transcript-derived aggregates into a redacted `stats.usage.snapshot`; renderer range changes are a closed `stats.query` verb for 7d or 30d. |
 | Doctor, status, and validation | `src/commands/{doctor,status}/` | `src/screens/Doctor.tsx`, `src/components/Settings/Status.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/status.tsx`, `src/utils/envValidation.ts` | `/doctor` and `/status` overlap but have distinct owners; settings and environment validation feed their displays. |
 | IDE diagnostics and debug/error logs | `src/services/diagnosticTracking.ts`, `src/utils/debug.ts` | `src/utils/{attachments,log,errorLogSink}.ts`, `src/components/DiagnosticsDisplay.tsx` | IDE diagnostics are local edit feedback; debug/error output has separate enablement, filtering, and persistence paths. |

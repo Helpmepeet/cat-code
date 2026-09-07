@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-08-21.
+Last refreshed: 2026-09-06.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -8,7 +8,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 
 - `src/tasks.ts` and `src/Task.ts` for task exposure and base types.
 - `src/tasks/` for concrete lifecycle and stop behavior.
-- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `runAgent.ts`, and `resumeAgent.ts` for local-agent work.
+- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `runAgent.ts`, `resumeAgent.ts`, and `loadAgentsDir.ts` for local-agent work and definition loading.
 - `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, and `src/utils/swarm/inProcessRunner.ts` for teammate routing.
 - `src/components/tasks/`, `src/screens/REPL.tsx`, `src/hooks/useBackgroundTaskNavigation.ts`, and `src/state/selectors.ts` for terminal task UI.
 - `src/agent-mode/sessionState.ts` and the worker-control tool directories for durable Agent Mode worker state.
@@ -23,6 +23,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 | Operational task activity (session busy/waiting) | `src/tasks/attention.ts` | `src/utils/tuiSessionStatus.ts`, `src/tasks/pillLabel.ts`, `src/screens/REPL.tsx`, `docs/maps/terminal-ui-state.md` | `deriveDelegatedTaskStatus()` answers a different question from `isBackgroundTask()`: does this session own active delegated work, and is any delegated task stalled on the user. Working and waiting are independent aggregate facts. Excluded from work: terminal tasks, idle teammates, blocked local agents, teammates awaiting plan approval, remote ultraplan attention phases, deliberately long-running remote agents, and `local_bash` / `monitor_mcp` / `dream`. A backgrounded main session counts as work, because it runs as `local_agent`. |
 | AppState updates and eviction | `src/utils/task/framework.ts` | `src/state/teammateViewHelpers.ts`, concrete task files | `registerTask()`, `updateTaskState()`, `generateTaskAttachments()` (eviction only, despite the name) and `evictTerminalTask()` are the shared state helpers. Local-agent panel retention uses `PANEL_GRACE_MS`. |
 | Task output files | `src/utils/task/diskOutput.ts` | task detail dialogs, notification code | Bash and remote tasks write output files directly; local agents symlink task output to sidechain transcripts. Reads should use deltas/tails, not full unbounded reads. |
+| CLI and structured agent definitions | `src/tools/AgentTool/loadAgentsDir.ts` | `src/main.tsx`, `src/cli/print.ts` | Both `--agents` and structured initialization reject malformed definitions explicitly; never silently start without the requested agents. |
 
 ## Task Types
 
@@ -52,6 +53,7 @@ Then inspect:
 - `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, partial-result extraction, and terminal Agent Mode worker records.
 - `src/tools/AgentTool/runAgent.ts` for sidechain transcript writes, agent-specific MCP/hook/skill setup, subagent context isolation, and cleanup of agent-scoped shell/monitor tasks when an agent exits.
 - `src/tools/AgentTool/resumeAgent.ts` for resuming a retained/completed local agent in the background from its transcript and metadata.
+- `src/tools/AgentTool/loadAgentsDir.ts` for custom-agent parsing shared by on-disk definitions, `--agents`, and structured initialization; callers must surface its errors rather than treating a rejected payload as an empty list.
 - `src/tasks/LocalAgentTask/LocalAgentTask.tsx` for task state fields: progress, `pendingMessages`, `retain`, `diskLoaded`, `evictAfter`, blocked handoff metadata, and verification verdict extraction.
 - `src/tasks/attention.ts` for which task states mean the session is waiting on the user. Four surfaces read it: the footer pill, the task row label, footer notifications, and live session status. Do not spell `handoffStatus === 'blocked'` or an ultraplan phase check out again in a fifth place.
 - `src/tasks/pillLabel.ts` for the canonical compact label/icon rules that blocked handoffs and verification agents share with the footer pill and transcript status lines.

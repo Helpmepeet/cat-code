@@ -1,6 +1,6 @@
 # Auth, Accounts, And OAuth Map
 
-Last refreshed: 2026-08-08
+Last refreshed: 2026-09-06
 
 ## Purpose
 
@@ -73,7 +73,7 @@ Codex client.
 | Codex config token mirror | `src/utils/auth.ts:getCodexOAuthTokens()` | Global config `codexOAuth` | Backward-compatible mirror written by login and raw/no-vault refresh. It is used only when there is no vault-backed pool inventory; a single pool account is enough for pool-managed credentials. |
 | Codex account pool | `src/services/api/codexAccountPool.ts` | `~/codex-vault/accounts/<accountId>.json`, optional `.codex-nootp/config.toml` vault path, plus config mirror only when no vault profiles exist | Pool owns credential authority, health/classification, aliases, active account, usage hints, quota observation reconciliation, plan eligibility, config active-account pointer, and stale-config-fallback prevention. `poolManagesCredentials()` is true with one or more accounts; `canFailover()` is reserved for rotation. |
 | Codex token refresh | `src/codex-core/accounts.ts:maybeRefreshAccount()` | Codex vault JSON plus persisted `refresh` state, or raw config/vault writes with ledger for no-vault accounts | `maybeRefreshAccount()` is the caller-facing refresh entry point. Vault refresh writes `idle` / `in_flight` / `unknown` / `reauth_required` state into the vault, uses file locking to serialize writers, distinguishes definitely-not-sent transport errors from ambiguous outcomes, and leaves identity-mismatch refreshes marked for reauth on the old vault file. Raw/no-vault refresh uses the ledger path before `saveCodexOAuthTokens()` / vault persistence. |
-| Codex usage hints | `src/services/api/codexUsage.ts` | `src/components/Settings/Usage.tsx`, `src/components/LogoV2/AccountsPanel.tsx`, pool account fields | Usage fetches are best-effort and send provider account-selection headers. Treat plan type, quota data, and switchability separately: free accounts can be healthy and displayable even when their quota shape differs from paid accounts. Hard-429, usage-poll, and reset-redemption observations are reconciled by the pool before availability changes. |
+| Codex usage hints | `src/services/api/codexUsage.ts` | `src/components/Settings/Usage.tsx`, `src/components/LogoV2/AccountsPanel.tsx`, pool account fields | Usage fetches are best-effort and send provider account-selection headers. The pool keeps distinct primary and weekly reset hints, while only the primary reset gates the already-reset escape from a usage block. Treat plan type, quota data, and switchability separately: free accounts can be healthy and displayable even when their quota shape differs from paid accounts. Hard-429, usage-poll, and reset-redemption observations are reconciled by the pool before availability changes. |
 
 ## Command Routing
 
