@@ -907,6 +907,12 @@ describe('codex-fetch-adapter', () => {
     expect(mapEffortToCodex('minimal', 'gpt-5.6-luna')).toBe('none')
   })
 
+  test('mapEffortToCodex maps minimal to low for Astra', () => {
+    expect(mapEffortToCodex('minimal', 'gpt-6-astra')).toBe('low')
+    expect(mapEffortToCodex('max', 'gpt-6-astra')).toBe('max')
+    expect(mapEffortToCodex('ultra', 'gpt-6-astra')).toBeUndefined()
+  })
+
   test('mapEffortToCodex preserves supported GPT-5.6 reasoning levels', () => {
     expect(mapEffortToCodex('xhigh', 'gpt-5.6-sol')).toBe('xhigh')
     expect(mapEffortToCodex('max', 'gpt-5.6-sol')).toBe('max')
@@ -4157,7 +4163,12 @@ describe('mapClaudeModelToCodex', () => {
   })
 
   test('passes a Codex model through untouched', () => {
-    for (const model of ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']) {
+    for (const model of [
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+      'gpt-6-astra',
+    ]) {
       expect(mapClaudeModelToCodex(model)).toBe(model)
     }
   })

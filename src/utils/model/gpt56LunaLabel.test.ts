@@ -14,6 +14,7 @@ import {
 } from '../effort.js'
 import { getAgentModelOptions } from './agent.js'
 import {
+  getMarketingNameForModel,
   getPublicModelDisplayName,
   parseUserSpecifiedModel,
 } from './model.js'
@@ -114,5 +115,37 @@ describe('GPT-5.6 Sol, Terra, and Luna', () => {
     expect(source).toContain("value: 'gpt-5.6-sol'")
     expect(source).toContain("value: 'gpt-5.6-terra'")
     expect(source).toContain("value: 'gpt-5.6-luna'")
+  })
+})
+
+describe('GPT-6 Astra', () => {
+  test('is selectable and uses its documented Codex limits', () => {
+    expect(getPublicModelDisplayName('gpt-6-astra')).toBe('GPT 6 Astra')
+    expect(getMarketingNameForModel('gpt-6-astra')).toBe('GPT-6 Astra')
+    expect(
+      getAgentModelOptions().find(option => option.value === 'gpt-6-astra')
+        ?.label,
+    ).toBe('GPT-6 Astra')
+    const agentModels = getAgentModelOptions().map(option => option.value)
+    expect(agentModels.indexOf('gpt-5.6-sol')).toBe(
+      agentModels.indexOf('gpt-6-astra') + 1,
+    )
+    expect(CODEX_MODELS.find(entry => entry.id === 'gpt-6-astra')?.label).toBe(
+      'GPT-6 Astra',
+    )
+    const codexModels = CODEX_MODELS.map(entry => entry.id)
+    expect(codexModels.indexOf('gpt-5.6-sol')).toBe(
+      codexModels.indexOf('gpt-6-astra') + 1,
+    )
+    expect(getContextWindowForModel('gpt-6-astra')).toBe(1_050_000)
+    expect(getDefaultEffortForModel('gpt-6-astra')).toBeUndefined()
+    expect(modelSupportsMaxEffort('gpt-6-astra')).toBe(true)
+    expect(getSupportedEffortLevels('gpt-6-astra')).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+      'max',
+    ])
   })
 })

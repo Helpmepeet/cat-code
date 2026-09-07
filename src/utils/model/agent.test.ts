@@ -47,6 +47,14 @@ describe('getAgentModel explicit override', () => {
     ).toBe('gpt-5.6-sol')
   })
 
+  test('honors an explicit Astra selection', () => {
+    expect(
+      getCanonicalName(
+        getAgentModel(undefined, 'gpt-5.6-terra', 'gpt-6-astra', 'default'),
+      ),
+    ).toBe('gpt-6-astra')
+  })
+
   test('honors an explicit Sonnet selection when the parent uses Opus', () => {
     expect(
       getCanonicalName(

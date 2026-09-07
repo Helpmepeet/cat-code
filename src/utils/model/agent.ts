@@ -1,6 +1,5 @@
 import type { PermissionMode } from '../permissions/PermissionMode.js'
 import { capitalize } from '../stringUtils.js'
-import { MODEL_ALIASES, type ModelAlias } from './aliases.js'
 import { applyBedrockRegionPrefix, getBedrockRegionPrefix } from './bedrock.js'
 import {
   getCanonicalName,
@@ -14,8 +13,9 @@ import { getAPIProvider, resolveRequestProvider, type APIProvider } from './prov
 
 // @[MODEL LAUNCH]: 'claude-opus-5' is a deliberate version pin, not an alias.
 // Re-point it (or add the successor beside it) when a newer Opus ships.
-export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
+export const AGENT_MODEL_OPTIONS = ['sonnet', 'opus', 'claude-opus-5', 'best', 'sonnet[1m]', 'opus[1m]', 'opusplan', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'inherit'] as const
 export type AgentModelAlias = (typeof AGENT_MODEL_OPTIONS)[number]
+export type AgentModelSelection = Exclude<AgentModelAlias, 'inherit'>
 
 export type AgentModelOption = {
   value: AgentModelAlias
@@ -42,7 +42,7 @@ export function getDefaultSubagentModel(): string {
 export function getAgentModel(
   agentModel: string | undefined,
   parentModel: string,
-  toolSpecifiedModel?: ModelAlias,
+  toolSpecifiedModel?: AgentModelSelection,
   permissionMode?: PermissionMode,
   parentProvider?: APIProvider,
 ): string {
@@ -166,6 +166,11 @@ export function getAgentModelOptions(): AgentModelOption[] {
       value: 'claude-opus-5',
       label: 'Opus 5',
       description: 'Pinned to Opus 5, even when the parent runs something else',
+    },
+    {
+      value: 'gpt-6-astra',
+      label: 'GPT-6 Astra',
+      description: 'GPT-6 Astra',
     },
     {
       value: 'gpt-5.6-sol',

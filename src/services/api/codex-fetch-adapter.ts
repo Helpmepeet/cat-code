@@ -573,6 +573,7 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
   { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Frontier model for complex professional work' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
@@ -1465,6 +1466,7 @@ export function mapEffortToCodex(
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
+    if (model === 'gpt-6-astra') return 'low'
     // Cat Code's `minimal` means disabled thinking. GPT-5.6 models expose
     // `none`, which preserves the former GPT-5.4 Mini low-latency path.
     if (model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna') return 'none'
@@ -1472,7 +1474,12 @@ export function mapEffortToCodex(
   }
   if (e === 'max') {
     const model = codexModel.toLowerCase()
-    return model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna'
+    return (
+      model === 'gpt-5.6-sol' ||
+      model === 'gpt-5.6-terra' ||
+      model === 'gpt-5.6-luna' ||
+      model === 'gpt-6-astra'
+    )
       ? 'max'
       : model.includes('codex')
         ? 'xhigh'

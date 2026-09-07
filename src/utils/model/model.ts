@@ -431,6 +431,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('gpt-5.6-luna')) {
     return 'gpt-5.6-luna'
   }
+  if (name.includes('gpt-6-astra')) {
+    return 'gpt-6-astra'
+  }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
     return match[1]
@@ -528,6 +531,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.6-sol') return 'GPT 5.6 Sol'
     if (model === 'gpt-5.6-terra') return 'GPT 5.6 Terra'
     if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
+    if (model === 'gpt-6-astra') return 'GPT 6 Astra'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model
   }
@@ -581,6 +585,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'GPT-5.6 Terra'
     case getModelStrings().gpt56luna:
       return 'GPT-5.6 Luna'
+    case getModelStrings().gpt6astra:
+      return 'GPT-6 Astra'
     default:
       return null
   }
@@ -843,6 +849,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('gpt-5.6-luna')) {
     return 'GPT-5.6 Luna'
+  }
+  if (canonical.includes('gpt-6-astra')) {
+    return 'GPT-6 Astra'
   }
   return undefined
 }

@@ -221,5 +221,9 @@ describe('1M-context rows and Sonnet 4.6', () => {
     expect(labels).toContain('Opus 5')
     expect(labels).toContain('Fable 5')
     expect(labels).toContain('GPT-5.6 Sol')
+    expect(labels).toContain('GPT-6 Astra')
+    expect(labels.indexOf('GPT-5.6 Sol')).toBe(
+      labels.indexOf('GPT-6 Astra') + 1,
+    )
   })
 })

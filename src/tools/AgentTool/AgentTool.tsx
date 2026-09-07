@@ -538,7 +538,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'claude-opus-5', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
+  model: z.enum(['sonnet', 'opus', 'claude-opus-5', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
   effort: z.enum(effortLevels).optional().describe("Optional reasoning effort override. OMIT this — leave it unset and the subagent inherits your effort level (or its own pin). Set it only when the user explicitly named an effort level for this work. Do not reason about how much effort a task deserves; that is not your call to make. Levels the subagent's model does not support fall back to high."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));

@@ -116,6 +116,15 @@ afterEach(() => {
 describe('AgentTool effort input', () => {
   const baseInput = { description: 'do a thing', prompt: 'go' }
 
+  test('accepts Astra as an explicit model override', () => {
+    const parsed = inputSchema().safeParse({
+      ...baseInput,
+      model: 'gpt-6-astra',
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.model).toBe('gpt-6-astra')
+  })
+
   test('accepts a named effort level from the calling agent', () => {
     const parsed = inputSchema().safeParse({ ...baseInput, effort: 'max' })
     expect(parsed.success).toBe(true)
