@@ -1616,16 +1616,60 @@ describe('patch failure diagnostics', () => {
     )
 
     expect(message).toContain('transcribed inaccurately')
-    expect(message).not.toContain('may be stale')
+    expect(message).not.toContain('the file has since changed on disk')
   })
 
-  test('keeps the staleness wording when there is no cached read to compare', () => {
+  test('claims neither staleness nor transcription when there is no cached read', () => {
     const message = failureMessage(() =>
       applyPatchToBuffers([reflowed], new Map([[TARGET, fileState(TARGET, CONTENT)]])),
     )
 
-    expect(message).toContain('may be stale')
-    expect(message).not.toContain('transcribed inaccurately')
+    // A missing cache entry is equally consistent with an evicted read and a
+    // read on another thread, so the message may not pick a cause. Blaming a
+    // concurrent editor here is the expensive wrong turn on a shared tree.
+    expect(message).toContain('no recorded read of this file')
+    expect(message).toContain('cannot be told apart')
+    // The committal wording of the two branches that DO know the cause.
+    expect(message).not.toContain('the file has since changed on disk')
+    expect(message).not.toContain('most likely transcribed inaccurately')
+  })
+
+  test('names which hunk failed when the section has more than one', () => {
+    const secondHunkMisses: FilePatchOperation = {
+      type: 'update',
+      path: TARGET,
+      hunks: [
+        hunk({
+          lines: [
+            { kind: 'context', text: ' * a wrapped sentence that ends here' },
+            { kind: 'add', text: ' * inserted.' },
+          ],
+        }),
+        hunk({
+          lines: [
+            { kind: 'delete', text: ' * a line this file never had.' },
+            { kind: 'add', text: ' * rewritten.' },
+          ],
+        }),
+      ],
+    }
+
+    const message = failureMessage(() =>
+      applyPatchToBuffers(
+        [secondHunkMisses],
+        new Map([[TARGET, fileState(TARGET, CONTENT)]]),
+      ),
+    )
+
+    expect(message).toContain('hunk 2 of 2')
+  })
+
+  test('omits the ordinal when the section has a single hunk', () => {
+    const message = failureMessage(() =>
+      applyPatchToBuffers([reflowed], new Map([[TARGET, fileState(TARGET, CONTENT)]])),
+    )
+
+    expect(message).not.toContain('hunk 1 of 1')
   })
 
   test('states nothing was written when a later file in the patch fails', () => {

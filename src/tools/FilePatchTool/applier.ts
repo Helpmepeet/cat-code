@@ -177,7 +177,16 @@ export function applyUpdateHunks(
   const notes: string[] = []
 
   for (let i = 0; i < hunks.length; i++) {
-    const next = applySingleHunk(lines, hunks[i], path, i, cursor, lineDelta, cachedLines)
+    const next = applySingleHunk(
+      lines,
+      hunks[i],
+      path,
+      i,
+      hunks.length,
+      cursor,
+      lineDelta,
+      cachedLines,
+    )
     lines = next.lines
     cursor = next.cursor
     lineDelta = next.lineDelta
@@ -205,6 +214,7 @@ function applySingleHunk(
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  hunkCount: number,
   cursor: number,
   lineDelta: number,
   cachedLines?: string[],
@@ -220,6 +230,7 @@ function applySingleHunk(
     hunk,
     path,
     hunkIndex,
+    hunkCount,
     cursor,
     lineDelta,
     cachedLines,
@@ -301,11 +312,16 @@ function findHunkPosition(
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  hunkCount: number,
   cursor: number,
   lineDelta: number,
   cachedLines?: string[],
 ): { index: number; note?: string } {
   const fingerprint = hunk.lines.filter(l => l.kind !== 'add').map(l => l.text)
+  // A section with one hunk needs no ordinal. Naming one of many is what lets
+  // the model correct the hunk that failed instead of re-checking all of them
+  // against the file, which is the whole cost of a placement failure.
+  const hunkLabel = hunkCount > 1 ? ` (hunk ${hunkIndex + 1} of ${hunkCount})` : ''
 
   // Pure-insert hunk (no context, no delete lines)
   if (fingerprint.length === 0) {
@@ -317,7 +333,7 @@ function findHunkPosition(
       return { index: 0 }
     }
     throw new FilePatchError(
-      `Patch hunk for ${path} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
+      `Patch hunk for ${path}${hunkLabel} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
       { code: 'INVALID_PATCH_FORMAT', path },
     )
   }
@@ -400,27 +416,31 @@ function findHunkPosition(
       const cacheMatches = findAllMatches(cachedLines, fingerprint, 0, matchFn)
       if (cacheMatches.length > 0) {
         throw new FilePatchError(
-          `Patch anchor not found in ${path} — the context matched the previously-read version of the file, but the file has since changed on disk. Re-read the file and rebuild the patch with fresh context.`,
+          `Patch anchor not found in ${path}${hunkLabel} — the context matched the previously-read version of the file, but the file has since changed on disk. Re-read the file and rebuild the patch with fresh context.`,
           { code: 'PATCH_ANCHOR_NOT_FOUND', path },
         )
       }
     }
   }
 
-  // Staleness is only a live possibility when we have nothing to compare
-  // against. With a cached read in hand the loop above already proved the
-  // fingerprint matches neither the file nor what was last read from it, so
-  // naming staleness here sends the model hunting a concurrent editor that
-  // does not exist — a costly wrong turn on a shared tree.
+  // With a cached read in hand the loop above already proved the fingerprint
+  // matches neither the file nor what was last read from it, so naming
+  // staleness here sends the model hunting a concurrent editor that does not
+  // exist — a costly wrong turn on a shared tree.
   if (cachedLines !== undefined) {
     throw new FilePatchError(
-      `Patch anchor not found in ${path} — the hunk's context and delete lines match neither the current file nor the content you last read from it, so they were most likely transcribed inaccurately. Compare them against the file line for line: wording, whitespace, and where each line wraps must all match. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+      `Patch anchor not found in ${path}${hunkLabel} — the hunk's context and delete lines match neither the current file nor the content you last read from it, so they were most likely transcribed inaccurately. Compare them against the file line for line: wording, whitespace, and where each line wraps must all match. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
       { code: 'PATCH_ANCHOR_NOT_FOUND', path },
     )
   }
 
+  // Without a cached read the comparison above never ran, so the cause here is
+  // genuinely unknown. Asserting staleness would send the model hunting a
+  // concurrent editor on nothing but a missing cache entry, and the entry is
+  // equally absent when the read was evicted from the read-state cache or
+  // happened on another thread — neither says the file changed.
   throw new FilePatchError(
-    `Patch anchor not found in ${path} — re-read the file; the context may be stale. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+    `Patch anchor not found in ${path}${hunkLabel} — there is no recorded read of this file to compare against, so whether it changed on disk or the context was transcribed inaccurately cannot be told apart here. Re-read the file and rebuild the hunk from what it actually contains. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
     { code: 'PATCH_ANCHOR_NOT_FOUND', path },
   )
 }
