@@ -26,11 +26,11 @@ beforeEach(async () => {
   }))
 })
 
-function toolUseContext(): ToolUseContext {
+function toolUseContext(allowRules: string[] = []): ToolUseContext {
   const toolPermissionContext: ToolPermissionContext = {
     mode: 'default',
     additionalWorkingDirectories: new Map(),
-    alwaysAllowRules: {},
+    alwaysAllowRules: allowRules.length > 0 ? { localSettings: allowRules } : {},
     alwaysDenyRules: {},
     alwaysAskRules: {},
     isBypassPermissionsModeAvailable: false,
@@ -44,8 +44,8 @@ function toolUseContext(): ToolUseContext {
   } as unknown as ToolUseContext
 }
 
-async function decide(command: string) {
-  return await bashToolHasPermission({ command }, toolUseContext())
+async function decide(command: string, allowRules: string[] = []) {
+  return await bashToolHasPermission({ command }, toolUseContext(allowRules))
 }
 
 // A command made only of assignments parses to zero commands. Both
@@ -91,5 +91,148 @@ describe('bashToolHasPermission assignment-only commands', () => {
     // walkVariableAssignment. Verified live: this prints under /bin/bash.
     const decision = await decide("for OPTIND in 'a[$(echo PWNED)]'; do :; done")
     expect(decision.behavior).toBe('ask')
+  })
+})
+
+// The sibling of the above, with the damage one command later instead of in
+// the assignment itself. A statement-level assignment is not pushed as a
+// subcommand, so `PATH=/tmp/evil && git status` was permission-checked as a
+// bare `git status`: the allow rule matched and `git` ran resolved out of an
+// attacker-chosen directory, with no prompt. The env-PREFIX form
+// (`PATH=/tmp/evil git status`) was already caught, which is what made the
+// gap easy to miss. No cross-call shell persistence is needed — the hijack
+// lands inside the single invocation.
+describe('bashToolHasPermission lookup-altering assignments', () => {
+  const ALLOW_GIT_STATUS = ['Bash(git status)']
+
+  test('the allow rule alone still allows the bare command', async () => {
+    // Baseline: every case below differs from this one only by the
+    // assignment, so an `ask` there is the assignment being seen.
+    const decision = await decide('git status', ALLOW_GIT_STATUS)
+    expect(decision.behavior).toBe('allow')
+  })
+
+  test('PATH before && asks instead of riding the allow rule', async () => {
+    const decision = await decide(
+      'PATH=/tmp/evil && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('leading whitespace does not hide a PATH assignment', async () => {
+    const decision = await decide(
+      '  PATH=/tmp/evil && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('a lookup-altering assignment after ; asks', async () => {
+    // `;` and `&&` are different separator tokens reaching the same branch.
+    const decision = await decide('PATH=/tmp/evil; git status', ALLOW_GIT_STATUS)
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('LD_PRELOAD before && asks', async () => {
+    // Prefix family, not a listed name: the binary is the real one, the
+    // attacker's code runs inside it.
+    const decision = await decide(
+      'LD_PRELOAD=/tmp/x.so && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('DYLD_INSERT_LIBRARIES before && asks', async () => {
+    const decision = await decide(
+      'DYLD_INSERT_LIBRARIES=/tmp/x.dylib && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('BASH_ENV before && asks', async () => {
+    // Not covered by BINARY_HIJACK_VARS (/^(LD_|DYLD_|PATH$)/) — the startup
+    // file bash sources for the next non-interactive shell.
+    const decision = await decide(
+      'BASH_ENV=/tmp/x && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('the lowercase zsh alias of PATH asks', async () => {
+    // zsh ties lowercase `path` to $PATH, and BashTool runs under the user's
+    // default shell. A case-sensitive check would miss this entirely.
+    const decision = await decide(
+      'path=/tmp/evil && git status',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('export of a lookup-altering variable asks', async () => {
+    // A declaration builtin reaches the same hijack by a different node
+    // type: `Bash(export:*)` matched the export and `Bash(git status)`
+    // matched the hijacked command, so both were allowed.
+    const decision = await decide('export PATH=/tmp/evil && git status', [
+      ...ALLOW_GIT_STATUS,
+      'Bash(export:*)',
+    ])
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('the quoted export form asks', async () => {
+    // `export "PATH=..."` arrives as one string token, so the
+    // variable_assignment case never sees the name — it must be split out.
+    const decision = await decide('export "PATH=/tmp/evil" && git status', [
+      ...ALLOW_GIT_STATUS,
+      'Bash(export:*)',
+    ])
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('a lookup-altering for-loop variable asks', async () => {
+    // for_statement assigns the loop var directly, bypassing
+    // walkVariableAssignment — the same second site 320c795d had to patch.
+    const decision = await decide(
+      'for PATH in /tmp/evil; do git status; done',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('a legitimate PATH prepend asks rather than being denied', async () => {
+    // `PATH=/usr/local/bin:$PATH make` is a common, honest pattern. The
+    // outcome must be a prompt, not a refusal — the guard cannot tell it
+    // apart from the hijack, and does not try to.
+    const decision = await decide('PATH=/usr/local/bin:$PATH make', [
+      'Bash(make:*)',
+    ])
+    expect(decision.behavior).toBe('ask')
+  })
+
+  test('an ordinary assignment before && is still allowed', async () => {
+    // The whole point of the statement-level branch: FOO is read by nothing
+    // that decides what runs, so it stays inert and prompt-free.
+    const decision = await decide('FOO=bar && git status', ALLOW_GIT_STATUS)
+    expect(decision.behavior).toBe('allow')
+  })
+
+  test('exporting an ordinary variable is still allowed', async () => {
+    const decision = await decide('export FOO=bar && git status', [
+      ...ALLOW_GIT_STATUS,
+      'Bash(export:*)',
+    ])
+    expect(decision.behavior).toBe('allow')
+  })
+
+  test('an ordinary for-loop variable is still allowed', async () => {
+    const decision = await decide(
+      'for f in a b; do git status; done',
+      ALLOW_GIT_STATUS,
+    )
+    expect(decision.behavior).toBe('allow')
   })
 })
