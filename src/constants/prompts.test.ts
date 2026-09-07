@@ -341,41 +341,132 @@ describe('session transcript guidance scope', () => {
     clearSystemPromptSections()
   })
 
-  const transcriptSection = async () => {
-    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
-    const start = prompt.indexOf('## Reading session transcripts')
-    expect(start).toBeGreaterThan(-1)
-    return prompt.slice(start)
+  const transcriptSection = async (embedded = false) => {
+    const saved = {
+      embedded: process.env.EMBEDDED_SEARCH_TOOLS,
+      entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
+    }
+    try {
+      if (embedded) {
+        process.env.EMBEDDED_SEARCH_TOOLS = '1'
+      } else {
+        delete process.env.EMBEDDED_SEARCH_TOOLS
+      }
+      clearSystemPromptSections()
+      const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const start = prompt.indexOf('## Reading session transcripts')
+      expect(start).toBeGreaterThan(-1)
+      return prompt.slice(start)
+    } finally {
+      if (saved.embedded === undefined) delete process.env.EMBEDDED_SEARCH_TOOLS
+      else process.env.EMBEDDED_SEARCH_TOOLS = saved.embedded
+      if (saved.entrypoint === undefined)
+        delete process.env.CLAUDE_CODE_ENTRYPOINT
+      else process.env.CLAUDE_CODE_ENTRYPOINT = saved.entrypoint
+      clearSystemPromptSections()
+    }
   }
 
-  test('names what the raw files are for instead of offering them as a general way to read sessions', async () => {
-    // Desktop sessions carry a tool for reading another session, which resolves
-    // who the caller may read, bounds the output, and redacts. This section is
-    // in the same prompt and its recipes reach the same bytes with none of
-    // that, so it has to say what it is for and defer where a tool exists.
+  test('prefers session-reading tools for understanding another session while keeping raw transcripts available for debugging', async () => {
     const section = await transcriptSection()
 
-    expect(section).toContain('forensics on a session id you were given')
-    expect(section).toContain('subagents you spawned')
-    expect(section).toContain('call that tool')
+    // Concise tool-preference statement without raw file prohibition
+    expect(section).toContain(
+      'These files are the raw record of a session.',
+    )
+    expect(section).toContain(
+      "When you need to understand another session's work, prefer the available session-reading tool.",
+    )
+    expect(section).toContain(
+      'For debugging that requires raw events or tool results the tool does not expose, inspect the transcript directly.',
+    )
+
+    // Mistaken restrictions must not be present
+    expect(section).not.toContain('narrow forensic surface, not a general session-discovery API')
+    expect(section).not.toContain('Use this route only for a specific session identifier')
+    expect(section).not.toContain('Do not scan the raw projects directory')
+    expect(section).not.toContain('explain that corpus-wide analysis is unavailable')
+    expect(section).not.toContain('Do not use raw files to bypass')
+    expect(section).not.toContain('you were given')
+    expect(section).not.toContain('you were not given')
   })
 
-  test('tells the model to resolve by id rather than to search for sessions it was not pointed at', async () => {
-    // The resolve recipe globs every workspace, so without this the shortest
-    // route to "what is that other session doing" is a glob over all of them.
-    const section = await transcriptSection()
+  test('covers dedicated search-tool variant with prefix resolution, scoped queries, and subagent metadata', async () => {
+    const section = await transcriptSection(false)
 
-    expect(section).toContain('resolve by id')
-    expect(section).toContain('you were not given')
+    // Resolution guidance
+    expect(section).toContain(
+      'Prefer a known workspace and full session ID to open the path directly.',
+    )
+    expect(section).toContain(
+      'When resolving a specific session by prefix, locate the file with Glob',
+    )
+    expect(section).toContain(
+      'Glob pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"',
+    )
+    expect(section).toContain(
+      'Require unambiguous resolution to a single file before reading contents.',
+    )
+
+    // Paths and metadata workflow
+    expect(section).toContain(
+      '~/.cat-code/projects/<sanitized-cwd>/<session-id>.jsonl',
+    )
+    expect(section).toContain('subagents/agent-<hash>.jsonl')
+    expect(section).toContain('subagents/agent-<hash>.meta.json')
+    expect(section).toContain(
+      'Read .meta.json first when you want to know what a subagent was for or who spawned it.',
+    )
+
+    // Scoped queries with Grep
+    expect(section).toContain(
+      'Examples for querying an individual transcript:',
+    )
+    expect(section).toContain(
+      `Grep '"type":"tool_use"' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"stop_reason"' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"type":"subagent-' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"tool_use_id":"' path="<path-to-transcript.jsonl>"`,
+    )
   })
 
-  test('keeps the recipes the real uses need', async () => {
-    const section = await transcriptSection()
+  test('covers embedded search-tool variant with find resolution and scoped grep queries', async () => {
+    const section = await transcriptSection(true)
 
-    expect(section).toContain('~/.cat-code/projects/')
-    expect(section).toContain('subagents/agent-')
-    expect(section).toContain('.meta.json')
-    expect(section).toContain(`Grep '"tool_use_id":"'`)
+    // Resolution guidance with find
+    expect(section).toContain(
+      'Prefer a known workspace and full session ID to open the path directly.',
+    )
+    expect(section).toContain(
+      'find ~/.cat-code/projects -name \'*9a993deb*.jsonl\'',
+    )
+    expect(section).toContain(
+      'Require unambiguous resolution to a single file before reading contents.',
+    )
+
+    // Scoped queries with grep
+    expect(section).toContain(
+      `grep '"type":"tool_use"' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"stop_reason"' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"type":"subagent-' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"tool_use_id":"' <path-to-transcript.jsonl>`,
+    )
+
+    // Must not contain dedicated Glob/Grep tools
+    expect(section).not.toContain('Glob')
+    expect(section).not.toContain('Grep')
   })
 })
 

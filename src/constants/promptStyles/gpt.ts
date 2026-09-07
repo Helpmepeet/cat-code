@@ -246,11 +246,12 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     : `the ${GLOB_TOOL_NAME} or ${GREP_TOOL_NAME}`
   const hasReadTool = enabledTools.has(FILE_READ_TOOL_NAME)
   const hasBashTool = enabledTools.has(BASH_TOOL_NAME)
-  // Reads and search stay open through Bash: they are cheap and lossless, so
-  // only mutations are steered to a dedicated tool (see the file-mutation rule
-  // above).
-  const shellReadRule = hasBashTool
-    ? `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
+  // Reads and search stay open through Bash when it is available: they are
+  // cheap and lossless, so only mutations are steered to a dedicated tool.
+  const shellReadRule = hasReadTool
+    ? hasBashTool
+      ? `\`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run through the ${BASH_TOOL_NAME} tool. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
+      : `Shell reads such as \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are permitted when a shell is available. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`
     : null
   // Each branch routes to a named search tool, so a session without that tool
   // gets no rule rather than a pointer to something it cannot call.
@@ -260,7 +261,9 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
       : null
     : enabledTools.has(GREP_TOOL_NAME)
       ? `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`
-      : null
+      : hasBashTool
+        ? `READ DISCIPLINE: Use targeted \`rg\` or \`rg --files\` through the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
+        : null
   const readDiscipline =
     hasReadTool && readDisciplineLead !== null
       ? [readDisciplineLead, shellReadRule].filter(part => part !== null).join(' ')
