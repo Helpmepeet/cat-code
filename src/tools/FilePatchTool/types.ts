@@ -69,10 +69,21 @@ export type ApplyPatchSuccess = {
   type: FilePatchOperationType
   before: string | null
   after: string | null
-  // Placement disclosures: set when a hunk was ambiguous on its own and was
-  // resolved by the position the previous hunk established.
-  notes?: string[]
 }
+
+export type FilePatchFailureDetail = {
+  code: string
+  operation: FilePatchOperationType
+  path: string
+  moveTo?: string
+  hunkIndex?: number
+  hunkCount?: number
+  message: string
+}
+
+export const MAX_FILE_PATCH_FAILURE_DETAILS = 8
+export const MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH = 800
+export const MAX_FILE_PATCH_ERROR_REPAIR_LENGTH = 1_200
 
 export type ApplyPatchResult = {
   files: ApplyPatchSuccess[]
@@ -81,6 +92,11 @@ export type ApplyPatchResult = {
 export class FilePatchError extends Error {
   readonly code: string
   readonly path?: string
+  readonly operation?: FilePatchOperationType
+  readonly moveTo?: string
+  readonly hunkIndex?: number
+  readonly hunkCount?: number
+  readonly details?: FilePatchFailureDetail[]
   readonly mutationOutcome: FilePatchMutationOutcome
 
   constructor(
@@ -88,6 +104,11 @@ export class FilePatchError extends Error {
     options?: {
       code?: string
       path?: string
+      operation?: FilePatchOperationType
+      moveTo?: string
+      hunkIndex?: number
+      hunkCount?: number
+      details?: readonly FilePatchFailureDetail[]
       mutationOutcome?: FilePatchMutationOutcome
     },
   ) {
@@ -95,6 +116,22 @@ export class FilePatchError extends Error {
     this.name = 'FilePatchError'
     this.code = options?.code ?? 'FILE_PATCH_ERROR'
     this.path = options?.path
+    this.operation = options?.operation
+    this.moveTo = options?.moveTo
+    this.hunkIndex = options?.hunkIndex
+    this.hunkCount = options?.hunkCount
+    this.details =
+      options?.details === undefined
+        ? undefined
+        : options.details
+            .slice(0, MAX_FILE_PATCH_FAILURE_DETAILS)
+            .map(detail => ({
+              ...detail,
+              message: boundFilePatchErrorText(
+                detail.message,
+                MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
+              ),
+            }))
     this.mutationOutcome = options?.mutationOutcome ?? 'no-mutation'
   }
 }
@@ -103,6 +140,44 @@ export type FilePatchMutationOutcome =
   | 'no-mutation'
   | 'complete-rollback'
   | 'incomplete-recovery'
+
+export type FilePatchModelError = {
+  type: 'file_patch_error'
+  code: string
+  operation?: FilePatchOperationType
+  path?: string
+  moveTo?: string
+  hunkIndex?: number
+  hunkCount?: number
+  details: FilePatchFailureDetail[]
+  mutationOutcome: FilePatchMutationOutcome
+  repair: string
+}
+
+export function serializeFilePatchError(
+  error: FilePatchError,
+): FilePatchModelError {
+  return {
+    type: 'file_patch_error',
+    code: error.code,
+    ...(error.operation !== undefined ? { operation: error.operation } : {}),
+    ...(error.path !== undefined ? { path: error.path } : {}),
+    ...(error.moveTo !== undefined ? { moveTo: error.moveTo } : {}),
+    ...(error.hunkIndex !== undefined ? { hunkIndex: error.hunkIndex } : {}),
+    ...(error.hunkCount !== undefined ? { hunkCount: error.hunkCount } : {}),
+    details: error.details ?? [],
+    mutationOutcome: error.mutationOutcome,
+    repair: boundFilePatchErrorText(
+      error.message,
+      MAX_FILE_PATCH_ERROR_REPAIR_LENGTH,
+    ),
+  }
+}
+
+function boundFilePatchErrorText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength - 20)}… [truncated]`
+}
 
 const hunkLineSchema = lazySchema(() =>
   z.strictObject({
@@ -175,8 +250,8 @@ const outputFileSchema = lazySchema(() =>
         }),
       )
       .describe('Display diff for the operation'),
-    // Additive-optional so transcripts written before placement disclosures
-    // existed still validate on resume.
+    // Keep accepting placement notes from old transcripts without emitting
+    // them from current patch results.
     notes: z.array(z.string()).optional(),
   }),
 )

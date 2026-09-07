@@ -8,6 +8,8 @@ import type {
 } from '../../types/message.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import type { MessageUpdateLazy } from './toolExecution.js'
+import { classifyToolError } from './toolExecution.js'
+import { FilePatchError } from '../../tools/FilePatchTool/types.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -290,5 +292,58 @@ describe('runToolUse PreToolUse additionalContext', () => {
     expect(resultIndices).toHaveLength(1)
     const contextIndex = additionalContextIndex(updates)
     expect(contextIndex).toBeLessThan(resultIndices[0]!)
+  })
+
+  test('persists structured Apply_patch failures without leaking telemetry text', async () => {
+    const path = '/private/code/secret.ts'
+    const error = new FilePatchError(
+      `Patch hunk placement is ambiguous in ${path}: there are multiple eligible placements.`,
+      {
+        code: 'PATCH_ANCHOR_AMBIGUOUS',
+        operation: 'update',
+        path,
+        hunkIndex: 2,
+        hunkCount: 3,
+        details: [
+          {
+            code: 'PATCH_ANCHOR_AMBIGUOUS',
+            operation: 'update',
+            path,
+            hunkIndex: 2,
+            hunkCount: 3,
+            message: 'There are multiple eligible placements.',
+          },
+        ],
+      },
+    )
+    const updates = await drain(
+      makeTool('Apply_patch', async () => {
+        throw error
+      }),
+    )
+    const resultUpdate = updates.find(update => toolResultIndices([update]).length > 0)!
+    const message = resultUpdate.message as {
+      message: {
+        content: { content?: string; is_error?: boolean }[]
+      }
+      toolUseResult?: unknown
+    }
+    const resultBlock = message.message.content[0]!
+    expect(resultBlock.is_error).toBe(true)
+    expect(resultBlock.content).toContain('PATCH_ANCHOR_AMBIGUOUS')
+    expect(resultBlock.content).toContain('file_patch_error')
+    expect(message.toolUseResult).toMatchObject({
+      type: 'file_patch_error',
+      code: 'PATCH_ANCHOR_AMBIGUOUS',
+      operation: 'update',
+      path,
+      hunkIndex: 2,
+      hunkCount: 3,
+      mutationOutcome: 'no-mutation',
+    })
+    expect(classifyToolError(error)).toBe(
+      'FilePatchError:PATCH_ANCHOR_AMBIGUOUS',
+    )
+    expect(classifyToolError(error)).not.toContain(path)
   })
 })

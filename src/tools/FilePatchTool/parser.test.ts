@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { getPatchMutationPaths, parseFilePatch } from './parser.js'
+import { FilePatchError } from './types.js'
 
 describe('parseFilePatch', () => {
   test('parses update, add, and delete operations in one envelope', () => {
@@ -56,6 +57,32 @@ describe('parseFilePatch', () => {
       type: 'delete',
       path: 'src/old.ts',
     })
+  })
+
+  test('rejects repeated source paths', () => {
+    let error: unknown
+    try {
+      parseFilePatch(
+        [
+          '*** Begin Patch',
+          '*** Update File: src/example.ts',
+          '@@',
+          ' old',
+          '-old',
+          '+new',
+          '*** Update File: src/example.ts',
+          '@@',
+          ' another',
+          '-another',
+          '+changed',
+          '*** End Patch',
+        ].join('\n'),
+      )
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).code).toBe('DUPLICATE_PATCH_PATH')
   })
 
   test('tracks no-newline markers for update and add operations', () => {

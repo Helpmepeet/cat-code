@@ -9,6 +9,7 @@ import {
 } from '../../utils/fsOperations.js'
 import { runWithCwdOverride } from '../../utils/cwd.js'
 import { createFileStateCacheWithSizeLimit } from '../../utils/fileStateCache.js'
+import { getFileIdentity } from '../../utils/file.js'
 import { FilePatchTool } from './FilePatchTool.js'
 import {
   applyPatchToBuffers,
@@ -16,7 +17,12 @@ import {
   serializeBuffer,
 } from './applier.js'
 import { renderToolResultMessage } from './UI.js'
-import type { ApplyPatchFileState, FilePatchHunk, FilePatchOperation } from './types.js'
+import {
+  FilePatchError,
+  type ApplyPatchFileState,
+  type FilePatchHunk,
+  type FilePatchOperation,
+} from './types.js'
 import {
   boundPatchLinesForPersistence,
   MAX_PERSISTED_FIRST_LINE_LENGTH,
@@ -71,7 +77,6 @@ describe('applyUpdateHunks', () => {
             { kind: 'context', text: 'alpha' },
             { kind: 'delete', text: 'beta' },
             { kind: 'add', text: 'beta updated' },
-            { kind: 'context', text: 'gamma' },
           ],
         }),
         hunk({
@@ -154,6 +159,21 @@ describe('BOF and EOF (canonical Codex V4A)', () => {
       '/tmp/example.ts',
     )
     expect(result.buffer.content).toBe('// top\nline1\nline2\n')
+  })
+
+  test('pure-insert scope hints remain mandatory constraints', () => {
+    expect(() =>
+      applyUpdateHunks(
+        { content: 'line1\nline2\n', lineEndings: 'LF' },
+        [
+          hunk({
+            scopeHints: ['missing scope'],
+            lines: [{ kind: 'add', text: '// top' }],
+          }),
+        ],
+        '/tmp/example.ts',
+      ),
+    ).toThrow('scope does not appear')
   })
 
   test('pure-insert first hunk on empty file produces only the added lines', () => {
@@ -325,6 +345,24 @@ describe('scope hint disambiguation', () => {
     expect(result.buffer.content).toContain('    return 1')
     expect(result.buffer.content).not.toContain('    return 2')
   })
+
+  test('does not fall back to an unscoped match when the scope is wrong', () => {
+    expect(() =>
+      applyUpdateHunks(
+        { content: 'class A {\ntarget\n}\n', lineEndings: 'LF' },
+        [
+          hunk({
+            scopeHints: ['class Missing'],
+            lines: [
+              { kind: 'context', text: 'target' },
+              { kind: 'add', text: 'updated' },
+            ],
+          }),
+        ],
+        '/tmp/example.ts',
+      ),
+    ).toThrow('no placement satisfies the supplied scope constraints')
+  })
 })
 
 describe('sequential hunk cursor', () => {
@@ -337,41 +375,25 @@ describe('sequential hunk cursor', () => {
     '})',
   ].join('\n') + '\n'
 
-  test('a later hunk with a repeated fingerprint lands after the anchored hunk', () => {
-    const result = applyUpdateHunks(
-      { content: SEQUENTIAL_FILE, lineEndings: 'LF' },
-      [
-        hunk({
-          lines: [
-            { kind: 'context', text: "test('b', () => {" },
-            { kind: 'delete', text: '  two()' },
-            { kind: 'add', text: '  two updated()' },
-          ],
-        }),
-        hunk({
-          lines: [
-            { kind: 'context', text: '})' },
-            { kind: 'add', text: '// tail' },
-          ],
-        }),
-      ],
-      '/tmp/example.test.ts',
-    )
-
-    expect(result.buffer.content).toBe(
-      [
-        "test('a', () => {",
-        '  one()',
-        '})',
-        "test('b', () => {",
-        '  two updated()',
-        '})',
-        '// tail',
-      ].join('\n') + '\n',
-    )
-    expect(result.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
-    ])
+  test('a later hunk with multiple eligible matches fails instead of choosing one', () => {
+    expect(() =>
+      applyUpdateHunks(
+        { content: SEQUENTIAL_FILE, lineEndings: 'LF' },
+        [
+          hunk({
+            lines: [
+              { kind: 'context', text: "test('a', () => {" },
+              { kind: 'delete', text: '  one()' },
+              { kind: 'add', text: '  one updated()' },
+            ],
+          }),
+          hunk({
+            lines: [{ kind: 'context', text: '})' }, { kind: 'add', text: '// tail' }],
+          }),
+        ],
+        '/tmp/example.test.ts',
+      ),
+    ).toThrow('multiple eligible placements')
   })
 
   test('a duplicate the first hunk itself created does not capture the second hunk', () => {
@@ -395,12 +417,6 @@ describe('sequential hunk cursor', () => {
     )
 
     expect(result.buffer.content).toBe('alpha\nmarker\nbeta\nmarker\ninserted\ngamma\n')
-    // Line 3 is where 'marker' sits in the file the model read: the first hunk
-    // added a line above it, so the mutated buffer's index 4 is not what the
-    // disclosure should name.
-    expect(result.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 3)',
-    ])
   })
 
   test('a first hunk that matches everywhere still fails, and says why', () => {
@@ -418,7 +434,7 @@ describe('sequential hunk cursor', () => {
         ],
         '/tmp/example.ts',
       ),
-    ).toThrow('the first hunk of an update must locate itself uniquely')
+    ).toThrow('multiple eligible placements')
   })
 
   test('a later hunk whose every match sits behind the cursor asks for a reorder', () => {
@@ -441,10 +457,10 @@ describe('sequential hunk cursor', () => {
         ],
         '/tmp/example.ts',
       ),
-    ).toThrow('sit before the position established by the previous hunk')
+    ).toThrow('no eligible placement after the previous hunk')
   })
 
-  test('a scope hint outranks the cursor and discloses nothing', () => {
+  test('a scope hint cannot bypass file ordering', () => {
     const content = [
       'class A {',
       '  getValue() {',
@@ -459,49 +475,30 @@ describe('sequential hunk cursor', () => {
       '// end',
     ].join('\n') + '\n'
 
-    const result = applyUpdateHunks(
-      { content, lineEndings: 'LF' },
-      [
-        hunk({
-          lines: [
-            { kind: 'context', text: '// end' },
-            { kind: 'add', text: '// appended' },
-          ],
-        }),
-        hunk({
-          // Both matches sit behind the cursor the first hunk established, so
-          // only the hint can place this one.
-          scopeHints: ['class B'],
-          lines: [
-            { kind: 'context', text: '  getValue() {' },
-            { kind: 'add', text: '    // hinted' },
-          ],
-        }),
-      ],
-      '/tmp/example.ts',
-    )
-
-    expect(result.buffer.content).toBe(
-      [
-        'class A {',
-        '  getValue() {',
-        '    return 1',
-        '  }',
-        '}',
-        'class B {',
-        '  getValue() {',
-        '    // hinted',
-        '    return 2',
-        '  }',
-        '}',
-        '// end',
-        '// appended',
-      ].join('\n') + '\n',
-    )
-    expect(result.notes).toEqual([])
+    expect(() =>
+      applyUpdateHunks(
+        { content, lineEndings: 'LF' },
+        [
+          hunk({
+            lines: [
+              { kind: 'context', text: '// end' },
+              { kind: 'add', text: '// appended' },
+            ],
+          }),
+          hunk({
+            scopeHints: ['class B'],
+            lines: [
+              { kind: 'context', text: '  getValue() {' },
+              { kind: 'add', text: '    // hinted' },
+            ],
+          }),
+        ],
+        '/tmp/example.ts',
+      ),
+    ).toThrow('no eligible placement after the previous hunk')
   })
 
-  test('the applyPatchToBuffers result entry carries the disclosure', () => {
+  test('the applyPatchToBuffers result entry carries no placement metadata', () => {
     const result = applyPatchToBuffers(
       [
         {
@@ -515,12 +512,6 @@ describe('sequential hunk cursor', () => {
                 { kind: 'add', text: '  two updated()' },
               ],
             }),
-            hunk({
-              lines: [
-                { kind: 'context', text: '})' },
-                { kind: 'add', text: '// tail' },
-              ],
-            }),
           ],
         },
       ],
@@ -529,12 +520,10 @@ describe('sequential hunk cursor', () => {
       ]),
     )
 
-    expect(result.files[0]?.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
-    ])
+    expect(Object.keys(result.files[0] ?? {})).not.toContain('placementMetadata')
   })
 
-  test('an unambiguous patch records no disclosure', () => {
+  test('an unambiguous patch records no placement metadata', () => {
     const result = applyPatchToBuffers(
       [
         {
@@ -553,11 +542,10 @@ describe('sequential hunk cursor', () => {
       ],
       new Map([['/tmp/example.txt', fileState('/tmp/example.txt', 'one\ntwo\n')]]),
     )
-
-    expect(result.files[0]?.notes).toBeUndefined()
+    expect(Object.keys(result.files[0] ?? {})).not.toContain('placementMetadata')
   })
 
-  test('a move carries the disclosure on the destination entry, not the delete', () => {
+  test('a move carries no placement metadata', () => {
     const result = applyPatchToBuffers(
       [
         {
@@ -572,12 +560,6 @@ describe('sequential hunk cursor', () => {
                 { kind: 'add', text: '  two updated()' },
               ],
             }),
-            hunk({
-              lines: [
-                { kind: 'context', text: '})' },
-                { kind: 'add', text: '// tail' },
-              ],
-            }),
           ],
         },
       ],
@@ -585,14 +567,10 @@ describe('sequential hunk cursor', () => {
     )
 
     expect(result.files[0]).toMatchObject({ path: '/tmp/old.test.ts', type: 'delete' })
-    expect(result.files[0]?.notes).toBeUndefined()
     expect(result.files[1]).toMatchObject({ path: '/tmp/new.test.ts', type: 'add' })
-    expect(result.files[1]?.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
-    ])
   })
 
-  test('a second file in the same patch does not inherit the first file disclosure', () => {
+  test('a second file in the same patch does not inherit placement metadata', () => {
     const result = applyPatchToBuffers(
       [
         {
@@ -604,12 +582,6 @@ describe('sequential hunk cursor', () => {
                 { kind: 'context', text: "test('b', () => {" },
                 { kind: 'delete', text: '  two()' },
                 { kind: 'add', text: '  two updated()' },
-              ],
-            }),
-            hunk({
-              lines: [
-                { kind: 'context', text: '})' },
-                { kind: 'add', text: '// tail' },
               ],
             }),
           ],
@@ -634,11 +606,8 @@ describe('sequential hunk cursor', () => {
       ]),
     )
 
-    expect(result.files[0]?.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
-    ])
-    expect(result.files[1]?.notes).toBeUndefined()
-    expect(Object.keys(result.files[1] ?? {})).not.toContain('notes')
+    expect(Object.keys(result.files[0] ?? {})).not.toContain('placementMetadata')
+    expect(Object.keys(result.files[1] ?? {})).not.toContain('placementMetadata')
   })
 
   test('a BOF pure-insert first hunk moves the cursor past the lines it added', () => {
@@ -659,17 +628,13 @@ describe('sequential hunk cursor', () => {
     )
 
     expect(result.buffer.content).toBe('dup\nalpha\ndup\ninserted\nbeta\n')
-    expect(result.notes).toEqual([
-      'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 2)',
-    ])
+    expect(result.buffer.content).toContain('inserted')
   })
 
-  test('a scope hint that narrows to two still constrains the cursor rule', () => {
+  test('a scope hint leaves one eligible placement', () => {
     const content = [
       '// anchor',
-      'target',
       'class B {',
-      'target',
       'target',
       '}',
     ].join('\n') + '\n'
@@ -684,9 +649,6 @@ describe('sequential hunk cursor', () => {
           ],
         }),
         hunk({
-          // Three matches, two of them inside the hinted scope. The first match
-          // after the cursor is the unhinted one, so only a hint subset that
-          // survives into the cursor rule keeps this inside class B.
           scopeHints: ['class B'],
           lines: [
             { kind: 'context', text: 'target' },
@@ -701,17 +663,12 @@ describe('sequential hunk cursor', () => {
       [
         '// anchor',
         '// touched',
-        'target',
         'class B {',
         'target',
         '  // inserted',
-        'target',
         '}',
       ].join('\n') + '\n',
     )
-    expect(result.notes).toEqual([
-      'hunk 2 matched 3 locations (2 within the hinted scope); applied at the first match after the previous hunk (line 4)',
-    ])
   })
 })
 
@@ -849,6 +806,84 @@ describe('applyPatchToBuffers', () => {
     expect(result.files[1]).toMatchObject({ path: '/tmp/new.txt', type: 'add', after: 'content\nadded\n' })
   })
 
+  test('aggregates bounded independent preflight failures without partial results', () => {
+    const operations = Array.from({ length: 10 }, (_, index): FilePatchOperation => ({
+      type: 'update',
+      path: `/tmp/invalid-${index}.txt`,
+      hunks: [
+        hunk({
+          lines: [
+            { kind: 'context', text: `missing-${index}` },
+            { kind: 'add', text: 'replacement' },
+          ],
+        }),
+      ],
+    }))
+    const currentFiles = new Map(
+      operations.map(operation => [
+        operation.path,
+        fileState(operation.path, 'actual\n'),
+      ]),
+    )
+
+    let error: unknown
+    try {
+      applyPatchToBuffers(operations, currentFiles)
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    const patchError = error as FilePatchError
+    expect(patchError.code).toBe('PATCH_PREFLIGHT_FAILED')
+    expect(patchError.details).toHaveLength(8)
+    expect(patchError.message).toContain('2 additional failures omitted')
+    expect(patchError.details?.[0]).toMatchObject({
+      code: 'PATCH_ANCHOR_NOT_FOUND',
+      operation: 'update',
+      path: '/tmp/invalid-0.txt',
+      hunkIndex: 1,
+      hunkCount: 1,
+    })
+    expect(currentFiles.get('/tmp/invalid-0.txt')?.buffer.content).toBe('actual\n')
+  })
+
+  test('does not diagnose later hunks after the first hunk fails', () => {
+    let error: unknown
+    try {
+      applyPatchToBuffers(
+        [
+          {
+            type: 'update',
+            path: '/tmp/dependent.txt',
+            hunks: [
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'missing first hunk' },
+                  { kind: 'add', text: 'first replacement' },
+                ],
+              }),
+              hunk({
+                lines: [
+                  { kind: 'context', text: 'missing second hunk' },
+                  { kind: 'add', text: 'second replacement' },
+                ],
+              }),
+            ],
+          },
+        ],
+        new Map([['/tmp/dependent.txt', fileState('/tmp/dependent.txt', 'actual\n')]]),
+      )
+    } catch (caught) {
+      error = caught
+    }
+
+    expect(error).toBeInstanceOf(FilePatchError)
+    expect((error as FilePatchError).details).toHaveLength(1)
+    expect((error as FilePatchError).details?.[0]?.hunkIndex).toBe(1)
+    expect((error as FilePatchError).message).not.toContain('second hunk')
+  })
+
   test('restores earlier files if a later disk write fails', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
     tempDirs.push(tempDir)
@@ -868,8 +903,10 @@ describe('applyPatchToBuffers', () => {
     readFileState.set(secondPath, {
       content: 'alpha\nbeta\n',
       timestamp: Math.floor(Date.now()),
-      offset: undefined,
+      offset: 1,
       limit: undefined,
+      isWriteAuthorizedRead: true,
+      fileIdentity: getFileIdentity(secondPath),
     })
 
     const originalFs = getFsImplementation()
@@ -928,8 +965,10 @@ describe('FilePatchTool.call disk-mutation safety', () => {
     readFileState.set(path, {
       content,
       timestamp: Math.floor(Date.now()),
-      offset: undefined,
+      offset: 1,
       limit: undefined,
+      isWriteAuthorizedRead: true,
+      fileIdentity: getFileIdentity(path),
     })
     return readFileState
   }
@@ -1217,7 +1256,7 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     expect(content).toContain('Deleted /x/gone.ts')
   })
 
-  test('puts a placement disclosure on its own file line', () => {
+  test('does not add placement metadata to result lines', () => {
     const result = FilePatchTool.mapToolResultToToolResultBlockParam(
       {
         files: [
@@ -1226,9 +1265,6 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
             path: '/x/b.ts',
             type: 'update',
             structuredPatch: [],
-            notes: [
-              'hunk 3 matched 21 locations; applied at the first match after the previous hunk (line 118)',
-            ],
           },
         ],
       },
@@ -1237,9 +1273,7 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
 
     const lines = (result.content as string).split('\n')
     expect(lines).toContain('Updated /x/a.ts')
-    expect(lines).toContain(
-      'Updated /x/b.ts: hunk 3 matched 21 locations; applied at the first match after the previous hunk (line 118)',
-    )
+    expect(lines).toContain('Updated /x/b.ts')
   })
 })
 
@@ -1263,6 +1297,15 @@ describe('FilePatchTool.call transcript payload', () => {
     )
     writeFileSync(deletePath, 'header two\ngone\n')
     writeFileSync(movePath, 'header three\nmoved\n')
+    const readFileState = createFileStateCacheWithSizeLimit(10)
+    readFileState.set(deletePath, {
+      content: 'header two\ngone\n',
+      timestamp: Math.floor(Date.now()),
+      offset: 1,
+      limit: undefined,
+      isWriteAuthorizedRead: true,
+      fileIdentity: getFileIdentity(deletePath),
+    })
 
     const result = await FilePatchTool.call(
       {
@@ -1303,7 +1346,7 @@ describe('FilePatchTool.call transcript payload', () => {
         ],
       },
       {
-        readFileState: createFileStateCacheWithSizeLimit(10),
+        readFileState,
         updateFileHistoryState: () => undefined,
       } as never,
       undefined,
@@ -1553,20 +1596,32 @@ describe('FilePatchTool.outputSchema back-compat', () => {
     ).toBe(true)
   })
 
-  test('accepts a result that carries placement notes', () => {
+  test('accepts legacy placement notes while current results omit them', () => {
     expect(
       outputSchema().safeParse({
         files: [
           {
             ...base,
             firstLine: 'const a = 1',
-            notes: [
-              'hunk 2 matched 2 locations; applied at the first match after the previous hunk (line 6)',
-            ],
+            notes: ['legacy placement note'],
           },
         ],
       }).success,
     ).toBe(true)
+  })
+
+  test('rejects a result that carries placement metadata', () => {
+    expect(
+      outputSchema().safeParse({
+        files: [
+          {
+            ...base,
+            firstLine: 'const a = 1',
+            placementMetadata: ['placement was selected'],
+          },
+        ],
+      }).success,
+    ).toBe(false)
   })
 
   test('still rejects an unknown field', () => {
@@ -1606,12 +1661,11 @@ describe('patch failure diagnostics', () => {
     throw new Error('expected the patch to fail')
   }
 
-  test('blames transcription, not staleness, when a cached read rules staleness out', () => {
+  test('reports absent current fingerprint lines without causal claims', () => {
     const message = failureMessage(() =>
       applyPatchToBuffers(
         [reflowed],
         new Map([[TARGET, fileState(TARGET, CONTENT)]]),
-        new Map([[TARGET, CONTENT]]),
       ),
     )
 
@@ -1621,12 +1675,10 @@ describe('patch failure diagnostics', () => {
       'The line " * a wrapped sentence that ends" does not appear anywhere in',
     )
     expect(message).toContain('1 other line in this hunk is missing')
-    expect(message).not.toContain('the file has since changed on disk')
+    expect(message).not.toContain('changed on disk')
   })
 
-  test('says the lines are scattered, not mis-transcribed, when each one exists', () => {
-    // Every line is transcribed correctly; the hunk just drops the one between
-    // them, so telling the model to check its wording sends it the wrong way.
+  test('reports a nonconsecutive current fingerprint without causal claims', () => {
     const dropsAnInterveningLine: FilePatchOperation = {
       type: 'update',
       path: TARGET,
@@ -1646,28 +1698,22 @@ describe('patch failure diagnostics', () => {
       applyPatchToBuffers(
         [dropsAnInterveningLine],
         new Map([[TARGET, fileState(TARGET, threeLines)]]),
-        new Map([[TARGET, threeLines]]),
       ),
     )
 
-    expect(message).toContain('just never all in a row')
+    expect(message).toContain('not one consecutive ordered run in the current file')
     expect(message).toContain('blank lines included')
-    expect(message).not.toContain('does not appear anywhere in')
+    expect(message).not.toContain('missing a line')
   })
 
-  test('claims neither staleness nor transcription when there is no cached read', () => {
+  test('does not mention read-cache state in a placement failure', () => {
     const message = failureMessage(() =>
       applyPatchToBuffers([reflowed], new Map([[TARGET, fileState(TARGET, CONTENT)]])),
     )
 
-    // A missing cache entry is equally consistent with an evicted read and a
-    // read on another thread, so the message may not pick a cause. Blaming a
-    // concurrent editor here is the expensive wrong turn on a shared tree.
-    expect(message).toContain('no recorded read of this file')
-    expect(message).toContain('cannot be told apart')
-    // The committal wording of the two branches that DO know the cause.
-    expect(message).not.toContain('the file has since changed on disk')
-    expect(message).not.toContain('most likely transcribed inaccurately')
+    expect(message).not.toContain('recorded read')
+    expect(message).not.toContain('cached')
+    expect(message).not.toContain('changed on disk')
   })
 
   test('names which hunk failed when the section has more than one', () => {
@@ -1705,7 +1751,7 @@ describe('patch failure diagnostics', () => {
       applyPatchToBuffers([reflowed], new Map([[TARGET, fileState(TARGET, CONTENT)]])),
     )
 
-    expect(message).not.toContain('hunk 1 of 1')
+    expect(message).toContain('hunk 1 of 1')
   })
 
   test('states nothing was written when a later file in the patch fails', () => {
