@@ -33,7 +33,10 @@ import {
   getIsRemoteMode,
   getSessionId,
 } from '../../bootstrap/state.js'
-import { createAutoMemCanUseTool } from '../extractMemories/extractMemories.js'
+import {
+  createAutoMemCanUseTool,
+  getWrittenFilePaths,
+} from '../extractMemories/extractMemories.js'
 import { buildConsolidationPrompt } from './consolidationPrompt.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import {
@@ -49,8 +52,6 @@ import {
   failDreamTask,
   isDreamTask,
 } from '../../tasks/DreamTask/DreamTask.js'
-import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
-import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 
 // Scan throttle: when time-gate passes but session-gate doesn't, the lock
 // mtime doesn't advance, so the time-gate keeps passing every turn.
@@ -293,10 +294,10 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
 /**
  * Watch the forked agent's messages. For each assistant turn, extracts any
  * text blocks (the agent's reasoning/summary — what the user wants to see)
- * and collapses tool_use blocks to a count. Edit/Write file_paths are
+ * and collapses tool_use blocks to a count. Edit/Write/Apply_patch file_paths are
  * collected for phase-flip + the inline completion message.
  */
-function makeDreamProgressWatcher(
+export function makeDreamProgressWatcher(
   taskId: string,
   setAppState: import('../../Task.js').SetAppState,
 ): (msg: Message) => void {
@@ -310,15 +311,8 @@ function makeDreamProgressWatcher(
         text += block.text
       } else if (block.type === 'tool_use') {
         toolUseCount++
-        if (
-          block.name === FILE_EDIT_TOOL_NAME ||
-          block.name === FILE_WRITE_TOOL_NAME
-        ) {
-          const input = block.input as { file_path?: unknown }
-          if (typeof input.file_path === 'string') {
-            touchedPaths.push(input.file_path)
-          }
-        }
+        const paths = getWrittenFilePaths(block)
+        touchedPaths.push(...paths)
       }
     }
     addDreamTurn(

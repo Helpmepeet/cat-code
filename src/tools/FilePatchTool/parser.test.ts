@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { parseFilePatch } from './parser.js'
+import { getPatchMutationPaths, parseFilePatch } from './parser.js'
 
 describe('parseFilePatch', () => {
   test('parses update, add, and delete operations in one envelope', () => {
@@ -220,5 +220,74 @@ EOF
     expect(parsed.ops).toHaveLength(2)
     expect(parsed.ops[0]).toMatchObject({ type: 'add', path: 'src/a.ts' })
     expect(parsed.ops[1]).toMatchObject({ type: 'add', path: 'src/b.ts' })
+  })
+})
+
+describe('getPatchMutationPaths', () => {
+  test('extracts paths from raw envelope { input: string }', () => {
+    const paths = getPatchMutationPaths({
+      input: `*** Begin Patch
+*** Update File: src/a.ts
+@@
+-old
++new
+*** Add File: src/b.ts
++content
+*** Delete File: src/c.ts
+*** End Patch
+`,
+    })
+    expect(paths).toEqual(['src/a.ts', 'src/b.ts', 'src/c.ts'])
+  })
+
+  test('extracts both path and moveTo from move operations', () => {
+    const paths = getPatchMutationPaths({
+      input: `*** Begin Patch
+*** Update File: old-path.ts
+*** Move to: new-path.ts
+@@
+-old
++new
+*** End Patch
+`,
+    })
+    expect(paths).toEqual(['old-path.ts', 'new-path.ts'])
+  })
+
+  test('extracts paths from structured { ops: FilePatchOperation[] }', () => {
+    const paths = getPatchMutationPaths({
+      ops: [
+        { type: 'update', path: 'foo.ts', moveTo: 'bar.ts', hunks: [] },
+        { type: 'add', path: 'baz.ts', lines: [], noNewlineAtEndOfFile: false },
+      ],
+    })
+    expect(paths).toEqual(['foo.ts', 'bar.ts', 'baz.ts'])
+  })
+
+  test('handles raw string envelope directly', () => {
+    const paths = getPatchMutationPaths(`*** Begin Patch
+*** Add File: notes.md
++text
+*** End Patch
+`)
+    expect(paths).toEqual(['notes.md'])
+  })
+
+  test('returns empty array on invalid, missing, or malformed inputs without throwing', () => {
+    expect(getPatchMutationPaths(null)).toEqual([])
+    expect(getPatchMutationPaths(undefined)).toEqual([])
+    expect(getPatchMutationPaths({})).toEqual([])
+    expect(getPatchMutationPaths({ input: 'not a valid patch' })).toEqual([])
+    expect(getPatchMutationPaths({ ops: 'not an array' })).toEqual([])
+  })
+
+  test('deduplicates targets when a path appears multiple times', () => {
+    const paths = getPatchMutationPaths({
+      ops: [
+        { type: 'update', path: 'foo.ts', moveTo: 'bar.ts', hunks: [] },
+        { type: 'add', path: 'bar.ts', lines: [], noNewlineAtEndOfFile: false },
+      ],
+    })
+    expect(paths).toEqual(['foo.ts', 'bar.ts'])
   })
 })

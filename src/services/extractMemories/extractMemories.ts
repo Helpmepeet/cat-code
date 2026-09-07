@@ -30,11 +30,14 @@ import {
 import type { Tool } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import { getPatchMutationPaths } from '../../tools/FilePatchTool/parser.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../../tools/GrepTool/prompt.js'
 import { REPL_TOOL_NAME } from '../../tools/REPLTool/constants.js'
+import { expandPath } from '../../utils/path.js'
 import type {
   AssistantMessage,
   Message,
@@ -120,9 +123,9 @@ function countModelVisibleMessagesSince(
  * agent and advances the cursor past this range, making the main agent
  * and the background agent mutually exclusive per turn.
  */
-function hasMemoryWritesSince(
+export function hasMemoryWritesSince(
   messages: Message[],
-  sinceUuid: string | undefined,
+  sinceUuid?: string,
 ): boolean {
   let foundStart = sinceUuid === undefined
   for (const message of messages) {
@@ -140,9 +143,15 @@ function hasMemoryWritesSince(
       continue
     }
     for (const block of content) {
-      const filePath = getWrittenFilePath(block)
-      if (filePath !== undefined && isAutoMemPath(filePath)) {
-        return true
+      const filePaths = getWrittenFilePaths(block)
+      for (const filePath of filePaths) {
+        try {
+          if (isAutoMemPath(expandPath(filePath))) {
+            return true
+          }
+        } catch {
+          // ignore malformed path
+        }
       }
     }
   }
@@ -211,14 +220,41 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
       'file_path' in input
     ) {
       const filePath = input.file_path
-      if (typeof filePath === 'string' && isAutoMemPath(filePath)) {
-        return { behavior: 'allow' as const, updatedInput: input }
+      if (typeof filePath === 'string') {
+        try {
+          if (isAutoMemPath(expandPath(filePath))) {
+            return { behavior: 'allow' as const, updatedInput: input }
+          }
+        } catch {
+          // fall through to deny
+        }
       }
+    }
+
+    if (tool.name === FILE_PATCH_TOOL_NAME) {
+      const mutationPaths = getPatchMutationPaths(input)
+      if (mutationPaths.length > 0) {
+        try {
+          const allInsideMemory = mutationPaths.every(p => {
+            const absolutePath = expandPath(p)
+            return isAutoMemPath(absolutePath)
+          })
+          if (allInsideMemory) {
+            return { behavior: 'allow' as const, updatedInput: input }
+          }
+        } catch {
+          // If expandPath throws (e.g. null bytes), fall through to deny
+        }
+      }
+      return denyAutoMemTool(
+        tool,
+        `all patch mutation targets must be within ${memoryDir}`,
+      )
     }
 
     return denyAutoMemTool(
       tool,
-      `only ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME}, and ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} within ${memoryDir} are allowed`,
+      `only ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME}, and ${FILE_EDIT_TOOL_NAME}/${FILE_PATCH_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} within ${memoryDir} are allowed`,
     )
   }
 }
@@ -228,26 +264,33 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
 // ============================================================================
 
 /**
- * Extract file_path from a tool_use block's input, if present.
- * Returns undefined when the block is not an Edit/Write tool use or has no file_path.
+ * Extract all target file paths written or modified by a tool_use block.
+ * Handles Edit, Write, and Apply_patch.
+ * Returns an empty array for unrelated tools or invalid inputs.
  */
-function getWrittenFilePath(block: {
+export function getWrittenFilePaths(block: {
   type: string
   name?: string
   input?: unknown
-}): string | undefined {
+}): string[] {
+  if (block.type !== 'tool_use' || !block.name) {
+    return []
+  }
   if (
-    block.type !== 'tool_use' ||
-    (block.name !== FILE_EDIT_TOOL_NAME && block.name !== FILE_WRITE_TOOL_NAME)
+    block.name === FILE_EDIT_TOOL_NAME ||
+    block.name === FILE_WRITE_TOOL_NAME
   ) {
-    return undefined
+    const input = block.input
+    if (typeof input === 'object' && input !== null && 'file_path' in input) {
+      const fp = (input as { file_path: unknown }).file_path
+      return typeof fp === 'string' && fp.length > 0 ? [fp] : []
+    }
+    return []
   }
-  const input = block.input
-  if (typeof input === 'object' && input !== null && 'file_path' in input) {
-    const fp = (input as { file_path: unknown }).file_path
-    return typeof fp === 'string' ? fp : undefined
+  if (block.name === FILE_PATCH_TOOL_NAME) {
+    return getPatchMutationPaths(block.input)
   }
-  return undefined
+  return []
 }
 
 function extractWrittenPaths(agentMessages: Message[]): string[] {
@@ -261,10 +304,7 @@ function extractWrittenPaths(agentMessages: Message[]): string[] {
       continue
     }
     for (const block of content) {
-      const filePath = getWrittenFilePath(block)
-      if (filePath !== undefined) {
-        paths.push(filePath)
-      }
+      paths.push(...getWrittenFilePaths(block))
     }
   }
   return uniq(paths)

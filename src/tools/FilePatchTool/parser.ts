@@ -324,3 +324,55 @@ function isOperationHeader(line: string): boolean {
     line === PATCH_END_MARKER
   )
 }
+
+/**
+ * Extract all mutation target file paths from an Apply_patch input envelope.
+ * Handles:
+ *   - raw { input: string }
+ *   - structured { ops: FilePatchOperation[] }
+ *   - raw patch string
+ * Collects operation.path for all operations and operation.moveTo for moves.
+ * Returns an empty array if input is malformed, missing, or has no operations.
+ */
+export function getPatchMutationPaths(input: unknown): string[] {
+  if (!input) return []
+
+  let ops: FilePatchOperation[] | undefined
+
+  if (typeof input === 'string') {
+    try {
+      ops = parseFilePatch(input).ops
+    } catch {
+      return []
+    }
+  } else if (typeof input === 'object' && input !== null) {
+    if ('ops' in input && Array.isArray((input as { ops?: unknown }).ops)) {
+      ops = (input as { ops: FilePatchOperation[] }).ops
+    } else if (
+      'input' in input &&
+      typeof (input as { input?: unknown }).input === 'string'
+    ) {
+      try {
+        ops = parseFilePatch((input as { input: string }).input).ops
+      } catch {
+        return []
+      }
+    }
+  }
+
+  if (!ops || !Array.isArray(ops)) {
+    return []
+  }
+
+  const paths: string[] = []
+  for (const op of ops) {
+    if (op && typeof op === 'object' && typeof op.path === 'string' && op.path.length > 0) {
+      paths.push(op.path)
+      if (op.type === 'update' && typeof op.moveTo === 'string' && op.moveTo.length > 0) {
+        paths.push(op.moveTo)
+      }
+    }
+  }
+
+  return Array.from(new Set(paths))
+}
