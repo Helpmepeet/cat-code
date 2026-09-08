@@ -318,4 +318,26 @@ describe('the pane does not feed itself', () => {
     runFrames()
     release()
   })
+
+  test('a rounded programmatic write suppresses its actual scroll event', () => {
+    installGlobals()
+    const scroller = createScroller(READING_GEOMETRY)
+    let scrollTop = scroller.scrollTop
+    Object.defineProperty(scroller, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: next => {
+        scrollTop = Math.floor(next)
+      },
+    })
+    const release = observePaneScroll(scroller, () => {})
+
+    reportPaneHeightCorrection(scroller, { offset: 0, delta: 120.75 })
+    runFrames()
+    expect(scroller.scrollTop).toBe(5_120)
+
+    scroller.emitScroll()
+    expect(pendingFrames).toHaveLength(0)
+    release()
+  })
 })

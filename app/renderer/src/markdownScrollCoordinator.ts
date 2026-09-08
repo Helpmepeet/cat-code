@@ -163,7 +163,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
           syncObservedChildren()
           markGeometryDirty()
         })
-  mutationObserver?.observe(scroller, { childList: true, subtree: true })
+  mutationObserver?.observe(scroller, { childList: true })
   pane.mutationObserver = mutationObserver
   // The scroll event our OWN correction causes must not schedule another frame.
   // Without this the pane feeds itself: correcting writes `scrollTop`, the
@@ -229,8 +229,8 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   // costs a layout plus a scroll event.
   if (Math.abs(adjustment) < 1) return
   const next = scroller.scrollTop + adjustment
-  pane.selfScrollTop = next
   scroller.scrollTop = next
+  pane.selfScrollTop = scroller.scrollTop
   for (const onProgrammaticScroll of pane.programmaticScrolls) {
     onProgrammaticScroll(scroller.scrollTop)
   }

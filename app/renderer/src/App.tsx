@@ -3200,9 +3200,6 @@ export function App() {
             previewOpen: shell.previews[sessionId] === true,
             liveTranscript: transcript,
           })
-	      const panelPartialCount = sessionLog.messages.filter(
-	        message => message.type === 'stream_event',
-	      ).length
 	      // The whole composer rail's display-vs-capability split, derived in one
 	      // testable place (`composerRailModel.ts`) rather than as a dozen
 	      // expressions here. It owns which values outlive the session's engine
@@ -3550,7 +3547,6 @@ export function App() {
 	                buildDenyResponse('User declined to answer questions'),
 	              )
 	            }}
-	            partialCount={panelPartialCount}
 	            permissionContext={selectPermissionContext(permissions, sessionId)}
 	            permissionKeyTargetRequestId={
 	              sessionId === activeSessionId

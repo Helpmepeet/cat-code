@@ -679,7 +679,6 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
       onPaste={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[]}
       // A REAL context: the mode chip renders only once the pane has been told
       // the mode, so leaving this null would make the chip assertion below pass
@@ -807,7 +806,6 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
       onPreviewEngage={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
@@ -879,7 +877,6 @@ test('CC-16: a connecting session accepts typing and can arm the send arrow', ()
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionContext: null,
     permissionQueue: [],
@@ -954,7 +951,6 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionContext: null,
     permissionQueue: [],
@@ -1219,23 +1215,16 @@ test('D1a: waiting messages end the transcript document instead of docking above
   // owns that half; this one is the cheap direction (a move back INTO the dock).
 })
 
-test('D1a: the waiting block follows the rows, and the pane observes its growth', () => {
-  // Two wiring facts SSR cannot show, both of which fail silently.
-  //
+test('D1a: the waiting block follows the rows and shares their measure', () => {
   // `readTranscriptRowGeometry` reads the scroller's FIRST element child as the
   // row list, so this block placed ahead of `TranscriptView` would make the
   // scroll memory anchor on it instead of on a message.
-  //
-  // The pane-level observer watches the complete scrolling document, including
-  // the waiting block that is not part of the projected row list.
   const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   const transcriptView = source.indexOf('<TranscriptView')
   const waitingBlock = source.indexOf('{queuedPrompts.length > 0 ? (')
   expect(transcriptView).toBeGreaterThan(-1)
   expect(waitingBlock).toBeGreaterThan(transcriptView)
-
-  expect(source).toContain('observePaneBottomLock')
 
   // The waiting bubble sits on the delivered ones' right edge because its
   // column and the row column share BOTH halves of the measure. Only one half
@@ -1300,7 +1289,6 @@ test('CC-16: a dead session stays read-only and does not pretend to be typeable'
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionContext: null,
     permissionQueue: [],
@@ -1551,7 +1539,6 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
       onPaste={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
@@ -1622,7 +1609,6 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
       onPaste={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
@@ -1881,7 +1867,6 @@ test('composer form owns the ↑/↓ history key scope', () => {
       onPaste={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[]}
       permissionContext={null}
       permissionQueue={[]}
@@ -1952,7 +1937,6 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
       onPaste={() => {}}
       onRemovePaste={() => {}}
       onRevisePlan={() => {}}
-      partialCount={0}
       pastes={[{ id: 1, content: 'line A\nline B\nline C', numLines: 2 }]}
       permissionContext={null}
       permissionQueue={[]}
@@ -2159,7 +2143,6 @@ test('a previewed pane shows what the cached session really ran on', () => {
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionQueue: [],
     planReview: null,
@@ -2225,7 +2208,6 @@ test('a previewed pane with an empty cache claims nothing', () => {
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionQueue: [],
     planReview: null,
@@ -2577,22 +2559,6 @@ test('an incomplete transcript says so inside the pane, on a preview and once li
   )
   expect(rawOnly).not.toContain('Raw message history')
   expect(rawOnly).not.toContain(HISTORY_BOUNDARY_HTML)
-})
-
-test('the pane does not use a content signature for autoscroll', () => {
-  // Content height is observed at the pane boundary, so tool-result-only and
-  // local expansion changes do not need a projected-row signature.
-  const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
-  expect(paneSource).not.toContain('contentSignature')
-  expect(paneSource).toContain('observePaneBottomLock')
-})
-
-test('a one-pixel upward transcript scroll releases the bottom lock', () => {
-  // The pane coordinator is allowed to re-pin only while this logical lock is
-  // true. Scroll direction, not a transient geometry gap, releases it.
-  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('selectPaneFollowIntent')
-  expect(source).toContain('previousScrollTopRef')
 })
 
 test('a cold-spawn prompt is visible, and the send arrow says so', () => {

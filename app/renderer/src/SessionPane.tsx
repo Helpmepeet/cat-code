@@ -237,7 +237,6 @@ export function SessionPane({
   onOpenTasks,
   onBackgroundSubagent,
   tasksSnapshot = null,
-  partialCount,
   pastes,
   pendingSubmit = null,
   onRecallQueuedPrompts = null,
@@ -2029,7 +2028,6 @@ type SessionPaneProps = {
    * byline — see `ActivityIndicator`'s header for why the byline cannot hold it.
    */
   onBackgroundSubagent?: (toolUseId: string) => void
-  partialCount: number
   permissionContext: ReturnType<typeof selectPermissionContext>
   /** P4-43 — the request the shortcuts act on in THIS pane, or null. A split
    * workspace renders one queue per pane, and only the active pane's card may

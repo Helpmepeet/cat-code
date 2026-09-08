@@ -45,7 +45,6 @@ export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionContext: null,
     permissionQueue: [],

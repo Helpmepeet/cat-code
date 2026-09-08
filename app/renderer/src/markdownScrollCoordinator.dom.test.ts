@@ -384,6 +384,20 @@ describe('observePaneScroll in a real DOM', () => {
     expect(pane.scroller.firstElementChild).toBe(replacementRoot)
   })
 
+  test('nested document mutations rely on resize instead of scheduling directly', async () => {
+    const calls: number[] = []
+    const pane = await mountInstrumentedPane(bodyIndex => calls.push(bodyIndex))
+    await pane.setBodyCount(1)
+    pane.scroller.firstElementChild?.appendChild(
+      pane.scroller.ownerDocument.createElement('span'),
+    )
+
+    await Promise.resolve()
+    await harness.nextFrame()
+
+    expect(calls).toEqual([])
+  })
+
   test('the bottom-lock owner holds the pane open after the last body unmounts', async () => {
     const pane = await mountInstrumentedPane(() => {})
     const releaseLock = observePaneBottomLock(pane.scroller, () => false)
