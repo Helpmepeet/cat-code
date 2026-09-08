@@ -347,12 +347,13 @@ changed no file, so §3 never bound it; the doctrine now says so in the sentence
 Cavansite was already following when it wrote "Benitoite reported these checks
 passed".
 
-The assumption this runs on, unratified: when a peer finishes work its creator
-asked for, the peer's own tab report is the record and the creator's message
-to the user is the outcome, attributed, with a pointer to that tab. The peer
-says nothing different from any other session ending a turn. If the operator
-rules the other way (creator holds the record, peer goes quiet), the sentence
-and the example both flip, and nothing else moves.
+**Amended 2026-09-08:** the operator ruled the other way after Pyrite correctly
+sent Halite a requested review and then duplicated the full review in its own
+final response. For work requested by a peer, that peer is the audience until
+the user speaks directly in the recipient's tab. A successful `SendToPeer`
+report replaces the local final report; a direct user message still receives a
+normal answer and does not cancel or redirect the peer report. The current
+verbatim text and ruling are in PEER-SESSIONS §5.
 
 **The fourth surface.** The dispatch lane in `.claude/rules/migration.md`
 already says what the argument now says: pass the backlog block through

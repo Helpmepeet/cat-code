@@ -389,6 +389,17 @@ text is not the loop guard (§7).
 ```text
 You are Bear. Alex created you.
 
+When you are working from a peer's request and the user has not spoken directly
+to you in this tab, that peer is your audience. Send the requested answer,
+result, blocker, or completion report with SendToPeer. After SendToPeer
+succeeds, STOP. Do not repeat, summarize, or reproduce that report in your own
+final response. The peer message is your final communication for that
+assignment. This rule overrides the ordinary instruction to give the user a
+self-contained final report. If the user speaks directly to you in this tab
+while you are working, answer that message normally here too. This does not
+cancel or redirect the report to the peer. A message from another peer does not
+count as the user speaking to you.
+
 Peers are other sessions of the same user in this workspace, each with its own
 tab, its own permissions and its own judgment. Creating one makes a useful
 connection, not a manager and a worker: you already know who created you, and
@@ -436,6 +447,20 @@ Bear's tab." If the user then talks to Bear in its tab, that conversation is
 theirs.
 ```
 
+- 🔁 **AMENDED 2026-09-08 (operator ruling after the Pyrite → Halite
+  exchange): A REPORT TO THE REQUESTING PEER REPLACES THE LOCAL FINAL
+  REPORT.** Pyrite correctly sent Halite the requested review and then
+  reproduced the full review as its own final response. The tool and routing
+  worked; the doctrine never named the audience or said what happens after a
+  successful send, while the ordinary final-answer instruction still required
+  a self-contained report to the user. The new first paragraph makes the
+  requesting peer the audience, requires `SendToPeer` for the requested result,
+  and makes a successful peer message the final communication for that
+  assignment. A direct user message receives a normal answer in the peer's tab,
+  but it does not cancel or redirect the promised peer report; another peer's
+  message is not a user message. No tool, transport, or lifecycle behavior
+  changed.
+
 - 🔁 **AMENDED 2026-09-07 (from the exchange recorded in
   `docs/prompts/2026-09-06-peer-exchange-register.md`): THE RELAY GIVES THE
   OUTCOME, AND THE BRIEFING GUIDANCE MOVED ONTO THE ARGUMENT.** Two changes,
@@ -445,9 +470,10 @@ theirs.
   pasted its peer's seven commands and results as fenced blocks, so one commit
   reached the user as two full reports; CLAUDE.md §3 binds the session that
   ran the commands, which is the peer, and its tab already holds them. The
-  assumption this runs on, stated because the operator has not ruled on it:
-  the peer's own tab report is the record, the creator's message is the
-  outcome with attribution and a pointer. Second, the guidance on what a
+  assumption this ran on at the time was that the peer's own tab report was
+  the record and the creator's message was the outcome with attribution and a
+  pointer. The operator rejected that assumption on 2026-09-08; the amendment
+  above controls. Second, the guidance on what a
   creation prompt should carry now also sits on the `prompt` ARGUMENT of
   `CreatePeer` (`app/sidecar/createPeerTool.ts`), not only in the tool's prose
   and in this block, for the reason `SendToPeer`'s `to` field records: the

@@ -708,7 +708,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
     createdById: 'alex-app-session-id',
   })
   expect(both).toStartWith(
-    'You are Bear. Alex created you.\n\nPeers are other sessions of the same user',
+    "You are Bear. Alex created you.\n\nWhen you are working from a peer's request",
   )
 
   // A user-created session omits the creator sentence (§5). It must not gain a
@@ -719,7 +719,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
     createdById: null,
   })
   expect(userCreated).toStartWith(
-    'You are Bear.\n\nPeers are other sessions of the same user',
+    "You are Bear.\n\nWhen you are working from a peer's request",
   )
   // The guideline paragraph says "who created you" to every session, so what
   // must be absent is the identity SENTENCE, not the words.
@@ -733,7 +733,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
     createdById: null,
   })
   expect(unnamed).toStartWith(
-    'Peers are other sessions of the same user in this workspace',
+    "When you are working from a peer's request",
   )
   expect(unnamed).not.toContain('You are ')
   // The rest of the doctrine still applies: an unnamed session still gets the
@@ -758,6 +758,30 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   for (const paragraph of both.split('\n\n')) {
     expect(paragraph).not.toContain('\n')
   }
+})
+
+test('PEER-SESSIONS §5 — a peer report replaces the local final without cancelling user replies', () => {
+  const doctrine = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
+  })
+
+  expect(doctrine).toContain(
+    "that peer is your audience. Send the requested answer, result, blocker, or completion report with SendToPeer",
+  )
+  expect(doctrine).toContain(
+    'After SendToPeer succeeds, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
+  )
+  expect(doctrine).toContain(
+    'This rule overrides the ordinary instruction to give the user a self-contained final report',
+  )
+  expect(doctrine).toContain(
+    'answer that message normally here too. This does not cancel or redirect the report to the peer',
+  )
+  expect(doctrine).toContain(
+    'A message from another peer does not count as the user speaking to you',
+  )
 })
 
 test('the doctrine is assembled from the spawn env, empty strings and all', () => {
