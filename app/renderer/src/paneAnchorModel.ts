@@ -47,6 +47,23 @@ export type PaneAnchorInput = {
 }
 
 /**
+ * Chooses the next logical follow state from one scroll event. A document can
+ * grow while `scrollTop` stays unchanged, so a non-bottom gap is not by itself
+ * evidence that the reader moved. An actual upward movement is the signal that
+ * releases follow; reaching the end or moving down does not release it.
+ */
+export function selectPaneFollowIntent(input: {
+  following: boolean
+  previousScrollTop: number
+  scrollTop: number
+  gap: number
+}): boolean {
+  if (input.scrollTop < input.previousScrollTop) return false
+  if (input.gap <= 1) return true
+  return input.following
+}
+
+/**
  * Pixels to add to the scroller's `scrollTop`; 0 when the scroller must not
  * move. The result is clamped to the scrollable range, so a caller can add it
  * without re-clamping.

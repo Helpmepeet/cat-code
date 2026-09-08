@@ -1,10 +1,11 @@
 /**
- * One scroll listener, one scroller ResizeObserver, and one animation-frame
- * batch per pane scroller, shared by every virtualized body mounted inside it.
+ * One scroll listener, one pooled ResizeObserver, and one animation-frame batch
+ * per pane scroller, shared by every virtualized body mounted inside it.
  * Bodies register here instead of attaching their own listeners to the shared
  * scroller, so pane-level attachment counts stay fixed as transcript history
- * grows. Each body keeps its own observer for its own root element; only the
- * shared scroller is pooled.
+ * grows. The pooled observer watches the scroller and its direct document
+ * children, while a mutation observer keeps those targets aligned with root
+ * replacement.
  *
  * The pane also owns SCROLL CORRECTION (CC-59 hard constraint 13). A body that
  * replaces an estimated height with a measured one reports the change through
@@ -31,9 +32,15 @@ export type { PaneHeightCorrection } from './paneAnchorModel.js'
 type PaneRecord = {
   subscribers: Set<() => void>
   bottomLocks: Set<() => boolean>
+  programmaticScrolls: Set<(scrollTop: number) => void>
   corrections: PaneHeightCorrection[]
   /** `scrollTop` this pane wrote itself, pending its own scroll event. */
   selfScrollTop: number | null
+  observedChildren: Set<Element>
+  lastGeometry: { viewportHeight: number; contentHeight: number }
+  geometryDirty: boolean
+  resizeObserver: ResizeObserver | null
+  mutationObserver: MutationObserver | null
   frame: number
   schedule: () => void
   detach: () => void
@@ -81,20 +88,24 @@ export function reportPaneHeightCorrection(
  * of its document. The pane asks at flush time rather than storing a flag,
  * because the answer changes on the scroll event that precedes the flush.
  *
- * Bottom lock is consulted only when a correction is pending. A pane that is
- * merely locked is never re-pinned on its own, so a reader scrolling up is not
- * pulled back by a frame that happened to be scheduled.
+ * Bottom lock is consulted when a correction or document-geometry change is
+ * pending. A pane that is merely locked is never re-pinned on its own, so a
+ * reader scrolling up is not pulled back by a frame that happened to be
+ * scheduled.
  */
 export function observePaneBottomLock(
   scroller: HTMLElement,
   isBottomLocked: () => boolean,
+  onProgrammaticScroll?: (scrollTop: number) => void,
 ): () => void {
   const pane = panes.get(scroller) ?? createPane(scroller)
   panes.set(scroller, pane)
   pane.bottomLocks.add(isBottomLocked)
+  if (onProgrammaticScroll) pane.programmaticScrolls.add(onProgrammaticScroll)
 
   return () => {
     pane.bottomLocks.delete(isBottomLocked)
+    if (onProgrammaticScroll) pane.programmaticScrolls.delete(onProgrammaticScroll)
     releaseWhenEmpty(scroller, pane)
   }
 }
@@ -103,8 +114,14 @@ function createPane(scroller: HTMLElement): PaneRecord {
   const pane: PaneRecord = {
     subscribers: new Set(),
     bottomLocks: new Set(),
+    programmaticScrolls: new Set(),
     corrections: [],
     selfScrollTop: null,
+    observedChildren: new Set(),
+    lastGeometry: readPaneMetrics(scroller),
+    geometryDirty: false,
+    resizeObserver: null,
+    mutationObserver: null,
     frame: 0,
     schedule: () => {},
     detach: () => {},
@@ -118,6 +135,36 @@ function createPane(scroller: HTMLElement): PaneRecord {
   const schedule = () => {
     if (pane.frame === 0) pane.frame = globalThis.requestAnimationFrame(flush)
   }
+  const markGeometryDirty = () => {
+    pane.geometryDirty = true
+    schedule()
+  }
+  const syncObservedChildren = () => {
+    const nextChildren = new Set<Element>(Array.from(scroller.children ?? []))
+    for (const child of pane.observedChildren) {
+      if (!nextChildren.has(child)) pane.resizeObserver?.unobserve(child)
+    }
+    for (const child of nextChildren) {
+      if (!pane.observedChildren.has(child)) pane.resizeObserver?.observe(child)
+    }
+    pane.observedChildren = nextChildren
+  }
+  const resizeObserver =
+    typeof ResizeObserver === 'undefined'
+      ? null
+      : new ResizeObserver(markGeometryDirty)
+  resizeObserver?.observe(scroller)
+  pane.resizeObserver = resizeObserver
+  syncObservedChildren()
+  const mutationObserver =
+    typeof MutationObserver === 'undefined' || globalThis.document === undefined
+      ? null
+      : new MutationObserver(() => {
+          syncObservedChildren()
+          markGeometryDirty()
+        })
+  mutationObserver?.observe(scroller, { childList: true, subtree: true })
+  pane.mutationObserver = mutationObserver
   // The scroll event our OWN correction causes must not schedule another frame.
   // Without this the pane feeds itself: correcting writes `scrollTop`, the
   // browser reports a scroll, subscribers recompute their windows, the mounted
@@ -140,24 +187,31 @@ function createPane(scroller: HTMLElement): PaneRecord {
     scroller === globalThis.document?.documentElement ? globalThis.window : scroller
   scrollTarget.addEventListener('scroll', onScroll, { passive: true })
 
-  const observer =
-    typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(schedule)
-  observer?.observe(scroller)
-
   pane.detach = () => {
     scrollTarget.removeEventListener('scroll', onScroll)
-    observer?.disconnect()
+    pane.resizeObserver?.disconnect()
+    pane.mutationObserver?.disconnect()
   }
   return pane
 }
 
 /**
- * One scroll decision for every correction the frame collected. Deliberately a
- * no-op without corrections: this is the pane's answer to a height change, not
- * a periodic re-pin.
+ * One scroll decision for every correction or document-geometry change the
+ * frame collected. Without either, this is deliberately a no-op rather than a
+ * periodic re-pin.
  */
 function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void {
-  if (pane.corrections.length === 0) return
+  const metrics = readPaneMetrics(scroller)
+  const geometryChanged =
+    pane.geometryDirty &&
+    (metrics.viewportHeight !== pane.lastGeometry.viewportHeight ||
+      metrics.contentHeight !== pane.lastGeometry.contentHeight)
+  pane.geometryDirty = false
+  pane.lastGeometry = {
+    viewportHeight: metrics.viewportHeight,
+    contentHeight: metrics.contentHeight,
+  }
+  if (pane.corrections.length === 0 && !geometryChanged) return
   const corrections = pane.corrections
   pane.corrections = []
 
@@ -167,7 +221,7 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   }
 
   const adjustment = selectPaneScrollAdjustment({
-    metrics: readPaneMetrics(scroller),
+    metrics,
     corrections,
     bottomLocked,
   })
@@ -177,6 +231,9 @@ function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void 
   const next = scroller.scrollTop + adjustment
   pane.selfScrollTop = next
   scroller.scrollTop = next
+  for (const onProgrammaticScroll of pane.programmaticScrolls) {
+    onProgrammaticScroll(scroller.scrollTop)
+  }
 }
 
 function readPaneMetrics(scroller: HTMLElement): PaneScrollMetrics {
@@ -192,6 +249,7 @@ function releaseWhenEmpty(scroller: HTMLElement, pane: PaneRecord): void {
   if (pane.frame !== 0) globalThis.cancelAnimationFrame(pane.frame)
   pane.frame = 0
   pane.corrections = []
+  pane.programmaticScrolls.clear()
   pane.detach()
   panes.delete(scroller)
 }

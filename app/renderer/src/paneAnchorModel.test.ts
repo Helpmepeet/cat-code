@@ -4,7 +4,10 @@
  * number below is absolute, never a comparison against the rule under test.
  */
 import { describe, expect, test } from 'bun:test'
-import { selectPaneScrollAdjustment } from './paneAnchorModel.js'
+import {
+  selectPaneFollowIntent,
+  selectPaneScrollAdjustment,
+} from './paneAnchorModel.js'
 
 /** A pane scrolled to 5,000 px through a 40,000 px document. */
 const READING = { scrollTop: 5_000, viewportHeight: 800, contentHeight: 40_000 }
@@ -58,6 +61,63 @@ describe('a correction relative to the visible anchor', () => {
         bottomLocked: false,
       }),
     ).toBe(0)
+  })
+})
+
+describe('logical follow intent', () => {
+  test('a real upward movement releases follow even within the one-pixel gap', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: true,
+        previousScrollTop: 1_000,
+        scrollTop: 999,
+        gap: 1,
+      }),
+    ).toBe(false)
+  })
+
+  test('a same-position growth gap keeps a pinned pane following', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: true,
+        previousScrollTop: 1_000,
+        scrollTop: 1_000,
+        gap: 240,
+      }),
+    ).toBe(true)
+  })
+
+  test('a downward event across a growth gap keeps a pinned pane following', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: true,
+        previousScrollTop: 1_000,
+        scrollTop: 1_080,
+        gap: 160,
+      }),
+    ).toBe(true)
+  })
+
+  test('a smooth jump remains locked during intermediate downward movement', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: true,
+        previousScrollTop: 1_000,
+        scrollTop: 1_250,
+        gap: 900,
+      }),
+    ).toBe(true)
+  })
+
+  test('reaching the end reacquires follow after it was released', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: false,
+        previousScrollTop: 1_250,
+        scrollTop: 1_900,
+        gap: 1,
+      }),
+    ).toBe(true)
   })
 })
 

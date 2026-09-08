@@ -1219,17 +1219,15 @@ test('D1a: waiting messages end the transcript document instead of docking above
   // owns that half; this one is the cheap direction (a move back INTO the dock).
 })
 
-test('D1a: the waiting block follows the rows, and the pane re-pins when it grows', () => {
+test('D1a: the waiting block follows the rows, and the pane observes its growth', () => {
   // Two wiring facts SSR cannot show, both of which fail silently.
   //
   // `readTranscriptRowGeometry` reads the scroller's FIRST element child as the
   // row list, so this block placed ahead of `TranscriptView` would make the
   // scroll memory anchor on it instead of on a message.
   //
-  // And the pane's bottom lock only answers measured-body corrections, so the
-  // one thing that re-pins a parked reader to the end is `contentSignature`.
-  // Queue a message with that signature blind to the queue and the new row
-  // lands below the fold.
+  // The pane-level observer watches the complete scrolling document, including
+  // the waiting block that is not part of the projected row list.
   const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
 
   const transcriptView = source.indexOf('<TranscriptView')
@@ -1237,13 +1235,7 @@ test('D1a: the waiting block follows the rows, and the pane re-pins when it grow
   expect(transcriptView).toBeGreaterThan(-1)
   expect(waitingBlock).toBeGreaterThan(transcriptView)
 
-  // An index, not `toContain`: a failed substring match on a file this size
-  // prints the whole file and buries the result.
-  expect(
-    source.indexOf(
-      'const contentSignature = `${renderedRowCount}:${partialCount}:${queuedPrompts.length}`',
-    ),
-  ).toBeGreaterThan(-1)
+  expect(source).toContain('observePaneBottomLock')
 
   // The waiting bubble sits on the delivered ones' right edge because its
   // column and the row column share BOTH halves of the measure. Only one half
@@ -2587,28 +2579,20 @@ test('an incomplete transcript says so inside the pane, on a preview and once li
   expect(rawOnly).not.toContain(HISTORY_BOUNDARY_HTML)
 })
 
-test('the autoscroll signature tracks the RENDERED transcript, not the capped raw log', () => {
-  // `activeLog` is bounded by DEFAULT_MAX_RAW_MESSAGES. Deriving the signature
-  // from it meant that, past the cap, `messages.length` pinned and any message
-  // that did not also move `partialCount` produced an identical signature, so
-  // the follow-to-bottom effect never re-ran. SSR cannot observe an effect, so
-  // this is pinned at the source (the P4-38 / userVisibleText.test.ts precedent).
-  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+test('the pane does not use a content signature for autoscroll', () => {
+  // Content height is observed at the pane boundary, so tool-result-only and
+  // local expansion changes do not need a projected-row signature.
   const paneSource = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
-  const start = paneSource.indexOf('const contentSignature =')
-  expect(start).toBeGreaterThan(-1)
-  const line = paneSource.slice(start, paneSource.indexOf('\n', start))
-
-  expect(line).not.toContain('activeLog')
-  expect(line).toContain('renderedRowCount')
+  expect(paneSource).not.toContain('contentSignature')
+  expect(paneSource).toContain('observePaneBottomLock')
 })
 
 test('a one-pixel upward transcript scroll releases the bottom lock', () => {
-  // The pane coordinator is allowed to re-pin only while this lock is true.
-  // Keeping it through a 120px grace range made ordinary upward scrolling fight
-  // measurement corrections after a turn had stopped.
+  // The pane coordinator is allowed to re-pin only while this logical lock is
+  // true. Scroll direction, not a transient geometry gap, releases it.
   const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
-  expect(source).toContain('const nextAtBottom = gap <= 1')
+  expect(source).toContain('selectPaneFollowIntent')
+  expect(source).toContain('previousScrollTopRef')
 })
 
 test('a cold-spawn prompt is visible, and the send arrow says so', () => {

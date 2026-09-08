@@ -104,10 +104,20 @@ function watchScrollListeners(element: HTMLElement): {
  * records construction and observation only. Layout-driven callbacks are not
  * something this environment can produce.
  */
-function watchResizeObservers(): { targets: EventTarget[]; restore: () => void } {
+function watchResizeObservers(): {
+  targets: EventTarget[]
+  trigger: () => void
+  restore: () => void
+} {
   const targets: EventTarget[] = []
+  const callbacks = new Set<() => void>()
   const original = globalThis.ResizeObserver
   class RecordingResizeObserver extends original {
+    constructor(callback: ResizeObserverCallback) {
+      super(callback)
+      callbacks.add(() => callback([], this))
+    }
+
     override observe(observed: Element, options?: ResizeObserverOptions): void {
       targets.push(observed)
       super.observe(observed, options)
@@ -116,7 +126,11 @@ function watchResizeObservers(): { targets: EventTarget[]; restore: () => void }
   globalThis.ResizeObserver = RecordingResizeObserver
   return {
     targets,
+    trigger: () => {
+      for (const callback of callbacks) callback()
+    },
     restore: () => {
+      callbacks.clear()
       globalThis.ResizeObserver = original
     },
   }
@@ -189,7 +203,9 @@ describe('observePaneScroll in a real DOM', () => {
     expect(coordinator.paneSubscriberCount(pane.scroller)).toBe(12)
     expect(pane.listeners.counts.added).toBe(1)
     expect(pane.listeners.counts.removed).toBe(0)
-    expect(pane.observers.targets).toEqual([pane.scroller])
+    expect(pane.observers.targets.filter(target => target === pane.scroller)).toEqual([
+      pane.scroller,
+    ])
   })
 
   test('a real scroll event fans out to every subscriber in one animation frame', async () => {
@@ -242,7 +258,10 @@ describe('observePaneScroll in a real DOM', () => {
     expect(coordinator.paneSubscriberCount(pane.scroller)).toBe(3)
     expect(pane.listeners.counts.added).toBe(2)
     expect(pane.listeners.counts.removed).toBe(1)
-    expect(pane.observers.targets).toEqual([pane.scroller, pane.scroller])
+    expect(pane.observers.targets.filter(target => target === pane.scroller)).toEqual([
+      pane.scroller,
+      pane.scroller,
+    ])
   })
 
   test('reported corrections become ONE scroll write on the real scroller', async () => {
@@ -264,7 +283,9 @@ describe('observePaneScroll in a real DOM', () => {
     expect(pane.scroller.scrollTop).toBe(5_100)
     // Correction did not cost the pane a second listener or observer.
     expect(pane.listeners.counts.added).toBe(1)
-    expect(pane.observers.targets).toEqual([pane.scroller])
+    expect(pane.observers.targets.filter(target => target === pane.scroller)).toEqual([
+      pane.scroller,
+    ])
   })
 
   test('a correction below the visible anchor leaves the real scroller alone', async () => {
@@ -314,6 +335,53 @@ describe('observePaneScroll in a real DOM', () => {
 
     expect(pane.scroller.scrollTop).toBe(120)
     releaseLock()
+  })
+
+  test('a pinned pane follows document growth without a correction report', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    const geometry = { scrollTop: 9_200, clientHeight: 800, scrollHeight: 10_000 }
+    injectScrollGeometry(pane.scroller, geometry)
+    await pane.setBodyCount(1)
+    let syncedScrollTop = 0
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true, scrollTop => {
+      syncedScrollTop = scrollTop
+    })
+
+    geometry.scrollHeight = 10_300
+    pane.observers.trigger()
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(9_500)
+    expect(syncedScrollTop).toBe(9_500)
+    releaseLock()
+  })
+
+  test('a viewport change while following re-pins the pane', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    const geometry = { scrollTop: 9_200, clientHeight: 800, scrollHeight: 10_000 }
+    injectScrollGeometry(pane.scroller, geometry)
+    await pane.setBodyCount(1)
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true)
+
+    geometry.clientHeight = 1_000
+    pane.observers.trigger()
+    await harness.nextFrame()
+
+    expect(pane.scroller.scrollTop).toBe(9_000)
+    releaseLock()
+  })
+
+  test('replacing the transcript root keeps the new document child observed', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    await pane.setBodyCount(1)
+    const previousRoot = pane.scroller.firstElementChild
+    const replacementRoot = pane.scroller.ownerDocument.createElement('div')
+    pane.scroller.replaceChild(replacementRoot, previousRoot as Element)
+
+    await Promise.resolve()
+
+    expect(pane.observers.targets).toContain(replacementRoot)
+    expect(pane.scroller.firstElementChild).toBe(replacementRoot)
   })
 
   test('the bottom-lock owner holds the pane open after the last body unmounts', async () => {

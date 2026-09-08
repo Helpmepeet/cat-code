@@ -66,6 +66,7 @@ import {
   type RestorePhase,
 } from './TranscriptView.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
+import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
   captureTranscriptScrollAnchor,
   createTranscriptScrollCapturePump,
@@ -556,6 +557,7 @@ export function SessionPane({
   // writes the ref during the event itself, so a reader who has just scrolled up
   // is never pulled back by a correction landing in the frame that follows.
   const atBottomRef = useRef(true)
+  const previousScrollTopRef = useRef(0)
   const applyAtBottom = (next: boolean): void => {
     atBottomRef.current = next
     setAtBottom(next)
@@ -736,6 +738,7 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     const restored = restoreTranscriptScroll(el, { anchor: scrollAnchor })
+    previousScrollTopRef.current = el.scrollTop
     applyAtBottom(restored.kind === 'bottom')
     // Read at bind only: the pane is remounted per session (`WorkspacePanels`
     // keys each panel by session id), so a later anchor is this pane reporting
@@ -752,7 +755,9 @@ export function SessionPane({
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el) return
-    return observePaneBottomLock(el, () => atBottomRef.current)
+    return observePaneBottomLock(el, () => atBottomRef.current, scrollTop => {
+      previousScrollTopRef.current = scrollTop
+    })
   }, [])
 
   // Unbinding is the one moment the anchor is READ, so a capture still waiting
@@ -767,18 +772,6 @@ export function SessionPane({
       pump.flush()
     }
   }, [activeSessionId])
-  // Derived from the RENDERED transcript, never from `activeLog`: the raw log is
-  // capped per session, so once it fills, `messages.length` pins at the cap and
-  // any message that does not also move `partialCount` yields an identical
-  // signature, silently stranding the pane above the newest row.
-  const renderedRowCount = activeSessionId
-    ? (transcript.sessions[activeSessionId]?.rows.length ?? 0)
-    : 0
-  // Waiting messages are part of this document too (they render at the end of
-  // the scroller, see the D1a block below), and they are the one part of it the
-  // row count cannot see. Without them in the signature, queuing a message while
-  // parked at the end grows the content and leaves the new row below the fold.
-  const contentSignature = `${renderedRowCount}:${partialCount}:${queuedPrompts.length}`
   // P4-24: context-window fullness for the composer donut. The prototype's
   // ContextChip is always on (`Surfaces.jsx:471-473`), so `selectContextUsage`
   // always returns — real result-frame usage once a turn provides it, a 0% gauge
@@ -842,28 +835,26 @@ export function SessionPane({
         return false
       }
     })()
-  // The REF, not the state, and the difference is a bug not a style choice. On
-  // mount this effect and the restore above run in one flush, in declaration
-  // order, so this closure still holds the mount-time `atBottom` — `true`, from
-  // `useState` — even though the restore has just placed the reader on a
-  // remembered row and reported that they are not at the end. Reading the state
-  // therefore threw every restored pane to the bottom of its transcript, which
-  // is precisely what the restore exists to prevent. `applyAtBottom` writes the
-  // ref synchronously, so the ref already knows.
-  //
-  // `atBottom` stays in the deps: the effect must still re-run when the reader
-  // returns to the end, and a ref change schedules nothing on its own.
+  // `atBottom` stays in the deps so a reader who reaches the end gets one
+  // immediate write in addition to the observer's next geometry frame.
   useEffect(() => {
     const el = transcriptScrollRef.current
     if (!el || !atBottomRef.current) return
     el.scrollTop = el.scrollHeight
-  }, [contentSignature, atBottom])
+    previousScrollTopRef.current = el.scrollTop
+  }, [atBottom])
 
   const onTranscriptScroll = (): void => {
     const el = transcriptScrollRef.current
     if (!el) return
     const gap = el.scrollHeight - el.scrollTop - el.clientHeight
-    const nextAtBottom = gap <= 1
+    const nextAtBottom = selectPaneFollowIntent({
+      following: atBottomRef.current,
+      previousScrollTop: previousScrollTopRef.current,
+      scrollTop: el.scrollTop,
+      gap,
+    })
+    previousScrollTopRef.current = el.scrollTop
     applyAtBottom(nextAtBottom)
     // Measured from a scroll event rather than at unmount, because a pane's DOM
     // is already gone by the time its ordinary cleanup runs — but COALESCED to
@@ -886,6 +877,7 @@ export function SessionPane({
     const el = transcriptScrollRef.current
     if (!el) return
     el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+    previousScrollTopRef.current = el.scrollTop
     applyAtBottom(true)
   }
 
@@ -1186,11 +1178,6 @@ export function SessionPane({
             * block ahead of the rows would make the scroll memory anchor on it.
             * Its own column repeats `TranscriptView`'s measure so the waiting
             * bubble's right edge lands on the delivered ones.
-            *
-            * The pane re-pins to the end when this list changes
-            * (`contentSignature`): the bottom lock only answers measured-body
-            * corrections, so growth here would otherwise leave the newest
-            * waiting message below the fold.
             *
             * One caption over the stack, inside the live region so the
             * announcement still names what these rows are. It is not repeated
