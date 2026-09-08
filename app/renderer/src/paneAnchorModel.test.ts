@@ -65,15 +65,26 @@ describe('a correction relative to the visible anchor', () => {
 })
 
 describe('logical follow intent', () => {
-  test('a real upward movement releases follow even within the one-pixel gap', () => {
+  test('a real upward movement away from the end releases follow', () => {
     expect(
       selectPaneFollowIntent({
         following: true,
         previousScrollTop: 1_000,
         scrollTop: 999,
-        gap: 1,
+        gap: 2,
       }),
     ).toBe(false)
+  })
+
+  test('an upward clamp that lands at the end keeps follow', () => {
+    expect(
+      selectPaneFollowIntent({
+        following: true,
+        previousScrollTop: 1_000,
+        scrollTop: 900,
+        gap: 0,
+      }),
+    ).toBe(true)
   })
 
   test('a same-position growth gap keeps a pinned pane following', () => {

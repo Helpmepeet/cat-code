@@ -201,6 +201,7 @@ function createPane(scroller: HTMLElement): PaneRecord {
  * periodic re-pin.
  */
 function applyPendingCorrections(scroller: HTMLElement, pane: PaneRecord): void {
+  if (pane.corrections.length === 0 && !pane.geometryDirty) return
   const metrics = readPaneMetrics(scroller)
   const geometryChanged =
     pane.geometryDirty &&

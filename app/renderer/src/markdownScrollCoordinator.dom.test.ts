@@ -356,6 +356,24 @@ describe('observePaneScroll in a real DOM', () => {
     releaseLock()
   })
 
+  test('a scroll frame cannot consume growth before the resize report arrives', async () => {
+    const pane = await mountInstrumentedPane(() => {})
+    const geometry = { scrollTop: 9_200, clientHeight: 800, scrollHeight: 10_000 }
+    injectScrollGeometry(pane.scroller, geometry)
+    await pane.setBodyCount(1)
+    const releaseLock = observePaneBottomLock(pane.scroller, () => true)
+
+    geometry.scrollHeight = 10_300
+    pane.scroller.dispatchEvent(new Event('scroll'))
+    await harness.nextFrame()
+    expect(pane.scroller.scrollTop).toBe(9_200)
+
+    pane.observers.trigger()
+    await harness.nextFrame()
+    expect(pane.scroller.scrollTop).toBe(9_500)
+    releaseLock()
+  })
+
   test('a viewport change while following re-pins the pane', async () => {
     const pane = await mountInstrumentedPane(() => {})
     const geometry = { scrollTop: 9_200, clientHeight: 800, scrollHeight: 10_000 }

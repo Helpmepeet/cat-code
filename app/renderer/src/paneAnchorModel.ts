@@ -58,8 +58,8 @@ export function selectPaneFollowIntent(input: {
   scrollTop: number
   gap: number
 }): boolean {
-  if (input.scrollTop < input.previousScrollTop) return false
   if (input.gap <= 1) return true
+  if (input.scrollTop < input.previousScrollTop) return false
   return input.following
 }
 
