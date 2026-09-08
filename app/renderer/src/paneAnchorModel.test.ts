@@ -65,13 +65,31 @@ describe('a correction relative to the visible anchor', () => {
 })
 
 describe('logical follow intent', () => {
-  test('a real upward movement away from the end releases follow', () => {
+  test('a one-pixel upward movement releases follow', () => {
     expect(
       selectPaneFollowIntent({
         following: true,
         previousScrollTop: 1_000,
         scrollTop: 999,
-        gap: 2,
+        gap: 1,
+      }),
+    ).toBe(false)
+  })
+
+  test('growth after an upward release does not reacquire follow', () => {
+    const released = selectPaneFollowIntent({
+      following: true,
+      previousScrollTop: 1_000,
+      scrollTop: 999,
+      gap: 1,
+    })
+
+    expect(
+      selectPaneFollowIntent({
+        following: released,
+        previousScrollTop: 999,
+        scrollTop: 999,
+        gap: 241,
       }),
     ).toBe(false)
   })
