@@ -31,8 +31,15 @@ import { getMcpConfigByName } from '../../services/mcp/config.js'
 import type {
   MCPServerConnection,
   ScopedMcpServerConfig,
+  ServerResource,
 } from '../../services/mcp/types.js'
-import type { Tool, Tools, ToolUseContext } from '../../Tool.js'
+import type {
+  McpRuntimeInputs,
+  McpRuntimeSnapshot,
+  Tool,
+  Tools,
+  ToolUseContext,
+} from '../../Tool.js'
 import { killShellTasksForAgent } from '../../tasks/LocalShellTask/killShellTasks.js'
 import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import type { Command } from '../../types/command.js'
@@ -368,6 +375,8 @@ async function* runAgentInCleanupScope({
   contentReplacementState,
   useExactTools,
   agentToolEnvironment,
+  mcpRuntimeInputs,
+  mcpRuntimeSnapshot,
   worktreePath,
   description,
   agentName,
@@ -432,6 +441,18 @@ async function* runAgentInCleanupScope({
    * ALS context exists) pass it explicitly so this per-turn resolution can't
    * disagree with that prior resolution. Defaults to 'default'. */
   agentToolEnvironment?: AgentToolEnvironment
+  /** A fully assembled MCP runtime read by the caller. This is used by launch
+   * paths that already consumed refreshMcpRuntime and must not perform a second
+   * snapshot read before handing tools, commands, clients, and resources to the
+   * subagent. */
+  mcpRuntimeInputs?: McpRuntimeInputs
+  /** The MCP generation this launch was authorized against. AgentTool reads it
+   * once after waiting for required servers and passes it here so the tool
+   * pool, clients, and resources the subagent starts with all come from that
+   * same read. Omit it and this run reads the parent context's current
+   * snapshot itself; with no live MCP source at all, the parent's static
+   * options are used as before. */
+  mcpRuntimeSnapshot?: McpRuntimeSnapshot
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
@@ -839,6 +860,47 @@ async function* runAgentInCleanupScope({
     }
   }
 
+  // The parent's MCP generation for this launch: the caller's snapshot when it
+  // took one, otherwise a single read of the live source, otherwise the static
+  // options. Clients and resources are taken from the same object so they can
+  // never straddle two generations.
+  const parentMcpRuntime = mcpRuntimeInputs
+    ? undefined
+    : (mcpRuntimeSnapshot ??
+      toolUseContext.options.getMcpRuntimeSnapshot?.())
+  const parentMcpClients = mcpRuntimeInputs
+    ? [...mcpRuntimeInputs.mcpClients]
+    : parentMcpRuntime
+      ? [...parentMcpRuntime.clients]
+      : toolUseContext.options.mcpClients
+  const parentMcpResources: Record<string, ServerResource[]> = mcpRuntimeInputs
+    ? Object.fromEntries(
+        Object.entries(mcpRuntimeInputs.mcpResources).map(
+          ([server, resources]) => [server, [...resources]],
+        ),
+      )
+    : parentMcpRuntime
+      ? Object.fromEntries(
+          Object.entries(parentMcpRuntime.resources).map(
+            ([server, resources]) => [server, [...resources]],
+          ),
+        )
+      : toolUseContext.options.mcpResources
+  const parentCommands = mcpRuntimeInputs
+    ? [...mcpRuntimeInputs.commands]
+    : parentMcpRuntime
+      ? [
+          ...toolUseContext.options.commands.filter(
+            command => !command.isMcp && command.loadedFrom !== 'mcp',
+          ),
+          ...parentMcpRuntime.commands,
+        ]
+      : []
+  const parentBaseTools = availableTools.filter(tool => !tool.mcpInfo)
+  const parentBaseCommands = toolUseContext.options.commands.filter(
+    command => !command.isMcp && command.loadedFrom !== 'mcp',
+  )
+
   // Initialize agent-specific MCP servers (additive to parent's servers)
   const {
     clients: mergedMcpClients,
@@ -846,7 +908,7 @@ async function* runAgentInCleanupScope({
     cleanup: mcpCleanup,
   } = await initializeAgentMcpServers(
     agentDefinition,
-    toolUseContext.options.mcpClients,
+    parentMcpClients,
     cleanup => setupCleanups.push(cleanup),
   )
 
@@ -857,6 +919,39 @@ async function* runAgentInCleanupScope({
     agentMcpTools.length > 0
       ? uniqBy([...resolvedTools, ...agentMcpTools], 'name')
       : resolvedTools
+  const agentMcpClients = mergedMcpClients.slice(parentMcpClients.length)
+  const refreshMcpRuntime = () => {
+    const snapshot = toolUseContext.options.getMcpRuntimeSnapshot?.()
+    if (!snapshot) {
+      return {
+        tools: allTools,
+        commands: parentCommands,
+        mcpClients: mergedMcpClients,
+        mcpResources: parentMcpResources,
+      }
+    }
+    const refreshedTools = resolveAgentTools(
+      agentDefinition,
+      [...parentBaseTools, ...snapshot.tools],
+      isAsync,
+      agentToolEnvironment,
+    ).resolvedTools
+
+    return {
+      tools:
+        agentMcpTools.length > 0
+          ? uniqBy([...refreshedTools, ...agentMcpTools], 'name')
+          : refreshedTools,
+      commands: [...parentBaseCommands, ...snapshot.commands],
+      mcpClients: [...snapshot.clients, ...agentMcpClients],
+      mcpResources: Object.fromEntries(
+        Object.entries(snapshot.resources).map(([server, resources]) => [
+          server,
+          [...resources],
+        ]),
+      ),
+    }
+  }
 
   // Build agent-specific options
   const agentOptions: ToolUseContext['options'] = {
@@ -867,7 +962,7 @@ async function* runAgentInCleanupScope({
         : (toolUseContext.options.isNonInteractiveSession ?? false),
     appendSystemPrompt: toolUseContext.options.appendSystemPrompt,
     tools: allTools,
-    commands: [],
+    commands: parentCommands,
     debug: toolUseContext.options.debug,
     verbose: toolUseContext.options.verbose,
     mainLoopModel: resolvedAgentModel,
@@ -882,7 +977,9 @@ async function* runAgentInCleanupScope({
       ? toolUseContext.options.thinkingConfig
       : { type: 'disabled' as const },
     mcpClients: mergedMcpClients,
-    mcpResources: toolUseContext.options.mcpResources,
+    mcpResources: parentMcpResources,
+    getMcpRuntimeSnapshot: toolUseContext.options.getMcpRuntimeSnapshot,
+    refreshMcpRuntime,
     agentDefinitions: toolUseContext.options.agentDefinitions,
     // Fork children (useExactTools path) need querySource on context.options
     // for the recursive-fork guard at AgentTool.tsx call() — it checks

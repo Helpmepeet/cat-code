@@ -362,19 +362,25 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
  * use this function to ensure consistent tool pool assembly.
  *
  * The function:
- * 1. Gets built-in tools via getTools() (respects mode filtering)
+ * 1. Gets the base tools — the caller's own set when supplied, otherwise
+ *    built-ins via getTools() (which respects mode filtering)
  * 2. Filters MCP tools by deny rules
- * 3. Deduplicates by tool name (built-in tools take precedence)
+ * 3. Deduplicates by tool name (base tools take precedence)
  *
  * @param permissionContext - Permission context for filtering built-in tools
  * @param mcpTools - MCP tools from appState.mcp.tools
- * @returns Combined, deduplicated array of built-in and MCP tools
+ * @param baseTools - Caller-supplied base tools. Passed through as given (the
+ *   caller already decided what belongs in it), so a harness, test, or app
+ *   runtime that injects its own tool set keeps it instead of having the
+ *   default built-ins regenerated over the top. Omit to use getTools().
+ * @returns Combined, deduplicated array of base and MCP tools
  */
 export function assembleToolPool(
   permissionContext: ToolPermissionContext,
   mcpTools: Tools,
+  baseTools?: Tools,
 ): Tools {
-  const builtInTools = getTools(permissionContext)
+  const builtInTools = baseTools ?? getTools(permissionContext)
 
   // Filter out MCP tools that are in the deny list
   const allowedMcpTools = filterToolsByDenyRules(mcpTools, permissionContext)

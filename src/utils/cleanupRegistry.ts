@@ -24,6 +24,24 @@ export async function runCleanupFunctions(): Promise<void> {
   await Promise.all(Array.from(cleanupFunctions).map(fn => fn()))
 }
 
+export type CleanupRunResult = {
+  rejected: number
+}
+
+/**
+ * Run every registered cleanup function and report only how many rejected.
+ * Sidecar shutdown uses this when no individual cleanup is allowed to prevent
+ * its peers from running.
+ */
+export async function runCleanupFunctionsSettled(): Promise<CleanupRunResult> {
+  const results = await Promise.allSettled(
+    Array.from(cleanupFunctions).map(cleanup => Promise.resolve().then(cleanup)),
+  )
+  return {
+    rejected: results.filter(result => result.status === 'rejected').length,
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Subagent stall sweep — tracks in-flight subagents and writes stall-detected
 // terminal entries on parent exit for any that never received a terminal entry.

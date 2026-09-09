@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle';
 import * as React from 'react';
-import { buildTool, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
+import { buildTool, type McpRuntimeSnapshot, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
 import type { Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
 import { getQuerySourceForAgent } from 'src/utils/promptCategory.js';
 import { z } from 'zod/v4';
@@ -14,6 +14,7 @@ import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryRe
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
+import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
 import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
@@ -870,6 +871,13 @@ export const AgentTool = buildTool({
     // narrowing property types across the if-else assignment above.
     const requiredMcpServers = selectedAgent.requiredMcpServers;
 
+    // One MCP generation for this launch. Read after any required-server wait
+    // below, so a server that connects during the wait reaches the subagent in
+    // this iteration instead of the next main-query one. Everything the
+    // subagent gets (availability verdict, tool pool, clients, resources)
+    // comes from this one read.
+    let mcpRuntimeSnapshot: McpRuntimeSnapshot | undefined;
+
     // Check if required MCP servers have tools available
     // A server that's connected but not authenticated won't have any tools
     if (requiredMcpServers?.length) {
@@ -895,18 +903,11 @@ export const AgentTool = buildTool({
         }
       }
 
-      // Get servers that actually have tools (meaning they're connected AND authenticated)
-      const serversWithTools: string[] = [];
-      for (const tool of currentAppState.mcp.tools) {
-        if (tool.name?.startsWith('mcp__')) {
-          // Extract server name from tool name (format: mcp__serverName__toolName)
-          const parts = tool.name.split('__');
-          const serverName = parts[1];
-          if (serverName && !serversWithTools.includes(serverName)) {
-            serversWithTools.push(serverName);
-          }
-        }
-      }
+      mcpRuntimeSnapshot = toolUseContext.options.getMcpRuntimeSnapshot?.();
+
+      const currentMcp =
+        mcpRuntimeSnapshot ?? currentAppState.mcp;
+      const serversWithTools = selectAvailableMcpServerNames(currentMcp);
       if (!hasRequiredMcpServers(selectedAgent, serversWithTools)) {
         const missing = requiredMcpServers.filter(pattern => !serversWithTools.some(server => server.toLowerCase().includes(pattern.toLowerCase())));
         throw new Error(`Agent '${selectedAgent.agentType}' requires MCP servers matching: ${missing.join(', ')}. ` + `MCP servers with tools: ${serversWithTools.length > 0 ? serversWithTools.join(', ') : 'none'}. ` + `Use /mcp to configure and authenticate the required MCP servers.`);
@@ -1052,7 +1053,8 @@ export const AgentTool = buildTool({
       ...appState.toolPermissionContext,
       mode: selectedAgent.permissionMode ?? 'acceptEdits'
     };
-    const workerTools = assembleToolPool(workerPermissionContext, appState.mcp.tools);
+    mcpRuntimeSnapshot ??= toolUseContext.options.getMcpRuntimeSnapshot?.();
+    const workerTools = assembleToolPool(workerPermissionContext, mcpRuntimeSnapshot?.tools ?? appState.mcp.tools);
 
     let worktreeInfo: {
       worktreePath: string;
@@ -1176,6 +1178,16 @@ export const AgentTool = buildTool({
         systemPrompt: asSystemPrompt(enhancedSystemPrompt)
       } : undefined,
       availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
+      ...(isForkPath
+        ? {
+            mcpRuntimeInputs: {
+              tools: toolUseContext.options.tools,
+              commands: toolUseContext.options.commands,
+              mcpClients: toolUseContext.options.mcpClients,
+              mcpResources: toolUseContext.options.mcpResources,
+            },
+          }
+        : { mcpRuntimeSnapshot }),
       // Pass parent conversation when the fork-subagent path needs full
       // context. useExactTools inherits thinkingConfig (runAgent.ts:624).
       forkContextMessages: isForkPath ? toolUseContext.messages : undefined,

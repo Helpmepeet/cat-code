@@ -15,7 +15,7 @@ import type {
 } from '../../src/app-runtime/sessionEvents.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { createStore } from '../../src/state/store.js'
-import type { ToolPermissionContext } from '../../src/Tool.js'
+import type { Tool, ToolPermissionContext } from '../../src/Tool.js'
 import type { PermissionUpdate } from '../../src/types/permissions.js'
 import { applyPermissionUpdate } from '../../src/utils/permissions/PermissionUpdate.js'
 import {
@@ -105,6 +105,9 @@ import type {
 import type { SidecarDiagnosticsDomain } from './diagnosticsDomain.js'
 import { createSidecarExtensionsDomain } from './extensionsDomain.js'
 import type { SidecarSettingsDomain } from './settingsDomain.js'
+import { createSidecarAgentConfigDomain } from './agentConfigDomain.js'
+import type { AgentDefinition } from '../../src/tools/AgentTool/loadAgentsDir.js'
+import type { ScopedMcpServerConfig } from '../../src/services/mcp/types.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
   createOperationalRecord,
@@ -3112,6 +3115,106 @@ test('P4-12 — attach emits an extensions.snapshot after the goal snapshot, sec
   expect(snap?.extensions.mcp?.[0]?.name).toBe('linear')
   expect(snap?.extensions.skills?.[0]?.name).toBe('deep-research')
   expect(snap && scanForSecrets(snap).ok).toBe(true)
+})
+
+test('agent config rebroadcasts to every connection only when live MCP availability changes', () => {
+  const store = makePermissionStore()
+  const serverName = 'Cua Driver, Local'
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = {
+    agentType: 'desktop-driver',
+    source: 'userSettings',
+    whenToUse: 'Drive the desktop',
+    requiredMcpServers: ['driver, local'],
+    getSystemPrompt: () => 'Drive the desktop',
+  } as AgentDefinition
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      clients: [{ name: serverName, type: 'pending', config }],
+      tools: [],
+    },
+  }))
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    agentConfig: createSidecarAgentConfigDomain({
+      agentDefinitions: {
+        allAgents: [agent],
+        activeAgents: [agent],
+      },
+      appStateStore: store,
+    }),
+    log: () => {},
+  })
+  servers.push(server)
+  const first = makeSocket()
+  const second = makeSocket()
+  server.addConnection(first.socket)
+  server.addConnection(second.socket)
+  const snapshots = (frames: ServerFrame[]) =>
+    frames.filter(
+      (
+        frame,
+      ): frame is Extract<ServerFrame, { kind: 'agent-config.snapshot' }> =>
+        frame.kind === 'agent-config.snapshot',
+    )
+
+  expect(snapshots(first.received)).toHaveLength(1)
+  expect(snapshots(second.received)).toHaveLength(1)
+  expect(snapshots(first.received)[0]?.agents.definitions[0]?.available).toBe(
+    false,
+  )
+
+  const realTool = {
+    name: 'mcp__Cua_Driver__click',
+    mcpInfo: { serverName, toolName: 'click' },
+  } as Tool
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      clients: [{
+        name: serverName,
+        type: 'connected',
+        config,
+        capabilities: {},
+        cleanup: async () => {},
+        client: {} as never,
+      }],
+      tools: [realTool],
+    },
+  }))
+
+  expect(snapshots(first.received)).toHaveLength(2)
+  expect(snapshots(second.received)).toHaveLength(2)
+  expect(snapshots(first.received).at(-1)?.agents).toMatchObject({
+    availableMcpServers: [serverName],
+    definitions: [{ available: true, missingMcpServers: [] }],
+  })
+
+  store.setState(previous => ({
+    ...previous,
+    mcp: {
+      ...previous.mcp,
+      tools: [
+        realTool,
+        {
+          name: 'mcp__Cua_Driver__scroll',
+          mcpInfo: { serverName, toolName: 'scroll' },
+        } as Tool,
+      ],
+    },
+  }))
+  expect(snapshots(first.received)).toHaveLength(2)
+  expect(snapshots(second.received)).toHaveLength(2)
 })
 
 test('P4-9 — emits the live tasks snapshot on attach and store change', () => {
@@ -7152,9 +7255,11 @@ test('P4-14 — a null workspace-trust read degrades to no frame, never strands 
 function makeWorkspaceTrustServer(
   snapshot: ReturnType<SidecarWorkspaceTrustDomain['getSnapshot']>,
   acceptTrust?: () => WorkspaceTrustAcceptResult,
+  onWorkspaceTrusted?: () => void,
 ): SidecarServer {
   return makeServer(new AppSessionController(probeAdapter()), {
     workspaceTrust: fakeWorkspaceTrust(snapshot, acceptTrust),
+    ...(onWorkspaceTrusted ? { onWorkspaceTrusted } : {}),
   })
 }
 
@@ -7236,6 +7341,42 @@ test('P4-15 — a valid workspace.trust accept produces an ok result and re-broa
   expect(
     received.filter(f => f.kind === 'workspace-trust.snapshot').length,
   ).toBeGreaterThan(before)
+})
+
+test('workspace.trust starts the internal MCP continuation once after trusted state is re-read', () => {
+  let trusted = false
+  let starts = 0
+  const workspaceTrust: SidecarWorkspaceTrustDomain = {
+    getSnapshot: () => ({
+      trusted,
+      detectedRepo: null,
+      trustRoot: '/repo',
+    }),
+    acceptTrust: () => {
+      trusted = true
+      return { ok: true, message: 'Workspace trusted.', changed: true }
+    },
+  }
+  const server = new SidecarServer({
+    sessionId: SESSION,
+    engineSessionId: ENGINE_SESSION,
+    controller: new AppSessionController(probeAdapter()),
+    workspaceTrust,
+    onWorkspaceTrusted: () => {
+      starts++
+    },
+    log: () => {},
+  })
+  servers.push(server)
+  const { socket } = makeSocket()
+  const connection = server.addConnection(socket)
+
+  server.handleData(
+    connection,
+    clientFrame({ type: 'workspace.trust', requestId: 'mcp-trust' }),
+  )
+
+  expect(starts).toBe(1)
 })
 
 test('P4-15 — an already-trusted accept returns ok but does NOT re-broadcast (changed:false)', () => {

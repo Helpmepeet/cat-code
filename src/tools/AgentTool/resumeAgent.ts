@@ -229,9 +229,15 @@ async function resumeAgentBackgroundLocked(
     ...appState.toolPermissionContext,
     mode: selectedAgent.permissionMode ?? 'acceptEdits',
   }
+  const mcpRuntimeSnapshot = isResumedFork
+    ? undefined
+    : toolUseContext.options.getMcpRuntimeSnapshot?.()
   const workerTools = isResumedFork
     ? toolUseContext.options.tools
-    : assembleToolPool(workerPermissionContext, appState.mcp.tools)
+    : assembleToolPool(
+        workerPermissionContext,
+        mcpRuntimeSnapshot?.tools ?? appState.mcp.tools,
+      )
 
   const currentSessionMode = getCurrentSessionMode()
   const parentTranscriptPath = getTranscriptPath()
@@ -266,6 +272,15 @@ async function resumeAgentBackgroundLocked(
       ? { systemPrompt: forkParentSystemPrompt }
       : undefined,
     availableTools: workerTools,
+    mcpRuntimeSnapshot,
+    ...(isResumedFork && {
+      mcpRuntimeInputs: {
+        tools: toolUseContext.options.tools,
+        commands: toolUseContext.options.commands,
+        mcpClients: toolUseContext.options.mcpClients,
+        mcpResources: toolUseContext.options.mcpResources,
+      },
+    }),
     // Transcript already contains the parent context slice from the
     // original fork. Re-supplying it would cause duplicate tool_use IDs.
     forkContextMessages: undefined,

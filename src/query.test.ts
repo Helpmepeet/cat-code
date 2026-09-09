@@ -16,6 +16,7 @@ import {
 } from './utils/messageQueueManager.js'
 import { SLEEP_TOOL_NAME } from './tools/SleepTool/prompt.js'
 import { buildTool } from './Tool.js'
+import { asSystemPrompt } from './utils/systemPromptType.js'
 import z from 'zod/v4'
 
 function createAssistantMessage(text: string, uuid: string): AssistantMessage {
@@ -806,5 +807,183 @@ describe('codex partial-stream continuation', () => {
 
     expect(call).toBe(1)
     expect(recoveryNotices(yielded)).toHaveLength(0)
+  })
+})
+
+describe('between-iteration MCP runtime refresh', () => {
+  type ObservedRuntime = {
+    tools: string[]
+    commands: string[]
+    clients: string[]
+    resources: string[]
+  }
+
+  // A tool that records the four MCP-derived runtime values its own execution
+  // sees. Tool execution reads clients off options (toolExecution.ts) and
+  // subagent setup reads clients and resources off options (runAgent.ts), so
+  // this is the surface a refresh has to actually reach, not options.tools
+  // alone.
+  function createProbeTool(observed: ObservedRuntime[]) {
+    return buildTool({
+      name: 'RuntimeProbe',
+      maxResultSizeChars: 100_000,
+      inputSchema: z.strictObject({}),
+      isReadOnly: () => true,
+      isConcurrencySafe: () => true,
+      async description() {
+        return 'runtime probe'
+      },
+      async prompt() {
+        return 'runtime probe'
+      },
+      async validateInput() {
+        return { result: true as const }
+      },
+      renderToolUseMessage: () => null,
+      renderToolResultMessage: () => null,
+      renderToolUseErrorMessage: () => null,
+      mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
+        return {
+          tool_use_id: toolUseID,
+          type: 'tool_result' as const,
+          content: 'probed',
+        }
+      },
+      // toolExecution.ts awaits tool.call() for a single result; it does not
+      // iterate it. A generator here would be awaited as a plain object and
+      // its body would never run, so this records nothing.
+      async call(_input: unknown, context: ToolUseContext) {
+        observed.push({
+          tools: context.options.tools.map(t => t.name),
+          commands: context.options.commands.map(c => c.name),
+          clients: context.options.mcpClients.map(c => c.name),
+          resources: Object.keys(context.options.mcpResources ?? {}),
+        })
+        return { data: 'probed' }
+      },
+    })
+  }
+
+  function probeTwiceThenAnswer(probeName: string): QueryDeps {
+    let call = 0
+    return {
+      uuid: () => 'test-query-chain-id',
+      microcompact: async messages => ({ messages }),
+      autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+      callModel: async function* () {
+        call++
+        if (call <= 2) {
+          const withProbe = createAssistantMessage(
+            'probing',
+            `assistant-probe-${call}`,
+          )
+          withProbe.message.content = [
+            {
+              type: 'tool_use',
+              id: `toolu_probe_${call}`,
+              name: probeName,
+              input: {},
+            },
+          ] as AssistantMessage['message']['content']
+          yield withProbe
+          return
+        }
+        yield createAssistantMessage('done', 'assistant-done')
+      },
+    }
+  }
+
+  async function drainProbeQuery(
+    toolUseContext: ToolUseContext,
+    messages: Message[],
+  ): Promise<void> {
+    for await (const _message of query({
+      messages,
+      systemPrompt: asSystemPrompt(['system prompt']),
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        decisionReason: { type: 'other', reason: 'test allows all tools' },
+      }),
+      toolUseContext,
+      querySource: 'repl_main_thread',
+      deps: probeTwiceThenAnswer('RuntimeProbe'),
+    })) {
+      // Drain the generator so both tool iterations run.
+    }
+  }
+
+  test('refreshes tools, commands, clients and resources from one generation', async () => {
+    const observed: ObservedRuntime[] = []
+    const probeTool = createProbeTool(observed)
+    const messages: Message[] = [createUserMessage({ content: 'go' })]
+    const toolUseContext = createToolUseContext(messages)
+
+    // refreshTools is deliberately wired too, and must never be consulted:
+    // a caller with a live MCP source that also got the tools-only refresh
+    // would advance its tool pool while leaving clients and resources behind,
+    // which is the incoherence the atomic seam exists to prevent.
+    let staleToolsRefreshes = 0
+    Object.assign(toolUseContext.options, {
+      tools: [probeTool],
+      commands: [{ name: 'base-command' }],
+      mcpClients: [{ name: 'stale-server', type: 'pending' }],
+      mcpResources: {},
+      refreshTools: () => {
+        staleToolsRefreshes++
+        return [probeTool]
+      },
+      refreshMcpRuntime: () => ({
+        tools: [probeTool, { name: 'mcp__live__act' }],
+        commands: [{ name: 'base-command' }, { name: 'mcp-command' }],
+        mcpClients: [{ name: 'live-server', type: 'connected' }],
+        mcpResources: { 'live-server': [{ uri: 'file://r', name: 'r' }] },
+      }),
+    })
+
+    await drainProbeQuery(toolUseContext, messages)
+
+    expect(observed).toHaveLength(2)
+    expect(observed[0]).toEqual({
+      tools: ['RuntimeProbe'],
+      commands: ['base-command'],
+      clients: ['stale-server'],
+      resources: [],
+    })
+    // Every field advanced together. A partial refresh would leave at least
+    // one of these on the first generation's value.
+    expect(observed[1]).toEqual({
+      tools: ['RuntimeProbe', 'mcp__live__act'],
+      commands: ['base-command', 'mcp-command'],
+      clients: ['live-server'],
+      resources: ['live-server'],
+    })
+    expect(staleToolsRefreshes).toBe(0)
+  })
+
+  test('a caller with only refreshTools keeps the tools-only refresh', async () => {
+    const observed: ObservedRuntime[] = []
+    const probeTool = createProbeTool(observed)
+    const laterTool = { name: 'AppearsLater' }
+    const messages: Message[] = [createUserMessage({ content: 'go' })]
+    const toolUseContext = createToolUseContext(messages)
+
+    Object.assign(toolUseContext.options, {
+      tools: [probeTool],
+      commands: [{ name: 'base-command' }],
+      mcpClients: [{ name: 'static-server', type: 'connected' }],
+      mcpResources: {},
+      refreshTools: () => [probeTool, laterTool],
+    })
+
+    await drainProbeQuery(toolUseContext, messages)
+
+    expect(observed).toHaveLength(2)
+    expect(observed[1].tools).toEqual(['RuntimeProbe', 'AppearsLater'])
+    // Untouched, exactly as before this seam existed.
+    expect(observed[1].commands).toEqual(['base-command'])
+    expect(observed[1].clients).toEqual(['static-server'])
+    expect(observed[1].resources).toEqual([])
   })
 })

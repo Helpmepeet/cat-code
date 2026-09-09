@@ -40,6 +40,10 @@ import {
 import { createStore } from '../../src/state/store.js'
 import type { ToolPermissionContext } from '../../src/Tool.js'
 import {
+  createAppRuntimeMcpLifecycle,
+  type AppRuntimeMcpLifecycle,
+} from '../../src/app-runtime/createAppRuntimeMcpLifecycle.js'
+import {
   initializeToolPermissionContext,
   initialPermissionModeFromCLI,
   removeDangerousPermissions,
@@ -336,10 +340,13 @@ export async function createNormalSidecarQueryEngineConfig(
   initialMessages?: readonly Message[],
   {
     agentDefinitions: suppliedAgentDefinitions,
+    onMcpLifecycleCreated,
     resumedInitialState,
   }: {
     /** One startup snapshot shared with resume, never a second disk read. */
     agentDefinitions?: AgentDefinitionsResult
+    /** Registers sidecar shutdown ownership before asynchronous MCP setup. */
+    onMcpLifecycleCreated?: (dispose: () => Promise<void>) => void
     /** Durable state returned by processResumedConversation. */
     resumedInitialState?: AppState
   } = {},
@@ -413,7 +420,9 @@ export async function createNormalSidecarQueryEngineConfig(
   const agentDefinitions =
     suppliedAgentDefinitions ?? await loadAgentDefinitionsForRuntime(cwd)
   const mcpClients: [] = []
-  const availableMcpServers: string[] = []
+  const mcpLifecycle = createAppRuntimeMcpLifecycle(appStateStore)
+  onMcpLifecycleCreated?.(mcpLifecycle.dispose)
+  await mcpLifecycle.prepare()
 
   // P4-12 settings-extensions read-seam: build the spawn-time MCP/plugins/skills/
   // hooks snapshot from the SAME loaded catalogs the runtime uses (skills ⊂
@@ -423,6 +432,7 @@ export async function createNormalSidecarQueryEngineConfig(
     commands,
     agentDefinitions: agentDefinitions.allAgents,
     appState: appStateStore.getState(),
+    preparedMcpConfiguration: mcpLifecycle.getPreparedConfiguration(),
   })
 
   // The composer SlashCommandPicker renders name + arg-hint + description columns
@@ -457,8 +467,8 @@ export async function createNormalSidecarQueryEngineConfig(
   return {
     appStateStore,
     agentDefinitions,
-    availableMcpServers,
     extensionsSnapshot,
+    mcpLifecycle,
     slashCatalog,
     /**
      * The session's REAL model-visible tool list (same array wired into the query
@@ -482,6 +492,7 @@ export async function createNormalSidecarQueryEngineConfig(
         mcpCommands: [],
         mcpClients,
         mcpResources: {},
+        getMcpRuntimeSnapshot: mcpLifecycle.getSnapshot,
         agents: agentDefinitions.activeAgents,
         getAppState: appStateStore.getState,
         setAppState: appStateStore.setState,
@@ -489,6 +500,7 @@ export async function createNormalSidecarQueryEngineConfig(
           READ_FILE_STATE_CACHE_SIZE,
         ),
         appendSystemPrompt: buildDesktopSystemPrompt(),
+        handleElicitation: async () => ({ action: 'cancel' }),
       }),
       // F1 (host-plane review 2026-07-05): seed the resumed transcript into the
       // QueryEngine's live turn context (`initialMessages` → `mutableMessages`,
@@ -609,6 +621,13 @@ export type SidecarSession = {
    */
   contextBreakdown: SidecarContextBreakdownDomain | null
   /**
+   * Lifecycle start stays sidecar-owned. The bootstrap combines this with socket
+   * readiness and the trust domain; no renderer data reaches this callback.
+   */
+  startMcpLifecycle: (() => void) | null
+  /** Sidecar-owned disposal prevents later MCP publication during process exit. */
+  disposeMcpLifecycle: (() => Promise<void>) | null
+  /**
    * The session's real user-invocable slash commands WITH display metadata (name
    * + description + optional arg hint), built at spawn from the SAME `getCommands`
    * catalog that feeds `slash_commands`. The server pushes it on connect as a
@@ -624,6 +643,7 @@ export async function createSidecarSessionController({
   cwd,
   initialMessages,
   agentDefinitions: suppliedAgentDefinitions,
+  onMcpLifecycleCreated,
   resumedInitialState,
 }: {
   probe: boolean
@@ -639,6 +659,8 @@ export async function createSidecarSessionController({
   agentDefinitions?: AgentDefinitionsResult
   /** Durable engine state returned during resume, omitted for a fresh session. */
   resumedInitialState?: AppState
+  /** Registers MCP disposal before setup steps that can fail. */
+  onMcpLifecycleCreated?: (dispose: () => Promise<void>) => void
 }): Promise<SidecarSession> {
   if (probe) {
     return {
@@ -681,6 +703,8 @@ export async function createSidecarSessionController({
       runControls: null,
       sessionActions: null,
       contextBreakdown: null,
+      startMcpLifecycle: null,
+      disposeMcpLifecycle: null,
       slashCatalog: [],
     }
   }
@@ -693,14 +717,15 @@ export async function createSidecarSessionController({
   const {
     appStateStore,
     agentDefinitions,
-    availableMcpServers,
     extensionsSnapshot,
+    mcpLifecycle,
     commands,
     queryEngineConfig,
     slashCatalog,
     tools,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
     agentDefinitions: suppliedAgentDefinitions,
+    onMcpLifecycleCreated,
     resumedInitialState,
   })
   const providerBoundHistory = initialMessages
@@ -720,7 +745,7 @@ export async function createSidecarSessionController({
     }),
     agentConfig: createSidecarAgentConfigDomain({
       agentDefinitions,
-      availableMcpServers,
+      appStateStore,
     }),
     goals: createSidecarGoalDomain(appStateStore),
     // P4-34 — the SAME active-agent list the query engine receives above
@@ -762,6 +787,8 @@ export async function createSidecarSessionController({
         console.error('[sidecar] context breakdown failed', error)
       },
     }),
+    startMcpLifecycle: mcpLifecycle.start,
+    disposeMcpLifecycle: mcpLifecycle.dispose,
     slashCatalog,
   }
 }

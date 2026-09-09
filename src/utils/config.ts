@@ -1,6 +1,6 @@
 import { feature } from 'bun:bundle'
 import { randomBytes } from 'crypto'
-import { unwatchFile, watchFile } from 'fs'
+import { realpathSync, unwatchFile, watchFile } from 'fs'
 import memoize from 'lodash-es/memoize.js'
 import pickBy from 'lodash-es/pickBy.js'
 import { basename, dirname, join, resolve } from 'path'
@@ -786,6 +786,12 @@ function computeTrustDialogAccepted(): boolean {
 export function isPathTrusted(dir: string): boolean {
   const config = getGlobalConfig()
   let currentPath = normalizePathForConfigKey(resolve(dir))
+  try {
+    currentPath = normalizePathForConfigKey(realpathSync(currentPath))
+  } catch {
+    // A caller may ask about a path that no longer exists; preserve the logical
+    // lookup so a missing directory cannot throw or become trusted by accident.
+  }
   while (true) {
     if (config.projects?.[currentPath]?.hasTrustDialogAccepted) return true
     const parentPath = normalizePathForConfigKey(resolve(currentPath, '..'))

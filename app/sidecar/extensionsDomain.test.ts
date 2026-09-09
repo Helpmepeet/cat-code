@@ -7,6 +7,7 @@ import type { CommandBase, PromptCommand } from '../../src/types/command.js'
 import type { Command } from '../../src/commands.js'
 import type { LoadedPlugin, PluginError } from '../../src/types/plugin.js'
 import type { AgentDefinition } from '../../src/tools/AgentTool/loadAgentsDir.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
   ExtensionsSnapshotFrame,
@@ -18,9 +19,11 @@ import type {
 } from '../shared/protocol.js'
 import {
   buildHookEntries,
+  buildMcpEntries,
   buildMcpEntry,
   buildPluginEntries,
   buildSkillEntries,
+  loadExtensionsSnapshot,
 } from './extensionsDomain.js'
 
 /* -------------------- compile-time drift tripwires -------------------- */
@@ -168,6 +171,89 @@ test('buildMcpEntry keeps a word-shaped path so the server stays identifiable', 
 test('buildMcpEntry defaults a missing transport to stdio', () => {
   const config = { command: 'x', args: [], scope: 'local' } as unknown as ScopedMcpServerConfig
   expect(buildMcpEntry('legacy', config).transport).toBe('stdio')
+})
+
+test('prepared explicit-only configurations are projected and redacted without rereading MCP config', () => {
+  const entries = buildMcpEntries({
+    userServer: {
+      type: 'stdio',
+      command: 'user-server',
+      args: ['--token', 'secret-argument'],
+      env: { API_KEY: 'sk-live-user' },
+      scope: 'user',
+    },
+    localServer: {
+      type: 'stdio',
+      command: 'local-server',
+      args: [],
+      scope: 'local',
+    },
+    flagServer: {
+      type: 'http',
+      url: 'https://flag.example.test/api/opaqueCredentialValue/rpc?token=secret',
+      headers: { Authorization: 'Bearer secret' },
+      scope: 'dynamic',
+    },
+    policyServer: {
+      type: 'stdio',
+      command: 'policy-server',
+      args: [],
+      scope: 'managed',
+    },
+    approvedProjectServer: {
+      type: 'stdio',
+      command: 'project-server',
+      args: [],
+      scope: 'project',
+    },
+  } as unknown as Record<string, ScopedMcpServerConfig>)
+
+  expect(entries.map(entry => entry.name)).toEqual([
+    'approvedProjectServer',
+    'flagServer',
+    'localServer',
+    'policyServer',
+    'userServer',
+  ])
+  expect(entries.find(entry => entry.name === 'flagServer')?.url).toBe(
+    'https://flag.example.test/api/*/rpc',
+  )
+  expect(entries.find(entry => entry.name === 'userServer')).toMatchObject({
+    command: 'user-server',
+    argCount: 2,
+  })
+  const serialized = JSON.stringify(entries)
+  expect(serialized).not.toContain('secret')
+  expect(serialized).not.toContain('API_KEY')
+  expect(serialized).not.toContain('Authorization')
+})
+
+test('the Extensions snapshot uses its supplied lifecycle-prepared MCP configuration', async () => {
+  const snapshot = await loadExtensionsSnapshot({
+    commands: [],
+    agentDefinitions: [],
+    appState: getDefaultAppState(),
+    preparedMcpConfiguration: {
+      approvedProjectServer: {
+        type: 'stdio',
+        command: 'approved-project-server',
+        args: [],
+        env: { API_KEY: 'sk-live-withheld' },
+        scope: 'project',
+      } as ScopedMcpServerConfig,
+    },
+  })
+
+  expect(snapshot.mcp).toEqual([
+    {
+      name: 'approvedProjectServer',
+      transport: 'stdio',
+      scope: 'project',
+      command: 'approved-project-server',
+      argCount: 0,
+    },
+  ])
+  expect(JSON.stringify(snapshot)).not.toContain('sk-live-withheld')
 })
 
 /* -------------------------------- Skills ------------------------------ */

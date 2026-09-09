@@ -2,7 +2,6 @@ import { feature } from 'bun:bundle'
 import { basename } from 'path'
 import { useCallback, useEffect, useRef } from 'react'
 import { getSessionId } from '../../bootstrap/state.js'
-import type { Command } from '../../commands.js'
 import type { Tool } from '../../Tool.js'
 import {
   clearServerCache,
@@ -13,9 +12,7 @@ import {
   reconnectMcpServerImpl,
 } from './client.js'
 import type {
-  MCPServerConnection,
   ScopedMcpServerConfig,
-  ServerResource,
 } from './types.js'
 
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -35,8 +32,6 @@ import {
   ResourceListChangedNotificationSchema,
   ToolListChangedNotificationSchema,
 } from '@modelcontextprotocol/sdk/types.js'
-import omit from 'lodash-es/omit.js'
-import reject from 'lodash-es/reject.js'
 import {
   type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
   logEvent,
@@ -82,8 +77,12 @@ import {
   fetchClaudeAIMcpConfigsIfEligible,
 } from './claudeai.js'
 import { registerElicitationHandler } from './elicitationHandler.js'
-import { getMcpPrefix } from './mcpStringUtils.js'
-import { commandBelongsToServer, excludeStalePluginClients } from './utils.js'
+import {
+  applyMcpServerStateUpdate,
+  seedMcpServerStates,
+  type McpServerStateUpdate,
+} from './mcpState.js'
+import { excludeStalePluginClients } from './utils.js'
 
 // Constants for reconnection with exponential backoff
 const MAX_RECONNECT_ATTEMPTS = 5
@@ -206,12 +205,7 @@ export function useManageMCPConnections(
   // (instead of queueMicrotask) ensures updates are batched even when
   // connection callbacks arrive at different times due to network I/O.
   const MCP_BATCH_FLUSH_MS = 16
-  type PendingUpdate = MCPServerConnection & {
-    tools?: Tool[]
-    commands?: Command[]
-    resources?: ServerResource[]
-  }
-  const pendingUpdatesRef = useRef<PendingUpdate[]>([])
+  const pendingUpdatesRef = useRef<McpServerStateUpdate[]>([])
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const flushPendingUpdates = useCallback(() => {
@@ -224,67 +218,7 @@ export function useManageMCPConnections(
       let mcp = prevState.mcp
 
       for (const update of updates) {
-        const {
-          tools: rawTools,
-          commands: rawCmds,
-          resources: rawRes,
-          ...client
-        } = update
-        const tools =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawTools ?? [])
-            : rawTools
-        const commands =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawCmds ?? [])
-            : rawCmds
-        const resources =
-          client.type === 'disabled' || client.type === 'failed'
-            ? (rawRes ?? [])
-            : rawRes
-
-        const prefix = getMcpPrefix(client.name)
-        const existingClientIndex = mcp.clients.findIndex(
-          c => c.name === client.name,
-        )
-
-        const updatedClients =
-          existingClientIndex === -1
-            ? [...mcp.clients, client]
-            : mcp.clients.map(c => (c.name === client.name ? client : c))
-
-        const updatedTools =
-          tools === undefined
-            ? mcp.tools
-            : [...reject(mcp.tools, t => t.name?.startsWith(prefix)), ...tools]
-
-        const updatedCommands =
-          commands === undefined
-            ? mcp.commands
-            : [
-              ...reject(mcp.commands, c =>
-                commandBelongsToServer(c, client.name),
-              ),
-              ...commands,
-            ]
-
-        const updatedResources =
-          resources === undefined
-            ? mcp.resources
-            : {
-              ...mcp.resources,
-              ...(resources.length > 0
-                ? { [client.name]: resources }
-                : omit(mcp.resources, client.name)),
-            }
-
-        mcp = {
-          ...mcp,
-          clients: updatedClients,
-          tools: updatedTools,
-          commands: updatedCommands,
-          resources: updatedResources,
-        }
+        mcp = applyMcpServerStateUpdate(mcp, update)
       }
 
       return { ...prevState, mcp }
@@ -293,10 +227,10 @@ export function useManageMCPConnections(
 
   // Update server state, tools, commands, and resources.
   // When tools, commands, or resources are undefined, the existing values are preserved.
-  // When type is 'disabled' or 'failed', tools/commands/resources are automatically cleared.
+  // Disabled, failed, and needs-auth results clear omitted executable state.
   // Updates are batched via setTimeout to coalesce updates arriving within MCP_BATCH_FLUSH_MS.
   const updateServer = useCallback(
-    (update: PendingUpdate) => {
+    (update: McpServerStateUpdate) => {
       pendingUpdatesRef.current.push(update)
       if (flushTimerRef.current === null) {
         flushTimerRef.current = setTimeout(
@@ -314,13 +248,8 @@ export function useManageMCPConnections(
       tools,
       commands,
       resources,
-    }: {
-      client: MCPServerConnection
-      tools: Tool[]
-      commands: Command[]
-      resources?: ServerResource[]
-    }) => {
-      updateServer({ ...client, tools, commands, resources })
+    }: McpServerStateUpdate) => {
+      updateServer({ client, tools, commands, resources })
 
       // Handle side effects based on client state
       switch (client.type) {
@@ -386,10 +315,12 @@ export function useManageMCPConnections(
                   }
 
                   updateServer({
-                    ...client,
-                    type: 'pending',
-                    reconnectAttempt: attempt,
-                    maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
+                    client: {
+                      ...client,
+                      type: 'pending',
+                      reconnectAttempt: attempt,
+                      maxReconnectAttempts: MAX_RECONNECT_ATTEMPTS,
+                    },
                   })
 
                   const reconnectStartTime = Date.now()
@@ -463,7 +394,9 @@ export function useManageMCPConnections(
                       reconnectTimersRef.current.delete(client.name)
                       // Same in-flight disable race as the success path above.
                       if (!isMcpServerDisabled(client.name)) {
-                        updateServer({ ...client, type: 'failed' })
+                        updateServer({
+                          client: { ...client, type: 'failed' },
+                        })
                       }
                       return
                     }
@@ -489,7 +422,7 @@ export function useManageMCPConnections(
 
               void reconnectWithBackoff()
             } else {
-              updateServer({ ...client, type: 'failed' })
+              updateServer({ client: { ...client, type: 'failed' } })
             }
           }
 
@@ -685,7 +618,7 @@ export function useManageMCPConnections(
                       newCount,
                     })
                   }
-                  updateServer({ ...client, tools: newTools })
+                  updateServer({ client, tools: newTools })
                 } catch (error) {
                   logMCPError(
                     client.name,
@@ -718,7 +651,7 @@ export function useManageMCPConnections(
                       : Promise.resolve([]),
                   ])
                   updateServer({
-                    ...client,
+                    client,
                     commands: [...mcpPrompts, ...mcpSkills],
                   })
                   // MCP skills changed — invalidate skill-search index so
@@ -761,7 +694,7 @@ export function useManageMCPConnections(
                         fetchMcpSkillsForClient!(client),
                       ])
                     updateServer({
-                      ...client,
+                      client,
                       resources: newResources,
                       commands: [...mcpPrompts, ...mcpSkills],
                     })
@@ -770,7 +703,7 @@ export function useManageMCPConnections(
                     clearSkillIndexCache?.()
                   } else {
                     const newResources = await fetchResourcesForClient(client)
-                    updateServer({ ...client, resources: newResources })
+                    updateServer({ client, resources: newResources })
                   }
                 } catch (error) {
                   logMCPError(
@@ -821,16 +754,12 @@ export function useManageMCPConnections(
           configs,
         )
         // Clean up stale connections. Fire-and-forget — state updaters must
-        // be synchronous. Three hazards to defuse before calling cleanup:
+        // be synchronous. Two hazards to defuse before calling cleanup:
         //   1. Pending reconnect timer would fire with the OLD config.
         //   2. onclose (set at L254) starts reconnectWithBackoff with the
         //      OLD config from its closure — it checks isMcpServerDisabled
         //      but config-changed servers aren't disabled, so it'd race the
         //      fresh connection and last updateServer wins.
-        //   3. clearServerCache internally calls connectToServer (memoized).
-        //      For never-connected servers (disabled/pending/failed) the
-        //      cache is empty → real connect attempt → spawn/OAuth just to
-        //      immediately kill it. Only connected servers need cleanup.
         for (const s of stale) {
           const timer = reconnectTimersRef.current.get(s.name)
           if (timer) {
@@ -843,30 +772,20 @@ export function useManageMCPConnections(
           }
         }
 
-        const existingServerNames = new Set(
-          mcpWithoutStale.clients.map(c => c.name),
+        const baseMcp =
+          stale.length === 0
+            ? prevState.mcp
+            : { ...prevState.mcp, ...mcpWithoutStale }
+        const mcp = seedMcpServerStates(
+          baseMcp,
+          configs,
+          isMcpServerDisabled,
         )
-        const newClients = Object.entries(configs)
-          .filter(([name]) => !existingServerNames.has(name))
-          .map(([name, config]) => ({
-            name,
-            type: isMcpServerDisabled(name)
-              ? ('disabled' as const)
-              : ('pending' as const),
-            config,
-          }))
-
-        if (newClients.length === 0 && stale.length === 0) {
-          return prevState
-        }
+        if (mcp === prevState.mcp) return prevState
 
         return {
           ...prevState,
-          mcp: {
-            ...prevState.mcp,
-            ...mcpWithoutStale,
-            clients: [...mcpWithoutStale.clients, ...newClients],
-          },
+          mcp,
         }
       })
     }
@@ -955,25 +874,15 @@ export function useManageMCPConnections(
         if (Object.keys(claudeaiConfigs).length > 0) {
           // Add claude.ai servers as pending immediately so they show up in UI
           setAppState(prevState => {
-            const existingServerNames = new Set(
-              prevState.mcp.clients.map(c => c.name),
+            const mcp = seedMcpServerStates(
+              prevState.mcp,
+              claudeaiConfigs,
+              isMcpServerDisabled,
             )
-            const newClients = Object.entries(claudeaiConfigs)
-              .filter(([name]) => !existingServerNames.has(name))
-              .map(([name, config]) => ({
-                name,
-                type: isMcpServerDisabled(name)
-                  ? ('disabled' as const)
-                  : ('pending' as const),
-                config,
-              }))
-            if (newClients.length === 0) return prevState
+            if (mcp === prevState.mcp) return prevState
             return {
               ...prevState,
-              mcp: {
-                ...prevState.mcp,
-                clients: [...prevState.mcp.clients, ...newClients],
-              },
+              mcp,
             }
           })
 
@@ -1133,9 +1042,11 @@ export function useManageMCPConnections(
 
         // Update to disabled state (tools/commands/resources auto-cleared)
         updateServer({
-          name: serverName,
-          type: 'disabled',
-          config: client.config,
+          client: {
+            name: serverName,
+            type: 'disabled',
+            config: client.config,
+          },
         })
       } else {
         // Enabling: persist enabled state to disk first
@@ -1143,9 +1054,11 @@ export function useManageMCPConnections(
 
         // Mark as pending and reconnect
         updateServer({
-          name: serverName,
-          type: 'pending',
-          config: client.config,
+          client: {
+            name: serverName,
+            type: 'pending',
+            config: client.config,
+          },
         })
 
         // Reconnect the server

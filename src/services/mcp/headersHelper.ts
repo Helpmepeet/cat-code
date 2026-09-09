@@ -32,6 +32,7 @@ function isMcpServerFromProjectOrLocalSettings(
 export async function getMcpHeadersFromHelper(
   serverName: string,
   config: McpSSEServerConfig | McpHTTPServerConfig | McpWebSocketServerConfig,
+  abortSignal?: AbortSignal,
 ): Promise<Record<string, string> | null> {
   if (!config.headersHelper) {
     return null
@@ -61,6 +62,7 @@ export async function getMcpHeadersFromHelper(
     const execResult = await execFileNoThrowWithCwd(config.headersHelper, [], {
       shell: true,
       timeout: 10000,
+      abortSignal,
       // Pass server context so one helper script can serve multiple MCP servers
       // (git credential-helper style). See deshaw/anthropic-issues#28.
       env: {
@@ -125,10 +127,11 @@ export async function getMcpHeadersFromHelper(
 export async function getMcpServerHeaders(
   serverName: string,
   config: McpSSEServerConfig | McpHTTPServerConfig | McpWebSocketServerConfig,
+  abortSignal?: AbortSignal,
 ): Promise<Record<string, string>> {
   const staticHeaders = config.headers || {}
   const dynamicHeaders =
-    (await getMcpHeadersFromHelper(serverName, config)) || {}
+    (await getMcpHeadersFromHelper(serverName, config, abortSignal)) || {}
 
   // Dynamic headers override static headers if both are present
   return {

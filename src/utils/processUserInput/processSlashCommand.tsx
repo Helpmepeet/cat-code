@@ -145,7 +145,8 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
         if (!s.mcp.clients.some(c => c.type === 'pending')) break;
         await sleep(MCP_SETTLE_POLL_MS);
       }
-      const freshTools = context.options.refreshTools?.() ?? context.options.tools;
+      const freshMcpRuntime = context.options.refreshMcpRuntime?.();
+      const freshTools = freshMcpRuntime?.tools ?? context.options.refreshTools?.() ?? context.options.tools;
       const agentMessages: Message[] = [];
       for await (const message of runAgent({
         agentDefinition,
@@ -160,6 +161,7 @@ async function executeForkedSlashCommand(command: CommandBase & PromptCommand, a
         querySource: 'agent:custom',
         model: command.model as ModelAlias | undefined,
         availableTools: freshTools,
+        mcpRuntimeInputs: freshMcpRuntime,
         override: {
           agentId
         }
