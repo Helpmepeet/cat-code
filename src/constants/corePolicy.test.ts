@@ -224,7 +224,7 @@ describe('policy core coverage across provider and mode variants', () => {
 
     expect(proactiveBranch).toContain('getCorePolicySection()')
     expect(proactiveBranch).toContain(
-      'gpt ? getGPTActionsSection() : getActionsSection()',
+      'gpt ? getGPTActionsSection(gptFamily) : getActionsSection()',
     )
     expect(proactiveBranch).toContain('getSystemRemindersSection()')
     expect(proactiveBranch).not.toContain('CYBER_RISK_INSTRUCTION')

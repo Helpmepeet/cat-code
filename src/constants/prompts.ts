@@ -68,7 +68,7 @@ import {
   resolveRequestProvider,
   type APIProvider,
 } from '../utils/model/providers.js'
-import { isGPTPromptStyle } from './promptStyle.js'
+import { getGPTPromptFamily, isGPTPromptStyle } from './promptStyle.js'
 import {
   getGPTIntroSection,
   getGPTSystemSection,
@@ -685,6 +685,7 @@ export async function getSystemPrompt(
   ])
   const requestProvider = resolveRequestProvider(model, provider)
   const gpt = isGPTPromptStyle(requestProvider)
+  const gptFamily = getGPTPromptFamily(model)
 
   const settings = getInitialSettings()
   const enabledTools = new Set(tools.map(_ => _.name))
@@ -697,7 +698,7 @@ export async function getSystemPrompt(
     return [
       `\nYou are an autonomous agent. Use the available tools to do useful work.`,
       getCorePolicySection(),
-      gpt ? getGPTActionsSection() : getActionsSection(),
+      gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
       getSystemRemindersSection(),
       await loadMemoryPrompt(),
       envInfo,
@@ -755,15 +756,15 @@ export async function getSystemPrompt(
         }),
     hasDoingTasksSection
       ? gpt
-        ? getGPTDoingTasksSection(enabledTools)
+        ? getGPTDoingTasksSection(enabledTools, gptFamily)
         : getSimpleDoingTasksSection()
       : null,
-    gpt ? getGPTActionsSection() : getActionsSection(),
+    gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
     ...(gpt ? [] : [getDeliveringWorkSection(), getCorrectionsSection()]),
     gpt
       ? getGPTUsingToolsSection(enabledTools)
       : getUsingYourToolsSection(enabledTools),
-    gpt ? getGPTToneAndStyleSection() : getSimpleToneAndStyleSection(),
+    gpt ? getGPTToneAndStyleSection(gptFamily) : getSimpleToneAndStyleSection(),
     gpt ? getGPTOutputSection() : getOutputEfficiencySection(),
     // === BOUNDARY MARKER - DO NOT MOVE OR REMOVE ===
     ...(shouldUseGlobalCacheScope() ? [SYSTEM_PROMPT_DYNAMIC_BOUNDARY] : []),
@@ -901,7 +902,7 @@ export async function computeSimpleEnvInfo(
 
   return [
     `# Environment`,
-    `You have been invoked in the following environment: `,
+    `You have been invoked in the following environment:`,
     ...prependBullets(envItems),
   ].join(`\n`)
 }

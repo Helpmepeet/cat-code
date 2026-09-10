@@ -7,6 +7,11 @@ import {
 } from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 
+// Command availability is filtered by auth, so an assembly built with no
+// credential anywhere throws before it reaches the sections under test. The
+// value is never sent: nothing here makes a request.
+process.env.ANTHROPIC_API_KEY ??= 'test-key'
+process.env.OPENAI_API_KEY ??= 'test-key'
 
 const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
@@ -139,7 +144,10 @@ describe('GPT section boundaries', () => {
     const prompt = (await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')).join('\n')
 
     expect(prompt).toContain('take the natural next action')
-    expect(prompt).toContain('STOP and confirm with the user first')
+    expect(prompt).toContain(
+      'confirm first unless the user or loaded durable instructions already authorize that scope',
+    )
+    expect(prompt).toContain('RISKY ACTIONS include')
     expect(prompt).toContain(
       'does not by itself authorize implementation',
     )
@@ -150,7 +158,7 @@ describe('GPT section boundaries', () => {
 
 describe('GPT copyable text guidance', () => {
   test('distinguishes shell commands from copyable text', () => {
-    const guidance = getGPTToneAndStyleSection()
+    const guidance = getGPTToneAndStyleSection('gpt-5.6')
 
     expect(guidance).toContain(
       'Shell commands are commands, not copyable text',

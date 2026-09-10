@@ -17,6 +17,12 @@ import {
   getGPTUsingToolsSection,
 } from '../constants/promptStyles/gpt.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
+
+// Command availability is filtered by auth, so an assembly built with no
+// credential anywhere throws before it reaches the prompt under test. The
+// value is never sent: nothing here makes a request.
+process.env.ANTHROPIC_API_KEY ??= 'test-key'
+process.env.OPENAI_API_KEY ??= 'test-key'
 import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
 import { getEditToolDescription } from '../tools/FileEditTool/prompt.js'
 import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
@@ -213,11 +219,17 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('GPT doing-tasks guidance references Apply_patch when available', () => {
-    const section = getGPTDoingTasksSection(new Set(['Read', 'Apply_patch']))
-
-    expect(section).toContain('prior Read tool result before emitting an Apply_patch')
-    expect(section).not.toContain('prior Read tool result before emitting an Edit')
+  test('GPT doing-tasks carries read-before-modify only when an edit tool is present', () => {
+    // The rule names no tool any more, so what is testable is the gate: it
+    // needs both an edit tool and a way to read the file first.
+    for (const editTool of ['Apply_patch', 'Edit']) {
+      expect(getGPTDoingTasksSection(new Set(['Read', editTool]), 'gpt-5.6')).toContain(
+        'Read before modifying:',
+      )
+    }
+    expect(getGPTDoingTasksSection(new Set(['Read']), 'gpt-5.6')).not.toContain(
+      'Read before modifying:',
+    )
   })
 
   test('normalizeMessagesForAPI preserves raw Apply_patch tool_use input for executable handoff', () => {
@@ -392,14 +404,13 @@ describe('provider and prompt regressions', () => {
       }
     }
   })
-  // The patch format mandates relative paths without naming the base, so a
-  // session rooted below the project root resolves them one level too deep.
-  test('GPT tool rules state where patch paths resolve, only when that tool is live', () => {
+  // The exposed tool description owns the path base. Keep that contract while
+  // removing its duplicate from the main prompt.
+  test('Apply_patch description owns path resolution without a duplicate system rule', async () => {
     const withPatchTool = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
-    expect(withPatchTool).toContain('resolved against the session working directory')
-
-    const withoutPatchTool = getGPTUsingToolsSection(new Set())
-    expect(withoutPatchTool).not.toContain('resolved against the session working directory')
+    const description = (await FilePatchTool.prompt()).replace(/\s+/g, ' ')
+    expect(description).toContain('current session working directory')
+    expect(withPatchTool).not.toContain('PATHS:')
   })
 
   test('GPT tool rules carry the Apply_patch mutation rule and the diff check', () => {
