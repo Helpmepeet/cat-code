@@ -1,0 +1,269 @@
+<title>Peer Sessions User Surfaces</title>
+<style>
+  /* ---------- chrome: deliberately not the app ---------- */
+  :root { --x-ink: #6b6b72; --x-rule: #dcdce1; --x-page: #f6f6f7; }
+  body { margin: 0; background: var(--x-page); }
+  .x-doc { max-width: 940px; margin: 0 auto; padding: 44px 24px 110px; }
+  .x-title {
+    font: 600 10px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.16em; color: var(--x-ink);
+    margin: 0 0 40px;
+  }
+  .x-sec { margin: 0 0 8px; padding-top: 34px; border-top: 1px solid var(--x-rule); }
+  .x-sec:first-of-type { padding-top: 0; border-top: 0; }
+  .x-name {
+    font: 600 9.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.14em; color: var(--x-ink);
+  }
+  .x-state {
+    font: 500 9px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.12em; color: #9a9aa2;
+    margin: 22px 0 7px;
+  }
+
+  /* ---------- specimen ground: the app's own background, flat ---------- */
+  .s-ground {
+    background: #09090b;
+    padding: 14px 16px;
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  .s-ground.wide { padding: 18px 22px; }
+
+  /* sidebar row */
+  .s-row {
+    display: flex; flex-direction: column;
+    padding: 6px 8px 6px 7px; border-radius: 6px;
+    border: 1px solid transparent; max-width: 236px;
+  }
+  .s-row.on { border-color: rgba(244,114,182,0.18); background: rgba(244,114,182,0.09); }
+  .s-title { font-size: 13px; font-weight: 500; color: #c4c4c8; }
+  .s-row.on .s-title { color: #fce7f3; }
+  .s-sub { display: flex; align-items: center; gap: 5px; font-size: 10px; color: #838389; }
+  .s-sub .s-dot { color: #75757b; }
+
+  /* transcript seam */
+  .s-seam { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+  .s-seam .s-rule { height: 1px; flex: 1; background: rgba(255,255,255,0.06); }
+  .s-seam .s-mid { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 11px; }
+  .s-seam .s-lab { color: #98989f; }
+  .s-seam .s-det { color: rgba(152,152,159,0.7); }
+
+  /* peer message row */
+  .s-inj {
+    display: flex; align-items: flex-start; gap: 8px;
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.018); padding: 6px 12px; max-width: 560px;
+  }
+  .s-glyph { font-size: 12px; line-height: 20px; color: #75757b; }
+  .s-inj .s-who { font-size: 12px; font-weight: 500; color: #f4f4f5; }
+  .s-inj .s-who.dim { color: #a1a1aa; font-weight: 500; }
+  .s-inj .s-body { margin-top: 2px; font-size: 12px; color: #a1a1aa; white-space: pre-wrap; }
+
+  /* composer */
+  .s-comp {
+    border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
+    padding: 10px 14px; max-width: 560px;
+  }
+  .s-ph { font-size: 13px; color: #75757b; }
+
+  /* tool card body, `cards` style */
+  .s-cbody {
+    border-top: 1px solid rgba(255,255,255,0.06);
+    background: rgba(0,0,0,0.28); padding: 8px 12px 10px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px; line-height: 1.5; color: #a1a1aa;
+    white-space: pre-wrap; word-break: break-word;
+  }
+
+  /* tool card, `cards` style */
+  .s-card {
+    width: 100%; overflow: hidden; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.025); max-width: 560px;
+  }
+  .s-card + .s-card { margin-top: 6px; }
+  .s-chead { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+  .s-mark { width: 16px; flex-shrink: 0; text-align: center; font-size: 13px; color: #a1a1aa; }
+  .s-word {
+    flex-shrink: 0; font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em; color: #a1a1aa;
+  }
+  .s-tgt {
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: #f4f4f5;
+  }
+
+  /* session actions menu item */
+  .s-menu { max-width: 268px; }
+  .s-item {
+    display: flex; width: 100%; align-items: center; gap: 8px;
+    border-radius: 6px; padding: 6px 10px; font-size: 12.5px;
+    color: #a1a1aa; text-align: left;
+  }
+  .s-item .s-ic { display: flex; flex-shrink: 0; color: #98989f; }
+  .s-item .s-lbl { flex: 1; }
+  .s-item .s-ck { display: flex; flex-shrink: 0; color: #f472b6; }
+  .s-item.off { color: rgba(152,152,159,0.7); }
+  .s-item.off .s-ic { color: rgba(152,152,159,0.7); }
+  .s-item .s-soon {
+    flex-shrink: 0; font-size: 9.5px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.025em; color: rgba(152,152,159,0.5);
+  }
+</style>
+
+<div class="x-doc">
+  <p class="x-title">Peer sessions · user surfaces · migration</p>
+
+  <!-- 1 -->
+  <div class="x-sec"><p class="x-name">Sidebar row subtitle</p></div>
+  <p class="x-state">Named</p>
+  <div class="s-ground">
+    <div class="s-row">
+      <div class="s-title">Peer request plane wiring</div>
+      <div class="s-sub"><span>14m</span><span class="s-dot">·</span><span>Quartz</span></div>
+    </div>
+  </div>
+  <p class="x-state">Active row</p>
+  <div class="s-ground">
+    <div class="s-row on">
+      <div class="s-title">Peer request plane wiring</div>
+      <div class="s-sub"><span>14m</span><span class="s-dot">·</span><span>Quartz</span></div>
+    </div>
+  </div>
+  <p class="x-state">No name</p>
+  <div class="s-ground">
+    <div class="s-row">
+      <div class="s-title">Untitled session</div>
+      <div class="s-sub"><span>5h</span></div>
+    </div>
+  </div>
+
+  <!-- 2 -->
+  <div class="x-sec"><p class="x-name">Composer placeholder</p></div>
+  <p class="x-state">Named</p>
+  <div class="s-ground wide">
+    <div class="s-comp"><span class="s-ph">Ask Basalt anything or describe a task&hellip;</span></div>
+  </div>
+  <p class="x-state">No name</p>
+  <div class="s-ground wide">
+    <div class="s-comp"><span class="s-ph">Ask Cat Code anything or describe a task&hellip;</span></div>
+  </div>
+  <p class="x-state">Not editable</p>
+  <div class="s-ground wide">
+    <div class="s-comp"><span class="s-ph">Connecting&hellip;</span></div>
+  </div>
+
+  <!-- 3 -->
+  <div class="x-sec"><p class="x-name">Transcript creation seam</p></div>
+  <p class="x-state">Creator named</p>
+  <div class="s-ground wide">
+    <div class="s-seam">
+      <div class="s-rule"></div>
+      <div class="s-mid"><span class="s-lab">Quartz</span><span class="s-det">· created by Alex</span></div>
+      <div class="s-rule"></div>
+    </div>
+  </div>
+  <p class="x-state">Creator gone</p>
+  <div class="s-ground wide">
+    <div class="s-seam">
+      <div class="s-rule"></div>
+      <div class="s-mid"><span class="s-lab">Quartz</span><span class="s-det">· created by a session that is gone</span></div>
+      <div class="s-rule"></div>
+    </div>
+  </div>
+
+  <!-- 3 -->
+  <div class="x-sec"><p class="x-name">Peer message row</p></div>
+  <p class="x-state">Named sender</p>
+  <div class="s-ground wide">
+    <div class="s-inj">
+      <span class="s-glyph">←</span>
+      <div>
+        <div class="s-who">Basalt</div>
+        <div class="s-body">The sidecar validator is on migration now. The renderer half is free to go.</div>
+      </div>
+    </div>
+  </div>
+  <p class="x-state">No name</p>
+  <div class="s-ground wide">
+    <div class="s-inj">
+      <span class="s-glyph">←</span>
+      <div>
+        <div class="s-who dim">Peer message</div>
+        <div class="s-body">The sidecar validator is on migration now. The renderer half is free to go.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4 -->
+  <div class="x-sec"><p class="x-name">Peer tool call</p></div>
+  <p class="x-state">Send</p>
+  <div class="s-ground wide">
+    <div class="s-card"><div class="s-chead">
+      <span class="s-mark">&bull;</span><span class="s-word">Tool</span>
+      <span class="s-tgt">message Basalt: The sidecar validator is on migration now. The renderer half is free to go.</span>
+    </div></div>
+  </div>
+  <p class="x-state">Read, tail</p>
+  <div class="s-ground wide">
+    <div class="s-card"><div class="s-chead">
+      <span class="s-mark">&bull;</span><span class="s-word">Tool</span>
+      <span class="s-tgt">read Basalt</span>
+    </div></div>
+  </div>
+  <p class="x-state">Read, search</p>
+  <div class="s-ground wide">
+    <div class="s-card"><div class="s-chead">
+      <span class="s-mark">&bull;</span><span class="s-word">Tool</span>
+      <span class="s-tgt">read Basalt: app/host/registry.ts</span>
+    </div></div>
+  </div>
+  <p class="x-state">Create</p>
+  <div class="s-ground wide">
+    <div class="s-card"><div class="s-chead">
+      <span class="s-mark">&bull;</span><span class="s-word">Tool</span>
+      <span class="s-tgt">new session: Count the TypeScript files under app/sidecar and report the number back</span>
+    </div></div>
+  </div>
+  <p class="x-state">List</p>
+  <div class="s-ground wide">
+    <div class="s-card"><div class="s-chead">
+      <span class="s-mark">&bull;</span><span class="s-word">Tool</span>
+      <span class="s-tgt">ListPeers</span>
+    </div></div>
+  </div>
+
+  <!-- 5 -->
+  <div class="x-sec"><p class="x-name">Session actions item</p></div>
+  <p class="x-state">Unchecked</p>
+  <div class="s-ground">
+    <div class="s-menu">
+      <div class="s-item">
+        <span class="s-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 3.6A6 6 0 0 1 18 8c0 2.4.5 4.2 1.2 5.5"/><path d="M6 8a6 6 0 0 1 .1-1.2M6 8c0 5-2 6-2 6h12.5"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/><path d="M2.5 2.5l19 19"/></svg></span>
+        <span class="s-lbl">Don&rsquo;t let peers reopen</span>
+      </div>
+    </div>
+  </div>
+  <p class="x-state">Checked</p>
+  <div class="s-ground">
+    <div class="s-menu">
+      <div class="s-item">
+        <span class="s-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 3.6A6 6 0 0 1 18 8c0 2.4.5 4.2 1.2 5.5"/><path d="M6 8a6 6 0 0 1 .1-1.2M6 8c0 5-2 6-2 6h12.5"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/><path d="M2.5 2.5l19 19"/></svg></span>
+        <span class="s-lbl">Don&rsquo;t let peers reopen</span>
+        <span class="s-ck"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg></span>
+      </div>
+    </div>
+  </div>
+  <p class="x-state">Deferred</p>
+  <div class="s-ground">
+    <div class="s-menu">
+      <div class="s-item off" title="Open this session here first. Peers can only reopen sessions opened in this app.">
+        <span class="s-ic"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.6 3.6A6 6 0 0 1 18 8c0 2.4.5 4.2 1.2 5.5"/><path d="M6 8a6 6 0 0 1 .1-1.2M6 8c0 5-2 6-2 6h12.5"/><path d="M10.3 20a2 2 0 0 0 3.4 0"/><path d="M2.5 2.5l19 19"/></svg></span>
+        <span class="s-lbl">Don&rsquo;t let peers reopen</span>
+        <span class="s-soon">soon</span>
+      </div>
+    </div>
+  </div>
+
+</div>

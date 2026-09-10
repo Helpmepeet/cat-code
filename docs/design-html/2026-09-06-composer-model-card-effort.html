@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Composer model card</title>
+<style>
+@font-face {
+  font-family: 'DM Sans';
+  font-style: normal;
+  font-weight: 100 1000;
+  src: url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2');
+}
+
+/* ── chrome (x-) ─────────────────────────────────────────────────────────── */
+:root { color-scheme: dark; }
+html, body { background: #09090b; margin: 0; }
+body {
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  color: #f4f4f5;
+  padding: 28px 32px 64px;
+}
+.x-title,
+.x-variant-name,
+.x-state {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: #6f6f74;
+  font-weight: 400;
+}
+.x-title { font-size: 9.5px; padding-bottom: 10px; border-bottom: 1px solid rgba(255,255,255,.07); }
+.x-variant { padding-top: 34px; }
+.x-variant-name { font-size: 9.5px; padding-bottom: 12px; }
+.x-variant-name b { color: #c9c9ce; font-weight: 400; margin-right: 10px; }
+.x-row { display: flex; flex-wrap: wrap; gap: 20px 28px; align-items: flex-start; }
+.x-cell { width: 470px; flex: 0 0 470px; }
+.x-state { font-size: 9px; padding-bottom: 6px; }
+.x-rule { height: 1px; background: rgba(255,255,255,.07); margin-bottom: 10px; }
+
+/* ── specimen (cc-) ──────────────────────────────────────────────────────── */
+.stage { position: relative; height: 380px; }
+.cc-composer { position: absolute; left: 0; right: 0; bottom: 0; z-index: 0; }
+.cc-field {
+  padding: 6px 4px;
+  font-size: 15px;
+  font-weight: 500;
+  color: #838389;
+  line-height: normal;
+  min-height: 24px;
+}
+.cc-focus-rule { height: 2px; border-radius: 2px; background: rgba(255,255,255,.08); }
+.cc-rail { margin-top: 12px; padding: 0 4px; display: flex; align-items: center; gap: 16px; }
+.cc-attach {
+  height: 22px; width: 22px; border-radius: 5px; border: 0; background: none; padding: 0;
+  display: flex; align-items: center; justify-content: center; color: #75757b; flex: 0 0 auto;
+}
+.cc-cluster { display: flex; align-items: center; gap: 7px; flex: 1 1 auto; min-width: 0; }
+.cc-face {
+  display: inline-flex; align-items: center; max-width: 170px; flex: 0 0 auto;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 6px; padding: 3px 5px; font-size: 12.5px; font-weight: 500;
+}
+.cc-model-face { color: #22d3ee; }
+.cc-effort-face { color: #fbbf24; }
+.cc-mode-face { color: #f472b6; }
+.cc-account-face { color: #a1a1aa; gap: 6px; }
+.cc-dot { height: 7px; width: 7px; border-radius: 999px; background: #4ade80; flex: 0 0 auto; }
+.cc-sep { color: rgba(255,255,255,.2); font-size: 12px; user-select: none; flex: 0 0 auto; }
+.cc-right { margin-left: auto; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.cc-gauge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 5px; }
+.cc-gauge svg { transform: rotate(-90deg); }
+.cc-gauge span { font-size: 12.5px; font-weight: 600; color: #f472b6; }
+
+.cc-card {
+  position: absolute; left: 42px; bottom: 30px; z-index: 40;
+  width: 280px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.06);
+  background: #111113;
+  padding: 6px;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
+}
+.cc-heading {
+  padding: 2px 8px 4px;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .025em;
+  color: #98989f;
+}
+.cc-group + .cc-group { margin-top: 4px; }
+.cc-group.is-locked { opacity: .4; }
+
+.cc-item { position: relative; display: flex; align-items: center; gap: 8px; border-radius: 6px; padding: 0 8px; }
+.cc-item:hover { background: rgba(255,255,255,.05); }
+.cc-item.is-active { background: rgba(255,255,255,.06); }
+.cc-group.is-locked .cc-item:hover { background: none; }
+.cc-item-main {
+  flex: 1 1 auto; min-width: 0; border: 0; background: none; padding: 6px 0; cursor: pointer;
+  font: inherit; font-size: 12px; color: #f4f4f5; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-item.is-active .cc-item-main { color: #22d3ee; }
+.cc-group.is-locked .cc-item-main { cursor: default; }
+.cc-resolved { flex: 0 0 auto; font-size: 11px; color: #75757b; }
+
+.cc-ladder { display: flex; align-items: center; flex: 0 0 auto; }
+.cc-rung { border: 0; background: none; padding: 5px 2px; cursor: pointer; display: block; }
+.cc-rung i { display: block; width: 3px; height: 10px; border-radius: 1px; background: rgba(255,255,255,.16); }
+.cc-rung.is-on i { background: #fbbf24; }
+.cc-item:hover .cc-rung:not(.is-on) i { background: rgba(255,255,255,.3); }
+.cc-rung:hover:not(.is-on) i { background: #fbbf24; }
+.cc-group.is-locked .cc-rung { cursor: default; }
+
+.cc-value { flex: 0 0 auto; font-size: 11px; color: #fbbf24; }
+.cc-auto {
+  flex: 0 0 auto; border: 0; background: none; cursor: pointer; font: inherit;
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .025em;
+  color: #98989f; border-radius: 4px; padding: 2px 4px;
+}
+.cc-auto:hover { color: #f4f4f5; }
+.cc-auto.is-on { color: #fbbf24; background: rgba(255,255,255,.06); }
+
+.cc-footer { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.06); }
+.cc-footer-head { display: flex; align-items: center; justify-content: space-between; padding: 0 8px 2px; }
+.cc-track { display: flex; gap: 3px; padding: 0 8px 2px; }
+.cc-seg { flex: 1 1 0; border: 0; background: none; padding: 6px 0; cursor: pointer; }
+.cc-seg i { display: block; height: 6px; border-radius: 2px; background: rgba(255,255,255,.16); }
+.cc-seg.is-on i { background: #fbbf24; }
+.cc-seg:hover:not(.is-on) i { background: rgba(255,255,255,.3); }
+
+.cc-step { display: flex; align-items: center; gap: 1px; flex: 0 0 auto; }
+.cc-step button {
+  width: 18px; height: 18px; border: 0; background: none; cursor: pointer; padding: 0;
+  color: #98989f; border-radius: 4px; display: flex; align-items: center; justify-content: center;
+}
+.cc-step button:hover:not(:disabled) { color: #f4f4f5; background: rgba(255,255,255,.06); }
+.cc-step button:disabled { opacity: .3; cursor: default; }
+.cc-step .cc-value { min-width: 58px; text-align: center; }
+
+.cc-chevron { flex: 0 0 auto; color: #75757b; display: flex; }
+.cc-step-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  border: 0; background: none; cursor: pointer; font: inherit; font-size: 12px;
+  color: #22d3ee; text-align: left; padding: 4px 8px 8px;
+}
+.cc-step-head svg { color: #75757b; }
+.cc-step-head:hover svg { color: #f4f4f5; }
+.cc-flyout {
+  position: absolute; left: calc(100% + 13px); top: -7px; width: 160px; z-index: 41;
+  border-radius: 8px; border: 1px solid rgba(255,255,255,.06); background: #111113; padding: 6px;
+  box-shadow: 0 10px 15px -3px rgba(0,0,0,.1), 0 4px 6px -4px rgba(0,0,0,.1);
+}
+</style>
+</head>
+<body>
+
+<div class="x-title">Cat Code &middot; composer model card</div>
+<div id="x-mount"></div>
+
+<script>
+const MODELS = [
+  { v: '__default__',   label: 'Default (recommended)', provider: 'openai',    resolved: 'GPT-5.6 Sol', effort: ['low','medium','high','xhigh','max','ultra'] },
+  { v: 'gpt-6-astra',   label: 'GPT-6 Astra',           provider: 'openai',    effort: ['low','medium','high','xhigh','max'] },
+  { v: 'gpt-5.6-sol',   label: 'GPT-5.6 Sol',           provider: 'openai',    effort: ['low','medium','high','xhigh','max','ultra'] },
+  { v: 'gpt-5.6-terra', label: 'GPT-5.6 Terra',         provider: 'openai',    effort: ['low','medium','high','xhigh','max','ultra'] },
+  { v: 'gpt-5.6-luna',  label: 'GPT-5.6 Luna',          provider: 'openai',    effort: ['low','medium','high','xhigh','max'] },
+  { v: 'fable',         label: 'Fable 5',               provider: 'anthropic', effort: ['low','medium','high','max'] },
+  { v: 'opus',          label: 'Opus 5',                provider: 'anthropic', effort: ['low','medium','high','max'] },
+  { v: 'sonnet',        label: 'Sonnet 5',              provider: 'anthropic', effort: ['low','medium','high'] },
+  { v: 'haiku',         label: 'Haiku 4.5',             provider: 'anthropic', effort: [] },
+]
+const EFFORT_LABEL = { low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Max', ultra: 'Ultra' }
+const PROVIDER_LABEL = { openai: 'OpenAI', anthropic: 'Anthropic' }
+const GROUPS = [
+  { provider: 'openai', models: MODELS.filter(m => m.provider === 'openai') },
+  { provider: 'anthropic', models: MODELS.filter(m => m.provider === 'anthropic') },
+]
+
+const VARIANTS = [
+  { id: 'A', name: 'Row ladder' },
+  { id: 'B', name: 'Ladder on the picked row' },
+  { id: 'C', name: 'Pinned track' },
+  { id: 'D', name: 'Row stepper' },
+  { id: 'E', name: 'Second face', extra: [
+    { label: 'Second face', model: 'gpt-5.6-sol', effort: 'high', locked: false, step: 'effort' },
+  ] },
+  { id: 'F', name: 'Flyout', extra: [] },
+  { id: 'G', name: 'Second face only on a reset', extra: [
+    { label: 'After a reset', model: 'gpt-6-astra', effort: 'auto', locked: false, step: 'effort' },
+  ] },
+]
+const STATES = [
+  { key: 'sol',    label: 'Sol · high',      model: 'gpt-5.6-sol', effort: 'high',  locked: false },
+  { key: 'haiku',  label: 'Haiku 4.5',       model: 'haiku',       effort: 'auto',  locked: false },
+  { key: 'locked', label: 'Provider locked', model: 'gpt-5.6-sol', effort: 'ultra', locked: true  },
+]
+
+function modelOf(v) { return MODELS.find(m => m.v === v) }
+function el(tag, cls, text) {
+  const n = document.createElement(tag)
+  if (cls) n.className = cls
+  if (text != null) n.textContent = text
+  return n
+}
+function svgIcon(points, rotate) {
+  const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+  s.setAttribute('width', '11'); s.setAttribute('height', '11'); s.setAttribute('viewBox', '0 0 24 24')
+  s.setAttribute('fill', 'none'); s.setAttribute('stroke', 'currentColor'); s.setAttribute('stroke-width', '2.4')
+  s.setAttribute('stroke-linecap', 'round'); s.setAttribute('stroke-linejoin', 'round')
+  const p = document.createElementNS('http://www.w3.org/2000/svg', 'polyline')
+  p.setAttribute('points', points)
+  s.appendChild(p)
+  if (rotate) s.style.transform = 'rotate(180deg)'
+  return s
+}
+
+function setModel(state, m, onPick) {
+  const previous = state.effort
+  state.model = m.v
+  if (previous !== 'auto' && !m.effort.includes(previous)) state.effort = 'auto'
+  if (onPick) onPick(m, previous)
+  state.render()
+}
+
+function ladder(state, m, interactive) {
+  const wrap = el('span', 'cc-ladder')
+  const currentIndex = m.effort.indexOf(state.effort)
+  m.effort.forEach((level, i) => {
+    const on = state.model === m.v && currentIndex >= 0 && i <= currentIndex
+    const b = el('button', 'cc-rung' + (on ? ' is-on' : ''))
+    b.type = 'button'
+    b.title = m.label + ' · ' + EFFORT_LABEL[level]
+    b.appendChild(el('i'))
+    if (interactive) {
+      b.onclick = event => {
+        event.stopPropagation()
+        state.model = m.v
+        state.effort = level
+        state.render()
+      }
+    }
+    wrap.appendChild(b)
+  })
+  return wrap
+}
+
+function autoButton(state) {
+  const b = el('button', 'cc-auto' + (state.effort === 'auto' ? ' is-on' : ''), 'Auto')
+  b.type = 'button'
+  b.title = 'Auto effort'
+  b.onclick = event => { event.stopPropagation(); state.effort = 'auto'; state.render() }
+  return b
+}
+
+function row(state, m, build, onPick) {
+  const locked = state.locked && m.provider !== 'openai'
+  const active = state.model === m.v
+  const r = el('div', 'cc-item' + (active ? ' is-active' : ''))
+  const main = el('button', 'cc-item-main')
+  main.type = 'button'
+  main.textContent = m.label
+  main.title = m.label
+  if (!locked) main.onclick = () => setModel(state, m, onPick)
+  r.appendChild(main)
+  if (m.v === '__default__' && active) r.appendChild(el('span', 'cc-resolved', m.resolved))
+  if (build) build(r, m, locked, active)
+  return r
+}
+
+function list(state, build, onPick) {
+  const wrap = el('div')
+  GROUPS.forEach(g => {
+    const locked = state.locked && g.provider !== 'openai'
+    const group = el('div', 'cc-group' + (locked ? ' is-locked' : ''))
+    group.appendChild(el('div', 'cc-heading', PROVIDER_LABEL[g.provider]))
+    g.models.forEach(m => group.appendChild(row(state, m, build, onPick)))
+    wrap.appendChild(group)
+  })
+  return wrap
+}
+
+function buildA(state) {
+  const card = el('div', 'cc-card')
+  card.appendChild(list(state, (r, m, locked, active) => {
+    if (active && m.effort.length) {
+      r.appendChild(autoButton(state))
+      if (state.effort !== 'auto') r.appendChild(el('span', 'cc-value', EFFORT_LABEL[state.effort]))
+    }
+    if (m.effort.length) r.appendChild(ladder(state, m, !locked))
+  }))
+  return card
+}
+
+function buildB(state) {
+  const card = el('div', 'cc-card')
+  card.appendChild(list(state, (r, m, locked, active) => {
+    if (!active || !m.effort.length) return
+    r.appendChild(autoButton(state))
+    if (state.effort !== 'auto') r.appendChild(el('span', 'cc-value', EFFORT_LABEL[state.effort]))
+    r.appendChild(ladder(state, m, true))
+  }))
+  return card
+}
+
+function effortTrack(state, m, heading) {
+  const wrap = el('div')
+  const head = el('div', 'cc-footer-head')
+  head.appendChild(el('span', 'cc-heading', heading))
+  const right = el('span')
+  right.style.display = 'inline-flex'
+  right.style.alignItems = 'center'
+  right.style.gap = '6px'
+  if (state.effort !== 'auto') right.appendChild(el('span', 'cc-value', EFFORT_LABEL[state.effort]))
+  right.appendChild(autoButton(state))
+  head.appendChild(right)
+  wrap.appendChild(head)
+  const track = el('div', 'cc-track')
+  const currentIndex = m.effort.indexOf(state.effort)
+  m.effort.forEach((level, i) => {
+    const seg = el('button', 'cc-seg' + (currentIndex >= 0 && i <= currentIndex ? ' is-on' : ''))
+    seg.type = 'button'
+    seg.title = EFFORT_LABEL[level]
+    seg.appendChild(el('i'))
+    seg.onclick = () => { state.effort = level; state.render() }
+    track.appendChild(seg)
+  })
+  wrap.appendChild(track)
+  return wrap
+}
+
+function chevronEl() {
+  const wrap = el('span', 'cc-chevron')
+  wrap.appendChild(svgIcon('9 18 15 12 9 6'))
+  return wrap
+}
+
+function stepHead(state, m) {
+  const head = el('button', 'cc-step-head')
+  head.type = 'button'
+  head.appendChild(svgIcon('15 18 9 12 15 6'))
+  head.appendChild(el('span', null, m.v === '__default__' ? m.resolved : m.label))
+  head.onclick = () => { state.step = 'models'; state.render() }
+  return head
+}
+
+function buildC(state) {
+  const m = modelOf(state.model)
+  const card = el('div', 'cc-card')
+  card.appendChild(list(state))
+  if (!m.effort.length) return card
+  const footer = el('div', 'cc-footer')
+  footer.appendChild(effortTrack(state, m, 'Effort'))
+  card.appendChild(footer)
+  return card
+}
+
+function buildE(state) {
+  const m = modelOf(state.model)
+  const card = el('div', 'cc-card')
+  if (state.step === 'effort' && m.effort.length) {
+    card.appendChild(stepHead(state, m))
+    card.appendChild(effortTrack(state, m, 'Effort'))
+    return card
+  }
+  card.appendChild(list(
+    state,
+    (r, model) => { if (model.effort.length) r.appendChild(chevronEl()) },
+    picked => { state.step = picked.effort.length ? 'effort' : 'models' },
+  ))
+  return card
+}
+
+function buildF(state) {
+  const card = el('div', 'cc-card')
+  card.appendChild(list(state, (r, m, locked, active) => {
+    if (!m.effort.length) return
+    r.appendChild(chevronEl())
+    if (!active || locked) return
+    const fly = el('div', 'cc-flyout')
+    fly.appendChild(effortTrack(state, m, 'Effort'))
+    r.appendChild(fly)
+  }))
+  return card
+}
+
+function buildG(state) {
+  const m = modelOf(state.model)
+  const card = el('div', 'cc-card')
+  if (state.step === 'effort' && m.effort.length) {
+    card.appendChild(stepHead(state, m))
+    card.appendChild(effortTrack(state, m, 'Effort'))
+    return card
+  }
+  card.appendChild(list(state, null, (picked, previous) => {
+    const dropped = previous !== 'auto' && !picked.effort.includes(previous)
+    state.step = dropped && picked.effort.length ? 'effort' : 'models'
+  }))
+  return card
+}
+
+function buildD(state) {
+  const card = el('div', 'cc-card')
+  card.appendChild(list(state, (r, m, locked, active) => {
+    if (!active || !m.effort.length) return
+    const index = m.effort.indexOf(state.effort)
+    const step = el('div', 'cc-step')
+    const down = el('button')
+    down.type = 'button'
+    down.title = 'Lower effort'
+    down.appendChild(svgIcon('15 18 9 12 15 6'))
+    down.disabled = index <= 0
+    down.onclick = () => { state.effort = m.effort[index - 1]; state.render() }
+    const up = el('button')
+    up.type = 'button'
+    up.title = 'Higher effort'
+    up.appendChild(svgIcon('9 18 15 12 9 6'))
+    up.disabled = index === m.effort.length - 1
+    up.onclick = () => {
+      state.effort = index < 0 ? m.effort[0] : m.effort[index + 1]
+      state.render()
+    }
+    step.appendChild(down)
+    step.appendChild(el('span', 'cc-value', state.effort === 'auto' ? 'Auto' : EFFORT_LABEL[state.effort]))
+    step.appendChild(up)
+    r.appendChild(autoButton(state))
+    r.appendChild(step)
+  }))
+  return card
+}
+
+const BUILDERS = { A: buildA, B: buildB, C: buildC, D: buildD, E: buildE, F: buildF, G: buildG }
+
+function rail(state) {
+  const m = modelOf(state.model)
+  const composer = el('div', 'cc-composer')
+  composer.appendChild(el('div', 'cc-field', 'Ask Cat Code anything or describe a task…'))
+  composer.appendChild(el('div', 'cc-focus-rule'))
+  const r = el('div', 'cc-rail')
+  const attach = el('button', 'cc-attach')
+  attach.type = 'button'
+  attach.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>'
+  r.appendChild(attach)
+  const cluster = el('div', 'cc-cluster')
+  cluster.appendChild(el('span', 'cc-face cc-model-face', m.v === '__default__' ? m.resolved : m.label))
+  cluster.appendChild(el('span', 'cc-sep', '·'))
+  cluster.appendChild(el('span', 'cc-face cc-effort-face', state.effort === 'auto' ? 'Auto' : EFFORT_LABEL[state.effort]))
+  cluster.appendChild(el('span', 'cc-sep', '·'))
+  cluster.appendChild(el('span', 'cc-face cc-mode-face', 'Auto'))
+  const right = el('div', 'cc-right')
+  const acct = el('span', 'cc-face cc-account-face')
+  acct.appendChild(el('span', 'cc-dot'))
+  acct.appendChild(el('span', null, 'pt-main'))
+  right.appendChild(acct)
+  right.appendChild(el('span', 'cc-sep', '·'))
+  const gauge = el('div', 'cc-gauge')
+  gauge.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.5" stroke="rgba(255,255,255,0.10)" stroke-width="3"/><circle cx="8" cy="8" r="6.5" stroke="#f472b6" stroke-width="3" stroke-linecap="round" stroke-dasharray="8.17 40.84"/></svg><span>20%</span>'
+  right.appendChild(gauge)
+  cluster.appendChild(right)
+  r.appendChild(cluster)
+  composer.appendChild(r)
+  return composer
+}
+
+function mountStage(host, variantId, base) {
+  const stage = el('div', 'stage')
+  const state = {
+    model: base.model,
+    effort: base.effort,
+    locked: base.locked,
+    step: base.step ?? 'models',
+    render() {
+      stage.textContent = ''
+      stage.appendChild(BUILDERS[variantId](state))
+      stage.appendChild(rail(state))
+    },
+  }
+  state.render()
+  host.appendChild(stage)
+}
+
+const mount = document.getElementById('x-mount')
+VARIANTS.forEach(variant => {
+  const block = el('div', 'x-variant')
+  const name = el('div', 'x-variant-name')
+  name.appendChild(el('b', null, variant.id))
+  name.appendChild(document.createTextNode(variant.name))
+  block.appendChild(name)
+  const row = el('div', 'x-row')
+  STATES.concat(variant.extra ?? []).forEach(s => {
+    const cell = el('div', 'x-cell')
+    cell.appendChild(el('div', 'x-state', s.label))
+    cell.appendChild(el('div', 'x-rule'))
+    mountStage(cell, variant.id, s)
+    row.appendChild(cell)
+  })
+  block.appendChild(row)
+  mount.appendChild(block)
+})
+</script>
+</body>
+</html>

@@ -1,0 +1,468 @@
+<title>Peer Surfaces Redesign</title>
+<!--
+  DECIDED 2026-09-04 (operator): ONE PEER COLOUR FOR EVERY PEER.
+
+  No per-peer identity palette, no six tints, no name hash. The peer's NAME says
+  which peer it is; the colour marks the PEER NAMESPACE, not "somebody else".
+  That distinction is load-bearing: it is why the composer placeholder tints this
+  session's OWN name too (decided below). Your session has a peer name as much as
+  any other does, and the colour says "this is the name peers address you by".
+  This drops the proposal in 2026-09-04-peer-name-identity-colour.html for these
+  surfaces.
+
+  The colour is #818cf8, carried by the single class .c-peer, so every peer
+  surface agrees: tool card mark and word, the message bubble, the name above
+  it, the composer placeholder. It also removes the accent-collision problem that killed the
+  magenta tint: #818cf8 sits 105 degrees from the pink accent and never lands on
+  a selectable accent's hue.
+
+  Consequence, deliberately accepted: two peers in one transcript are no longer
+  told apart by colour. The name carries that alone.
+
+  SESSION OPENING DECIDED 2026-09-04 (operator): DELETE THE CREATION SEAM, and
+  add no label in its place. The first row already names the creator, and it is
+  the first row, so "created this session" only restates what position says.
+  CLAUDE.md section 7: say only what is surprising. A created session's first row IS a peer message from
+  its creator, carrying that creator's name and the instruction, so the seam
+  above it named the same session twice. Dropping it also drops the read-time
+  creator resolution and the "creator is gone" state; the row's own label is
+  frozen at delivery, which for a transcript row is the historically accurate
+  answer anyway.
+
+  COMPOSER DECIDED 2026-09-04 (operator): the session's own name in the composer
+  placeholder carries the peer colour. "Ask <Basalt> anything or describe a task"
+  with the name tinted, everything else unchanged. The unnamed fallback stays
+  byte-identical and untinted: "Cat Code" is the product, not a peer name.
+
+  PEER TOOL CARD DECIDED 2026-09-05 (operator): the operation mark. The mark says
+  what KIND of operation it is, borrowed from the family that already owns that
+  shape, and the peer colour says it is about a session rather than a file:
+  read = the read family's mark, search = the grep family's, create = the write
+  family's, list = an ellipsis. The word slot reads "Peer" for all four.
+
+  Known risk, accepted with eyes open: a peer read and a file read differ by HUE
+  ALONE, and both can sit in the same turn. The spec grounds put them adjacent so
+  that is judged rather than assumed.
+
+  Cards vs lines is NOT decided here. It is an existing user preference applied to
+  every tool card (app/renderer/src/toolCardStyle.ts), so these rows follow
+  whatever is set; both drawings are in the spec.
+
+  MESSAGE TO A PEER DECIDED 2026-09-05 (operator): the speech mark. A left-quote
+  glyph in the family mark column, the recipient's name beside it in the peer
+  colour, the message below as prose. NOT a mirrored user bubble (rejected: an
+  outgoing peer message is the assistant's action, not the user's) and no arrow.
+  The mark says speech rather than direction, and it sits in the same 16px column
+  every family mark uses, so the column still aligns.
+
+  Failure state is mine, not the operator's, and needs confirming: the glyph takes
+  the danger tone and the name line gains "not delivered". The tool's own failure
+  summaries (app/sidecar/sendToPeerTool.ts:175-199) are addressed to the MODEL
+  ("wait and send again"), so they must not be printed at the user verbatim.
+
+  NO DIRECTION ARROWS ON PEER CALLS (operator, 2026-09-05). Earlier drafts marked
+  peer calls with a -> / <- pair. The "->" on a SEND is real and kept: it is this
+  session speaking outward. The "<-" was not. "<-" is CHANNEL_ARROW
+  (src/constants/figures.ts:21), "inbound channel message indicator"; peer borrowed
+  it at TranscriptView.tsx:5470 and channel still owns it at :5467, so after the
+  peer bubble replaced that row the glyph reads as "channel", not "peer". "->" was
+  invented here and never existed in the app at all. It was also wrong on ReadPeer,
+  which receives nothing: it is an in-process file read of another session's
+  transcript (app/sidecar/readPeerTool.ts header, point 1). So: "->" on a send,
+  one family mark on everything else, and the verb in words.
+
+  ALSO DECIDED 2026-09-04 (operator): the peer bubble shares the user bubble's
+  right edge. The 30px lane from the "Its own lane" variant existed to separate
+  peer from user without colour; the colour now does that, so the inset only
+  read as a misalignment. Both bubbles are flush right, same max-width, same
+  radius, same padding. Only hue and the name above differ.
+-->
+<style>
+  /* ---------- chrome: deliberately not the app ---------- */
+  :root { --x-ink: #6b6b72; --x-rule: #dcdce1; --x-page: #f6f6f7; }
+  body { margin: 0; background: var(--x-page); }
+  .x-doc { max-width: 940px; margin: 0 auto; padding: 44px 24px 120px; }
+  .x-title {
+    font: 600 10px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.16em; color: var(--x-ink);
+    margin: 0 0 40px;
+  }
+  .x-sec { margin: 0 0 6px; padding-top: 40px; border-top: 1px solid var(--x-rule); }
+  .x-sec:first-of-type { padding-top: 0; border-top: 0; }
+  .x-name {
+    font: 600 9.5px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.14em; color: var(--x-ink);
+    margin: 0;
+  }
+  .x-hd { display: flex; align-items: baseline; gap: 10px; margin: 30px 0 7px; }
+  .x-key {
+    font: 700 9px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    letter-spacing: 0.12em; color: #9a9aa2;
+    border: 1px solid var(--x-rule); border-radius: 2px; padding: 2px 5px;
+  }
+  .x-nm {
+    font: 500 9px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.12em; color: #9a9aa2;
+  }
+  .x-state {
+    font: 500 9px/1.4 ui-monospace, "SF Mono", Menlo, monospace;
+    text-transform: uppercase; letter-spacing: 0.12em; color: #b0b0b8;
+    margin: 14px 0 5px;
+  }
+
+  /* ---------- specimen ground: the app's own background, flat ---------- */
+  .s-ground {
+    background: #09090b;
+    padding: 18px 28px;
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  .s-col { max-width: 836px; display: flex; flex-direction: column; gap: 10px; }
+
+  /* tool card, `cards` style */
+  .s-card {
+    width: 100%; overflow: hidden; border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.025);
+  }
+  .s-chead { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+  .s-mark { width: 16px; flex-shrink: 0; text-align: center; font-size: 13px; }
+  .s-word {
+    flex-shrink: 0; font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .s-tgt {
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12px; color: #f4f4f5;
+  }
+  .s-dot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 999px; background: #4ade80; }
+  .s-dot.bad { background: #f87171; }
+
+  /* family hues, from FAMILY_STYLE */
+  .fam-read { color: #60a5fa; }
+  .fam-agent { color: #a78bfa; }
+  .fam-grep { color: #fbbf24; }
+  .fam-other { color: #a1a1aa; }
+  /* the one peer colour, every peer surface */
+  .c-peer { color: #818cf8; }
+
+  /* target inner runs */
+  .t-sans { font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", sans-serif; }
+  .t-name { color: #f4f4f5; font-weight: 500; }
+  .t-mid { color: #75757b; }
+  .t-arg { color: #a1a1aa; }
+  .t-mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; color: #a1a1aa; }
+
+  /* `lines` card style, the app's own second drawing (toolCardStyle.ts) */
+  .l-row { display: flex; width: 100%; align-items: center; gap: 10px; border-radius: 4px; padding: 2px 0; }
+
+  /* outgoing peer message: the incoming bubble, mirrored to the left */
+  .o-wrap { display: flex; justify-content: flex-start; }
+  .o-bub {
+    max-width: 82%; border-radius: 16px 16px 16px 4px;
+    padding: 10px 16px; font-size: 14px; line-height: 1.625; color: #f4f4f5;
+    border: 1px solid rgba(129,140,248,0.20); background: rgba(129,140,248,0.10);
+  }
+  .o-who { font-size: 11px; margin-bottom: 4px; }
+
+  /* bare log line, no chrome at all */
+  .g-line { display: flex; gap: 8px; font-size: 12.5px; line-height: 1.5; }
+  .g-line .g-to { flex-shrink: 0; }
+  .g-line .g-body { min-width: 0; color: #a1a1aa; }
+
+  /* one grouped panel for a turn's peer traffic */
+  .p-panel { width: 100%; overflow: hidden; border-radius: 6px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.025); }
+  .p-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; }
+  .p-body { border-top: 1px solid rgba(255,255,255,0.06); padding: 4px 12px 8px 12px; }
+  .p-item { display: flex; gap: 9px; padding: 3px 0; font-size: 12.5px; }
+  .p-item .p-verb { flex-shrink: 0; width: 62px; color: #98989f; }
+  .p-item .p-what { min-width: 0; color: #a1a1aa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* incoming bubble (decided) */
+  .x2-in  { display: flex; flex-direction: column; align-items: flex-end; }
+  .x2-who { font-size: 11px; margin-bottom: 4px; }
+  .x2-bub {
+    max-width: 82%; padding: 10px 16px; font-size: 14px; line-height: 1.625; color: #f4f4f5;
+    border-radius: 16px 16px 4px 16px;
+    border: 1px solid rgba(129,140,248,0.20); background: rgba(129,140,248,0.10);
+  }
+
+  /* outgoing: no bubble, no arrow. Words and typography carry it. */
+  .q-quote { border-left: 2px solid rgba(129,140,248,0.55); padding-left: 13px; }
+  .q-quote .q-who { font-size: 11px; margin-bottom: 2px; }
+  .q-quote .q-body { font-size: 14px; line-height: 1.625; color: #a1a1aa; }
+
+  .q-said { font-size: 14px; line-height: 1.625; color: #a1a1aa; }
+  .q-said .q-verb { font-weight: 500; margin-right: 7px; }
+
+  .q-mark { display: flex; gap: 10px; }
+  .q-mark .q-glyph { width: 16px; flex-shrink: 0; text-align: center; font-size: 17px; line-height: 1.35; }
+  .q-mark .q-who { font-size: 11px; margin-bottom: 2px; }
+  .q-mark .q-body { font-size: 14px; line-height: 1.625; color: #a1a1aa; }
+  .q-mark .q-det { color: rgba(152,152,159,0.7); }
+  .tone-danger { color: #f87171; }
+
+  /* the app's own collapsed band under a `lines` header (toolCardStyle.ts) */
+  .q-band { margin-left: 24px; border-left: 1px solid rgba(255,255,255,0.06);
+            background: rgba(0,0,0,0.2); padding: 6px 0 6px 13px;
+            font-size: 14px; line-height: 1.625; color: #a1a1aa; }
+
+  .q-runin { font-size: 14px; line-height: 1.625; color: #a1a1aa; }
+  .q-runin .q-nm { font-weight: 500; margin-right: 6px; }
+
+  /* injected peer message row, as shipped */
+  .s-inj {
+    display: flex; align-items: flex-start; gap: 8px;
+    border-radius: 8px; border: 1px solid rgba(255,255,255,0.06);
+    background: rgba(255,255,255,0.018); padding: 6px 12px;
+  }
+  .s-glyph { font-size: 12px; line-height: 20px; color: #75757b; }
+  .s-inj .s-who { font-size: 12px; font-weight: 500; color: #f4f4f5; }
+  .s-inj .s-who.dim { color: #a1a1aa; font-weight: 500; }
+  .s-inj .s-body { margin-top: 2px; font-size: 12px; color: #a1a1aa; white-space: pre-wrap; }
+
+  /* seam, as shipped */
+  .s-seam { display: flex; align-items: center; gap: 12px; padding: 4px 0; }
+  .s-seam .s-rule { height: 1px; flex: 1; background: rgba(255,255,255,0.06); }
+  .s-seam .s-mid { display: flex; align-items: center; gap: 6px; white-space: nowrap; font-size: 11px; }
+  .s-seam .s-lab { color: #98989f; }
+  .s-seam .s-det { color: rgba(152,152,159,0.7); }
+
+  /* neighbours: assistant prose, user bubble */
+  .s-prose { font-size: 14px; font-weight: 500; line-height: 1.625; color: #f4f4f5; }
+  .s-user { display: flex; justify-content: flex-end; }
+  .s-user > div {
+    max-width: 82%; border-radius: 16px 16px 4px 16px;
+    border: 1px solid rgba(244,114,182,0.2); background: rgba(244,114,182,0.1);
+    padding: 10px 16px; font-size: 14px; line-height: 1.625; color: #f4f4f5;
+  }
+
+  /* ---------- message row proposals ---------- */
+  /* A: bare */
+  .m-a .m-who { font-size: 12px; font-weight: 500; color: #f4f4f5; }
+  .m-a .m-who.dim { color: #a1a1aa; }
+  .m-a .m-body { margin-top: 2px; font-size: 13px; line-height: 1.55; color: #a1a1aa; }
+
+  /* B: rule */
+  .m-b { border-left: 1px solid rgba(255,255,255,0.06); padding-left: 12px; }
+  .m-b .m-body { font-size: 13px; line-height: 1.55; color: #a1a1aa; }
+  .m-b .m-who { font-weight: 500; color: #f4f4f5; margin-right: 8px; }
+  .m-b .m-who.dim { color: #a1a1aa; }
+
+  /* C: left bubble */
+  .m-c .m-who { font-size: 11px; color: #98989f; margin-bottom: 4px; }
+  .m-c .m-who.dim { color: rgba(152,152,159,0.7); }
+  .m-c .m-bub {
+    max-width: 82%; border-radius: 16px 16px 16px 4px;
+    border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.045);
+    padding: 10px 16px; font-size: 14px; line-height: 1.625; color: #f4f4f5;
+  }
+
+  /* D: seam then prose */
+  .m-d .m-body { font-size: 14px; font-weight: 500; line-height: 1.625; color: #a1a1aa; margin-top: 6px; }
+
+  /* ---------- seam proposals ---------- */
+  /* B: left header, one line */
+  .p-b { display: flex; align-items: baseline; gap: 7px; font-size: 11px; }
+  .p-b .p-nm { color: #98989f; }
+  .p-b .p-det { color: rgba(152,152,159,0.7); }
+
+  /* C: left header, two lines */
+  .p-c .p-nm { font-size: 13px; font-weight: 500; color: #f4f4f5; }
+  .p-c .p-det { margin-top: 1px; font-size: 11px; color: rgba(152,152,159,0.7); }
+
+  /* CHOSEN: right-aligned peer message sharing the user bubble's right edge and
+     its own recipe (border/20 over fill/10), in the one peer colour. */
+  .r-wrap { display: flex; flex-direction: column; align-items: flex-end; }
+  .r-who { font-size: 11px; white-space: nowrap; margin-bottom: 4px; }
+  .r-who.dim { color: rgba(152,152,159,0.75); }
+  .r-bub {
+    max-width: 82%; border-radius: 16px 16px 4px 16px;
+    padding: 10px 16px; font-size: 14px; line-height: 1.625; color: #f4f4f5;
+  }
+  .r-run { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; }
+  /* the user's own bubble is accent/20 over accent/10; this is that recipe in
+     the one peer colour. */
+  .sf-peer     { border: 1px solid rgba(129,140,248,0.20); background: rgba(129,140,248,0.10); }
+  .sf-none     { border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05); }
+
+  /* composer: no box in source, the field is a bare line on the dock */
+  .s-ph { font-size: 15px; font-weight: 500; line-height: normal; color: #838389; }
+  .s-ph .ph-nm { color: #838389; }
+  .s-ph .ph-tint { color: #818cf8; }  /* = .c-peer */
+
+  /* D: on the first row */
+  .p-inline { font-weight: 400; color: rgba(152,152,159,0.7); }
+</style>
+
+<div class="x-doc">
+  <p class="x-title">Peer sessions · redesign choices · migration</p>
+
+  <div class="x-sec"><p class="x-name">Peer tool card · chosen</p></div>
+
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">Fallback grey</span></div>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-other">&bull;</span><span class="s-word fam-other">Tool</span><span class="s-tgt">read Basalt</span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-other">&bull;</span><span class="s-word fam-other">Tool</span><span class="s-tgt">read Basalt: app/host/registry.ts</span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-other">&bull;</span><span class="s-word fam-other">Tool</span><span class="s-tgt">new session: Count the TypeScript files under app/sidecar and report the number back</span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-other">&bull;</span><span class="s-word fam-other">Tool</span><span class="s-tgt">ListPeers</span><span class="s-dot"></span></div></div>
+  </div></div>
+
+  <div class="x-hd"><span class="x-key">SPEC</span><span class="x-nm">Operation mark</span></div>
+  <p class="x-state">Lines, beside the families it borrows from</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="l-row"><span class="s-mark fam-read">≡</span><span class="s-word fam-read">Read</span><span class="s-tgt">app/host/registry.ts</span><span class="s-dot"></span></div>
+    <div class="l-row"><span class="s-mark fam-grep">⌕</span><span class="s-word fam-grep">Search</span><span class="s-tgt">resolveSidecarLaunch</span><span class="s-dot"></span></div>
+    <div class="l-row"><span class="s-mark c-peer">≡</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-name">Basalt</span><span class="t-mid"> · </span><span class="t-arg">recent messages</span></span><span class="s-dot"></span></div>
+    <div class="l-row"><span class="s-mark c-peer">⌕</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-name">Basalt</span><span class="t-mid"> · </span><span class="t-mono">app/host/registry.ts</span></span><span class="s-dot"></span></div>
+    <div class="l-row"><span class="s-mark c-peer">+</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-arg">Count the TypeScript files under app/sidecar and report the number back</span></span><span class="s-dot"></span></div>
+    <div class="l-row"><span class="s-mark c-peer">⋯</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-arg">the roster</span></span><span class="s-dot"></span></div>
+  </div></div>
+
+  <p class="x-state">Cards, the same rows under the other setting</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-read">≡</span><span class="s-word fam-read">Read</span><span class="s-tgt">app/host/registry.ts</span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-grep">⌕</span><span class="s-word fam-grep">Search</span><span class="s-tgt">resolveSidecarLaunch</span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark c-peer">≡</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-name">Basalt</span><span class="t-mid"> · </span><span class="t-arg">recent messages</span></span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark c-peer">⌕</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-name">Basalt</span><span class="t-mid"> · </span><span class="t-mono">app/host/registry.ts</span></span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark c-peer">+</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-arg">Count the TypeScript files under app/sidecar and report the number back</span></span><span class="s-dot"></span></div></div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark c-peer">⋯</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-arg">the roster</span></span><span class="s-dot"></span></div></div>
+  </div></div>
+
+  <p class="x-state">A read that failed</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="l-row"><span class="s-mark c-peer">≡</span><span class="s-word c-peer">Peer</span><span class="s-tgt t-sans"><span class="t-name">Basalt</span><span class="t-mid"> · </span><span class="t-arg">recent messages</span></span><span class="s-dot bad"></span></div>
+  </div></div>
+
+  <div class="x-sec"><p class="x-name">Message to a peer · chosen</p></div>
+
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">Tool card out, bubble in</span></div>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Handing the validator over now.</div>
+    <div class="s-card"><div class="s-chead"><span class="s-mark fam-other">&bull;</span><span class="s-word fam-other">Tool</span><span class="s-tgt">message Basalt: Sidecar validator is on migration. Renderer half is yours whenever you want it.</span><span class="s-dot"></span></div></div>
+    <div class="x2-in"><span class="x2-who c-peer">Basalt</span><div class="x2-bub in fill-peer">Got it. Rebasing the parser branch on that now.</div></div>
+  </div></div>
+
+  <div class="x-hd"><span class="x-key">SPEC</span><span class="x-nm">Speech mark</span></div>
+  <p class="x-state">Sent</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Handing the validator over now.</div>
+    <div class="q-mark"><span class="q-glyph c-peer">&ldquo;</span><div><div class="q-who c-peer">Basalt</div><div class="q-body">Sidecar validator is on migration. Renderer half is yours whenever you want it.</div></div></div>
+    <div class="x2-in"><span class="x2-who c-peer">Basalt</span><div class="x2-bub">Got it. Rebasing the parser branch on that now.</div></div>
+  </div></div>
+
+  <p class="x-state">Not delivered</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Handing the validator over now.</div>
+    <div class="q-mark"><span class="q-glyph tone-danger">&ldquo;</span><div><div class="q-who c-peer">Basalt<span class="q-det"> · not delivered</span></div><div class="q-body">Sidecar validator is on migration. Renderer half is yours whenever you want it.</div></div></div>
+  </div></div>
+
+  <p class="x-state">A long message</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Handing the validator over now.</div>
+    <div class="q-mark"><span class="q-glyph c-peer">&ldquo;</span><div><div class="q-who c-peer">Basalt</div><div class="q-body">Sidecar validator is on migration. The renderer half is yours whenever you want it, and the boundary tests are green on my side, so nothing should be blocking you. I left the fixture rebuild alone because it looked like yours.</div></div></div>
+    <div class="x2-in"><span class="x2-who c-peer">Basalt</span><div class="x2-bub">Got it. Rebasing the parser branch on that now.</div></div>
+  </div></div>
+
+  <div class="x-sec"><p class="x-name">Peer message row · chosen</p></div>
+
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">Notice box</span></div>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Ran the focused tests. All green.</div>
+    <div class="s-inj"><span class="s-glyph">←</span><div><div class="s-who c-peer">Basalt</div><div class="s-body">The sidecar validator is on migration now. The renderer half is free to go.</div></div></div>
+    <div class="s-inj"><span class="s-glyph">←</span><div><div class="s-who dim">Peer message</div><div class="s-body">Continuing from the earlier thread. Nothing else to hand over.</div></div></div>
+    <div class="s-user"><div>Pick it up from there.</div></div>
+  </div></div>
+
+  <div class="x-hd"><span class="x-key">SPEC</span><span class="x-nm">Same recipe, peer hue</span></div>
+  <p class="x-state">One message, beside your own</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-prose">Ran the focused tests. All green.</div>
+    <div><div class="r-wrap"><span class="r-who c-peer">Basalt</span><div class="r-bub sf-peer">The sidecar validator is on migration now. The renderer half is free to go.</div></div></div>
+    <div class="s-user"><div>Pick it up from there.</div></div>
+  </div></div>
+
+  <p class="x-state">A run from one peer</p>
+  <div class="s-ground"><div class="s-col">
+    <div><div class="r-wrap"><span class="r-who c-peer">Basalt</span><div class="r-run"><div class="r-bub sf-peer">The sidecar validator is on migration now. The renderer half is free to go.</div><div class="r-bub sf-peer">Rebased on migration too, so nothing is stale on your side.</div></div></div></div>
+    <div class="s-user"><div>Pick it up from there.</div></div>
+  </div></div>
+
+  <p class="x-state">Two peers in the same transcript</p>
+  <div class="s-ground"><div class="s-col">
+    <div><div class="r-wrap"><span class="r-who c-peer">Basalt</span><div class="r-bub sf-peer">The sidecar validator is on migration now. The renderer half is free to go.</div></div></div>
+    <div><div class="r-wrap"><span class="r-who c-peer">Cinnabar</span><div class="r-bub sf-peer">Parser branch is clean. Say the word and I will merge it.</div></div></div>
+    <div class="s-user"><div>Pick it up from there.</div></div>
+  </div></div>
+
+  <p class="x-state">No name</p>
+  <div class="s-ground"><div class="s-col">
+    <div><div class="r-wrap"><span class="r-who dim">Peer message</span><div class="r-bub sf-none">Continuing from the earlier thread. Nothing else to hand over.</div></div></div>
+    <div class="s-user"><div>Pick it up from there.</div></div>
+  </div></div>
+
+  <div class="x-sec"><p class="x-name">Session opening · chosen</p></div>
+
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">Seam plus notice row</span></div>
+  <p class="x-state">Creator named</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-seam"><div class="s-rule"></div><div class="s-mid"><span class="s-lab c-peer">Quartz</span><span class="s-det">· created by <span class="c-peer">Alex</span></span></div><div class="s-rule"></div></div>
+    <div class="s-inj"><span class="s-glyph">←</span><div><div class="s-who c-peer">Alex</div><div class="s-body">Pick up the parser branch and keep going.</div></div></div>
+    <div class="s-prose">Reading the branch now. The rebase looks clean.</div>
+  </div></div>
+
+  <p class="x-state">Creator gone</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-seam"><div class="s-rule"></div><div class="s-mid"><span class="s-lab c-peer">Quartz</span><span class="s-det">· created by a session that is gone</span></div><div class="s-rule"></div></div>
+    <div class="s-inj"><span class="s-glyph">←</span><div><div class="s-who c-peer">Alex</div><div class="s-body">Pick up the parser branch and keep going.</div></div></div>
+    <div class="s-prose">Reading the branch now. The rebase looks clean.</div>
+  </div></div>
+
+  <div class="x-hd"><span class="x-key">SPEC</span><span class="x-nm">No seam</span></div>
+  <p class="x-state">Created by a peer</p>
+  <div class="s-ground"><div class="s-col">
+    <div><div class="r-wrap"><span class="r-who c-peer">Alex</span><div class="r-bub sf-peer">Pick up the parser branch and keep going.</div></div></div>
+    <div class="s-prose">Reading the branch now. The rebase looks clean.</div>
+  </div></div>
+
+  <p class="x-state">Opened by you, the ordinary case</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-user"><div>Start on the parser branch.</div></div>
+    <div class="s-prose">Reading the branch now. The rebase looks clean.</div>
+  </div></div>
+
+  <div class="x-sec"><p class="x-name">Composer placeholder · chosen</p></div>
+
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">One grey line</span></div>
+  <p class="x-state">Named</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Ask <span class="ph-nm">Basalt</span> anything or describe a task&hellip;</div>
+  </div></div>
+
+  <p class="x-state">No name</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Ask Cat Code anything or describe a task&hellip;</div>
+  </div></div>
+
+  <p class="x-state">Not editable</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Connecting&hellip;</div>
+  </div></div>
+
+  <div class="x-hd"><span class="x-key">SPEC</span><span class="x-nm">Tinted name</span></div>
+  <p class="x-state">Named</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Ask <span class="ph-tint">Basalt</span> anything or describe a task&hellip;</div>
+  </div></div>
+
+  <p class="x-state">No name</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Ask Cat Code anything or describe a task&hellip;</div>
+  </div></div>
+
+  <p class="x-state">Not editable</p>
+  <div class="s-ground"><div class="s-col">
+    <div class="s-ph">Connecting&hellip;</div>
+  </div></div>
+
+</div>
