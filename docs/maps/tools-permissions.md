@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-09-06 against the current source tree.
+Last refreshed: 2026-09-07 against the current source tree.
 
 ## Purpose
 
@@ -222,7 +222,7 @@ authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
 | MCP tools | `src/services/mcp/client.ts`, `src/tools/MCPTool/MCPTool.ts` | MCP tools use JSON Schema directly via `inputJSONSchema`. Their runtime prompt text comes from MCP server descriptions. |
 | Resource tools | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Separate from normal MCP call tools; still part of the tool pool and can be deferred. |
 | Agent orchestration tools | `src/tools/{AgentTool,ResumeAgentTool,SendMessageTool,TaskStopTool,AskParentSessionTool}/`, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
-| Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. |
+| Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. In Bash, lookup-altering assignments (`PATH`, `BASH_ENV`, `LD_*`, `DYLD_*`, including declaration and loop forms) bypass sandbox auto-allow: only an exact existing rule may allow them; otherwise they require approval. |
 | File mutation and persisted result bounds | `src/tools/{FileEditTool,FileWriteTool,FilePatchTool,NotebookEditTool}/` | `src/utils/{diff,analyzeContext}.ts`, the tool-specific tests, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation. The tool result must retain bounded, useful diff/line context rather than whole edited files or notebooks; rollback and result enumeration remain part of the safety contract. |
 
 ## Tool Search And Deferred Loading
