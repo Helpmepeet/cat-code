@@ -2231,12 +2231,12 @@ function projectResultFrame(
   if (result === null || errors === null || durationMs === null || totalCostUsd === null) {
     return changed
   }
-  // A submit-interrupt result has no durable interruption marker and is only a
-  // live lifecycle byproduct. Other interrupted results remain transcript rows,
-  // including explicit stops that carry a durable interruption marker.
+  // A submit-interrupt result is only a live lifecycle byproduct. An explicit
+  // stop already has a durable interruption row, so its result is also redundant.
   if (
     subtype === 'interrupted' &&
-    message.stop_reason === 'interrupt'
+    (message.stop_reason === 'interrupt' ||
+      draft.session.rows.some(row => row.kind === 'turn-stopped'))
   ) {
     markFrameSeen(draft, frameId)
     return true

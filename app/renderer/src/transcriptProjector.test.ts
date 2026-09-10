@@ -183,7 +183,6 @@ test('projects one durable stopped seam without interruption protocol text', () 
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([
     expect.objectContaining({ kind: 'turn-stopped' }),
-    expect.objectContaining({ kind: 'result', subtype: 'interrupted' }),
   ])
 })
 
