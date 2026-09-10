@@ -3021,6 +3021,42 @@ export function buildConversationChain(
   return recoverOrphanedParallelToolResults(messages, transcript, seen)
 }
 
+/**
+ * Rewind markers store the last user/assistant UUID, while a continuation may
+ * be parented through retained attachment or system records after that UUID.
+ * Only walk metadata descendants before the first main-chain user/assistant
+ * child so discarded branches cannot become continuation anchors.
+ */
+function collectActiveConversationMetadataDescendants(
+  messages: Iterable<TranscriptMessage>,
+  root: UUID | null,
+): Set<UUID> {
+  const descendants = new Set<UUID>()
+  let rootSeen = root === null
+
+  for (const message of messages) {
+    if (message.isSidechain) continue
+    if (message.uuid === root) {
+      rootSeen = true
+      continue
+    }
+    if (!rootSeen) continue
+
+    const parent = message.parentUuid
+    const extendsActiveBranch =
+      root === null
+        ? parent === null || (parent !== null && descendants.has(parent))
+        : parent === root ||
+          (parent !== null && descendants.has(parent))
+    if (!extendsActiveBranch) continue
+
+    if (message.type === 'user' || message.type === 'assistant') break
+    descendants.add(message.uuid)
+  }
+
+  return descendants
+}
+
 export type ActiveConversationSelection = {
   messages: TranscriptMessage[]
   tip: TranscriptMessage | null
@@ -4381,6 +4417,7 @@ function findActiveConversationTipInBuffer(
   let activeTip: ActiveConversationTipEntry | undefined
   let activeRoot: UUID | null | undefined
   const activeDescendants = new Set<UUID>()
+  const bufferedMessages = new Map<UUID, TranscriptMessage>()
   let pos = 0
 
   while (pos < buf.length) {
@@ -4406,13 +4443,20 @@ function findActiveConversationTipInBuffer(
             : undefined
         activeRoot = activeTip?.tipUuid
         activeDescendants.clear()
+        if (activeTip) {
+          for (const uuid of collectActiveConversationMetadataDescendants(
+            bufferedMessages.values(),
+            activeTip.tipUuid,
+          )) {
+            activeDescendants.add(uuid)
+          }
+        }
       } catch {
         activeTip = undefined
         activeRoot = undefined
         activeDescendants.clear()
       }
     } else if (
-      activeTip &&
       lineEnd - pos > PARENT_PREFIX.length &&
       buf.compare(
         PARENT_PREFIX,
@@ -4427,22 +4471,25 @@ function findActiveConversationTipInBuffer(
           buf.toString('utf8', pos, lineEnd),
         ) as Entry
         if (isTranscriptMessage(candidate) && !candidate.isSidechain) {
-          const parent = candidate.parentUuid
-          const extendsActiveBranch =
-            activeRoot === null
-              ? parent === null ||
-                (parent !== null && activeDescendants.has(parent))
-              : parent === activeRoot ||
-                (parent !== null && activeDescendants.has(parent))
-          if (extendsActiveBranch) {
-            activeDescendants.add(candidate.uuid)
-            if (
-              candidate.type === 'user' ||
-              candidate.type === 'assistant'
-            ) {
-              activeTip = { ...activeTip, tipUuid: candidate.uuid }
+          if (activeTip) {
+            const parent = candidate.parentUuid
+            const extendsActiveBranch =
+              activeRoot === null
+                ? parent === null ||
+                  (parent !== null && activeDescendants.has(parent))
+                : parent === activeRoot ||
+                  (parent !== null && activeDescendants.has(parent))
+            if (extendsActiveBranch) {
+              activeDescendants.add(candidate.uuid)
+              if (
+                candidate.type === 'user' ||
+                candidate.type === 'assistant'
+              ) {
+                activeTip = { ...activeTip, tipUuid: candidate.uuid }
+              }
             }
           }
+          bufferedMessages.set(candidate.uuid, candidate)
         }
       } catch {
         // Malformed transcript lines do not make an older marker authoritative.
@@ -4934,6 +4981,14 @@ export async function loadTranscriptFile(
           parseActiveConversationTipEntry(entry) ?? undefined
         activeConversationRoot = activeConversationTip?.tipUuid
         activeConversationDescendants.clear()
+        if (activeConversationTip) {
+          for (const uuid of collectActiveConversationMetadataDescendants(
+            messages.values(),
+            activeConversationTip.tipUuid,
+          )) {
+            activeConversationDescendants.add(uuid)
+          }
+        }
       } else if (applySessionMetadataEntry(entry)) {
         // Handled above: session-scoped metadata shared with the pre-boundary pass.
       } else if (entry.type === 'file-history-snapshot') {

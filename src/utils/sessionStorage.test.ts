@@ -14,6 +14,111 @@ import { createUserMessage } from './messages.js'
 import { releaseActiveTranscriptLease } from './transcriptLease.js'
 import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
+function createRewindContinuationFixture(
+  sessionId: string,
+  cwd: string,
+  discardedAssistantText: string,
+) {
+  const retainedUserUuid = randomUUID()
+  const retainedAssistantUuid = randomUUID()
+  const retainedAttachmentUuid = randomUUID()
+  const discardedUserUuid = randomUUID()
+  const discardedAssistantUuid = randomUUID()
+  const continuationUserUuid = randomUUID()
+  const continuationAssistantUuid = randomUUID()
+  const base = {
+    isSidechain: false,
+    sessionId,
+    cwd,
+    version: 'test',
+  }
+  const entries = [
+    {
+      parentUuid: null,
+      ...base,
+      type: 'user',
+      uuid: retainedUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:00.000Z',
+      message: { role: 'user', content: 'retained prompt' },
+    },
+    {
+      parentUuid: retainedUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: retainedAssistantUuid,
+      timestamp: '2026-08-24T04:00:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'retained answer' }],
+      },
+    },
+    {
+      parentUuid: retainedAssistantUuid,
+      ...base,
+      type: 'attachment',
+      uuid: retainedAttachmentUuid,
+      timestamp: '2026-08-24T04:00:01.100Z',
+      attachment: { type: 'hook', content: 'retained metadata' },
+    },
+    {
+      parentUuid: retainedAttachmentUuid,
+      ...base,
+      type: 'user',
+      uuid: discardedUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:02.000Z',
+      message: { role: 'user', content: 'discarded prompt' },
+    },
+    {
+      parentUuid: discardedUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: discardedAssistantUuid,
+      timestamp: '2026-08-24T04:00:03.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: discardedAssistantText }],
+      },
+    },
+    {
+      type: 'active-conversation-tip',
+      sessionId,
+      tipUuid: retainedAssistantUuid,
+    },
+    {
+      parentUuid: retainedAttachmentUuid,
+      ...base,
+      type: 'user',
+      uuid: continuationUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:04.000Z',
+      message: { role: 'user', content: 'continuation prompt' },
+    },
+    {
+      parentUuid: continuationUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: continuationAssistantUuid,
+      timestamp: '2026-08-24T04:00:05.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'continuation answer' }],
+      },
+    },
+  ]
+  return {
+    entries,
+    expectedUuids: [
+      retainedUserUuid,
+      retainedAssistantUuid,
+      retainedAttachmentUuid,
+      continuationUserUuid,
+      continuationAssistantUuid,
+    ],
+  }
+}
+
 describe('session archive flag', () => {
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
@@ -338,6 +443,119 @@ describe('session storage', () => {
       firstAssistant.uuid,
       branchedUser.uuid,
       branchedAssistant.uuid,
+    ])
+  })
+
+  for (const [label, discardedAssistantText] of [
+    ['small transcript', 'discarded answer'],
+    ['large transcript', 'x'.repeat(6 * 1024 * 1024)],
+  ] as const) {
+    test(`rewound continuation follows retained metadata in the ${label}`, async () => {
+      const { entries, expectedUuids } = createRewindContinuationFixture(
+        sessionId,
+        tempDir,
+        discardedAssistantText,
+      )
+      const path = getTranscriptPathForSession(sessionId)
+      await writeFile(
+        path,
+        `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+      )
+
+      const resumed = await getLastSessionLog(sessionId as UUID)
+      expect(resumed?.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+
+      clearSessionMessagesCache()
+      const explicitPath = await loadTranscriptFromFile(path)
+      expect(explicitPath.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+
+      const display = await loadDisplayTranscriptFromJsonlPath(path, {
+        maxMessages: 20,
+        maxBytes: 20 * 1024 * 1024,
+      })
+      expect(display.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+    })
+  }
+
+  test('null active tip reconnects a continuation through retained metadata', async () => {
+    const attachmentUuid = randomUUID()
+    const discardedUserUuid = randomUUID()
+    const discardedAssistantUuid = randomUUID()
+    const continuationUserUuid = randomUUID()
+    const continuationAssistantUuid = randomUUID()
+    const base = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const entries = [
+      {
+        parentUuid: null,
+        ...base,
+        type: 'attachment',
+        uuid: attachmentUuid,
+        timestamp: '2026-08-24T05:00:00.000Z',
+        attachment: { type: 'startup-hook', content: 'retained metadata' },
+      },
+      {
+        parentUuid: attachmentUuid,
+        ...base,
+        type: 'user',
+        uuid: discardedUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T05:00:01.000Z',
+        message: { role: 'user', content: 'discarded first prompt' },
+      },
+      {
+        parentUuid: discardedUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: discardedAssistantUuid,
+        timestamp: '2026-08-24T05:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'discarded answer' }],
+        },
+      },
+      { type: 'active-conversation-tip', sessionId, tipUuid: null },
+      {
+        parentUuid: attachmentUuid,
+        ...base,
+        type: 'user',
+        uuid: continuationUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T05:00:03.000Z',
+        message: { role: 'user', content: 'continuation prompt' },
+      },
+      {
+        parentUuid: continuationUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: continuationAssistantUuid,
+        timestamp: '2026-08-24T05:00:04.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'continuation answer' }],
+        },
+      },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const resumed = await getLastSessionLog(sessionId as UUID)
+    expect(resumed?.messages.map(message => message.uuid)).toEqual([
+      attachmentUuid,
+      continuationUserUuid,
+      continuationAssistantUuid,
     ])
   })
 
