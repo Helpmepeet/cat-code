@@ -325,11 +325,7 @@ export const MAX_HOST_REQUEST_ARG_CHARS = 256
  */
 export const MAX_PEER_DELIVERY_ATTEMPTS = 3
 
-/**
- * The longest a chain of peer messages may grow before main refuses it
- * (`hop_runaway`). Upstream's equivalent is 28; a chain this long is a loop
- * with extra steps, and every hop is a billed turn.
- */
+/** Maximum repeated route length and per-pair back-and-forth before refusal. */
 export const MAX_PEER_HOPS = 16
 
 /**
@@ -364,7 +360,7 @@ export const PEER_CHAIN_WINDOW_MS = 10 * 60_000
  *
  * The same headroom rule as `MAX_PROMPT_BYTES` above, for the same reason and
  * against a different frame: main REBUILDS the inbound `peer.deliver` frame
- * around this text, adding the sender name, the hop chain, a message id and the
+ * around this text, adding the sender identity, a message id and the
  * `ClientFrame` envelope, and the supervisor rejects the whole ENCODED frame
  * against `MAX_FRAME_BYTES` (128 KiB). Measured in bytes, not JS chars, so
  * multibyte text cannot advertise a size the frame cannot carry.

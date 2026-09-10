@@ -442,12 +442,8 @@ const HOST_CALL_UNANSWERED = Symbol('host call unanswered')
 
 type Bucket = { tokens: number; lastRefillAt: number }
 /**
- * One record of a hop main routed toward `recipient` from `sender`. `viaRefusal`
- * marks a hop that was REFUSED rather than delivered — see `buildHops` for why
- * those two are stored together but inherited differently.
- *
- * `chain` and `pairHops` are two DIFFERENT quantities and answer two different
- * questions; `buildHops` derives both and explains why they had to be split.
+ * One active request path main routed toward `recipient` from `sender`.
+ * `chain` detects cross-pair rings; `pairHops` independently bounds one pair.
  */
 type ChainRecord = {
   chain: SessionId[]
@@ -754,104 +750,22 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   }
 
   /**
-   * §4 step 2. Two things are deliberate here and both are flagged deviations
-   * from the decision text, with the derivations.
+   * PEER-SESSIONS loop and cost guard.
    *
-   * ONE — the loop predicate. The decision says a send inherits "the chain last
-   * delivered TO the requester" and that main refuses a send "whose chain
-   * already contains the recipient". Taken literally those cannot both hold: a
-   * chain delivered to A by B always ENDS with B, so A's reply to B is refused
-   * as a loop, every reply is, and `MAX_PEER_HOPS` becomes unreachable dead code
-   * while §6 owes a test in which two peers answering each other stop AT that
-   * cap. So the rule is: a loop is the recipient being in the inherited chain
-   * AND NOT its last entry. The last entry is by construction the peer being
-   * answered, so a reply is never a loop; reaching PAST it to someone earlier is
-   * what closes a cycle.
+   * The chain is the active request path, excluding its current recipient. A
+   * send to its last entry returns to the caller and pops that entry; every
+   * other send pushes the sender. Re-entering an earlier participant is allowed
+   * until the active path exceeds `MAX_PEER_HOPS`, so one useful circuit is not
+   * mistaken for an infinite loop.
    *
-   *   A→B, B→A, A→B, …   the recipient is always the chain's last entry: the
-   *                      chain grows one per hop and stops at MAX_PEER_HOPS.
-   *   A→B, B→C, C→A      inherited [A, B], last is B, recipient A present and
-   *                      not last: hop_loop, on the hop that closes the cycle.
-   *   A→B, B→C, C→B      recipient IS last: allowed. This is the report-back R2
-   *                      makes the delivery model for, one rung down the R8
-   *                      ladder; refusing it breaks the primary workflow.
-   *   A→B, B→C, C→B, …   a two-party sub-exchange, bounded by MAX_PEER_HOPS.
-   *   A→C after A↔B      first contact with a NEW peer: allowed, whatever the
-   *                      A↔B exchange has spent. See THREE.
+   * Records stay keyed by ordered pair, but a send inherits the longest path
+   * delivered to its sender so a shorter third-party message cannot erase ring
+   * evidence. Refusals remain pair-local so one refused ring cannot silence an
+   * uninvolved pair. The independent pair counter still stops sustained
+   * back-and-forth even though returning messages shrink the active path.
    *
-   * TWO — what a send inherits, and this is where the STORE shape matters. The
-   * records are per ORDERED PAIR, but a send inherits the LONGEST chain among
-   * every pair that has delivered to the requester, because a chain has to
-   * travel across pairs or a ring is invisible to it. Refusal records are the
-   * exception: they are inherited only by their own pair.
-   *
-   * That combination is what it is because a single slot per recipient — the
-   * first shape this had — is shared mutable state any peer can write, and two
-   * separate exploits fall straight out of it:
-   *
-   *   - A third peer sending one message to either party of a long exchange
-   *     overwrote that pair's chain with a chain of one, resetting `hop_runaway`
-   *     on demand, forever. Inheriting the LONGEST chain rather than the most
-   *     recent one closes it: a fresh short conversation cannot shorten a live
-   *     long one.
-   *   - A refusal wrote onto the recipient's slot, so `A→B, B→C, C→A` (correctly
-   *     refused) then made an unrelated `A→B` refuse `hop_loop` for the whole
-   *     window. A prompt-injected peer triggers that deliberately with one
-   *     message it never needed delivered. Keeping refusal records pair-local
-   *     closes it: they are inherited only by the pair they belong to.
-   *
-   * Refusal records still have to EXIST, because a refusal must advance the pair
-   * or the stop leaks: without one, the two directions' chains drift by one, the
-   * capped direction refuses while the other still holds a shorter chain, and
-   * the exchange leaks a message every other attempt forever.
-   *
-   * ACCEPTED COST, stated plainly rather than left for a later reader to find: a
-   * ring of three or more (A→B→C→A→…) is DETECTED and refused once per lap, not
-   * killed. The refusing hop's record is pair-local, so the next lap starts from
-   * a fresh chain. Killing a ring outright needs refusals to be visible across
-   * pairs, which is exactly the second exploit above. A throttled ring is a
-   * worse outcome than a dead one and a better outcome than an uninvolved pair
-   * being silenced by a peer that only had to send one message to do it, and the
-   * per-pair token bucket and dedup window still apply to every lap.
-   *
-   * THREE — loop detection and the runaway budget are now two quantities, and
-   * this is the correction to the shape TWO describes rather than a replacement
-   * for it. Both of the above still hold for LOOPS.
-   *
-   * One quantity was doing both jobs: the length of the inherited chain was both
-   * the ring evidence and the budget. Cross-pair inheritance is required for the
-   * first and is wrong for the second, and the two collided on the ladder the
-   * design exists to permit. After eight legitimate A↔B round trips the pair's
-   * chain is sixteen long; A's FIRST EVER message to C inherited it, the hop
-   * count came to seventeen, and C was refused `hop_runaway` — the sender told
-   * its back-and-forth with C had run too long when the two had exchanged
-   * nothing, and told it again for as long as A↔B kept the record fresh.
-   *
-   * So:
-   *
-   *   - LOOPS keep cross-pair inheritance exactly as TWO describes it. A ring is
-   *     only visible in a chain that travelled across pairs.
-   *   - RUNAWAY is a count carried forward from THIS pair's own record, the last
-   *     hop the recipient routed toward the sender, and compared to
-   *     `MAX_PEER_HOPS`. A pair that has never spoken starts at zero however long
-   *     anyone else's conversation is, which is the whole point.
-   *
-   * The five shapes, and what each one now does:
-   *
-   *   A↔B sustained         count 1, 2, 3, … refused on hop MAX_PEER_HOPS + 1,
-   *                         and it STAYS refused: a refusal advances the pair.
-   *   A→B, B→C, C→A         hop_loop on the closing hop (A is in the inherited
-   *                         chain and is not its last entry).
-   *   A→B, B→C, C→B         allowed: B IS the last entry, so it is the
-   *                         report-back, and the (B, C) count is 2.
-   *   B↔C sustained below A allowed and bounded: no hop is a loop, and the
-   *                         (B, C) count reaches the cap on its own.
-   *   A→C after A↔B saturated  allowed: the (A, C) count is zero, and the long
-   *                         inherited chain contains no C.
-   *
-   * Nothing here reads anything the sending sidecar wrote: the chain is main's
-   * own record, so a compromised sidecar cannot launder a loop by shortening
-   * what it never held, nor escape a guard by omitting a field it never sends.
+   * Main derives every value. The sending sidecar cannot shorten or replace the
+   * route because no route field crosses that boundary.
    */
   function inheritedChain(from: SessionId, to: SessionId): SessionId[] {
     const at = now()
@@ -863,8 +777,8 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
       }
       const [recipient, sender] = key.split('|')
       if (recipient !== from) continue
-      // A refusal is evidence about ONE pair, never about the requester's other
-      // conversations. Inheriting it across pairs is the second exploit above.
+      // A refusal is evidence about one pair. Inheriting it across pairs could
+      // make a failed ring silence an unrelated conversation.
       if (record.viaRefusal && sender !== to) continue
       if (record.chain.length > longest.length) longest = record.chain
     }
@@ -883,17 +797,9 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   }
 
   /**
-   * THREE — hops this pair has already spent, read off the ONE record that says
-   * so: the last hop `to` routed toward `from`. It is the count carried by the
-   * message being answered, so a back-and-forth advances it by one each turn
-   * whichever way the turn goes, and a pair that has never answered anything
-   * starts at zero.
-   *
-   * Only `to` can write that key, which is what keeps the count honest: no third
-   * peer can reset it, and the sender cannot either by talking to someone else.
-   * Reading the other direction as well would count a one-way stream of sends as
-   * a runaway conversation, which it is not; that is the pending cap's and the
-   * token bucket's job, and both still apply.
+   * Carry the count from the last hop `to` routed toward `from`, so each reply
+   * advances the pair once in either direction. Only `to` can write that record;
+   * unrelated peers and one-way sends cannot reset or spend this pair's budget.
    */
   function pairHopsSoFar(from: SessionId, to: SessionId): number {
     return freshRecord(chainKey(from, to))?.pairHops ?? 0
@@ -905,14 +811,17 @@ export function createPeerRequestPlane(deps: PeerRequestPlaneDeps): PeerRequestP
   ): { hops: SessionId[]; pairHops: number } | { refusal: 'hop_loop' | 'hop_runaway' } {
     if (from === to) return { refusal: 'hop_loop' }
     const inherited = inheritedChain(from, to)
-    const hops = [...inherited, from]
     const pairHops = pairHopsSoFar(from, to) + 1
     const answersLastSender = inherited[inherited.length - 1] === to
+    // A reply unwinds the active request path. Keeping the completed branch
+    // would make a nested result returning through its callers look like a ring.
+    const hops = answersLastSender ? inherited.slice(0, -1) : [...inherited, from]
+    const revisitsRoute = inherited.includes(to) && !answersLastSender
     const refusal =
-      inherited.includes(to) && !answersLastSender
-        ? ('hop_loop' as const)
-        : pairHops > MAX_PEER_HOPS
-          ? ('hop_runaway' as const)
+      pairHops > MAX_PEER_HOPS
+        ? ('hop_runaway' as const)
+        : revisitsRoute && hops.length > MAX_PEER_HOPS
+          ? ('hop_loop' as const)
           : null
     if (refusal !== null) {
       chains.set(chainKey(to, from), { chain: hops, pairHops, viaRefusal: true, at: now() })

@@ -822,33 +822,64 @@ describe('loop and channel guards', () => {
       recipient = sender
       sender = next
     }
-    // It stops, it stops mechanically, and it stops AT the cap rather than on
-    // the first reply (which is what a literal contains-the-recipient test
-    // would have done, making MAX_PEER_HOPS unreachable).
+    // It stops mechanically at the pair cap rather than on the first reply.
     expect(outcomes.slice(0, MAX_PEER_HOPS).every(outcome => outcome.startsWith('queued'))).toBe(
       true,
     )
     expect(outcomes[MAX_PEER_HOPS]).toBe('refused:hop_runaway')
-    // And it STAYS stopped. A refused hop has to advance the pair's chain or the
-    // two directions drift by one and the exchange leaks a message every other
-    // attempt, forever — which is a stop that does not stop.
+    // And it stays stopped. A refused hop advances the pair count so the two
+    // directions cannot drift and leak a message every other attempt.
     expect(outcomes.slice(MAX_PEER_HOPS)).toEqual(
       outcomes.slice(MAX_PEER_HOPS).map(() => 'refused:hop_runaway'),
     )
   })
 
-  test('a three-way cycle is refused hop_loop before it can run twice', async () => {
+  test('a three-way cycle may close but is stopped when its active route exceeds the hop cap', async () => {
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
       live: new Set([ALEX, BEAR, CORAL]),
     })
-    h.advance(3_000)
-    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'a' }, 'r1'))
-    h.advance(3_000)
-    await h.plane.handleRequest(BEAR, request('peer.deliver', { to: 'Coral', text: 'b' }, 'r2'))
-    h.advance(3_000)
-    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Alex', text: 'c' }, 'r3'))
-    expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:hop_loop' })
+    const route = [
+      [ALEX, 'Bear'],
+      [BEAR, 'Coral'],
+      [CORAL, 'Alex'],
+    ] as const
+    const outcomes: string[] = []
+    for (let i = 0; i < MAX_PEER_HOPS + 1; i++) {
+      const [sender, recipient] = route[i % route.length]!
+      h.advance(3_000)
+      await h.plane.handleRequest(
+        sender,
+        request('peer.deliver', { to: recipient, text: `turn ${i}` }, `r${i}`),
+      )
+      outcomes.push(
+        (h.lastResult()?.value as { outcome: string } | undefined)?.outcome ?? 'error',
+      )
+    }
+
+    expect(outcomes[2]).toBe('queued_live')
+    expect(outcomes.slice(0, MAX_PEER_HOPS).every(outcome => outcome === 'queued_live')).toBe(true)
+    expect(outcomes[MAX_PEER_HOPS]).toBe('refused:hop_loop')
+  })
+
+  test('a route through distinct peers is not capped as a loop', async () => {
+    const peers = Array.from({ length: MAX_PEER_HOPS + 2 }, (_, index) => ({
+      id: `route-${index}`,
+      name: `Route${index}`,
+    }))
+    const h = harness({
+      rows: peers.map(peer => row(peer.id, peer.name)),
+      live: new Set(peers.map(peer => peer.id)),
+    })
+
+    for (let i = 0; i < peers.length - 1; i++) {
+      h.advance(3_000)
+      await h.plane.handleRequest(
+        peers[i]!.id,
+        request('peer.deliver', { to: peers[i + 1]!.name, text: `hop ${i}` }, `r${i}`),
+      )
+      expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+    }
   })
 
   test('a peer reports back to the one that messaged it, one rung down the ladder', async () => {
@@ -876,11 +907,44 @@ describe('loop and channel guards', () => {
     })
   })
 
+  test('a nested delegation can report all the way back up its request path', async () => {
+    const h = harness({
+      rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
+      live: new Set([ALEX, BEAR, CORAL]),
+    })
+    h.advance(3_000)
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'delegate' }, 'r1'),
+    )
+    h.advance(3_000)
+    await h.plane.handleRequest(
+      BEAR,
+      request('peer.deliver', { to: 'Coral', text: 'subtask' }, 'r2'),
+    )
+    h.advance(3_000)
+    await h.plane.handleRequest(
+      CORAL,
+      request('peer.deliver', { to: 'Bear', text: 'subtask result' }, 'r3'),
+    )
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+
+    h.advance(3_000)
+    await h.plane.handleRequest(
+      BEAR,
+      request('peer.deliver', { to: 'Alex', text: 'final result' }, 'r4'),
+    )
+    expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
+    expect(h.deliveries().at(-1)?.message).toMatchObject({
+      from: 'Bear',
+      text: 'final result',
+    })
+  })
+
   test('a two-party sub-exchange further down the chain is bounded by hops, not refused as a loop', async () => {
     // The same shape continued: Bear and Coral now go back and forth. Each hop
-    // answers the last sender, so none of them is a cycle, and the chain keeps
-    // growing until MAX_PEER_HOPS ends it — the same mechanical stop a top-level
-    // exchange gets, rather than an early refusal that reads as a bug.
+    // answers the last sender, so none is a cycle; their independent pair count
+    // still reaches the same mechanical stop as a top-level exchange.
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
       live: new Set([ALEX, BEAR, CORAL]),
@@ -1306,25 +1370,31 @@ describe('F2 — chains are per pair, so one conversation cannot move another', 
     expect(outcomes.at(-1)).toBe('refused:hop_runaway')
   })
 
-  test('a refusal between two peers does not refuse an uninvolved pair', async () => {
-    // The DoS: `A→B, B→C, C→A` refuses correctly, and under a recipient-keyed
-    // store the refusal wrote onto Alex key, so Alex next send to Bear was
-    // refused `hop_loop` for the whole ten-minute window. One message a
-    // prompt-injected peer never needed delivered silenced someone else.
+  test('a ring refusal does not refuse another pair on that route', async () => {
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral')],
       live: new Set([ALEX, BEAR, CORAL]),
     })
-    h.advance(3_000)
-    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'a' }, 'r1'))
-    h.advance(3_000)
-    await h.plane.handleRequest(BEAR, request('peer.deliver', { to: 'Coral', text: 'b' }, 'r2'))
-    h.advance(3_000)
-    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Alex', text: 'c' }, 'r3'))
+    const route = [
+      [ALEX, 'Bear'],
+      [BEAR, 'Coral'],
+      [CORAL, 'Alex'],
+    ] as const
+    for (let i = 0; i < MAX_PEER_HOPS + 1; i++) {
+      const [sender, recipient] = route[i % route.length]!
+      h.advance(3_000)
+      await h.plane.handleRequest(
+        sender,
+        request('peer.deliver', { to: recipient, text: `turn ${i}` }, `r${i}`),
+      )
+    }
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:hop_loop' })
 
     h.advance(3_000)
-    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'd' }, 'r4'))
+    await h.plane.handleRequest(
+      ALEX,
+      request('peer.deliver', { to: 'Bear', text: 'new pair message' }, 'new-pair'),
+    )
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
   })
 })
@@ -1488,7 +1558,7 @@ describe('F5/F7/F9/F11 — smaller fixes', () => {
  * Second-review fixes
  * ------------------------------------------------------------------------- */
 
-describe('H1 — the hop budget belongs to the pair, the chain belongs to the ring', () => {
+describe('H1 — pair and active-route hop guards stay independent', () => {
   test('a first message to a NEW peer is allowed however long another exchange ran', async () => {
     // The defect this pins: the inherited chain was both the ring evidence and
     // the budget, so eight legitimate Alex/Bear round trips left a chain of
@@ -1548,26 +1618,38 @@ describe('H1 — the hop budget belongs to the pair, the chain belongs to the ri
   })
 
   test('T1 — a ring is caught by the LONGEST chain, not the last one written', async () => {
-    // The chain store is a map, and the fixture's insertion order happened to
-    // leave the long chain last, so a re-implementation that took any matching
-    // record passed every test. Here the SHORT record is written after the long
-    // one: Dune messages Coral between Bear's hop and Coral's reply, so
-    // last-iterated-wins inherits `[Dune]`, sees no Alex in it, and lets the ring
-    // close.
     const h = harness({
       rows: [row(ALEX, 'Alex'), row(BEAR, 'Bear'), row(CORAL, 'Coral'), row(DUNE, 'Dune')],
       live: new Set([ALEX, BEAR, CORAL, DUNE]),
     })
+    const route = [
+      [ALEX, 'Bear'],
+      [BEAR, 'Coral'],
+      [CORAL, 'Alex'],
+    ] as const
+    for (let i = 0; i < MAX_PEER_HOPS; i++) {
+      const [sender, recipient] = route[i % route.length]!
+      h.advance(3_000)
+      await h.plane.handleRequest(
+        sender,
+        request('peer.deliver', { to: recipient, text: `turn ${i}` }, `r${i}`),
+      )
+    }
+
+    // Write a short path to Bear after the long one. Taking the most recent
+    // path would reset the ring; taking the longest reaches the cap.
     h.advance(3_000)
-    await h.plane.handleRequest(ALEX, request('peer.deliver', { to: 'Bear', text: 'a' }, 'r1'))
-    h.advance(3_000)
-    await h.plane.handleRequest(BEAR, request('peer.deliver', { to: 'Coral', text: 'b' }, 'r2'))
-    h.advance(3_000)
-    await h.plane.handleRequest(DUNE, request('peer.deliver', { to: 'Coral', text: 'noise' }, 'r3'))
+    await h.plane.handleRequest(
+      DUNE,
+      request('peer.deliver', { to: 'Bear', text: 'noise' }, 'noise'),
+    )
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'queued_live' })
 
     h.advance(3_000)
-    await h.plane.handleRequest(CORAL, request('peer.deliver', { to: 'Alex', text: 'c' }, 'r4'))
+    await h.plane.handleRequest(
+      BEAR,
+      request('peer.deliver', { to: 'Coral', text: 'over cap' }, 'over'),
+    )
     expect(h.lastResult()?.value).toMatchObject({ outcome: 'refused:hop_loop' })
   })
 })

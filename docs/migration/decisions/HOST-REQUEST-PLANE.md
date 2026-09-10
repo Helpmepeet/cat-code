@@ -226,19 +226,18 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    2026-09-03; it was required, validated at the sidecar and read by nothing, so
    the chain is now entirely main-side and the inbound surface is that much
    smaller (HR5). **The sidecar
-   never sends a chain, and there is no `replyTo`:** main keeps, per
-   `(from, to)` pair, the chain of the last message it delivered in that
-   direction, for `PEER_CHAIN_WINDOW_MS` (PEER-SESSIONS §7). A send inherits
-   the chain last delivered TO the requester FROM this recipient inside the
-   window, plus the requester's id; a send to a peer that has not written to
-   the requester within the window starts a fresh chain of one. So two peers
-   answering each other extend one chain whatever the model does, which is
-   what makes the stop mechanical rather than a prompt hope. Main rejects a send
-   whose chain already contains the recipient **at any position other than its
-   last entry** (`hop_loop`), or whose chain exceeds `MAX_PEER_HOPS`
-   (`hop_runaway`). A self-send is a loop of one. With one trusted router
-   deriving the chain there is no need for the upstream blinded-token variant,
-   and a compromised sidecar cannot shorten a chain it never held.
+   never sends a chain, and there is no `replyTo`:** main keeps an active request
+   path per ordered pair for `PEER_CHAIN_WINDOW_MS` (PEER-SESSIONS §7). A send
+   inherits the longest non-expired path delivered to the requester, with
+   refusal paths visible only to their own pair. Sending to a new peer pushes
+   the requester onto the path. Sending to the path's last entry returns to the
+   caller and pops that entry. Every other send pushes the requester, including
+   a send to an earlier participant. A revisit is allowed until the resulting
+   path exceeds `MAX_PEER_HOPS`, then it is `hop_loop`; a path through distinct
+   participants is not capped here. A separate per-pair count uses the same cap,
+   so repeated two-party replies still stop as `hop_runaway` even while the
+   active path unwinds. A self-send is a loop of one. Main derives both values,
+   so a compromised sidecar cannot shorten either.
 
    **🔁 AMENDED AGAIN 2026-09-03: how the chain is KEYED, which the first
    amendment did not settle.** The chain was keyed by recipient alone, so a
@@ -283,14 +282,19 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    when a third participant is present kills the feature's own workflow, since
    it refuses `A→B, B→C, C→B` — the report-back R2 is built on and the ladder
    R8 permits — and bounds a two-party sub-exchange below the root at three
-   messages. The shipped rule is the one that leaves both guards alive: a reply
-   to whoever last wrote to you is never a loop and is bounded by the hop cap,
-   while revisiting anyone earlier in the chain closes a cycle and is refused.
+   messages.
 
-   A refused hop still ADVANCES the pair's chain, and must: without it the two
-   directions drift by one, so the peer under the cap keeps sending and the one
-   over it keeps being refused, leaking one message every other attempt
-   forever. A stop that leaks is not a stop.
+   **🔁 AMENDED 2026-09-11.** Allowing an immediate reply but appending it to the
+   path handled `A→B→C→B` and then incorrectly refused the ordinary final
+   report `B→A`. A reply now pops the caller, so `A→B→C→B→A` unwinds. A
+   single `A→B→C→A` circuit is also allowed: revisiting a participant proves a
+   circuit, not an infinite loop. Repeated circulation grows the active path
+   until the existing cap mechanically refuses it as `hop_loop`. The separate
+   pair count continues to bound repeated two-party replies.
+
+   A refused hop still advances the pair's count and record. Without that, the
+   two directions drift by one, so the peer under the cap keeps sending and the
+   one over it keeps being refused, leaking one message every other attempt.
 3. Main applies the channel guards: per `(from, to)` token bucket, duplicate
    body within a short window, and `MAX_PENDING_PEER_MESSAGES` per recipient
    (a NEW main-side count of undelivered peer messages; the sidecar's
@@ -380,17 +384,16 @@ Numbered HR1–HR7 so tests and reviews can cite them, in the style of HC1–HC4
    process failed anyway, which `wake_failed` misreported as a peer that could
    not be brought back), plus the main-minted `messageId`. The sending
    model sees this in its tool result, so it never reasons from a false
-   belief that a peer heard it. **Ack = enqueued.** The recipient sidecar
-   acks a `messageId` when it has enqueued it into the engine command queue.
-   Main holds the message until then; if the recipient's process exits with
-   the message unacked, main delivers it after that row's next `ready`, the
-   same deliver-after-ready path as step 5 and the same store a parked row
-   uses. A crash after enqueue and before the turn persisted loses the
-   message, and a crash after enqueue and before the ack duplicates it once;
-   both are crash windows the operator sees as a dead tab, accepted for v1
-   (the `onInputPersisted` ack with redelivery dedup was designed and cut,
-   PEER-SESSIONS §0a). On ack main writes the metadata-only operational-log
-   line (PEER-SESSIONS §10) and forgets the message.
+   belief that a peer heard it. **Ack = consumed.** A busy recipient acks when
+   the engine takes the queued command at a tool boundary; an idle recipient
+   acks from `onInputPersisted`. Main holds the message until then and
+   redelivers it after the recipient's next `ready` if the process exits
+   unacked. The recipient recognises consumed `messageId` values from its
+   transcript, suppresses a duplicate model delivery, and re-acks so main can
+   release its copy. Transcript compaction or a crash before the consumed row
+   reaches disk can degrade to one duplicate. On ack main writes the
+   metadata-only operational-log line (PEER-SESSIONS §10) and forgets the
+   message.
 
 ## 5. Per-plane change list (for the dispatch that builds it)
 

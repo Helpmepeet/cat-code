@@ -718,24 +718,23 @@ ruled no peer budget (R8), so a tree of peers is bounded only by HC4, the same
 bound a human opening tabs meets. The proposed per-creator, depth and root
 caps were withdrawn on that ruling (§16). Every message
 carries a main-minted `messageId`, used for the outcome, the ack and the log
-line; main keeps nothing per message after the ack, only one chain per
-`(from, to)` pair inside `PEER_CHAIN_WINDOW_MS`. Plus one soft rule the
-doctrine carries: no reply to a message that asks nothing. The send result tells the
-sender what happened, so silent non-delivery cannot leave it reasoning from a
-false belief (a reported upstream failure mode, research §6).
+line; main keeps nothing per message after the ack, only one active request
+path per `(from, to)` pair inside `PEER_CHAIN_WINDOW_MS`. The send result tells
+the sender what happened, so silent non-delivery cannot leave it reasoning
+from a false belief (a reported upstream failure mode, research §6).
 
 Values, so the build does not invent them (all new constants in
 `app/shared/limits.ts`, named here so a later change is a visible diff):
 
 | constant | value | note |
 |---|---|---|
-| `MAX_PEER_HOPS` | 16 | upstream 28; a chain this long is a loop with extra steps |
+| `MAX_PEER_HOPS` | 16 | caps a repeated active route and per-pair back-and-forth; a route through distinct peers is not capped here |
 | `MAX_PENDING_PEER_MESSAGES` | 50 | per recipient, undelivered, main-side |
 | `MAX_HOST_REQUESTS_PER_WINDOW` | 60 per 60 s | per requesting session, all model-facing verbs. 🔁 `peer.ack` is exempt (amended 2026-09-03 during the build): an ack is main-induced bookkeeping forced by a delivery, so charging it here let a few senders spend a recipient's whole allowance and starve it off the plane. Every frame including acks is still charged to `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` below |
 | `PEER_SEND_BURST` / `PEER_SEND_REFILL_MS` | 10 / 2 000 | per `(from, to)` token bucket, upstream 30 / 2 s |
 | `PEER_DEDUP_WINDOW_MS` | 30 000 | identical body, same sender, same recipient. 🔁 AMENDED 2026-09-04: the key was recipient and body alone, so two peers reporting the same short text to one parent collided and the second was told its message had already arrived and to await a reply to it. The tool's own prompt asks for short single messages, so the collision is ordinary orchestration, not a corner. A single sender is bounded by the per-pair bucket; fan-in by the pending cap. The recipient-only key never was a fan-in defence, since anything actually flooding varies one character and walks past it |
-| `PEER_CHAIN_WINDOW_MS` | 10 min | automatic chain inheritance per `(from, to)` pair (HRP §4 step 2). 🔁 The refusal rule that reads this chain was AMENDED 2026-09-03 during the build: a recipient already in the chain is a loop only when it is not the chain's last entry, so replying to whoever last wrote to you is bounded by `MAX_PEER_HOPS` rather than refused. HRP §4 step 2 carries the derivation |
-| `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender, chain and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
+| `PEER_CHAIN_WINDOW_MS` | 10 min | automatic active-path inheritance per ordered pair (HRP §4 step 2). Replying to the last sender pops it; every other send pushes. A circuit may complete, but repeated circulation eventually exceeds `MAX_PEER_HOPS` and becomes `hop_loop`; the independent pair count supplies `hop_runaway` |
+| `MAX_PEER_TEXT_BYTES` | 64 KiB | `SendToPeer` text and the `CreatePeer` prompt, UTF-8; leaves room under `MAX_FRAME_BYTES` (128 KiB) for sender identity, message id and envelope once main rebuilds the frame (`supervisor.ts:479` rejects the whole encoded frame), the same headroom rule as `MAX_PROMPT_BYTES` 96 KiB (`limits.ts:48`) |
 | `PEER_READ_DEFAULT_BYTES` / `MAX_PEER_READ_BYTES` | 32 KiB / 128 KiB | `ReadPeer.maxBytes` default and ceiling; the tool clamps, never errors. 🔁 RAISED 2026-09-05 from 16 KiB / 64 KiB when the unit became a TURN and `limit` went, leaving this the only count bound. A median peer session is 5 turns, and the shape built against two real peers of that length measured 24,089 and 17,272 bytes, so 16 KiB returned a median peer in pieces. Cost is not what bounds this: a peer runs at 372,000 tokens (Codex) or 1,000,000 (frontier Claude) of context, so 32 KiB is roughly 2.5% of the smaller window |
 | `MAX_PEER_QUERY_BYTES` | 512 | `ReadPeer` search query |
 | `MAX_HOST_REQUEST_FRAMES_PER_WINDOW` | 240 per 60 s | 🔁 added during the build. Charged to EVERY inbound `host.request` before it is validated, because the rate cap above counted only requests that parsed, so the cheapest flood to send was the one nothing counted (HR1/A6) |
@@ -743,7 +742,7 @@ Values, so the build does not invent them (all new constants in
 | `MAX_PEER_DELIVERY_ATTEMPTS` | 3 | 🔁 added during the build. Bounds redelivery after a recipient rejects a frame, which otherwise recurred at every `ready` forever while holding a pending slot |
 | `PEER_WAKE_TIMEOUT_MS` | 30 s | 🔁 added during the build. Without it a deliver to a row whose spawn never completes leaves the sending model's tool call pending for the window's life |
 | `HOST_REQUEST_TIMEOUT_MS` | 45 s | 🔁 added during the build. Deliberately greater than the wake timeout, so the caller learns `wake_failed` rather than a bare timeout |
-| (retention) | none | main holds a pending message only until the sidecar acks enqueue; every per-session and per-pair structure (buckets, dedup windows, pair chains) is cleared when either row is reaped (`session-removed`, `host.ts:484`) and at runtime teardown |
+| (retention) | none | main holds a pending message until the recipient engine consumes it and the sidecar acks; every per-session and per-pair structure (buckets, dedup windows, pair paths) is cleared when either row is reaped (`session-removed`, `host.ts:484`) and at runtime teardown |
 
 Upstream's numbers were the reference, not adopted verbatim: burst 30,
 sustained one per 2 s, dedup 30 s, queue 50, chain 28.
