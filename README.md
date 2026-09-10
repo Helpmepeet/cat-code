@@ -1,289 +1,186 @@
 # Cat Code
 
-Cat Code is a terminal-first, persistent coding-agent runtime for interactive
-work and automation. It combines multi-provider model access, code and shell
-tools, permission controls, resumable sessions, delegated workers, MCP
-integrations, skills, hooks, plugins, and project-scoped memory in one local
-runtime.
+Cat Code is a private, local-first coding-agent runtime developed from a Claude
+Code fork. Its primary product is the terminal engine: a persistent interactive
+agent for working in source repositories and local development environments.
 
-The terminal engine is the primary product today. An Electron desktop client is
-under active development, but it is not a publicly distributed application yet.
-The longer-term direction is an always-on personal agent system; the current
-repository should not be mistaken for a finished hosted service or packaged
-desktop release.
+This is source software for a personal system, not a hosted product or public
+distribution. The Electron desktop application is a substantial developer
+preview, but the terminal engine is the supported day-to-day surface in this
+repository.
 
-> **Repository status:** Cat Code is private source software. It is not published
-> to npm, has no supported Cat Code-owned installer or update channel, and does
-> not currently include a root license file. Run it from a trusted source
-> checkout and do not infer redistribution rights that are not stated here.
+## What it does
 
-## What works today
+The terminal engine provides:
 
-### Terminal agent
+- Interactive terminal sessions and non-interactive prompt execution.
+- Multi-turn tool use for files, patches, shells, search, web fetch, notebooks,
+  tasks, and other build-enabled integrations.
+- Permission rules, interactive approval, path validation, sandbox integration,
+  and lifecycle hooks around tool execution.
+- Durable, project-scoped JSONL transcripts that can be resumed or forked.
+- Context compaction, session state, and separate durable memory for normal
+  local sessions.
+- Model selection and reasoning-effort controls across supported providers.
 
-- Interactive, full-screen terminal sessions.
-- Headless execution with text, JSON, or streaming JSON output.
-- Multi-turn tool use with concurrent read-only work and serialized mutations.
-- Automatic and explicit context compaction for long-running conversations.
-- Project-scoped transcripts that can be continued, resumed, searched, named,
-  or forked.
-- Configurable model, reasoning effort, tools, permissions, prompts, agents,
-  MCP servers, settings sources, and working directories.
-- Prompt history, image paste, transcript navigation, Vim mode, custom
-  keybindings, background tasks, and model switching.
+Tool availability is intentional rather than universal. Build features,
+environment checks, session mode, configured permissions, deny rules, and
+sandbox policy determine what a model can see and call. MCP tools and resources
+join the normal tool pool and may be discovered on demand through tool search.
 
 ### Models and providers
 
-Cat Code can run Claude models through:
+Cat Code supports Anthropic model routing through first-party Anthropic
+authentication, AWS Bedrock, Google Vertex AI, and Microsoft Foundry.
 
-- Anthropic first-party APIs or Claude subscription OAuth
-- AWS Bedrock
-- Google Vertex AI
-- Microsoft Foundry
+It also supports the Codex-backed GPT models in its current catalog through
+ChatGPT/Codex subscription OAuth. Codex credentials are managed through a local
+account pool, with request-time account selection and refresh handling. A
+`gpt-*` model name routes that request to the Codex/OpenAI path regardless of
+the session's default provider.
 
-It can also run GPT-5.6 Sol, Terra, and Luna through a configured
-ChatGPT/Codex subscription account. This path uses Cat Code's Codex OAuth and
-account-pool integration; it is not generic OpenAI API-key support. A `gpt-*`
-model name always routes that request through the OpenAI/Codex path.
+There is **no generic OpenAI API-key route for GPT model requests**. Use the
+interactive `/login` flow to add a ChatGPT/Codex subscription account, then use
+`/accounts` to inspect or switch configured accounts. The read-only
+`cat-code codex status --json` command reports an advisory pool observation; it
+does not reserve capacity or make a live request route decision.
 
-### Tools and permissions
+### Workers, sessions, and workflow
 
-The built-in tool surface includes filesystem reads and edits, patching, shell
-execution, globbing, content search, web fetch, optional web search, notebooks,
-subagents, tasks, goals, skills, MCP resources, and build-gated integrations
-such as LSP and browser tooling.
+The `Agent` tool delegates bounded work to specialized local workers. A worker
+can run in the foreground or background, use a selected model and policy, be
+resumed from its retained transcript, and, when requested, work in an isolated
+Git worktree. Shell tasks and agent tasks have explicit lifecycle and stop
+controls.
 
-Actual tool exposure is narrower than the registry. Feature flags, environment
-checks, session mode, tool configuration, sandbox rules, and permission policy
-all participate. Permission decisions combine schema validation, hooks,
-allow/ask/deny rules, path checks, sandbox checks, and interactive approval.
+The earlier **Agent Mode** is retired. Current terminal orchestration uses
+delegated workers and tasks. The desktop preview adds a distinct peer-session
+model: peers are independently addressable desktop sessions that can create,
+list, read, and message one another through the host-controlled request plane.
 
-When the transcript classifier is compiled in and the selected model supports
-it, sessions without an explicit default can start in classifier-assisted
-`auto` mode unless it has been disabled or circuit-broken. Other common modes
-support interactive approval, automatically accepting edits, plan-only work,
-and non-interactive denial when approval would otherwise be required. Explicit
-safety checks and denies remain meaningful even when a more permissive mode is
-selected.
+### Configuration and extension
 
-### Agents and workers
+Cat Code supports:
 
-The `Agent` tool delegates bounded work to specialized workers. Workers can run
-in the foreground or background, use their own model and tool policy, preserve
-status beside the parent session, resume after stopping, and optionally isolate
-implementation in a Git worktree.
+- **Skills**: reusable instruction workflows, including slash-command and
+  model-invocable surfaces when their metadata permits it.
+- **Custom agents**: local definitions that set prompts, tools, models, effort,
+  permissions, hooks, MCP requirements, and optional worktree isolation.
+- **Hooks**: commands that run around session and tool lifecycle events.
+- **MCP**: configured external tools, resources, and authentication flows.
+- **Plugins**: packages that can contribute commands, skills, agents, hooks,
+  MCP servers, output styles, and LSP configuration.
 
-### Sessions, instructions, and memory
-
-Sessions are stored as project-scoped JSONL transcripts under `~/.cat-code` by
-default. Accepted user input is persisted before the model response, so an
-interrupted request remains resumable.
-
-Cat Code loads layered instructions from managed policy, user configuration,
-repository instructions, directory rules, and local private instructions.
-`.cat-code` is the current project namespace, while selected `.claude` paths
-remain supported for Claude Code compatibility.
-
-Auto-memory is separate from transcript history. It stores durable user
-preferences and non-derivable project context in a small `MEMORY.md` index with
-linked topic files. Auto-memory is enabled by default in normal local sessions
-and disabled in minimal bare mode.
-
-### Extensibility
-
-Cat Code can be extended with:
-
-- **Skills:** reusable instruction workflows exposed as slash commands and,
-  when permitted by metadata, model-invocable capabilities.
-- **Custom agents:** prompts, tools, models, effort, permissions, hooks, MCP
-  requirements, turn limits, isolation, and scoped memory.
-- **Hooks:** user-defined commands around session and tool lifecycle events.
-- **MCP:** external tools and resources, discovered on demand where possible.
-- **Plugins:** packages of commands, skills, agents, hooks, MCP servers, output
-  styles, and LSP servers.
-
-Availability can vary by build feature set, provider, authentication state, and
-local configuration.
+Build features decide whether some checked-in capabilities are live. Check
+[`scripts/build.ts`](scripts/build.ts) and the corresponding runtime
+`feature(...)` call sites rather than assuming a module is enabled because it
+exists in the tree.
 
 ## Run from source
 
-Cat Code does not currently have a supported end-user installation path. For an
-existing source checkout, use Bun 1.4.0 or newer and Git:
+Cat Code has no supported end-user installer or update channel. Use a trusted
+checkout with Git and Bun 1.4 or newer:
 
-```bash
+```sh
 cd /path/to/cat-code && bun install
 cd /path/to/cat-code && bun run build:dev:full
 cd /path/to/cat-code && ./cli-dev
 ```
 
-`build:dev:full` is the repository's terminal-engine gate. It validates workspace
-maps, parses changed TypeScript through the branch-diff lint step, builds
-`./cli-dev` with the explicit development feature set from `scripts/build.ts`,
-and verifies that the resulting binary prints its version.
+`bun run build:dev:full` is the terminal-engine build gate. It validates the
+workspace maps, checks undefined names and changed TypeScript, builds the
+development feature set, and confirms the resulting `cli-dev` binary runs.
 
-For a faster unbundled source run:
+For an unbundled source run:
 
-```bash
+```sh
 cd /path/to/cat-code && bun run dev
 ```
 
-This executes the TypeScript entry point directly. It does not compile the
-`dev-full` feature set, so build-gated behavior can differ from `./cli-dev`.
+The source-run path and `cli-dev` can differ where behavior is build-gated.
+Use `./cli-dev --bare` when you deliberately want a smaller environment with
+less implicit startup behavior, including no normal instruction discovery,
+auto-memory, hook loading, or marketplace-plugin synchronization.
 
-Useful terminal examples:
+## Authentication, local state, and instructions
 
-```bash
-cd /path/to/cat-code && ./cli-dev
-cd /path/to/cat-code && ./cli-dev -p "Summarize this repository"
-cd /path/to/cat-code && ./cli-dev -p --output-format json "List the current risks"
-cd /path/to/cat-code && ./cli-dev -p --verbose --output-format stream-json "Review this branch"
-cd /path/to/cat-code && ./cli-dev --continue
-cd /path/to/cat-code && ./cli-dev --resume
-```
+Authentication and session state are local and sensitive:
 
-Use `--bare` for a deliberately smaller execution environment:
+- The default Cat Code home is `~/.cat-code`; set `CLAUDE_CONFIG_DIR` to use a
+  different configuration home.
+- User settings live in `~/.cat-code/settings.json`; project settings use
+  `.cat-code/settings.json` and private project settings use
+  `.cat-code/settings.local.json`.
+- Session transcripts are JSONL files under
+  `~/.cat-code/projects/<project>/<session>.jsonl`. Subagent records and
+  session memory sit alongside their parent session data.
+- Codex account profiles contain credentials under `~/codex-vault/accounts/`.
+  Treat that directory, the general credential store, and all session
+  transcripts as private local data.
 
-```bash
-cd /path/to/cat-code && ./cli-dev --bare -p "Inspect only the context I supplied"
-```
+On macOS, the general credential layer prefers Keychain and falls back to a
+mode-`0600` local file. Other supported platforms currently use the local
+credential-file implementation. Do not commit credentials, vault files,
+transcripts, or private local settings.
 
-Bare mode skips normal instruction discovery, hooks, LSP, plugin synchronization,
-auto-memory, keychain reads, background prefetches, and most implicit skill
-discovery. Explicit prompts, directories, MCP configuration, settings, agents,
-and plugin directories can still be supplied by flags.
+Instructions are layered. The current project-facing locations are `CLAUDE.md`,
+`.cat-code/CLAUDE.md`, `.cat-code/rules/*.md`, and `CLAUDE.local.md`; selected
+`.claude` paths remain compatibility inputs. New Cat Code project
+configuration should prefer `.cat-code`.
 
-## Authentication
+## Desktop developer preview
 
-The two built-in OAuth entry points serve different account systems:
+The Electron application in [`app/`](app/) runs real engine-backed sessions
+from source. It includes session management, transcript projection, permissions,
+settings and account surfaces, worker views, history restore, and desktop peer
+sessions.
 
-| Action | Purpose |
-|---|---|
-| `./cli-dev auth login` | Anthropic login: Claude subscription OAuth or Console/API billing. |
-| `/login` inside an interactive session | OpenAI/Codex subscription login. |
-| `./cli-dev codex status --json` | Inspect the configured Codex account pool. |
-
-Anthropic also supports `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, provider
-credential helpers, and provider-specific platform credentials. Bedrock,
-Vertex, and Foundry use their own authentication mechanisms.
-
-On macOS, the general secure-storage layer prefers Keychain and falls back to a
-mode-`0600` plaintext file. Non-macOS platforms currently use that plaintext
-layer rather than a completed libsecret integration. Independently, the Claude
-and Codex account pools persist token-bearing account JSON under
-`~/claude-vault` and `~/codex-vault`; those directories are not relocated by
-`CLAUDE_CONFIG_DIR`.
-
-`WebSearch` uses Exa and requires `EXA_API_KEY`. Without it the tool is not
-offered to the model at all; normal filesystem, shell, MCP, and `WebFetch`
-capabilities remain available.
-
-## Local state and configuration
-
-`CLAUDE_CONFIG_DIR` overrides the default configuration home of `~/.cat-code`.
-The principal paths are:
-
-| Path | Purpose |
-|---|---|
-| `~/.cat-code/settings.json` | User settings. |
-| `~/.cat-code/.cat-code.json` | Global configuration and startup preferences. |
-| `~/.cat-code/projects/` | Project-keyed transcripts, subagent records, memory, and session state. |
-| `~/.cat-code/agents/` | User-defined agents. |
-| `~/.cat-code/skills/` | User-installed skills. |
-| `~/claude-vault/accounts/` | Claude account-pool records, including OAuth tokens. |
-| `~/codex-vault/accounts/` | Codex account-pool records, including OAuth tokens. |
-| `.cat-code/settings.json` | Repository-shared project settings. |
-| `.cat-code/settings.local.json` | Private project-local settings. |
-| `CLAUDE.md` or `.cat-code/CLAUDE.md` | Repository instructions. |
-| `CLAUDE.local.md` | Private repository instructions. |
-| `.cat-code/rules/*.md` | Path-sensitive project rules. |
-
-Normal setting precedence is user, project, local, command-line settings, then
-managed policy. Legacy `.claude` instruction and rule paths are still read for
-compatibility; new Cat Code-specific configuration should prefer `.cat-code`.
-
-## Experimental clients
-
-### Electron desktop developer preview
-
-The Electron app is a substantial development preview with real engine-backed
-sessions, split panes, transcript rendering, permissions, session restore,
-accounts, settings, goals, tasks, and workspace controls.
-
-Run it from source:
-
-```bash
-cd /path/to/cat-code && bun run --cwd app dev
-```
-
-Its process boundary is intentionally strict:
+Its runtime boundary is deliberate:
 
 ```text
 React/Vite renderer
-  -> sandboxed, default-deny preload
-  -> Electron main and durable host registry
+  -> default-deny preload
+  -> Electron main and host registry
   -> Electron-free supervisor
-  -> one Bun engine sidecar per live session
-  -> raw AppSessionEvent frames back to the renderer
+  -> one Bun engine sidecar per live desktop session
+  -> raw session events back to the renderer
 ```
 
-The sidecar is the final inbound trust boundary. It validates the closed message
-vocabulary, session addresses, schemas, frame sizes, rates, permission request
-identities, and workspace trust. Credentials stay on the engine side, and
-outbound frames pass through secret scanning.
+The supervisor communicates with sidecars over Unix-domain sockets. The
+sidecar is the final inbound validation boundary: it accepts a closed message
+vocabulary, validates request shape and limits, reattaches engine-minted
+permission data, and secret-screens outbound session events.
 
-The desktop client is not yet packaged, signed, auto-updating, or release-tested.
-Packaging work has not opened, graphical acceptance remains incomplete, and
-resource use scales with the one-engine-process-per-live-session design. Treat
-it as a developer preview, not an installable desktop release.
+Run the preview from source:
 
-## Architecture
-
-The terminal path is the authoritative engine:
-
-```text
-src/entrypoints/cli.tsx
-  -> src/main.tsx
-  -> src/screens/REPL.tsx
-  -> src/QueryEngine.ts and src/query.ts
-  -> src/services/api/
-  -> selected provider
+```sh
+cd /path/to/cat-code && bun run --cwd app dev
 ```
 
-Supporting systems surround that loop:
-
-| Area | Primary source |
-|---|---|
-| Built-in tools and exposure | `src/tools.ts`, `src/tools/` |
-| Commands and skills | `src/commands.ts`, `src/commands/`, `src/skills/` |
-| Agents and workers | `src/tools/AgentTool/`, `src/tasks/`, `src/coordinator/` |
-| Provider routing | `src/utils/model/providers.ts`, `src/services/api/` |
-| Settings and persistence | `src/utils/settings/`, `src/utils/config.ts`, `src/utils/sessionStorage.ts` |
-| Memory | `src/memdir/`, `src/services/SessionMemory/` |
-| Desktop runtime | `app/` |
-| Build feature sets | `scripts/build.ts` |
-
-Many source-level capabilities are build-gated. A feature is live only when its
-name is compiled into the selected feature set and runtime code consumes it.
-Treat `scripts/build.ts` and the corresponding `feature(...)` call sites as the
-source of truth rather than assuming every checked-in module ships.
+Treat it as a developer preview, not a released desktop product. It is not a
+supported public download, installer, updater, or distribution channel. Each
+live desktop session has its own Bun engine process, so resource use scales
+with the number of live sessions. Main and preload changes require a full
+development-app relaunch; renderer edits hot-reload during a normal source
+development run.
 
 ## Development and verification
 
-The repository contains three separate build and test domains.
+The root engine and desktop app have separate verification batteries.
 
 ### Terminal engine (`src/`, `scripts/`)
 
-```bash
+```sh
 cd /path/to/cat-code && bun run build:dev:full
 cd /path/to/cat-code && bun test path/to/focused.test.ts
 ```
 
-There is no root all-tests script. Root `bun run typecheck` is a known-red
-historical baseline and is not the engine gate.
+There is no root all-tests command. Root `bun run typecheck` has a known
+historical error baseline and is not the engine gate.
 
 ### Desktop (`app/`)
 
-```bash
+```sh
 cd /path/to/cat-code && bun test app/
 cd /path/to/cat-code && bun run --cwd app typecheck
 cd /path/to/cat-code && bun run --cwd app typecheck:sidecar
@@ -291,41 +188,30 @@ cd /path/to/cat-code && bun run --cwd app test:hardening
 cd /path/to/cat-code && bun run --cwd app renderer:build
 ```
 
-## Important limitations
-
-- **No supported distribution:** do not use `install.sh`, `cat-code install`, or
-  `cat-code update` as Cat Code release mechanisms. Inherited paths still depend
-  partly on upstream Claude Code artifact or package infrastructure.
-- **No declared license:** the repository has no root `LICENSE`, `NOTICE`, or
-  package license field. Private access does not grant redistribution rights.
-- **Build-dependent behavior:** development builds enable a finite feature set,
-  not every implementation present in the tree.
-- **Incomplete naming migration:** `.cat-code` is preferred, but compatible
-  `.claude` paths and upstream-facing names remain in selected surfaces.
-- **Experimental desktop client:** Electron is a useful development surface, not
-  a supported public application.
-- **No generic OpenAI API-key route:** GPT models require the Codex OAuth account
-  pool used by the ChatGPT/Codex subscription integration.
-- **Local-first, not hosted:** remote-control and always-on deployment work is
-  incomplete and should not be treated as a production service boundary.
+Run the battery for every area you change. The desktop hardening check is a
+required security boundary check for changes under `app/`.
 
 ## Repository guide
 
-| Document | Purpose |
-|---|---|
-| `CLAUDE.md` | Authoritative contributor rules, architecture constraints, and verification batteries. |
-| `AGENTS.md` | Agent-facing repository instructions. |
-| `docs/maps/WORKSPACE_MAP.md` | Router to current subsystem ownership maps. |
-| `docs/2026-04-30-docs-readme.md` | Canonical-versus-historical documentation index. |
-| `docs/migration/STATUS.md` | Current Electron migration program state. |
+| Document | Use it for |
+| --- | --- |
+| [`CLAUDE.md`](CLAUDE.md) | Repository rules, architecture constraints, and required verification. |
+| [`AGENTS.md`](AGENTS.md) | Agent-facing repository instructions. |
+| [`docs/maps/WORKSPACE_MAP.md`](docs/maps/WORKSPACE_MAP.md) | Entry point to current subsystem ownership maps. |
+| [`docs/maps/codex-core.md`](docs/maps/codex-core.md) | Codex account-pool, request-routing, and transport behavior. |
+| [`docs/maps/web-app-runtime.md`](docs/maps/web-app-runtime.md) | Desktop runtime, sidecar, renderer, and host boundaries. |
+| [`docs/migration/STATUS.md`](docs/migration/STATUS.md) | Current desktop migration status. |
 
-Maps route to source; source remains authoritative. Dated plans and reports are
-historical records unless their containing index explicitly says otherwise.
+Maps route to ownership; current source is authoritative. Dated plans and
+reports are historical unless their containing index says otherwise.
 
-## Provenance
+## Boundaries and provenance
 
-Cat Code is a private fork and reconstruction of Claude Code, adapted into a
-personal agent runtime. Claude Code and its original source belong to
-Anthropic. Additional checked-in components retain their own provenance and
-license obligations. A complete Cat Code licensing and attribution package has
-not yet been assembled.
+Cat Code is private source software. It is not published as a general package,
+and this repository does not provide a declared root license or redistribution
+grant. Do not infer rights to redistribute it, its vendored material, or
+upstream-derived components.
+
+The codebase began as a Claude Code fork and contains components with their own
+provenance and obligations. It is a local development runtime, not a hosted
+service or a released desktop application.
