@@ -10,6 +10,7 @@ import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 import { getDefaultAppState, type AppState } from './state/AppStateStore.js'
 import { createFileStateCacheWithSizeLimit } from './utils/fileStateCache.js'
 import {
+  createAssistantMessage,
   createSystemAPIErrorMessage,
   createSystemTransportRecoveryMessage,
   createUserMessage,
@@ -96,7 +97,9 @@ afterEach(() => {
   macroState.MACRO = originalMacro
 })
 
-async function collectFrames(): Promise<Record<string, unknown>[]> {
+async function collectFrames(
+  options: { interrupt?: { reason?: string } } = {},
+): Promise<Record<string, unknown>[]> {
   let state: AppState = getDefaultAppState()
   const engine = new QueryEngine({
     cwd: process.cwd(),
@@ -114,12 +117,33 @@ async function collectFrames(): Promise<Record<string, unknown>[]> {
     customSystemPrompt: '',
     recordTranscript: async () => null,
   })
+  if (options.interrupt) engine.interrupt(options.interrupt.reason)
   const frames: Record<string, unknown>[] = []
   for await (const message of engine.submitMessage('go')) {
     frames.push(message as unknown as Record<string, unknown>)
   }
   return frames
 }
+
+test('an interrupted result prefers its string abort reason over a stale assistant stop reason', async () => {
+  const staleAssistant = createAssistantMessage({ content: 'partial response' })
+  staleAssistant.message.stop_reason = 'tool_use'
+  queryMessages = [staleAssistant]
+
+  const submitInterruptFrames = await collectFrames({
+    interrupt: { reason: 'interrupt' },
+  })
+  expect(submitInterruptFrames.find(frame => frame.type === 'result')).toMatchObject({
+    subtype: 'interrupted',
+    stop_reason: 'interrupt',
+  })
+
+  const defaultAbortFrames = await collectFrames({ interrupt: {} })
+  expect(defaultAbortFrames.find(frame => frame.type === 'result')).toMatchObject({
+    subtype: 'interrupted',
+    stop_reason: 'tool_use',
+  })
+})
 
 test('a transport recovery message becomes an api_retry frame the desktop can read', async () => {
   queryMessages = [

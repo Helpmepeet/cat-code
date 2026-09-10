@@ -2556,7 +2556,7 @@ export class SidecarServer {
     }
 
     if (this.activeTurn) {
-      this.controller.abort('force-send')
+      this.controller.abort('force-send', 'interrupt')
     } else {
       this.scheduleBoundaryDrain()
     }

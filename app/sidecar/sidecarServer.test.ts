@@ -1994,6 +1994,7 @@ async function serverWithStagedPrompt(prompt: SubmitPromptValue) {
 test('prompt.force aborts only while the displayed queue head is still waiting', async () => {
   const prompts: string[] = []
   let aborts = 0
+  const abortIntents: Array<'interrupt' | undefined> = []
   let releaseCurrent: (() => void) | undefined
   const controller = new AppSessionController({
     async *runTurn({ prompt, options }) {
@@ -2003,8 +2004,9 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
         releaseCurrent = resolve
       })
     },
-    abort() {
+    abort(intent) {
       aborts += 1
+      abortIntents.push(intent)
       releaseCurrent?.()
     },
   })
@@ -2040,6 +2042,7 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
 
   expect(forceResults(received).at(-1)?.ok).toBe(true)
   expect(aborts).toBe(1)
+  expect(abortIntents).toEqual(['interrupt'])
   expect(prompts).toEqual(['start', 'and the logs'])
 
   // A delayed duplicate sees that the engine-minted id has left the queue and
@@ -2060,6 +2063,44 @@ test('prompt.force aborts only while the displayed queue head is still waiting',
 
   releaseCurrent?.()
   server.close()
+})
+
+test('app.abort cannot spoof the submit-interrupt adapter intent', async () => {
+  let receivedIntent: 'interrupt' | undefined
+  let releaseCurrent: (() => void) | undefined
+  const controller = new AppSessionController({
+    async *runTurn() {
+      await new Promise<void>(resolve => {
+        releaseCurrent = resolve
+      })
+    },
+    abort(intent) {
+      receivedIntent = intent
+      releaseCurrent?.()
+    },
+  })
+  const { server, conn } = connect(controller)
+
+  server.handleData(
+    conn,
+    clientFrame({ type: 'app.submit', requestId: 'turn', prompt: 'start' }),
+  )
+  await waitFor(() => controller.isTurnActive())
+  server.handleData(
+    conn,
+    clientFrame({
+      type: 'app.abort',
+      requestId: 'spoofed-interrupt',
+      reason: 'interrupt',
+    }),
+  )
+  await waitFor(() => !controller.isTurnActive())
+
+  expect(receivedIntent).toBeUndefined()
+  expect(controller.getAbortState()).toEqual({
+    status: 'aborted',
+    reason: 'interrupt',
+  })
 })
 
 test('prompt.force rejects renderer-authored queue state before aborting', async () => {

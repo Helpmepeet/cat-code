@@ -20,6 +20,8 @@ import {
   type AppSessionEvent,
 } from './sessionEvents.js'
 
+export type AppSessionAbortIntent = 'interrupt'
+
 export type AppSessionSubmitOptions = {
   uuid?: string
   isMeta?: boolean
@@ -46,7 +48,7 @@ export type AppSessionControllerAdapter = {
       request: AppPermissionRequest,
     ) => Promise<AppPermissionResponse>
   }): AsyncIterable<SDKMessage>
-  abort?: () => void
+  abort?: (intent?: AppSessionAbortIntent) => void
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
     targetUuid: string,
@@ -130,7 +132,10 @@ export class AppSessionController {
     return true
   }
 
-  abort(reason = 'Session aborted'): void {
+  abort(
+    reason = 'Session aborted',
+    adapterIntent?: AppSessionAbortIntent,
+  ): void {
     if (!this.activeTurn && this.pendingPermissionRequests.size === 0) {
       return
     }
@@ -152,7 +157,11 @@ export class AppSessionController {
     }
 
     this.abortController?.abort(reason)
-    this.adapter.abort?.()
+    if (adapterIntent === undefined) {
+      this.adapter.abort?.()
+    } else {
+      this.adapter.abort?.(adapterIntent)
+    }
   }
 
   rewindBeforeUserMessage(

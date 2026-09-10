@@ -7,6 +7,7 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
     let createEngineCalls = 0
     let refreshAbortControllerCalls = 0
     let interruptCalls = 0
+    let receivedIntent: 'interrupt' | undefined
     let rewindTarget = ''
     let forkTarget = ''
     const session = createQueryEngineAppSession({
@@ -24,8 +25,9 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
           refreshAbortController() {
             refreshAbortControllerCalls += 1
           },
-          interrupt() {
+          interrupt(intent) {
             interruptCalls += 1
+            receivedIntent = intent
           },
           async rewindBeforeUserMessage(targetUuid: string) {
             rewindTarget = targetUuid
@@ -48,7 +50,7 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
     for await (const _message of session.submitMessage('first')) {
       // drain
     }
-    session.interrupt?.()
+    session.interrupt?.('interrupt')
     await session.rewindBeforeUserMessage?.('rewind-target')
     await session.forkBeforeUserMessage?.('fork-target')
     for await (const _message of session.submitMessage('second')) {
@@ -58,6 +60,7 @@ describe('createQueryEngineAppSession abort lifecycle', () => {
     expect(createEngineCalls).toBe(1)
     expect(refreshAbortControllerCalls).toBe(2)
     expect(interruptCalls).toBe(1)
+    expect(receivedIntent).toBe('interrupt')
     expect(rewindTarget).toBe('rewind-target')
     expect(forkTarget).toBe('fork-target')
   })

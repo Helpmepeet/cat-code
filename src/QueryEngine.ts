@@ -1337,6 +1337,11 @@ export class QueryEngine {
           result.message.content[0]?.text === INTERRUPT_MESSAGE_FOR_TOOL_USE))
 
     if (isInterrupted) {
+      const abortReason = this.abortController.signal.reason
+      const stopReason =
+        typeof abortReason === 'string' && abortReason.length > 0
+          ? abortReason
+          : lastStopReason ?? 'interrupted'
       yield {
         type: 'result',
         subtype: 'interrupted',
@@ -1344,7 +1349,7 @@ export class QueryEngine {
         duration_api_ms: getTotalAPIDuration(),
         is_error: false,
         num_turns: turnCount,
-        stop_reason: lastStopReason ?? 'interrupted',
+        stop_reason: stopReason,
         session_id: getSessionId(),
         total_cost_usd: getTotalCost(),
         usage: this.totalUsage,
@@ -1443,8 +1448,8 @@ export class QueryEngine {
     }
   }
 
-  interrupt(): void {
-    this.abortController.abort()
+  interrupt(reason?: string): void {
+    this.abortController.abort(reason)
   }
 
   refreshAbortController(): AbortController {

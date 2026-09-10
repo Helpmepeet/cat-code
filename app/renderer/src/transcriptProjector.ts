@@ -2231,13 +2231,12 @@ function projectResultFrame(
   if (result === null || errors === null || durationMs === null || totalCostUsd === null) {
     return changed
   }
-  // A current engine writes an origin-tagged interruption user frame before its
-  // result. That durable marker is the one transcript seam; the result is a
-  // live lifecycle byproduct and would otherwise duplicate it. Legacy emitters
-  // without the origin retain their existing interrupted result seam.
+  // A submit-interrupt result has no durable interruption marker and is only a
+  // live lifecycle byproduct. Other interrupted results remain transcript rows,
+  // including explicit stops that carry a durable interruption marker.
   if (
     subtype === 'interrupted' &&
-    draft.session.rows.some(row => row.kind === 'turn-stopped')
+    message.stop_reason === 'interrupt'
   ) {
     markFrameSeen(draft, frameId)
     return true

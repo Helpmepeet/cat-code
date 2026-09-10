@@ -72,19 +72,22 @@ describe('createQueryEngineSessionController', () => {
 
   test('adapter abort delegates to interrupt', () => {
     let interruptCalls = 0
+    let receivedIntent: 'interrupt' | undefined
 
     const adapter = createQueryEngineSessionAdapter({
       async *submitMessage() {
         yield createAssistantMessage('noop')
       },
-      interrupt() {
+      interrupt(intent) {
         interruptCalls += 1
+        receivedIntent = intent
       },
     })
 
-    adapter.abort?.()
+    adapter.abort?.('interrupt')
 
     expect(interruptCalls).toBe(1)
+    expect(receivedIntent).toBe('interrupt')
   })
 
   test('exposes message-targeted history operations without changing turn lifecycle', async () => {

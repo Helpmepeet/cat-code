@@ -12,6 +12,7 @@ import {
   createAppRuntimeCanUseTool,
   type AppPermissionRequestHandler,
 } from './appRuntimeCanUseTool.js'
+import type { AppSessionAbortIntent } from './AppSessionController.js'
 import type {
   QueryEngineSessionLike,
   QueryEngineSessionOptions,
@@ -58,8 +59,12 @@ export function createQueryEngineAppSession(
         currentPermissionHandler = undefined
       }
     },
-    interrupt() {
-      engine.interrupt?.()
+    interrupt(intent?: AppSessionAbortIntent) {
+      if (intent === undefined) {
+        engine.interrupt?.()
+      } else {
+        engine.interrupt?.(intent)
+      }
     },
     refreshAbortController() {
       return engine.refreshAbortController?.() ?? abortController

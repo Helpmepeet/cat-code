@@ -183,6 +183,7 @@ test('projects one durable stopped seam without interruption protocol text', () 
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([
     expect.objectContaining({ kind: 'turn-stopped' }),
+    expect.objectContaining({ kind: 'result', subtype: 'interrupted' }),
   ])
 })
 
@@ -913,6 +914,7 @@ test('projects result with subtype: interrupted as a non-error result row', () =
     messageFrame('session-1', {
       type: 'result',
       subtype: 'interrupted',
+      stop_reason: 'interrupted',
       is_error: false,
       duration_ms: 1800,
       total_cost_usd: 0,
@@ -929,6 +931,22 @@ test('projects result with subtype: interrupted as a non-error result row', () =
     durationMs: 1800,
     totalCostUsd: 0,
   })
+})
+
+test('suppresses and deduplicates a submit-interrupt result', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const frame = messageFrame('session-1', {
+    type: 'result',
+    subtype: 'interrupted',
+    stop_reason: 'interrupt',
+    is_error: false,
+    uuid: 'result-submit-interrupt-1',
+  })
+
+  state = projectServerFrame(state, frame)
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+  expect(projectServerFrame(state, frame)).toBe(state)
 })
 
 /* ─────────────────────────────────────────────────────────────────────────

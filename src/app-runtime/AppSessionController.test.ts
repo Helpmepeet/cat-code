@@ -295,6 +295,59 @@ describe('AppSessionController', () => {
     )
   })
 
+  test('keeps the human abort reason separate from the adapter interrupt intent', async () => {
+    const exerciseAbort = async (adapterIntent?: 'interrupt') => {
+      let signal: AbortSignal | undefined
+      let resolveStarted: (() => void) | undefined
+      let releaseTurn: (() => void) | undefined
+      let receivedIntent: 'interrupt' | undefined
+      const started = new Promise<void>(resolve => {
+        resolveStarted = resolve
+      })
+      const turnGate = new Promise<void>(resolve => {
+        releaseTurn = resolve
+      })
+      const controller = new AppSessionController({
+        async *runTurn(args) {
+          signal = args.signal
+          resolveStarted?.()
+          await turnGate
+        },
+        abort(intent) {
+          receivedIntent = intent
+          releaseTurn?.()
+        },
+      })
+
+      const submitPromise = controller.submit('queued message')
+      await started
+      controller.abort('Human stopped the turn', adapterIntent)
+      await submitPromise
+
+      return {
+        receivedIntent,
+        signalReason: signal?.reason,
+        abortState: controller.getAbortState(),
+      }
+    }
+
+    const normalAbort = await exerciseAbort()
+    expect(normalAbort.receivedIntent).toBeUndefined()
+    expect(normalAbort.signalReason).toBe('Human stopped the turn')
+    expect(normalAbort.abortState).toEqual({
+      status: 'aborted',
+      reason: 'Human stopped the turn',
+    })
+
+    const submitInterrupt = await exerciseAbort('interrupt')
+    expect(submitInterrupt.receivedIntent).toBe('interrupt')
+    expect(submitInterrupt.signalReason).toBe('Human stopped the turn')
+    expect(submitInterrupt.abortState).toEqual({
+      status: 'aborted',
+      reason: 'Human stopped the turn',
+    })
+  })
+
   test('waitUntilIdle settles from the active-turn writer without polling', async () => {
     let releaseTurn: (() => void) | undefined
     const turnGate = new Promise<void>(resolve => {
