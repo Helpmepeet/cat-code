@@ -51,6 +51,7 @@ export function startAgentSummarization(
   cacheSafeParams: CacheSafeParams,
   setAppState: TaskContext['setAppState'],
   options: { intervalMs?: number } = {},
+  runId?: string,
 ): { stop: () => void } {
   const intervalMs = options.intervalMs ?? SUMMARY_INTERVAL_MS
   // Drop forkContextMessages from the closure — runSummary rebuilds it each
@@ -166,7 +167,7 @@ export function startAgentSummarization(
             `[AgentSummary] Summary result for ${taskId}: ${summaryText}`,
           )
           previousSummary = summaryText
-          updateAgentSummary(taskId, summaryText, setAppState)
+          updateAgentSummary(taskId, summaryText, setAppState, runId)
           break
         }
       }

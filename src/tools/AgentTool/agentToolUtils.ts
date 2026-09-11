@@ -952,6 +952,7 @@ export async function runAsyncAgentLifecycle({
   toolUseContext,
   rootSetAppState,
   agentIdForCleanup,
+  runId,
   enableSummarization,
   getWorktreeResult,
   formatFinalMessage,
@@ -969,6 +970,7 @@ export async function runAsyncAgentLifecycle({
   toolUseContext: ToolUseContext
   rootSetAppState: SetAppState
   agentIdForCleanup: string
+  runId?: string
   enableSummarization: boolean
   getWorktreeResult: () => Promise<{
     worktreePath?: string
@@ -1003,6 +1005,8 @@ export async function runAsyncAgentLifecycle({
             asAgentId(taskId),
             params,
             rootSetAppState,
+            {},
+            runId,
           )
           stopSummarization = stop
         }
@@ -1014,7 +1018,13 @@ export async function runAsyncAgentLifecycle({
       // means live is always a suffix of disk, so merge is order-correct.
       rootSetAppState(prev => {
         const t = prev.tasks[taskId]
-        if (!isLocalAgentTask(t) || !t.retain) return prev
+        if (
+          !isLocalAgentTask(t) ||
+          !t.retain ||
+          (runId !== undefined && t.runId !== runId)
+        ) {
+          return prev
+        }
         const base = t.messages ?? []
         return {
           ...prev,
@@ -1034,6 +1044,7 @@ export async function runAsyncAgentLifecycle({
         taskId,
         getProgressUpdate(tracker),
         rootSetAppState,
+        runId,
       )
       const lastToolName = getLastToolUseName(message)
       if (lastToolName) {
@@ -1088,7 +1099,7 @@ export async function runAsyncAgentLifecycle({
     // preserved through the failure notification.
     if (agentResult.error) {
       const apiErrorMsg = agentResult.error
-      failAsyncAgent(taskId, apiErrorMsg, rootSetAppState)
+      failAsyncAgent(taskId, apiErrorMsg, rootSetAppState, runId)
       appendSubagentTerminal(parentTranscriptPath, {
         sessionId: parentSessionId,
         agentId: asAgentId(taskId),
@@ -1127,12 +1138,13 @@ export async function runAsyncAgentLifecycle({
           durationMs: agentResult.totalDurationMs,
         },
         toolUseId: toolUseContext.toolUseId,
+        runId,
         ...worktreeResult,
       })
       return
     }
 
-    completeAsyncAgent(agentResult, rootSetAppState)
+    completeAsyncAgent(agentResult, rootSetAppState, runId)
 
     appendSubagentTerminal(parentTranscriptPath, {
       sessionId: parentSessionId,
@@ -1186,6 +1198,7 @@ export async function runAsyncAgentLifecycle({
         durationMs: agentResult.totalDurationMs,
       },
       toolUseId: toolUseContext.toolUseId,
+      runId,
       ...worktreeResult,
     })
   } catch (error) {
@@ -1195,7 +1208,7 @@ export async function runAsyncAgentLifecycle({
       // but only this catch handler has agentMessages, so the notification
       // must fire unconditionally. Transition status BEFORE worktree cleanup
       // so TaskOutput unblocks even if git hangs (gh-20236).
-      killAsyncAgent(taskId, rootSetAppState)
+      killAsyncAgent(taskId, rootSetAppState, runId)
       logEvent('tengu_agent_tool_terminated', {
         agent_type:
           metadata.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1232,6 +1245,7 @@ export async function runAsyncAgentLifecycle({
         status: 'killed',
         setAppState: rootSetAppState,
         toolUseId: toolUseContext.toolUseId,
+        runId,
         finalMessage: partialResult,
         usage: {
           totalTokens: getTokenCountFromTracker(tracker),
@@ -1243,7 +1257,7 @@ export async function runAsyncAgentLifecycle({
       return
     }
     const msg = errorMessage(error)
-    failAsyncAgent(taskId, msg, rootSetAppState)
+    failAsyncAgent(taskId, msg, rootSetAppState, runId)
     appendSubagentTerminal(parentTranscriptPath, {
       sessionId: parentSessionId,
       agentId: asAgentId(taskId),
@@ -1271,6 +1285,7 @@ export async function runAsyncAgentLifecycle({
       error: msg,
       setAppState: rootSetAppState,
       toolUseId: toolUseContext.toolUseId,
+      runId,
       finalMessage: partialResult,
       usage: {
         totalTokens: getTokenCountFromTracker(tracker),

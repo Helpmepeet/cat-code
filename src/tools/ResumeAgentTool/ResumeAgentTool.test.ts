@@ -663,7 +663,20 @@ describe('ResumeAgentTool', () => {
           lastReportedToolCount: 0,
           lastReportedTokenCount: 0,
           isBackgrounded: true,
-          pendingMessages: ['queued-1', 'queued-2'],
+          pendingMessages: [
+            {
+              id: 'queued-1',
+              message: 'queued-1',
+              status: 'pending',
+              acceptedAt: 1,
+            },
+            {
+              id: 'queued-2',
+              message: 'queued-2',
+              status: 'pending',
+              acceptedAt: 2,
+            },
+          ],
           retain: false,
           diskLoaded: false,
         },
@@ -682,8 +695,18 @@ describe('ResumeAgentTool', () => {
       message: 'Resumed "@worker-one" in the background.',
     })
     expect(getState().tasks[agentId].pendingMessages).toEqual([
-      'queued-1',
-      'queued-2',
+      {
+        id: 'queued-1',
+        message: 'queued-1',
+        status: 'pending',
+        acceptedAt: 1,
+      },
+      {
+        id: 'queued-2',
+        message: 'queued-2',
+        status: 'pending',
+        acceptedAt: 2,
+      },
     ])
     expect(getState().tasks[agentId].status).toBe('running')
     expect(runAsyncAgentLifecycle).toHaveBeenCalledTimes(1)

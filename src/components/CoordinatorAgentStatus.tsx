@@ -15,7 +15,7 @@ import { stringWidth } from '../ink/stringWidth.js';
 import { Box, Text, wrapText } from '../ink.js';
 import { type AppState, useAppState, useSetAppState } from '../state/AppState.js';
 import { enterTeammateView, exitTeammateView } from '../state/teammateViewHelpers.js';
-import { isPanelAgentTask, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
+import { getUnresolvedAgentMessageDeliveries, isPanelAgentTask, type LocalAgentTaskState } from '../tasks/LocalAgentTask/LocalAgentTask.js';
 import { formatDuration, formatNumber } from '../utils/format.js';
 import { evictTerminalTask } from '../utils/task/framework.js';
 import { getAgentProfileLabel, isTerminalStatus } from './tasks/taskStatusUtils.js';
@@ -181,7 +181,7 @@ function AgentLine(t0) {
   const resumeText = task.resumedAt && isRunning ? " · resumed" : "";
   const tokenText = `${t2}${resumeText}`;
   const profileText = profileLabel ? ` · ${profileLabel}` : "";
-  const queuedCount = task.pendingMessages.length;
+  const queuedCount = getUnresolvedAgentMessageDeliveries(task).length;
   const queuedText = queuedCount > 0 ? ` · ${queuedCount} queued` : "";
   const displayDescription = task.progress?.summary || task.description;
   const highlighted = isSelected || hover;

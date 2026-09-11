@@ -74,11 +74,20 @@ import {
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
 import {
+  createAgentPendingMessageAttachment,
   createAttachmentMessage,
   filterDuplicateMemoryAttachments,
   getAttachmentMessages,
   startRelevantMemoryPrefetch,
 } from './utils/attachments.js'
+import {
+  claimPendingMessagesOrClose,
+  claimPendingMessagesForRequest,
+  settleAgentMessagesForTerminal,
+  settleAgentMessagesForRun,
+  settleAgentMessageDeliveries,
+  submitPreparedAgentMessages,
+} from './tasks/LocalAgentTask/LocalAgentTask.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
 const skillPrefetch = feature('EXPERIMENTAL_SKILL_SEARCH')
   ? (require('./services/skillSearch/prefetch.js') as typeof import('./services/skillSearch/prefetch.js'))
@@ -814,6 +823,11 @@ async function* queryLoop(
       | undefined
 
     let attemptWithFallback = true
+    const localAgentRequestId = toolUseContext.agentId
+      ? deps.uuid()
+      : undefined
+    let submittedLocalAgentMessageIds: string[] = []
+    let confirmedLocalAgentMessageIds = false
 
     queryCheckpoint('query_api_loop_start')
     try {
@@ -827,6 +841,14 @@ async function* queryLoop(
             userContext,
             systemContext,
           })
+          if (toolUseContext.agentId && localAgentRequestId) {
+            submittedLocalAgentMessageIds = submitPreparedAgentMessages(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              localAgentRequestId,
+              toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+            )
+          }
 
           let streamingFallbackOccured = false
           queryCheckpoint('query_api_streaming_start')
@@ -1049,6 +1071,27 @@ async function* queryLoop(
             }
           }
           queryCheckpoint('query_api_streaming_end')
+          const completedAssistantMessage = assistantMessages.at(-1)
+          if (
+            toolUseContext.agentId &&
+            submittedLocalAgentMessageIds.length > 0 &&
+            !confirmedLocalAgentMessageIds &&
+            completedAssistantMessage &&
+            !completedAssistantMessage.isApiErrorMessage &&
+            !streamingFallbackOccured &&
+            !toolUseContext.abortController.signal.aborted
+          ) {
+            settleAgentMessageDeliveries(
+              toolUseContext.agentId,
+              submittedLocalAgentMessageIds,
+              toolUseContext.agentRunId,
+              'delivered',
+              'The provider returned a valid response.',
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            confirmedLocalAgentMessageIds = true
+          }
 
           // Yield deferred microcompact boundary message using actual API-reported
           // token deletion count instead of client-side estimates.
@@ -1144,6 +1187,17 @@ async function* queryLoop(
         }
       }
     } catch (error) {
+      if (toolUseContext.agentId) {
+        settleAgentMessagesForRun(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'undelivered',
+          submittedLocalAgentMessageIds.length > 0
+            ? 'The request failed after submission.'
+            : 'The request could not be prepared.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+      }
       logError(error)
       const errorMessage =
         error instanceof Error ? error.message : String(error)
@@ -1503,6 +1557,21 @@ async function* queryLoop(
       const partialStreamFailure =
         getEligibleCodexPartialStreamFailure(lastMessage)
       if (partialStreamFailure && lastMessage) {
+        if (
+          toolUseContext.agentId &&
+          submittedLocalAgentMessageIds.length > 0 &&
+          !confirmedLocalAgentMessageIds
+        ) {
+          settleAgentMessageDeliveries(
+            toolUseContext.agentId,
+            submittedLocalAgentMessageIds,
+            toolUseContext.agentRunId,
+            'uncertain',
+            'The provider stream ended ambiguously after submission.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+          confirmedLocalAgentMessageIds = true
+        }
         const abortSignal = toolUseContext.abortController.signal
         // The marker reports what the provider stream showed. This reports
         // what the engine actually materialized. They should agree, and a
@@ -1591,11 +1660,35 @@ async function* queryLoop(
         }
       }
 
+      if (
+        toolUseContext.agentId &&
+        submittedLocalAgentMessageIds.length > 0 &&
+        !confirmedLocalAgentMessageIds
+      ) {
+        settleAgentMessageDeliveries(
+          toolUseContext.agentId,
+          submittedLocalAgentMessageIds,
+          toolUseContext.agentRunId,
+          'uncertain',
+          'The request ended without a valid provider response.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        confirmedLocalAgentMessageIds = true
+      }
+
       // Skip stop hooks when the last message is an API error (rate limit,
       // prompt-too-long, auth failure, etc.). The model never produced a
       // real response — hooks evaluating it create a death spiral:
       // error → hook blocking → retry → error → …
       if (lastMessage?.isApiErrorMessage) {
+        if (toolUseContext.agentId) {
+          settleAgentMessagesForTerminal(
+            toolUseContext.agentId,
+            toolUseContext.agentRunId,
+            'The provider returned an error before accepting the instruction.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+        }
         void executeStopFailureHooks(lastMessage, toolUseContext)
         return { reason: 'completed' }
       }
@@ -1622,6 +1715,14 @@ async function* queryLoop(
       }
 
       if (stopHookResult.preventContinuation) {
+        if (toolUseContext.agentId) {
+          settleAgentMessagesForTerminal(
+            toolUseContext.agentId,
+            toolUseContext.agentRunId,
+            'The worker stopped before accepting the instruction.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+        }
         return { reason: 'stop_hook_prevented' }
       }
 
@@ -1668,10 +1769,25 @@ async function* queryLoop(
           logForDebugging(
             `Token budget continuation #${decision.continuationCount}: ${decision.pct}% (${decision.turnTokens.toLocaleString()} / ${decision.budget.toLocaleString()})`,
           )
+          const localContinuationMessages = toolUseContext.agentId
+            ? claimPendingMessagesForRequest(
+                toolUseContext.agentId,
+                toolUseContext.agentRunId,
+                toolUseContext.setAppStateForTasks ??
+                  toolUseContext.setAppState,
+              )
+            : []
+          const localContinuationAttachments =
+            localContinuationMessages.map(message =>
+              createAttachmentMessage(
+                createAgentPendingMessageAttachment(message),
+              ),
+            )
           state = {
             messages: [
               ...messagesForQuery,
               ...assistantMessages,
+              ...localContinuationAttachments,
               createUserMessage({
                 content: decision.nudgeMessage,
                 isMeta: true,
@@ -1702,6 +1818,76 @@ async function* queryLoop(
             queryChainId: queryChainIdForAnalytics,
             queryDepth: queryTracking.depth,
           })
+          if (toolUseContext.agentId) {
+            const localCompletion = claimPendingMessagesOrClose(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            if (localCompletion.kind === 'claimed') {
+              settleAgentMessagesForTerminal(
+                toolUseContext.agentId,
+                toolUseContext.agentRunId,
+                'The token budget ended before the instruction was submitted.',
+                toolUseContext.setAppStateForTasks ??
+                  toolUseContext.setAppState,
+              )
+            }
+          }
+        }
+      }
+
+      if (toolUseContext.agentId) {
+        const localContinuation = claimPendingMessagesOrClose(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        if (localContinuation.kind === 'claimed') {
+          const nextTurnCount = turnCount + 1
+          const continuationAttachments = localContinuation.messages.map(
+            message =>
+              createAttachmentMessage(
+                createAgentPendingMessageAttachment(message),
+              ),
+          )
+          if (maxTurns && nextTurnCount > maxTurns) {
+            settleAgentMessagesForTerminal(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              'The turn budget was exhausted before the instruction was submitted.',
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            yield createAttachmentMessage({
+              type: 'max_turns_reached',
+              maxTurns,
+              turnCount: nextTurnCount,
+            })
+            return { reason: 'max_turns', turnCount: nextTurnCount }
+          }
+          for (const attachment of continuationAttachments) {
+            yield attachment
+          }
+          state = {
+            messages: [
+              ...messagesForQuery,
+              ...assistantMessages,
+              ...continuationAttachments,
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
+            hasAttemptedReactiveCompact,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount: nextTurnCount,
+            transition: { reason: 'next_turn' },
+          }
+          continue
         }
       }
 
@@ -2092,6 +2278,21 @@ async function* queryLoop(
 
     // Check if we've reached the max turns limit
     if (maxTurns && nextTurnCount > maxTurns) {
+      if (toolUseContext.agentId) {
+        settleAgentMessagesForRun(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'undelivered',
+          'The turn budget was exhausted before the instruction was submitted.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        settleAgentMessagesForTerminal(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'The worker reached its turn limit before accepting another instruction.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+      }
       yield createAttachmentMessage({
         type: 'max_turns_reached',
         maxTurns,

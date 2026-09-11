@@ -13,6 +13,7 @@ import {
   evictTerminalTask,
   generateTaskAttachments,
 } from './framework.js'
+import { markAgentMessageDeliveriesReported } from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 
 afterEach(() => {
   resetCommandQueue()
@@ -94,5 +95,42 @@ test('a queued or reserved task completion keeps its terminal task addressable',
 
   releaseTaskNotificationReservation(reservation)
   evictTerminalTask('worker', setAppState)
+  expect(state.tasks.worker).toBeUndefined()
+})
+
+test('unresolved local-worker delivery blocks eager and lazy eviction until reported', () => {
+  let state = {
+    tasks: {
+      worker: {
+        id: 'worker',
+        type: 'local_agent',
+        status: 'completed',
+        notified: true,
+        retain: false,
+        evictAfter: 0,
+        pendingMessages: [
+          {
+            id: 'message-1',
+            message: 'inspect the race',
+            status: 'uncertain',
+            acceptedAt: 1,
+            reported: false,
+          },
+        ],
+      },
+    },
+  } as unknown as AppState
+  const setAppState = (update: (previous: AppState) => AppState) => {
+    state = update(state)
+  }
+
+  evictTerminalTask('worker', setAppState)
+  expect(state.tasks.worker).toBeDefined()
+  expect(generateTaskAttachments(state).evictedTaskIds).toEqual([])
+
+  markAgentMessageDeliveriesReported('worker', ['message-1'], setAppState)
+  const { evictedTaskIds } = generateTaskAttachments(state)
+  expect(evictedTaskIds).toEqual(['worker'])
+  applyTaskEvictions(setAppState, evictedTaskIds)
   expect(state.tasks.worker).toBeUndefined()
 })

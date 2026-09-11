@@ -132,6 +132,33 @@ describe('LocalAgentTask foreground cleanup', () => {
     expect(appState.tasks[agentId]).toBeUndefined()
   })
 
+  test('unregisterAgentForeground retains unresolved instructions for the parent', () => {
+    const agentId = 'sync-agent-unresolved'
+    registerAgentForeground({
+      agentId,
+      description: 'Unresolved foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    expect(queuePendingMessageIfRunning(agentId, 'finish the audit', setAppState)).toBe(
+      true,
+    )
+
+    unregisterAgentForeground(agentId, setAppState)
+
+    expect(appState.tasks[agentId]).toMatchObject({
+      status: 'completed',
+      acceptingMessages: false,
+      pendingMessages: [
+        {
+          message: 'finish the audit',
+          status: 'undelivered',
+        },
+      ],
+    })
+  })
+
   test('unregisterAgentForeground hands back the account it just released', () => {
     // The regression this protects: the account is readable ONLY in the instant
     // before the release, because `releaseCodexLease` deletes the entry rather
@@ -309,6 +336,41 @@ describe('LocalAgentTask foreground cleanup', () => {
       handoffStatus: 'blocked',
       blockReason: 'Should I update the public API too?',
     })
+  })
+
+  test('terminal notification reports an unresolved instruction outcome', () => {
+    const agentId = 'sync-agent-delivery-report'
+    registerAgentForeground({
+      agentId,
+      description: 'Delivery report agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    queuePendingMessageIfRunning(agentId, 'send the final note', setAppState)
+    completeAgentTask(
+      {
+        agentId,
+        content: [{ type: 'text', text: 'done' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+    )
+    enqueueAgentNotification({
+      taskId: agentId,
+      description: 'Delivery report agent',
+      status: 'completed',
+      setAppState,
+      finalMessage: 'done',
+    })
+
+    const notification = dequeue()
+    expect(notification?.value).toContain('Unresolved worker instructions:')
+    expect(notification?.value).toContain('Undelivered:')
+    expect(notification?.value).toContain('send the final note')
+    expect(appState.tasks[agentId]?.notified).toBe(true)
   })
 
   // The handoff runAgent writes when a worker calls ask_parent_session has to
@@ -663,7 +725,9 @@ describe('queuePendingMessageIfRunning', () => {
     const stoppedId = 'stopped'
 
     expect(queuePendingMessageIfRunning(runningId, 'follow-up', setAppState)).toBe(true)
-    expect(appState.tasks[runningId].pendingMessages).toEqual(['follow-up'])
+    expect(appState.tasks[runningId].pendingMessages).toMatchObject([
+      { message: 'follow-up', status: 'pending' },
+    ])
     expect(queuePendingMessageIfRunning(stoppedId, 'late', setAppState)).toBe(false)
     expect(appState.tasks[stoppedId].pendingMessages).toEqual([])
   })

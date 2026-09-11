@@ -400,6 +400,7 @@ async function* runAgentInCleanupScope({
     systemPrompt?: SystemPrompt
     abortController?: AbortController
     agentId?: AgentId
+    agentRunId?: string
   }
   model?: ModelAlias
   /** Effort level the caller selected for this spawn. Outranks the agent
@@ -996,6 +997,7 @@ async function* runAgentInCleanupScope({
   const agentToolUseContext = createSubagentContext(toolUseContext, {
     options: agentOptions,
     agentId,
+    agentRunId: override?.agentRunId,
     agentType: agentDefinition.agentType,
     messages: initialMessages,
     readFileState: agentReadFileState,

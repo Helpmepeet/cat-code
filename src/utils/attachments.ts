@@ -136,7 +136,10 @@ import {
   generateTaskAttachments,
   applyTaskEvictions,
 } from './task/framework.js'
-import { drainPendingMessages } from '../tasks/LocalAgentTask/LocalAgentTask.js'
+import {
+  claimPendingMessagesForRequest,
+  type LocalAgentMessageDelivery,
+} from '../tasks/LocalAgentTask/LocalAgentTask.js'
 import type { TaskType, TaskStatus } from '../Task.js'
 import {
   getOriginalCwd,
@@ -1097,17 +1100,25 @@ export function getAgentPendingMessageAttachments(
 ): Attachment[] {
   const agentId = toolUseContext.agentId
   if (!agentId) return []
-  const drained = drainPendingMessages(
+  const prepared = claimPendingMessagesForRequest(
     agentId,
-    toolUseContext.getAppState,
+    toolUseContext.agentRunId,
     toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
   )
-  return drained.map(msg => ({
+  return prepared.map(msg => createAgentPendingMessageAttachment(msg))
+}
+
+export function createAgentPendingMessageAttachment(
+  message: LocalAgentMessageDelivery,
+): Attachment {
+  return {
     type: 'queued_command' as const,
-    prompt: msg,
+    prompt: message.message,
+    source_uuid: message.id as UUID,
+    commandMode: 'local-agent-message',
     origin: { kind: 'coordinator' as const },
     isMeta: true,
-  }))
+  }
 }
 
 async function buildImageContentBlocks(

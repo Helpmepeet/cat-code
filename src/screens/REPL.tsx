@@ -4131,6 +4131,23 @@ export function REPL({
       // the store updater instead of trusting the `task` snapshot captured
       // at render time, which may be stale by the time the user submits.
       if (!queuePendingMessageIfRunning(task.id, input, setAppState)) {
+        const currentTask = store.getState().tasks[task.id]
+        if (
+          isLocalAgentTask(currentTask) &&
+          currentTask.status === 'running' &&
+          currentTask.acceptingMessages === false
+        ) {
+          appendLocalAgentSystemMessage(
+            task.id,
+            'This worker is finishing and no longer accepts messages. Use ResumeAgent after it stops to send this instruction.',
+            'warning',
+            setAppState,
+          )
+          setInputValue('');
+          helpers.setCursorOffset(0);
+          helpers.clearBuffer();
+          return
+        }
         const agentDisplayName = await displayNameForAgent({
           agentId: task.id,
           appState: store.getState()

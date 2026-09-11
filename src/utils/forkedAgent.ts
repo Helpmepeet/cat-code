@@ -269,6 +269,8 @@ export type SubagentContextOverrides = {
   options?: ToolUseContext['options']
   /** Override the agentId (for subagents with their own ID) */
   agentId?: AgentId
+  /** Run token used to reject stale callbacks after a resume. */
+  agentRunId?: string
   /** Override the agentType (for subagents with a specific type) */
   agentType?: string
   /** Override the messages array */
@@ -453,6 +455,7 @@ export function createSubagentContext(
     messages: overrides?.messages ?? parentContext.messages,
     // Generate new agentId for subagents (each subagent should have its own ID)
     agentId: overrides?.agentId ?? createAgentId(),
+    agentRunId: overrides?.agentRunId,
     agentType: overrides?.agentType,
 
     // Create new query tracking chain for subagent with incremented depth

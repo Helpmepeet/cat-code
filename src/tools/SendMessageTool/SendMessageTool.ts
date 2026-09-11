@@ -332,6 +332,22 @@ async function routeToLocalWorker(
       }
     }
   }
+  if (
+    isLocalAgentTask(task) &&
+    !isMainSessionTask(task) &&
+    task.status === 'running' &&
+    task.acceptingMessages === false
+  ) {
+    const resumeTarget = resolved.displayName.startsWith('@')
+      ? resolved.displayName
+      : displayInput.trim()
+    return {
+      data: {
+        success: false,
+        message: `Agent "${resolved.displayName}" is finishing and no longer accepts messages. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) after it stops to send this instruction.${formatContextSizeHint(resolved.contextTokens, resolved.contextWindowTokens)}`,
+      },
+    }
+  }
   const resumeTarget = resolved.displayName.startsWith('@')
     ? resolved.displayName
     : displayInput.trim()

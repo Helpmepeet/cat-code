@@ -1,6 +1,7 @@
 import type { AppState } from '../../state/AppState.js'
 import { isTerminalTaskStatus } from '../../Task.js'
 import type { TaskState } from '../../tasks/types.js'
+import { randomUUID } from 'crypto'
 import { hasPendingTaskNotification } from '../messageQueueManager.js'
 import { enqueueSdkEvent } from '../sdkEventQueue.js'
 
@@ -64,7 +65,9 @@ export function registerTask(task: TaskState, setAppState: SetAppState): void {
             startTime: existing.startTime,
             messages: existing.messages,
             diskLoaded: existing.diskLoaded,
-            pendingMessages: existing.pendingMessages,
+            pendingMessages: carryPendingMessagesAcrossRun(
+              existing.pendingMessages,
+            ),
           }
         : task
     return { ...prev, tasks: { ...prev.tasks, [task.id]: merged } }
@@ -88,9 +91,68 @@ export function registerTask(task: TaskState, setAppState: SetAppState): void {
   })
 }
 
+function carryPendingMessagesAcrossRun(
+  messages: unknown,
+): Array<Record<string, unknown>> {
+  if (!Array.isArray(messages)) return []
+  return messages.flatMap(message => {
+    if (typeof message === 'string') {
+      return [
+        {
+          id: randomUUID(),
+          message,
+          status: 'pending',
+          acceptedAt: Date.now(),
+        },
+      ]
+    }
+    if (
+      typeof message !== 'object' ||
+      message === null ||
+      typeof (message as { id?: unknown }).id !== 'string' ||
+      typeof (message as { message?: unknown }).message !== 'string'
+    ) {
+      return []
+    }
+    const record = message as Record<string, unknown>
+    if (record.status === 'prepared' || record.status === 'submitted') {
+      return [
+        {
+          ...record,
+          status: 'uncertain',
+          outcome: 'The previous worker run ended before delivery was confirmed.',
+          reported: false,
+        },
+      ]
+    }
+    return [record]
+  })
+}
+
+function hasUnresolvedLocalAgentMessages(task: TaskState): boolean {
+  if (task.type !== 'local_agent') return false
+  const messages = (task as { pendingMessages?: unknown }).pendingMessages
+  if (!Array.isArray(messages)) return false
+  return messages.some(message => {
+    if (typeof message === 'string') return true
+    if (typeof message !== 'object' || message === null) return false
+    const status = (message as { status?: unknown }).status
+    const reported = (message as { reported?: unknown }).reported
+    return (
+      status === 'pending' ||
+      status === 'prepared' ||
+      status === 'submitted' ||
+      ((status === 'undelivered' || status === 'uncertain') &&
+        reported !== true)
+    )
+  })
+}
+
 /**
  * Eagerly evict a terminal task from AppState.
  * The task must be in a terminal state (completed/failed/killed) with notified=true.
+ * Unresolved local-worker delivery records keep it addressable until their
+ * terminal report is queued.
  * This allows memory to be freed without waiting for the next query loop iteration.
  * The lazy GC in generateTaskAttachments() remains as a safety net.
  */
@@ -103,6 +165,7 @@ export function evictTerminalTask(
     if (!task) return prev
     if (!isTerminalTaskStatus(task.status)) return prev
     if (!task.notified) return prev
+    if (hasUnresolvedLocalAgentMessages(task)) return prev
     if (hasPendingTaskNotification(taskId)) return prev
     // Panel grace period — blocks eviction until deadline passes.
     // 'retain' in task narrows to LocalAgentTaskState (the only type with
@@ -121,7 +184,9 @@ export function evictTerminalTask(
  */
 export function getRunningTasks(state: AppState): TaskState[] {
   const tasks = state.tasks ?? {}
-  return Object.values(tasks).filter(task => task.status === 'running')
+  return (Object.values(tasks) as TaskState[]).filter(
+    task => task.status === 'running',
+  )
 }
 
 /**
@@ -138,10 +203,11 @@ export function generateTaskAttachments(state: AppState): {
   const evictedTaskIds: string[] = []
   const tasks = state.tasks ?? {}
 
-  for (const taskState of Object.values(tasks)) {
+  for (const taskState of Object.values(tasks) as TaskState[]) {
     // Not yet notified, or still pending/running — the parent still needs it.
     if (!taskState.notified) continue
     if (!isTerminalTaskStatus(taskState.status)) continue
+    if (hasUnresolvedLocalAgentMessages(taskState)) continue
     if (!hasPendingTaskNotification(taskState.id)) {
       evictedTaskIds.push(taskState.id)
     }
@@ -164,7 +230,7 @@ export function applyTaskEvictions(
   }
   setAppState(prev => {
     let changed = false
-    const newTasks = { ...prev.tasks }
+    const newTasks = { ...prev.tasks } as Record<string, TaskState>
     for (const id of evictedTaskIds) {
       const fresh = newTasks[id]
       // Re-check terminal+notified on fresh state (TOCTOU: resume may have
@@ -172,6 +238,7 @@ export function applyTaskEvictions(
       if (!fresh || !isTerminalTaskStatus(fresh.status) || !fresh.notified) {
         continue
       }
+      if (hasUnresolvedLocalAgentMessages(fresh)) continue
       if (hasPendingTaskNotification(id)) continue
       if ('retain' in fresh && (fresh.evictAfter ?? Infinity) > Date.now()) {
         continue

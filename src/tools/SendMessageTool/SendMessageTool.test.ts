@@ -261,7 +261,9 @@ describe('SendMessageTool durable worker handle fallback', () => {
           'Message queued for delivery to worker-one at its next tool round.',
       },
     })
-    expect(state.tasks['agent-running'].pendingMessages).toEqual(['go deeper'])
+    expect(state.tasks['agent-running'].pendingMessages).toMatchObject([
+      { message: 'go deeper', status: 'pending' },
+    ])
     expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
@@ -301,7 +303,9 @@ describe('SendMessageTool durable worker handle fallback', () => {
     )
 
     expect(result.data.success).toBe(true)
-    expect(state.tasks['agent-running'].pendingMessages).toEqual(['go deeper'])
+    expect(state.tasks['agent-running'].pendingMessages).toMatchObject([
+      { message: 'go deeper', status: 'pending' },
+    ])
     expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
@@ -335,7 +339,9 @@ describe('SendMessageTool durable worker handle fallback', () => {
     )
 
     expect(result.data.success).toBe(true)
-    expect(state.tasks[agentId].pendingMessages).toEqual(['raw follow-up'])
+    expect(state.tasks[agentId].pendingMessages).toMatchObject([
+      { message: 'raw follow-up', status: 'pending' },
+    ])
     expect(resumeAgentBackground).not.toHaveBeenCalled()
   })
 
@@ -400,7 +406,9 @@ describe('SendMessageTool durable worker handle fallback', () => {
       success: true,
       message: 'Message queued for delivery to worker-one at its next tool round.',
     })
-    expect(state.tasks['agent-race'].pendingMessages).toEqual(['go deeper'])
+    expect(state.tasks['agent-race'].pendingMessages).toMatchObject([
+      { message: 'go deeper', status: 'pending' },
+    ])
     expect(resumeAgentBackground).not.toHaveBeenCalled()
     resolveSpy.mockRestore()
   })
@@ -747,7 +755,7 @@ describe('SendMessageTool deterministic routing and truthful delivery', () => {
     expect(
       (collisionHarness.getState().tasks['agent-local'] as LocalAgentTaskState)
         .pendingMessages,
-    ).toEqual(['follow-up'])
+    ).toMatchObject([{ message: 'follow-up', status: 'pending' }])
   })
 
   test('fails closed on an ambiguous legacy teammate name collision', async () => {

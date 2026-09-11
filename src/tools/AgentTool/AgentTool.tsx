@@ -17,7 +17,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryReport, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -1382,11 +1382,13 @@ export const AgentTool = buildTool({
       void runWithAgentContext(asyncAgentContext, () => wrapWithCwd(() => runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
         abortController: agentBackgroundTask.abortController!,
+        runId: agentBackgroundTask.runId,
         makeStream: onCacheSafeParams => runAgent({
           ...runAgentParams,
           override: {
             ...runAgentParams.override,
             agentId: asAgentId(agentBackgroundTask.agentId),
+            agentRunId: agentBackgroundTask.runId,
             abortController: agentBackgroundTask.abortController!
           },
           onCacheSafeParams
@@ -1474,6 +1476,7 @@ export const AgentTool = buildTool({
         // Skip registration if background tasks are disabled
         let foregroundTaskId: string | undefined;
         let foregroundAbortController: AbortController | undefined;
+        let foregroundRunId: string | undefined;
         let detachParentAbort = () => {};
         // Seeded at spawn and refreshed at the terminal, because the two
         // moments can disagree (failover, repair, follow-main reassignment) and
@@ -1512,6 +1515,7 @@ export const AgentTool = buildTool({
           );
           foregroundTaskId = registration.taskId;
           foregroundAbortController = registration.abortController;
+          foregroundRunId = registration.runId;
           const parentSignal = toolUseContext.abortController.signal;
           const forwardParentAbort = () => {
             registration.abortController.abort(parentSignal.reason);
@@ -1548,6 +1552,7 @@ export const AgentTool = buildTool({
           override: {
             ...runAgentParams.override,
             agentId: syncAgentId,
+            agentRunId: foregroundRunId,
             ...(foregroundAbortController
               ? { abortController: foregroundAbortController }
               : {})
@@ -1555,7 +1560,14 @@ export const AgentTool = buildTool({
           onCacheSafeParams: summaryTaskId && getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
             const {
               stop
-            } = startAgentSummarization(summaryTaskId, syncAgentId, params, rootSetAppState);
+            } = startAgentSummarization(
+              summaryTaskId,
+              syncAgentId,
+              params,
+              rootSetAppState,
+              {},
+              foregroundRunId,
+            );
             stopForegroundSummarization = stop;
           } : undefined
         })[Symbol.asyncIterator]();
@@ -1603,6 +1615,7 @@ export const AgentTool = buildTool({
               if (isLocalAgentTask(task) && task.isBackgrounded) {
                 // Capture the taskId for use in the async callback
                 const backgroundedTaskId = foregroundTaskId;
+                const backgroundedRunId = foregroundRunId;
                 wasBackgrounded = true;
                 // The detached consumer keeps the same live agent and therefore
                 // the same summarizer. Transfer cleanup ownership so the outer
@@ -1626,7 +1639,12 @@ export const AgentTool = buildTool({
 
                       // Track progress for backgrounded agents
                       updateProgressFromMessage(tracker, msg, resolveActivity2, toolUseContext.options.tools);
-                      updateAsyncAgentProgress(backgroundedTaskId, getProgressUpdate(tracker), rootSetAppState);
+                      updateAsyncAgentProgress(
+                        backgroundedTaskId,
+                        getProgressUpdate(tracker),
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       const lastToolName = getLastToolUseName(msg);
                       if (lastToolName) {
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
@@ -1658,7 +1676,12 @@ export const AgentTool = buildTool({
                     // Mirrors the sync path's terminalError handling.
                     if (agentResult.error) {
                       const apiErrorMsg = agentResult.error;
-                      failAsyncAgent(backgroundedTaskId, apiErrorMsg, rootSetAppState);
+                      failAsyncAgent(
+                        backgroundedTaskId,
+                        apiErrorMsg,
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       let finalMessage = extractTextContent(agentResult.content, '\n');
                       if (isForkPath && finalMessage.trim()) {
                         finalMessage = formatForkWorkerResultForNotification(finalMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
@@ -1684,6 +1707,7 @@ export const AgentTool = buildTool({
                       unregisterActiveSubagent(backgroundedTaskId);
                       enqueueAgentNotification({
                         taskId: backgroundedTaskId,
+                        runId: backgroundedRunId,
                         description,
                         status: 'failed',
                         error: apiErrorMsg,
@@ -1704,7 +1728,11 @@ export const AgentTool = buildTool({
                     // unblocks immediately. classifyHandoffIfNeeded and
                     // cleanupWorktreeIfNeeded can hang — they must not gate
                     // the status transition (gh-20236).
-                    completeAsyncAgent(agentResult, rootSetAppState);
+                    completeAsyncAgent(
+                      agentResult,
+                      rootSetAppState,
+                      backgroundedRunId,
+                    );
 
                     // Extract text from agent result content for the notification
                     let finalMessage = extractTextContent(agentResult.content, '\n');
@@ -1747,6 +1775,7 @@ export const AgentTool = buildTool({
                     unregisterActiveSubagent(backgroundedTaskId);
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
+                      runId: backgroundedRunId,
                       description,
                       status: 'completed',
                       setAppState: rootSetAppState,
@@ -1763,7 +1792,11 @@ export const AgentTool = buildTool({
                     if (error instanceof AbortError) {
                       // Transition status BEFORE worktree cleanup so
                       // TaskOutput unblocks even if git hangs (gh-20236).
-                      killAsyncAgent(backgroundedTaskId, rootSetAppState);
+                      killAsyncAgent(
+                        backgroundedTaskId,
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       logEvent('tengu_agent_tool_terminated', {
                         agent_type: metadata.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
                         model: metadata.resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1793,6 +1826,7 @@ export const AgentTool = buildTool({
                       const partialResult = extractPartialResult(agentMessages);
                       enqueueAgentNotification({
                         taskId: backgroundedTaskId,
+                        runId: backgroundedRunId,
                         description,
                         status: 'killed',
                         setAppState: rootSetAppState,
@@ -1808,7 +1842,12 @@ export const AgentTool = buildTool({
                       return;
                     }
                     const errMsg = errorMessage(error);
-                    failAsyncAgent(backgroundedTaskId, errMsg, rootSetAppState);
+                    failAsyncAgent(
+                      backgroundedTaskId,
+                      errMsg,
+                      rootSetAppState,
+                      backgroundedRunId,
+                    );
                     appendSubagentTerminal(parentTranscriptPath, {
                       sessionId: parentSessionId,
                       agentId: asAgentId(backgroundedTaskId),
@@ -1831,6 +1870,7 @@ export const AgentTool = buildTool({
                     const partialResult = extractPartialResult(agentMessages);
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
+                      runId: backgroundedRunId,
                       description,
                       status: 'failed',
                       error: errMsg,
@@ -1906,7 +1946,12 @@ export const AgentTool = buildTool({
                 // enabled, so updateAgentSummary reads correct token/tool counts
                 // instead of zeros.
                 if (getSdkAgentProgressSummariesEnabled()) {
-                  updateAsyncAgentProgress(foregroundTaskId, getProgressUpdate(syncTracker), rootSetAppState);
+                  updateAsyncAgentProgress(
+                    foregroundTaskId,
+                    getProgressUpdate(syncTracker),
+                    rootSetAppState,
+                    foregroundRunId,
+                  );
                 }
               }
             }
@@ -2020,7 +2065,15 @@ export const AgentTool = buildTool({
             // spawn-time seed because a lease that failed over, was repaired, or
             // was reassigned mid-run ends somewhere else.
             syncLeaseAccount = reportableAccount(
-              unregisterAgentForeground(foregroundTaskId, rootSetAppState),
+              unregisterAgentForeground(
+                foregroundTaskId,
+                rootSetAppState,
+                wasAborted
+                  ? 'killed'
+                  : syncAgentError
+                    ? 'failed'
+                    : 'completed',
+              ),
               resolvedAgentModel,
               toolUseContext.options.mainLoopProvider,
             ) ?? syncLeaseAccount;
@@ -2165,6 +2218,41 @@ export const AgentTool = buildTool({
               type: 'text' as const,
               text: handoffWarning
             }, ...agentResult.content];
+          }
+        }
+        if (foregroundTaskId) {
+          const foregroundTask = toolUseContext.getAppState().tasks[
+            foregroundTaskId
+          ]
+          if (isLocalAgentTask(foregroundTask)) {
+            const deliveryReport =
+              formatAgentMessageDeliveryReport(foregroundTask)
+            if (deliveryReport) {
+              agentResult.content = [
+                ...agentResult.content,
+                { type: 'text' as const, text: `\n\n${deliveryReport}` },
+              ]
+              const reportIds = getUnresolvedAgentMessageDeliveries(
+                foregroundTask,
+              ).map(message => message.id)
+              markAgentMessageDeliveriesReported(
+                foregroundTaskId,
+                reportIds,
+                rootSetAppState,
+                foregroundRunId,
+              )
+              rootSetAppState(prev => {
+                const task = prev.tasks[foregroundTaskId]
+                if (!isLocalAgentTask(task)) return prev
+                return {
+                  ...prev,
+                  tasks: {
+                    ...prev.tasks,
+                    [foregroundTaskId]: { ...task, notified: true },
+                  },
+                }
+              })
+            }
           }
         }
         // Treat synthetic API-error terminals (set by finalizeAgentTool when

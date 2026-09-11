@@ -382,12 +382,14 @@ async function resumeAgentBackgroundLocked(
       runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
         abortController: agentBackgroundTask.abortController!,
+        runId: agentBackgroundTask.runId,
         makeStream: onCacheSafeParams =>
           runAgent({
             ...runAgentParams,
             override: {
               ...runAgentParams.override,
               agentId: asAgentId(agentBackgroundTask.agentId),
+              agentRunId: agentBackgroundTask.runId,
               abortController: agentBackgroundTask.abortController!,
             },
             onCacheSafeParams,
