@@ -883,6 +883,12 @@ export function App() {
   // the active tab is removed.
   const shellRef = useRef(shell)
   shellRef.current = shell
+  const activeSessionIdRef = useRef(activeSessionId)
+  activeSessionIdRef.current = activeSessionId
+  const pendingCloseRequestsRef = useRef<
+    Map<SessionId, { openOrder: SessionId[] }>
+  >(new Map())
+  const pendingExplicitSessionRef = useRef<SessionId | null>(null)
   const lazyRestoreClaimsRef = useRef<Set<SessionId>>(new Set())
   const cancelledRestoresRef = useRef<Set<SessionId>>(new Set())
   // Sessions whose cached preview has already handed over to its live engine.
@@ -1349,15 +1355,35 @@ export function App() {
   // A frame arriving for any session still wins the pane first (it sets active
   // before this runs). Restorable-only rows still do not auto-focus until their
   // cache has actually opened a preview pane.
-  useEffect(() => {
-    const paneOrder = selectPaneSessions(shell).map(
+  const focusActivePaneAfterRosterChange = useCallback(() => {
+    const current = activeSessionIdRef.current
+    const currentShell = shellRef.current
+    const paneOrder = selectPaneSessions(currentShell).map(
       descriptor => descriptor.appSessionId,
     )
-    setActiveSessionId(current => {
-      if (current !== null) return activeAfterPaneChange(current, paneOrder)
-      return paneOrder[0] ?? null
-    })
-  }, [shell])
+    const pendingClose =
+      current === null
+        ? undefined
+        : pendingCloseRequestsRef.current.get(current)
+    if (pendingClose) return
+    const openOrder =
+      currentShell.order.filter(
+        sessionId =>
+          currentShell.tabs[sessionId] === true ||
+          currentShell.previews[sessionId] === true ||
+          sessionId === current,
+      )
+    const next =
+      current === null
+        ? paneOrder[0] ?? null
+        : activeAfterPaneChange(current, paneOrder, openOrder)
+    if (next === current) return
+    setActiveSessionId(next)
+  }, [])
+
+  useEffect(() => {
+    focusActivePaneAfterRosterChange()
+  }, [focusActivePaneAfterRosterChange, shell])
 
   useEffect(() => {
     for (const sessionId in shell.previews) {
@@ -1499,6 +1525,27 @@ export function App() {
 
   useEffect(() => {
     if (!hostSnapshotReady && paneSessionIds.length === 0) return
+    const pendingExplicitSession = pendingExplicitSessionRef.current
+    if (
+      pendingExplicitSession !== null &&
+      paneSessionIds.includes(pendingExplicitSession)
+    ) {
+      pendingExplicitSessionRef.current = null
+    }
+    if (
+      pendingExplicitSession !== null &&
+      pendingExplicitSession === activeSessionId &&
+      !paneSessionIds.includes(pendingExplicitSession)
+    ) {
+      return
+    }
+    if (
+      activeSessionId !== null &&
+      pendingCloseRequestsRef.current.has(activeSessionId) &&
+      !paneSessionIds.includes(activeSessionId)
+    ) {
+      return
+    }
     setWorkspaceLayoutState(current => {
       const next = reconcileWorkspaceLayout(
         current,
@@ -1578,6 +1625,15 @@ export function App() {
     writeWorkspaceLayoutToStorage(getWorkspaceStorage(), workspaceLayout)
   }, [hostSnapshotReady, pendingRestore, workspaceLayout])
 
+  const focusCreatedSession = useCallback((sessionId: SessionId) => {
+    pendingExplicitSessionRef.current = sessionId
+    setWorkspaceLayoutState(current =>
+      focusOrAssignWorkspaceSession(current, sessionId).state,
+    )
+    setActiveSessionId(sessionId)
+    setActiveView('chat')
+  }, [])
+
   const newSession = useCallback(async () => {
     const bridge = getBridge()
     try {
@@ -1586,15 +1642,14 @@ export function App() {
       if (!token) return // cancelled
       const result = await bridge.createSession({ cwdToken: token })
       if (result.ok) {
-        setActiveSessionId(result.value.appSessionId)
-        setActiveView('chat')
+        focusCreatedSession(result.value.appSessionId)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
     } catch (error) {
       setShellError(errorMessage(error))
     }
-  }, [activeSessionId])
+  }, [activeSessionId, focusCreatedSession])
 
   const newSessionInWorkspace = useCallback(async (repId: SessionId) => {
     const bridge = getBridge()
@@ -1605,15 +1660,14 @@ export function App() {
       // a fresh session — no native picker, no renderer-authored cwd.
       const result = await bridge.createSessionInWorkspace(repId)
       if (result.ok) {
-        setActiveSessionId(result.value.appSessionId)
-        setActiveView('chat')
+        focusCreatedSession(result.value.appSessionId)
       } else {
         setShellError(hostErrorMessage(result.error))
       }
     } catch (error) {
       setShellError(errorMessage(error))
     }
-  }, [])
+  }, [focusCreatedSession])
 
   /**
    * The sidebar's "New chat" (design source `components/sidebar/index.html`).
@@ -1661,6 +1715,7 @@ export function App() {
   const selectTab = useCallback((sessionId: SessionId) => {
     // Pure UI focus — never touches the frame stream or the P3-4 stores, so no
     // in-flight streaming into a background session is lost on switch.
+    pendingExplicitSessionRef.current = null
     const result = focusOrAssignWorkspaceSession(workspaceLayout, sessionId)
     setWorkspaceLayoutState(result.state)
     setLayoutNotice(null)
@@ -2391,7 +2446,47 @@ export function App() {
     }
   }, [])
 
+  const navigateAfterClosedSession = useCallback(
+    (sessionId: SessionId, openedOrder: readonly SessionId[]) => {
+      pendingCloseRequestsRef.current.delete(sessionId)
+      if (pendingExplicitSessionRef.current === sessionId) {
+        pendingExplicitSessionRef.current = null
+      }
+      if (activeSessionIdRef.current !== sessionId) return
+
+      const currentPaneOrder = selectPaneSessions(shellRef.current).map(
+        descriptor => descriptor.appSessionId,
+      )
+      const paneOrder = currentPaneOrder.filter(
+        candidate => candidate !== sessionId,
+      )
+      const openOrder = [
+        ...openedOrder,
+        ...currentPaneOrder.filter(candidate => !openedOrder.includes(candidate)),
+      ]
+      const next = activeAfterPaneChange(sessionId, paneOrder, openOrder)
+      if (next === null) {
+        setWorkspaceLayoutState(createWorkspaceLayout(null))
+      } else {
+        setWorkspaceLayoutState(current =>
+          focusOrAssignWorkspaceSession(current, next).state,
+        )
+      }
+      setActiveSessionId(next)
+    },
+    [],
+  )
+
   const closeTab = useCallback(async (sessionId: SessionId) => {
+    const shell = shellRef.current
+    const openOrder = selectPaneSessions(shell).map(
+      descriptor => descriptor.appSessionId,
+    )
+    if (openOrder.includes(sessionId)) {
+      pendingCloseRequestsRef.current.set(sessionId, {
+        openOrder,
+      })
+    }
     // Closing is the user saying they are done with this session, so a prompt
     // still queued for it is handed back rather than left to drain into a
     // session that is going away. The text lands in this session's draft, which
@@ -2418,7 +2513,10 @@ export function App() {
       } else {
         lazyRestoreClaimsRef.current.delete(sessionId)
       }
-      if (!plan.closeLive) return
+      if (!plan.closeLive) {
+        navigateAfterClosedSession(sessionId, openOrder)
+        return
+      }
     }
     // Non-destructive: closeSession keeps the registry row and emits
     // session-status(exited, restorable) — NOT session-removed (the row stays in
@@ -2430,11 +2528,22 @@ export function App() {
     const bridge = getBridge()
     try {
       const result = await bridge.closeSession(sessionId)
-      if (!result.ok) setShellError(hostErrorMessage(result.error))
+      if (!result.ok) {
+        pendingCloseRequestsRef.current.delete(sessionId)
+        setShellError(hostErrorMessage(result.error))
+        return
+      }
+
+      const pendingClose = pendingCloseRequestsRef.current.get(sessionId)
+      navigateAfterClosedSession(
+        sessionId,
+        pendingClose?.openOrder ?? openOrder,
+      )
     } catch (error) {
+      pendingCloseRequestsRef.current.delete(sessionId)
       setShellError(errorMessage(error))
     }
-  }, [releasePendingSubmit])
+  }, [navigateAfterClosedSession, releasePendingSubmit])
 
   const setPeerWakeBlocked = useCallback(
     async (sessionId: SessionId, blocked: boolean) => {

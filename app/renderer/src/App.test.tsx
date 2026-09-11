@@ -449,6 +449,62 @@ test('P4-29 wiring tripwire: the ⋯ menu Open verb restores instead of focusing
   expect(applyBody).toContain('void performRestore(route.appSessionId)')
 })
 
+test('new-session creation focuses the created session in the workspace panel', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const helperStart = source.indexOf('const focusCreatedSession = useCallback(')
+  const newSessionStart = source.indexOf('const newSession = useCallback(')
+  const workspaceStart = source.indexOf(
+    'const newSessionInWorkspace = useCallback(',
+  )
+  const end = source.indexOf('\n  /**', workspaceStart)
+
+  expect(helperStart).toBeGreaterThan(-1)
+  expect(newSessionStart).toBeGreaterThan(helperStart)
+  expect(workspaceStart).toBeGreaterThan(newSessionStart)
+  expect(end).toBeGreaterThan(workspaceStart)
+
+  const helperBody = source.slice(helperStart, newSessionStart)
+  const newSessionBody = source.slice(newSessionStart, workspaceStart)
+  const workspaceBody = source.slice(workspaceStart, end)
+
+  expect(helperBody).toContain('focusOrAssignWorkspaceSession')
+  expect(helperBody).toContain('setWorkspaceLayoutState')
+  expect(newSessionBody).toContain(
+    'focusCreatedSession(result.value.appSessionId)',
+  )
+  expect(workspaceBody).toContain(
+    'focusCreatedSession(result.value.appSessionId)',
+  )
+})
+
+test('close navigation waits for a successful host result and focuses the chosen pane', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const closeTab = useCallback(')
+  const end = source.indexOf('\n  const setPeerWakeBlocked', start)
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+
+  const body = source.slice(start, end)
+  const navigationStart = source.indexOf(
+    'const navigateAfterClosedSession = useCallback(',
+  )
+  expect(navigationStart).toBeGreaterThan(-1)
+  expect(navigationStart).toBeLessThan(start)
+  const navigationBody = source.slice(navigationStart, start)
+  const resultIndex = body.indexOf('const result = await bridge.closeSession(sessionId)')
+  const focusIndex = navigationBody.indexOf('setActiveSessionId(next)')
+  const navigateIndex = body.indexOf('navigateAfterClosedSession(', resultIndex)
+
+  expect(navigationBody).toContain('pendingCloseRequestsRef')
+  expect(navigationBody).toContain('activeAfterPaneChange')
+  expect(navigationBody).toContain('focusOrAssignWorkspaceSession')
+  expect(body).toContain('if (!result.ok)')
+  expect(body).toContain('pendingCloseRequestsRef.current.delete(sessionId)')
+  expect(resultIndex).toBeGreaterThan(-1)
+  expect(navigateIndex).toBeGreaterThan(resultIndex)
+  expect(focusIndex).toBeGreaterThan(-1)
+})
+
 test('message actions use one stable App dispatcher and correlate targeted results across sessions', () => {
   const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
   const dispatchStart = source.indexOf(

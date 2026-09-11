@@ -313,8 +313,44 @@ test('crash-then-restart-in-place does NOT reorder — the tab never lost member
   expect(selectLiveSessions(state).map(s => s.appSessionId)).toEqual(['a', 'b'])
 })
 
-test('activeAfterPaneChange: active session that left the pane set moves to first pane', () => {
+test('activeAfterPaneChange: active session that left the pane set moves to only remaining pane', () => {
   expect(activeAfterPaneChange('closed', ['live'])).toBe('live')
+})
+
+test('activeAfterPaneChange: close chooses the preceding open tab before the next tab', () => {
+  const openOrder = ['first', 'closed', 'last']
+  expect(activeAfterPaneChange('closed', ['first', 'last'], openOrder)).toBe(
+    'first',
+  )
+  expect(
+    activeAfterPaneChange('first', ['next', 'last'], [
+      'first',
+      'next',
+      'last',
+    ]),
+  ).toBe('next')
+  expect(activeAfterPaneChange('last', ['first', 'closed'], openOrder)).toBe(
+    'closed',
+  )
+})
+
+test('activeAfterPaneChange follows the tab order after a host close status', () => {
+  let state = createShellState()
+  state = reduceShellState(state, added(descriptor('first')))
+  state = reduceShellState(state, added(descriptor('closed')))
+  state = reduceShellState(state, added(descriptor('last')))
+  state = reduceShellState(state, {
+    type: 'session-status',
+    session: descriptor('closed', { status: 'exited', restorable: true }),
+  })
+
+  const paneOrder = selectPaneSessions(state).map(
+    session => session.appSessionId,
+  )
+  expect(paneOrder).toEqual(['first', 'last'])
+  expect(
+    activeAfterPaneChange('closed', paneOrder, ['first', 'closed', 'last']),
+  ).toBe('first')
 })
 
 test('activeAfterPaneChange: a previewing active session stays put', () => {

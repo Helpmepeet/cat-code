@@ -123,6 +123,39 @@ test('single-panel layout follows tab focus without touching split layouts', () 
   expect(sessionIds(unchanged)).toEqual(['b', 'c'])
 })
 
+test('explicitly opening a session replaces the focused panel in a split layout', () => {
+  const split = splitWorkspacePanel(
+    createWorkspaceLayout('older'),
+    0,
+    'right',
+    'current',
+  ).state
+
+  const focused = focusOrAssignWorkspaceSession(split, 'new')
+
+  expect(sessionIds(focused.state)).toEqual(['older', 'new'])
+  expect(focused.state.activeIndex).toBe(1)
+})
+
+test('explicit focus remains visible when the new session joins the pane roster', () => {
+  const split = splitWorkspacePanel(
+    createWorkspaceLayout('older'),
+    0,
+    'right',
+    'current',
+  ).state
+  const focused = focusOrAssignWorkspaceSession(split, 'new').state
+
+  const reconciled = reconcileWorkspaceLayout(
+    focused,
+    ['older', 'current', 'new'],
+    'new',
+  )
+
+  expect(sessionIds(reconciled)).toEqual(['older', 'new'])
+  expect(reconciled.activeIndex).toBe(1)
+})
+
 test('reconcile keeps the focused split panel when the active session is not shown', () => {
   const layout: WorkspaceLayoutState = {
     panels: [{ sessionId: 'a' }, { sessionId: 'b' }],
