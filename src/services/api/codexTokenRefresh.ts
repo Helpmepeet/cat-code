@@ -7,7 +7,7 @@
  */
 
 import { readFileSync, readdirSync, existsSync } from 'fs'
-import { join, dirname } from 'path'
+import { join } from 'path'
 import { createHash, randomUUID } from 'crypto'
 import {
   CODEX_CLIENT_ID,
@@ -27,11 +27,18 @@ import {
   getVaultPath,
   getCodexCredentialGenerationFromVaultTokens,
   isAccountLocked,
+  LEGACY_CODEX_CREDENTIAL_GENERATION,
   markAccountDead,
   markPoolAccountQuarantined,
   normalizeCodexAccountBlockReason,
 } from './codexAccountPool.js'
-import { reconcileCodexIdentityMismatch } from './codexIdentityReconciliation.js'
+import { emitAccountDiagnostic } from './accountDiagnostics.js'
+import {
+  codexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+  type CodexCredentialLifecyclePermit,
+  type CodexCredentialLifecycleReadResult,
+} from './codexCredentialLifecycle.js'
 
 // ── Constants ──────────────────────────────────────────────────────────────
 
@@ -60,12 +67,17 @@ export interface RefreshResult {
 
 type RefreshAccountTokensResult = {
   accountId: string
+  status: 'refreshed'
   accessToken: string
   refreshToken: string
   idToken: string
   expiresAt: number
-  status: 'refreshed' | 'identity_mismatch'
-  refreshedAccountId?: string
+  credentialGeneration: number
+} | {
+  accountId: string
+  status: 'identity_mismatch'
+  refreshedAccountId: string
+  credentialGeneration: number
 }
 
 function refreshedVaultTokensResult(
@@ -73,14 +85,20 @@ function refreshedVaultTokensResult(
   accountId: string,
   vaultFilePath: string,
   writer: string,
+  credentialGeneration: number,
+  lifecycle: CodexCredentialLifecycle,
 ): RefreshAccountTokensResult | undefined {
   const accessToken = tokens?.access_token as string | undefined
   const refreshToken = tokens?.refresh_token as string | undefined
   if (!accessToken || !refreshToken) return undefined
-  const credentialGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
-  if (credentialGeneration === null) return undefined
+  const storedGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
+  if (storedGeneration === null || storedGeneration !== credentialGeneration) {
+    return undefined
+  }
 
-  const vaultAccountId = (tokens?.account_id as string | undefined) ?? accountId
+  const vaultAccountId = tokens?.account_id as string | undefined
+  if (vaultAccountId !== accountId) return undefined
+  requireCredentialedLifecycle(lifecycle, accountId, credentialGeneration)
   const expiresAt = (tokens?.expires_at as number | undefined) ?? Date.now() + DEFAULT_TOKEN_EXPIRY_MS
   appendAccount(
     {
@@ -105,6 +123,7 @@ function refreshedVaultTokensResult(
     refreshToken,
     idToken: (tokens?.id_token as string | undefined) || '',
     expiresAt,
+    credentialGeneration,
   }
 }
 
@@ -138,10 +157,44 @@ export class RefreshAlreadyInFlightError extends Error {
   }
 }
 
-const pendingRefreshesByAccountId = new Map<
+export type CodexRefreshOptions = Readonly<{
+  lifecycle?: CodexCredentialLifecycle
+}>
+
+export type CodexRefreshLifecycleFailureCode =
+  | 'missing'
+  | 'malformed'
+  | 'unreadable'
+  | 'state_mismatch'
+  | 'generation_mismatch'
+  | 'profile_mismatch'
+
+export class CodexRefreshLifecycleError extends Error {
+  readonly code: CodexRefreshLifecycleFailureCode
+  readonly accountId: string
+  readonly expectedGeneration: number
+
+  constructor(
+    code: CodexRefreshLifecycleFailureCode,
+    accountId: string,
+    expectedGeneration: number,
+  ) {
+    super('Codex credential lifecycle does not authorize this refresh.')
+    this.name = 'CodexRefreshLifecycleError'
+    this.code = code
+    this.accountId = accountId
+    this.expectedGeneration = expectedGeneration
+  }
+}
+
+const pendingRefreshesByCredential = new Map<
   string,
   Promise<RefreshAccountTokensResult>
 >()
+
+function refreshPendingKey(accountId: string, credentialGeneration: number): string {
+  return `${accountId}\u0000${credentialGeneration}`
+}
 
 function hashToken(token: string) {
   return createHash('sha256').update(token).digest('hex')
@@ -161,6 +214,122 @@ function readExistingVault(vaultFilePath: string): Record<string, any> {
     throw new Error('Codex vault profile no longer exists')
   }
   return JSON.parse(readFileSync(vaultFilePath, 'utf-8')) as Record<string, any>
+}
+
+function requireCredentialedLifecycle(
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+  accountId: string,
+  credentialGeneration: number,
+): void {
+  const result: CodexCredentialLifecycleReadResult = lifecycle.read(accountId)
+  if (result.status !== 'valid') {
+    throw new CodexRefreshLifecycleError(
+      result.status === 'absent' ? 'missing' : result.status,
+      accountId,
+      credentialGeneration,
+    )
+  }
+  if (result.record.state !== 'credentialed') {
+    throw new CodexRefreshLifecycleError(
+      'state_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+  if (result.record.credentialGeneration !== credentialGeneration) {
+    throw new CodexRefreshLifecycleError(
+      'generation_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+}
+
+function requireLegacyLifecycleBootstrap(
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+  accountId: string,
+  credentialGeneration: number,
+): void {
+  if (credentialGeneration !== LEGACY_CODEX_CREDENTIAL_GENERATION) {
+    requireCredentialedLifecycle(lifecycle, accountId, credentialGeneration)
+    return
+  }
+  const result = lifecycle.read(accountId)
+  if (result.status !== 'absent') {
+    throw new CodexRefreshLifecycleError(
+      result.status === 'valid'
+        ? 'state_mismatch'
+        : result.status === 'malformed'
+          ? 'malformed'
+          : 'unreadable',
+      accountId,
+      credentialGeneration,
+    )
+  }
+}
+
+function requireVaultCredentialGeneration(
+  vault: Record<string, any>,
+  accountId: string,
+  credentialGeneration: number,
+): void {
+  const tokens = vault.tokens as Record<string, unknown> | undefined
+  const storedAccountId =
+    typeof tokens?.account_id === 'string' ? tokens.account_id : undefined
+  if (storedAccountId !== accountId) {
+    throw new CodexRefreshLifecycleError(
+      'profile_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+  const storedGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
+  if (storedGeneration === null || storedGeneration !== credentialGeneration) {
+    throw new CodexRefreshLifecycleError(
+      'profile_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+}
+
+function markLifecycleReauthRequired(
+  lifecycle: CodexCredentialLifecycle,
+  permit: CodexCredentialLifecyclePermit,
+  accountId: string,
+  credentialGeneration: number,
+): void {
+  const result = lifecycle.markReauthRequired(permit, {
+    expectedGeneration: credentialGeneration,
+  })
+  if (result.status !== 'applied') {
+    const reason = result.status === 'superseded' ? result.reason : 'state_mismatch'
+    throw new CodexRefreshLifecycleError(
+      reason === 'generation_mismatch'
+        ? 'generation_mismatch'
+        : reason === 'missing'
+          ? 'missing'
+          : 'state_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+}
+
+function emitIdentityMismatchDiagnostic(
+  oldAccountId: string,
+  newAccountId: string,
+): void {
+  emitAccountDiagnostic({
+    code: 'account.identity_mismatch',
+    severity: 'warning',
+    provider: 'openai',
+    pool: 'codex',
+    recoverable: true,
+    from_account_ref: oldAccountId,
+    account_ref: newAccountId,
+    reason: `refresh returned different account ${newAccountId}`,
+  })
 }
 
 export function acquireCodexVaultFileLock(
@@ -309,22 +478,43 @@ function writeUnknownRefreshState(
 /**
  * Refresh a single account's OAuth tokens via the OpenAI auth endpoint.
  * On success: atomically writes updated vault JSON and updates the in-memory pool.
- * On failure: marks the account dead with a descriptive error.
+ * Credential failures advance the lifecycle; transport failures preserve it.
  */
 export async function refreshAccountTokens(
   accountId: string,
   refreshToken: string,
   vaultFilePath: string,
+  credentialGeneration: number,
+  options: CodexRefreshOptions = {},
 ): Promise<RefreshAccountTokensResult> {
-  const pending = pendingRefreshesByAccountId.get(accountId)
+  if (
+    !Number.isSafeInteger(credentialGeneration) ||
+    credentialGeneration < LEGACY_CODEX_CREDENTIAL_GENERATION
+  ) {
+    throw new CodexRefreshLifecycleError(
+      'generation_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+
+  const pendingKey = refreshPendingKey(accountId, credentialGeneration)
+  const pending = pendingRefreshesByCredential.get(pendingKey)
   if (pending) {
     return pending
   }
 
-  const refresh = refreshAccountTokensStateful(accountId, refreshToken, vaultFilePath).finally(() => {
-    pendingRefreshesByAccountId.delete(accountId)
+  const lifecycle = options.lifecycle ?? codexCredentialLifecycle
+  const refresh = refreshAccountTokensStateful(
+    accountId,
+    refreshToken,
+    vaultFilePath,
+    credentialGeneration,
+    lifecycle,
+  ).finally(() => {
+    pendingRefreshesByCredential.delete(pendingKey)
   })
-  pendingRefreshesByAccountId.set(accountId, refresh)
+  pendingRefreshesByCredential.set(pendingKey, refresh)
   return refresh
 }
 
@@ -334,351 +524,544 @@ async function refreshAccountTokensStateful(
   accountId: string,
   refreshToken: string,
   vaultFilePath: string,
+  credentialGeneration: number,
+  lifecycle: CodexCredentialLifecycle,
 ): Promise<RefreshAccountTokensResult> {
-  let releaseLock: undefined | (() => Promise<void>)
-  let lockCompromised = false
-
   const attemptId = randomUUID()
   const refreshTokenHash = hashToken(refreshToken)
 
-  try {
-    releaseLock = await acquireCodexVaultFileLock(
-      vaultFilePath,
-      (err) => {
-        lockCompromised = true
-        logForDebugging(`[codex-refresh] Lock compromised: ${err instanceof Error ? err.message : String(err)}`, { level: 'error' })
-      },
-    )
+  return lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'refresh', operationId: attemptId },
+    async permit => {
+      let releaseLock: undefined | (() => Promise<void>)
+      let lockCompromised = false
 
-    let vault = readExistingVault(vaultFilePath)
-
-    // 1. Another process already saved a rotated token.
-    if (vault.tokens?.refresh_token && vault.tokens.refresh_token !== refreshToken) {
-      // Adopt the rotation only when the vault holds no terminal verdict for
-      // THAT token. Step 2 below correlates against the token we were called
-      // with, so without this check a caller carrying a stale token (the
-      // quarantine probe passes its in-memory copy) hands back a revoked
-      // rotation as healthy, with no network request.
-      const rotatedHash = hashToken(String(vault.tokens.refresh_token))
-      if (
-        vault.refresh?.state === 'reauth_required' &&
-        vault.refresh.refresh_token_hash === rotatedHash
-      ) {
-        const rotatedReason = vault.refresh.reason || 'refresh outcome is unknown'
-        const rotatedDisplay = normalizeCodexAccountBlockReason(rotatedReason) ?? rotatedReason
-        markAccountDead(accountId, rotatedDisplay)
-        throw new ReauthenticationRequiredError(`Reauthentication required: ${rotatedDisplay}`)
-      }
-      const refreshed = refreshedVaultTokensResult(
-        vault.tokens,
-        accountId,
-        vaultFilePath,
-        'codex-refresh.refreshAccountTokens.concurrent-recovery',
-      )
-      if (refreshed) {
-        logForDebugging(`[codex-refresh] Token was updated by another process. Using new token...`)
-        return refreshed
-      }
-    }
-
-    // 2. A terminal previous verdict for this exact token still blocks. Unknown
-    // transport outcomes intentionally fall through to a real re-probe.
-    if (
-      vault.refresh?.state === 'reauth_required' &&
-      vault.refresh.refresh_token_hash === refreshTokenHash
-    ) {
-      const reason = vault.refresh.reason || 'refresh outcome is unknown'
-      const displayReason = normalizeCodexAccountBlockReason(reason) ?? reason
-      markAccountDead(accountId, displayReason)
-      throw new ReauthenticationRequiredError(`Reauthentication required: ${displayReason}`)
-    }
-
-    // 3. Refresh already in flight — block regardless of whether hash matches.
-    if (vault.refresh?.state === 'in_flight') {
-      if (vault.refresh.refresh_token_hash !== refreshTokenHash) {
-        // A different token is already being refreshed; do not overwrite.
-        throw new RefreshAlreadyInFlightError('Token refresh for a different token is in progress.')
-      }
-      // Same hash: apply grace period / stale logic.
-      const ageMs = Date.now() - Date.parse(vault.refresh.started_at || new Date(0).toISOString())
-      if (ageMs > IN_FLIGHT_GRACE_MS) {
-        if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
-        writeUnknownRefreshState(
-          vaultFilePath,
-          vault,
-          vault.refresh.attempt_id,
-          refreshTokenHash,
-          'stale_in_flight',
-        )
-        const reason = 'Previous token refresh stalled and outcome is unknown.'
-        markPoolAccountQuarantined(accountId, reason)
-        throw new CodexRefreshTransportError(reason, 'ambiguous')
-      }
-      throw new RefreshAlreadyInFlightError('Token refresh is already in progress.')
-    }
-
-    // 4. Persist intent BEFORE sending the request.
-    const nextProbeAt =
-      typeof vault.refresh?.next_probe_at === 'string'
-        ? vault.refresh.next_probe_at
-        : undefined
-    const consecutiveFailures =
-      typeof vault.refresh?.consecutive_failures === 'number' &&
-      Number.isFinite(vault.refresh.consecutive_failures)
-        ? vault.refresh.consecutive_failures
-        : undefined
-    vault.refresh = {
-      state: 'in_flight',
-      attempt_id: attemptId,
-      refresh_token_hash: refreshTokenHash,
-      started_at: new Date().toISOString(),
-      pid: process.pid,
-      ...(nextProbeAt ? { next_probe_at: nextProbeAt } : {}),
-      ...(consecutiveFailures !== undefined ? { consecutive_failures: consecutiveFailures } : {}),
-    }
-    vault.version = (vault.version ?? 0) + 1
-    atomicWriteJson(vaultFilePath, vault)
-
-    // 5. Send network request
-    let response: Response
-    try {
-      response = await globalThis.fetch(CODEX_TOKEN_URL, {
-        method: 'POST',
-        signal: AbortSignal.timeout(15_000),
-        headers: {
-          'Content-Type': 'application/json',
-          originator: 'codex_cli_rs',
-        },
-        body: JSON.stringify({
-          client_id: CODEX_CLIENT_ID,
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        }),
-      })
-    } catch (fetchErr: any) {
-      if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
-      const transport = classifyRefreshTransportError(fetchErr)
-      const latest = readVault(vaultFilePath)
-      const stillOwner = latest.refresh?.attempt_id === attemptId
-      const detail = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
-      if (transport === 'definitely_not_sent') {
-        // Request definitely never reached the server — safe to reset to idle.
-        if (stillOwner) {
-          latest.refresh = { state: 'idle' }
-          latest.version = (latest.version ?? 0) + 1
-          atomicWriteJson(vaultFilePath, latest)
-        }
-        throw new CodexRefreshTransportError(
-          `Token refresh could not reach the server: ${detail}`,
-          'offline',
-        )
-      } else {
-        // Outcome uncertain — mark unknown so a future probe can retry without
-        // converting a network drop into a server-side auth verdict.
-        if (stillOwner) {
-          writeUnknownRefreshState(
-            vaultFilePath,
-            latest,
-            attemptId,
-            refreshTokenHash,
-            detail || (transport === 'ambiguous' ? 'transport_ambiguous' : 'transport_fatal'),
+      try {
+        if (credentialGeneration === LEGACY_CODEX_CREDENTIAL_GENERATION) {
+          requireLegacyLifecycleBootstrap(
+            lifecycle,
+            accountId,
+            credentialGeneration,
+          )
+        } else {
+          requireCredentialedLifecycle(
+            lifecycle,
+            accountId,
+            credentialGeneration,
           )
         }
-        const reason = `Token refresh transport error (outcome unknown): ${detail}`
-        markPoolAccountQuarantined(accountId, reason)
-        throw new CodexRefreshTransportError(
-          reason,
-          transport === 'ambiguous' ? 'ambiguous' : 'server_fatal',
-        )
-      }
-    }
 
-    if (!response.ok) {
-      if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
-      const bodyText = await response.text().catch(() => '')
-      const latest = readVault(vaultFilePath)
-      if (isCredentialRefreshFailure(response.status, bodyText)) {
-        // Another process may have already rotated this token out from under
-        // us — a rotated-away refresh token legitimately 401s. Recover onto
-        // the newer token instead of declaring the account dead.
-        if (latest.tokens?.refresh_token && latest.tokens.refresh_token !== refreshToken) {
+        releaseLock = await acquireCodexVaultFileLock(
+          vaultFilePath,
+          err => {
+            lockCompromised = true
+            logForDebugging(
+              `[codex-refresh] Lock compromised: ${err instanceof Error ? err.message : String(err)}`,
+              { level: 'error' },
+            )
+          },
+        )
+
+        let vault = readExistingVault(vaultFilePath)
+        let effectiveGeneration = credentialGeneration
+
+        if (credentialGeneration === LEGACY_CODEX_CREDENTIAL_GENERATION) {
+          if (
+            vault.profile_state === 'signed_out' ||
+            vault.profile_state === 'recovery_required'
+          ) {
+            throw new CodexRefreshLifecycleError(
+              'state_mismatch',
+              accountId,
+              credentialGeneration,
+            )
+          }
+          const storedGeneration = getCodexCredentialGenerationFromVaultTokens(
+            vault.tokens as Record<string, unknown> | undefined,
+          )
+          if (storedGeneration !== LEGACY_CODEX_CREDENTIAL_GENERATION) {
+            throw new CodexRefreshLifecycleError(
+              'profile_mismatch',
+              accountId,
+              credentialGeneration,
+            )
+          }
+          const tokens = vault.tokens as Record<string, unknown> | undefined
+          if (
+            !tokens ||
+            typeof tokens.access_token !== 'string' ||
+            typeof tokens.refresh_token !== 'string' ||
+            tokens.account_id !== accountId
+          ) {
+            throw new CodexRefreshLifecycleError(
+              'profile_mismatch',
+              accountId,
+              credentialGeneration,
+            )
+          }
+          const taggedTokens = {
+            ...tokens,
+            credential_generation: 1,
+          }
+          vault.tokens = taggedTokens
+          vault.version = (vault.version ?? 0) + 1
+          if (lockCompromised) {
+            throw new Error('Lock compromised; refusing to write vault')
+          }
+          atomicWriteJson(vaultFilePath, vault)
+
+          const bootstrapped = lifecycle.legacyBootstrap(permit, {
+            validatedUntaggedLegacyCredentials: true,
+          })
+          if (
+            bootstrapped.status !== 'applied' ||
+            bootstrapped.record.credentialGeneration !== 1
+          ) {
+            throw new CodexRefreshLifecycleError(
+              'state_mismatch',
+              accountId,
+              credentialGeneration,
+            )
+          }
+          effectiveGeneration = bootstrapped.record.credentialGeneration
+        }
+
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          effectiveGeneration,
+        )
+        requireVaultCredentialGeneration(
+          vault,
+          accountId,
+          effectiveGeneration,
+        )
+
+        // 1. Another process already saved a rotated token.
+        if (vault.tokens?.refresh_token && vault.tokens.refresh_token !== refreshToken) {
+          // Adopt the rotation only when the vault holds no terminal verdict for
+          // THAT token. Step 2 below correlates against the token we were called
+          // with, so without this check a caller carrying a stale token (the
+          // quarantine probe passes its in-memory copy) hands back a revoked
+          // rotation as healthy, with no network request.
+          const rotatedHash = hashToken(String(vault.tokens.refresh_token))
+          if (
+            vault.refresh?.state === 'reauth_required' &&
+            vault.refresh.refresh_token_hash === rotatedHash
+          ) {
+            if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+            const rotatedReason = vault.refresh.reason || 'refresh outcome is unknown'
+            markLifecycleReauthRequired(
+              lifecycle,
+              permit,
+              accountId,
+              effectiveGeneration,
+            )
+            const rotatedDisplay = normalizeCodexAccountBlockReason(rotatedReason) ?? rotatedReason
+            markAccountDead(accountId, rotatedDisplay)
+            throw new ReauthenticationRequiredError(`Reauthentication required: ${rotatedDisplay}`)
+          }
           const refreshed = refreshedVaultTokensResult(
-            latest.tokens,
+            vault.tokens,
             accountId,
             vaultFilePath,
-            'codex-refresh.refreshAccountTokens.credential-failure-recovery',
+            'codex-refresh.refreshAccountTokens.concurrent-recovery',
+            effectiveGeneration,
+            lifecycle,
           )
           if (refreshed) {
-            logForDebugging(`[codex-refresh] Credential failure but a newer token exists in the vault. Using new token...`)
+            logForDebugging(`[codex-refresh] Token was updated by another process. Using new token...`)
             return refreshed
           }
         }
-        const credentialReason = extractOAuthErrorCode(bodyText) ?? `http_${response.status}`
-        if (latest.refresh?.attempt_id === attemptId) {
+
+        // 2. A terminal previous verdict for this exact token still blocks. Unknown
+        // transport outcomes intentionally fall through to a real re-probe.
+        if (
+          vault.refresh?.state === 'reauth_required' &&
+          vault.refresh.refresh_token_hash === refreshTokenHash
+        ) {
+          if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+          const reason = vault.refresh.reason || 'refresh outcome is unknown'
+          markLifecycleReauthRequired(
+            lifecycle,
+            permit,
+            accountId,
+            effectiveGeneration,
+          )
+          const displayReason = normalizeCodexAccountBlockReason(reason) ?? reason
+          markAccountDead(accountId, displayReason)
+          throw new ReauthenticationRequiredError(`Reauthentication required: ${displayReason}`)
+        }
+
+        // 3. Refresh already in flight — block regardless of whether hash matches.
+        if (vault.refresh?.state === 'in_flight') {
+          if (vault.refresh.refresh_token_hash !== refreshTokenHash) {
+            // A different token is already being refreshed; do not overwrite.
+            throw new RefreshAlreadyInFlightError('Token refresh for a different token is in progress.')
+          }
+          // Same hash: apply grace period / stale logic.
+          const ageMs = Date.now() - Date.parse(vault.refresh.started_at || new Date(0).toISOString())
+          if (ageMs > IN_FLIGHT_GRACE_MS) {
+            if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+            requireCredentialedLifecycle(
+              lifecycle,
+              accountId,
+              effectiveGeneration,
+            )
+            writeUnknownRefreshState(
+              vaultFilePath,
+              vault,
+              vault.refresh.attempt_id,
+              refreshTokenHash,
+              'stale_in_flight',
+            )
+            const reason = 'Previous token refresh stalled and outcome is unknown.'
+            markPoolAccountQuarantined(accountId, reason)
+            throw new CodexRefreshTransportError(reason, 'ambiguous')
+          }
+          throw new RefreshAlreadyInFlightError('Token refresh is already in progress.')
+        }
+
+        // 4. Persist intent BEFORE sending the request.
+        const nextProbeAt =
+          typeof vault.refresh?.next_probe_at === 'string'
+            ? vault.refresh.next_probe_at
+            : undefined
+        const consecutiveFailures =
+          typeof vault.refresh?.consecutive_failures === 'number' &&
+          Number.isFinite(vault.refresh.consecutive_failures)
+            ? vault.refresh.consecutive_failures
+            : undefined
+        vault.refresh = {
+          state: 'in_flight',
+          attempt_id: attemptId,
+          refresh_token_hash: refreshTokenHash,
+          started_at: new Date().toISOString(),
+          pid: process.pid,
+          ...(nextProbeAt ? { next_probe_at: nextProbeAt } : {}),
+          ...(consecutiveFailures !== undefined ? { consecutive_failures: consecutiveFailures } : {}),
+        }
+        vault.version = (vault.version ?? 0) + 1
+        if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          effectiveGeneration,
+        )
+        atomicWriteJson(vaultFilePath, vault)
+
+        // 5. Send network request
+        let response: Response
+        try {
+          response = await globalThis.fetch(CODEX_TOKEN_URL, {
+            method: 'POST',
+            signal: AbortSignal.timeout(15_000),
+            headers: {
+              'Content-Type': 'application/json',
+              originator: 'codex_cli_rs',
+            },
+            body: JSON.stringify({
+              client_id: CODEX_CLIENT_ID,
+              grant_type: 'refresh_token',
+              refresh_token: refreshToken,
+            }),
+          })
+        } catch (fetchErr: any) {
+          if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+          const transport = classifyRefreshTransportError(fetchErr)
+          const latest = readVault(vaultFilePath)
+          const stillOwner = latest.refresh?.attempt_id === attemptId
+          const detail = fetchErr instanceof Error ? fetchErr.message : String(fetchErr)
+          if (transport === 'definitely_not_sent') {
+            // Request definitely never reached the server — safe to reset to idle.
+            if (stillOwner) {
+              requireCredentialedLifecycle(
+                lifecycle,
+                accountId,
+                effectiveGeneration,
+              )
+              requireVaultCredentialGeneration(
+                latest,
+                accountId,
+                effectiveGeneration,
+              )
+              latest.refresh = { state: 'idle' }
+              latest.version = (latest.version ?? 0) + 1
+              atomicWriteJson(vaultFilePath, latest)
+            }
+            throw new CodexRefreshTransportError(
+              `Token refresh could not reach the server: ${detail}`,
+              'offline',
+            )
+          } else {
+            // Outcome uncertain — mark unknown so a future probe can retry without
+            // converting a network drop into a server-side auth verdict.
+            if (stillOwner) {
+              requireCredentialedLifecycle(
+                lifecycle,
+                accountId,
+                effectiveGeneration,
+              )
+              requireVaultCredentialGeneration(
+                latest,
+                accountId,
+                effectiveGeneration,
+              )
+              writeUnknownRefreshState(
+                vaultFilePath,
+                latest,
+                attemptId,
+                refreshTokenHash,
+                detail || (transport === 'ambiguous' ? 'transport_ambiguous' : 'transport_fatal'),
+              )
+            }
+            const reason = `Token refresh transport error (outcome unknown): ${detail}`
+            markPoolAccountQuarantined(accountId, reason)
+            throw new CodexRefreshTransportError(
+              reason,
+              transport === 'ambiguous' ? 'ambiguous' : 'server_fatal',
+            )
+          }
+        }
+
+        if (!response.ok) {
+          if (lockCompromised) throw new Error('Lock compromised; refusing to write vault')
+          const bodyText = await response.text().catch(() => '')
+          const latest = readVault(vaultFilePath)
+          if (isCredentialRefreshFailure(response.status, bodyText)) {
+            // Another process may have already rotated this token out from under
+            // us — a rotated-away refresh token legitimately 401s. Recover onto
+            // the newer token instead of declaring the account dead.
+            if (latest.tokens?.refresh_token && latest.tokens.refresh_token !== refreshToken) {
+              const rotatedHash = hashToken(String(latest.tokens.refresh_token))
+              if (
+                latest.refresh?.state === 'reauth_required' &&
+                latest.refresh.refresh_token_hash === rotatedHash
+              ) {
+                markLifecycleReauthRequired(
+                  lifecycle,
+                  permit,
+                  accountId,
+                  effectiveGeneration,
+                )
+                const rotatedReason = latest.refresh.reason || 'refresh outcome is unknown'
+                const rotatedDisplay = normalizeCodexAccountBlockReason(rotatedReason) ?? rotatedReason
+                markAccountDead(accountId, rotatedDisplay)
+                throw new ReauthenticationRequiredError(`Reauthentication required: ${rotatedDisplay}`)
+              }
+              const refreshed = refreshedVaultTokensResult(
+                latest.tokens,
+                accountId,
+                vaultFilePath,
+                'codex-refresh.refreshAccountTokens.credential-failure-recovery',
+                effectiveGeneration,
+                lifecycle,
+              )
+              if (refreshed) {
+                logForDebugging(`[codex-refresh] Credential failure but a newer token exists in the vault. Using new token...`)
+                return refreshed
+              }
+            }
+            const credentialReason = extractOAuthErrorCode(bodyText) ?? `http_${response.status}`
+            if (latest.refresh?.attempt_id === attemptId) {
+              requireVaultCredentialGeneration(
+                latest,
+                accountId,
+                effectiveGeneration,
+              )
+              markLifecycleReauthRequired(
+                lifecycle,
+                permit,
+                accountId,
+                effectiveGeneration,
+              )
+              latest.refresh = {
+                state: 'reauth_required',
+                refresh_token_hash: refreshTokenHash,
+                marked_at: new Date().toISOString(),
+                reason: credentialReason,
+              }
+              atomicWriteJson(vaultFilePath, latest)
+            }
+            const reason = normalizeCodexAccountBlockReason(credentialReason) ?? `Token refresh failed: HTTP ${response.status}`
+            markAccountDead(accountId, reason)
+            throw new ReauthenticationRequiredError(reason)
+          }
+
+          const transportClass = getHttpRefreshTransportClass(response.status)
+          const reason = `Token refresh failed: HTTP ${response.status}`
+          if (latest.refresh?.attempt_id === attemptId) {
+            requireCredentialedLifecycle(
+              lifecycle,
+              accountId,
+              effectiveGeneration,
+            )
+            requireVaultCredentialGeneration(
+              latest,
+              accountId,
+              effectiveGeneration,
+            )
+            writeUnknownRefreshState(
+              vaultFilePath,
+              latest,
+              attemptId,
+              refreshTokenHash,
+              `http_${response.status}`,
+            )
+          }
+          markPoolAccountQuarantined(accountId, reason)
+          throw new CodexRefreshTransportError(reason, transportClass)
+        }
+
+        const data = (await response.json()) as Record<string, unknown>
+        const newAccessToken = data.access_token as string | undefined
+        const newRefreshToken = data.refresh_token as string | undefined
+        const newIdToken = data.id_token as string | undefined
+        const expiresAt = parseExpiresAt(data)
+
+        if (!newAccessToken || !newRefreshToken) {
+          const reason = 'Token refresh response missing required fields'
+          markAccountDead(accountId, reason)
+          throw new Error(reason)
+        }
+
+        const refreshedAccountId = extractCodexAccountId(newAccessToken)
+        if (!refreshedAccountId) {
+          const reason = 'Token refresh response missing account identity'
+          markAccountDead(accountId, reason)
+          throw new Error(reason)
+        }
+
+        if (lockCompromised) {
+          throw new Error('Lock compromised; refusing to write vault')
+        }
+
+        const latest = readVault(vaultFilePath)
+        if (latest.refresh?.attempt_id !== attemptId) {
+          // Lost ownership — check if another process already wrote valid newer tokens.
+          if (latest.tokens?.refresh_token && latest.tokens.refresh_token !== refreshToken) {
+            const refreshed = refreshedVaultTokensResult(
+              latest.tokens,
+              accountId,
+              vaultFilePath,
+              'codex-refresh.refreshAccountTokens.lost-ownership-recovery',
+              effectiveGeneration,
+              lifecycle,
+            )
+            if (refreshed) return refreshed
+          }
+          throw new Error('Lost refresh attempt ownership; refusing to write tokens')
+        }
+
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          effectiveGeneration,
+        )
+        requireVaultCredentialGeneration(
+          latest,
+          accountId,
+          effectiveGeneration,
+        )
+
+        const sameAccount = refreshedAccountId === accountId
+
+        // A refresh must never move credentials into a different profile. The
+        // lifecycle record for the old account is the only durable outcome.
+        if (!sameAccount) {
+          logForDebugging(
+            `[codex-profile] identity-mismatch writer=codex-refresh.refreshAccountTokens before_account=${accountId} after_account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} action=reauth-required`,
+            { level: 'warn' },
+          )
+          markLifecycleReauthRequired(
+            lifecycle,
+            permit,
+            accountId,
+            effectiveGeneration,
+          )
           latest.refresh = {
             state: 'reauth_required',
             refresh_token_hash: refreshTokenHash,
             marked_at: new Date().toISOString(),
-            reason: credentialReason,
+            reason: 'identity_mismatch',
           }
+          latest.version = (latest.version ?? 0) + 1
           atomicWriteJson(vaultFilePath, latest)
+          markAccountDead(
+            accountId,
+            `Refresh returned different account ${refreshedAccountId}`,
+            { rerollActive: false },
+          )
+          emitIdentityMismatchDiagnostic(accountId, refreshedAccountId)
+
+          return {
+            accountId,
+            credentialGeneration: effectiveGeneration,
+            status: 'identity_mismatch',
+            refreshedAccountId,
+          }
         }
-        const reason = normalizeCodexAccountBlockReason(credentialReason) ?? `Token refresh failed: HTTP ${response.status}`
-        markAccountDead(accountId, reason)
-        throw new ReauthenticationRequiredError(reason)
-      }
 
-      const transportClass = getHttpRefreshTransportClass(response.status)
-      const reason = `Token refresh failed: HTTP ${response.status}`
-      if (latest.refresh?.attempt_id === attemptId) {
-        writeUnknownRefreshState(
-          vaultFilePath,
-          latest,
-          attemptId,
-          refreshTokenHash,
-          `http_${response.status}`,
-        )
-      }
-      markPoolAccountQuarantined(accountId, reason)
-      throw new CodexRefreshTransportError(reason, transportClass)
-    }
+        // Normal success
+        const tokens = latest.tokens as Record<string, unknown>
+        tokens.access_token = newAccessToken
+        tokens.refresh_token = newRefreshToken
+        tokens.account_id = refreshedAccountId
+        tokens.expires_at = expiresAt
+        if (newIdToken) tokens.id_token = newIdToken
+        latest.tokens = tokens
+        latest.last_refresh = new Date().toISOString()
+        latest.refresh = { state: 'idle' }
+        latest.version = (latest.version ?? 0) + 1
 
-    const data = (await response.json()) as Record<string, unknown>
-    const newAccessToken = data.access_token as string | undefined
-    const newRefreshToken = data.refresh_token as string | undefined
-    const newIdToken = data.id_token as string | undefined
-    const expiresAt = parseExpiresAt(data)
-
-    if (!newAccessToken || !newRefreshToken) {
-      const reason = 'Token refresh response missing required fields'
-      markAccountDead(accountId, reason)
-      throw new Error(reason)
-    }
-
-    const refreshedAccountId = extractCodexAccountId(newAccessToken)
-    if (!refreshedAccountId) {
-      const reason = 'Token refresh response missing account identity'
-      markAccountDead(accountId, reason)
-      throw new Error(reason)
-    }
-
-    if (lockCompromised) {
-      throw new Error('Lock compromised; refusing to write vault')
-    }
-
-    const latest = readVault(vaultFilePath)
-    if (latest.refresh?.attempt_id !== attemptId) {
-      // Lost ownership — check if another process already wrote valid newer tokens.
-      if (latest.tokens?.refresh_token && latest.tokens.refresh_token !== refreshToken) {
-        const refreshed = refreshedVaultTokensResult(
-          latest.tokens,
+        requireCredentialedLifecycle(
+          lifecycle,
           accountId,
-          vaultFilePath,
-          'codex-refresh.refreshAccountTokens.lost-ownership-recovery',
+          effectiveGeneration,
         )
-        if (refreshed) return refreshed
-      }
-      throw new Error('Lost refresh attempt ownership; refusing to write tokens')
-    }
+        atomicWriteJson(vaultFilePath, latest)
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          effectiveGeneration,
+        )
 
-    const sameAccount = refreshedAccountId === accountId
-
-    // Identity mismatch handling
-    if (!sameAccount) {
-      logForDebugging(
-        `[codex-profile] identity-mismatch writer=codex-refresh.refreshAccountTokens before_account=${accountId} after_account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} action=save-as-new-profile`,
-        { level: 'warn' },
-      )
-      reconcileCodexIdentityMismatch({
-        oldAccountId: accountId,
-        newAccountId: refreshedAccountId,
-        tokens: {
+        appendAccount({
           accessToken: newAccessToken,
           refreshToken: newRefreshToken,
           idToken: newIdToken,
           expiresAt,
-          credentialGeneration: 0,
-        },
-        writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
-        source: 'vault',
-        saveNewVault: {
-          expectedPreviousAccountId: accountId,
-          filePath: join(dirname(vaultFilePath), `${refreshedAccountId}.json`),
-          preserveExistingMetadata: false,
-        },
-      })
+          accountId: refreshedAccountId,
+          credentialGeneration: effectiveGeneration,
+        }, {
+          preserveCapped: true,
+          writer: 'codex-refresh.refreshAccountTokens',
+          source: 'vault',
+          vaultFilePath,
+        })
 
-      // Fix 7: Mark old vault reauth_required rather than idle on identity mismatch.
-      latest.refresh = {
-        state: 'reauth_required',
-        refresh_token_hash: refreshTokenHash,
-        marked_at: new Date().toISOString(),
-        reason: 'identity_mismatch',
+        logForDebugging(
+          `[codex-profile] refresh-done writer=codex-refresh.refreshAccountTokens account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} metadata=preserved`,
+        )
+
+        return {
+          accountId: refreshedAccountId,
+          accessToken: newAccessToken,
+          refreshToken: newRefreshToken,
+          idToken: newIdToken || '',
+          expiresAt,
+          credentialGeneration: effectiveGeneration,
+          status: 'refreshed',
+        }
+      } finally {
+        if (releaseLock) {
+          await releaseLock().catch(() => {})
+        }
       }
-      latest.version = (latest.version ?? 0) + 1
-      atomicWriteJson(vaultFilePath, latest)
-
-      return {
-        accountId: refreshedAccountId,
-        accessToken: newAccessToken,
-        refreshToken: newRefreshToken,
-        idToken: newIdToken || '',
-        expiresAt,
-        status: 'identity_mismatch',
-        refreshedAccountId,
-      }
-    }
-
-    // Normal success
-    const tokens = (latest.tokens || {}) as Record<string, unknown>
-    const credentialGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
-    if (credentialGeneration === null) {
-      throw new Error('Vault credential generation is invalid; refusing to install tokens')
-    }
-    tokens.access_token = newAccessToken
-    tokens.refresh_token = newRefreshToken
-    tokens.account_id = refreshedAccountId
-    tokens.expires_at = expiresAt
-    if (newIdToken) tokens.id_token = newIdToken
-    latest.tokens = tokens
-    latest.last_refresh = new Date().toISOString()
-    latest.refresh = { state: 'idle' }
-    latest.version = (latest.version ?? 0) + 1
-
-    atomicWriteJson(vaultFilePath, latest)
-
-    appendAccount({
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
-      idToken: newIdToken,
-      expiresAt,
-      accountId: refreshedAccountId,
-      credentialGeneration,
-    }, {
-      preserveCapped: true,
-      writer: 'codex-refresh.refreshAccountTokens',
-      source: 'vault',
-      vaultFilePath,
-    })
-
-    logForDebugging(
-      `[codex-profile] refresh-done writer=codex-refresh.refreshAccountTokens account=${refreshedAccountId} file=${vaultFilePath.split('/').pop() ?? vaultFilePath} metadata=preserved`,
-    )
-
-    return {
-      accountId: refreshedAccountId,
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
-      idToken: newIdToken || '',
-      expiresAt,
-      status: 'refreshed',
-    }
-
-  } finally {
-    if (releaseLock) {
-      await releaseLock().catch(() => {})
-    }
-  }
+    },
+  )
 }
 
 // ── Touch-all ──────────────────────────────────────────────────────────────
@@ -687,9 +1070,12 @@ async function refreshAccountTokensStateful(
  * Refresh tokens for all unlocked vault accounts.
  * Skips locked accounts. Returns per-account results.
  */
-export async function touchAll(options: { vaultPath?: string } = {}): Promise<RefreshResult[]> {
+export async function touchAll(
+  options: { vaultPath?: string; lifecycle?: CodexCredentialLifecycle } = {},
+): Promise<RefreshResult[]> {
   const vaultPath = options.vaultPath ?? getVaultPath()
   if (!vaultPath) return []
+  const lifecycle = options.lifecycle ?? codexCredentialLifecycle
 
   const accountsDir = join(vaultPath, 'accounts')
   const locksDir = join(vaultPath, 'locks')
@@ -711,6 +1097,46 @@ export async function touchAll(options: { vaultPath?: string } = {}): Promise<Re
       const raw = readFileSync(filePath, 'utf-8')
       const data = JSON.parse(raw) as Record<string, unknown>
       const tokens = data.tokens as Record<string, unknown> | undefined
+      const explicitProfileState = data.profile_state
+      const accountFromFile =
+        typeof data.account_id === 'string'
+          ? data.account_id
+          : typeof tokens?.account_id === 'string'
+            ? tokens.account_id
+            : undefined
+
+      if (
+        explicitProfileState === 'signed_out' ||
+        explicitProfileState === 'recovery_required'
+      ) {
+        results.push({
+          accountId: accountFromFile ?? file,
+          status: 'skipped',
+          detail:
+            explicitProfileState === 'signed_out'
+              ? 'Profile is signed out'
+              : 'Profile is not credentialed',
+        })
+        continue
+      }
+
+      const lifecycleForFile = accountFromFile
+        ? lifecycle.read(accountFromFile)
+        : undefined
+      if (
+        lifecycleForFile?.status === 'valid' &&
+        lifecycleForFile.record.state !== 'credentialed'
+      ) {
+        results.push({
+          accountId: accountFromFile ?? file,
+          status: 'skipped',
+          detail:
+            lifecycleForFile.record.state === 'signed_out'
+              ? 'Profile is signed out'
+              : 'Profile is not credentialed',
+        })
+        continue
+      }
 
       if (!tokens?.access_token || !tokens.refresh_token || !tokens.account_id) {
         results.push({
@@ -722,6 +1148,33 @@ export async function touchAll(options: { vaultPath?: string } = {}): Promise<Re
       }
 
       accountId = String(tokens.account_id)
+      const lifecycleResult =
+        accountFromFile === accountId
+          ? lifecycleForFile
+          : lifecycle.read(accountId)
+      if (
+        lifecycleResult?.status === 'valid' &&
+        lifecycleResult.record.state !== 'credentialed'
+      ) {
+        results.push({
+          accountId,
+          status: 'skipped',
+          detail:
+            lifecycleResult.record.state === 'signed_out'
+              ? 'Profile is signed out'
+              : 'Profile is not credentialed',
+        })
+        continue
+      }
+      const credentialGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
+      if (credentialGeneration === null) {
+        results.push({
+          accountId,
+          status: 'failed',
+          detail: 'Credential generation is invalid',
+        })
+        continue
+      }
       const expiresAt =
         typeof tokens.expires_at === 'number' && Number.isFinite(tokens.expires_at)
           ? tokens.expires_at
@@ -742,7 +1195,13 @@ export async function touchAll(options: { vaultPath?: string } = {}): Promise<Re
       }
 
       // Refresh
-      const refreshed = await refreshAccountTokens(accountId, String(tokens.refresh_token), filePath)
+      const refreshed = await refreshAccountTokens(
+        accountId,
+        String(tokens.refresh_token),
+        filePath,
+        credentialGeneration,
+        { lifecycle },
+      )
       if (refreshed.status === 'identity_mismatch') {
         results.push({
           accountId,
@@ -869,13 +1328,16 @@ export function stopQuarantineProbe(): void {
   }
 }
 
-export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
+export async function runQuarantineProbeOnce(
+  options: CodexRefreshOptions = {},
+): Promise<RefreshResult[]> {
   if (quarantineProbeInFlight) return []
   quarantineProbeInFlight = true
 
   try {
     const now = Date.now()
     const results: RefreshResult[] = []
+    const lifecycle = options.lifecycle ?? codexCredentialLifecycle
     const accounts = getPoolStatus().accounts.filter(
       account =>
         account.status === 'quarantined' &&
@@ -886,6 +1348,26 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
     for (const account of accounts) {
       const vaultFilePath = account.vaultFilePath!
       const vault = readVault(vaultFilePath)
+      const lifecycleResult = lifecycle.read(account.accountId)
+      const legacyBootstrapPending =
+        account.credentialGeneration === LEGACY_CODEX_CREDENTIAL_GENERATION &&
+        lifecycleResult.status === 'absent'
+      if (
+        !legacyBootstrapPending &&
+        (
+          account.credentialGeneration === LEGACY_CODEX_CREDENTIAL_GENERATION ||
+          lifecycleResult.status !== 'valid' ||
+          lifecycleResult.record.state !== 'credentialed' ||
+          lifecycleResult.record.credentialGeneration !== account.credentialGeneration
+        )
+      ) {
+        results.push({
+          accountId: account.accountId,
+          status: 'skipped',
+          detail: 'Credential lifecycle no longer authorizes this probe',
+        })
+        continue
+      }
       const refreshState = vault.refresh as Record<string, unknown> | undefined
       const nextProbeAt = typeof refreshState?.next_probe_at === 'string'
         ? Date.parse(refreshState.next_probe_at)
@@ -895,23 +1377,43 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
       }
 
       try {
-        await persistNextQuarantineProbe(
-          vaultFilePath,
-          'quarantine probe in progress',
-        )
+        if (!legacyBootstrapPending) {
+          await persistNextQuarantineProbe(
+            vaultFilePath,
+            'quarantine probe in progress',
+            account.accountId,
+            account.credentialGeneration,
+            { lifecycle },
+          )
+        }
         const refreshed = await refreshAccountTokens(
           account.accountId,
           account.refreshToken,
           vaultFilePath,
+          account.credentialGeneration,
+          { lifecycle },
         )
-        results.push({
-          accountId: account.accountId,
-          status: refreshed.status === 'identity_mismatch' ? 'identity_mismatch' : 'refreshed',
-          ...(refreshed.refreshedAccountId
-            ? { refreshedAccountId: refreshed.refreshedAccountId }
-            : {}),
-        })
+        if (refreshed.status === 'identity_mismatch') {
+          results.push({
+            accountId: account.accountId,
+            status: 'identity_mismatch',
+            refreshedAccountId: refreshed.refreshedAccountId,
+          })
+        } else {
+          results.push({
+            accountId: account.accountId,
+            status: 'refreshed',
+          })
+        }
       } catch (err) {
+        if (err instanceof CodexRefreshLifecycleError) {
+          results.push({
+            accountId: account.accountId,
+            status: 'skipped',
+            detail: 'Credential lifecycle no longer authorizes this probe',
+          })
+          continue
+        }
         if (err instanceof ReauthenticationRequiredError) {
           results.push({
             accountId: account.accountId,
@@ -924,8 +1426,30 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
         const detail = err instanceof Error ? err.message : String(err)
         markPoolAccountQuarantined(account.accountId, detail)
         try {
-          await persistNextQuarantineProbe(vaultFilePath, detail)
+          const currentLifecycle = lifecycle.read(account.accountId)
+          const currentGeneration =
+            currentLifecycle.status === 'valid'
+              ? currentLifecycle.record.credentialGeneration
+              : account.credentialGeneration
+          await persistNextQuarantineProbe(
+            vaultFilePath,
+            detail,
+            account.accountId,
+            currentGeneration,
+            { lifecycle },
+          )
         } catch (persistenceError) {
+          if (persistenceError instanceof CodexRefreshLifecycleError) {
+            results.push({
+              accountId: account.accountId,
+              status: 'skipped',
+              detail: 'Credential lifecycle no longer authorizes this probe',
+              ...(err instanceof CodexRefreshTransportError
+                ? { transportClass: err.transportClass }
+                : {}),
+            })
+            continue
+          }
           logForDebugging(
             `[codex-refresh] Could not persist quarantine probe failure: ${persistenceError instanceof Error ? persistenceError.message : String(persistenceError)}`,
             { level: 'error' },
@@ -951,63 +1475,103 @@ export async function runQuarantineProbeOnce(): Promise<RefreshResult[]> {
 export async function persistNextQuarantineProbe(
   vaultFilePath: string,
   reason: string,
+  accountId: string,
+  credentialGeneration: number,
+  options: CodexRefreshOptions = {},
 ): Promise<void> {
-  let lockCompromised = false
-  const release = await acquireCodexVaultFileLock(vaultFilePath, error => {
-    lockCompromised = true
-    logForDebugging(
-      `[codex-refresh] Quarantine probe lock compromised: ${error.message}`,
-      { level: 'error' },
-    )
-  })
-  try {
-    const vault = readExistingVault(vaultFilePath)
-    const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
-    if (refreshState.state === 'reauth_required') return
-
-    const previousFailures =
-      typeof refreshState.consecutive_failures === 'number' &&
-      Number.isFinite(refreshState.consecutive_failures)
-        ? refreshState.consecutive_failures
-        : 0
-    const existingNextProbeAt =
-      typeof refreshState.next_probe_at === 'string'
-        ? Date.parse(refreshState.next_probe_at)
-        : Number.NaN
-    const hasFutureReservation =
-      Number.isFinite(existingNextProbeAt) && existingNextProbeAt > Date.now()
-    const consecutiveFailures = hasFutureReservation
-      ? previousFailures
-      : previousFailures + 1
-    const backoff =
-      QUARANTINE_PROBE_BACKOFF_MS[
-        Math.min(
-          consecutiveFailures - 1,
-          QUARANTINE_PROBE_BACKOFF_MS.length - 1,
+  const lifecycle = options.lifecycle ?? codexCredentialLifecycle
+  return lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'refresh' },
+    async () => {
+      requireCredentialedLifecycle(
+        lifecycle,
+        accountId,
+        credentialGeneration,
+      )
+      let lockCompromised = false
+      const release = await acquireCodexVaultFileLock(vaultFilePath, error => {
+        lockCompromised = true
+        logForDebugging(
+          `[codex-refresh] Quarantine probe lock compromised: ${error.message}`,
+          { level: 'error' },
         )
-      ] ??
-      QUARANTINE_PROBE_BACKOFF_MS[QUARANTINE_PROBE_BACKOFF_MS.length - 1]
+      })
+      try {
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          credentialGeneration,
+        )
+        const vault = readExistingVault(vaultFilePath)
+        if (
+          vault.profile_state === 'signed_out' ||
+          vault.profile_state === 'recovery_required'
+        ) {
+          throw new CodexRefreshLifecycleError(
+            'state_mismatch',
+            accountId,
+            credentialGeneration,
+          )
+        }
+        requireVaultCredentialGeneration(
+          vault,
+          accountId,
+          credentialGeneration,
+        )
+        const refreshState = (vault.refresh ?? {}) as Record<string, unknown>
+        if (refreshState.state === 'reauth_required') return
 
-    vault.refresh = {
-      ...refreshState,
-      state: 'unknown',
-      failed_at: new Date().toISOString(),
-      reason,
-      consecutive_failures: consecutiveFailures,
-      next_probe_at:
-        hasFutureReservation &&
-        typeof refreshState.next_probe_at === 'string'
-          ? refreshState.next_probe_at
-          : new Date(Date.now() + backoff).toISOString(),
-    }
-    vault.version = (vault.version ?? 0) + 1
-    if (lockCompromised) {
-      throw new Error('Lock compromised; refusing to write vault')
-    }
-    atomicWriteJson(vaultFilePath, vault)
-  } finally {
-    await release()
-  }
+        const previousFailures =
+          typeof refreshState.consecutive_failures === 'number' &&
+          Number.isFinite(refreshState.consecutive_failures)
+            ? refreshState.consecutive_failures
+            : 0
+        const existingNextProbeAt =
+          typeof refreshState.next_probe_at === 'string'
+            ? Date.parse(refreshState.next_probe_at)
+            : Number.NaN
+        const hasFutureReservation =
+          Number.isFinite(existingNextProbeAt) && existingNextProbeAt > Date.now()
+        const consecutiveFailures = hasFutureReservation
+          ? previousFailures
+          : previousFailures + 1
+        const backoff =
+          QUARANTINE_PROBE_BACKOFF_MS[
+            Math.min(
+              consecutiveFailures - 1,
+              QUARANTINE_PROBE_BACKOFF_MS.length - 1,
+            )
+          ] ??
+          QUARANTINE_PROBE_BACKOFF_MS[QUARANTINE_PROBE_BACKOFF_MS.length - 1]
+
+        vault.refresh = {
+          ...refreshState,
+          state: 'unknown',
+          failed_at: new Date().toISOString(),
+          reason,
+          consecutive_failures: consecutiveFailures,
+          next_probe_at:
+            hasFutureReservation &&
+            typeof refreshState.next_probe_at === 'string'
+              ? refreshState.next_probe_at
+              : new Date(Date.now() + backoff).toISOString(),
+        }
+        vault.version = (vault.version ?? 0) + 1
+        if (lockCompromised) {
+          throw new Error('Lock compromised; refusing to write vault')
+        }
+        requireCredentialedLifecycle(
+          lifecycle,
+          accountId,
+          credentialGeneration,
+        )
+        atomicWriteJson(vaultFilePath, vault)
+      } finally {
+        await release()
+      }
+    },
+  )
 }
 
 /**

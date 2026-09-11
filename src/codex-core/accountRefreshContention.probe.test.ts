@@ -49,6 +49,7 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
+import { createCodexCredentialLifecycle } from '../services/api/codexCredentialLifecycle.js'
 
 /**
  * Scenarios are isolated per-HOME (scenarioDirs below) AND use distinct
@@ -301,6 +302,29 @@ function readyMarkers(goFile: string): number {
   }
 }
 
+async function establishProbeLifecycle(
+  directory: string,
+  accountId: string,
+): Promise<void> {
+  const lifecycle = createCodexCredentialLifecycle({ directory })
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'login', operationId: `probe-login-${accountId}` },
+    permit => {
+      const prepared = lifecycle.prepareLogin(permit)
+      if (prepared.status !== 'applied') {
+        throw new Error('probe lifecycle preparation failed')
+      }
+      const committed = lifecycle.commitLogin(permit, {
+        expectedGeneration: prepared.record.credentialGeneration,
+      })
+      if (committed.status !== 'applied') {
+        throw new Error('probe lifecycle commit failed')
+      }
+    },
+  )
+}
+
 async function waitFor(
   condition: () => boolean,
   timeoutMs: number,
@@ -417,6 +441,7 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
                 access_token: mintAccessJwt(ACCOUNT_ID, 0),
                 refresh_token: 'R0',
                 account_id: ACCOUNT_ID,
+                credential_generation: 1,
                 expires_at: Date.now() + 30_000,
               },
               version: 1,
@@ -434,7 +459,12 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_ACCOUNT_ID: ACCOUNT_ID,
           PROBE_REFRESH_TOKEN: 'R0',
           PROBE_VAULT_FILE: vaultFile,
+          PROBE_CREDENTIAL_GENERATION: '1',
         }
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          ACCOUNT_ID,
+        )
         const a = spawnChild(dirs, contenderEnv)
         const b = spawnChild(dirs, contenderEnv)
         await releaseBarrier(goFile)
@@ -659,6 +689,7 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
                 access_token: mintAccessJwt(IMAGE_ACCOUNT_ID, 0),
                 refresh_token: 'R0',
                 account_id: IMAGE_ACCOUNT_ID,
+                credential_generation: 1,
                 // Within the 60s refresh skew but not expired → the resolver
                 // refreshes it and the pool does not pre-mark it dead.
                 expires_at: Date.now() + 30_000,
@@ -678,6 +709,10 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_GO_FILE: goFile,
           PROBE_ACCOUNT_ID: IMAGE_ACCOUNT_ID,
         }
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          IMAGE_ACCOUNT_ID,
+        )
         const a = spawnChild(dirs, contenderEnv)
         const b = spawnChild(dirs, contenderEnv)
         await releaseBarrier(goFile)

@@ -20,6 +20,7 @@ import {
 } from '../services/oauth/codex-client.js'
 import {
   classifyRefreshTransportError,
+  CodexRefreshLifecycleError,
   ReauthenticationRequiredError,
   refreshAccountTokens,
 } from '../services/api/codexTokenRefresh.js'
@@ -286,14 +287,24 @@ async function refreshAccountNow(
       idToken?: string
     }
     let savedVaultPath = account.vaultFilePath
+    let refreshedCredentialGeneration = account.credentialGeneration
     if (usedStatefulRefresh) {
       // Cross-process safety is owned by refreshAccountTokens itself
       // (proper-lockfile on the vault file + rotated-token recovery).
-      refreshed = await refreshAccountTokens(
+      const statefulRefresh = await refreshAccountTokens(
         account.accountId,
         account.refreshToken,
         account.vaultFilePath!,
+        account.credentialGeneration,
       )
+      if (statefulRefresh.status === 'identity_mismatch') {
+        throw new CodexCoreError(
+          'auth',
+          `Failed to refresh Codex account "${account.profile}". Please re-login.`,
+        )
+      }
+      refreshed = statefulRefresh
+      refreshedCredentialGeneration = statefulRefresh.credentialGeneration
     } else {
       // Raw refresh rotates the refresh token with no protection of its own;
       // serialize refresh-and-persist across processes (DR-2).
@@ -314,7 +325,7 @@ async function refreshAccountNow(
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
       credentialGeneration: sameAccount
-        ? account.credentialGeneration
+        ? refreshedCredentialGeneration
         : 0,
       profile: account.profile,
       source: account.source,
@@ -354,6 +365,13 @@ async function refreshAccountNow(
       throw error
     }
     if (error instanceof ReauthenticationRequiredError) {
+      throw new CodexCoreError(
+        'auth',
+        `Failed to refresh Codex account "${account.profile}". Please re-login.`,
+        { status: 401, cause: error },
+      )
+    }
+    if (error instanceof CodexRefreshLifecycleError) {
       throw new CodexCoreError(
         'auth',
         `Failed to refresh Codex account "${account.profile}". Please re-login.`,

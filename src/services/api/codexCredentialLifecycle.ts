@@ -6,7 +6,8 @@ import {
 } from 'fs'
 import { getClaudeConfigHomeDir } from '../../utils/envUtils.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
-import { acquireMutationLockSync } from '../../utils/lockfile.js'
+import { lock } from '../../utils/lockfile.js'
+import { logForDebugging } from '../../utils/debug.js'
 import { join, resolve } from 'path'
 
 export const CODEX_CREDENTIAL_LIFECYCLE_VERSION = 1 as const
@@ -513,14 +514,52 @@ export function createCodexCredentialLifecycle(
     }
   }
 
-  function acquireLock(recordPath: string): () => void {
-    try {
-      return acquireMutationLockSync(recordPath, {
-        label: '[codex-lifecycle] Account',
-        waitMs: lockWaitMs,
-      })
-    } catch {
-      throwLifecycleError('lock_unavailable')
+  async function acquireLock(recordPath: string): Promise<() => Promise<void>> {
+    const deadline = Date.now() + lockWaitMs
+    for (;;) {
+      try {
+        const release = await lock(recordPath, {
+          realpath: false,
+          retries: 0,
+          stale: 120_000,
+          update: 30_000,
+          onCompromised: error => {
+            logForDebugging(
+              `[codex-lifecycle] Account lock compromised: ${error.message}`,
+              { level: 'error' },
+            )
+          },
+        })
+        let released = false
+        return async () => {
+          if (released) return
+          released = true
+          try {
+            await release()
+          } catch (error) {
+            if (
+              !(
+                error &&
+                typeof error === 'object' &&
+                'code' in error &&
+                error.code === 'ERELEASED'
+              )
+            ) {
+              throw error
+            }
+          }
+        }
+      } catch (error) {
+        const locked =
+          error &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'ELOCKED'
+        if (!locked || Date.now() >= deadline) {
+          throwLifecycleError('lock_unavailable')
+        }
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
     }
   }
 
@@ -588,7 +627,7 @@ export function createCodexCredentialLifecycle(
     const { recordPath } = getPaths(accountId)
 
     ensureDirectory()
-    const release = acquireLock(recordPath)
+    const release = await acquireLock(recordPath)
     const permit = Object.freeze({})
     const details: PermitDetails = {
       accountId,
@@ -609,7 +648,7 @@ export function createCodexCredentialLifecycle(
       permitDetails.delete(permit)
       preparedLoginGenerations.delete(permit)
       try {
-        release()
+        await release()
       } catch {
         if (callbackError === undefined) {
           throwLifecycleError('lock_unavailable')
@@ -622,7 +661,13 @@ export function createCodexCredentialLifecycle(
     permit: CodexCredentialLifecyclePermit,
     bootstrapOptions: CodexCredentialLegacyBootstrapOptions,
   ): CodexCredentialLifecycleTransitionResult {
-    const { details } = getPermit(permit, 'legacy_bootstrap')
+    const { details } = getPermit(permit)
+    if (
+      details.operationKind !== 'legacy_bootstrap' &&
+      details.operationKind !== 'refresh'
+    ) {
+      throwLifecycleError('invalid_transition')
+    }
     if (
       !bootstrapOptions ||
       typeof bootstrapOptions !== 'object' ||

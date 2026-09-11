@@ -160,14 +160,23 @@ async function main(): Promise<void> {
         requireEnv('PROBE_ACCOUNT_ID'),
         requireEnv('PROBE_REFRESH_TOKEN'),
         requireEnv('PROBE_VAULT_FILE'),
+        Number(requireEnv('PROBE_CREDENTIAL_GENERATION')),
       )
-      printResult({
-        ok: true,
-        accountId: refreshed.accountId,
-        accessToken: refreshed.accessToken,
-        refreshToken: refreshed.refreshToken,
-        status: refreshed.status,
-      })
+      if (refreshed.status === 'identity_mismatch') {
+        printResult({
+          ok: false,
+          accountId: refreshed.accountId,
+          status: refreshed.status,
+        })
+      } else {
+        printResult({
+          ok: true,
+          accountId: refreshed.accountId,
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          status: refreshed.status,
+        })
+      }
     } catch (error) {
       printResult({
         ok: false,
