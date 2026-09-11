@@ -304,7 +304,7 @@ export async function loadPoolForObservation(
  * Drop the legacy `codexOAuth` config mirror once a vault account is proven to
  * own that id.
  *
- * The mirror is rewritten by every `/login` (`ConsoleOAuthFlow.persistCodexLogin`)
+ * The mirror is written by the central Codex login persistence transaction
  * but is never rotated afterwards, so it decays into a spent refresh token while
  * the vault chain moves on. Redeeming a spent token from a live chain is the
  * canonical reuse-detection trigger, and two paths reach for the mirror whenever

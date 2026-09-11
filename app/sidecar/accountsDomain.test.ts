@@ -7,6 +7,7 @@ import * as logoutModule from '../../src/commands/logout/logout.js'
 import {
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
+  type CodexProfileInventory,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
 import {
@@ -25,6 +26,7 @@ import type {
 import {
   buildAccountsSnapshot,
   buildAccountStatus,
+  createRealOAuthLoginRunner,
   createRealAnthropicOAuthLoginRunner,
   createRealAccountsExecutor,
   createSidecarAccountsDomain,
@@ -931,6 +933,68 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     domain.setOAuthProgressSink(p => captured.push(p))
     return domain
   }
+
+  test('real Codex runner delegates installation and recognizes signed-out profiles', async () => {
+    const calls: Array<{
+      accountId: string
+      alias?: string
+      operationId: string
+    }> = []
+    const inventory: CodexProfileInventory = {
+      accounts: [],
+      signedOutProfiles: [
+        {
+          accountId: 'signed-out-codex',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePaths: ['/tmp/signed-out-codex.json'],
+          profileState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      ],
+      duplicateVaultIdentities: [],
+    }
+    const runner = createRealOAuthLoginRunner({
+      runOAuthFlow: async onUrlReady => {
+        await onUrlReady('https://auth.example/codex')
+        return {
+          accessToken: 'access-token',
+          refreshToken: 'refresh-token',
+          expiresAt: Date.now() + 60_000,
+          accountId: 'signed-out-codex',
+        }
+      },
+      readProfileInventory: () => inventory,
+      createOperationId: () => 'accounts-domain-login',
+      persistLogin: async (received, options) => {
+        calls.push({
+          accountId: received.accountId,
+          alias: options.alias,
+          operationId: options.operationId,
+        })
+        return {
+          accountId: received.accountId,
+          credentialGeneration: 3,
+          source: 'vault',
+        }
+      },
+    })
+
+    const pending = await runner.begin({
+      onWaitingForLogin: () => {},
+      waitForManualCode: async () => '',
+    })
+    expect(pending.isExistingAccount).toBe(true)
+    await pending.persist(undefined)
+
+    expect(calls).toEqual([
+      {
+        accountId: 'signed-out-codex',
+        alias: undefined,
+        operationId: 'accounts-domain-login',
+      },
+    ])
+  })
 
   test('new account: waiting_for_login {url} → waiting_for_alias → success + persists the alias', async () => {
     const captured: OAuthLoginProgress[] = []

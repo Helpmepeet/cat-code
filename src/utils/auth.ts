@@ -1356,7 +1356,7 @@ export function clearOAuthTokenCache(): void {
  * Saves the OpenAI Codex OAuth tokens to GlobalConfig.
  * Does NOT overwrite or interfere with Anthropic's claudeAiOauth block.
  */
-export function saveCodexOAuthTokens(tokens: CodexTokens): void {
+export function saveCodexOAuthTokens(tokens: CodexTokens): boolean {
   const credentialGeneration =
     tokens.credentialGeneration === undefined
       ? 0
@@ -1364,7 +1364,7 @@ export function saveCodexOAuthTokens(tokens: CodexTokens): void {
   if (!isValidCodexCredentialGeneration(credentialGeneration)) {
     throw new Error('Codex credential generation is invalid')
   }
-  saveGlobalConfig((cfg) => ({
+  return saveGlobalConfig((cfg) => ({
     ...cfg,
     codexOAuth: {
       accessToken: tokens.accessToken,

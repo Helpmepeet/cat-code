@@ -45,19 +45,22 @@
 import { existsSync } from 'node:fs'
 
 import {
-  appendAccount,
   describeCodexAccountAvailability,
   getCodexAccountAvailability,
+  getCodexProfileInventory,
   getPoolStatus,
   isCodexAccountSwitchable,
   removeCodexAccount,
   loadPoolForObservation,
-  saveCodexTokenToVault,
   setAccountAlias,
   validateCodexAccountAlias,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
 import { commitCodexAccountSwitch } from '../../src/services/api/codexAccountSwitch.js'
+import {
+  createCodexOAuthLoginOperationId,
+  persistCodexOAuthLogin,
+} from '../../src/services/api/codexLoginPersistence.js'
 import {
   getClaudePoolStatus,
   loadClaudePoolForObservation,
@@ -84,7 +87,6 @@ import {
   clearOAuthTokenCache,
   hasAnthropicCredentials,
   isClaudeAISubscriber,
-  saveCodexOAuthTokens,
   validateForceLoginOrgForToken,
 } from '../../src/utils/auth.js'
 import { clearAuthRelatedCaches } from '../../src/commands/logout/logout.js'
@@ -270,47 +272,55 @@ export type AnthropicOAuthRunnerDependencies = {
 
 /**
  * The REAL runner — consumes the engine's `runCodexOAuthFlow` and performs the
- * engine's own token persistence (`saveCodexOAuthTokens` + vault + `appendAccount`,
- * the identical writes `ConsoleOAuthFlow.persistCodexLogin` performs,
- * `ConsoleOAuthFlow.tsx:213`). Only exercised by a LIVE login (the operator step);
- * headless tests inject a fake so no browser/port/vault is ever touched.
+ * engine's lifecycle-authorized credential installation. Only exercised by a
+ * LIVE login (the operator step); headless tests inject a fake so no
+ * browser/port/vault is ever touched.
  */
-export function createRealOAuthLoginRunner(): OAuthLoginRunner {
+export type CodexOAuthRunnerDependencies = {
+  persistLogin?: typeof persistCodexOAuthLogin
+  createOperationId?: typeof createCodexOAuthLoginOperationId
+  readProfileInventory?: typeof getCodexProfileInventory
+  runOAuthFlow?: typeof runCodexOAuthFlow
+}
+
+export function createRealOAuthLoginRunner(
+  dependencies: CodexOAuthRunnerDependencies = {},
+): OAuthLoginRunner {
+  const persistLogin = dependencies.persistLogin ?? persistCodexOAuthLogin
+  const createOperationId =
+    dependencies.createOperationId ?? createCodexOAuthLoginOperationId
+  const readProfileInventory =
+    dependencies.readProfileInventory ?? getCodexProfileInventory
+  const runOAuthFlow = dependencies.runOAuthFlow ?? runCodexOAuthFlow
   return {
     async begin({ onWaitingForLogin, waitForManualCode }) {
-      const tokens: CodexTokens = await runCodexOAuthFlow(
+      const tokens: CodexTokens = await runOAuthFlow(
         async url => {
           onWaitingForLogin(url)
         },
         () => waitForManualCode(),
       )
-      const existing = getPoolStatus().accounts.find(
-        a => a.accountId === tokens.accountId,
-      )
+      const inventory = readProfileInventory()
+      const existing =
+        inventory.accounts.find(a => a.accountId === tokens.accountId) ??
+        inventory.signedOutProfiles.find(
+          profile => profile.accountId === tokens.accountId,
+        )
+      const operationId = createOperationId()
+      const isExistingAccount = existing !== undefined
       return {
-        isExistingAccount: existing !== undefined,
+        isExistingAccount,
         validateAlias(alias) {
           const trimmed = alias.trim()
           if (!trimmed) return { ok: true }
           return validateCodexAccountAlias(trimmed, tokens.accountId)
         },
-        persist(alias) {
+        async persist(alias) {
           const trimmed = alias?.trim() || undefined
-          // The engine's OWN credential writes — NOT a re-implementation.
-          saveCodexOAuthTokens(tokens)
-          const saved = saveCodexTokenToVault(
-            { ...tokens, alias: trimmed },
-            { writer: 'accountsDomain.oauthPersist' },
-          )
-          appendAccount(
-            { ...tokens, alias: trimmed },
-            {
-              writer: 'accountsDomain.oauthPersist',
-              source: saved ? 'vault' : 'config',
-              vaultFilePath: saved?.filePath,
-              activate: true,
-            },
-          )
+          await persistLogin(tokens, {
+            operationId,
+            ...(trimmed ? { alias: trimmed } : {}),
+          })
         },
       }
     },
