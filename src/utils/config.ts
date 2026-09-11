@@ -241,6 +241,7 @@ export type GlobalConfig = {
     refreshToken: string
     expiresAt: number
     accountId: string
+    credentialGeneration: number
   }
   /**
    * Multi-account credential storage (foundation scaffolding).
@@ -251,7 +252,13 @@ export type GlobalConfig = {
   accountLabels?: Record<string, {
     provider: 'anthropic' | 'openai'
     label: string
-    codexOAuth?: { accessToken: string; refreshToken: string; expiresAt: number; accountId: string }
+    codexOAuth?: {
+      accessToken: string
+      refreshToken: string
+      expiresAt: number
+      accountId: string
+      credentialGeneration: number
+    }
     anthropicMeta?: { email: string; orgName?: string }
   }>
   /** Active account label per provider. Defaults to "default" if not set. */

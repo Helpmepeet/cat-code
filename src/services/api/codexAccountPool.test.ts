@@ -14,7 +14,12 @@ import {
   getCodexPlanMetadataFromIdToken,
   getPoolStatus,
   getRedemptionEligibility,
+  getCodexProfileInventory,
+  getSignedOutCodexProfiles,
+  LEGACY_CODEX_CREDENTIAL_GENERATION,
   isCodexAccountSwitchable,
+  loadCodexProfileInventoryForTest,
+  loadPoolForObservation,
   loadVaultAccountsForTest,
   markAccountDead,
   markPoolAccountCapped,
@@ -26,12 +31,19 @@ import {
   resolveCodexAccountByPrefix,
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
+  setAccountAlias,
   shouldRunStartupCodexTouchAll,
   switchToAccount,
   updateAccountUsageHints,
+  validateCodexAccountAlias,
   type PoolAccount,
   type RedemptionEligibility,
 } from './codexAccountPool.js'
+import {
+  createCodexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+  type CodexCredentialLifecycleReadResult,
+} from './codexCredentialLifecycle.js'
 import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
@@ -48,6 +60,13 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 0,
+    credentialGenerationState:
+      overrides.credentialGenerationState ??
+      (overrides.credentialGeneration === undefined ||
+      overrides.credentialGeneration === 0
+        ? 'legacy_unbound'
+        : 'lifecycle_bound'),
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -75,6 +94,95 @@ function createIdToken(auth: Record<string, unknown>): string {
     }),
   ).toString('base64url')
   return `${header}.${payload}.signature`
+}
+
+async function establishCredentialedLifecycle(
+  directory: string,
+  accountId: string,
+  desiredGeneration = 1,
+): Promise<CodexCredentialLifecycle> {
+  if (!Number.isSafeInteger(desiredGeneration) || desiredGeneration < 1) {
+    throw new Error('desired lifecycle generation must be positive')
+  }
+  const lifecycle = createCodexCredentialLifecycle({ directory })
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'login', operationId: `login-${accountId}` },
+    permit => {
+      const prepared = lifecycle.prepareLogin(permit)
+      if (prepared.status !== 'applied') {
+        throw new Error('failed to prepare lifecycle login')
+      }
+      const committed = lifecycle.commitLogin(permit, {
+        expectedGeneration: prepared.record.credentialGeneration,
+      })
+      if (committed.status !== 'applied') {
+        throw new Error('failed to commit lifecycle login')
+      }
+    },
+  )
+  for (let generation = 1; generation < desiredGeneration; generation += 1) {
+    if (generation % 2 === 1) {
+      await lifecycle.withTransaction(
+        accountId,
+        {
+          operationKind: 'sign_out',
+          operationId: `sign-out-${accountId}-${generation}`,
+        },
+        permit => {
+          const signedOut = lifecycle.signOut(permit, {
+            expectedGeneration: generation,
+          })
+          if (signedOut.status !== 'applied') {
+            throw new Error('failed to advance lifecycle sign-out')
+          }
+        },
+      )
+      continue
+    }
+
+    await lifecycle.withTransaction(
+      accountId,
+      {
+        operationKind: 'login',
+        operationId: `login-${accountId}-${generation + 1}`,
+      },
+      permit => {
+        const prepared = lifecycle.prepareLogin(permit)
+        if (
+          prepared.status !== 'applied' ||
+          prepared.record.credentialGeneration !== generation + 1
+        ) {
+          throw new Error('failed to advance lifecycle login preparation')
+        }
+        const committed = lifecycle.commitLogin(permit, {
+          expectedGeneration: generation + 1,
+        })
+        if (committed.status !== 'applied') {
+          throw new Error('failed to advance lifecycle login')
+        }
+      },
+    )
+  }
+  return lifecycle
+}
+
+async function establishSignedOutLifecycle(
+  directory: string,
+  accountId: string,
+): Promise<CodexCredentialLifecycle> {
+  const lifecycle = await establishCredentialedLifecycle(directory, accountId)
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'sign_out', operationId: `sign-out-${accountId}` },
+    permit => {
+      const signedOut = lifecycle.signOut(permit, { expectedGeneration: 1 })
+      if (signedOut.status !== 'applied') {
+        throw new Error('failed to record lifecycle sign-out')
+      }
+    },
+  )
+  return lifecycle
 }
 
 describe('codexAccountPool availability', () => {
@@ -288,6 +396,22 @@ describe('codexAccountPool appendAccount', () => {
     _resetAccountDiagnosticStreamJsonHookForTesting()
   })
 
+  test('classifies runtime callers without generation metadata as legacy unbound', () => {
+    const untaggedTokens = {
+      accessToken: 'legacy-access',
+      refreshToken: 'legacy-refresh',
+      expiresAt: Date.now() + 120_000,
+      accountId: 'legacy-runtime-account',
+    }
+
+    appendAccount(untaggedTokens as Parameters<typeof appendAccount>[0])
+
+    expect(getPoolStatus().accounts[0]).toMatchObject({
+      credentialGeneration: 0,
+      credentialGenerationState: 'legacy_unbound',
+    })
+  })
+
   test('preserves capped status during token refresh updates', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -308,6 +432,7 @@ describe('codexAccountPool appendAccount', () => {
       refreshToken: 'new-refresh',
       expiresAt: Date.now() + 120_000,
       accountId: 'backup-account',
+      credentialGeneration: 0,
     }, {
       preserveCapped: true,
     })
@@ -337,6 +462,7 @@ describe('codexAccountPool appendAccount', () => {
       refreshToken: 'new-refresh',
       expiresAt: Date.now() + 120_000,
       accountId: 'main-account',
+      credentialGeneration: 0,
     }, {
       preserveCapped: true,
     })
@@ -360,6 +486,7 @@ describe('codexAccountPool appendAccount', () => {
         refreshToken: 'new-refresh',
         expiresAt: Date.now() + 60_000,
         accountId: 'acct-1',
+        credentialGeneration: 0,
         idToken: createIdToken({
           chatgpt_plan_type: 'plus',
           chatgpt_subscription_active_until: '2999-01-01T00:00:00.000Z',
@@ -427,6 +554,7 @@ describe('codexAccountPool appendAccount', () => {
       refreshToken: 'fresh-refresh',
       expiresAt: Date.now() + 120_000,
       accountId: 'backup-account',
+      credentialGeneration: 0,
     })
 
     expect(emitted.some(message =>
@@ -560,6 +688,7 @@ describe('codexAccountPool appendAccount', () => {
       refreshToken: 'fresh-refresh',
       expiresAt: Date.now() + 120_000,
       accountId: 'stale-account',
+      credentialGeneration: 0,
     }, {
       preserveCapped: true,
     })
@@ -1109,6 +1238,7 @@ describe('codexAccountPool appendAccount', () => {
         refreshToken: 'new-refresh',
         expiresAt: Date.now() + 120_000,
         accountId: 'vault-account',
+        credentialGeneration: 0,
       },
       {
         source: 'vault',
@@ -1372,6 +1502,406 @@ describe('loadVaultAccounts correlates a terminal verdict with the token it name
     expect(readdirSync(join(dir, 'accounts')).filter((f) => f.endsWith('.tmp'))).toHaveLength(0)
     rmSync(dir, { recursive: true, force: true })
   })
+
+  test('round-trips generated credential metadata without consulting lifecycle state for the value', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-generation-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'generated-generation-account'
+    const filePath = join(dir, 'accounts', `${accountId}.json`)
+
+    const saved = saveCodexTokenToVault(
+      {
+        accessToken: 'generated-access',
+        refreshToken: 'generated-refresh',
+        accountId,
+        credentialGeneration: 7,
+      },
+      { filePath, writer: 'test.generated-generation' },
+    )
+    expect(saved?.filePath).toBe(filePath)
+
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+      account_id?: string
+      profile_state?: string
+      tokens?: Record<string, unknown>
+    }
+    expect(written.account_id).toBe(accountId)
+    expect(written.profile_state).toBe('credentialed')
+    expect(written.tokens?.credential_generation).toBe(7)
+
+    const lifecycle = await establishCredentialedLifecycle(lifecycleDir, accountId, 7)
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(1)
+    expect(inventory.accounts[0]).toMatchObject({
+      accountId,
+      credentialGeneration: 7,
+      credentialGenerationState: 'lifecycle_bound',
+    })
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('classifies an untagged credential as an explicitly legacy unbound account', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-legacy-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'legacy-unbound-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        tokens: {
+          access_token: 'legacy-access',
+          refresh_token: 'legacy-refresh',
+          account_id: accountId,
+        },
+      }),
+      'utf-8',
+    )
+
+    const lifecycle = createCodexCredentialLifecycle({ directory: lifecycleDir })
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts[0]).toMatchObject({
+      accountId,
+      credentialGeneration: LEGACY_CODEX_CREDENTIAL_GENERATION,
+      credentialGenerationState: 'legacy_unbound',
+    })
+    expect(inventory.signedOutProfiles).toHaveLength(0)
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('denies tagged credentials when their lifecycle record is absent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-tagged-absent-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'tagged-absent-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        account_id: accountId,
+        alias: 'recover-me',
+        tokens: {
+          access_token: 'tagged-access',
+          refresh_token: 'tagged-refresh',
+          account_id: accountId,
+          credential_generation: 1,
+        },
+      }),
+      'utf-8',
+    )
+
+    const lifecycle = createCodexCredentialLifecycle({ directory: lifecycleDir })
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(0)
+    expect(inventory.signedOutProfiles).toHaveLength(1)
+    expect(inventory.signedOutProfiles[0]).toMatchObject({
+      accountId,
+      alias: 'recover-me',
+      profileState: 'recovery_required',
+      credentialGeneration: 1,
+      lifecycleReadStatus: 'absent',
+    })
+    expect(inventory.signedOutProfiles[0]).not.toHaveProperty('accessToken')
+    expect(inventory.signedOutProfiles[0]).not.toHaveProperty('refreshToken')
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('denies tagged credentials when lifecycle generation does not match', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-tagged-mismatch-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'tagged-mismatch-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        account_id: accountId,
+        tokens: {
+          access_token: 'mismatch-access',
+          refresh_token: 'mismatch-refresh',
+          account_id: accountId,
+          credential_generation: 2,
+        },
+      }),
+      'utf-8',
+    )
+
+    const lifecycle = await establishCredentialedLifecycle(lifecycleDir, accountId)
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(0)
+    expect(inventory.signedOutProfiles[0]).toMatchObject({
+      accountId,
+      profileState: 'recovery_required',
+      credentialGeneration: 2,
+      lifecycleState: 'credentialed',
+      lifecycleReadStatus: 'valid',
+    })
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('denies tagged credentials for malformed, unreadable, and non-credentialed lifecycle state', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-tagged-invalid-lifecycle-'))
+    const accountId = 'tagged-invalid-lifecycle-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        account_id: accountId,
+        tokens: {
+          access_token: 'tagged-access',
+          refresh_token: 'tagged-refresh',
+          account_id: accountId,
+          credential_generation: 1,
+        },
+      }),
+      'utf-8',
+    )
+
+    const lifecycleResults: CodexCredentialLifecycleReadResult[] = [
+      { status: 'malformed' },
+      { status: 'unreadable' },
+      {
+        status: 'valid',
+        record: {
+          version: 1,
+          accountId,
+          credentialGeneration: 1,
+          state: 'login_prepared',
+          operationId: 'prepared-login',
+          operationKind: 'login',
+          changedAt: '2026-09-12T00:00:00.000Z',
+        },
+      },
+    ]
+    for (const result of lifecycleResults) {
+      const inventory = loadCodexProfileInventoryForTest(dir, {
+        lifecycle: { read: () => result },
+      })
+      expect(inventory.accounts).toHaveLength(0)
+      expect(inventory.signedOutProfiles[0]?.profileState).toBe(
+        'recovery_required',
+      )
+    }
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('keeps signed-out vault identity in metadata inventory without routing or counting it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-signed-out-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'signed-out-profile-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        account_id: accountId,
+        alias: 'former-main',
+        profile_state: 'signed_out',
+      }),
+      'utf-8',
+    )
+
+    const lifecycle = await establishSignedOutLifecycle(lifecycleDir, accountId)
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(0)
+    expect(inventory.signedOutProfiles).toHaveLength(1)
+    expect(inventory.signedOutProfiles[0]).toMatchObject({
+      accountId,
+      alias: 'former-main',
+      profileState: 'signed_out',
+      credentialGeneration: 2,
+      lifecycleState: 'signed_out',
+      lifecycleReadStatus: 'valid',
+    })
+    expect(inventory.signedOutProfiles[0]).not.toHaveProperty('tokens')
+
+    await loadPoolForObservation({
+      vaultPath: dir,
+      lifecycle,
+      configAccount: null,
+    })
+    expect(getPoolStatus().accounts).toHaveLength(0)
+    expect(getSignedOutCodexProfiles()).toHaveLength(1)
+    expect(getCodexProfileInventory().accounts).toHaveLength(0)
+    const resolution = resolveCodexAccountByPrefix('former-main')
+    expect(resolution.kind).toBe('unique')
+    expect(validateCodexAccountAlias('former-main', 'another-account')).toEqual({
+      ok: false,
+      message: 'Alias "former-main" is already in use by another account.',
+    })
+    expect(setAccountAlias(accountId, 'recover-renamed')).toBe(true)
+    expect(resolveCodexAccountByPrefix('recover-renamed').kind).toBe('unique')
+    expect(removeCodexAccount(accountId)).toBe(true)
+    expect(existsSync(join(accountsDir, `${accountId}.json`))).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('keeps an explicit recovery profile without credentials in metadata inventory', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-recovery-profile-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'recovery-profile-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, `${accountId}.json`),
+      JSON.stringify({
+        account_id: accountId,
+        alias: 'recover-later',
+        profile_state: 'recovery_required',
+      }),
+      'utf-8',
+    )
+
+    const lifecycle = createCodexCredentialLifecycle({ directory: lifecycleDir })
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(0)
+    expect(inventory.signedOutProfiles).toEqual([
+      expect.objectContaining({
+        accountId,
+        alias: 'recover-later',
+        profileState: 'recovery_required',
+        lifecycleReadStatus: 'absent',
+      }),
+    ])
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
+  test('preserves an alias only when canonical and token identities match on relogin', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-alias-match-'))
+    const accountId = 'alias-match-account'
+    const filePath = join(dir, 'accounts', `${accountId}.json`)
+    mkdirSync(join(dir, 'accounts'), { recursive: true })
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        account_id: accountId,
+        profile_state: 'signed_out',
+        alias: 'keep-me',
+        tokens: {
+          access_token: 'old-access',
+          refresh_token: 'old-refresh',
+          account_id: accountId,
+        },
+      }),
+      'utf-8',
+    )
+
+    saveCodexTokenToVault(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        accountId,
+        credentialGeneration: 0,
+      },
+      { filePath, writer: 'test.alias-match' },
+    )
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>
+    expect(written.alias).toBe('keep-me')
+    expect(written.account_id).toBe(accountId)
+    expect(written.profile_state).toBe('credentialed')
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('does not transfer an alias when either stored identity disagrees', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-alias-mismatch-'))
+    const oldAccountId = 'alias-old-account'
+    const newAccountId = 'alias-new-account'
+    const filePath = join(dir, 'accounts', `${oldAccountId}.json`)
+    mkdirSync(join(dir, 'accounts'), { recursive: true })
+    writeFileSync(
+      filePath,
+      JSON.stringify({
+        account_id: oldAccountId,
+        alias: 'must-not-transfer',
+        tokens: {
+          access_token: 'old-access',
+          refresh_token: 'old-refresh',
+          account_id: oldAccountId,
+        },
+      }),
+      'utf-8',
+    )
+
+    saveCodexTokenToVault(
+      {
+        accessToken: 'new-access',
+        refreshToken: 'new-refresh',
+        accountId: newAccountId,
+        credentialGeneration: 0,
+      },
+      { filePath, writer: 'test.alias-mismatch' },
+    )
+    const written = JSON.parse(readFileSync(filePath, 'utf-8')) as {
+      account_id?: string
+      alias?: string
+      tokens?: Record<string, unknown>
+    }
+    expect(written.account_id).toBe(newAccountId)
+    expect(written.alias).toBeUndefined()
+    expect(written.tokens?.account_id).toBe(newAccountId)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test('reports duplicate vault identities when one path lacks credentials and fails mutation closed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-pool-duplicates-'))
+    const lifecycleDir = mkdtempSync(join(tmpdir(), 'codex-pool-lifecycle-'))
+    const accountId = 'duplicate-vault-account'
+    const accountsDir = join(dir, 'accounts')
+    mkdirSync(accountsDir, { recursive: true })
+    writeFileSync(
+      join(accountsDir, 'first.json'),
+      JSON.stringify({
+        account_id: accountId,
+        tokens: {
+          access_token: 'first-access',
+          refresh_token: 'first-refresh',
+          account_id: accountId,
+          credential_generation: 1,
+        },
+      }),
+      'utf-8',
+    )
+    writeFileSync(
+      join(accountsDir, 'second.json'),
+      JSON.stringify({ account_id: accountId }),
+      'utf-8',
+    )
+
+    const lifecycle = await establishCredentialedLifecycle(lifecycleDir, accountId)
+    const inventory = loadCodexProfileInventoryForTest(dir, { lifecycle })
+    expect(inventory.accounts).toHaveLength(0)
+    expect(inventory.duplicateVaultIdentities).toEqual([
+      {
+        accountId,
+        vaultFilePaths: [
+          join(accountsDir, 'first.json'),
+          join(accountsDir, 'second.json'),
+        ],
+      },
+    ])
+    expect(inventory.signedOutProfiles[0]?.vaultFilePaths).toEqual(
+      inventory.duplicateVaultIdentities[0]?.vaultFilePaths,
+    )
+    await loadPoolForObservation({
+      vaultPath: dir,
+      lifecycle,
+      configAccount: null,
+    })
+    expect(setAccountAlias(accountId, 'ambiguous')).toBe(false)
+    expect(removeCodexAccount(accountId)).toBe(false)
+    expect(existsSync(join(accountsDir, 'first.json'))).toBe(true)
+    expect(existsSync(join(accountsDir, 'second.json'))).toBe(true)
+    rmSync(dir, { recursive: true, force: true })
+    rmSync(lifecycleDir, { recursive: true, force: true })
+  })
+
 })
 
 describe('resolveCodexAccountByPrefix', () => {

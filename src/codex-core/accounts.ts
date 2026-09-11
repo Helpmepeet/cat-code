@@ -2,6 +2,7 @@ import {
   appendAccount,
   initAccountPool,
   getPoolStatus,
+  loadConfigAccount,
   describeCodexAccountAvailability,
   getVaultPath,
   saveCodexTokenToVault,
@@ -33,6 +34,7 @@ export type CodexCoreAccount = {
   accessToken: string
   refreshToken: string
   expiresAt: number
+  credentialGeneration: number
   profile: string
   source: PoolAccount['source'] | 'config'
   alias?: string
@@ -80,6 +82,7 @@ export async function resolveCodexCoreAccount(
       accessToken: match.accessToken,
       refreshToken: match.refreshToken,
       expiresAt: match.expiresAt,
+      credentialGeneration: match.credentialGeneration,
       profile,
       source: match.source,
       alias: match.alias,
@@ -88,13 +91,14 @@ export async function resolveCodexCoreAccount(
   }
 
   if (poolStatus.accounts.length === 0) {
-    const configTokens = getCodexOAuthTokens()
-    if (configTokens && matchesProfile(profile, configTokens.accountId, undefined)) {
+    const configAccount = loadConfigAccount()
+    if (configAccount && matchesProfile(profile, configAccount.accountId, undefined)) {
       return maybeRefreshAccount({
-        accountId: configTokens.accountId,
-        accessToken: configTokens.accessToken,
-        refreshToken: configTokens.refreshToken,
-        expiresAt: configTokens.expiresAt,
+        accountId: configAccount.accountId,
+        accessToken: configAccount.accessToken,
+        refreshToken: configAccount.refreshToken,
+        expiresAt: configAccount.expiresAt,
+        credentialGeneration: configAccount.credentialGeneration,
         profile,
         source: 'config',
       })
@@ -133,7 +137,14 @@ export type PreflightRefreshOutcome =
 export async function refreshPoolAccountForRedeem(
   account: Pick<
     PoolAccount,
-    'accountId' | 'accessToken' | 'refreshToken' | 'expiresAt' | 'source' | 'alias' | 'vaultFilePath'
+    | 'accountId'
+    | 'accessToken'
+    | 'refreshToken'
+    | 'expiresAt'
+    | 'credentialGeneration'
+    | 'source'
+    | 'alias'
+    | 'vaultFilePath'
   >,
 ): Promise<PreflightRefreshOutcome> {
   const coreAccount: CodexCoreAccount = {
@@ -141,6 +152,7 @@ export async function refreshPoolAccountForRedeem(
     accessToken: account.accessToken,
     refreshToken: account.refreshToken,
     expiresAt: account.expiresAt,
+    credentialGeneration: account.credentialGeneration,
     profile: account.alias ?? account.accountId,
     source: account.source,
     alias: account.alias,
@@ -166,6 +178,7 @@ export async function refreshPoolAccountForRedeem(
             refreshToken: refreshed.refreshToken,
             expiresAt: refreshed.expiresAt,
             accountId: refreshed.accountId,
+            credentialGeneration: poolAccount.credentialGeneration,
           },
           {
             preserveCapped: true,
@@ -300,6 +313,9 @@ async function refreshAccountNow(
       accessToken: refreshed.accessToken,
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
+      credentialGeneration: sameAccount
+        ? account.credentialGeneration
+        : 0,
       profile: account.profile,
       source: account.source,
       alias: sameAccount ? account.alias : undefined,
@@ -322,6 +338,7 @@ async function refreshAccountNow(
           refreshToken: refreshed.refreshToken,
           idToken: refreshed.idToken || undefined,
           expiresAt: refreshed.expiresAt,
+          credentialGeneration: 0,
         },
         writer: 'codex-core.maybeRefreshAccount.identity-mismatch',
         source: account.source === 'config' ? 'config' : 'vault',
@@ -378,6 +395,7 @@ type StoredCodexTokens = {
   refreshToken: string
   expiresAt: number
   accountId: string
+  credentialGeneration: number
   vaultFilePath?: string
 }
 
@@ -555,7 +573,10 @@ async function refreshRawUnderCrossProcessLock(
     let persistFailed = false
     if (account.source === 'config') {
       try {
-        saveCodexOAuthTokens(refreshed)
+        saveCodexOAuthTokens({
+          ...refreshed,
+          credentialGeneration: sameAccount ? account.credentialGeneration : 0,
+        })
         // saveGlobalConfig can swallow write failures (auth-loss guard /
         // fallback paths) — verify the rotation actually reached disk. Skipped
         // under NODE_ENV=test, where config writes are in-memory by design.
@@ -574,6 +595,7 @@ async function refreshRawUnderCrossProcessLock(
         refreshToken: refreshed.refreshToken,
         accountId: refreshed.accountId,
         alias: sameAccount ? account.alias : undefined,
+        credentialGeneration: sameAccount ? account.credentialGeneration : 0,
         expiresAt: refreshed.expiresAt,
       }, {
         writer: 'codex-core.maybeRefreshAccount',
@@ -631,6 +653,7 @@ function readAdoptableTokens(account: CodexCoreAccount): CodexCoreAccount | null
       : readPersistedVaultTokens(candidateVaultFilePath(account))
   if (!stored) return null
   if (stored.accountId !== account.accountId) return null
+  if (stored.credentialGeneration !== account.credentialGeneration) return null
   if (stored.refreshToken === account.refreshToken) return null
   return {
     ...account,
@@ -650,6 +673,7 @@ function readPersistedConfigTokens(): StoredCodexTokens | null {
         refreshToken?: string
         expiresAt?: number
         accountId?: string
+        credentialGeneration?: unknown
       }
     }
     const stored = parsed.codexOAuth
@@ -661,11 +685,18 @@ function readPersistedConfigTokens(): StoredCodexTokens | null {
     ) {
       return null
     }
+    const credentialGeneration = parseStoredCredentialGeneration(
+      stored.credentialGeneration,
+    )
+    if (credentialGeneration === null) {
+      return null
+    }
     return {
       accessToken: stored.accessToken,
       refreshToken: stored.refreshToken,
       expiresAt: stored.expiresAt,
       accountId: stored.accountId,
+      credentialGeneration,
     }
   } catch {
     return null
@@ -684,6 +715,7 @@ function readPersistedVaultTokens(
         refresh_token?: string
         expires_at?: number
         account_id?: string
+        credential_generation?: unknown
       }
     }
     const tokens = parsed.tokens
@@ -695,16 +727,35 @@ function readPersistedVaultTokens(
     ) {
       return null
     }
+    const credentialGeneration = parseStoredCredentialGeneration(
+      tokens.credential_generation,
+    )
+    if (credentialGeneration === null) {
+      return null
+    }
     return {
       accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token,
       expiresAt: tokens.expires_at,
       accountId: tokens.account_id,
+      credentialGeneration,
       vaultFilePath,
     }
   } catch {
     return null
   }
+}
+
+function parseStoredCredentialGeneration(value: unknown): number | null {
+  if (value === undefined) return 0
+  if (
+    typeof value !== 'number' ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    return null
+  }
+  return value
 }
 
 /** Where saveCodexTokenToVault would land this account's tokens. */

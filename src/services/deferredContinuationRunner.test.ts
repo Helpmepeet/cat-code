@@ -357,6 +357,8 @@ describe('deferred continuation runner', () => {
       status: 'capped',
       statusReason: 'usage_cap',
       lastUsedAt: 0,
+      credentialGeneration: 0,
+      credentialGenerationState: 'legacy_unbound',
       cappedAt: now - 1,
       usageResetAt: resetAtSeconds,
     }
@@ -441,6 +443,8 @@ describe('deferred continuation runner', () => {
           status: 'capped',
           statusReason: 'usage_cap',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           cappedAt: now - 1,
           usageResetAt: resetAtSeconds,
         }],

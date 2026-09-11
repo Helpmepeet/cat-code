@@ -244,6 +244,7 @@ function toCoreAccount(
     accessToken: account.accessToken,
     refreshToken: account.refreshToken,
     expiresAt: account.expiresAt,
+    credentialGeneration: account.credentialGeneration,
     profile,
     source: account.source,
     alias: account.alias,
@@ -272,6 +273,7 @@ function rememberRefreshedPoolAccount(
       refreshToken: refreshed.refreshToken,
       expiresAt: refreshed.expiresAt,
       accountId: refreshed.accountId,
+      credentialGeneration: original.credentialGeneration,
       alias: refreshed.alias ?? original.alias,
     },
     {

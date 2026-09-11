@@ -208,6 +208,7 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
       refreshToken: tokens.refreshToken ?? '',
       expiresAt: tokens.expiresAt ?? Date.now() + 3600_000,
       accountId: (tokens.tokenAccount?.uuid ?? ''),
+      credentialGeneration: 0,
     })
   }
 

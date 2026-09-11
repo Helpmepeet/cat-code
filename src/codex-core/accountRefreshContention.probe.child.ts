@@ -106,6 +106,7 @@ async function main(): Promise<void> {
       refreshToken: requireEnv('PROBE_REFRESH_TOKEN'),
       expiresAt: Number(requireEnv('PROBE_EXPIRES_AT')),
       accountId: requireEnv('PROBE_ACCOUNT_ID'),
+      credentialGeneration: 0,
     })
     printResult({ ok: true })
     return

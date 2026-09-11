@@ -25,6 +25,7 @@ import {
   appendAccount,
   getPoolStatus,
   getVaultPath,
+  getCodexCredentialGenerationFromVaultTokens,
   isAccountLocked,
   markAccountDead,
   markPoolAccountQuarantined,
@@ -76,6 +77,8 @@ function refreshedVaultTokensResult(
   const accessToken = tokens?.access_token as string | undefined
   const refreshToken = tokens?.refresh_token as string | undefined
   if (!accessToken || !refreshToken) return undefined
+  const credentialGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
+  if (credentialGeneration === null) return undefined
 
   const vaultAccountId = (tokens?.account_id as string | undefined) ?? accountId
   const expiresAt = (tokens?.expires_at as number | undefined) ?? Date.now() + DEFAULT_TOKEN_EXPIRY_MS
@@ -86,6 +89,7 @@ function refreshedVaultTokensResult(
       idToken: tokens?.id_token as string | undefined,
       expiresAt,
       accountId: vaultAccountId,
+      credentialGeneration,
     },
     {
       preserveCapped: true,
@@ -593,6 +597,7 @@ async function refreshAccountTokensStateful(
           refreshToken: newRefreshToken,
           idToken: newIdToken,
           expiresAt,
+          credentialGeneration: 0,
         },
         writer: 'codex-refresh.refreshAccountTokens.identity-mismatch',
         source: 'vault',
@@ -626,6 +631,10 @@ async function refreshAccountTokensStateful(
 
     // Normal success
     const tokens = (latest.tokens || {}) as Record<string, unknown>
+    const credentialGeneration = getCodexCredentialGenerationFromVaultTokens(tokens)
+    if (credentialGeneration === null) {
+      throw new Error('Vault credential generation is invalid; refusing to install tokens')
+    }
     tokens.access_token = newAccessToken
     tokens.refresh_token = newRefreshToken
     tokens.account_id = refreshedAccountId
@@ -644,6 +653,7 @@ async function refreshAccountTokensStateful(
       idToken: newIdToken,
       expiresAt,
       accountId: refreshedAccountId,
+      credentialGeneration,
     }, {
       preserveCapped: true,
       writer: 'codex-refresh.refreshAccountTokens',

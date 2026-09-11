@@ -742,6 +742,7 @@ export async function* withRetry<T, Client = Anthropic>(
                 accessToken: currentAccount.accessToken,
                 refreshToken: currentAccount.refreshToken,
                 expiresAt: currentAccount.expiresAt,
+                credentialGeneration: currentAccount.credentialGeneration,
                 profile: currentAccount.alias ?? currentAccount.accountId,
                 source: currentAccount.source,
                 alias: currentAccount.alias,
@@ -760,6 +761,7 @@ export async function* withRetry<T, Client = Anthropic>(
                   refreshToken: refreshed.refreshToken,
                   expiresAt: refreshed.expiresAt,
                   accountId: refreshed.accountId,
+                  credentialGeneration: currentAccount.credentialGeneration,
                   alias: refreshed.alias ?? currentAccount.alias,
                 },
                 {

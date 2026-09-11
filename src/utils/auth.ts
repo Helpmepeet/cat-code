@@ -1357,6 +1357,13 @@ export function clearOAuthTokenCache(): void {
  * Does NOT overwrite or interfere with Anthropic's claudeAiOauth block.
  */
 export function saveCodexOAuthTokens(tokens: CodexTokens): void {
+  const credentialGeneration =
+    tokens.credentialGeneration === undefined
+      ? 0
+      : tokens.credentialGeneration
+  if (!isValidCodexCredentialGeneration(credentialGeneration)) {
+    throw new Error('Codex credential generation is invalid')
+  }
   saveGlobalConfig((cfg) => ({
     ...cfg,
     codexOAuth: {
@@ -1364,6 +1371,7 @@ export function saveCodexOAuthTokens(tokens: CodexTokens): void {
       refreshToken: tokens.refreshToken,
       expiresAt: tokens.expiresAt,
       accountId: tokens.accountId,
+      credentialGeneration,
     },
   }))
 }
@@ -1383,12 +1391,27 @@ export function getCodexOAuthTokens(): CodexTokens | null {
   ) {
     return null
   }
+  const rawGeneration = (stored as typeof stored & {
+    credentialGeneration?: unknown
+  }).credentialGeneration
+  const credentialGeneration =
+    rawGeneration === undefined ? 0 : rawGeneration
+  if (!isValidCodexCredentialGeneration(credentialGeneration)) {
+    return null
+  }
   return {
     accessToken: stored.accessToken,
     refreshToken: stored.refreshToken,
     expiresAt: stored.expiresAt,
     accountId: stored.accountId,
+    credentialGeneration,
   }
+}
+
+function isValidCodexCredentialGeneration(
+  value: unknown,
+): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0
 }
 
 /**

@@ -38,6 +38,8 @@ function buildPoolAccount(accountId: string): PoolAccount {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
   }
 }
 
@@ -742,6 +744,8 @@ describe('GenerateImageTool', () => {
           source: 'vault',
           status: 'healthy',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           vaultFilePath,
         },
       ],
@@ -860,6 +864,8 @@ describe('GenerateImageTool', () => {
           source: 'vault',
           status: 'healthy',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           vaultFilePath,
         },
       ],

@@ -5929,6 +5929,8 @@ function acctFixture(overrides: Partial<PoolAccount> = {}): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: 1,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     vaultFilePath: '/Users/secret/.cat-code/vault/acct.json',
     alias: 'main',
     ...overrides,

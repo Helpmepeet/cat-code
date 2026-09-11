@@ -26,6 +26,8 @@ function account(overrides: Partial<PoolAccount> = {}): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: Date.now(),
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     ...overrides,
   }
 }

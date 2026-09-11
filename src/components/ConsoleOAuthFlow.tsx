@@ -214,14 +214,14 @@ export function ConsoleOAuthFlow({
     codexTokens: CodexTokens,
     alias?: string,
   ) => {
-    saveCodexOAuthTokens(codexTokens);
+    saveCodexOAuthTokens({ ...codexTokens, credentialGeneration: 0 });
     const { appendAccount, saveCodexTokenToVault } = await import('../services/api/codexAccountPool.js');
     const saved = saveCodexTokenToVault(
-      { ...codexTokens, alias },
+      { ...codexTokens, alias, credentialGeneration: 0 },
       { writer: 'ConsoleOAuthFlow.persistCodexLogin' },
     );
     appendAccount(
-      { ...codexTokens, alias },
+      { ...codexTokens, alias, credentialGeneration: 0 },
       {
         writer: 'ConsoleOAuthFlow.persistCodexLogin',
         source: saved ? 'vault' : 'config',

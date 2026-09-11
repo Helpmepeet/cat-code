@@ -48,6 +48,8 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: 1_000,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     vaultFilePath: '/Users/secret/.cat-code/vault/accounts/acct.json',
     alias: 'work-laptop',
     usagePrimary: 40,

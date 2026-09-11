@@ -28,6 +28,13 @@ import { resetUserCache } from '../../utils/user.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import { acquireMutationLockSync } from '../../utils/lockfile.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
+import {
+  codexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+  type CodexCredentialLifecycleReadResult,
+  type CodexCredentialLifecycleState,
+} from './codexCredentialLifecycle.js'
+import type { CodexTokens } from '../oauth/codex-client.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +47,13 @@ export interface PoolAccount {
   status: 'healthy' | 'dead' | 'capped' | 'quarantined'
   statusReason?: PoolAccountStatusReason
   lastUsedAt: number
+  /**
+   * Immutable binding metadata for the credential object held by this pool
+   * entry. A pool update replaces the entry when this value changes; it never
+   * relabels an existing credential in place.
+   */
+  readonly credentialGeneration: number
+  readonly credentialGenerationState: CodexCredentialGenerationState
   lastError?: string
   lastRefreshIso?: string       // ISO timestamp from vault's last_refresh field
   vaultFilePath?: string        // absolute path to the vault JSON file (vault accounts only)
@@ -59,6 +73,36 @@ export interface PoolAccount {
   planExpiresAt?: string        // raw ISO string from chatgpt_subscription_active_until
   lastErrorAt?: number          // epoch ms of most recent turn error (any kind)
 }
+
+export const LEGACY_CODEX_CREDENTIAL_GENERATION = 0 as const
+
+export type CodexCredentialGenerationState =
+  | 'lifecycle_bound'
+  | 'legacy_unbound'
+
+export type SignedOutCodexProfile = Readonly<{
+  accountId: string
+  alias?: string
+  source: 'vault'
+  vaultFilePath?: string
+  vaultFilePaths: readonly string[]
+  profileState: 'signed_out' | 'recovery_required'
+  credentialGeneration?: number
+  credentialGenerationState?: CodexCredentialGenerationState
+  lifecycleState?: CodexCredentialLifecycleState
+  lifecycleReadStatus: CodexCredentialLifecycleReadResult['status']
+}>
+
+export type CodexDuplicateVaultIdentity = Readonly<{
+  accountId: string
+  vaultFilePaths: readonly string[]
+}>
+
+export type CodexProfileInventory = Readonly<{
+  accounts: readonly PoolAccount[]
+  signedOutProfiles: readonly SignedOutCodexProfile[]
+  duplicateVaultIdentities: readonly CodexDuplicateVaultIdentity[]
+}>
 
 interface PoolState {
   accounts: PoolAccount[]
@@ -108,6 +152,12 @@ const pool: PoolState = {
   accounts: [],
   activeIndex: -1,
   initialized: false,
+}
+
+let profileInventory: CodexProfileInventory = {
+  accounts: [],
+  signedOutProfiles: [],
+  duplicateVaultIdentities: [],
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
@@ -191,12 +241,41 @@ export function applyPostCodexAccountSwitchRefresh(): void {
  * calls this first and then performs its live side-effects, so this refactor
  * changes no `initAccountPool` behavior.
  */
-export async function loadPoolForObservation(): Promise<void> {
-  const vaultPath = readVaultPath()
-  const vaultAccounts = vaultPath ? loadVaultAccounts(vaultPath) : []
-  const configAccount = vaultAccounts.length === 0 ? loadConfigAccount() : null
+export type CodexPoolObservationOptions = Readonly<{
+  vaultPath?: string | null
+  lifecycle?: Pick<CodexCredentialLifecycle, 'read'>
+  configAccount?: PoolAccount | null
+}>
 
-  pool.accounts = mergePoolAccounts(vaultAccounts, configAccount)
+export async function loadPoolForObservation(
+  options: CodexPoolObservationOptions = {},
+): Promise<void> {
+  const vaultPath = options.vaultPath === undefined ? readVaultPath() : options.vaultPath
+  const vaultInventory = vaultPath
+    ? loadCodexProfileInventory(vaultPath, { lifecycle: options.lifecycle })
+    : emptyCodexProfileInventory()
+  const vaultAccounts = [...vaultInventory.accounts]
+  const blockedConfigIds = new Set([
+    ...vaultInventory.signedOutProfiles.map(profile => profile.accountId),
+    ...vaultInventory.duplicateVaultIdentities.map(identity => identity.accountId),
+  ])
+  const configAccount =
+    options.configAccount !== undefined
+      ? options.configAccount
+      : vaultAccounts.length === 0
+        ? loadConfigAccount({ lifecycle: options.lifecycle })
+        : null
+  const eligibleConfigAccount =
+    configAccount && blockedConfigIds.has(configAccount.accountId)
+      ? null
+      : configAccount
+
+  pool.accounts = mergePoolAccounts(vaultAccounts, eligibleConfigAccount)
+  profileInventory = {
+    accounts: pool.accounts,
+    signedOutProfiles: [...vaultInventory.signedOutProfiles],
+    duplicateVaultIdentities: [...vaultInventory.duplicateVaultIdentities],
+  }
 
   const savedActiveAccountId = getGlobalConfig().activeCodexAccountId
   if (savedActiveAccountId) {
@@ -381,6 +460,7 @@ export function appendAccount(tokens: {
   refreshToken: string
   expiresAt: number
   accountId: string
+  credentialGeneration?: number
   alias?: string
   idToken?: string
 }, options?: {
@@ -390,6 +470,11 @@ export function appendAccount(tokens: {
   vaultFilePath?: string
   activate?: boolean
 }): void {
+  const credentialGeneration =
+    tokens.credentialGeneration === undefined
+      ? LEGACY_CODEX_CREDENTIAL_GENERATION
+      : tokens.credentialGeneration
+  assertCredentialGeneration(credentialGeneration)
   const existing = pool.accounts.findIndex(
     (a) => a.accountId === tokens.accountId,
   )
@@ -400,30 +485,36 @@ export function appendAccount(tokens: {
     const previousStatus = acct.status
     const previousLastError = acct.lastError
     const preserveCapped = options?.preserveCapped === true && acct.status === 'capped'
-    acct.accessToken = tokens.accessToken
-    acct.refreshToken = tokens.refreshToken
-    acct.expiresAt = tokens.expiresAt
-    acct.status = preserveCapped ? 'capped' : 'healthy'
-    acct.lastError = preserveCapped ? acct.lastError : undefined
-    acct.statusReason = preserveCapped ? acct.statusReason : undefined
-    acct.cappedAt = preserveCapped ? acct.cappedAt : undefined
-    if (previousStatus === 'capped' && acct.status === 'healthy') {
+    const nextAccount: PoolAccount = {
+      ...acct,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      credentialGeneration,
+      credentialGenerationState: getCredentialGenerationState(credentialGeneration),
+      status: preserveCapped ? 'capped' : 'healthy',
+      lastError: preserveCapped ? acct.lastError : undefined,
+      statusReason: preserveCapped ? acct.statusReason : undefined,
+      cappedAt: preserveCapped ? acct.cappedAt : undefined,
+      ...(tokens.alias ? { alias: tokens.alias } : {}),
+      ...(options?.source ? { source: options.source } : {}),
+      ...(options?.vaultFilePath ? { vaultFilePath: options.vaultFilePath } : {}),
+    }
+    if (previousStatus === 'capped' && nextAccount.status === 'healthy') {
       emitUsageStatusDiagnostic(
         'account.usage.uncap',
-        acct.accountId,
+        nextAccount.accountId,
         previousLastError
           ? `usage cap cleared: ${previousLastError}`
           : 'usage cap cleared',
       )
     }
-    if (tokens.alias) acct.alias = tokens.alias
-    if (options?.source) acct.source = options.source
-    if (options?.vaultFilePath) acct.vaultFilePath = options.vaultFilePath
     if (tokens.idToken) {
       const planMetadata = getCodexPlanMetadataFromIdToken(tokens.idToken)
-      acct.planType = planMetadata.planType
-      acct.planExpiresAt = planMetadata.planExpiresAt
+      nextAccount.planType = planMetadata.planType
+      nextAccount.planExpiresAt = planMetadata.planExpiresAt
     }
+    pool.accounts[existing] = nextAccount
     logForDebugging(
       `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=updated-memory`,
     )
@@ -436,6 +527,8 @@ export function appendAccount(tokens: {
       source: options?.source ?? 'config',
       status: 'healthy',
       lastUsedAt: 0,
+      credentialGeneration,
+      credentialGenerationState: getCredentialGenerationState(credentialGeneration),
       alias: tokens.alias,
       vaultFilePath: options?.vaultFilePath,
       ...(tokens.idToken ? getCodexPlanMetadataFromIdToken(tokens.idToken) : {}),
@@ -443,6 +536,13 @@ export function appendAccount(tokens: {
     logForDebugging(
       `[codex-profile] profile-save writer=${options?.writer ?? 'appendAccount'} account=${tokens.accountId} action=added-memory`,
     )
+  }
+
+  profileInventory = {
+    ...profileInventory,
+    signedOutProfiles: profileInventory.signedOutProfiles.filter(
+      profile => profile.accountId !== tokens.accountId,
+    ),
   }
 
   if (options?.activate) {
@@ -479,6 +579,18 @@ export function getPoolStatus(): {
 
 export function getPoolAccountsForLeaseSelection(): readonly PoolAccount[] {
   return pool.accounts
+}
+
+export function getSignedOutCodexProfiles(): readonly SignedOutCodexProfile[] {
+  return profileInventory.signedOutProfiles
+}
+
+export function getCodexProfileInventory(): CodexProfileInventory {
+  return {
+    accounts: pool.accounts,
+    signedOutProfiles: profileInventory.signedOutProfiles,
+    duplicateVaultIdentities: profileInventory.duplicateVaultIdentities,
+  }
 }
 
 export function markPoolAccountStatus(
@@ -563,8 +675,10 @@ export function touchPoolAccountUsage(accountId: string): void {
  */
 export type CodexAccountResolution =
   | { kind: 'none' }
-  | { kind: 'unique'; account: PoolAccount; matchType: PoolAccountResolutionMatchType }
-  | { kind: 'ambiguous'; matches: PoolAccount[]; matchType: PoolAccountResolutionMatchType }
+  | { kind: 'unique'; account: CodexAccountLookup; matchType: PoolAccountResolutionMatchType }
+  | { kind: 'ambiguous'; matches: CodexAccountLookup[]; matchType: PoolAccountResolutionMatchType }
+
+export type CodexAccountLookup = PoolAccount | SignedOutCodexProfile
 
 export function resolveCodexAccountByPrefix(
   prefix: string,
@@ -579,9 +693,13 @@ export function resolveCodexAccountByPrefix(
         ? isCodexAccountSwitchable(a)
         : !onlyHealthy || a.status === 'healthy',
   )
+  const lookupAccounts: CodexAccountLookup[] =
+    onlyHealthy || onlySwitchable
+      ? pool_
+      : [...pool_, ...profileInventory.signedOutProfiles]
 
   // Exact alias or accountId match wins
-  const exact = pool_.filter(
+  const exact = lookupAccounts.filter(
     (a) => a.alias?.toLowerCase() === lower || a.accountId.toLowerCase() === lower,
   )
   if (exact.length === 1) {
@@ -591,8 +709,8 @@ export function resolveCodexAccountByPrefix(
 
   // Otherwise gather alias-prefix and id-prefix matches (deduped)
   const seen = new Set<string>()
-  const matches: PoolAccount[] = []
-  for (const a of pool_) {
+  const matches: CodexAccountLookup[] = []
+  for (const a of lookupAccounts) {
     if (a.alias && a.alias.toLowerCase().startsWith(lower)) {
       if (!seen.has(a.accountId)) {
         seen.add(a.accountId)
@@ -600,7 +718,7 @@ export function resolveCodexAccountByPrefix(
       }
     }
   }
-  for (const a of pool_) {
+  for (const a of lookupAccounts) {
     if (a.accountId.toLowerCase().startsWith(lower)) {
       if (!seen.has(a.accountId)) {
         seen.add(a.accountId)
@@ -629,6 +747,7 @@ export function switchToAccount(idPrefix: string | null): PoolAccount | null {
   if (idPrefix) {
     const resolution = resolveCodexAccountByPrefix(idPrefix, { onlySwitchable: true })
     if (resolution.kind !== 'unique') return null
+    if (!isPoolAccount(resolution.account)) return null
     targetIdx = pool.accounts.indexOf(resolution.account)
     if (targetIdx < 0) return null
   } else {
@@ -760,6 +879,7 @@ export function saveCodexTokenToVault(tokens: {
   accessToken: string
   refreshToken: string
   accountId: string
+  credentialGeneration?: number
   alias?: string
   idToken?: string
   expiresAt?: number
@@ -777,6 +897,11 @@ export function saveCodexTokenToVault(tokens: {
 } | null {
   let releaseLock: (() => void) | undefined
   try {
+    const credentialGeneration =
+      tokens.credentialGeneration === undefined
+        ? LEGACY_CODEX_CREDENTIAL_GENERATION
+        : tokens.credentialGeneration
+    assertCredentialGeneration(credentialGeneration)
     const vaultPath = readVaultPath() ?? DEFAULT_VAULT_PATH
     const accountsDir = join(vaultPath, 'accounts')
     const filePath = options.filePath ?? join(accountsDir, `${tokens.accountId}.json`)
@@ -794,27 +919,45 @@ export function saveCodexTokenToVault(tokens: {
     const existing = existed
       ? (JSON.parse(readFileSync(filePath, 'utf-8')) as Record<string, unknown>)
       : null
-    const existingTokens = (existing?.tokens ?? null) as Record<string, unknown> | null
-    const previousAccountId = typeof existingTokens?.account_id === 'string'
-      ? existingTokens.account_id
-      : undefined
-    const accountChanged = previousAccountId != null && previousAccountId !== tokens.accountId
+    const existingTokens = asRecord(existing?.tokens)
+    const previousAccountId = getStoredAccountId(existing)
+    const existingIdentity = getStoredIdentity(existing)
+    const expectedPreviousMatches =
+      options.expectedPreviousAccountId === undefined ||
+      identityMatches(
+        existingIdentity,
+        options.expectedPreviousAccountId,
+      )
+    const accountChanged =
+      existingIdentity.kind === 'known' &&
+      existingIdentity.accountId !== tokens.accountId
     const shouldPreserve = Boolean(
       existing &&
         options.preserveExistingMetadata !== false &&
-        !accountChanged,
+        existingIdentity.kind === 'known' &&
+        !accountChanged &&
+        expectedPreviousMatches,
     )
     const data: Record<string, unknown> = shouldPreserve ? { ...existing! } : {}
+    const preservedTokens = shouldPreserve ? { ...(existingTokens ?? {}) } : {}
+    delete preservedTokens.credential_generation
     data.tokens = {
-      ...(shouldPreserve ? existingTokens ?? {} : {}),
+      ...preservedTokens,
       access_token: tokens.accessToken,
       refresh_token: tokens.refreshToken,
       account_id: tokens.accountId,
+      ...(tokens.credentialGeneration !== undefined &&
+      tokens.credentialGeneration > LEGACY_CODEX_CREDENTIAL_GENERATION
+        ? { credential_generation: tokens.credentialGeneration }
+        : {}),
       ...(tokens.idToken ? { id_token: tokens.idToken } : {}),
       ...(typeof tokens.expiresAt === 'number' && Number.isFinite(tokens.expiresAt)
         ? { expires_at: tokens.expiresAt }
         : {}),
     }
+    data.account_id = tokens.accountId
+    data.profile_state = 'credentialed'
+    clearSignedOutMarkers(data)
     data.last_refresh = new Date().toISOString()
     // A login mints a new refresh token, which voids any verdict recorded
     // against the old one. Without this the preserved block outlives the token
@@ -873,26 +1016,46 @@ export function saveCodexTokenToVault(tokens: {
  */
 export function setAccountAlias(accountId: string, alias: string, writer = 'rename-account'): boolean {
   const acct = pool.accounts.find((a) => a.accountId === accountId)
-  if (!acct?.vaultFilePath) return false
+  const savedProfile = profileInventory.signedOutProfiles.find(
+    profile => profile.accountId === accountId,
+  )
+  const paths = acct?.vaultFilePath
+    ? [acct.vaultFilePath]
+    : savedProfile?.vaultFilePaths ?? []
+  if (paths.length !== 1 || !paths[0]) return false
 
   let releaseLock: (() => void) | undefined
   try {
-    releaseLock = acquireVaultMutationLockSync(acct.vaultFilePath)
-    const existing = JSON.parse(readFileSync(acct.vaultFilePath, 'utf-8')) as Record<string, unknown>
+    releaseLock = acquireVaultMutationLockSync(paths[0])
+    const existing = JSON.parse(readFileSync(paths[0], 'utf-8')) as Record<string, unknown>
+    if (!identityMatches(getStoredIdentity(existing), accountId)) return false
     existing.alias = alias
+    existing.account_id = accountId
     writeFileAtomicDurableSync(
-      acct.vaultFilePath,
+      paths[0],
       JSON.stringify(existing, null, 2) + '\n',
       {
       encoding: 'utf-8',
       mode: 0o600,
       },
     )
-    chmodSync(acct.vaultFilePath, 0o600)
-    const oldAlias = acct.alias
-    acct.alias = alias
+    chmodSync(paths[0], 0o600)
+    const oldAlias = acct?.alias ?? savedProfile?.alias
+    if (acct) {
+      acct.alias = alias
+    }
+    if (savedProfile) {
+      profileInventory = {
+        ...profileInventory,
+        signedOutProfiles: profileInventory.signedOutProfiles.map(profile =>
+          profile.accountId === accountId
+            ? { ...profile, alias }
+            : profile,
+        ),
+      }
+    }
     logForDebugging(
-      `[codex-profile] profile-rename writer=${writer} account=${accountId} old_alias=${oldAlias ?? 'none'} new_alias=${alias} file=${basename(acct.vaultFilePath)}`,
+      `[codex-profile] profile-rename writer=${writer} account=${accountId} old_alias=${oldAlias ?? 'none'} new_alias=${alias} file=${basename(paths[0])}`,
     )
     return true
   } catch (err) {
@@ -925,7 +1088,26 @@ export function deleteCodexVaultFile(filePath: string): boolean {
 
 export function removeCodexAccount(accountId: string): boolean {
   const idx = pool.accounts.findIndex((account) => account.accountId === accountId)
-  if (idx < 0) return false
+  if (idx < 0) {
+    const profileIndex = profileInventory.signedOutProfiles.findIndex(
+      profile => profile.accountId === accountId,
+    )
+    const profile = profileIndex >= 0
+      ? profileInventory.signedOutProfiles[profileIndex]
+      : undefined
+    if (!profile || profile.vaultFilePaths.length !== 1 || !profile.vaultFilePaths[0]) {
+      return false
+    }
+    if (!deleteCodexVaultFile(profile.vaultFilePaths[0])) return false
+    profileInventory = {
+      ...profileInventory,
+      signedOutProfiles: profileInventory.signedOutProfiles.filter(
+        (_, index) => index !== profileIndex,
+      ),
+    }
+    logForDebugging(`[codex-pool] Removed saved profile ${truncId(accountId)}`)
+    return true
+  }
 
   const acct = pool.accounts[idx]!
   const previousActiveAccountId = pool.accounts[pool.activeIndex]?.accountId
@@ -962,6 +1144,7 @@ export function removeCodexAccount(accountId: string): boolean {
       refreshToken: active.refreshToken,
       expiresAt: active.expiresAt,
       accountId: active.accountId,
+      credentialGeneration: active.credentialGeneration,
     })
     persistActiveCodexAccountId(active.accountId)
     emitActiveRerollDiagnostic(
@@ -996,9 +1179,15 @@ export function validateCodexAccountAlias(
     }
   }
   const lower = alias.toLowerCase()
-  const duplicate = pool.accounts.find(
-    (a) => a.accountId !== currentAccountId && a.alias?.toLowerCase() === lower,
-  )
+  const duplicate =
+    pool.accounts.find(
+      (a) => a.accountId !== currentAccountId && a.alias?.toLowerCase() === lower,
+    ) ??
+    profileInventory.signedOutProfiles.find(
+      (profile) =>
+        profile.accountId !== currentAccountId &&
+        profile.alias?.toLowerCase() === lower,
+    )
   if (duplicate) {
     return { ok: false, message: `Alias "${alias}" is already in use by another account.` }
   }
@@ -1020,17 +1209,55 @@ function readVaultPath(): string | null {
   }
 }
 
-export function loadVaultAccountsForTest(vaultPath: string): PoolAccount[] {
-  return loadVaultAccounts(vaultPath)
+export type CodexVaultLoadOptions = Readonly<{
+  lifecycle?: Pick<CodexCredentialLifecycle, 'read'>
+}>
+
+type StoredIdentity =
+  | { kind: 'known'; accountId: string }
+  | { kind: 'ambiguous' }
+  | { kind: 'unknown' }
+
+type VaultFileObservation = {
+  accountId: string
+  filePath: string
+  alias?: string
+  account?: PoolAccount
+  profile?: SignedOutCodexProfile
 }
 
-function loadVaultAccounts(vaultPath: string): PoolAccount[] {
+function emptyCodexProfileInventory(): CodexProfileInventory {
+  return {
+    accounts: [],
+    signedOutProfiles: [],
+    duplicateVaultIdentities: [],
+  }
+}
+
+export function loadCodexProfileInventoryForTest(
+  vaultPath: string,
+  options: CodexVaultLoadOptions = {},
+): CodexProfileInventory {
+  return loadCodexProfileInventory(vaultPath, options)
+}
+
+export function loadVaultAccountsForTest(
+  vaultPath: string,
+  options: CodexVaultLoadOptions = {},
+): PoolAccount[] {
+  return [...loadCodexProfileInventory(vaultPath, options).accounts]
+}
+
+function loadCodexProfileInventory(
+  vaultPath: string,
+  options: CodexVaultLoadOptions = {},
+): CodexProfileInventory {
   const accountsDir = join(vaultPath, 'accounts')
   const locksDir = join(vaultPath, 'locks')
 
   if (!existsSync(accountsDir)) {
     logForDebugging(`[codex-pool] Vault accounts dir not found: ${accountsDir}`)
-    return []
+    return emptyCodexProfileInventory()
   }
 
   try {
@@ -1042,12 +1269,14 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
     )
   }
 
-  const results: PoolAccount[] = []
+  const observations: VaultFileObservation[] = []
   let files: string[]
   try {
-    files = readdirSync(accountsDir).filter((f) => f.endsWith('.json'))
+    files = readdirSync(accountsDir)
+      .filter((f) => f.endsWith('.json'))
+      .sort()
   } catch {
-    return []
+    return emptyCodexProfileInventory()
   }
 
   for (const file of files) {
@@ -1063,18 +1292,14 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
           { level: 'warn' },
         )
       }
-      const tokens = data.tokens as
-        | Record<string, unknown>
-        | undefined
-
-      if (!tokens?.access_token || !tokens.refresh_token || !tokens.account_id) {
-        logForDebugging(
-          `[codex-pool] Skipping ${file}: missing required token fields`,
-        )
+      const tokens = asRecord(data.tokens)
+      const identity = getStoredIdentity(data)
+      if (identity.kind !== 'known') {
+        logForDebugging(`[codex-pool] Skipping ${file}: stored account identity is unavailable`)
         continue
       }
 
-      const accountId = String(tokens.account_id)
+      const accountId = identity.accountId
       const fileAccountId = file.replace(/\.json$/, '')
       if (fileAccountId !== accountId) {
         logForDebugging(
@@ -1083,8 +1308,89 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
         )
       }
 
-      // Check lock
-      if (isAccountLocked(locksDir, accountId)) {
+      const lifecycle = readCredentialLifecycle(
+        options.lifecycle ?? codexCredentialLifecycle,
+        accountId,
+      )
+      const profileState = data.profile_state
+      const hasCredentials = Boolean(tokens?.access_token && tokens.refresh_token)
+      const generation = parseStoredCredentialGeneration(tokens)
+      const generationValue = generation.kind === 'invalid'
+        ? LEGACY_CODEX_CREDENTIAL_GENERATION
+        : generation.generation
+      const alias = typeof data.alias === 'string' && data.alias
+        ? data.alias
+        : undefined
+      const locked = isAccountLocked(locksDir, accountId)
+      const lifecycleState =
+        lifecycle.status === 'valid' ? lifecycle.record.state : undefined
+      const explicitSignedOut = profileState === 'signed_out'
+      const explicitRecoveryRequired = profileState === 'recovery_required'
+      const lifecycleSignedOut = lifecycleState === 'signed_out'
+      const needsMetadataProfile =
+        explicitSignedOut ||
+        explicitRecoveryRequired ||
+        lifecycleSignedOut ||
+        generation.kind === 'invalid' ||
+        (generation.kind === 'tagged' &&
+          !isCredentialedLifecycleMatch(lifecycle, generation.generation)) ||
+        (generation.kind === 'legacy' &&
+          lifecycle.status === 'valid' &&
+          lifecycleState !== 'credentialed')
+
+      if (!hasCredentials) {
+        if (needsMetadataProfile) {
+          observations.push({
+            accountId,
+            filePath,
+            alias,
+            profile: makeSavedCodexProfile({
+              accountId,
+              alias,
+              filePath,
+              profileState: explicitSignedOut || lifecycleSignedOut
+                ? 'signed_out'
+                : 'recovery_required',
+              generation,
+              hasCredentials,
+              lifecycle,
+            }),
+          })
+        } else {
+          observations.push({ accountId, filePath, alias })
+          logForDebugging(
+            `[codex-pool] Skipping ${file}: missing required token fields`,
+          )
+        }
+        continue
+      }
+
+      if (needsMetadataProfile) {
+        observations.push({
+          accountId,
+          filePath,
+          alias,
+          profile: makeSavedCodexProfile({
+            accountId,
+            alias,
+            filePath,
+            profileState: explicitSignedOut || lifecycleSignedOut
+              ? 'signed_out'
+              : 'recovery_required',
+            generation,
+            hasCredentials,
+            lifecycle,
+          }),
+        })
+        logForDebugging(
+          `[codex-profile] profile-load source=vault account=${accountId} file=${file} action=metadata-only`,
+          { level: 'warn' },
+        )
+        continue
+      }
+
+      if (locked) {
+        observations.push({ accountId, filePath, alias })
         logForDebugging(
           `[codex-pool] Skipping ${truncId(accountId)}: locked by another process`,
         )
@@ -1095,36 +1401,39 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
       // `expires_at` written by the refresh path; fall back to 0 (forces an
       // immediate refresh) when absent.
       const lastRefresh = data.last_refresh as string | undefined
-      const expiresAtRaw = tokens.expires_at
+      const expiresAtRaw = tokens?.expires_at
       const expiresAt =
         typeof expiresAtRaw === 'number' && Number.isFinite(expiresAtRaw)
           ? expiresAtRaw
           : 0
-      const refresh = data.refresh as Record<string, unknown> | undefined
-      const refreshStatus = getVaultRefreshPoolStatus(refresh, tokens.refresh_token)
+      const refresh = asRecord(data.refresh)
+      const refreshStatus = getVaultRefreshPoolStatus(refresh, tokens?.refresh_token)
       const status = refreshStatus.status
       const planMetadata = getCodexPlanMetadataFromIdToken(
-        typeof tokens.id_token === 'string' ? tokens.id_token : undefined,
+        typeof tokens?.id_token === 'string' ? tokens.id_token : undefined,
       )
 
-      results.push({
+      const account: PoolAccount = {
         accountId,
-        accessToken: String(tokens.access_token),
-        refreshToken: String(tokens.refresh_token),
+        accessToken: String(tokens?.access_token),
+        refreshToken: String(tokens?.refresh_token),
         expiresAt,
         source: 'vault',
         status,
         lastUsedAt: 0,
+        credentialGeneration: generationValue,
+        credentialGenerationState: getCredentialGenerationState(generationValue),
         lastRefreshIso: lastRefresh,
         vaultFilePath: filePath,
-        alias: typeof data.alias === 'string' && data.alias ? data.alias : undefined,
+        alias,
         planType: planMetadata.planType,
         planExpiresAt: planMetadata.planExpiresAt,
         ...(refreshStatus.lastError ? { lastError: refreshStatus.lastError } : {}),
         ...(refreshStatus.statusReason ? { statusReason: refreshStatus.statusReason } : {}),
-      })
+      }
+      observations.push({ accountId, filePath, alias, account })
       logForDebugging(
-        `[codex-profile] profile-load source=vault account=${accountId} alias=${typeof data.alias === 'string' && data.alias ? data.alias : 'none'} file=${file} status=${status} last_refresh=${lastRefresh ?? 'none'}`,
+        `[codex-profile] profile-load source=vault account=${accountId} alias=${alias ?? 'none'} file=${file} status=${status} last_refresh=${lastRefresh ?? 'none'}`,
       )
     } catch (err) {
       logForDebugging(
@@ -1132,12 +1441,90 @@ function loadVaultAccounts(vaultPath: string): PoolAccount[] {
       )
     }
   }
-  return results
+
+  const observationsByAccountId = new Map<string, VaultFileObservation[]>()
+  for (const observation of observations) {
+    const existing = observationsByAccountId.get(observation.accountId) ?? []
+    existing.push(observation)
+    observationsByAccountId.set(observation.accountId, existing)
+  }
+
+  const accounts: PoolAccount[] = []
+  const signedOutProfiles: SignedOutCodexProfile[] = []
+  const duplicateVaultIdentities: CodexDuplicateVaultIdentity[] = []
+  for (const [accountId, matching] of observationsByAccountId) {
+    if (matching.length > 1) {
+      const vaultFilePaths = matching.map(observation => observation.filePath)
+      duplicateVaultIdentities.push({ accountId, vaultFilePaths })
+      const metadata = matching.find(observation => observation.profile)?.profile
+      if (metadata) {
+        signedOutProfiles.push({
+          ...metadata,
+          profileState: metadata.profileState === 'signed_out'
+            ? 'signed_out'
+            : 'recovery_required',
+          vaultFilePaths,
+          vaultFilePath: vaultFilePaths[0],
+        })
+      } else {
+        signedOutProfiles.push(
+          makeSavedCodexProfile({
+            accountId,
+            alias: matching.find(observation => observation.alias)?.alias,
+            filePath: vaultFilePaths[0]!,
+            filePaths: vaultFilePaths,
+            profileState: 'recovery_required',
+            generation: { kind: 'legacy', generation: LEGACY_CODEX_CREDENTIAL_GENERATION },
+            hasCredentials: matching.some(observation => observation.account !== undefined),
+            lifecycle: readCredentialLifecycle(
+              options.lifecycle ?? codexCredentialLifecycle,
+              accountId,
+            ),
+          }),
+        )
+      }
+      logForDebugging(
+        `[codex-profile] profile-duplicate account=${accountId} files=${vaultFilePaths.length} action=excluded-from-routing`,
+        { level: 'warn' },
+      )
+      continue
+    }
+
+    const only = matching[0]!
+    if (only.account) accounts.push(only.account)
+    if (only.profile) signedOutProfiles.push(only.profile)
+  }
+
+  return {
+    accounts,
+    signedOutProfiles,
+    duplicateVaultIdentities,
+  }
 }
 
-export function loadConfigAccount(): PoolAccount | null {
-  const tokens = getCodexOAuthTokens()
+export type CodexConfigLoadOptions = Readonly<{
+  lifecycle?: Pick<CodexCredentialLifecycle, 'read'>
+  tokens?: CodexTokens | null
+}>
+
+export function loadConfigAccount(
+  options: CodexConfigLoadOptions = {},
+): PoolAccount | null {
+  const tokens = options.tokens === undefined
+    ? getCodexOAuthTokens()
+    : options.tokens
   if (!tokens?.accessToken || !tokens.accountId) return null
+  const generation =
+    tokens.credentialGeneration === undefined
+      ? LEGACY_CODEX_CREDENTIAL_GENERATION
+      : tokens.credentialGeneration
+  if (!isConfigCredentialRoutable(
+    tokens.accountId,
+    generation,
+    options.lifecycle ?? codexCredentialLifecycle,
+  )) {
+    return null
+  }
   return {
     accountId: tokens.accountId,
     accessToken: tokens.accessToken,
@@ -1146,7 +1533,192 @@ export function loadConfigAccount(): PoolAccount | null {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
+    credentialGeneration: generation,
+    credentialGenerationState: getCredentialGenerationState(generation),
   }
+}
+
+type StoredCredentialGeneration =
+  | { kind: 'legacy'; generation: typeof LEGACY_CODEX_CREDENTIAL_GENERATION }
+  | { kind: 'tagged'; generation: number }
+  | { kind: 'invalid'; generation?: number }
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
+}
+
+function readIdentityField(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined | null {
+  if (!record || !Object.prototype.hasOwnProperty.call(record, key)) {
+    return undefined
+  }
+  const value = record[key]
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function getStoredIdentity(data: Record<string, unknown> | null): StoredIdentity {
+  const topLevel = readIdentityField(data ?? undefined, 'account_id')
+  const tokens = asRecord(data?.tokens)
+  const tokenIdentity = readIdentityField(tokens, 'account_id')
+  if (topLevel === null || tokenIdentity === null) return { kind: 'ambiguous' }
+  if (topLevel && tokenIdentity && topLevel !== tokenIdentity) {
+    return { kind: 'ambiguous' }
+  }
+  const accountId = topLevel ?? tokenIdentity
+  return accountId ? { kind: 'known', accountId } : { kind: 'unknown' }
+}
+
+function getStoredAccountId(
+  data: Record<string, unknown> | null,
+): string | undefined {
+  const identity = getStoredIdentity(data)
+  return identity.kind === 'known' ? identity.accountId : undefined
+}
+
+function identityMatches(identity: StoredIdentity, accountId: string): boolean {
+  return identity.kind === 'known' && identity.accountId === accountId
+}
+
+function isPoolAccount(account: CodexAccountLookup): account is PoolAccount {
+  return 'accessToken' in account && 'refreshToken' in account
+}
+
+function parseStoredCredentialGeneration(
+  tokens: Record<string, unknown> | undefined,
+): StoredCredentialGeneration {
+  if (
+    !tokens ||
+    !Object.prototype.hasOwnProperty.call(tokens, 'credential_generation')
+  ) {
+    return {
+      kind: 'legacy',
+      generation: LEGACY_CODEX_CREDENTIAL_GENERATION,
+    }
+  }
+  const value = tokens.credential_generation
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    return { kind: 'invalid' }
+  }
+  if (value === LEGACY_CODEX_CREDENTIAL_GENERATION) {
+    return {
+      kind: 'legacy',
+      generation: LEGACY_CODEX_CREDENTIAL_GENERATION,
+    }
+  }
+  return { kind: 'tagged', generation: value as number }
+}
+
+export function getCodexCredentialGenerationFromVaultTokens(
+  tokens: Record<string, unknown> | undefined,
+): number | null {
+  const generation = parseStoredCredentialGeneration(tokens)
+  return generation.kind === 'invalid' ? null : generation.generation
+}
+
+function assertCredentialGeneration(value: number): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error('Codex credential generation is invalid')
+  }
+}
+
+function getCredentialGenerationState(
+  generation: number,
+): CodexCredentialGenerationState {
+  // Generation zero is an explicit observation-only legacy binding. It is not
+  // a lifecycle record and must be upgraded before protected mutation/send.
+  return generation === LEGACY_CODEX_CREDENTIAL_GENERATION
+    ? 'legacy_unbound'
+    : 'lifecycle_bound'
+}
+
+function readCredentialLifecycle(
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+  accountId: string,
+): CodexCredentialLifecycleReadResult {
+  try {
+    return lifecycle.read(accountId)
+  } catch {
+    return { status: 'unreadable' }
+  }
+}
+
+function isCredentialedLifecycleMatch(
+  lifecycle: CodexCredentialLifecycleReadResult,
+  generation: number,
+): boolean {
+  return (
+    lifecycle.status === 'valid' &&
+    lifecycle.record.state === 'credentialed' &&
+    lifecycle.record.credentialGeneration === generation
+  )
+}
+
+function isConfigCredentialRoutable(
+  accountId: string,
+  generation: number,
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+): boolean {
+  if (!Number.isSafeInteger(generation) || generation < 0) return false
+  const result = readCredentialLifecycle(lifecycle, accountId)
+  if (generation === LEGACY_CODEX_CREDENTIAL_GENERATION) {
+    // Untagged config credentials retain the legacy load path. A durable
+    // non-credentialed lifecycle state still wins over an unbound credential.
+    return result.status !== 'valid' || result.record.state === 'credentialed'
+  }
+  return isCredentialedLifecycleMatch(result, generation)
+}
+
+function makeSavedCodexProfile(input: {
+  accountId: string
+  alias?: string
+  filePath: string
+  filePaths?: readonly string[]
+  profileState: SignedOutCodexProfile['profileState']
+  generation: StoredCredentialGeneration
+  hasCredentials: boolean
+  lifecycle: CodexCredentialLifecycleReadResult
+}): SignedOutCodexProfile {
+  const lifecycleGeneration =
+    input.lifecycle.status === 'valid'
+      ? input.lifecycle.record.credentialGeneration
+      : undefined
+  const credentialGeneration =
+    input.generation.kind === 'tagged' || input.hasCredentials
+      ? input.generation.generation
+      : lifecycleGeneration ?? input.generation.generation
+  const generationMatchesLifecycle =
+    input.lifecycle.status === 'valid' &&
+    input.lifecycle.record.credentialGeneration === credentialGeneration
+  return {
+    accountId: input.accountId,
+    ...(input.alias ? { alias: input.alias } : {}),
+    source: 'vault',
+    vaultFilePath: input.filePath,
+    vaultFilePaths: input.filePaths ?? [input.filePath],
+    profileState: input.profileState,
+    ...(credentialGeneration !== undefined ? { credentialGeneration } : {}),
+    ...(generationMatchesLifecycle
+      ? {
+          credentialGenerationState: getCredentialGenerationState(
+            credentialGeneration!,
+          ),
+        }
+      : {}),
+    ...(input.lifecycle.status === 'valid'
+      ? { lifecycleState: input.lifecycle.record.state }
+      : {}),
+    lifecycleReadStatus: input.lifecycle.status,
+  }
+}
+
+function clearSignedOutMarkers(data: Record<string, unknown>): void {
+  delete data.signed_out
+  delete data.signed_out_at
+  delete data.signedOut
+  delete data.signedOutAt
 }
 
 function mergePoolAccounts(
@@ -1812,6 +2384,11 @@ export function seedCodexAccountPoolForTest({
 }): void {
   pool.accounts = accounts.map((account) => ({ ...account }))
   pool.initialized = true
+  profileInventory = {
+    accounts: pool.accounts,
+    signedOutProfiles: [],
+    duplicateVaultIdentities: [],
+  }
 
   if (activeAccountId) {
     pool.activeIndex = pool.accounts.findIndex(
@@ -1828,6 +2405,7 @@ export function resetCodexAccountPoolForTest(): void {
   pool.accounts = []
   pool.activeIndex = -1
   pool.initialized = false
+  profileInventory = emptyCodexProfileInventory()
 }
 
 function truncId(id: string): string {

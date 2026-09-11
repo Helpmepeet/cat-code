@@ -3398,6 +3398,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
           {
             accountId: 'acct_http_backup',
@@ -3407,6 +3409,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
         ],
       })
@@ -3518,6 +3522,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
           {
             accountId: 'acct_http_backup',
@@ -3527,6 +3533,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
         ],
       })

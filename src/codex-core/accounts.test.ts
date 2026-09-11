@@ -35,6 +35,13 @@ function buildPoolAccount(
     source: overrides.source ?? 'vault',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 0,
+    credentialGenerationState:
+      overrides.credentialGenerationState ??
+      (overrides.credentialGeneration === undefined ||
+      overrides.credentialGeneration === 0
+        ? 'legacy_unbound'
+        : 'lifecycle_bound'),
     alias: overrides.alias,
     vaultFilePath: overrides.vaultFilePath,
   }
@@ -438,6 +445,7 @@ describe('codex-core/accounts identity mismatch reconciliation', () => {
       // (withRetry) must, because a 401 can be a server-side revoke on a token
       // that is still locally valid.
       expiresAt: Date.now() + 3600_000,
+      credentialGeneration: 0,
       profile: 'main',
       source: 'config' as const,
     }

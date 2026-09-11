@@ -29,6 +29,8 @@ function createCodexAccount(
     source: 'vault',
     status: 'healthy',
     lastUsedAt,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     alias,
   }
 }
