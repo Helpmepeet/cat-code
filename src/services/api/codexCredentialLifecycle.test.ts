@@ -13,9 +13,11 @@ import { basename, join } from 'path'
 import {
   CodexCredentialLifecycleError,
   createCodexCredentialLifecycle,
+  type CodexCredentialCleanupExpectation,
   type CodexCredentialBinding,
   type CodexCredentialLifecycle,
   type CodexCredentialLifecycleRecord,
+  type CodexCredentialLifecycleRecoveryResult,
   type CodexCredentialLifecycleTransitionResult,
 } from './codexCredentialLifecycle.js'
 
@@ -37,6 +39,16 @@ function appliedRecord(
     throw new Error('expected an applied lifecycle transition')
   }
   return result.record
+}
+
+function pendingCleanup(
+  result: CodexCredentialLifecycleRecoveryResult,
+): CodexCredentialCleanupExpectation {
+  expect(result.status).toBe('pending')
+  if (result.status !== 'pending') {
+    throw new Error('expected pending credential cleanup')
+  }
+  return result.cleanup
 }
 
 async function establishCredentialed(
@@ -240,6 +252,16 @@ describe('Codex credential lifecycle authority', () => {
       name: 'CodexCredentialLifecycleError',
       code: 'malformed_state',
     })
+    await expect(
+      store.withTransaction(
+        ACCOUNT_ID,
+        { operationKind: 'refresh', operationId: 'malformed-recovery' },
+        permit => store.recover(permit),
+      ),
+    ).rejects.toMatchObject({
+      name: 'CodexCredentialLifecycleError',
+      code: 'malformed_state',
+    })
     try {
       await store.withTransaction(
         ACCOUNT_ID,
@@ -263,6 +285,16 @@ describe('Codex credential lifecycle authority', () => {
         ACCOUNT_ID,
         { operationKind: 'login', operationId: 'unreadable-read' },
         permit => store.prepareLogin(permit),
+      ),
+    ).rejects.toMatchObject({
+      name: 'CodexCredentialLifecycleError',
+      code: 'unreadable_state',
+    })
+    await expect(
+      store.withTransaction(
+        ACCOUNT_ID,
+        { operationKind: 'refresh', operationId: 'unreadable-recovery' },
+        permit => store.recover(permit),
       ),
     ).rejects.toMatchObject({
       name: 'CodexCredentialLifecycleError',
@@ -317,11 +349,23 @@ describe('Codex credential lifecycle authority', () => {
           operationKind: 'sign_out',
           cleanup: 'pending',
         })
+        expect(
+          store.completeCleanup(permit, {
+            accountId: ACCOUNT_ID,
+            credentialGeneration: signedOut.credentialGeneration + 1,
+            operationId: signedOut.operationId,
+            operationKind: 'sign_out',
+          }),
+        ).toMatchObject({
+          status: 'superseded',
+          reason: 'generation_mismatch',
+        })
         cleanup = appliedRecord(
           store.completeCleanup(permit, {
             accountId: ACCOUNT_ID,
             credentialGeneration: signedOut.credentialGeneration,
             operationId: signedOut.operationId,
+            operationKind: 'sign_out',
           }),
         )
       },
@@ -344,6 +388,7 @@ describe('Codex credential lifecycle authority', () => {
             accountId: ACCOUNT_ID,
             credentialGeneration: 2,
             operationId: 'signout-one',
+            operationKind: 'sign_out',
           }),
       ),
     ).toMatchObject({ status: 'applied', changed: false })
@@ -357,6 +402,7 @@ describe('Codex credential lifecycle authority', () => {
             accountId: OTHER_ACCOUNT_ID,
             credentialGeneration: 2,
             operationId: 'signout-one',
+            operationKind: 'sign_out',
           }),
         ).toMatchObject({
           status: 'superseded',
@@ -373,6 +419,24 @@ describe('Codex credential lifecycle authority', () => {
             accountId: ACCOUNT_ID,
             credentialGeneration: 2,
             operationId: 'signout-one',
+            operationKind: 'sign_out',
+          }),
+        ).toMatchObject({
+          status: 'superseded',
+          reason: 'operation_mismatch',
+        })
+      },
+    )
+    await store.withTransaction(
+      ACCOUNT_ID,
+      { operationKind: 'sign_out', operationId: 'signout-one' },
+      permit => {
+        expect(
+          store.completeCleanup(permit, {
+            accountId: ACCOUNT_ID,
+            credentialGeneration: 2,
+            operationId: 'signout-one',
+            operationKind: 'delete',
           }),
         ).toMatchObject({
           status: 'superseded',
@@ -422,6 +486,7 @@ describe('Codex credential lifecycle authority', () => {
           accountId: ACCOUNT_ID,
           credentialGeneration: signedOut!.credentialGeneration,
           operationId: signedOut!.operationId,
+          operationKind: 'sign_out',
         }),
     )
     expect(staleCleanup).toMatchObject({
@@ -467,7 +532,7 @@ describe('Codex credential lifecycle authority', () => {
     expect(validRecord(store)).toEqual(reauth)
   })
 
-  test('deleting credentialed state invalidates it before cleanup and leaves a tombstone', async () => {
+  test('recovery inspection is side-effect free before explicit deletion cleanup', async () => {
     const store = createStore()
     await establishCredentialed(store)
 
@@ -492,12 +557,40 @@ describe('Codex credential lifecycle authority', () => {
     })
     const paths = store.getPaths(ACCOUNT_ID)
     expect(existsSync(paths.recordPath)).toBe(true)
+    const beforeRecovery = validRecord(store)
+    const rawBeforeRecovery = readFileSync(paths.recordPath, 'utf8')
+    let cleanupExpectation: CodexCredentialCleanupExpectation | undefined
 
     await store.withTransaction(
       ACCOUNT_ID,
       { operationKind: 'refresh', operationId: 'recovery-delete' },
       permit => {
-        expect(store.recover(permit)).toMatchObject({
+        const recovery = store.recover(permit)
+        expect(recovery).toEqual({
+          status: 'pending',
+          cleanup: {
+            accountId: ACCOUNT_ID,
+            credentialGeneration: 2,
+            operationId: 'delete-credentialed',
+            operationKind: 'delete',
+          },
+        })
+        cleanupExpectation = pendingCleanup(recovery)
+      },
+    )
+    expect(validRecord(store)).toEqual(beforeRecovery)
+    expect(readFileSync(paths.recordPath, 'utf8')).toBe(rawBeforeRecovery)
+
+    await store.withTransaction(
+      ACCOUNT_ID,
+      {
+        operationKind: cleanupExpectation!.operationKind,
+        operationId: cleanupExpectation!.operationId,
+      },
+      permit => {
+        expect(
+          store.completeCleanup(permit, cleanupExpectation!),
+        ).toMatchObject({
           status: 'applied',
           changed: true,
         })
@@ -545,7 +638,19 @@ describe('Codex credential lifecycle authority', () => {
     expect(validRecord(store)).toEqual(signedOut)
   })
 
-  test('recovery completes only pending denial cleanup and never promotes another state', async () => {
+  test('recovery inspects pending cleanup and never promotes login or reauth state', async () => {
+    const absentStore = createStore()
+    await absentStore.withTransaction(
+      ACCOUNT_ID,
+      { operationKind: 'refresh', operationId: 'recover-absent' },
+      permit => {
+        expect(absentStore.recover(permit)).toEqual({
+          status: 'no_action',
+        })
+      },
+    )
+    expect(absentStore.read(ACCOUNT_ID)).toEqual({ status: 'absent' })
+
     const store = createStore()
 
     await establishCredentialed(store)
@@ -556,11 +661,44 @@ describe('Codex credential lifecycle authority', () => {
         store.signOut(permit, { expectedGeneration: 1 })
       },
     )
+    const beforeRecovery = validRecord(store)
+    const rawBeforeRecovery = readFileSync(
+      store.getPaths(ACCOUNT_ID).recordPath,
+      'utf8',
+    )
+    let cleanupExpectation: CodexCredentialCleanupExpectation | undefined
     await store.withTransaction(
       ACCOUNT_ID,
       { operationKind: 'refresh', operationId: 'recover-pending' },
       permit => {
-        expect(store.recover(permit)).toMatchObject({
+        const recovery = store.recover(permit)
+        expect(recovery).toEqual({
+          status: 'pending',
+          cleanup: {
+            accountId: ACCOUNT_ID,
+            credentialGeneration: 2,
+            operationId: 'recover-signout',
+            operationKind: 'sign_out',
+          },
+        })
+        cleanupExpectation = pendingCleanup(recovery)
+      },
+    )
+    expect(validRecord(store)).toEqual(beforeRecovery)
+    expect(
+      readFileSync(store.getPaths(ACCOUNT_ID).recordPath, 'utf8'),
+    ).toBe(rawBeforeRecovery)
+
+    await store.withTransaction(
+      ACCOUNT_ID,
+      {
+        operationKind: cleanupExpectation!.operationKind,
+        operationId: cleanupExpectation!.operationId,
+      },
+      permit => {
+        expect(
+          store.completeCleanup(permit, cleanupExpectation!),
+        ).toMatchObject({
           status: 'applied',
           changed: true,
         })
@@ -577,6 +715,10 @@ describe('Codex credential lifecycle authority', () => {
       },
     )
     const before = validRecord(secondStore)
+    const rawBefore = readFileSync(
+      secondStore.getPaths(ACCOUNT_ID).recordPath,
+      'utf8',
+    )
     await secondStore.withTransaction(
       ACCOUNT_ID,
       { operationKind: 'refresh', operationId: 'recover-must-not-promote' },
@@ -588,6 +730,38 @@ describe('Codex credential lifecycle authority', () => {
       },
     )
     expect(validRecord(secondStore)).toEqual(before)
+    expect(
+      readFileSync(secondStore.getPaths(ACCOUNT_ID).recordPath, 'utf8'),
+    ).toBe(rawBefore)
+
+    const thirdStore = createStore()
+    await establishCredentialed(thirdStore)
+    await thirdStore.withTransaction(
+      ACCOUNT_ID,
+      { operationKind: 'refresh', operationId: 'recover-reauth' },
+      permit => {
+        thirdStore.markReauthRequired(permit, { expectedGeneration: 1 })
+      },
+    )
+    const reauthBefore = validRecord(thirdStore)
+    const reauthRawBefore = readFileSync(
+      thirdStore.getPaths(ACCOUNT_ID).recordPath,
+      'utf8',
+    )
+    await thirdStore.withTransaction(
+      ACCOUNT_ID,
+      { operationKind: 'refresh', operationId: 'recover-reauth-no-promote' },
+      permit => {
+        expect(thirdStore.recover(permit)).toEqual({
+          status: 'no_action',
+          record: reauthBefore,
+        })
+      },
+    )
+    expect(validRecord(thirdStore)).toEqual(reauthBefore)
+    expect(
+      readFileSync(thirdStore.getPaths(ACCOUNT_ID).recordPath, 'utf8'),
+    ).toBe(reauthRawBefore)
   })
 
   test('permits expire when their transaction ends', async () => {

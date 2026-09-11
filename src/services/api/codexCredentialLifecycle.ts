@@ -134,11 +134,29 @@ export type CodexCredentialGenerationOptions = Readonly<{
   expectedGeneration: number
 }>
 
+export type CodexCredentialCleanupOperationKind = 'sign_out' | 'delete'
+
 export type CodexCredentialCleanupExpectation = Readonly<{
   accountId: string
   credentialGeneration: number
   operationId: string
+  operationKind: CodexCredentialCleanupOperationKind
 }>
+
+export type CodexCredentialLifecycleRecoveryResult =
+  | {
+      status: 'pending'
+      cleanup: CodexCredentialCleanupExpectation
+    }
+  | {
+      status: 'complete'
+      cleanup: CodexCredentialCleanupExpectation
+      record: CodexCredentialLifecycleRecord
+    }
+  | {
+      status: 'no_action'
+      record?: CodexCredentialLifecycleRecord
+    }
 
 declare const credentialLifecyclePermitBrand: unique symbol
 
@@ -190,7 +208,7 @@ export interface CodexCredentialLifecycle {
   ): CodexCredentialLifecycleTransitionResult
   recover(
     permit: CodexCredentialLifecyclePermit,
-  ): CodexCredentialLifecycleTransitionResult
+  ): CodexCredentialLifecycleRecoveryResult
 }
 
 type PermitDetails = {
@@ -280,6 +298,12 @@ function assertOperationId(operationId: string): void {
   if (!isIdentifier(operationId)) {
     throwLifecycleError('invalid_operation_id')
   }
+}
+
+function isCleanupOperationKind(
+  operationKind: unknown,
+): operationKind is CodexCredentialCleanupOperationKind {
+  return operationKind === 'sign_out' || operationKind === 'delete'
 }
 
 function assertGeneration(generation: number): void {
@@ -711,6 +735,9 @@ export function createCodexCredentialLifecycle(
     if (!expected || typeof expected !== 'object') {
       throwLifecycleError('invalid_transition')
     }
+    if (!isCleanupOperationKind(expected.operationKind)) {
+      throwLifecycleError('invalid_transition')
+    }
     assertAccountId(expected.accountId)
     assertOperationId(expected.operationId)
     assertGeneration(expected.credentialGeneration)
@@ -730,7 +757,9 @@ export function createCodexCredentialLifecycle(
     }
     if (
       current.operationId !== expected.operationId ||
-      details.operationId !== expected.operationId
+      details.operationId !== expected.operationId ||
+      current.operationKind !== expected.operationKind ||
+      details.operationKind !== expected.operationKind
     ) {
       return superseded('operation_mismatch', current)
     }
@@ -807,26 +836,31 @@ export function createCodexCredentialLifecycle(
 
   function recover(
     permit: CodexCredentialLifecyclePermit,
-  ): CodexCredentialLifecycleTransitionResult {
-    const { details } = getPermit(permit)
+  ): CodexCredentialLifecycleRecoveryResult {
+    const { details } = getPermit(permit, 'refresh')
     const current = readForMutation(details.accountId)
-    if (
-      current === undefined ||
-      current.state !== 'signed_out' ||
-      current.cleanup !== 'pending'
-    ) {
-      return { status: 'no_action', ...(current ? { record: current } : {}) }
+    if (current === undefined) {
+      return { status: 'no_action' }
     }
-    const record = makeRecord({
+    if (current.state !== 'signed_out') {
+      return { status: 'no_action', record: current }
+    }
+    if (!isCleanupOperationKind(current.operationKind)) {
+      return { status: 'no_action', record: current }
+    }
+    const cleanup = Object.freeze({
       accountId: current.accountId,
       credentialGeneration: current.credentialGeneration,
-      state: 'signed_out',
       operationId: current.operationId,
       operationKind: current.operationKind,
-      cleanup: 'complete',
     })
-    writeRecord(record)
-    return applied(record, true)
+    if (current.cleanup === 'complete') {
+      return { status: 'complete', cleanup, record: current }
+    }
+    if (current.cleanup !== 'pending') {
+      return { status: 'no_action', record: current }
+    }
+    return { status: 'pending', cleanup }
   }
 
   return Object.freeze({
