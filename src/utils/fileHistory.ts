@@ -10,7 +10,7 @@ import {
   stat,
   unlink,
 } from 'fs/promises'
-import { dirname, isAbsolute, join, relative } from 'path'
+import { dirname, join, resolve } from 'path'
 import {
   getIsNonInteractiveSession,
   getOriginalCwd,
@@ -21,6 +21,7 @@ import { notifyVscodeFileUpdated } from 'src/services/mcp/vscodeSdkMcp.js'
 import type { LogOption } from 'src/types/logs.js'
 import { inspect } from 'util'
 import { getGlobalConfig } from './config.js'
+import { getCwd } from './cwd.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
 import { getErrnoCode, isENOENT } from './errors.js'
@@ -38,13 +39,13 @@ export type FileHistoryBackup = {
 
 export type FileHistorySnapshot = {
   messageId: UUID // The associated message ID for this snapshot
-  trackedFileBackups: Record<string, FileHistoryBackup> // Map of file paths to backup versions
+  trackedFileBackups: Record<string, FileHistoryBackup> // Map of absolute file paths to backup versions
   timestamp: Date
 }
 
 export type FileHistoryState = {
   snapshots: FileHistorySnapshot[]
-  trackedFiles: Set<string>
+  trackedFiles: Set<string> // Absolute file paths
   // Monotonically-increasing counter incremented on every snapshot, even when
   // old snapshots are evicted.  Used by useGitDiffStats as an activity signal
   // (snapshots.length plateaus once the cap is reached).
@@ -94,7 +95,7 @@ export async function fileHistoryTrackEdit(
     return
   }
 
-  const trackingPath = maybeShortenFilePath(filePath)
+  const trackingPath = resolveFilePath(filePath, getCwd())
 
   // Phase 1: check if backup is needed. Speculative writes would overwrite
   // the deterministic {hash}@v1 backup on every repeat call — a second
@@ -120,7 +121,7 @@ export async function fileHistoryTrackEdit(
   // Phase 2: async backup.
   let backup: FileHistoryBackup
   try {
-    backup = await createBackup(filePath, 1)
+    backup = await createBackup(trackingPath, 1)
   } catch (error) {
     logError(error)
     logEvent('tengu_file_history_track_edit_failed', {})
@@ -225,7 +226,7 @@ export async function fileHistoryMakeSnapshot(
     await Promise.all(
       Array.from(captured.trackedFiles, async trackingPath => {
         try {
-          const filePath = maybeExpandFilePath(trackingPath)
+          const filePath = trackingPath
           const latestBackup =
             mostRecentSnapshot.trackedFileBackups[trackingPath]
           const nextVersion = latestBackup ? latestBackup.version + 1 : 1
@@ -430,7 +431,7 @@ export async function fileHistoryGetDiffStats(
   const results = await Promise.all(
     Array.from(state.trackedFiles, async trackingPath => {
       try {
-        const filePath = maybeExpandFilePath(trackingPath)
+        const filePath = trackingPath
         const targetBackup = targetSnapshot.trackedFileBackups[trackingPath]
 
         const backupFileName: BackupFileName | undefined = targetBackup
@@ -508,7 +509,7 @@ export async function fileHistoryHasAnyChanges(
 
   for (const trackingPath of state.trackedFiles) {
     try {
-      const filePath = maybeExpandFilePath(trackingPath)
+      const filePath = trackingPath
       const targetBackup = targetSnapshot.trackedFileBackups[trackingPath]
       const backupFileName: BackupFileName | undefined = targetBackup
         ? targetBackup.backupFileName
@@ -541,7 +542,7 @@ async function applySnapshot(
   const filesChanged: string[] = []
   for (const trackingPath of state.trackedFiles) {
     try {
-      const filePath = maybeExpandFilePath(trackingPath)
+      const filePath = trackingPath
       const targetBackup = targetSnapshot.trackedFileBackups[trackingPath]
 
       const backupFileName: BackupFileName | undefined = targetBackup
@@ -861,25 +862,8 @@ function getBackupFileNameFirstVersion(
   return undefined
 }
 
-/**
- * Use the relative path as the key to reduce session storage space for tracking.
- */
-function maybeShortenFilePath(filePath: string): string {
-  if (!isAbsolute(filePath)) {
-    return filePath
-  }
-  const cwd = getOriginalCwd()
-  if (filePath.startsWith(cwd)) {
-    return relative(cwd, filePath)
-  }
-  return filePath
-}
-
-function maybeExpandFilePath(filePath: string): string {
-  if (isAbsolute(filePath)) {
-    return filePath
-  }
-  return join(getOriginalCwd(), filePath)
+function resolveFilePath(filePath: string, basePath: string): string {
+  return resolve(basePath, filePath).normalize('NFC')
 }
 
 /**
@@ -892,15 +876,16 @@ export function fileHistoryRestoreStateFromLog(
   if (!fileHistoryEnabled()) {
     return
   }
-  // Make a copy of the snapshots as we migrate from absolute path to
-  // shortened relative tracking path.
+  // Persisted snapshots created before absolute tracking may still contain
+  // relative keys. Resolve them before putting them back into live state.
+  const restoreBase = getOriginalCwd()
   const snapshots: FileHistorySnapshot[] = []
   // Rebuild the tracked files from the snapshots
   const trackedFiles = new Set<string>()
   for (const snapshot of fileHistorySnapshots) {
     const trackedFileBackups: Record<string, FileHistoryBackup> = {}
     for (const [path, backup] of Object.entries(snapshot.trackedFileBackups)) {
-      const trackingPath = maybeShortenFilePath(path)
+      const trackingPath = resolveFilePath(path, restoreBase)
       trackedFiles.add(trackingPath)
       trackedFileBackups[trackingPath] = backup
     }
@@ -1063,7 +1048,7 @@ async function notifyVscodeSnapshotFilesUpdated(
   }
 
   for (const trackingPath of newState.trackedFiles) {
-    const filePath = maybeExpandFilePath(trackingPath)
+    const filePath = trackingPath
     const oldBackup = oldSnapshot?.trackedFileBackups[trackingPath]
     const newBackup = newSnapshot.trackedFileBackups[trackingPath]
 
