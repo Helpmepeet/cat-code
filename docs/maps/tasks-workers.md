@@ -1,6 +1,6 @@
 # Tasks And Workers Routing Map
 
-Last refreshed: 2026-09-06.
+Last refreshed: 2026-09-11.
 
 Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, task panel UI, lifecycle, kill/stop behavior, and tests. This is a navigation map, not a replacement for source inspection. Start here, then verify behavior in the owner files below.
 
@@ -8,7 +8,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 
 - `src/tasks.ts` and `src/Task.ts` for task exposure and base types.
 - `src/tasks/` for concrete lifecycle and stop behavior.
-- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `runAgent.ts`, `resumeAgent.ts`, and `loadAgentsDir.ts` for local-agent work and definition loading.
+- `src/tools/AgentTool/AgentTool.tsx`, `agentToolUtils.ts`, `agentLifecycleOwnership.ts`, `runAgent.ts`, `resumeAgent.ts`, and `loadAgentsDir.ts` for local-agent work and definition loading.
 - `src/utils/swarm/teamHelpers.ts`, `src/utils/teammateMailbox.ts`, and `src/utils/swarm/inProcessRunner.ts` for teammate routing.
 - `src/components/tasks/`, `src/screens/REPL.tsx`, `src/hooks/useBackgroundTaskNavigation.ts`, and `src/state/selectors.ts` for terminal task UI.
 - `src/coordinator/` and `src/tasks/` for coordinator-safe worker state and persistence.
@@ -21,7 +21,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 | Base task contract | `src/Task.ts` | `src/utils/task/framework.ts`, `src/utils/task/diskOutput.ts` | The polymorphic task interface is now just `kill(taskId, setAppState)`. Spawn/render are owned by concrete task modules and tools. |
 | Background-task filtering | `src/tasks/types.ts` | `src/components/tasks/BackgroundTaskStatus.tsx`, `src/components/tasks/BackgroundTasksDialog.tsx` | `isBackgroundTask()` requires `running` or `pending`, and excludes foreground tasks with `isBackgrounded === false`. This is a UI-visibility predicate, not an activity predicate. |
 | Operational task activity (session busy/waiting) | `src/tasks/attention.ts` | `src/utils/tuiSessionStatus.ts`, `src/tasks/pillLabel.ts`, `src/screens/REPL.tsx`, `docs/maps/terminal-ui-state.md` | `deriveDelegatedTaskStatus()` answers a different question from `isBackgroundTask()`: does this session own active delegated work, and is any delegated task stalled on the user. Working and waiting are independent aggregate facts. Excluded from work: terminal tasks, idle teammates, blocked local agents, teammates awaiting plan approval, remote ultraplan attention phases, deliberately long-running remote agents, and `local_bash` / `monitor_mcp` / `dream`. A backgrounded main session counts as work, because it runs as `local_agent`. |
-| AppState updates and eviction | `src/utils/task/framework.ts` | `src/state/teammateViewHelpers.ts`, concrete task files | `registerTask()`, `updateTaskState()`, `generateTaskAttachments()` (eviction only, despite the name) and `evictTerminalTask()` are the shared state helpers. Local-agent panel retention uses `PANEL_GRACE_MS`. |
+| AppState updates and eviction | `src/utils/task/framework.ts` | `src/state/teammateViewHelpers.ts`, concrete task files | `registerTask()`, `updateTaskState()`, `generateTaskAttachments()` (eviction only, despite the name) and `evictTerminalTask()` are the shared state helpers. Local-agent panel retention uses `PANEL_GRACE_MS`; unresolved instruction records and pending targeted notifications block both eager and lazy eviction. |
 | Task output files | `src/utils/task/diskOutput.ts` | task detail dialogs, notification code | Bash and remote tasks write output files directly; local agents symlink task output to sidechain transcripts. Reads should use deltas/tails, not full unbounded reads. |
 | CLI and structured agent definitions | `src/tools/AgentTool/loadAgentsDir.ts` | `src/main.tsx`, `src/cli/print.ts` | Both `--agents` and structured initialization reject malformed definitions explicitly; never silently start without the requested agents. |
 
@@ -30,7 +30,7 @@ Purpose: route local agents, shell tasks, teammate tasks, remote agent tasks, ta
 | Task kind | Owner | Spawn/register path | Completion path | Kill/stop path |
 |---|---|---|---|---|
 | Shell task (`local_bash`) | `src/tasks/LocalShellTask/LocalShellTask.tsx` | `spawnShellTask()`, `registerForeground()`, `backgroundExistingForegroundTask()` | Shell result updates status, flushes/cleans command output, enqueues shell notification, evicts task output | `LocalShellTask.kill()` delegates to `src/tasks/LocalShellTask/killShellTasks.ts`; `stopTask()` suppresses noisy shell XML notification and emits SDK termination directly |
-| Local async agent (`local_agent`) | `src/tasks/LocalAgentTask/LocalAgentTask.tsx` | `registerAsyncAgent()` for async-from-start/resume; `registerAgentForeground()` for sync agents that may later background | `completeAgentTask()` / `failAgentTask()` update terminal state; `runAsyncAgentLifecycle()` enqueues model-facing notification | `killAsyncAgent()` aborts controller, releases Codex lease, evicts output; bulk kill uses `killAllRunningAgentTasks()` plus `markAgentsNotified()` |
+| Local async agent (`local_agent`) | `src/tasks/LocalAgentTask/LocalAgentTask.tsx` | `registerAsyncAgent()` for async-from-start/resume; `registerAgentForeground()` for sync agents that may later background | `completeAgentTask()` / `failAgentTask()` update terminal state and preserve unresolved instruction outcomes; `runAsyncAgentLifecycle()` enqueues model-facing notification | `killAsyncAgent()` aborts controller, settles unresolved instructions, releases Codex lease, and evicts output; bulk kill uses `killAllRunningAgentTasks()` plus `markAgentsNotified()` |
 | Backgrounded main session (`local_agent`, `agentType=main-session`) | `src/tasks/LocalMainSessionTask.ts` | `registerMainSessionTask()` and `startBackgroundSession()` from REPL/session backgrounding | `completeMainSessionTask()` updates status and notifies only if still backgrounded | Uses local-agent task shape and abort controller; foregrounding goes through `foregroundMainSessionTask()` |
 | In-process teammate (`in_process_teammate`) | `src/tasks/InProcessTeammateTask/` | Runtime spawn is in swarm utilities; task module owns state helpers and direct kill bridge | Teammate runner updates task state; UI state can stay in viewing mode until auto-exit or user action | `InProcessTeammateTask.kill()` calls `killInProcessTeammate()`. Escape while viewing a running teammate aborts only current work via `currentWorkAbortController`; `k`/`x` kill the teammate task |
 | Remote agent (`remote_agent`) | `src/tasks/RemoteAgentTask/RemoteAgentTask.tsx` | `registerRemoteAgentTask()` creates local task, output file, sidecar metadata, and poller; `restoreRemoteAgentTasks()` rehydrates on resume | Poller watches CCR events, projected todo/task logs, remote review tags, ultraplan phases, completion checkers, and archived sessions | `RemoteAgentTask.kill()` marks killed/notified, emits SDK termination, archives remote session, evicts output, removes sidecar metadata |
@@ -51,10 +51,11 @@ Start with `src/tools/AgentTool/AgentTool.tsx` for launch decisions:
 Then inspect:
 
 - `src/tools/AgentTool/agentToolUtils.ts` for `runAsyncAgentLifecycle()`, final notification formatting, progress tracking, and partial-result extraction.
+- `src/tools/AgentTool/agentLifecycleOwnership.ts` for the in-process run ownership held until detached terminal recording, notification work, and cleanup finish; resume cannot replace a task while this ownership remains active.
 - `src/tools/AgentTool/runAgent.ts` for sidechain transcript writes, agent-specific MCP/hook/skill setup, subagent context isolation, and cleanup of agent-scoped shell/monitor tasks when an agent exits.
 - `src/tools/AgentTool/resumeAgent.ts` for resuming a retained/completed local agent in the background from its transcript and metadata.
 - `src/tools/AgentTool/loadAgentsDir.ts` for custom-agent parsing shared by on-disk definitions, `--agents`, and structured initialization; callers must surface its errors rather than treating a rejected payload as an empty list.
-- `src/tasks/LocalAgentTask/LocalAgentTask.tsx` for task state fields: progress, `pendingMessages`, `retain`, `diskLoaded`, `evictAfter`, blocked handoff metadata, and verification verdict extraction.
+- `src/tasks/LocalAgentTask/LocalAgentTask.tsx` for task state fields: progress, message delivery records in `pendingMessages`, run ownership, message-acceptance closure, sender-specific outcome reporting, `retain`, `diskLoaded`, `evictAfter`, blocked handoff metadata, and verification verdict extraction.
 - `src/tasks/attention.ts` for which task states mean the session is waiting on the user. Four surfaces read it: the footer pill, the task row label, footer notifications, and live session status. Do not spell `handoffStatus === 'blocked'` or an ultraplan phase check out again in a fifth place.
 - `src/tasks/pillLabel.ts` for the canonical compact label/icon rules that blocked handoffs and verification agents share with the footer pill and transcript status lines.
 
@@ -137,16 +138,16 @@ Start with `src/state/selectors.ts`.
 - `getViewedTeammateTask()` narrows `viewingAgentTaskId` to an in-process teammate.
 - `getActiveAgentForInput()` returns `leader`, `viewed` teammate, or `named_agent` local agent.
 - REPL currently inlines some viewed-agent checks near message display, so verify both selector and REPL code before changing input behavior.
-- Viewed local-agent input appends a user message immediately, then re-reads fresh AppState and calls `queuePendingMessageIfRunning()` (`src/tasks/LocalAgentTask/LocalAgentTask.tsx`) — an atomic, synchronous-updater-based queue-if-currently-running check that returns a boolean. (2026-07-12 hardening: replaced the older `queuePendingMessage()`, which queued unconditionally against a possibly-stale captured `task.status` and could silently queue into a task that had already stopped or race a concurrent resume. `queuePendingMessage()` still exists for internal callers that intentionally don't require a running check — do not use it for ordinary steering.) If queueing returns false, it resumes through `resumeAgentBackground()`.
+- Viewed local-agent input appends a user message immediately, then re-reads fresh AppState and calls `queuePendingMessageIfRunning()` (`src/tasks/LocalAgentTask/LocalAgentTask.tsx`). The synchronous state update accepts only a running task whose acceptance gate is open and records a uniquely identified delivery record before returning success. At normal no-tool completion, `query()` atomically either claims the exact pending batch for another model round or closes acceptance; input that loses that race is rejected and resumes through `resumeAgentBackground()` after the worker stops.
 - Viewed teammate input queues through `injectUserMessageToTeammate()`.
-- `src/tools/SendMessageTool/SendMessageTool.ts` `routeToLocalWorker()` follows the same fresh-read-then-`queuePendingMessageIfRunning()` pattern rather than trusting the state captured when `resolveAgentTarget()` ran, closing a delayed-resolution race where the target could finish or get resumed by someone else between resolution and routing.
+- `src/tools/SendMessageTool/SendMessageTool.ts` `routeToLocalWorker()` follows the same fresh-read-then-`queuePendingMessageIfRunning()` pattern rather than trusting the state captured when `resolveAgentTarget()` ran. A worker-originated instruction records the sender agent ID so an undelivered or uncertain terminal outcome is queued back to that worker; main-origin input is reported in the ordinary parent notification.
 
 ## Lifecycle And Notifications
 
 - New task state should be built from `createTaskStateBase()` and registered with `registerTask()` so SDK `task_started` events emit once.
 - Running task output should flow through `DiskTaskOutput`, task output symlinks, or `appendTaskOutput()` depending on task type.
 - Task completion notifications are task-specific. `generateTaskAttachments()` intentionally does not notify completed tasks because that races per-task notifications.
-- Terminal tasks are evictable only after `notified=true`; retained local agents and panel grace periods delay eviction.
+- Terminal tasks are evictable only after `notified=true`; retained local agents, panel grace periods, pending task notifications, and unresolved local-worker instruction records delay eviction. A delivery record stops blocking only after its explicit failure or uncertainty report has transferred to the appropriate model-facing queue.
 - Queue model-facing task notifications through `enqueuePendingNotification()` with `formatTaskNotificationText()` and `toTaskNotificationOrigin()`.
 - For SDK consumers, check direct `emitTaskTerminatedSdk()` / `enqueueSdkEvent()` paths; not every UI/model notification creates an SDK event automatically.
 
