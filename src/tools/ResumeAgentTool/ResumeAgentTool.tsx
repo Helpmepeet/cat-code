@@ -139,7 +139,7 @@ export const ResumeAgentTool = buildTool({
       return {
         data: {
           success: false,
-          message: `Agent "${resolved.displayName}" is already running; resume is not needed. Any message you send via SendMessage will queue automatically and deliver at the next tool round.`,
+          message: `Agent "${resolved.displayName}" is already running; resume is not needed. Any message you send via SendMessage will queue automatically for this worker execution.`,
         },
       }
     }
@@ -172,7 +172,7 @@ export const ResumeAgentTool = buildTool({
         return {
           data: {
             success: false,
-            message: `Agent "${resolved.displayName}" is already running; resume is not needed. Any message you send via SendMessage will queue automatically and deliver at the next tool round.`,
+            message: `Agent "${resolved.displayName}" is already running; resume is not needed. Any message you send via SendMessage will queue automatically for this worker execution.`,
           },
         }
       }

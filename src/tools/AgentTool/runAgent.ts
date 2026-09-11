@@ -1124,15 +1124,11 @@ async function* runAgentInCleanupScope({
         // here made exhaustion look like a clean completion to every caller.
         yield message
         if (reachedMaxTurns) break
-        // A delivered queued_command carries the origin of whoever injected
-        // it (SendMessage's queued coordinator turn, a task-notification,
-        // a channel/teammate/peer message) via getAgentPendingMessageAttachments
-        // / getQueuedCommandAttachments. Record only this one attachment kind,
-        // naming its origin, so a subagent's sidechain can show it was
-        // delivered — this file's blanket "don't record attachments" rule
-        // still stands for the rest (structured_output, diagnostics, skill
-        // discovery, plan/auto-mode reminders, …), which are re-derived every
-        // turn from live state and would just be turn-by-turn noise if logged.
+        // Queue-backed commands carry the origin of whoever injected them.
+        // Local worker instructions use separate request-bound delivery records,
+        // so recording their prepared attachment here would overstate delivery.
+        // Other attachment kinds are re-derived from live state and are not
+        // transcript rows.
         // AttachmentMessage.attachment is declared `unknown` in
         // types/message.ts, so the union it always holds has to be named once
         // to read it; naming the real union rather than an ad-hoc shape is
@@ -1141,6 +1137,7 @@ async function* runAgentInCleanupScope({
         const deliveredAttachment = message.attachment as Attachment
         if (
           deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.commandMode !== 'local-agent-message' &&
           deliveredAttachment.origin
         ) {
           await recordSidechainTranscript(

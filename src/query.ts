@@ -2121,6 +2121,7 @@ async function* queryLoop(
     // drain their own agentId. User prompts (mode:'prompt') still go to main
     // only; subagents never see the prompt stream.
     // eslint-disable-next-line custom-rules/require-tool-match-name -- ToolUseBlock.name has no aliases
+    const nextTurnCount = turnCount + 1
     const sleepRan = toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)
     const isMainThread =
       querySource.startsWith('repl_main_thread') || querySource === 'sdk'
@@ -2144,6 +2145,14 @@ async function* queryLoop(
       [...messagesForQuery, ...assistantMessages, ...toolResults],
       querySource,
     )) {
+      if (
+        maxTurns &&
+        nextTurnCount > maxTurns &&
+        attachment.attachment.type === 'queued_command' &&
+        attachment.attachment.commandMode === 'local-agent-message'
+      ) {
+        continue
+      }
       yield attachment
       toolResults.push(attachment)
     }
@@ -2249,9 +2258,6 @@ async function* queryLoop(
       ...updatedToolUseContext,
       queryTracking,
     }
-
-    // Each time we have tool results and are about to recurse, that's a turn
-    const nextTurnCount = turnCount + 1
 
     // Periodic task summary for `claude ps` — fires mid-turn so a
     // long-running agent still refreshes what it's working on. Gated

@@ -20,6 +20,18 @@ import {
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
+import {
+  _resetAgentLifecycleOwnershipForTest,
+  isAgentLifecycleOwned,
+} from './agentLifecycleOwnership.js'
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>(res => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
 
 function poolAccount(accountId: string): PoolAccount {
   return {
@@ -66,10 +78,14 @@ async function runTerminal({
   taskId,
   model,
   mainLoopProvider,
+  getWorktreeResult = async () => ({}),
 }: {
   taskId: string
   model: string
   mainLoopProvider: 'openai' | 'firstParty' | undefined
+  getWorktreeResult?: (
+    appState: AppState,
+  ) => Promise<{ worktreePath?: string; worktreeBranch?: string }>
 }): Promise<{ accountId?: string } | undefined> {
   let appState: AppState = getDefaultAppState()
   appState = {
@@ -132,7 +148,7 @@ async function runTerminal({
     rootSetAppState,
     agentIdForCleanup: taskId,
     enableSummarization: false,
-    getWorktreeResult: async () => ({}),
+    getWorktreeResult: () => getWorktreeResult(appState),
     parentTranscriptPath: join(tmpdir(), 'catcode-terminal-account.jsonl'),
     parentSessionId: 'session-terminal-account',
   })
@@ -145,12 +161,14 @@ async function runTerminal({
 
 describe('runAsyncAgentLifecycle terminal Codex account stamp', () => {
   beforeEach(() => {
+    _resetAgentLifecycleOwnershipForTest()
     resetStateForTests()
     resetCodexLeaseManagerForTest()
     resetCodexAccountPoolForTest()
   })
 
   afterEach(() => {
+    _resetAgentLifecycleOwnershipForTest()
     resetCodexLeaseManagerForTest()
     resetCodexAccountPoolForTest()
     setSessionProvider(null)
@@ -206,5 +224,30 @@ describe('runAsyncAgentLifecycle terminal Codex account stamp', () => {
     })
 
     expect(account).toBeUndefined()
+  })
+
+  test('holds lifecycle ownership after status publication until finalization settles', async () => {
+    const finalizationStarted = deferred<void>()
+    const finalizationRelease = deferred<void>()
+    let statusDuringFinalization: string | undefined
+    const lifecycle = runTerminal({
+      taskId: 'agent_finalizing',
+      model: 'claude-sonnet-5',
+      mainLoopProvider: 'firstParty',
+      getWorktreeResult: async appState => {
+        statusDuringFinalization = appState.tasks.agent_finalizing?.status
+        finalizationStarted.resolve()
+        await finalizationRelease.promise
+        return {}
+      },
+    })
+
+    await finalizationStarted.promise
+    expect(statusDuringFinalization).toBe('completed')
+    expect(isAgentLifecycleOwned('agent_finalizing')).toBe(true)
+
+    finalizationRelease.resolve()
+    await lifecycle
+    expect(isAgentLifecycleOwned('agent_finalizing')).toBe(false)
   })
 })

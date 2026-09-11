@@ -78,6 +78,11 @@ import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { TASK_STOP_TOOL_NAME } from '../TaskStopTool/prompt.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
+import {
+  acquireAgentLifecycleOwnership,
+  releaseAgentLifecycleOwnership,
+  type AgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 export type ResolvedAgentTools = {
   hasWildcard: boolean
@@ -959,6 +964,7 @@ export async function runAsyncAgentLifecycle({
   parentTranscriptPath,
   parentSessionId,
   sessionStateTracking,
+  lifecycleOwnership: existingLifecycleOwnership,
 }: {
   taskId: string
   abortController: AbortController
@@ -990,7 +996,13 @@ export async function runAsyncAgentLifecycle({
     mode: string
     statePath?: string
   }
+  lifecycleOwnership?: AgentLifecycleOwnership
 }): Promise<void> {
+  const lifecycleOwnership =
+    existingLifecycleOwnership ?? acquireAgentLifecycleOwnership(taskId)
+  if (!lifecycleOwnership || lifecycleOwnership.agentId !== taskId) {
+    throw new Error(`Agent ${taskId} already has an active lifecycle`)
+  }
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
   const tracker = createProgressTracker()
@@ -1297,5 +1309,6 @@ export async function runAsyncAgentLifecycle({
   } finally {
     clearInvokedSkillsForAgent(agentIdForCleanup)
     clearDumpState(agentIdForCleanup)
+    releaseAgentLifecycleOwnership(lifecycleOwnership)
   }
 }

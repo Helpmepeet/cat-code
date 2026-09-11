@@ -181,8 +181,12 @@ function AgentLine(t0) {
   const resumeText = task.resumedAt && isRunning ? " · resumed" : "";
   const tokenText = `${t2}${resumeText}`;
   const profileText = profileLabel ? ` · ${profileLabel}` : "";
-  const queuedCount = getUnresolvedAgentMessageDeliveries(task).length;
-  const queuedText = queuedCount > 0 ? ` · ${queuedCount} queued` : "";
+  const queuedCount = getUnresolvedAgentMessageDeliveries(task).filter(message =>
+    message.status === 'pending' ||
+    message.status === 'prepared' ||
+    message.status === 'submitted'
+  ).length;
+  const queuedText = queuedCount > 0 ? ` · ${queuedCount} pending` : "";
   const displayDescription = task.progress?.summary || task.description;
   const highlighted = isSelected || hover;
   const prefix = highlighted ? figures.pointer + " " : "  ";

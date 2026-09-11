@@ -17,7 +17,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryReport, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -59,6 +59,7 @@ import { formatAgentId } from '../../utils/agentId.js';
 import { recipientNameKey } from '../../utils/recipientIdentity.js';
 import { allocateTeamRecipient, RecipientConflictError, tombstoneFailedRecipient, transitionTeamRecipient } from '../../utils/swarm/teamHelpers.js';
 import { setAgentColor } from './agentColorManager.js';
+import { runWithAgentLifecycleOwnership } from './agentLifecycleOwnership.js';
 import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
@@ -1626,7 +1627,8 @@ export const AgentTool = buildTool({
                 // Workload: inherited via ALS at `void` invocation time,
                 // same as the async-from-start path above.
                 // Continue agent in background and return async result
-                void runWithAgentContext(syncAgentContext, async () => {
+                void runWithAgentContext(syncAgentContext, () =>
+                  runWithAgentLifecycleOwnership(backgroundedTaskId, async () => {
                   const tracker = createProgressTracker();
                   const resolveActivity2 = createActivityDescriptionResolver(toolUseContext.options.tools);
                   try {
@@ -1891,7 +1893,8 @@ export const AgentTool = buildTool({
                     // Note: worktree cleanup is done before enqueueAgentNotification
                     // in both try and catch paths so we can include worktree info
                   }
-                });
+                  }),
+                );
 
                 // Return async_launched result immediately
                 const canCheckProgress = toolUseContext.options.tools.some(t => toolMatchesName(t, TASK_OUTPUT_TOOL_NAME));
@@ -2059,6 +2062,11 @@ export const AgentTool = buildTool({
 
           // Unregister foreground task if agent completed without being backgrounded
           if (foregroundTaskId) {
+            const foregroundTerminalStatus = wasAborted
+              ? 'killed'
+              : syncAgentError
+                ? 'failed'
+                : 'completed';
             // The account comes back FROM the release, not from a read ordered
             // before it: `releaseCodexLease` deletes the entry, so a separate
             // read here would be silently order-dependent. Preferred over the
@@ -2068,15 +2076,22 @@ export const AgentTool = buildTool({
               unregisterAgentForeground(
                 foregroundTaskId,
                 rootSetAppState,
-                wasAborted
-                  ? 'killed'
-                  : syncAgentError
-                    ? 'failed'
-                    : 'completed',
+                foregroundTerminalStatus,
               ),
               resolvedAgentModel,
               toolUseContext.options.mainLoopProvider,
             ) ?? syncLeaseAccount;
+            if (!wasBackgrounded) {
+              enqueueAgentMessageDeliveryReportsToOrigins({
+                taskId: foregroundTaskId,
+                description,
+                status: foregroundTerminalStatus,
+                error: syncAgentError?.message,
+                setAppState: rootSetAppState,
+                toolUseId: toolUseContext.toolUseId,
+                runId: foregroundRunId,
+              });
+            }
             // Notify SDK consumers (e.g. VS Code subagent panel) that this
             // foreground agent is done. Goes through drainSdkEvents() — does
             // NOT trigger the print.ts XML task_notification parser or the LLM loop.
@@ -2225,34 +2240,35 @@ export const AgentTool = buildTool({
             foregroundTaskId
           ]
           if (isLocalAgentTask(foregroundTask)) {
+            const mainDeliveryRecords =
+              getUnresolvedAgentMessageDeliveries(foregroundTask).filter(
+                message => !message.originAgentId,
+              )
             const deliveryReport =
-              formatAgentMessageDeliveryReport(foregroundTask)
+              formatAgentMessageDeliveryRecords(mainDeliveryRecords)
             if (deliveryReport) {
               agentResult.content = [
                 ...agentResult.content,
                 { type: 'text' as const, text: `\n\n${deliveryReport}` },
               ]
-              const reportIds = getUnresolvedAgentMessageDeliveries(
-                foregroundTask,
-              ).map(message => message.id)
               markAgentMessageDeliveriesReported(
                 foregroundTaskId,
-                reportIds,
+                mainDeliveryRecords.map(message => message.id),
                 rootSetAppState,
                 foregroundRunId,
               )
-              rootSetAppState(prev => {
-                const task = prev.tasks[foregroundTaskId]
-                if (!isLocalAgentTask(task)) return prev
-                return {
-                  ...prev,
-                  tasks: {
-                    ...prev.tasks,
-                    [foregroundTaskId]: { ...task, notified: true },
-                  },
-                }
-              })
             }
+            rootSetAppState(prev => {
+              const task = prev.tasks[foregroundTaskId]
+              if (!isLocalAgentTask(task)) return prev
+              return {
+                ...prev,
+                tasks: {
+                  ...prev.tasks,
+                  [foregroundTaskId]: { ...task, notified: true },
+                },
+              }
+            })
           }
         }
         // Treat synthetic API-error terminals (set by finalizeAgentTool when

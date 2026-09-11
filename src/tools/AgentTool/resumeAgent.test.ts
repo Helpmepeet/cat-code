@@ -32,6 +32,10 @@ import {
 import * as diskOutput from '../../utils/task/diskOutput.js'
 import * as agentToolUtils from './agentToolUtils.js'
 import {
+  _resetAgentLifecycleOwnershipForTest,
+  runWithAgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
+import {
   AgentResumeInProgressError,
   resumeAgentBackground,
   TranscriptNotFoundError,
@@ -59,6 +63,7 @@ describe('resumeAgentBackground', () => {
   let getTaskOutputPath: ReturnType<typeof spyOn>
 
   beforeEach(async () => {
+    _resetAgentLifecycleOwnershipForTest()
     resetStateForTests()
     tempDir = mkdtempSync(join(tmpdir(), 'resume-agent-'))
     switchSession(asSessionId('session-resume'), tempDir)
@@ -92,6 +97,7 @@ describe('resumeAgentBackground', () => {
   })
 
   afterEach(async () => {
+    _resetAgentLifecycleOwnershipForTest()
     await diskOutput._clearOutputsForTest()
     diskOutput._resetTaskOutputDirForTest()
     mock.restore()
@@ -209,6 +215,41 @@ describe('resumeAgentBackground', () => {
     await Promise.resolve()
 
     await expect(resume()).resolves.toMatchObject({ agentId: 'agent-resume' })
+  })
+
+  test('rejects resume while a non-resume background lifecycle is still finalizing', async () => {
+    const finalizationStarted = deferred<void>()
+    const finalizationRelease = deferred<void>()
+    const priorLifecycle = runWithAgentLifecycleOwnership(
+      'agent-resume',
+      async () => {
+        finalizationStarted.resolve()
+        await finalizationRelease.promise
+      },
+    )
+    await finalizationStarted.promise
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toBeInstanceOf(AgentResumeInProgressError)
+    expect(registerAsyncAgent).not.toHaveBeenCalled()
+
+    finalizationRelease.resolve()
+    await priorLifecycle
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
   })
 
   test('releases lifecycle ownership on setup failure without ever launching a lifecycle', async () => {

@@ -343,7 +343,7 @@ describe('ResumeAgentTool', () => {
     )
 
     expect(result.data.message).toBe(
-      'Agent "@worker-one" is already running; resume is not needed. Any message you send via SendMessage will queue automatically and deliver at the next tool round.',
+      'Agent "@worker-one" is already running; resume is not needed. Any message you send via SendMessage will queue automatically for this worker execution.',
     )
   })
 

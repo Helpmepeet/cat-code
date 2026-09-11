@@ -14,7 +14,7 @@ import { findToolByName } from '../../Tool.js';
 import type { AgentToolResult } from '../../tools/AgentTool/agentToolUtils.js';
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js';
-import { asAgentId } from '../../types/ids.js';
+import { asAgentId, type AgentId } from '../../types/ids.js';
 import type { Message, SystemMessageLevel } from '../../types/message.js';
 import { createAbortController, createChildAbortController } from '../../utils/abortController.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
@@ -61,6 +61,7 @@ export type LocalAgentMessageDeliveryStatus =
 export type LocalAgentMessageDelivery = {
   id: string
   message: string
+  originAgentId?: AgentId
   status: LocalAgentMessageDeliveryStatus
   acceptedAt: number
   runId?: string
@@ -305,13 +306,20 @@ export function getUnresolvedAgentMessageDeliveries(
 export function formatAgentMessageDeliveryReport(
   task: LocalAgentTaskState,
 ): string | undefined {
-  const unresolved = getUnresolvedAgentMessageDeliveries(task)
-  if (unresolved.length === 0) return undefined
+  return formatAgentMessageDeliveryRecords(
+    getUnresolvedAgentMessageDeliveries(task),
+  )
+}
+
+export function formatAgentMessageDeliveryRecords(
+  records: readonly LocalAgentMessageDelivery[],
+): string | undefined {
+  if (records.length === 0) return undefined
   const lines = ['Unresolved worker instructions:']
-  const undelivered = unresolved.filter(
+  const undelivered = records.filter(
     record => record.status === 'undelivered' || record.status === 'pending',
   )
-  const uncertain = unresolved.filter(
+  const uncertain = records.filter(
     record => record.status === 'uncertain' || record.status === 'prepared' || record.status === 'submitted',
   )
   if (undelivered.length > 0) {
@@ -343,7 +351,12 @@ export function formatAgentMessageDeliveryReport(
  * Atomically decide whether a task is currently accepting messages and, if so,
  * record the instruction before returning success to the caller.
  */
-export function queuePendingMessageIfRunning(taskId: string, message: string, setAppState: SetAppState): boolean {
+export function queuePendingMessageIfRunning(
+  taskId: string,
+  message: string,
+  setAppState: SetAppState,
+  originAgentId?: AgentId,
+): boolean {
   let queued = false;
   setAppState(prev => {
     const task = prev.tasks[taskId];
@@ -367,8 +380,10 @@ export function queuePendingMessageIfRunning(taskId: string, message: string, se
             {
               id: randomUUID(),
               message,
+              ...(originAgentId ? { originAgentId } : {}),
               status: 'pending',
               acceptedAt: Date.now(),
+              reported: false,
             },
           ],
         }
@@ -686,6 +701,86 @@ export function markAgentTaskResumed(taskId: string, setAppState: (f: (prev: App
 /**
  * Enqueue an agent notification to the message queue.
  */
+export function enqueueAgentMessageDeliveryReportsToOrigins({
+  taskId,
+  description,
+  status,
+  error,
+  setAppState,
+  toolUseId,
+  runId,
+}: {
+  taskId: string
+  description: string
+  status: 'completed' | 'failed' | 'killed'
+  error?: string
+  setAppState: SetAppState
+  toolUseId?: string
+  runId?: string
+}, {
+  enqueueNotification = enqueuePendingNotification,
+}: {
+  enqueueNotification?: typeof enqueuePendingNotification
+} = {}): void {
+  let taskSnapshot: LocalAgentTaskState | undefined
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    taskSnapshot = task
+    return task
+  })
+  if (!taskSnapshot) return
+
+  const originGroups = new Map<AgentId, LocalAgentMessageDelivery[]>()
+  for (const message of getUnresolvedAgentMessageDeliveries(taskSnapshot)) {
+    if (!message.originAgentId) continue
+    const group = originGroups.get(message.originAgentId) ?? []
+    group.push(message)
+    originGroups.set(message.originAgentId, group)
+  }
+  const agentLabel = taskSnapshot.agentName
+    ? `@${taskSnapshot.agentName}`
+    : `"${description}"`
+  const summary =
+    status === 'completed'
+      ? `Agent ${agentLabel} completed`
+      : status === 'failed'
+        ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}`
+        : `Agent ${agentLabel} was stopped`
+
+  for (const [originAgentId, records] of originGroups) {
+    const deliveryReport = formatAgentMessageDeliveryRecords(records)
+    if (!deliveryReport) continue
+    const details = {
+      taskId,
+      outputFile: getTaskOutputPath(taskId),
+      toolUseId,
+      status,
+      summary,
+      result: deliveryReport,
+    } as const
+    try {
+      enqueueNotification({
+        value: formatTaskNotificationText(details),
+        mode: 'task-notification',
+        origin: toTaskNotificationOrigin(details),
+        agentId: originAgentId,
+      })
+    } catch (enqueueError) {
+      logForDebugging(
+        `Failed to enqueue local worker delivery report: ${enqueueError}`,
+        { level: 'warn' },
+      )
+      continue
+    }
+    markAgentMessageDeliveriesReported(
+      taskId,
+      records.map(record => record.id),
+      setAppState,
+      runId,
+    )
+  }
+}
+
 export function enqueueAgentNotification({
   taskId,
   description,
@@ -714,46 +809,52 @@ export function enqueueAgentNotification({
   worktreePath?: string;
   worktreeBranch?: string;
   runId?: string;
-}): void {
-  let shouldEnqueue = false;
-  let agentName: string | undefined;
-  let deliveryReport: string | undefined;
-  let reportIds: string[] = [];
+}, {
+  enqueueNotification = enqueuePendingNotification,
+}: {
+  enqueueNotification?: typeof enqueuePendingNotification
+} = {}): void {
+  let taskSnapshot: LocalAgentTaskState | undefined;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    agentName = task.agentName;
     if (!taskRunMatches(task, runId)) {
       return task;
     }
-    const unresolved = getUnresolvedAgentMessageDeliveries(task)
-    if (task.notified && unresolved.length === 0) {
-      return task;
-    }
-    shouldEnqueue = true;
-    deliveryReport = formatAgentMessageDeliveryReport(task);
-    reportIds = unresolved.map(message => message.id);
+    taskSnapshot = task;
     return task
   });
-  if (!shouldEnqueue) {
+  if (!taskSnapshot) {
     return;
   }
 
-  // Abort any active speculation — background task state changed, so speculated
-  // results may reference stale task output. The prompt suggestion text is
-  // preserved; only the pre-computed response is discarded.
+  const unresolved = getUnresolvedAgentMessageDeliveries(taskSnapshot)
+  const mainDeliveryRecords = unresolved.filter(
+    message => !message.originAgentId,
+  )
+
   abortSpeculation(setAppState);
-  const agentLabel = agentName ? `@${agentName}` : `"${description}"`;
+  enqueueAgentMessageDeliveryReportsToOrigins(
+    {
+      taskId,
+      description,
+      status,
+      error,
+      setAppState,
+      toolUseId,
+      runId,
+    },
+    { enqueueNotification },
+  )
+  const agentLabel = taskSnapshot.agentName
+    ? `@${taskSnapshot.agentName}`
+    : `"${description}"`;
   const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
   const outputPath = getTaskOutputPath(taskId);
-  const resultWithDeliveryReport = [finalMessage, deliveryReport]
-    .filter((value): value is string => Boolean(value))
-    .join('\n\n');
-  const details = {
+  const baseDetails = {
     taskId,
     outputFile: outputPath,
     toolUseId,
     status,
     summary,
-    result: resultWithDeliveryReport || undefined,
     usage: usage
       ? {
           totalTokens: usage.totalTokens,
@@ -764,20 +865,37 @@ export function enqueueAgentNotification({
     worktreePath,
     worktreeBranch,
   } as const;
+
+  if (taskSnapshot.notified) {
+    return;
+  }
+  const deliveryReport = formatAgentMessageDeliveryRecords(mainDeliveryRecords)
+  const resultWithDeliveryReport = [finalMessage, deliveryReport]
+    .filter((value): value is string => Boolean(value))
+    .join('\n\n');
+  const details = {
+    ...baseDetails,
+    result: resultWithDeliveryReport || undefined,
+  } as const;
   try {
-    enqueuePendingNotification({
+    enqueueNotification({
       value: formatTaskNotificationText(details),
       mode: 'task-notification',
       origin: toTaskNotificationOrigin(details)
     });
-  } catch (error) {
+  } catch (enqueueError) {
     logForDebugging(
-      `Failed to enqueue local worker notification: ${error}`,
+      `Failed to enqueue local worker notification: ${enqueueError}`,
       { level: 'warn' },
     );
     return;
   }
-  markAgentMessageDeliveriesReported(taskId, reportIds, setAppState, runId);
+  markAgentMessageDeliveriesReported(
+    taskId,
+    mainDeliveryRecords.map(message => message.id),
+    setAppState,
+    runId,
+  );
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task =>
     taskRunMatches(task, runId) ? { ...task, notified: true } : task,
   );
@@ -1010,33 +1128,37 @@ export function completeAgentTask(
 ): void {
   const taskId = result.agentId;
   const resultMetadata = getResultMetadata(result);
+  let transitioned = false;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
+    transitioned = true;
     task.unregisterCleanup?.();
     const isBlocked = resultMetadata.handoffStatus === 'blocked';
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
-    const deliveryReport = formatAgentMessageDeliveryReport({
-      ...task,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker completed before the instruction was submitted.',
-          }
+    const terminalMessages = pendingMessages.map(message => {
+      if (message.status === 'pending' || message.status === 'prepared') {
+        return {
+          ...message,
+          status: 'undelivered' as const,
+          outcome: 'Worker completed before the instruction was submitted.',
+          runId,
         }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker completed while the instruction was in flight.',
-          }
+      }
+      if (message.status === 'submitted') {
+        return {
+          ...message,
+          status: 'uncertain' as const,
+          outcome: 'Worker completed while the instruction was in flight.',
+          runId,
         }
-        return message
-      }),
+      }
+      return message
     })
+    const deliveryReport = formatAgentMessageDeliveryRecords(
+      terminalMessages.filter(message => !message.originAgentId),
+    )
     const resultWithDeliveryReport = deliveryReport
       ? {
           ...result,
@@ -1050,25 +1172,7 @@ export function completeAgentTask(
       ...task,
       status: 'completed',
       acceptingMessages: false,
-      pendingMessages: pendingMessages.map(message => {
-        if (message.status === 'pending' || message.status === 'prepared') {
-          return {
-            ...message,
-            status: 'undelivered' as const,
-            outcome: 'Worker completed before the instruction was submitted.',
-            runId,
-          }
-        }
-        if (message.status === 'submitted') {
-          return {
-            ...message,
-            status: 'uncertain' as const,
-            outcome: 'Worker completed while the instruction was in flight.',
-            runId,
-          }
-        }
-        return message
-      }),
+      pendingMessages: terminalMessages,
       agentName: result.agentName ?? task.agentName,
       result: resultWithDeliveryReport,
       ...resultMetadata,
@@ -1079,8 +1183,10 @@ export function completeAgentTask(
       selectedAgent: undefined
     };
   });
-  releaseAgentCodexResources(taskId);
-  void evictTaskOutput(taskId);
+  if (transitioned) {
+    releaseAgentCodexResources(taskId);
+    void evictTaskOutput(taskId);
+  }
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
 
@@ -1093,10 +1199,12 @@ export function failAgentTask(
   setAppState: SetAppState,
   runId?: string,
 ): void {
+  let transitioned = false;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
     if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
+    transitioned = true;
     task.unregisterCleanup?.();
     const pendingMessages = normalizePendingMessages(task.pendingMessages)
     return {
@@ -1130,10 +1238,12 @@ export function failAgentTask(
       selectedAgent: undefined
     };
   });
-  const failedLease = getCodexLeaseForOwner(taskId)
-  if (failedLease) markPoolAccountLastError(failedLease.accountId)
-  releaseAgentCodexResources(taskId);
-  void evictTaskOutput(taskId);
+  if (transitioned) {
+    const failedLease = getCodexLeaseForOwner(taskId)
+    if (failedLease) markPoolAccountLastError(failedLease.accountId)
+    releaseAgentCodexResources(taskId);
+    void evictTaskOutput(taskId);
+  }
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
 

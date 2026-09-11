@@ -40,6 +40,7 @@ import {
   getCommandsByMaxPriority,
   resetCommandQueue,
 } from '../../utils/messageQueueManager.js'
+import { generateTaskAttachments } from '../../utils/task/framework.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -371,6 +372,94 @@ describe('LocalAgentTask foreground cleanup', () => {
     expect(notification?.value).toContain('Undelivered:')
     expect(notification?.value).toContain('send the final note')
     expect(appState.tasks[agentId]?.notified).toBe(true)
+  })
+
+  test('notification outcomes settle only the origin groups whose enqueue succeeds', () => {
+    const agentId = 'sync-agent-grouped-delivery-report'
+    registerAgentForeground({
+      agentId,
+      description: 'Grouped delivery report agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    queuePendingMessageIfRunning(
+      agentId,
+      'failed sender instruction',
+      setAppState,
+      'sender-failed' as never,
+    )
+    queuePendingMessageIfRunning(
+      agentId,
+      'successful sender instruction',
+      setAppState,
+      'sender-success' as never,
+    )
+    queuePendingMessageIfRunning(agentId, 'main instruction', setAppState)
+    completeAgentTask(
+      {
+        agentId,
+        content: [{ type: 'text', text: 'done' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+    )
+
+    const enqueued: Array<{ agentId?: string; value: unknown }> = []
+    enqueueAgentNotification(
+      {
+        taskId: agentId,
+        description: 'Grouped delivery report agent',
+        status: 'completed',
+        setAppState,
+        finalMessage: 'done',
+      },
+      {
+        enqueueNotification(command) {
+          if (command.agentId === 'sender-failed') {
+            throw new Error('injected enqueue failure')
+          }
+          enqueued.push(command)
+        },
+      },
+    )
+
+    const task = appState.tasks[agentId]
+    expect(task?.pendingMessages).toMatchObject([
+      {
+        message: 'failed sender instruction',
+        originAgentId: 'sender-failed',
+        reported: false,
+      },
+      {
+        message: 'successful sender instruction',
+        originAgentId: 'sender-success',
+        reported: true,
+      },
+      {
+        message: 'main instruction',
+        reported: true,
+      },
+    ])
+    expect(task?.notified).toBe(true)
+    expect(
+      enqueued.find(command => command.agentId === 'sender-success')?.value,
+    ).toContain('successful sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).not.toContain('successful sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === 'sender-success')?.value,
+    ).not.toContain('failed sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).not.toContain('failed sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).toContain('main instruction')
+    expect(generateTaskAttachments(appState).evictedTaskIds).toEqual([])
   })
 
   // The handoff runAgent writes when a worker calls ask_parent_session has to

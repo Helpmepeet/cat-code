@@ -40,6 +40,11 @@ import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { getParentSessionId } from '../../utils/teammate.js'
 import { reconstructForSubagentResume } from '../../utils/toolResultStorage.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
+import {
+  acquireAgentLifecycleOwnership,
+  releaseAgentLifecycleOwnership,
+  type AgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { FORK_AGENT, isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -75,32 +80,26 @@ type ResumeAgentBackgroundArgs = {
   sourceSessionId?: string
 }
 
-// Lifecycle ownership, not setup ownership: an agentId is held from the
-// start of resumeAgentBackground until the detached runAsyncAgentLifecycle
-// promise it launches actually settles, not merely until launch setup
-// finishes. Otherwise a second resume could slip in while the first
-// lifecycle is still running in the background (its Set membership having
-// already been released right after setup).
-const activeResumeLifecycles = new Set<string>()
-
 export async function resumeAgentBackground(
   args: ResumeAgentBackgroundArgs,
 ): Promise<ResumeAgentResult> {
-  if (activeResumeLifecycles.has(args.agentId)) {
+  const lifecycleOwnership = acquireAgentLifecycleOwnership(args.agentId)
+  if (!lifecycleOwnership) {
     throw new AgentResumeInProgressError(args.agentId)
   }
-  activeResumeLifecycles.add(args.agentId)
   let ownershipTransferred = false
   try {
-    return await resumeAgentBackgroundLocked(args, lifecycle => {
+    return await resumeAgentBackgroundLocked(args, lifecycleOwnership, lifecycle => {
       ownershipTransferred = true
       const release = () => {
-        activeResumeLifecycles.delete(args.agentId)
+        releaseAgentLifecycleOwnership(lifecycleOwnership)
       }
       void lifecycle.then(release, release)
     })
   } finally {
-    if (!ownershipTransferred) activeResumeLifecycles.delete(args.agentId)
+    if (!ownershipTransferred) {
+      releaseAgentLifecycleOwnership(lifecycleOwnership)
+    }
   }
 }
 
@@ -113,6 +112,7 @@ async function resumeAgentBackgroundLocked(
     invokingRequestId,
     sourceSessionId,
   }: ResumeAgentBackgroundArgs,
+  lifecycleOwnership: AgentLifecycleOwnership,
   onLifecycleStarted: (lifecycle: Promise<void>) => void,
 ): Promise<ResumeAgentResult> {
   const startTime = Date.now()
@@ -411,6 +411,7 @@ async function resumeAgentBackgroundLocked(
         parentTranscriptPath,
         parentSessionId,
         sessionStateTracking: runAgentParams.sessionStateTracking,
+        lifecycleOwnership,
       }),
     ),
   )

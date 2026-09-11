@@ -258,7 +258,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
       data: {
         success: true,
         message:
-          'Message queued for delivery to worker-one at its next tool round.',
+          'Message queued for delivery to worker-one in this worker execution.',
       },
     })
     expect(state.tasks['agent-running'].pendingMessages).toMatchObject([
@@ -404,7 +404,7 @@ describe('SendMessageTool durable worker handle fallback', () => {
     const result = await resultPromise
     expect(result.data).toMatchObject({
       success: true,
-      message: 'Message queued for delivery to worker-one at its next tool round.',
+      message: 'Message queued for delivery to worker-one in this worker execution.',
     })
     expect(state.tasks['agent-race'].pendingMessages).toMatchObject([
       { message: 'go deeper', status: 'pending' },

@@ -322,12 +322,13 @@ async function routeToLocalWorker(
       agentId,
       message,
       context.setAppStateForTasks ?? context.setAppState,
+      context.agentId,
     )
     if (queued) {
       return {
         data: {
           success: true,
-          message: `Message queued for delivery to ${displayInput} at its next tool round.`,
+          message: `Message queued for delivery to ${displayInput} in this worker execution.`,
         },
       }
     }
