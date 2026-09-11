@@ -1986,8 +1986,7 @@ export function REPL({
         void copyPlanForResume(log, asSessionId(sessionId));
       }
 
-      // Restore file history and attribution state from the resumed conversation
-      restoreSessionStateFromLog(log, setAppState);
+      // Copy file-history backups before switching the session identity.
       if (log.fileHistorySnapshots) {
         void copyFileHistoryForResume(log);
       }
@@ -2080,6 +2079,9 @@ export function REPL({
         const ws = getCurrentWorktreeSession();
         if (ws) saveWorktreeState(ws);
       }
+
+      // Legacy checkpoint paths must bind to the resumed cwd, not the prior session's.
+      restoreSessionStateFromLog(log, setAppState);
 
       // Persist the current mode so future resumes know what mode this session was in
       if (feature('COORDINATOR_MODE')) {
