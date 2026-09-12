@@ -22,6 +22,8 @@ import {
   createCodexFetch,
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
+import { createCodexCredentialHandle } from './codexCredentialUse.js'
+import type { CodexCredentialLifecycle } from './codexCredentialLifecycle.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -299,15 +301,49 @@ describe('account recovery diagnostics', () => {
     // per-request token carries source: 'pool' — that is what enables HTTP
     // credential-error classification (matching getAnthropicClient()).
     const token = buildCodexToken('account-one')
+    const lifecycle = {
+      read(accountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'credentialed' as const,
+            operationId: 'diagnostic-test',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
     await expect(
-      createCodexFetch(token, undefined, {
+      createCodexFetch(createCodexCredentialHandle({
+        accountId: 'account-one',
+        accessToken: token,
+        refreshToken: 'refresh-account-one',
+        expiresAt: Date.now() + 60 * 60_000,
+        credentialGeneration: 1,
+        credentialSource: 'config',
+      }), undefined, {
         resolveTokensForRequest: async () => ({
           accessToken: token,
           refreshToken: 'refresh-account-one',
           expiresAt: Date.now() + 60 * 60_000,
           accountId: 'account-one',
+          credentialGeneration: 1,
+          credentialSource: 'config',
+          credentialPath: '/test/account-recovery-config.json',
           source: 'pool',
         }),
+        credentialUse: { lifecycle },
       })(
         'https://api.anthropic.com/v1/messages',
         {
