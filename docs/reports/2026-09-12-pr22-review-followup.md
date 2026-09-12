@@ -1,0 +1,76 @@
+# PR #22 review follow-up
+
+The user requested independent GPT-5.6-Sol verification of the seven supplied
+findings, followed by fresh GPT-5.6-Sol fix passes for confirmed defects. This
+follow-up concerns those findings and affected integration paths, not a new
+review of every file in [PR #22](https://github.com/Helpmepeet/cat-code/pull/22).
+
+## Validation before fixes
+
+Verified snapshot: `73c4dad393c31abadc9d75c74c3d44828c40beab`; actual PR base:
+`2453710d1a1d58cb29a0065b10583d35bfeed2bc`. Three Sol verification agents
+executed isolated production-module probes. The orchestrator read their
+evidence and relevant caller, persistence, and cleanup paths and accepted all
+seven findings before production edits. There are two high-severity and five
+medium-severity findings, all with user-visible effects.
+
+Line references in this validation table refer to the reviewed snapshot.
+
+| ID | Severity | Impact | Source | Finding | Verdict |
+|---|---|---|---|---|---|
+| F1 | HIGH / P1 | user-visible | `src/tools/AgentTool/runAgent.ts:202` | A child cwd substitutes an unapproved MCP configuration for an inherited approved server name. | VALID |
+| F2 | HIGH / P1 | user-visible | `src/utils/sessionStorage.ts:4952` | Null-root replacement history after editing the first prompt disappears from cold-resume context. | VALID |
+| F3 | MEDIUM / P2 | user-visible | `src/tools/AgentTool/runAgent.ts:780` | Terminal handoff aborts a borrowed parent controller when the child lacks its own controller. | VALID |
+| F4 | MEDIUM / P2 | user-visible | `src/tools/AgentTool/runAgent.ts:584` | A startup delivery outcome reaches the first resume but is omitted from persistence and the next resume. | VALID |
+| F5 | MEDIUM / P2 | user-visible | `app/renderer/src/composerState.ts:1203` | A known refusal stays hidden behind a later missing reply and cleanup discards the retained input. | VALID |
+| F6 | MEDIUM / P2 | user-visible | `src/utils/statsCache.ts:14` | A version-3 session-day cache overlaps the new event-day pass on upgrade. | VALID |
+| F7 | MEDIUM / P2 | user-visible | `src/utils/stats.ts:583` | Adding daily session fragments overcounts unique sessions and truncates session duration. | VALID |
+
+### Observed effects
+
+- F1: the unapproved fixture stdio server launched; the approved server's marker
+  remained absent. Configuration lookup, connection identity, handshake, and
+  child tool discovery were production code.
+- F2: a separate cold-resume process constructed the real QueryEngine with zero
+  seeded messages instead of the replacement user/assistant pair.
+- F3: synchronous terminal handoff aborted the parent with `terminal_handoff`;
+  the asynchronous owned-controller control left the parent alive.
+- F4: the first resumed request contained the startup outcome and removed its
+  queued record, but stored history and the second request omitted it. An
+  ordinary SendMessage fact survived both resumes.
+- F5: production composer reducers retained a refused text/image submission
+  behind a pending submission, then cleanup removed the hidden copy.
+- F6: an actual cache produced by the PR base reported 1 session, 2 messages,
+  and 200 input tokens. The reviewed head accepted it unchanged and reported
+  2 sessions, 3 messages, and 300 input tokens.
+- F7: a fresh cache reported 2 sessions and zero duration for one two-hour
+  session. Daily rollovers increased the session count from 1 to 2 to 3.
+
+### Verification boundaries
+
+The verification used isolated fixture configuration, harmless local MCP
+servers, scripted model output, and synthetic transcripts. It did not access
+live accounts or launch Electron. F1 traced, rather than executed, the entire
+desktop approval and public AgentTool caller chain. F2 minted the production
+rewind persistence effects without invoking the renderer edit action. F3
+executed the disabled-background caller shape without invoking the public
+environment-controlled caller. F5 executed production reducers and traced App
+wiring without mounting React or disconnecting a real sidecar. These are
+unexercised integration hops, not additional findings.
+
+The legacy analytics cache contains aggregate-only data. It cannot distinguish
+all overlapping available transcript contributions from history whose
+transcripts have aged out. Migration must preserve that durable history and
+state any irreducible legacy attribution limit; a silent cache reset is not an
+acceptable fix.
+
+Local scratch evidence is under
+`tmp/pr22-review-followup-2026-09-12/{engine,restore,analytics}/` and is not
+committed. Exact-base source archives were moved outside the repository to
+avoid duplicate test discovery; their locations and recovery commit are in
+`tmp/pr22-review-followup-2026-09-12/snapshot-locations.json`.
+
+## Fix and integration status
+
+Validation is complete. Fresh Sol implementation passes and final integration
+verification are pending; no follow-up fix is claimed complete in this snapshot.
