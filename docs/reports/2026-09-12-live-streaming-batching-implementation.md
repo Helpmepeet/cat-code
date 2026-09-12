@@ -1,8 +1,10 @@
 # Live streaming batching implementation
 
-Date: 2026-09-12. Status: **implementation and headless correctness complete; production policy remains immediate pending authorized Electron measurement**.
+Date: 2026-09-12. Status: **core implemented and independently reviewed; headless subset passed; production policy remains immediate pending authorized Electron measurement**.
 
 Plan: [Live streaming batching implementation plan](../migration/specs/2026-09-12-live-streaming-batching-plan.md).
+
+Review: [Implementation and measurement preparation review](2026-09-12-live-streaming-batching-implementation-review.md). Measurement fixtures and commands: [Live streaming measurements](2026-09-12-live-streaming-measurements/README.md).
 
 ## Outcome
 
@@ -41,7 +43,7 @@ The required unfiltered `bun test app/` was attempted with an isolated config di
 The implementation does **not** claim lower Electron main+renderer CPU, acceptable actual React commit latency, smooth visual streaming or battery-life improvement. Production stays immediate for that reason.
 
 1. Run the prepared isolated Electron benchmark matrix after per-run authorization. Compare immediate, 8 ms and 16 ms for 1/4/8 sessions and record main+renderer CPU, send/dispatch/commit counts, queue age/bytes, clock uncertainty and actual arrival-to-commit p95/p99. Enable a nonzero production delay only if the fixed CPU and latency bars pass.
-2. Run `bun run --cwd app test:hardening` after per-run authorization. It launches Electron, so it was prepared but not run in this implementation session.
+2. Run `bun run --cwd app test:hardening` after per-run authorization and isolation preparation. It launches the actual production main. The existing runner isolates `CLAUDE_CONFIG_DIR` but still inherits the parent environment and Electron profile defaults; isolate those before describing this as a profile-independent run. It was not run in this implementation session.
 3. Run the fresh GUI acceptance from the plan with isolated temporary config/workspaces: simultaneous streams, typing and scrolling, permission presentation, stop/completion, tab switching, reload, session close and macOS close/reactivation. No provider or GUI run was performed here.
 
 ## Scope flags

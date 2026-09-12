@@ -32,4 +32,29 @@ The live coordinator is created even in the `original` sample but is never calle
 
 ## Real Electron tier
 
-A separate `app/scripts/streaming-benchmark*` harness is being prepared to exercise the coordinator, preload and actual App in isolated temporary state. It must identify its measurement boundary, verify frame-to-committed-state association and clock uncertainty, and preserve the user's app/profile. An Electron run is separately authorized only after the harness/build and exact run matrix are reviewable. No real Electron performance result is claimed by this document.
+The `app/scripts/streaming-benchmark*` harness builds an isolated fixture main, the actual preload, and the actual App with a benchmark-only transform. The transform tracks frames through the raw-log reducer into the exact state observed by a React layout effect. A receipt acknowledgement is recorded separately and is not treated as a commit. Frames that do not change raw-log state are excluded from that latency population and counted separately. The observer does not measure visible paint or all stores' commit latency.
+
+CPU is measured over scored input and bounded completion/acknowledgement drain using cumulative main/renderer process deltas. Bootstrap, expected-state computation and clock calibration are outside that interval. Before/after clock correlation records alignment uncertainty. Instrumentation and completion polling are included in CPU, so results describe this **instrumented delivery pipeline**. They are not whole-application CPU or energy measurements. Engine, supervisor and host workers, production recovery/health timers and operational logging outside delivery tracing are omitted.
+
+Each sample uses its own temporary config, Electron user-data and session-data directories. No engine or provider starts. The renderer/preload/main bundles live in temporary output directories, preserving shared application build outputs. The runner uses an allowlisted child environment, records source and fixture hashes, writes raw samples to the chosen durable directory without overwriting a sample, and cleans up only the process group it created. Other activity on the machine is not automatically detected; record it alongside the results.
+
+These commands run from the repository root. The first prepares and checks the build without launching Electron. The others require authorization for that run:
+
+```sh
+# Build-only preparation; no app launch.
+bun run app/scripts/streaming-benchmark.ts
+
+# First pilot: paced 4-session workload, all four policies, three repetitions.
+# Opens 12 temporary windows sequentially; about one minute of input plus startup.
+bun run app/scripts/streaming-benchmark.ts --run --workload paced-4 --out /tmp/catcode-streaming-electron-pilot-20260912
+
+# Full matrix: six workloads × four policies × three repetitions, rotated policy order.
+# Opens 72 temporary windows sequentially; six minutes of input plus startup.
+bun run app/scripts/streaming-benchmark.ts --run --out /tmp/catcode-streaming-electron-matrix-20260912
+```
+
+Choose a new output directory for each run. A workload has one second of warmup followed by a fresh-document reset and four seconds of scored input. The reload does not preserve the previous renderer document's warmed state; it separates warmup state and counters from scoring. Consequently this short study is not evidence of long-duration steady-state behavior.
+
+For the pilot, verify visible synthetic transcript bootstrap, exact committed frame order/coverage, complete current-document acknowledgements, valid unchanged CPU process membership, clock uncertainty, and confirmed owned-process cleanup before interpreting performance. Compare `original` against `0` to quantify the new coordinator's disabled-path overhead. Compare candidates against both baselines; a coordinator overhead regression cannot be hidden by selecting the weaker baseline. Report raw repetitions and variation, not only an average.
+
+The pilot establishes whether this harness can run and produce credible samples. The full matrix tests the declared performance targets. Production hardening, actual lifecycle/visual acceptance and assessment of instrumentation overhead remain separate before enabling a nonzero policy. No Electron run, CPU saving or battery improvement is claimed by this document.
