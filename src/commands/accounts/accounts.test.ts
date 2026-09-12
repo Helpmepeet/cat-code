@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from '../../services/api/codexUsageSharedCache.js'
 
 import {
   createCodexLeaseForTest,
@@ -67,6 +68,7 @@ function usageResponse(accountId: string, usedPercent: number): Response {
 
 describe('/accounts', () => {
   const realFetch = globalThis.fetch
+  beforeEach(() => setSharedUsageCacheDirectoryForTest(null))
 
   afterEach(() => {
     globalThis.fetch = realFetch
