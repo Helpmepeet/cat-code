@@ -97,9 +97,10 @@ for (const queuedPrompt of [
     },
   ],
 ] as const) {
-for (const force of [false, true]) {
+for (const forceBoundary of ['none', 'preparation', 'delivery'] as const) {
+  const force = forceBoundary !== 'none'
   const promptKind = typeof queuedPrompt === 'string' ? 'text' : 'image'
-  test(`full QueryEngine ${promptKind}: force during attachment snapshot = ${force}`, async () => {
+  test(`full QueryEngine ${promptKind}: force boundary = ${forceBoundary}`, async () => {
     ;(globalThis as any).MACRO = { VERSION: 'fixture-version' }
     const firstRequest = gate()
     const releaseFirst = gate()
@@ -160,8 +161,32 @@ for (const force of [false, true]) {
     const received: any[] = []
     const decoder = new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES)
     server = new SidecarServer({ sessionId: 'fixture-session', engineSessionId: 'fixture-engine', controller, log() {} })
+    let queuedId: string | undefined
+    let deliveryForceSent = false
     const conn = server.addConnection({ write(data) {
-      for (const frame of decoder.push(Buffer.from(data))) if (frame.kind === 'frame') received.push(frame.payload)
+      for (const frame of decoder.push(Buffer.from(data))) {
+        if (frame.kind !== 'frame') continue
+        received.push(frame.payload)
+        if (
+          forceBoundary === 'delivery' &&
+          queuedId &&
+          !deliveryForceSent &&
+          frame.payload.kind === 'event' &&
+          frame.payload.event?.type === 'message' &&
+          (frame.payload.event.message?.uuid === queuedId ||
+            frame.payload.event.message?.attachment?.source_uuid === queuedId)
+        ) {
+          deliveryForceSent = true
+          server!.handleData(
+            conn,
+            encodeFrame({
+              protocolVersion: PROTOCOL_VERSION,
+              sessionId: 'fixture-session',
+              message: { type: 'prompt.force', requestId: 'force', promptId: queuedId },
+            }),
+          )
+        }
+      }
     }, end() {} })
     const send = (message: unknown) => server!.handleData(conn, encodeFrame({ protocolVersion: PROTOCOL_VERSION, sessionId: 'fixture-session', message }))
     send({ type: 'app.submit', requestId: 'first', prompt: 'start' })
@@ -170,22 +195,29 @@ for (const force of [false, true]) {
       `first request did not reach scripted model: ${JSON.stringify(received)}`,
     )
     send({ type: 'app.submit', requestId: 'queued', prompt: queuedPrompt })
-    const queuedId = received.filter(frame => frame.kind === 'queued-prompts.snapshot').at(-1).prompts[0].id
+    queuedId = received.filter(frame => frame.kind === 'queued-prompts.snapshot').at(-1).prompts[0].id
     releaseFirst.release()
     await waitAt(attachmentSnapshot.promise, 'queued preparation did not start')
-    if (force) send({ type: 'prompt.force', requestId: 'force', promptId: queuedId })
+    if (forceBoundary === 'preparation') {
+      send({ type: 'prompt.force', requestId: 'force', promptId: queuedId })
+    }
     attachmentResume.release()
     await waitFor(() => !controller.isTurnActive())
     await new Promise(resolve => setTimeout(resolve, 20))
     const result = received.filter(frame => frame.kind === 'event' && frame.event?.type === 'message' && frame.event.message?.type === 'result').at(-1)?.event.message
-    console.log(JSON.stringify({ layer: 'QueryEngine plus app-session adapters', force, providerCalls, submittedRequests: submitted.length, submitCalls, queuedRemaining: getCommandQueueSnapshot().length, storedQueuedAttachment: engine.getMessages().some((message: any) => message.attachment?.source_uuid === queuedId), resultSubtype: result?.subtype, resultStopReason: result?.stop_reason }))
+    console.log(JSON.stringify({ layer: 'QueryEngine plus app-session adapters', force, forceBoundary, deliveryForceSent, forceResult: received.find(frame => frame.kind === 'prompt-force.result'), providerCalls, submittedRequests: submitted.length, submitCalls, queuedRemaining: getCommandQueueSnapshot().length, storedQueuedAttachment: engine.getMessages().some((message: any) => message.attachment?.source_uuid === queuedId), resultSubtype: result?.subtype, resultStopReason: result?.stop_reason }))
     expect(submitCalls).toEqual(
-      force ? ['start', queuedPrompt] : ['start'],
+      forceBoundary === 'preparation' ? ['start', queuedPrompt] : ['start'],
     )
     expect(submitted).toHaveLength(2)
     expect(getCommandQueueSnapshot()).toHaveLength(0)
     if (force) {
-      expect(received.find(frame => frame.kind === 'prompt-force.result')?.ok).toBe(true)
+      if (forceBoundary === 'delivery') {
+        expect(deliveryForceSent).toBe(true)
+        expect(received.find(frame => frame.kind === 'prompt-force.result')?.ok).toBe(false)
+      } else {
+        expect(received.find(frame => frame.kind === 'prompt-force.result')?.ok).toBe(true)
+      }
       expect(JSON.stringify(submitted[1])).toContain(
         typeof queuedPrompt === 'string' ? queuedPrompt : 'MUST HANDLE IMAGE',
       )
