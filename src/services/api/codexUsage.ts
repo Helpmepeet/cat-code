@@ -564,8 +564,8 @@ export function sortPoolUsageDisplayAccounts(
  *
  *             used                           resets
  * ● main
- *   primary    12%   ████░░░░░░░░░░░░░░░░    38m
- *   secondary   5%   ░░░░░░░░░░░░░░░░░░░░    4d 3h
+ *   5h          12%   ████░░░░░░░░░░░░░░░░    38m
+ *   7d           5%   ░░░░░░░░░░░░░░░░░░░░    4d 3h
  */
 export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   const { accounts: poolAccounts, activeIndex } = getPoolStatus()
@@ -601,11 +601,11 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
       // the action.
       lines.push('  upgrade to a paid plan to use Codex')
     } else if (account.usage) {
-      lines.push(usageRow('primary', account.usage.primaryWindow))
+      lines.push(usageRow('5h', account.usage.primaryWindow))
       // Free/odd-shaped plans omit the secondary window; don't render a fake
-      // "secondary 0% resets now" placeholder for it.
+      // "7d 0% resets now" placeholder for it.
       if (account.usage.hasSecondaryWindow !== false) {
-        lines.push(usageRow('secondary', account.usage.secondaryWindow))
+        lines.push(usageRow('7d', account.usage.secondaryWindow))
       }
     } else {
       lines.push(usageUnavailableRow(account.error))

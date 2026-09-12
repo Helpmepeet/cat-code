@@ -370,6 +370,54 @@ describe('codexUsage display helpers', () => {
     expect(account?.usageSecondaryWindowSeconds).toBe(604_800)
   })
 
+  test('routing hints preserve a weekly-only primary window without inventing a secondary', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'weekly-only',
+      accounts: [
+        buildPoolAccount({ accountId: 'weekly-only', alias: 'weekly' }),
+      ],
+    })
+
+    const resetAt = Math.floor(Date.now() / 1000) + 86_400
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'weekly@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 37,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 86_400,
+              reset_at: resetAt,
+            },
+            secondary_window: null,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const account = getPoolStatus().accounts.find(
+      candidate => candidate.accountId === 'weekly-only',
+    )
+    expect(account?.usagePrimary).toBe(37)
+    expect(account?.usageResetAt).toBe(resetAt)
+    expect(account?.usagePrimaryWindowSeconds).toBe(604_800)
+    expect(account?.usageSecondaryWindowSeconds).toBeUndefined()
+  })
+
   test('fetchPoolUsage parses a free/capped account with a null secondary window', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'main-account',
@@ -1698,7 +1746,7 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('● leased  [Ready]')
   })
 
-  test('formatPoolUsage omits the secondary row when the secondary window is absent', () => {
+  test('formatPoolUsage omits the weekly row when the secondary window is absent', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'free-account',
       accounts: [buildPoolAccount({ accountId: 'free-account', alias: 'hiby' })],
@@ -1716,8 +1764,8 @@ describe('codexUsage display helpers', () => {
       errors: [],
     })
 
-    expect(output).toContain('primary')
-    expect(output).not.toContain('secondary')
+    expect(output).toContain('5h')
+    expect(output).not.toContain('7d')
   })
 
   test('formatPoolUsage shows no Codex access for a free plan instead of usage bars', () => {
@@ -1742,12 +1790,12 @@ describe('codexUsage display helpers', () => {
     expect(output).toContain('[free — no Codex access]')
     expect(output).toContain('upgrade to a paid plan to use Codex')
     // No usage bars or reset timers for a plan that has no quota.
-    expect(output).not.toContain('primary')
-    expect(output).not.toContain('secondary')
+    expect(output).not.toContain('5h')
+    expect(output).not.toContain('7d')
     expect(output).not.toContain('Limit reached')
   })
 
-  test('formatPoolUsage keeps the secondary row when the secondary window is present', () => {
+  test('formatPoolUsage keeps the weekly row when the secondary window is present', () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'paid-account',
       accounts: [buildPoolAccount({ accountId: 'paid-account', alias: 'main' })],
@@ -1759,8 +1807,8 @@ describe('codexUsage display helpers', () => {
       errors: [],
     })
 
-    expect(output).toContain('primary')
-    expect(output).toContain('secondary')
+    expect(output).toContain('5h')
+    expect(output).toContain('7d')
   })
 
   test('formatPoolUsage shows shared availability status even when live usage is available', () => {
