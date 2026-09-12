@@ -437,6 +437,8 @@ function OverviewTab({
       {/* Date range selector */}
       <DateRangeSelector dateRange={dateRange} isLoading={isLoading} />
 
+      {dateRange === 'all' && stats.dataQualityNotice && <Box marginBottom={1}><Text color="warning">Estimated: {stats.dataQualityNotice}</Text></Box>}
+
       {/* Section 1: Usage */}
       <Box flexDirection="row" gap={4} marginBottom={1}>
         <Box flexDirection="column" width={28}>

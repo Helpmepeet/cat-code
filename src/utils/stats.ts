@@ -84,6 +84,7 @@ export type ClaudeCodeStats = {
   // Shot stats (ant-only, gated by SHOT_STATS feature flag)
   shotDistribution?: { [shotCount: number]: number }
   oneShotRate?: number
+  dataQualityNotice?: string
 }
 
 /**
@@ -580,14 +581,36 @@ function cacheToStats(
     .sort((a, b) => a.date.localeCompare(b.date))
 
   // Compute session aggregates: combine cache aggregates with today's stats
-  const totalSessions =
-    cache.totalSessions + (todayStats?.sessionStats.length || 0)
+  const sessionIndex = { ...cache.sessionIndex }
+  let liveNewSessions = 0
+  if (todayStats) {
+    for (const session of todayStats.sessionStats) {
+      const previous = sessionIndex[session.sessionId]
+      if (!previous) {
+        sessionIndex[session.sessionId] = session
+        liveNewSessions++
+      } else {
+        const start = previous.timestamp < session.timestamp ? previous.timestamp : session.timestamp
+        const end = Math.max(
+          new Date(previous.timestamp).getTime() + previous.duration,
+          new Date(session.timestamp).getTime() + session.duration,
+        )
+        sessionIndex[session.sessionId] = {
+          sessionId: session.sessionId,
+          timestamp: start,
+          duration: end - new Date(start).getTime(),
+          messageCount: previous.messageCount + session.messageCount,
+        }
+      }
+    }
+  }
+  const totalSessions = cache.totalSessions + liveNewSessions
   const totalMessages = cache.totalMessages + (todayStats?.totalMessages || 0)
 
   // Find longest session (compare cache's longest with today's sessions)
   let longestSession = cache.longestSession
   if (todayStats) {
-    for (const session of todayStats.sessionStats) {
+    for (const session of Object.values(sessionIndex)) {
       if (!longestSession || session.duration > longestSession.duration) {
         longestSession = session
       }
@@ -654,6 +677,9 @@ function cacheToStats(
     peakActivityDay,
     peakActivityHour,
     totalSpeculationTimeSavedMs,
+    ...(cache.legacyMigration
+      ? { dataQualityNotice: cache.legacyMigration.notice }
+      : {}),
   }
 
   if (feature('SHOT_STATS')) {
@@ -689,10 +715,6 @@ function cacheToStats(
 export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   const allSessionFiles = await getAllSessionFiles()
 
-  if (allSessionFiles.length === 0) {
-    return getEmptyStats()
-  }
-
   // Use lock to prevent race conditions with background cache updates
   const updatedCache = await withStatsCacheLock(async () => {
     // Load the cache
@@ -702,9 +724,44 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     // Determine what needs to be processed
     // - If no cache: process everything up to yesterday, then today separately
     // - If cache exists: process from day after lastComputedDate to yesterday, then today
-    let result = cache
+    const retainedSessionIds = new Set(
+      allSessionFiles
+        .filter(file => !file.includes(`${sep}subagents${sep}`))
+        .map(file => basename(file, '.jsonl')),
+    )
+    const retainedSessionIndex = Object.fromEntries(
+      Object.entries(cache.sessionIndex).filter(([sessionId]) =>
+        retainedSessionIds.has(sessionId),
+      ),
+    )
+    let result =
+      Object.keys(retainedSessionIndex).length ===
+      Object.keys(cache.sessionIndex).length
+        ? cache
+        : { ...cache, sessionIndex: retainedSessionIndex }
+    if (result !== cache) await saveStatsCache(result)
 
-    if (!cache.lastComputedDate) {
+    // A v1-v3 cache has durable aggregate history but no identities. Preserve
+    // its totals exactly and seed identity/span metadata from retained files;
+    // their events are not added again on the migration day.
+    if (cache.legacyMigration && Object.keys(result.sessionIndex).length === 0) {
+      const retained = await processSessionFiles(allSessionFiles)
+      result = {
+        ...cache,
+        lastComputedDate: cache.legacyMigration.ignoreThroughDate,
+        sessionIndex: Object.fromEntries(
+          retained.sessionStats.map(session => [session.sessionId, session]),
+        ),
+      }
+      await saveStatsCache(result)
+    }
+
+    if (
+      result.legacyMigration &&
+      !isDateBefore(result.legacyMigration.ignoreThroughDate, getTodayDateString())
+    ) {
+      // The legacy snapshot remains authoritative through its migration day.
+    } else if (!result.lastComputedDate) {
       // No cache - process all historical data (everything before today)
       logForDebugging('Stats cache empty, processing all historical data')
       const historicalStats = await processSessionFiles(allSessionFiles, {
@@ -715,15 +772,15 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
         historicalStats.sessionStats.length > 0 ||
         historicalStats.dailyActivity.length > 0
       ) {
-        result = mergeCacheWithNewStats(cache, historicalStats, yesterday)
+        result = mergeCacheWithNewStats(result, historicalStats, yesterday)
         await saveStatsCache(result)
       }
-    } else if (isDateBefore(cache.lastComputedDate, yesterday)) {
+    } else if (isDateBefore(result.lastComputedDate, yesterday)) {
       // Cache is stale - process new days
       // Process from day after lastComputedDate to yesterday
-      const nextDay = getNextDay(cache.lastComputedDate)
+      const nextDay = getNextDay(result.lastComputedDate)
       logForDebugging(
-        `Stats cache stale (${cache.lastComputedDate}), processing ${nextDay} to ${yesterday}`,
+        `Stats cache stale (${result.lastComputedDate}), processing ${nextDay} to ${yesterday}`,
       )
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
@@ -734,11 +791,11 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
         newStats.sessionStats.length > 0 ||
         newStats.dailyActivity.length > 0
       ) {
-        result = mergeCacheWithNewStats(cache, newStats, yesterday)
+        result = mergeCacheWithNewStats(result, newStats, yesterday)
         await saveStatsCache(result)
       } else {
         // No new data, but update lastComputedDate
-        result = { ...cache, lastComputedDate: yesterday }
+        result = { ...result, lastComputedDate: yesterday }
         await saveStatsCache(result)
       }
     }
@@ -749,10 +806,14 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   // Always process today's data live (it's incomplete)
   // This doesn't need to be in the lock since it doesn't modify the cache
   const today = getTodayDateString()
-  const todayStats = await processSessionFiles(allSessionFiles, {
-    fromDate: today,
-    toDate: today,
-  })
+  const todayStats =
+    updatedCache.legacyMigration &&
+    !isDateBefore(updatedCache.legacyMigration.ignoreThroughDate, today)
+      ? undefined
+      : await processSessionFiles(allSessionFiles, {
+          fromDate: today,
+          toDate: today,
+        })
 
   // Combine cache with today's stats
   return cacheToStats(updatedCache, todayStats)
