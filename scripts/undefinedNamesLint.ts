@@ -20,6 +20,21 @@ export type UndefinedName = {
 }
 
 const DIAGNOSTIC = /^(.+?)\((\d+),(\d+)\): error TS(?:2304|2503): Cannot find (?:name|namespace) '([^']+)'/
+const SOURCE_DIAGNOSTIC = /^(.+)\(\d+,\d+\): error TS\d+:/
+
+function isSourceDiagnosticOutput(output: string): boolean {
+  let inDiagnostic = false
+  return output.split(/\r?\n/).every(line => {
+    if (!line.trim()) return true
+    const diagnostic = line.match(SOURCE_DIAGNOSTIC)
+    if (diagnostic) {
+      if (diagnostic[1]!.endsWith('.json')) return false
+      inDiagnostic = true
+      return true
+    }
+    return inDiagnostic && /^[ \t]/.test(line)
+  })
+}
 
 export function parseUndefinedNames(tscOutput: string): UndefinedName[] {
   const found: UndefinedName[] = []
@@ -48,7 +63,8 @@ if (import.meta.main) {
   const checkerFailed =
     tsc.error ||
     tsc.signal ||
-    /^error TS\d+:/m.test(output) ||
+    !isSourceDiagnosticOutput(tsc.stdout ?? '') ||
+    !isSourceDiagnosticOutput(tsc.stderr ?? '') ||
     (tsc.status !== 0 &&
       ((tsc.status !== 1 && tsc.status !== 2) ||
         !/^.+\(\d+,\d+\): error TS\d+:/m.test(output)))

@@ -41,6 +41,7 @@ describe('undefined-name lint command', () => {
     for (const checker of [
       { status: 0 },
       { status: 2, stdout: "src/example.ts(1,1): error TS2345: Argument of type 'x' is not assignable to parameter of type 'y'.\n" },
+      { status: 1, stdout: "src/example.ts(1,1): error TS2322: Type 'x' is not assignable.\n  Types of property 'value' are incompatible.\n    Type 'string' is not assignable to type 'number'.\n" },
     ]) {
       const result = runLint(checker)
       expect(result.status).toBe(0)
@@ -55,16 +56,34 @@ describe('undefined-name lint command', () => {
   })
 
   test('fails on checker configuration errors', () => {
-    const result = runLint({ status: 1, stdout: "error TS5058: The specified path does not exist: 'tsconfig.json'.\n" })
-    expect(result.status).not.toBe(0)
-    expect(result.output).toContain('TS5058')
-    expect(result.output).not.toContain('undefined-name lint passed')
+    for (const stdout of [
+      "error TS5058: The specified path does not exist: 'tsconfig.json'.\n",
+      "tsconfig.json(2,1): error TS1005: '}' expected.\n",
+    ]) {
+      const result = runLint({ status: 1, stdout })
+      expect(result.status).not.toBe(0)
+      expect(result.output).toContain(stdout.trim())
+      expect(result.output).not.toContain('undefined-name lint passed')
+    }
   })
 
   test('does not treat a crash after source diagnostics as a completed check', () => {
     const result = runLint({ status: 137, stdout: 'src/example.ts(1,1): error TS2345: Invalid argument.\n' })
     expect(result.status).not.toBe(0)
     expect(result.output).not.toContain('undefined-name lint passed')
+  })
+
+  test('rejects infrastructure output even after valid source diagnostics', () => {
+    const diagnostic = 'src/example.ts(1,1): error TS2345: Invalid argument.\n'
+    for (const checker of [
+      { status: 1, stdout: diagnostic, stderr: 'TypeError: checker crashed\n    at checker.ts:1:1\n' },
+      { status: 1, stdout: `${diagnostic}TypeError: checker crashed\n    at checker.ts:1:1\n` },
+    ]) {
+      const result = runLint(checker)
+      expect(result.status).not.toBe(0)
+      expect(result.output).toContain('TypeError: checker crashed')
+      expect(result.output).not.toContain('undefined-name lint passed')
+    }
   })
 
   test('fails on undefined names reported through stderr', () => {
