@@ -231,7 +231,7 @@ describe('policy core coverage across provider and mode variants', () => {
   })
 })
 
-describe('retry budgets by mode', () => {
+describe('failure-handling guidance by mode', () => {
   afterEach(() => {
     clearSystemPromptSections()
   })
@@ -240,17 +240,17 @@ describe('retry budgets by mode', () => {
     ['Claude', CLAUDE_MODEL],
     ['GPT', GPT_MODEL],
   ] as const)(
-    'normal %s work requires a materially different retry and stops after three attempts',
+    'normal %s work allows useful corrections and reconsiders attempts without progress',
     async (_label, model) => {
       const prompt = await withPromptEnv(async () =>
         (await getSystemPrompt(TOOLS, model)).join('\n'),
       )
 
       expect(prompt).toContain(RETRY_RULE)
-      expect(prompt).toContain(
-        'Each retry must use a materially different strategy',
-      )
-      expect(prompt).toContain('After three failed attempts on the same problem')
+      expect(prompt).toContain('Continue with focused corrections while they produce new evidence or progress')
+      expect(prompt).toContain('If repeated attempts stop producing new evidence or progress, reconsider the approach or report the blocker')
+      expect(prompt).not.toContain('Each retry must use a materially different strategy')
+      expect(prompt).not.toContain('After three failed attempts on the same problem')
     },
   )
 
