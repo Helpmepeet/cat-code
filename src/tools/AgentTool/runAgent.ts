@@ -378,6 +378,8 @@ async function* runAgentInCleanupScope({
   mcpRuntimeInputs,
   mcpRuntimeSnapshot,
   worktreePath,
+  cwd,
+  seededMessagesForPersistence,
   description,
   agentName,
   transcriptSubdir,
@@ -454,9 +456,14 @@ async function* runAgentInCleanupScope({
    * snapshot itself; with no live MCP source at all, the parent's static
    * options are used as before. */
   mcpRuntimeSnapshot?: McpRuntimeSnapshot
+  /** Explicit cwd override. Persisted to metadata for resume restoration. */
+  cwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
+  /** Seeded messages already present in transcript persistence, used to avoid
+   * duplicate sidechain writes when resuming. */
+  seededMessagesForPersistence?: Message[]
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
@@ -561,6 +568,30 @@ async function* runAgentInCleanupScope({
     ? filterIncompleteToolCalls(forkContextMessages)
     : []
   const initialMessages: Message[] = [...contextMessages, ...promptMessages]
+  const seededMessageUuids = new Set(
+    (seededMessagesForPersistence ?? []).map(message => message.uuid),
+  )
+  const findLastChainParticipantUuid = (
+    messages: Message[],
+  ): UUID | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message?.type !== 'progress') {
+        return message.uuid
+      }
+    }
+    return null
+  }
+  const seededChainTailUuid =
+    seededMessageUuids.size > 0
+      ? findLastChainParticipantUuid(seededMessagesForPersistence)
+      : null
+  const persistedInitialMessages =
+    seededMessageUuids.size > 0
+      ? initialMessages.filter(
+          message => !seededMessageUuids.has(message.uuid),
+        )
+      : initialMessages
 
   const agentReadFileState =
     forkContextMessages !== undefined
@@ -1030,12 +1061,17 @@ async function* runAgentInCleanupScope({
   // Record initial messages before the query loop starts, plus the agentType
   // so resume can route correctly when subagent_type is omitted. Both writes
   // are fire-and-forget — persistence failure shouldn't block the agent.
-  void recordSidechainTranscript(initialMessages, agentId).catch(_err =>
+  void recordSidechainTranscript(
+    persistedInitialMessages,
+    agentId,
+    seededMessageUuids.size > 0 ? seededChainTailUuid : undefined,
+  ).catch(_err =>
     logForDebugging(`Failed to record sidechain transcript: ${_err}`),
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
     ...(workerName && { agentName: workerName }),
+    ...(cwd && { assignedCwd: cwd }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     parentSessionId: getSessionId(),
@@ -1062,7 +1098,14 @@ async function* runAgentInCleanupScope({
   }
 
   // Track the last recorded message UUID for parent chain continuity
-  let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
+  let lastRecordedUuid: UUID | null = findLastChainParticipantUuid(
+    persistedInitialMessages,
+  )
+  if (lastRecordedUuid === null) {
+    lastRecordedUuid =
+      seededChainTailUuid ??
+      findLastChainParticipantUuid(initialMessages)
+  }
 
   // Escalation is terminal, and the harness is what makes it so. There is no
   // reply channel into a running worker, so the only thing a worker could do

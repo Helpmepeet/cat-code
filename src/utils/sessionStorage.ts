@@ -402,6 +402,9 @@ export type AgentMetadata = {
   agentType: string
   /** Friendly system/user-facing name for targeting this subagent. */
   agentName?: string
+  /** Explicit cwd override assigned by AgentTool call (mutually exclusive with
+   * worktree isolation). */
+  assignedCwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -422,8 +425,9 @@ export type AgentMetadata = {
  * a fork silently degrades to general-purpose (4KB system prompt, no
  * inherited history). Sidecar file avoids JSONL schema changes.
  *
- * Also stores the worktreePath when the agent was spawned with worktree
- * isolation, enabling resume to restore the correct cwd.
+ * Also stores an explicit assignedCwd (when provided), and the worktreePath
+ * when the agent was spawned with worktree isolation, enabling resume to
+ * restore the correct cwd.
  */
 export async function writeAgentMetadata(
   agentId: AgentId,

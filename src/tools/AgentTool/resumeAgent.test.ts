@@ -24,6 +24,7 @@ import {
   getEmptyToolPermissionContext,
   type ToolUseContext,
 } from '../../Tool.js'
+import * as runAgentModule from './runAgent.js'
 import {
   getAgentTranscriptPath,
   getTranscriptPath,
@@ -317,6 +318,162 @@ describe('resumeAgentBackground', () => {
       process.off('unhandledRejection', onUnhandledRejection)
     }
   })
+
+  test('fails resume when the recorded worktree no longer exists', async () => {
+    const missingWorktree = join(tempDir, 'missing-worktree')
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: missingWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toThrow(
+      `Cannot resume agent agent-resume: recorded worktree ${missingWorktree} no longer exists.`,
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('fails resume when assigned cwd exists but the recorded worktree was removed', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    const removedWorktree = join(tempDir, 'missing-worktree')
+    await mkdir(resumedCwd, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: removedWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).rejects.toThrow(
+      `Cannot resume agent agent-resume: recorded worktree ${removedWorktree} no longer exists.`,
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('rejects resume when both assignedCwd and worktreePath are present', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    const resumedWorktree = join(tempDir, 'worktree')
+    await mkdir(resumedCwd, { recursive: true })
+    await mkdir(resumedWorktree, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      assignedCwd: resumedCwd,
+      worktreePath: resumedWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).rejects.toThrow(
+      'Cannot resume agent agent-resume: recorded metadata includes both assignedCwd and worktreePath.',
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('passes explicitly recorded cwd metadata when no worktree is recorded', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    await mkdir(resumedCwd, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      assignedCwd: resumedCwd,
+    })
+
+    let capturedRunAgentParams:
+      | Parameters<typeof runAgentModule.runAgent>[0]
+      | undefined
+    const runAgentSpy = spyOn(runAgentModule, 'runAgent').mockImplementation(
+      mock((params => {
+        capturedRunAgentParams = params
+        return (async function* () {
+          return
+        })()
+      }) as never),
+    )
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream()
+        await stream.next()
+      }) as never,
+    )
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+    expect(capturedRunAgentParams?.cwd).toBe(resumedCwd)
+    expect(capturedRunAgentParams?.worktreePath).toBeUndefined()
+
+    runAgentSpy.mockRestore()
+  })
+
+  test('passes worktree metadata when no cwd is recorded', async () => {
+    const resumedWorktree = join(tempDir, 'worktree')
+    await mkdir(resumedWorktree, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: resumedWorktree,
+    })
+
+    let capturedRunAgentParams:
+      | Parameters<typeof runAgentModule.runAgent>[0]
+      | undefined
+    const runAgentSpy = spyOn(runAgentModule, 'runAgent').mockImplementation(
+      mock((params => {
+        capturedRunAgentParams = params
+        return (async function* () {
+          return
+        })()
+      }) as never),
+    )
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream()
+        await stream.next()
+      }) as never,
+    )
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+    expect(capturedRunAgentParams?.cwd).toBeUndefined()
+    expect(capturedRunAgentParams?.worktreePath).toBe(resumedWorktree)
+
+    runAgentSpy.mockRestore()
+  })
 })
 
 async function writeAgentTranscript(agentId: string): Promise<void> {
@@ -341,11 +498,20 @@ async function writeAgentTranscript(agentId: string): Promise<void> {
   )
 }
 
-function createToolUseContext() {
+function createToolUseContext(additionalWorkingDirectories: string[] = []) {
   let state = {
     toolPermissionContext: {
       ...getEmptyToolPermissionContext(),
       mode: 'acceptEdits',
+      additionalWorkingDirectories: new Map(
+        additionalWorkingDirectories.map(dir => [
+          dir,
+          {
+            path: dir,
+            source: 'session',
+          },
+        ]),
+      ),
     },
     mcp: { tools: [] },
     tasks: {},

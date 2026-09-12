@@ -1,4 +1,6 @@
 import { feature } from 'bun:bundle';
+import { promises as fsp } from 'fs';
+import { isAbsolute, resolve } from 'path';
 import * as React from 'react';
 import { buildTool, type McpRuntimeSnapshot, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
 import type { Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
@@ -36,6 +38,7 @@ import { lazySchema } from '../../utils/lazySchema.js';
 import { createUserMessage, extractTextContent, isSyntheticMessage, normalizeMessages } from '../../utils/messages.js';
 import { getAgentModel } from '../../utils/model/agent.js';
 import type { EffortLevel } from '../../utils/effort.js';
+import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js';
 import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
@@ -541,9 +544,7 @@ const fullInputSchema = lazySchema(() => {
 // type, but call() destructures via the explicit AgentToolInput type below
 // which always includes all optional fields.
 export const inputSchema = lazySchema(() => {
-  let schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
-    cwd: true
-  });
+  let schema = fullInputSchema();
 
   // The multi-agent params (name/team_name/mode) only do anything in the
   // agent-teams/swarm spawn path: `name` is the teammate's required roster
@@ -989,6 +990,32 @@ export const AgentTool = buildTool({
         data: Output;
       };
     }
+
+    let validatedCwd: string | undefined = cwd
+    if (validatedCwd !== undefined) {
+      if (effectiveIsolation === 'worktree') {
+        throw new Error(
+          'Cannot set a custom cwd with worktree isolation.',
+        )
+      }
+      if (!isAbsolute(validatedCwd)) {
+        throw new Error('Custom cwd must be an absolute path.')
+      }
+      const resolvedCwd = resolve(validatedCwd)
+      const stat = await fsp.stat(resolvedCwd).catch(() => {
+        throw new Error(`Cannot use cwd ${resolvedCwd}: directory does not exist.`)
+      })
+      if (!stat.isDirectory()) {
+        throw new Error(`Cannot use cwd ${resolvedCwd}: not a directory.`)
+      }
+      if (!pathInAllowedWorkingPath(resolvedCwd, appState.toolPermissionContext)) {
+        throw new Error(
+          `Cannot use cwd ${resolvedCwd}: it is outside allowed working directories.`,
+        )
+      }
+      validatedCwd = resolvedCwd
+    }
+
     // System prompt + prompt messages: branch on fork path.
     //
     // Fork path: child inherits the PARENT's system prompt (not FORK_AGENT's)
@@ -1175,7 +1202,7 @@ export const AgentTool = buildTool({
       // returns the override path.
       override: isForkPath ? {
         systemPrompt: forkParentSystemPrompt
-      } : enhancedSystemPrompt && !worktreeInfo && !cwd ? {
+      } : enhancedSystemPrompt && !worktreeInfo && !validatedCwd ? {
         systemPrompt: asSystemPrompt(enhancedSystemPrompt)
       } : undefined,
       availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
@@ -1195,6 +1222,7 @@ export const AgentTool = buildTool({
       ...(isForkPath && {
         useExactTools: true
       }),
+      cwd: validatedCwd,
       worktreePath: worktreeInfo?.worktreePath,
       description,
       agentName,
@@ -1244,9 +1272,9 @@ export const AgentTool = buildTool({
       });
     }
 
-    // Helper to wrap execution with a cwd override: explicit cwd arg (KAIROS)
-    // takes precedence over worktree isolation path.
-    const cwdOverridePath = cwd ?? worktreeInfo?.worktreePath;
+    // Helper to wrap execution with the selected cwd override path.
+    // Explicit cwd takes precedence over worktree isolation.
+    const cwdOverridePath = validatedCwd ?? worktreeInfo?.worktreePath;
     const wrapWithCwd = <T,>(fn: () => T): T => cwdOverridePath ? runWithCwdOverride(cwdOverridePath, fn) : fn();
 
     // Helper to clean up worktree after agent completes

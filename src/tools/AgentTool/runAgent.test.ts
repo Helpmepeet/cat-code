@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { rm } from 'fs/promises'
+import { readFile, rm } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -70,10 +70,15 @@ const {
   clearSessionMessagesCache,
   flushSessionStorage,
   getAgentTranscript,
+  getAgentTranscriptPath,
   recordSidechainTranscript: recordSidechainTranscriptImpl,
   resetProjectForTesting,
 } = realSessionStorageModule
-let recordSidechainCalls: Array<{ messages: Message[]; agentId?: string }> = []
+let recordSidechainCalls: Array<{
+  messages: Message[]
+  agentId?: string
+  startingParentUuid?: string | null
+}> = []
 mock.module('../../utils/sessionStorage.js', () => ({
   ...realSessionStorageModule,
   recordSidechainTranscript: async (
@@ -81,7 +86,11 @@ mock.module('../../utils/sessionStorage.js', () => ({
     agentId?: string,
     startingParentUuid?: unknown,
   ) => {
-    recordSidechainCalls.push({ messages, agentId })
+    recordSidechainCalls.push({
+      messages,
+      agentId,
+      startingParentUuid: startingParentUuid as string | null | undefined,
+    })
     return recordSidechainTranscriptImpl(
       messages,
       agentId,
@@ -836,6 +845,232 @@ describe('runAgent coordinator-message sidechain recording', () => {
     } finally {
       clearSessionMessagesCache()
       resetProjectForTesting()
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousPersistence === undefined) {
+        delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      } else {
+        process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousPersistence
+      }
+      await rm(configDir, { recursive: true, force: true }).catch(() => {})
+      await rm(sessionDir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+})
+
+describe('runAgent resume continuation continuity', () => {
+  let tempDir: string
+
+  beforeEach(() => {
+    resetStateForTests()
+    resetWorkerNamesForTests()
+    tempDir = mkdtempSync(join(tmpdir(), 'run-agent-resume-'))
+    switchSession(asSessionId('session-run-agent-resume'), tempDir)
+  })
+
+  afterEach(() => {
+    resetWorkerNamesForTests()
+    resetStateForTests()
+  })
+
+  function callForAgent(agentId: string, index: number) {
+    return recordSidechainCalls.filter(call => call.agentId === agentId)[index]
+  }
+
+  test('links new resume instruction to the seeded tail', async () => {
+    const agentId = createAgentId('resume-continuity')
+    const seededA = createUserMessage({ content: 'resumed seed A' })
+    const seededB = createUserMessage({ content: 'resumed seed B' })
+    const resumeInstruction = createUserMessage({ content: 'continue from here' })
+    recordSidechainCalls = []
+    queryScript = async function* () {
+      yield createAssistantMessage({ content: 'working' })
+    }
+
+    for await (const _message of startAgent(createAppStateHarness(), {
+      promptMessages: [seededA, seededB, resumeInstruction],
+      seededMessagesForPersistence: [seededA, seededB],
+      override: {
+        systemPrompt: ['fixture prompt'] as never,
+        userContext: {},
+        systemContext: {},
+        agentId,
+      },
+    })) {
+      // drain
+    }
+
+    const persistedReplay = callForAgent(agentId, 0)
+    expect(persistedReplay).toBeDefined()
+    expect(persistedReplay?.messages).toEqual([resumeInstruction])
+    expect(persistedReplay?.startingParentUuid).toBe(seededB.uuid)
+
+    const continuationReplay = callForAgent(agentId, 1)
+    expect(continuationReplay?.startingParentUuid).toBe(resumeInstruction.uuid)
+  })
+
+  test('falls back to the seeded tail only when no new persisted initial message exists', async () => {
+    const agentId = createAgentId('resume-empty-initial')
+    const seededA = createUserMessage({ content: 'resumed seed A' })
+    const seededB = createUserMessage({ content: 'resumed seed B' })
+    recordSidechainCalls = []
+    queryScript = async function* () {
+      yield createAssistantMessage({ content: 'working' })
+    }
+
+    for await (const _message of startAgent(createAppStateHarness(), {
+      promptMessages: [seededA, seededB],
+      seededMessagesForPersistence: [seededA, seededB],
+      override: {
+        systemPrompt: ['fixture prompt'] as never,
+        userContext: {},
+        systemContext: {},
+        agentId,
+      },
+    })) {
+      // drain
+    }
+
+    const persistedReplay = callForAgent(agentId, 0)
+    expect(persistedReplay?.messages).toHaveLength(0)
+    expect(persistedReplay?.startingParentUuid).toBe(seededB.uuid)
+
+    const continuationReplay = callForAgent(agentId, 1)
+    expect(continuationReplay?.startingParentUuid).toBe(seededB.uuid)
+  })
+
+  test('persists same-destination resume continuations once and keeps their chain reachable', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'run-agent-resume-cfg-'))
+    const sessionDir = mkdtempSync(join(tmpdir(), 'run-agent-resume-session-'))
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    const agentId = createAgentId('durable-resume-continuity')
+    const seededA = createUserMessage({ content: 'historical seed A' })
+    const seededB = createUserMessage({ content: 'historical seed B' })
+    const firstAssistant = createAssistantMessage({ content: 'first output' })
+    const resumeInstruction = createUserMessage({ content: 'resume instruction' })
+    const resumedAssistant = createAssistantMessage({
+      content: 'resumed output',
+    })
+    const secondInstruction = createUserMessage({
+      content: 'second continuation',
+    })
+    const secondAssistant = createAssistantMessage({
+      content: 'second output',
+    })
+    const queryOutputs = [firstAssistant, resumedAssistant, secondAssistant]
+    let queryOutputIndex = 0
+
+    const run = async (
+      promptMessages: Message[],
+      seededMessagesForPersistence?: Message[],
+    ) => {
+      queryScript = async function* () {
+        yield queryOutputs[queryOutputIndex++]!
+      }
+      for await (const _message of startAgent(createAppStateHarness(), {
+        promptMessages,
+        seededMessagesForPersistence,
+        override: {
+          systemPrompt: ['fixture prompt'] as never,
+          userContext: {},
+          systemContext: {},
+          agentId,
+        },
+      })) {
+        // drain
+      }
+      await flushSessionStorage()
+      clearSessionMessagesCache()
+      return (await getAgentTranscript(agentId))!
+    }
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), sessionDir)
+      clearSessionMessagesCache()
+      recordSidechainCalls = []
+
+      const firstTranscript = await run([seededA, seededB])
+      expect(firstTranscript.messages.map(message => message.uuid)).toEqual([
+        seededA.uuid,
+        seededB.uuid,
+        firstAssistant.uuid,
+      ])
+
+      const resumeTranscript = await run(
+        [...firstTranscript.messages, resumeInstruction],
+        firstTranscript.messages,
+      )
+      expect(resumeTranscript.messages.map(message => message.uuid)).toEqual([
+        seededA.uuid,
+        seededB.uuid,
+        firstAssistant.uuid,
+        resumeInstruction.uuid,
+        resumedAssistant.uuid,
+      ])
+
+      const secondTranscript = await run(
+        [...resumeTranscript.messages, secondInstruction],
+        resumeTranscript.messages,
+      )
+      expect(secondTranscript.messages.map(message => message.uuid)).toEqual([
+        seededA.uuid,
+        seededB.uuid,
+        firstAssistant.uuid,
+        resumeInstruction.uuid,
+        resumedAssistant.uuid,
+        secondInstruction.uuid,
+        secondAssistant.uuid,
+      ])
+
+      const rawEntries = (await readFile(
+        getAgentTranscriptPath(agentId),
+        'utf8',
+      ))
+        .split('\n')
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as {
+          uuid?: string
+          parentUuid?: string | null
+        })
+      const uuidOccurrences = (uuid: string) =>
+        rawEntries.filter(entry => entry.uuid === uuid)
+
+      for (const message of [
+        seededA,
+        seededB,
+        firstAssistant,
+        resumeInstruction,
+        resumedAssistant,
+        secondInstruction,
+        secondAssistant,
+      ]) {
+        expect(uuidOccurrences(message.uuid)).toHaveLength(1)
+      }
+      expect(
+        uuidOccurrences(resumeInstruction.uuid)[0]?.parentUuid,
+      ).toBe(firstAssistant.uuid)
+      expect(uuidOccurrences(resumedAssistant.uuid)[0]?.parentUuid).toBe(
+        resumeInstruction.uuid,
+      )
+      expect(
+        secondTranscript.messages.some(
+          message => message.uuid === resumedAssistant.uuid,
+        ),
+      ).toBe(true)
+      expect(uuidOccurrences(secondInstruction.uuid)[0]?.parentUuid).toBe(
+        resumedAssistant.uuid,
+      )
+      expect(uuidOccurrences(secondAssistant.uuid)[0]?.parentUuid).toBe(
+        secondInstruction.uuid,
+      )
+    } finally {
+      clearSessionMessagesCache()
+      resetProjectForTesting()
+      switchSession(asSessionId('session-run-agent-resume'), tempDir)
       if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
       if (previousPersistence === undefined) {
