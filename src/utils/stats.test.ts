@@ -86,6 +86,51 @@ describe('processSessionFiles token aggregation', () => {
     expect(stats.dailyModelTokens[0]?.tokensByModel[MODEL]).toBe(1200 + 450)
   })
 
+  test('credits late input and cache increases once for a split response', async () => {
+    const sessionFile = writeSessionFile([
+      assistantRecord(
+        'msg_split',
+        {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+        },
+        0,
+      ),
+      assistantRecord(
+        'msg_split',
+        {
+          input_tokens: 1200,
+          output_tokens: 450,
+          cache_creation_input_tokens: 300,
+          cache_read_input_tokens: 5000,
+        },
+        1,
+      ),
+      assistantRecord(
+        'msg_split',
+        {
+          input_tokens: 1200,
+          output_tokens: 450,
+          cache_creation_input_tokens: 300,
+          cache_read_input_tokens: 5000,
+        },
+        2,
+      ),
+    ])
+
+    const stats = await _forTest.processSessionFiles([sessionFile])
+
+    expect(stats.modelUsage[MODEL]).toMatchObject({
+      inputTokens: 1200,
+      cacheCreationInputTokens: 300,
+      cacheReadInputTokens: 5000,
+      outputTokens: 450,
+    })
+    expect(stats.dailyModelTokens[0]?.tokensByModel[MODEL]).toBe(1650)
+  })
+
   test('still sums records with distinct message ids', async () => {
     const sessionFile = writeSessionFile([
       assistantRecord(
@@ -200,26 +245,90 @@ describe('rolling range aggregation', () => {
       const singleSeven = await aggregateClaudeCodeStatsForRange('7d')
       const singleThirty = await aggregateClaudeCodeStatsForRange('30d')
       const separateReads = reads.length
-      expect(singleSeven.totalSessions).toBe(1)
-      expect(singleSeven.totalMessages).toBe(2)
-      expect(singleSeven.modelUsage[MODEL]).toMatchObject({ inputTokens: 200, outputTokens: 30 })
-      expect(singleSeven.totalSpeculationTimeSavedMs).toBe(11)
-      expect(singleThirty.totalSessions).toBe(3)
-      expect(singleThirty.modelUsage[MODEL]).toMatchObject({ inputTokens: 400, outputTokens: 100 })
-      expect(singleThirty.totalSpeculationTimeSavedMs).toBe(24)
+      expect(singleSeven.totalSessions).toBe(3)
+      expect(singleSeven.totalMessages).toBe(4)
+      expect(singleSeven.modelUsage[MODEL]).toMatchObject({ inputTokens: 400, outputTokens: 130 })
+      expect(singleSeven.totalSpeculationTimeSavedMs).toBe(1024)
+      expect(singleThirty.totalSessions).toBe(5)
+      expect(singleThirty.modelUsage[MODEL]).toMatchObject({ inputTokens: 600, outputTokens: 200 })
+      expect(singleThirty.totalSpeculationTimeSavedMs).toBe(1024)
       expect(discoveries).toBe(2)
       reads.length = 0
       discoveries = 0
       const together = await aggregateClaudeCodeStatsForRanges(['7d', '30d'])
       expect(together).toEqual({ '7d': singleSeven, '30d': singleThirty })
       expect(discoveries).toBe(1)
-      expect(reads.sort()).toEqual([recent, month, smallResumed, subagent, monthLarge].sort())
-      expect(separateReads).toBe(9)
-      expect(reads).not.toContain(largeResumed)
+      expect(reads.sort()).toEqual([recent, month, smallResumed, largeResumed, subagent, monthLarge].sort())
+      expect(separateReads).toBe(12)
       expect(reads).not.toContain(stale)
     } finally {
       readSpy.mockRestore()
       discoverySpy.mockRestore()
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    }
+  })
+
+  test('attributes a session to every event day and includes recent events from an old session', async () => {
+    const { mkdirSync } = await import('fs')
+    const { aggregateClaudeCodeStatsForRange } = await import('./stats.js')
+    tempDir = mkdtempSync(join(tmpdir(), 'cat-code-stats-event-dates-'))
+    const project = join(tempDir, 'projects', 'fixture-project')
+    mkdirSync(project, { recursive: true })
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    const at = (daysAgo: number) => {
+      const value = new Date()
+      value.setHours(12, 0, 0, 0)
+      value.setDate(value.getDate() - daysAgo)
+      return value
+    }
+    const old = { ...assistantRecord('old', { input_tokens: 100, output_tokens: 20 }, 0), timestamp: at(8).toISOString() }
+    const yesterday = { ...assistantRecord('yesterday', { input_tokens: 100, output_tokens: 20 }, 1), timestamp: at(1).toISOString() }
+    const today = { ...assistantRecord('today', { input_tokens: 1200, output_tokens: 450 }, 2), timestamp: at(0).toISOString() }
+    writeFileSync(join(project, 'resumed.jsonl'), [old, yesterday, today].map(JSON.stringify).join('\n'))
+    try {
+      const stats = await aggregateClaudeCodeStatsForRange('7d')
+      expect(stats.totalSessions).toBe(1)
+      expect(stats.totalMessages).toBe(2)
+      expect(stats.dailyActivity.map(day => [day.date, day.sessionCount, day.messageCount])).toEqual([
+        [at(1).toISOString().slice(0, 10), 1, 1],
+        [at(0).toISOString().slice(0, 10), 1, 1],
+      ])
+      expect(stats.dailyModelTokens.map(day => [day.date, day.tokensByModel[MODEL]])).toEqual([
+        [at(1).toISOString().slice(0, 10), 120],
+        [at(0).toISOString().slice(0, 10), 1650],
+      ])
+    } finally {
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    }
+  })
+
+  test('distinguishes an absent projects directory from an incomplete project read', async () => {
+    const { mkdirSync } = await import('fs')
+    const { spyOn } = await import('bun:test')
+    const { aggregateClaudeCodeStatsForRange } = await import('./stats.js')
+    const { getFsImplementation } = await import('./fsOperations.js')
+    tempDir = mkdtempSync(join(tmpdir(), 'cat-code-stats-read-errors-'))
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    try {
+      expect((await aggregateClaudeCodeStatsForRange('7d')).totalSessions).toBe(0)
+      const project = join(tempDir, 'projects', 'fixture-project')
+      mkdirSync(project, { recursive: true })
+      const fs = getFsImplementation()
+      const realReaddir = fs.readdir.bind(fs)
+      const spy = spyOn(fs, 'readdir').mockImplementation(async path => {
+        if (path === project) throw Object.assign(new Error('fixture denied'), { code: 'EACCES' })
+        return realReaddir(path)
+      })
+      try {
+        await expect(aggregateClaudeCodeStatsForRange('7d')).rejects.toThrow('fixture denied')
+      } finally {
+        spy.mockRestore()
+      }
+    } finally {
       if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
       else process.env.CLAUDE_CONFIG_DIR = previousConfig
     }

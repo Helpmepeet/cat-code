@@ -174,73 +174,57 @@ function createStatsAccumulator(options: ProcessOptions) {
       : messages.filter(m => !m.isSidechain)
     if (mainMessages.length === 0) return
 
-    const firstMessage = mainMessages[0]!
-    const lastMessage = mainMessages.at(-1)!
-
-    const firstTimestamp = new Date(firstMessage.timestamp)
-    const lastTimestamp = new Date(lastMessage.timestamp)
-
-    // Skip sessions with malformed timestamps — some transcripts on disk
-    // have entries missing the timestamp field (e.g. partial/remote writes).
-    // new Date(undefined) produces an Invalid Date, and toDateString() would
-    // throw RangeError: Invalid Date on .toISOString().
-    if (isNaN(firstTimestamp.getTime()) || isNaN(lastTimestamp.getTime())) {
-      logForDebugging(
-        `Skipping session with invalid timestamp: ${sessionFile}`,
-      )
-      return
-    }
-
-    const dateKey = toDateString(firstTimestamp)
-
-    // Apply date filters
-    if (fromDate && isDateBefore(dateKey, fromDate)) return
-    if (toDate && isDateBefore(toDate, dateKey)) return
-
-    // Track daily activity (use first message date as session date)
-    const existing = dailyActivityMap.get(dateKey) || {
-      date: dateKey,
-      messageCount: 0,
-      sessionCount: 0,
-      toolCallCount: 0,
-    }
-
-    // Subagent files contribute tokens and tool calls, but aren't sessions.
-    if (!isSubagentFile) {
-      const duration = lastTimestamp.getTime() - firstTimestamp.getTime()
-
-      sessions.push({
-        sessionId,
-        duration,
-        messageCount: mainMessages.length,
-        timestamp: firstMessage.timestamp,
-      })
-
-      totalMessages += mainMessages.length
-
-      existing.sessionCount++
-      existing.messageCount += mainMessages.length
-
-      const hour = firstTimestamp.getHours()
-      hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
-    }
-
-    if (!isSubagentFile || dailyActivityMap.has(dateKey)) {
-      dailyActivityMap.set(dateKey, existing)
-    }
-
     // Streaming splits one API response into several persisted records that
     // share one API message.id. Every split carries the message_start
     // input/cache seed, so summing them multiplies the input side by the
-    // split count. Tracks the output already credited per id so input-side
-    // tokens are counted once and output is counted as the max across splits.
-    const creditedOutputByMessageId = new Map<string, number>()
+    // split count. Track every usage dimension already credited per id so a
+    // later increase is counted once without multiplying repeated snapshots.
+    const creditedUsageByMessageId = new Map<
+      string,
+      {
+        inputTokens: number
+        outputTokens: number
+        cacheReadTokens: number
+        cacheCreationTokens: number
+      }
+    >()
+    const activeDates = new Set<string>()
+    const eligibleMainMessages: Array<{
+      message: TranscriptMessage
+      timestamp: Date
+    }> = []
 
     // Process messages for tool usage and model stats
     for (const message of mainMessages) {
+      const timestamp = new Date(message.timestamp)
+      if (isNaN(timestamp.getTime())) {
+        logForDebugging(`Skipping message with invalid timestamp: ${sessionFile}`)
+        continue
+      }
+      const dateKey = toDateString(timestamp)
+      const inRange =
+        (!fromDate || !isDateBefore(dateKey, fromDate)) &&
+        (!toDate || !isDateBefore(toDate, dateKey))
+
+      if (inRange) {
+        eligibleMainMessages.push({ message, timestamp })
+        activeDates.add(dateKey)
+        if (!isSubagentFile) {
+          const activity = dailyActivityMap.get(dateKey) || {
+            date: dateKey,
+            messageCount: 0,
+            sessionCount: 0,
+            toolCallCount: 0,
+          }
+          activity.messageCount++
+          dailyActivityMap.set(dateKey, activity)
+          totalMessages++
+        }
+      }
+
       if (message.type === 'assistant') {
         const content = message.message?.content
-        if (Array.isArray(content)) {
+        if (inRange && Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'tool_use') {
               const activity = dailyActivityMap.get(dateKey)
@@ -261,34 +245,41 @@ function createStatsAccumulator(options: ProcessOptions) {
             continue
           }
 
-          // Dedup splits of one API response (see creditedOutputByMessageId).
+          // Dedup splits of one API response (see creditedUsageByMessageId).
           // Records without an id keep the plain summing behavior.
           const messageId = message.message.id
-          const creditedOutput = messageId
-            ? creditedOutputByMessageId.get(messageId)
+          const credited = messageId
+            ? creditedUsageByMessageId.get(messageId)
             : undefined
-          const isRepeatedMessageId = creditedOutput !== undefined
-
-          const inputTokens = isRepeatedMessageId ? 0 : usage.input_tokens || 0
-          const cacheReadTokens = isRepeatedMessageId
-            ? 0
-            : usage.cache_read_input_tokens || 0
-          const cacheCreationTokens = isRepeatedMessageId
-            ? 0
-            : usage.cache_creation_input_tokens || 0
-          // Credit only the increase, so the aggregate equals the max output
-          // seen for this id rather than the sum of every split's output.
+          const inputTokens = Math.max(
+            0,
+            (usage.input_tokens || 0) - (credited?.inputTokens || 0),
+          )
           const outputTokens = Math.max(
             0,
-            (usage.output_tokens || 0) - (creditedOutput || 0),
+            (usage.output_tokens || 0) - (credited?.outputTokens || 0),
+          )
+          const cacheReadTokens = Math.max(
+            0,
+            (usage.cache_read_input_tokens || 0) -
+              (credited?.cacheReadTokens || 0),
+          )
+          const cacheCreationTokens = Math.max(
+            0,
+            (usage.cache_creation_input_tokens || 0) -
+              (credited?.cacheCreationTokens || 0),
           )
 
           if (messageId) {
-            creditedOutputByMessageId.set(
-              messageId,
-              Math.max(creditedOutput || 0, usage.output_tokens || 0),
-            )
+            creditedUsageByMessageId.set(messageId, {
+              inputTokens: Math.max(credited?.inputTokens || 0, usage.input_tokens || 0),
+              outputTokens: Math.max(credited?.outputTokens || 0, usage.output_tokens || 0),
+              cacheReadTokens: Math.max(credited?.cacheReadTokens || 0, usage.cache_read_input_tokens || 0),
+              cacheCreationTokens: Math.max(credited?.cacheCreationTokens || 0, usage.cache_creation_input_tokens || 0),
+            })
           }
+
+          if (!inRange) continue
 
           if (!modelUsageAgg[model]) {
             modelUsageAgg[model] = {
@@ -317,6 +308,22 @@ function createStatsAccumulator(options: ProcessOptions) {
           }
         }
       }
+    }
+
+    if (!isSubagentFile && eligibleMainMessages.length > 0) {
+      const first = eligibleMainMessages[0]!
+      const last = eligibleMainMessages.at(-1)!
+      sessions.push({
+        sessionId,
+        duration: last.timestamp.getTime() - first.timestamp.getTime(),
+        messageCount: eligibleMainMessages.length,
+        timestamp: first.message.timestamp,
+      })
+      for (const dateKey of activeDates) {
+        dailyActivityMap.get(dateKey)!.sessionCount++
+      }
+      const hour = first.timestamp.getHours()
+      hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
     }
   }
 
@@ -356,7 +363,6 @@ async function processSessionFilesForRanges(
         const eligible = options.map(() => true)
         try {
           if (options.some(option => option.fromDate)) {
-            let fileSize = 0
             try {
               const fileStat = await fs.stat(sessionFile)
               const modifiedDate = toDateString(fileStat.mtime)
@@ -368,23 +374,11 @@ async function processSessionFilesForRanges(
                   eligible[index] = false
                 }
               }
-              fileSize = fileStat.size
             } catch {
               // Preserve the read attempt when stat fails.
             }
-            if (fileSize > 65536 && eligible.some(Boolean)) {
-              const startDate = await readSessionStartDate(sessionFile)
-              if (startDate) {
-                for (const [index, option] of options.entries()) {
-                  if (
-                    option.fromDate &&
-                    isDateBefore(startDate, option.fromDate)
-                  ) {
-                    eligible[index] = false
-                  }
-                }
-              }
-            }
+            // A file's first event cannot exclude a resumed session from a
+            // rolling window; modification time remains the safe fast path.
           }
           const entries = eligible.some(Boolean)
             ? await readJSONLFile<Entry>(sessionFile)
@@ -401,7 +395,7 @@ async function processSessionFilesForRanges(
         logForDebugging(
           `Failed to read session file ${sessionFile}: ${errorMessage(error)}`,
         )
-        continue
+        throw error ?? new Error(`Failed to read session file ${sessionFile}`)
       }
       for (const [index, accumulator] of accumulators.entries()) {
         if (eligible[index]) accumulator.add(sessionFile, entries)
@@ -469,9 +463,9 @@ async function getAllSessionFiles(): Promise<string[]> {
                     dirent.name.startsWith('agent-'),
                 )
                 .map(dirent => join(subagentsDir, dirent.name))
-            } catch {
-              // subagents directory doesn't exist for this session, skip
-              return []
+            } catch (error) {
+              if (isENOENT(error)) return []
+              throw error
             }
           }),
         )
@@ -481,7 +475,7 @@ async function getAllSessionFiles(): Promise<string[]> {
         logForDebugging(
           `Failed to read project directory ${projectDir}: ${errorMessage(error)}`,
         )
-        return []
+        throw error
       }
     }),
   )
