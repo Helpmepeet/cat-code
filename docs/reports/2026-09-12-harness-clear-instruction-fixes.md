@@ -2,6 +2,12 @@
 
 Date: 2026-09-12
 
+Follow-up: the user subsequently approved the
+[delegation and verification changes](2026-09-12-delegation-verification-instructions.md),
+kept compaction's format pending continuation evidence, skipped the unused
+generators, and dropped peer-approval redesign as YAGNI. The original batch and
+proposal discussion below are retained as history.
+
 Implemented the user's approved batch of concrete instruction corrections. This
 changes model-facing text in six source files; it does not establish that models
 will always follow the revised text or that shorter prompts improve quality.
