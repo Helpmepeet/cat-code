@@ -134,3 +134,94 @@ describe('processSessionFiles token aggregation', () => {
     })
   })
 })
+
+describe('rolling range aggregation', () => {
+  test('shares discovery and reads while preserving filters, split IDs, and subagent totals', async () => {
+    const { mkdirSync, utimesSync } = await import('fs')
+    const { spyOn } = await import('bun:test')
+    const json = await import('./json.js')
+    const { getFsImplementation } = await import('./fsOperations.js')
+    const { aggregateClaudeCodeStatsForRange, aggregateClaudeCodeStatsForRanges } = await import('./stats.js')
+    tempDir = mkdtempSync(join(tmpdir(), 'cat-code-stats-ranges-'))
+    const projects = join(tempDir, 'projects')
+    const project = join(projects, 'fixture-project')
+    mkdirSync(project, { recursive: true })
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    const date = (daysAgo: number) => {
+      const value = new Date()
+      value.setHours(12, 0, 0, 0)
+      value.setDate(value.getDate() - daysAgo)
+      return value
+    }
+    const record = (daysAgo: number, id: string, output: number, sidechain = false) => ({
+      ...assistantRecord(id, { input_tokens: 100, output_tokens: output }, 0),
+      timestamp: date(daysAgo).toISOString(),
+      isSidechain: sidechain,
+    })
+    const write = (name: string, records: unknown[], modifiedAgo = 0) => {
+      const file = join(project, name)
+      mkdirSync(join(file, '..'), { recursive: true })
+      writeFileSync(file, records.map(r => JSON.stringify(r)).join('\n') + '\n')
+      utimesSync(file, date(modifiedAgo), date(modifiedAgo))
+      return file
+    }
+    const recent = write('recent.jsonl', [record(6, 'split', 5), record(6, 'split', 20)])
+    const month = write('month.jsonl', [record(29, 'month', 30)])
+    const smallResumed = write('old-resumed.jsonl', [
+      record(50, 'old', 40), record(0, 'new', 50),
+      { type: 'speculation-accept', timeSavedMs: 11 },
+    ])
+    const largeResumed = write('old-large-resumed.jsonl', [
+      record(50, 'old-large', 40), { type: 'padding', value: 'x'.repeat(70_000) },
+      record(0, 'new-large', 50), { type: 'speculation-accept', timeSavedMs: 1000 },
+    ])
+    const stale = write('stale-mtime.jsonl', [record(1, 'stale', 500)], 50)
+    const subagent = write('recent/subagents/agent-child.jsonl', [record(6, 'child', 10, true)])
+    // Same basename in another file must not deduplicate across API responses.
+    const monthLarge = write('month-large.jsonl', [
+      record(15, 'split', 40), { type: 'padding', value: 'x'.repeat(70_000) },
+      { type: 'speculation-accept', timeSavedMs: 13 },
+    ])
+    const fs = getFsImplementation()
+    const realRead = json.readJSONLFile
+    const reads: string[] = []
+    const readSpy = spyOn(json, 'readJSONLFile').mockImplementation(async file => {
+      reads.push(file)
+      return realRead(file)
+    })
+    const realReaddir = fs.readdir.bind(fs)
+    let discoveries = 0
+    const discoverySpy = spyOn(fs, 'readdir').mockImplementation(async path => {
+      if (path === projects) discoveries++
+      return realReaddir(path)
+    })
+    try {
+      const singleSeven = await aggregateClaudeCodeStatsForRange('7d')
+      const singleThirty = await aggregateClaudeCodeStatsForRange('30d')
+      const separateReads = reads.length
+      expect(singleSeven.totalSessions).toBe(1)
+      expect(singleSeven.totalMessages).toBe(2)
+      expect(singleSeven.modelUsage[MODEL]).toMatchObject({ inputTokens: 200, outputTokens: 30 })
+      expect(singleSeven.totalSpeculationTimeSavedMs).toBe(11)
+      expect(singleThirty.totalSessions).toBe(3)
+      expect(singleThirty.modelUsage[MODEL]).toMatchObject({ inputTokens: 400, outputTokens: 100 })
+      expect(singleThirty.totalSpeculationTimeSavedMs).toBe(24)
+      expect(discoveries).toBe(2)
+      reads.length = 0
+      discoveries = 0
+      const together = await aggregateClaudeCodeStatsForRanges(['7d', '30d'])
+      expect(together).toEqual({ '7d': singleSeven, '30d': singleThirty })
+      expect(discoveries).toBe(1)
+      expect(reads.sort()).toEqual([recent, month, smallResumed, subagent, monthLarge].sort())
+      expect(separateReads).toBe(9)
+      expect(reads).not.toContain(largeResumed)
+      expect(reads).not.toContain(stale)
+    } finally {
+      readSpy.mockRestore()
+      discoverySpy.mockRestore()
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    }
+  })
+})

@@ -1,7 +1,7 @@
 /**
  * Stats domain capability — read-seam projection for real engine token usage stats.
  *
- * Sourced directly from `src/utils/stats.ts` (`aggregateClaudeCodeStatsForRange`),
+ * Sourced directly from `src/utils/stats.ts` (the single- and paired-range aggregators),
  * which reads the real transcript logs in the user's projects directory.
  *
  * ZERO fake numbers: if no session logs exist in the selected range, it produces
@@ -13,6 +13,7 @@
 
 import {
   aggregateClaudeCodeStatsForRange,
+  aggregateClaudeCodeStatsForRanges,
   type ClaudeCodeStats,
   type StatsDateRange,
 } from '../../src/utils/stats.js'
@@ -21,6 +22,7 @@ import type {
   UsageStatsDailyModelTokens,
   UsageStatsModelUsageItem,
   UsageStatsRange,
+  UsageStatsByRange,
   UsageStatsSnapshot,
 } from '../shared/protocol.js'
 
@@ -130,8 +132,16 @@ const statsMemoryCache: Partial<
  */
 type StatsAggregator = (range: StatsDateRange) => Promise<ClaudeCodeStats>
 let aggregate: StatsAggregator = aggregateClaudeCodeStatsForRange
+let aggregateRanges = aggregateClaudeCodeStatsForRanges<UsageStatsRange>
 
 export const _forTest = {
+  setRangesAggregatorForTest(next: typeof aggregateRanges): () => void {
+    const previous = aggregateRanges
+    aggregateRanges = next
+    return () => {
+      aggregateRanges = previous
+    }
+  },
   /** Swap the aggregator; returns the restore function. */
   setAggregatorForTest(next: StatsAggregator): () => void {
     const previous = aggregate
@@ -178,6 +188,37 @@ export async function tryGetUsageStatsSnapshot(
     const snapshot = buildUsageStatsSnapshot(stats, range)
     statsMemoryCache[range] = { snapshot, timestamp: Date.now() }
     return snapshot
+  } catch {
+    return null
+  }
+}
+
+/** Fetch both worker ranges in one engine pass; a failed read publishes neither. */
+export async function tryGetUsageStatsSnapshots(
+  bypassCache = false,
+): Promise<UsageStatsByRange | null> {
+  const now = Date.now()
+  const sevenDay = statsMemoryCache['7d']
+  const thirtyDay = statsMemoryCache['30d']
+  if (
+    !bypassCache &&
+    sevenDay &&
+    thirtyDay &&
+    now - sevenDay.timestamp < CACHE_TTL_MS &&
+    now - thirtyDay.timestamp < CACHE_TTL_MS
+  ) {
+    return { '7d': sevenDay.snapshot, '30d': thirtyDay.snapshot }
+  }
+  try {
+    const stats = await aggregateRanges(['7d', '30d'])
+    const snapshots = {
+      '7d': buildUsageStatsSnapshot(stats['7d'], '7d'),
+      '30d': buildUsageStatsSnapshot(stats['30d'], '30d'),
+    }
+    const timestamp = Date.now()
+    statsMemoryCache['7d'] = { snapshot: snapshots['7d'], timestamp }
+    statsMemoryCache['30d'] = { snapshot: snapshots['30d'], timestamp }
+    return snapshots
   } catch {
     return null
   }

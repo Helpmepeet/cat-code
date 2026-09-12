@@ -1,10 +1,37 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
 import type { ClaudeCodeStats } from '../../src/utils/stats.js'
 import {
+  _forTest,
   buildUsageStatsSnapshot,
+  tryGetUsageStatsSnapshots,
   getEmptyUsageStatsSnapshot,
   tryGetUsageStatsSnapshot,
 } from './statsDomain.js'
+
+const emptyStats: ClaudeCodeStats = {
+  totalSessions: 0,
+  totalMessages: 0,
+  totalDays: 0,
+  activeDays: 0,
+  streaks: {
+    currentStreak: 0,
+    longestStreak: 0,
+    currentStreakStart: null,
+    longestStreakStart: null,
+    longestStreakEnd: null,
+  },
+  dailyActivity: [],
+  dailyModelTokens: [],
+  longestSession: null,
+  modelUsage: {},
+  firstSessionDate: null,
+  lastSessionDate: null,
+  peakActivityDay: null,
+  peakActivityHour: null,
+  totalSpeculationTimeSavedMs: 0,
+}
+
+afterEach(() => _forTest.clearCacheForTest())
 
 describe('statsDomain', () => {
   test('buildUsageStatsSnapshot calculates exact aggregates and cache hit rates', () => {
@@ -69,18 +96,57 @@ describe('statsDomain', () => {
     expect(empty.dailyActivity).toEqual([])
   })
 
-  test('tryGetUsageStatsSnapshot runs throw-free and returns a valid UsageStatsSnapshot', async () => {
-    const snap = await tryGetUsageStatsSnapshot('7d')
-    // Null is reserved for a FAILED read. This machine has a readable projects
-    // directory, so a null here is a real failure, not an empty history.
-    expect(snap).not.toBeNull()
-    if (!snap) return
-    expect(snap.range).toBe('7d')
-    expect(typeof snap.totalTokens).toBe('number')
-    expect(typeof snap.cacheHitRate).toBe('number')
-    expect(Array.isArray(snap.dailyModelTokens)).toBe(true)
-    expect(Array.isArray(snap.dailyActivity)).toBe(true)
-    expect(typeof snap.modelUsage).toBe('object')
+  test('a successful empty aggregation remains a measured zero snapshot', async () => {
+    const restore = _forTest.setAggregatorForTest(async () => emptyStats)
+    try {
+      expect(await tryGetUsageStatsSnapshot('7d', true)).toEqual(getEmptyUsageStatsSnapshot('7d'))
+    } finally {
+      restore()
+    }
+  })
+
+  test('the paired read uses one range aggregation and caches both results after completion', async () => {
+    const realNow = Date.now
+    let clock = 10_000_000_000_000
+    Date.now = () => clock
+    const calls: string[][] = []
+    const restore = _forTest.setRangesAggregatorForTest(async ranges => {
+      calls.push([...ranges])
+      clock += 6000
+      return { '7d': emptyStats, '30d': { ...emptyStats, totalSessions: 2 } }
+    })
+    const restoreSingle = _forTest.setAggregatorForTest(async () => {
+      throw new Error('paired reads must not use the single-range aggregator')
+    })
+    try {
+      const snapshots = await tryGetUsageStatsSnapshots(true)
+      expect(calls).toEqual([['7d', '30d']])
+      expect(snapshots?.['7d'].totalSessions).toBe(0)
+      expect(snapshots?.['30d'].totalSessions).toBe(2)
+      expect(await tryGetUsageStatsSnapshots()).toEqual(snapshots)
+      expect(await tryGetUsageStatsSnapshot('30d')).toEqual(snapshots?.['30d'])
+      expect(calls).toHaveLength(1)
+    } finally {
+      restore()
+      restoreSingle()
+      Date.now = realNow
+    }
+  })
+
+  test('a failed paired read returns null and preserves the last successful snapshots', async () => {
+    let failed = false
+    const restore = _forTest.setRangesAggregatorForTest(async () => {
+      if (failed) throw new Error('transcript directory unreadable')
+      return { '7d': emptyStats, '30d': { ...emptyStats, totalSessions: 2 } }
+    })
+    try {
+      const success = await tryGetUsageStatsSnapshots(true)
+      failed = true
+      expect(await tryGetUsageStatsSnapshots(true)).toBeNull()
+      expect(await tryGetUsageStatsSnapshots()).toEqual(success)
+    } finally {
+      restore()
+    }
   })
 
   test('a failed aggregation reads as null, never as an empty snapshot', async () => {
@@ -104,28 +170,7 @@ describe('statsDomain', () => {
     // was still producing, so the cache went empty exactly on the large corpora
     // it exists for.
     const { _forTest } = await import('./statsDomain.js')
-    const emptyStats: ClaudeCodeStats = {
-      totalSessions: 0,
-      totalMessages: 0,
-      totalDays: 0,
-      activeDays: 0,
-      streaks: {
-        currentStreak: 0,
-        longestStreak: 0,
-        currentStreakStart: null,
-        longestStreakStart: null,
-        longestStreakEnd: null,
-      },
-      dailyActivity: [],
-      dailyModelTokens: [],
-      longestSession: null,
-      modelUsage: {},
-      firstSessionDate: null,
-      lastSessionDate: null,
-      peakActivityDay: null,
-      peakActivityHour: null,
-      totalSpeculationTimeSavedMs: 0,
-    }
+
     const realNow = Date.now
     let clock = 10_000_000_000_000
     Date.now = () => clock
