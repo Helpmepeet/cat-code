@@ -124,7 +124,7 @@ describe('statsDomain', () => {
       expect(snapshots?.['7d'].totalSessions).toBe(0)
       expect(snapshots?.['30d'].totalSessions).toBe(2)
       expect(await tryGetUsageStatsSnapshots()).toEqual(snapshots)
-      expect(await tryGetUsageStatsSnapshot('30d')).toEqual(snapshots?.['30d'])
+      expect(await tryGetUsageStatsSnapshot('30d')).toEqual(snapshots!['30d'])
       expect(calls).toHaveLength(1)
     } finally {
       restore()

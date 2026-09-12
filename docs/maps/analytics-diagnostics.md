@@ -99,7 +99,7 @@ active local features.
 | Status property builders | `src/utils/status.tsx` | Account, provider, proxy/mTLS, IDE, MCP summary, sandbox, memory, installation, settings sources, model label. |
 | `cat-code codex status --json` | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | Emits a single advisory JSON observation and exits. Valid observations exit 0 even for no-account or all-blocked pools; nonzero is reserved for internal command failure. |
 | `/stats` command | `src/commands/stats/stats.tsx` | Lazy-renders `Stats` dialog. |
-| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files, aggregates sessions/messages/model usage/activity/streaks/speculation time, and uses stats cache helpers. |
+| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files and aggregates sessions/messages/model usage/activity/streaks/speculation time. The paired 7d/30d API shares discovery, metadata/header checks and JSONL reads with independent range accumulators; the accounts worker reaches it through `tryGetUsageStatsSnapshots` in `app/sidecar/statsDomain.ts`. The `all` range retains its existing durable cache. |
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
 | Desktop usage statistics | `app/sidecar/statsDomain.ts` | The sidecar reads `aggregateClaudeCodeStatsForRange()` and sends redacted totals, daily model/activity data, cache metrics, and model names to the Accounts surface; no transcript text or credentials cross the boundary. |

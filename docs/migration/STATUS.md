@@ -18,6 +18,8 @@ GUI/browser step (launch the Electron app, click, keypress); absent = fully head
 
 ---
 
+**Multi-session compute optimizations (2026-09-12):** ✅ Headless implementation complete: trace directory preparation 100→1 in a 100-record fixture; title descriptions capped at 4,096 UTF-16 units; paired 7d/30d stats 9→5 transcript reads; three simultaneous Codex usage readers plus a later process share one fixture GET. Full desktop **4,793/0**, account suites **168/0**, focused trace/title/stats tests green; engine build, shell typecheck and scoped sidecar typecheck green (**5,559 upstream ignored**); maps lint passes with 7 recommended-section warnings. Independent account review GREEN; report-review wording corrections included. §0: existing shared `main` retained per CLAUDE.md; no UI/protocol/topology change, GUI launch or energy measurement. Account sharing covers unforced observations; displayed usage can approach 120 seconds old, and failed epoch+eviction can leave old shared data until its 60-second TTL. [Implementation evidence](../reports/2026-09-12-multi-session-compute-implementation.md).
+
 ## ⚠ URGENT — CROSS-CUTTING TASKS (not phase-scoped)
 Tracked at the top of the file so they aren't buried under a phase. Orchestrator-owned.
 

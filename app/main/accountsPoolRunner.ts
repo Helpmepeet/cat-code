@@ -29,15 +29,12 @@ import {
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 
 /**
- * Default cadence. Longer than the catalog's 30 s because usage headroom is
- * coarse (percent buckets on a 5-hour window), and because the worker's one
- * network read (`fetchPoolUsage`) is NOT effectively cached here: its
- * module-level cache (`codexUsage.ts:93`, 1-minute TTL) lives inside the
- * disposable worker process this driver spawns fresh every run, so the cache
- * never survives between runs and every run performs a live authenticated
- * fetch regardless of interval. Polling faster does not "spend a boot to
- * re-read a cached value" — it directly multiplies real network calls against
- * the account's usage endpoint.
+ * Usage headroom changes in coarse percent buckets on a 5-hour window, so a
+ * minute is sufficient for ordinary observation. Each run still boots a
+ * disposable engine worker. Its unforced `fetchPoolUsage` read can reuse the
+ * engine-owned private 60-second observation shared across processes; misses
+ * perform authenticated usage GETs. Sharing observations saves requests when
+ * workers and sessions overlap, but does not remove worker startup cost.
  */
 export const ACCOUNTS_POOL_REFRESH_INTERVAL_MS = 60_000
 export const ACCOUNTS_POOL_WORKER_TIMEOUT_MS = 2 * 60 * 1000
