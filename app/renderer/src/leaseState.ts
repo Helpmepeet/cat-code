@@ -30,6 +30,7 @@ import { selectWorkerDisplayName } from './workersState.js'
 
 export type LeaseStateStore = {
   bySession: Record<SessionId, LeaseSnapshot | undefined>
+  lastMainFailoverAccountIds: Record<SessionId, string | undefined>
 }
 
 export type LeaseAction =
@@ -37,7 +38,7 @@ export type LeaseAction =
   | { type: 'session-removed'; sessionId: SessionId }
 
 export function createLeaseState(): LeaseStateStore {
-  return { bySession: {} }
+  return { bySession: {}, lastMainFailoverAccountIds: {} }
 }
 
 export function reduceLeaseState(
@@ -45,17 +46,56 @@ export function reduceLeaseState(
   action: LeaseAction,
 ): LeaseStateStore {
   if (action.type === 'session-removed') {
-    if (!(action.sessionId in state.bySession)) return state
+    if (
+      !(action.sessionId in state.bySession) &&
+      !(action.sessionId in state.lastMainFailoverAccountIds)
+    ) {
+      return state
+    }
     const bySession = { ...state.bySession }
+    const lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
     delete bySession[action.sessionId]
-    return { ...state, bySession }
+    delete lastMainFailoverAccountIds[action.sessionId]
+    return { ...state, bySession, lastMainFailoverAccountIds }
   }
   const { frame } = action
 
   if (frame.kind === 'lease.snapshot') {
+    const mainLease = selectLeaseForOwner(frame.leases, MAIN_LEASE_OWNER_ID)
+    const holdingMainLease =
+      mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding' ? mainLease : null
+    const previousFailoverAccountId = state.lastMainFailoverAccountIds[frame.sessionId]
+    let lastMainFailoverAccountIds = state.lastMainFailoverAccountIds
+
+    if (holdingMainLease?.selectionKind === 'failover') {
+      lastMainFailoverAccountIds = {
+        ...state.lastMainFailoverAccountIds,
+        [frame.sessionId]: holdingMainLease.accountId,
+      }
+    } else if (
+      previousFailoverAccountId &&
+      holdingMainLease &&
+      holdingMainLease.accountId !== previousFailoverAccountId
+    ) {
+      lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
+      delete lastMainFailoverAccountIds[frame.sessionId]
+    }
+
     return {
       bySession: { ...state.bySession, [frame.sessionId]: frame.leases },
+      lastMainFailoverAccountIds,
     }
+  }
+
+  if (
+    frame.kind === 'account.result' &&
+    frame.verb === 'account.switch' &&
+    frame.ok &&
+    frame.sessionId in state.lastMainFailoverAccountIds
+  ) {
+    const lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
+    delete lastMainFailoverAccountIds[frame.sessionId]
+    return { ...state, lastMainFailoverAccountIds }
   }
 
   // A dead session's leases are gone with its engine process (the lease map is
@@ -63,6 +103,7 @@ export function reduceLeaseState(
   if (frame.kind === 'lifecycle') {
     return {
       bySession: { ...state.bySession, [frame.sessionId]: undefined },
+      lastMainFailoverAccountIds: state.lastMainFailoverAccountIds,
     }
   }
 
@@ -75,6 +116,14 @@ export function selectLeaseSnapshot(
 ): LeaseSnapshot | null {
   const snapshot = sessionId ? state.bySession[sessionId] : undefined
   return snapshot ?? null
+}
+
+export function selectLastMainFailoverAccountId(
+  state: LeaseStateStore,
+  sessionId: SessionId | null,
+): string | null {
+  if (!sessionId) return null
+  return state.lastMainFailoverAccountIds?.[sessionId] ?? null
 }
 
 /* ── read-time derivations ─────────────────────────────────────────────────── */
@@ -106,6 +155,8 @@ export type SessionCodexAccountSources = {
   roster: AccountsSnapshot | null
   /** This session's own lease snapshot (`selectLeaseSnapshot`). */
   leases: LeaseSnapshot | null
+  /** The last account reached by this session's successful main-thread failover. */
+  lastMainFailoverAccountId?: string | null
   accounts: AccountsState
   sessionId: SessionId | null
 }
@@ -131,12 +182,14 @@ export type SessionCodexAccountSources = {
  *  1. this session's ACTIVE main-thread lease — the routing identity of a live
  *     turn. A failed lease keeps the account id it could NOT use, so only a
  *     holding one names an account (the `selectLeaseForLabel` refusal, reused).
- *  2. this session's OWN accounts snapshot, built from its in-memory pool —
+ *  2. this session's last successful main-thread failover, retained after the
+ *     per-turn lease release because that release does not refresh accounts.
+ *  3. this session's OWN accounts snapshot, built from its in-memory pool —
  *     `selectLastAccountsSnapshot`, so a parked or crashed session keeps naming
  *     what it actually ran on instead of falling back to a persisted account it
  *     never used. That selector exists for this face and is display-only; the
  *     switcher's arming is decided separately by `canSwitchAccount`.
- *  3. the roster's persisted active account, i.e. the previous behaviour.
+ *  4. the roster's persisted active account, i.e. the previous behaviour.
  *
  * Between turns there is legitimately no main lease: the engine registers it per
  * turn and releases it in a `finally`, and the sidecar drops synthesised leases.
@@ -148,7 +201,7 @@ export type SessionCodexAccountSources = {
 export function selectSessionCodexAccount(
   sources: SessionCodexAccountSources,
 ): AccountStatus | null {
-  const { accounts, leases, roster, sessionId } = sources
+  const { accounts, lastMainFailoverAccountId, leases, roster, sessionId } = sources
   const rows = roster?.accounts ?? []
   const rosterRow = (accountId: string): AccountStatus | null =>
     rows.find(row => row.id === accountId) ?? null
@@ -157,6 +210,11 @@ export function selectSessionCodexAccount(
   if (mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding') {
     const leased = rosterRow(mainLease.accountId)
     if (leased) return leased
+  }
+
+  if (lastMainFailoverAccountId) {
+    const failedOver = rosterRow(lastMainFailoverAccountId)
+    if (failedOver) return failedOver
   }
 
   const own = selectActiveAccount(selectLastAccountsSnapshot(accounts, sessionId))
