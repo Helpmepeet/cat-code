@@ -57,6 +57,7 @@ import { createCodexFetch } from './codex-fetch-adapter.js'
 import {
   createCodexCredentialHandle,
   type CodexCredentialHandle,
+  type CodexCredentialUseOptions,
 } from './codexCredentialUse.js'
 import { CodexAccountUnavailableError } from './withRetry.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
@@ -380,6 +381,7 @@ export async function getAnthropicClient({
   codexLeaseOwnerId,
   codexLeaseOwnerType,
   codexConversationIdOverride,
+  codexCredentialUse,
 }: {
   apiKey?: string
   maxRetries: number
@@ -390,6 +392,7 @@ export async function getAnthropicClient({
   codexLeaseOwnerId?: string
   codexLeaseOwnerType?: 'main' | 'subagent'
   codexConversationIdOverride?: string
+  codexCredentialUse?: CodexCredentialUseOptions
 }): Promise<Anthropic> {
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
@@ -466,6 +469,7 @@ export async function getAnthropicClient({
         {
           resolveTokensForRequest: () =>
             resolveCodexOAuthTokensForLeaseOwner(codexTokenOptions),
+          credentialUse: codexCredentialUse,
         },
       )
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {

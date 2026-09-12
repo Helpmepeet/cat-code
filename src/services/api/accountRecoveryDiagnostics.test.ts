@@ -373,6 +373,8 @@ describe('account recovery diagnostics', () => {
             access_token: buildCodexToken('account-one'),
             refresh_token: 'refresh-account-one',
             account_id: 'account-one',
+            expires_at: Date.now() + 60 * 60_000,
+            credential_generation: 1,
           },
           alias: 'main',
         },
@@ -391,8 +393,13 @@ describe('account recovery diagnostics', () => {
           source: 'vault',
           vaultFilePath: staleAccountPath,
           refreshToken: 'refresh-account-one',
+          credentialGeneration: 1,
         }),
-        buildPoolAccount({ accountId: 'account-two', alias: 'backup' }),
+        buildPoolAccount({
+          accountId: 'account-two',
+          alias: 'backup',
+          credentialGeneration: 1,
+        }),
       ],
     })
     seedCodexLeaseForTest({
@@ -455,6 +462,29 @@ describe('account recovery diagnostics', () => {
       throw new Error(`Unexpected account route: ${requestAccountId ?? 'none'}`)
     }) as typeof globalThis.fetch
 
+    const lifecycle = {
+      read(accountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'credentialed' as const,
+            operationId: 'auth-failover-test',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
     let attempts = 0
     try {
       for await (const _message of withRetry(
@@ -466,6 +496,7 @@ describe('account recovery diagnostics', () => {
             codexLeaseOwnerId: 'subagent-auth',
             codexLeaseOwnerType: 'subagent',
             codexConversationIdOverride: 'conv_auth_recovery_sdk',
+            codexCredentialUse: { lifecycle },
           }),
         async client => {
           attempts += 1
