@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement } from './streaming-benchmark-runtime.js'
+import { advanceDocumentSubscription, clockAlignmentUncertaintyMs, isCurrentDocumentAcknowledgement } from './streaming-benchmark-runtime.js'
 import { markerTracedBootstrap } from './streaming-benchmark-runtime.js'
 import { DeliveryAckQueue } from '../preload/deliveryAckQueue.js'
 import { createRendererIpcGuard } from '../preload/rendererIpcGuard.js'
@@ -19,6 +19,13 @@ test('acknowledgements must match both current document and current epoch', () =
   expect(isCurrentDocumentAcknowledgement(current, { documentId: 'new', subscriptionEpoch: 1 })).toBe(true)
   expect(isCurrentDocumentAcknowledgement(current, { documentId: 'old', subscriptionEpoch: 1 })).toBe(false)
   expect(isCurrentDocumentAcknowledgement(current, { documentId: 'new', subscriptionEpoch: 2 })).toBe(false)
+})
+
+test('clock alignment bound adds endpoint uncertainty and observed half-drift', () => {
+  expect(clockAlignmentUncertaintyMs(
+    { rendererToMainOffsetMs: 2.0, uncertaintyMs: 0.04 },
+    { rendererToMainOffsetMs: 2.2, uncertaintyMs: 0.05 },
+  )).toBeCloseTo(0.15, 12)
 })
 
 test('all workload bootstraps keep a bounded traced marker whose applied ACK survives the real queue and guard', () => {

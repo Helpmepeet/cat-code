@@ -1,6 +1,14 @@
 import type { ServerFrame } from '../shared/protocol.js'
 
 export type DocumentSubscription = { documentId: string; epoch: number }
+export type ClockCalibration = { rendererToMainOffsetMs: number; uncertaintyMs: number }
+
+/** Endpoint round-trip uncertainty and observed half-drift are independent bounds. */
+export function clockAlignmentUncertaintyMs(before: ClockCalibration, after: ClockCalibration): number {
+  const endpointUncertainty = Math.max(before.uncertaintyMs, after.uncertaintyMs)
+  const halfDrift = Math.abs(after.rendererToMainOffsetMs - before.rendererToMainOffsetMs) / 2
+  return endpointUncertainty + halfDrift
+}
 
 export function advanceDocumentSubscription(current: DocumentSubscription, documentId: string): DocumentSubscription {
   return documentId === current.documentId

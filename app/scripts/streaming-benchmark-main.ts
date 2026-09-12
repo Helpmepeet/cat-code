@@ -12,7 +12,7 @@ import type { ServerFrame } from '../shared/protocol.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import { createRawMessageLogState, reduceServerFrame } from '../renderer/src/rawMessageLog.js'
 import { benchmarkCoverageComplete, type BenchmarkObserverCounters } from './streaming-benchmark-observer.js'
-import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement, markerTracedBootstrap } from './streaming-benchmark-runtime.js'
+import { advanceDocumentSubscription, clockAlignmentUncertaintyMs, isCurrentDocumentAcknowledgement, markerTracedBootstrap } from './streaming-benchmark-runtime.js'
 import * as channels from '../shared/ipcChannels.js'
 
 let fatalExitStarted = false
@@ -244,11 +244,7 @@ const result = {
   wallMs: wallEnd - wallStart, mainCpuMicros: cpu.user + cpu.system,
   electronCpu: cpuDeltas(processMetricsBefore, processMetricsAfter),
   latencyMs: latencies, calibration: { before: calibrationBefore, after: calibrationAfter },
-  clockAlignmentUncertaintyMs: Math.max(
-    calibrationBefore.uncertaintyMs,
-    calibrationAfter.uncertaintyMs,
-    Math.abs(calibrationAfter.rendererToMainOffsetMs - calibrationBefore.rendererToMainOffsetMs) / 2,
-  ),
+  clockAlignmentUncertaintyMs: clockAlignmentUncertaintyMs(calibrationBefore, calibrationAfter),
   expectedTraceHash: digest(expectedTraceIds), observedTraceHash: digest(observedTraceIds), frameOrderVerified: true,
   finalRawMessageCount: commits.at(-1)?.rawMessageCount ?? -1,
   ownedPids: [process.pid, ...app.getAppMetrics().map(item => item.pid)].filter((pid, index, all) => all.indexOf(pid) === index),
