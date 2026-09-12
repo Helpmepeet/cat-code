@@ -28,7 +28,7 @@ export type Arrival = { atMs: number; frame: ServerFrame; barrier: boolean }
 type FixtureMessage = Extract<EventFrame['event'], { type: 'message' }>['message']
 export const digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 
-export function createFixture(workload: Workload, durationMs = manifest.durationMs) {
+export function createFixture(workload: Workload, durationMs: number = manifest.durationMs) {
   const initial: ServerFrame[] = []
   const arrivals: Arrival[] = []
   let sequence = 0
