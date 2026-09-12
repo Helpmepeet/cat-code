@@ -1,6 +1,6 @@
 # Prompt System Map
 
-Last refreshed: 2026-09-07
+Last refreshed: 2026-09-11
 
 ## Purpose
 
@@ -144,7 +144,7 @@ Use focused checks first, then the documented build:
 | Main query behavior | `bun test src/query.test.ts` |
 | Agent tool prompt/resume behavior | `bun test src/tools/AgentTool/prompt.test.ts src/tools/AgentTool/resumeAgent.test.ts src/tools/AgentTool/AgentTool.test.ts` |
 | Skill-loading prompt policy | `bun test src/tools/SkillTool/` |
-| Compaction prompt behavior | `bun test src/services/compact/prompt.test.ts src/services/compact/compact.test.ts` |
+| Compaction behavior | `bun test src/services/compact/compact.test.ts` |
 | Full documented build | `bun run build:dev:full` |
 
 For emitted-prompt inspection, use prompt dumps when available:

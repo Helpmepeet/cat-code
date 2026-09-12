@@ -293,6 +293,7 @@ import {
 import {
   createLeaseState,
   reduceLeaseState,
+  selectLastMainFailoverAccountId,
   selectLeaseSnapshot,
   selectSessionCodexAccount,
 } from './leaseState.js'
@@ -3360,6 +3361,10 @@ export function App() {
 	      )
 	      const panelProvider = rail.provider
 	      const panelLeases = selectLeaseSnapshot(leases, sessionId)
+	      const panelLastMainFailoverAccountId = selectLastMainFailoverAccountId(
+	        leases,
+	        sessionId,
+	      )
 	      // The face names the account this session ROUTES through, which is its
 	      // main lease, not the pool's persisted active row. See
 	      // `selectSessionCodexAccount` for why the two drift.
@@ -3368,6 +3373,7 @@ export function App() {
 	          ? selectSessionCodexAccount({
 	              roster: panelAccounts,
 	              leases: panelLeases,
+	              lastMainFailoverAccountId: panelLastMainFailoverAccountId,
 	              accounts,
 	              sessionId,
 	            })
