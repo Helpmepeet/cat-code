@@ -144,7 +144,7 @@ for (const forceBoundary of ['none', 'preparation', 'delivery'] as const) {
     let state = getDefaultAppState()
     let engine!: InstanceType<typeof QueryEngine>
     const appSession = createQueryEngineAppSession({
-      cwd: process.cwd(), tools: [tool], commands: [], mcpClients: [], agents: [],
+      cwd: process.cwd(), tools: [tool as any], commands: [], mcpClients: [], agents: [],
       canUseTool: async () => ({ behavior: 'allow', updatedInput: {} }),
       getAppState: () => state, setAppState: update => { state = update(state) },
       initialMessages: [], readFileCache: createFileStateCacheWithSizeLimit(20),
@@ -166,15 +166,16 @@ for (const forceBoundary of ['none', 'preparation', 'delivery'] as const) {
     const conn = server.addConnection({ write(data) {
       for (const frame of decoder.push(Buffer.from(data))) {
         if (frame.kind !== 'frame') continue
-        received.push(frame.payload)
+        const payload = frame.payload as any
+        received.push(payload)
         if (
           forceBoundary === 'delivery' &&
           queuedId &&
           !deliveryForceSent &&
-          frame.payload.kind === 'event' &&
-          frame.payload.event?.type === 'message' &&
-          (frame.payload.event.message?.uuid === queuedId ||
-            frame.payload.event.message?.attachment?.source_uuid === queuedId)
+          payload.kind === 'event' &&
+          payload.event?.type === 'message' &&
+          (payload.event.message?.uuid === queuedId ||
+            payload.event.message?.attachment?.source_uuid === queuedId)
         ) {
           deliveryForceSent = true
           server!.handleData(
