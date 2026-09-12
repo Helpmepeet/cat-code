@@ -88,6 +88,7 @@ export type SignedOutCodexProfile = Readonly<{
   vaultFilePaths: readonly string[]
   profileState: 'signed_out' | 'recovery_required'
   credentialGeneration?: number
+  lifecycleGeneration?: number
   credentialGenerationState?: CodexCredentialGenerationState
   lifecycleState?: CodexCredentialLifecycleState
   lifecycleReadStatus: CodexCredentialLifecycleReadResult['status']
@@ -647,6 +648,7 @@ export function reconcileCodexAccountSignOut(
       vaultFilePaths,
       profileState: 'signed_out',
       credentialGeneration: input.credentialGeneration,
+      lifecycleGeneration: input.credentialGeneration,
       credentialGenerationState: getCredentialGenerationState(
         input.credentialGeneration,
       ),
@@ -659,6 +661,37 @@ export function reconcileCodexAccountSignOut(
     accounts: pool.accounts,
     signedOutProfiles,
     duplicateVaultIdentities,
+  }
+}
+
+/**
+ * Apply a completed deletion to this process's pool only. Physical stores and
+ * the lifecycle tombstone are owned by the deletion transaction.
+ */
+export function reconcileCodexAccountDeletion(accountId: string): void {
+  const activeAccountId = pool.accounts[pool.activeIndex]?.accountId
+  pool.accounts = pool.accounts.filter(
+    account => account.accountId !== accountId,
+  )
+
+  if (activeAccountId === accountId) {
+    pool.activeIndex = -1
+  } else if (activeAccountId) {
+    pool.activeIndex = pool.accounts.findIndex(
+      account => account.accountId === activeAccountId,
+    )
+  } else {
+    pool.activeIndex = -1
+  }
+
+  profileInventory = {
+    accounts: pool.accounts,
+    signedOutProfiles: profileInventory.signedOutProfiles.filter(
+      profile => profile.accountId !== accountId,
+    ),
+    duplicateVaultIdentities: profileInventory.duplicateVaultIdentities.filter(
+      identity => identity.accountId !== accountId,
+    ),
   }
 }
 
@@ -1182,7 +1215,7 @@ export function setAccountAlias(accountId: string, alias: string, writer = 'rena
   }
 }
 
-export function deleteCodexVaultFile(filePath: string): boolean {
+function deleteCodexVaultFileForTest(filePath: string): boolean {
   let releaseLock: (() => void) | undefined
   try {
     releaseLock = acquireVaultMutationLockSync(filePath)
@@ -1199,7 +1232,22 @@ export function deleteCodexVaultFile(filePath: string): boolean {
   }
 }
 
-export function removeCodexAccount(accountId: string): boolean {
+/**
+ * Kept only for isolated pool tests. Production cleanup is lifecycle-owned and
+ * must validate the account generation before unlinking a profile.
+ */
+export function deleteCodexVaultFile(filePath: string): boolean {
+  if (process.env.NODE_ENV !== 'test') {
+    logForDebugging(
+      '[codex-pool] Refusing direct vault deletion outside test mode',
+      { level: 'warn' },
+    )
+    return false
+  }
+  return deleteCodexVaultFileForTest(filePath)
+}
+
+function removeCodexAccountForTest(accountId: string): boolean {
   const idx = pool.accounts.findIndex((account) => account.accountId === accountId)
   if (idx < 0) {
     const profileIndex = profileInventory.signedOutProfiles.findIndex(
@@ -1249,7 +1297,9 @@ export function removeCodexAccount(accountId: string): boolean {
     pool.activeIndex = findLRUHealthy(-1)
   }
 
-  const active = pool.accounts[pool.activeIndex] ?? pool.accounts.find((account) => isCodexAccountSwitchable(account)) ?? pool.accounts[0]
+  const active =
+    pool.accounts[pool.activeIndex] ??
+    pool.accounts.find((account) => isCodexAccountSwitchable(account))
 
   if (active) {
     saveCodexOAuthTokens({
@@ -1272,6 +1322,21 @@ export function removeCodexAccount(accountId: string): boolean {
 
   logForDebugging(`[codex-pool] Removed account ${truncId(accountId)}`)
   return true
+}
+
+/**
+ * Kept only for isolated pool tests. Production deletion must go through the
+ * lifecycle-owned transaction, which invalidates credentials before cleanup.
+ */
+export function removeCodexAccount(accountId: string): boolean {
+  if (process.env.NODE_ENV !== 'test') {
+    logForDebugging(
+      '[codex-pool] Refusing direct account removal outside test mode',
+      { level: 'warn' },
+    )
+    return false
+  }
+  return removeCodexAccountForTest(accountId)
 }
 
 const ALIAS_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/
@@ -1813,6 +1878,9 @@ function makeSavedCodexProfile(input: {
     vaultFilePaths: input.filePaths ?? [input.filePath],
     profileState: input.profileState,
     ...(credentialGeneration !== undefined ? { credentialGeneration } : {}),
+    ...(lifecycleGeneration !== undefined
+      ? { lifecycleGeneration }
+      : {}),
     ...(generationMatchesLifecycle
       ? {
           credentialGenerationState: getCredentialGenerationState(

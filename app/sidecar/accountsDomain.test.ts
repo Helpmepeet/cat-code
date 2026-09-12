@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsModule from 'node:fs'
 import * as codexPoolModule from '../../src/services/api/codexAccountPool.js'
-import * as leaseManagerModule from '../../src/services/api/codexAccountLeaseManager.js'
-import * as codexFetchAdapterModule from '../../src/services/api/codex-fetch-adapter.js'
-import * as logoutModule from '../../src/commands/logout/logout.js'
 import {
+  getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
   type CodexProfileInventory,
@@ -23,6 +21,10 @@ import type {
   OAuthLoginProgress,
   OAuthLoginProgressFrame,
 } from '../shared/protocol.js'
+import {
+  type CodexAccountDeletionInput,
+  type CodexAccountDeletionResult,
+} from '../../src/services/api/codexAccountSignOut.js'
 import {
   buildAccountsSnapshot,
   buildAccountStatus,
@@ -261,7 +263,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('real Codex delete executor cleanup', () => {
-  test('serializes profile removal and repairs leases and auth caches', async () => {
+  test('delegates deletion with the account generation from the live pool', async () => {
     const deleted = poolAccount({
       accountId: 'delete-me',
       vaultFilePath: '/test-vault/accounts/delete-me.json',
@@ -275,62 +277,37 @@ describe('real Codex delete executor cleanup', () => {
       activeAccountId: deleted.accountId,
     })
 
-    const order: string[] = []
-    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(accountId => {
-      order.push(`remove:${accountId}`)
-      seedCodexAccountPoolForTest({
-        accounts: [remaining],
-        activeAccountId: remaining.accountId,
-      })
-      return true
-    })
-    const repair = spyOn(
-      leaseManagerModule,
-      'repairLeasesForDeletedAccount',
-    ).mockImplementation(accountId => {
-      order.push(`repair:${accountId}`)
-    })
-    const reassign = spyOn(
-      leaseManagerModule,
-      'reassignCodexLeaseToActiveAccount',
-    ).mockImplementation(ownerId => {
-      order.push(`reassign:${ownerId}`)
-    })
-    const releaseLease = spyOn(
-      leaseManagerModule,
-      'releaseCodexLease',
-    ).mockImplementation(() => {})
-    const resetCache = spyOn(
-      codexFetchAdapterModule,
-      'resetCodexCacheContext',
-    ).mockImplementation(() => {
-      order.push('reset-cache')
-    })
-    const clearCaches = spyOn(
-      logoutModule,
-      'clearAuthRelatedCaches',
-    ).mockImplementation(async () => {
-      order.push('clear-auth-caches')
-    })
-
-    const result = await createRealAccountsExecutor().delete(deleted.accountId)
+    let deletionInput: CodexAccountDeletionInput | undefined
+    const result = await createRealAccountsExecutor({
+      deleteTransaction: async input => {
+        deletionInput = input
+        seedCodexAccountPoolForTest({
+          accounts: [remaining],
+          activeAccountId: remaining.accountId,
+        })
+        return {
+          status: 'committed',
+          accountId: input.accountId,
+          lifecycleGeneration: 1,
+          lifecycleState: 'signed_out',
+          credentialGeneration: 1,
+          state: 'signed_out',
+          operationId: input.operationId,
+          targetWasActive: true,
+          replacementActiveAccountId: remaining.accountId,
+        } satisfies CodexAccountDeletionResult
+      },
+    }).delete(deleted.accountId)
 
     expect(result).toEqual({ ok: true, message: 'Account deleted.' })
-    expect(repair).toHaveBeenCalledWith(deleted.accountId)
-    expect(reassign).toHaveBeenCalledWith('main-thread')
-    expect(releaseLease).not.toHaveBeenCalled()
-    expect(resetCache).toHaveBeenCalledTimes(1)
-    expect(clearCaches).toHaveBeenCalledTimes(1)
-    expect(order).toEqual([
-      `remove:${deleted.accountId}`,
-      `repair:${deleted.accountId}`,
-      'reassign:main-thread',
-      'reset-cache',
-      'clear-auth-caches',
-    ])
+    expect(deletionInput).toMatchObject({
+      accountId: deleted.accountId,
+      expectedCredentialGeneration: deleted.credentialGeneration,
+    })
+    expect(deletionInput?.operationId).toEqual(expect.any(String))
   })
 
-  test('releases the main-thread lease after deleting the final account', async () => {
+  test('reports a refused deletion transaction without mutating the pool', async () => {
     const deleted = poolAccount({
       accountId: 'delete-final',
       vaultFilePath: '/test-vault/accounts/delete-final.json',
@@ -340,35 +317,33 @@ describe('real Codex delete executor cleanup', () => {
       activeAccountId: deleted.accountId,
     })
 
-    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(() => {
-      seedCodexAccountPoolForTest({ accounts: [] })
-      return true
+    let deletionInput: CodexAccountDeletionInput | undefined
+    const result = await createRealAccountsExecutor({
+      deleteTransaction: async input => {
+        deletionInput = input
+        return {
+          status: 'superseded',
+          accountId: input.accountId,
+          lifecycleGeneration: 2,
+          lifecycleState: 'login_prepared',
+          credentialGeneration: 2,
+          state: 'login_prepared',
+          operationId: input.operationId,
+          targetWasActive: true,
+          replacementActiveAccountId: null,
+        } satisfies CodexAccountDeletionResult
+      },
+    }).delete(deleted.accountId)
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Could not delete that account.',
     })
-    spyOn(
-      leaseManagerModule,
-      'repairLeasesForDeletedAccount',
-    ).mockImplementation(() => {})
-    const reassign = spyOn(
-      leaseManagerModule,
-      'reassignCodexLeaseToActiveAccount',
-    ).mockImplementation(() => {})
-    const releaseLease = spyOn(
-      leaseManagerModule,
-      'releaseCodexLease',
-    ).mockImplementation(() => {})
-    spyOn(
-      codexFetchAdapterModule,
-      'resetCodexCacheContext',
-    ).mockImplementation(() => {})
-    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(
-      async () => {},
-    )
-
-    const result = await createRealAccountsExecutor().delete(deleted.accountId)
-
-    expect(result.ok).toBe(true)
-    expect(reassign).not.toHaveBeenCalled()
-    expect(releaseLease).toHaveBeenCalledWith('main-thread')
+    expect(deletionInput).toMatchObject({
+      accountId: deleted.accountId,
+      expectedCredentialGeneration: deleted.credentialGeneration,
+    })
+    expect(getPoolStatus().accounts).toHaveLength(1)
   })
 })
 
@@ -907,7 +882,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     const rename = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'new' })
     const del = await domain.runVerb({ type: 'account.delete', requestId: 'r', accountId: 'a', confirm: true })
     expect(rename.result.ok).toBe(false)
-    expect(del.result.ok).toBe(false)
+    expect(del.result.ok).toBe(true)
   })
 
   test('touchAll surfaces per-account results and marks the pool changed', async () => {

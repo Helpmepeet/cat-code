@@ -6,6 +6,7 @@ import { tmpdir } from 'os'
 import * as codexFetchAdapterModule from '../../services/api/codex-fetch-adapter.js'
 import * as claudePoolModule from '../../services/api/claudeAccountPool.js'
 import * as codexPoolModule from '../../services/api/codexAccountPool.js'
+import * as deletionModule from '../../services/api/codexAccountSignOut.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -17,7 +18,7 @@ import { call } from './delete-account.js'
 function createCodexAccount(
   accountId: string,
   alias: string,
-  vaultFilePath: string,
+  vaultFilePath: string | undefined,
   lastUsedAt = 0,
 ): PoolAccount {
   return {
@@ -82,6 +83,44 @@ describe('/delete-account', () => {
         createCodexAccount('new-main', 'backup', backupPath, 10),
       ],
     })
+    const deletion = spyOn(
+      deletionModule,
+      'deleteCodexAccount',
+    ).mockImplementation(async input => {
+      codexPoolModule.seedCodexAccountPoolForTest({
+        accounts: [
+          createCodexAccount('new-main', 'backup', backupPath, 10),
+        ],
+        activeAccountId: 'new-main',
+      })
+      resetCodexLeaseManagerForTest()
+      seedCodexLeaseForTest({
+        ownerId: 'main-thread',
+        ownerType: 'main',
+        ownerLabel: 'Main thread',
+        accountId: 'new-main',
+      })
+      seedCodexLeaseForTest({
+        ownerId: 'follow-worker',
+        ownerType: 'subagent',
+        ownerLabel: 'Follow Worker',
+        accountId: 'new-main',
+        strategy: 'follow-main',
+      })
+      resetContextSpy()
+      await clearCachesSpy()
+      return {
+        status: 'committed',
+        accountId: input.accountId,
+        lifecycleGeneration: input.expectedCredentialGeneration + 1,
+        lifecycleState: 'signed_out',
+        credentialGeneration: input.expectedCredentialGeneration + 1,
+        state: 'signed_out',
+        operationId: input.operationId,
+        targetWasActive: true,
+        replacementActiveAccountId: 'new-main',
+      }
+    })
     seedCodexLeaseForTest({
       ownerId: 'main-thread',
       ownerType: 'main',
@@ -136,6 +175,13 @@ describe('/delete-account', () => {
       type: 'text',
       value: 'Deleted old. Active Codex account is now backup.',
     })
+    expect(deletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'old-main',
+        expectedCredentialGeneration: 0,
+        operationId: expect.any(String),
+      }),
+    )
     const pool = codexPoolModule.getPoolStatus()
     expect(pool.accounts.map(account => account.accountId)).toEqual(['new-main'])
     expect(pool.accounts[pool.activeIndex]?.accountId).toBe('new-main')
@@ -200,5 +246,59 @@ describe('/delete-account', () => {
     expect(claudePoolModule.getClaudePoolStatus().accounts.map(account => account.accountUuid)).toEqual([
       'claude-current',
     ])
+  })
+
+  test('config-only Codex delete delegates with the legacy generation', async () => {
+    codexPoolModule.seedCodexAccountPoolForTest({
+      activeAccountId: 'config-only',
+      accounts: [
+        createCodexAccount('config-only', 'config', undefined),
+      ],
+    })
+    const deletion = spyOn(
+      deletionModule,
+      'deleteCodexAccount',
+    ).mockImplementation(async input => {
+      codexPoolModule.seedCodexAccountPoolForTest({
+        accounts: [],
+      })
+      return {
+        status: 'committed',
+        accountId: input.accountId,
+        lifecycleGeneration: 1,
+        lifecycleState: 'signed_out',
+        credentialGeneration: 1,
+        state: 'signed_out',
+        operationId: input.operationId,
+        targetWasActive: true,
+        replacementActiveAccountId: null,
+      }
+    })
+
+    const result = await call(
+      'config --confirm',
+      {
+        onChangeAPIKey: mock(() => {}),
+        setMessages: mock(() => {}),
+        setAppState: mock(
+          (
+            updater: (prev: { authVersion: number; statusLineRefreshKey: number }) =>
+              { authVersion: number; statusLineRefreshKey: number },
+          ) => updater({ authVersion: 0, statusLineRefreshKey: 0 }),
+        ),
+      } as Parameters<typeof call>[1],
+    )
+
+    expect(result).toEqual({
+      type: 'text',
+      value: 'Deleted config. No Codex accounts remain.',
+    })
+    expect(deletion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: 'config-only',
+        expectedCredentialGeneration: 0,
+        operationId: expect.any(String),
+      }),
+    )
   })
 })

@@ -40,6 +40,12 @@ import {
   seedCodexLeaseForTest,
 } from './codexAccountLeaseManager.js'
 import {
+  createCodexCredentialHandle,
+  startCodexCredentialSend,
+} from './codexCredentialUse.js'
+import {
+  deleteCodexAccount,
+  recoverCodexAccountDeletion,
   recoverCodexAccountSignOut,
   signOutCodexAccount,
   type CodexAccountSignOutDependencies,
@@ -830,6 +836,562 @@ describe('targeted Codex account sign-out', () => {
     expect(getSignedOutCodexProfiles()).toEqual([])
   })
 
+})
+
+describe('targeted Codex account deletion', () => {
+  test('invalidates before unlinking every credential path and denies an old handle', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const firstPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const secondPath = writeVaultProfile(vaultPath, 'copy.json', ACCOUNT_A)
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [
+        buildPoolAccount(ACCOUNT_A, {
+          vaultFilePath: firstPath,
+        }),
+      ],
+    })
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'target-access',
+      refreshToken: 'target-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+    const oldHandle = createCodexCredentialHandle({
+      accountId: ACCOUNT_A,
+      accessToken: 'old-access',
+      refreshToken: 'old-refresh',
+      expiresAt: Date.now() + 60_000,
+      credentialGeneration: 1,
+      credentialSource: 'vault',
+      credentialPath: firstPath,
+    })
+    let observedBeforeCleanup = false
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: 1,
+        operationId: 'delete-before-unlink',
+      },
+      dependencies(lifecycle, vaultPath, {
+        beforeCleanup: record => {
+          observedBeforeCleanup = true
+          expect(record).toMatchObject({
+            credentialGeneration: 2,
+            state: 'signed_out',
+            operationKind: 'delete',
+            cleanup: 'pending',
+          })
+          expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toEqual(record)
+          expect(existsSync(firstPath)).toBe(true)
+          expect(existsSync(secondPath)).toBe(true)
+        },
+      }),
+    )
+
+    expect(observedBeforeCleanup).toBe(true)
+    expect(result.status).toBe('committed')
+    expect(existsSync(firstPath)).toBe(false)
+    expect(existsSync(secondPath)).toBe(false)
+    expect(getPoolStatus().accounts).toEqual([])
+    expect(getSignedOutCodexProfiles()).toEqual([])
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toMatchObject({
+      credentialGeneration: 2,
+      state: 'signed_out',
+      operationKind: 'delete',
+      cleanup: 'complete',
+    })
+
+    let sends = 0
+    await expect(
+      startCodexCredentialSend(
+        oldHandle,
+        () => {
+          sends += 1
+          return Promise.resolve('sent')
+        },
+        { lifecycle },
+      ),
+    ).rejects.toMatchObject({ code: 'state_mismatch' })
+    expect(sends).toBe(0)
+  })
+
+  test('deletes signed-out metadata without rewriting the denial tombstone', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const vaultFilePath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [buildPoolAccount(ACCOUNT_A, { vaultFilePath })],
+    })
+    const signOutResult = await signOutCodexAccount(
+      input(),
+      dependencies(lifecycle, vaultPath),
+    )
+    expect(signOutResult.status).toBe('committed')
+    const tombstone = lifecycleRecord(lifecycle, ACCOUNT_A)
+    const tombstoneRaw = readFileSync(
+      lifecycle.getPaths(ACCOUNT_A).recordPath,
+      'utf8',
+    )
+    expect(tombstone.state).toBe('signed_out')
+    expect(existsSync(vaultFilePath)).toBe(true)
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: tombstone.credentialGeneration,
+        operationId: 'delete-metadata',
+      },
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(existsSync(vaultFilePath)).toBe(false)
+    expect(getSignedOutCodexProfiles()).toEqual([])
+    expect(readFileSync(lifecycle.getPaths(ACCOUNT_A).recordPath, 'utf8')).toBe(
+      tombstoneRaw,
+    )
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toEqual(tombstone)
+  })
+
+  test('deletes reauthentication metadata while preserving its denial generation', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const vaultFilePath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    await lifecycle.withTransaction(
+      ACCOUNT_A,
+      { operationKind: 'refresh', operationId: 'reauth-required' },
+      permit => {
+        expect(
+          lifecycle.markReauthRequired(permit, { expectedGeneration: 1 }),
+        ).toMatchObject({
+          status: 'applied',
+          record: {
+            credentialGeneration: 2,
+            state: 'reauth_required',
+          },
+        })
+      },
+    )
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [buildPoolAccount(ACCOUNT_A, { vaultFilePath })],
+    })
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'stale-access',
+      refreshToken: 'stale-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+    const denial = lifecycleRecord(lifecycle, ACCOUNT_A)
+    const denialRaw = readFileSync(
+      lifecycle.getPaths(ACCOUNT_A).recordPath,
+      'utf8',
+    )
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: denial.credentialGeneration,
+        operationId: 'delete-reauth-metadata',
+      },
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(existsSync(vaultFilePath)).toBe(false)
+    expect(getCodexOAuthTokens()).toBeNull()
+    expect(readFileSync(lifecycle.getPaths(ACCOUNT_A).recordPath, 'utf8')).toBe(
+      denialRaw,
+    )
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toEqual(denial)
+  })
+
+  test('config-only deletion invalidates its generation and leaves no saved profile', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'config-access',
+      refreshToken: 'config-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: 1,
+        operationId: 'delete-config',
+      },
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(getCodexOAuthTokens()).toBeNull()
+    expect(getPoolStatus().accounts).toEqual([])
+    expect(getSignedOutCodexProfiles()).toEqual([])
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toMatchObject({
+      credentialGeneration: 2,
+      state: 'signed_out',
+      operationKind: 'delete',
+      cleanup: 'complete',
+    })
+  })
+
+  test('legacy config-only deletion creates the first denial generation', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const lifecycle = createCodexCredentialLifecycle({ directory: lifecyclePath })
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'legacy-config-access',
+      refreshToken: 'legacy-config-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+    })
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: 0,
+        operationId: 'delete-legacy-config',
+      },
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(getCodexOAuthTokens()).toBeNull()
+    expect(getSignedOutCodexProfiles()).toEqual([])
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toMatchObject({
+      credentialGeneration: 1,
+      state: 'signed_out',
+      operationKind: 'delete',
+      cleanup: 'complete',
+    })
+  })
+
+  test('lost deletion results recover, while a newer prepared login wins', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const vaultFilePath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const replacementPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_B}.json`,
+      ACCOUNT_B,
+      1,
+      'backup',
+    )
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    await establishCredentialed(lifecyclePath, ACCOUNT_B)
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [
+        buildPoolAccount(ACCOUNT_A, { vaultFilePath }),
+        buildPoolAccount(ACCOUNT_B, {
+          alias: 'backup',
+          vaultFilePath: replacementPath,
+        }),
+      ],
+    })
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'target-access',
+      refreshToken: 'target-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+    const deletionInput = {
+      accountId: ACCOUNT_A,
+      expectedCredentialGeneration: 1,
+      operationId: 'lost-delete',
+    }
+    const pending = await deleteCodexAccount(
+      deletionInput,
+      dependencies(lifecycle, vaultPath, {
+        beforeCleanup: () => {
+          throw new Error('lost deletion result')
+        },
+        replaceActiveAccount: () => {
+          throw new Error('lost active replacement result')
+        },
+      }),
+    )
+    expect(pending.status).toBe('retryable_unknown')
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A).cleanup).toBe('pending')
+    expect(getPoolStatus().accounts).toEqual([
+      expect.objectContaining({ accountId: ACCOUNT_B }),
+    ])
+
+    const recovered = await recoverCodexAccountDeletion(
+      deletionInput,
+      dependencies(lifecycle, vaultPath),
+    )
+    expect(recovered.status).toBe('already_committed')
+    expect(existsSync(vaultFilePath)).toBe(false)
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A).cleanup).toBe('complete')
+    expect(recovered.replacementActiveAccountId).toBe(ACCOUNT_B)
+
+    const newerPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_C}.json`,
+      ACCOUNT_C,
+    )
+    await establishCredentialed(lifecyclePath, ACCOUNT_C)
+    const staleLifecycle = createCodexCredentialLifecycle({
+      directory: lifecyclePath,
+    })
+    await staleLifecycle.withTransaction(
+      ACCOUNT_C,
+      { operationKind: 'delete', operationId: 'stale-prepared-delete' },
+      permit => {
+        expect(
+          staleLifecycle.deleteAccount(permit, { expectedGeneration: 1 }),
+        ).toMatchObject({ status: 'applied' })
+      },
+    )
+    await staleLifecycle.withTransaction(
+      ACCOUNT_C,
+      { operationKind: 'login', operationId: 'newer-prepared-login' },
+      permit => {
+        expect(staleLifecycle.prepareLogin(permit)).toMatchObject({
+          status: 'applied',
+          record: {
+            credentialGeneration: 3,
+            state: 'login_prepared',
+          },
+        })
+      },
+    )
+    const newerBefore = readFileSync(newerPath, 'utf8')
+    const stale = await recoverCodexAccountDeletion(
+      {
+        accountId: ACCOUNT_C,
+        expectedCredentialGeneration: 1,
+        operationId: 'stale-prepared-delete',
+      },
+      dependencies(staleLifecycle, vaultPath),
+    )
+    expect(stale.status).toBe('superseded')
+    expect(readFileSync(newerPath, 'utf8')).toBe(newerBefore)
+    expect(lifecycleRecord(staleLifecycle, ACCOUNT_C)).toMatchObject({
+      credentialGeneration: 3,
+      state: 'login_prepared',
+    })
+  })
+
+  test('stale deletion recovery never touches a newer committed login', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const vaultFilePath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [buildPoolAccount(ACCOUNT_A, { vaultFilePath })],
+    })
+    const deletionInput = {
+      accountId: ACCOUNT_A,
+      expectedCredentialGeneration: 1,
+      operationId: 'stale-committed-delete',
+    }
+    await lifecycle.withTransaction(
+      ACCOUNT_A,
+      { operationKind: 'delete', operationId: deletionInput.operationId },
+      permit => {
+        expect(
+          lifecycle.deleteAccount(permit, { expectedGeneration: 1 }),
+        ).toMatchObject({
+          status: 'applied',
+          record: {
+            credentialGeneration: 2,
+            state: 'signed_out',
+          },
+        })
+      },
+    )
+    await lifecycle.withTransaction(
+      ACCOUNT_A,
+      { operationKind: 'login', operationId: 'newer-committed-login' },
+      permit => {
+        const prepared = lifecycle.prepareLogin(permit)
+        expect(prepared).toMatchObject({
+          status: 'applied',
+          record: {
+            credentialGeneration: 3,
+            state: 'login_prepared',
+          },
+        })
+        if (prepared.status === 'applied') {
+          expect(
+            lifecycle.commitLogin(permit, {
+              expectedGeneration: prepared.record.credentialGeneration,
+            }),
+          ).toMatchObject({
+            status: 'applied',
+            record: {
+              credentialGeneration: 3,
+              state: 'credentialed',
+            },
+          })
+        }
+      },
+    )
+    const before = readFileSync(vaultFilePath, 'utf8')
+
+    const result = await recoverCodexAccountDeletion(
+      deletionInput,
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('superseded')
+    expect(readFileSync(vaultFilePath, 'utf8')).toBe(before)
+    expect(lifecycleRecord(lifecycle, ACCOUNT_A)).toMatchObject({
+      credentialGeneration: 3,
+      state: 'credentialed',
+    })
+  })
+
+  test('repairs only target leases and preserves unrelated runtime state', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-delete-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-delete-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const targetPath = writeVaultProfile(vaultPath, `${ACCOUNT_A}.json`, ACCOUNT_A)
+    const replacementPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_B}.json`,
+      ACCOUNT_B,
+      1,
+      'replacement',
+    )
+    const unrelatedPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_C}.json`,
+      ACCOUNT_C,
+      1,
+      'unrelated',
+    )
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    await establishCredentialed(lifecyclePath, ACCOUNT_B)
+    await establishCredentialed(lifecyclePath, ACCOUNT_C)
+    const unrelated = buildPoolAccount(ACCOUNT_C, {
+      alias: 'unrelated',
+      vaultFilePath: unrelatedPath,
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'preserve',
+      lastUsedAt: 42,
+      usagePrimary: 31,
+      usageWeekly: 22,
+    })
+    seedCodexAccountPoolForTest({
+      activeAccountId: ACCOUNT_A,
+      accounts: [
+        buildPoolAccount(ACCOUNT_A, { vaultFilePath: targetPath }),
+        buildPoolAccount(ACCOUNT_B, {
+          alias: 'replacement',
+          vaultFilePath: replacementPath,
+        }),
+        unrelated,
+      ],
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: ACCOUNT_A,
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'follow-worker',
+      ownerType: 'subagent',
+      ownerLabel: 'Follow worker',
+      accountId: ACCOUNT_A,
+      strategy: 'follow-main',
+    })
+    seedCodexLeaseForTest({
+      ownerId: 'unrelated-worker',
+      ownerType: 'subagent',
+      ownerLabel: 'Unrelated worker',
+      accountId: ACCOUNT_C,
+      strategy: 'spread',
+    })
+    setConfigState(ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'target-access',
+      refreshToken: 'target-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+
+    const result = await deleteCodexAccount(
+      {
+        accountId: ACCOUNT_A,
+        expectedCredentialGeneration: 1,
+        operationId: 'delete-leases',
+      },
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.replacementActiveAccountId).toBe(ACCOUNT_B)
+    expect(getPoolStatus().activeIndex).toBe(0)
+    expect(getPoolStatus().accounts[0]?.accountId).toBe(ACCOUNT_B)
+    expect(getPoolStatus().accounts[1]).toEqual(
+      expect.objectContaining({
+        accountId: ACCOUNT_C,
+        status: 'capped',
+        statusReason: 'usage_cap',
+        lastError: 'preserve',
+        lastUsedAt: 42,
+        usagePrimary: 31,
+        usageWeekly: 22,
+      }),
+    )
+    expect(getCodexLeaseSnapshotForTest().leases).toEqual([
+      expect.objectContaining({ ownerId: 'main-thread', accountId: ACCOUNT_B }),
+      expect.objectContaining({ ownerId: 'follow-worker', accountId: ACCOUNT_B }),
+      expect.objectContaining({ ownerId: 'unrelated-worker', accountId: ACCOUNT_C }),
+    ])
+  })
 })
 
 function getGlobalConfigForTest(): {

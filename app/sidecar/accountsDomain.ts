@@ -50,7 +50,6 @@ import {
   getCodexProfileInventory,
   getPoolStatus,
   isCodexAccountSwitchable,
-  removeCodexAccount,
   loadPoolForObservation,
   setAccountAlias,
   validateCodexAccountAlias,
@@ -71,11 +70,11 @@ import {
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
 import {
-  reassignCodexLeaseToActiveAccount,
-  releaseCodexLease,
-  repairLeasesForDeletedAccount,
-} from '../../src/services/api/codexAccountLeaseManager.js'
-import { resetCodexCacheContext } from '../../src/services/api/codex-fetch-adapter.js'
+  createCodexAccountDeletionOperationId,
+  deleteCodexAccount,
+  type CodexAccountDeletionInput,
+  type CodexAccountDeletionResult,
+} from '../../src/services/api/codexAccountSignOut.js'
 import {
   installOAuthTokens,
   parseManualOAuthCallbackInput,
@@ -539,9 +538,13 @@ export function createRealAccountsExecutor(
      * transaction without touching a real vault.
      */
     commitSwitch?: (accountId: string) => Promise<PoolAccount | null>
+    deleteTransaction?: (
+      input: CodexAccountDeletionInput,
+    ) => Promise<CodexAccountDeletionResult>
   } = {},
 ): AccountsCommandExecutor {
   const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
+  const deleteTransaction = options.deleteTransaction ?? deleteCodexAccount
   return {
     // The desktop switch must run the SAME transaction the terminal
     // `/switch-account` runs, not just the pool write. `switchToAccount` alone
@@ -581,22 +584,22 @@ export function createRealAccountsExecutor(
       const account = getPoolStatus().accounts.find(
         candidate => candidate.accountId === accountId,
       )
-      if (!account?.vaultFilePath) {
+      if (!account) {
         return { ok: false, message: 'Could not delete that account.' }
       }
 
-      if (!removeCodexAccount(accountId)) {
+      const result = await deleteTransaction({
+        accountId,
+        expectedCredentialGeneration: account.credentialGeneration,
+        operationId: createCodexAccountDeletionOperationId(),
+      })
+      if (
+        result.status !== 'committed' &&
+        result.status !== 'already_committed'
+      ) {
         return { ok: false, message: 'Could not delete that account.' }
       }
 
-      repairLeasesForDeletedAccount(accountId)
-      if (getPoolStatus().activeIndex >= 0) {
-        reassignCodexLeaseToActiveAccount('main-thread')
-      } else {
-        releaseCodexLease('main-thread')
-      }
-      resetCodexCacheContext()
-      await clearAuthRelatedCaches()
       return { ok: true, message: 'Account deleted.' }
     },
     logout() {
@@ -993,13 +996,6 @@ export function createSidecarAccountsDomain(
           const account = await resolveAccountForWrite(verb.accountId)
           if (!account) {
             return notFound('account.delete')
-          }
-          if (!account.vaultFilePath) {
-            return {
-              verb: 'account.delete',
-              result: { ok: false, message: 'Only vault-backed accounts can be deleted.' },
-              poolChanged: false,
-            }
           }
           const result = await executor.delete(account.accountId)
           return { verb: 'account.delete', result, poolChanged: result.ok }

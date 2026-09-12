@@ -4,6 +4,7 @@ import {
   existsSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
 } from 'fs'
 import { basename, dirname, join } from 'path'
 
@@ -23,6 +24,7 @@ import {
   getPoolStatus,
   getCodexProfileInventory,
   isCodexAccountSwitchable,
+  reconcileCodexAccountDeletion,
   reconcileCodexAccountSignOut,
   resolveCodexAccountForTargetedSignOut,
   setActiveAccount,
@@ -54,12 +56,16 @@ export type CodexAccountSignOutInput = Readonly<{
   operationId: string
 }>
 
+export type CodexAccountDeletionInput = CodexAccountSignOutInput
+
 export type CodexAccountSignOutStatus =
   | 'committed'
   | 'already_committed'
   | 'superseded'
   | 'cleanup_pending'
   | 'retryable_unknown'
+
+export type CodexAccountDeletionStatus = CodexAccountSignOutStatus
 
 export type CodexAccountSignOutResult = Readonly<{
   status: CodexAccountSignOutStatus
@@ -72,6 +78,8 @@ export type CodexAccountSignOutResult = Readonly<{
   targetWasActive: boolean
   replacementActiveAccountId: string | null
 }>
+
+export type CodexAccountDeletionResult = CodexAccountSignOutResult
 
 export type CodexAccountSignOutDependencies = Readonly<{
   lifecycle?: CodexCredentialLifecycle
@@ -89,6 +97,7 @@ export type CodexAccountSignOutDependencies = Readonly<{
   reconcilePool?: (
     input: Parameters<typeof reconcileCodexAccountSignOut>[0],
   ) => void
+  reconcileDeletedPool?: (accountId: string) => void
   repairLeases?: typeof repairLeasesForUnavailableAccount
   resetCodexCacheContext?: typeof resetCodexCacheContext
   invalidateUsageCache?: typeof invalidateUsageCache
@@ -97,6 +106,8 @@ export type CodexAccountSignOutDependencies = Readonly<{
     record: CodexCredentialLifecycleRecord,
   ) => void | Promise<void>
 }>
+
+export type CodexAccountDeletionDependencies = CodexAccountSignOutDependencies
 
 type NormalizedInput = {
   accountId: string
@@ -150,6 +161,7 @@ type TransactionExecution =
       cleanup: PhysicalCleanup
       retirementFailed: boolean
       completionFailed: boolean
+      preserveLifecycle: boolean
     }
   | {
       kind: 'retryable_unknown'
@@ -307,11 +319,7 @@ function targetResolution(
     return { kind: 'ambiguous' }
   }
 
-  if (
-    status.accounts.length === 0 &&
-    inventory.signedOutProfiles.length === 0 &&
-    inventory.duplicateVaultIdentities.length === 0
-  ) {
+  if (accounts.length === 0 && profiles.length === 0 && !duplicate) {
     let config: GlobalConfig
     try {
       config = (dependencies.readConfig ?? getGlobalConfig)()
@@ -320,6 +328,13 @@ function targetResolution(
     }
     const mirror = config.codexOAuth
     const lifecycleResult = safeReadLifecycle(lifecycle, accountId)
+    const mirrorGeneration = mirror?.credentialGeneration ?? 0
+    const lifecycleMatchesMirror =
+      lifecycleResult.status === 'valid' &&
+      lifecycleResult.record.state === 'credentialed' &&
+      lifecycleResult.record.credentialGeneration === mirrorGeneration
+    const legacyMirror =
+      lifecycleResult.status === 'absent' && mirrorGeneration === 0
     if (
       mirror?.accountId === accountId &&
       typeof mirror.accessToken === 'string' &&
@@ -328,10 +343,7 @@ function targetResolution(
       mirror.refreshToken.length > 0 &&
       typeof mirror.expiresAt === 'number' &&
       Number.isFinite(mirror.expiresAt) &&
-      lifecycleResult.status === 'valid' &&
-      lifecycleResult.record.state === 'credentialed' &&
-      lifecycleResult.record.credentialGeneration ===
-        (mirror.credentialGeneration ?? 0)
+      (lifecycleMatchesMirror || legacyMirror)
     ) {
       return {
         kind: 'credentialed',
@@ -343,9 +355,9 @@ function targetResolution(
           source: 'config',
           status: 'healthy',
           lastUsedAt: 0,
-          credentialGeneration: mirror.credentialGeneration ?? 0,
+          credentialGeneration: mirrorGeneration,
           credentialGenerationState:
-            mirror.credentialGeneration === 0
+            mirrorGeneration === 0
               ? 'legacy_unbound'
               : 'lifecycle_bound',
         },
@@ -379,16 +391,32 @@ function mirrorMatches(
   return mirrorGeneration === generation
 }
 
-function isSameSignedOutOperation(
+function isSameCleanupOperation(
   record: CodexCredentialLifecycleRecord,
   input: NormalizedInput,
+  operationKind: 'sign_out' | 'delete',
 ): boolean {
   return (
     record.state === 'signed_out' &&
-    record.operationKind === 'sign_out' &&
+    record.operationKind === operationKind &&
     record.operationId === input.operationId &&
     record.credentialGeneration ===
       input.expectedCredentialGeneration + 1
+  )
+}
+
+function isCurrentCleanupRecord(
+  current: CodexCredentialLifecycleRecord | undefined,
+  expected: CodexCredentialLifecycleRecord,
+): boolean {
+  return (
+    current?.accountId === expected.accountId &&
+    current.credentialGeneration === expected.credentialGeneration &&
+    current.state === expected.state &&
+    (expected.state === 'signed_out' || expected.state === 'reauth_required') &&
+    current.operationId === expected.operationId &&
+    current.operationKind === expected.operationKind &&
+    current.cleanup === expected.cleanup
   )
 }
 
@@ -791,6 +819,146 @@ function cleanupVault(
   }
 }
 
+function deleteVaultPass(
+  scan: VaultScan,
+  accountId: string,
+  expectedGeneration: number,
+): VaultCleanup {
+  const observations = [...scan.observations].sort(
+    (left, right) => left.filePath.localeCompare(right.filePath),
+  )
+  const alias =
+    observations.map(observation => observation.alias).find(Boolean)
+  let failed = false
+
+  for (const observation of observations) {
+    let release: (() => void) | undefined
+    try {
+      release = acquireProfileLock(observation.filePath)
+      if (!existsSync(observation.filePath)) continue
+
+      const parsed = JSON.parse(
+        readFileSync(observation.filePath, 'utf8'),
+      ) as unknown
+      const data = asRecord(parsed)
+      if (!data) {
+        failed = true
+        continue
+      }
+      const identity = readStoredIdentity(data)
+      if (identity.kind === 'ambiguous') {
+        if (mentionsAccount(data, accountId)) failed = true
+        continue
+      }
+      if (identity.kind !== 'known' || identity.accountId !== accountId) {
+        continue
+      }
+
+      const tokens = asRecord(data.tokens)
+      const generation = credentialGenerationFrom(tokens)
+      if (
+        hasCredentialBearingCopy(data) &&
+        (generation === null || generation !== expectedGeneration)
+      ) {
+        failed = true
+        continue
+      }
+
+      try {
+        unlinkSync(observation.filePath)
+      } catch (error) {
+        if (!(error && typeof error === 'object' && 'code' in error &&
+          error.code === 'ENOENT')) {
+          failed = true
+          continue
+        }
+      }
+      if (existsSync(observation.filePath)) failed = true
+    } catch {
+      failed = true
+    } finally {
+      release?.()
+    }
+  }
+
+  return {
+    ok: !failed,
+    profilePaths: [],
+    discoveredPaths: observations.map(observation => observation.filePath),
+    ...(alias ? { alias } : {}),
+  }
+}
+
+function deleteVault(
+  vaultPath: string | null,
+  accountId: string,
+  expectedGeneration: number,
+  hint: TargetHint,
+): VaultCleanup {
+  const knownPaths = new Set(hint.vaultFilePaths)
+  let last: VaultCleanup = {
+    ok: true,
+    profilePaths: [],
+    discoveredPaths: [],
+  }
+
+  for (let pass = 0; pass < 2; pass += 1) {
+    const scan = scanVault(vaultPath, accountId, knownPaths)
+    if (scan.unsafe || scan.readFailure) {
+      return {
+        ok: false,
+        profilePaths: [],
+        discoveredPaths: [
+          ...new Set([
+            ...last.discoveredPaths,
+            ...scan.observations.map(observation => observation.filePath),
+          ]),
+        ],
+        ...(last.alias ? { alias: last.alias } : {}),
+      }
+    }
+    if (scan.observations.length === 0) return last
+
+    const deleted = deleteVaultPass(
+      scan,
+      accountId,
+      expectedGeneration,
+    )
+    last = {
+      ok: deleted.ok,
+      profilePaths: [],
+      discoveredPaths: [
+        ...new Set([
+          ...last.discoveredPaths,
+          ...deleted.discoveredPaths,
+        ]),
+      ],
+      ...(deleted.alias ?? last.alias
+        ? { alias: deleted.alias ?? last.alias }
+        : {}),
+    }
+    knownPaths.clear()
+    for (const path of last.discoveredPaths) knownPaths.add(path)
+    if (!deleted.ok) return last
+  }
+
+  const finalScan = scanVault(vaultPath, accountId, knownPaths)
+  if (finalScan.unsafe || finalScan.readFailure || finalScan.observations.length > 0) {
+    return {
+      ok: false,
+      profilePaths: [],
+      discoveredPaths: [
+        ...new Set([
+          ...last.discoveredPaths,
+          ...finalScan.observations.map(observation => observation.filePath),
+        ]),
+      ],
+      ...(last.alias ? { alias: last.alias } : {}),
+    }
+  }
+  return last
+}
+
 function vaultRootForProfilePath(filePath: string): string | undefined {
   const accountsDir = dirname(filePath)
   if (basename(accountsDir) !== 'accounts') return undefined
@@ -849,11 +1017,72 @@ function cleanupConfigMirror(
   return !mirrorMatches(after, accountId, expectedGeneration)
 }
 
+function cleanupConfigMirrorGenerations(
+  readConfig: () => GlobalConfig,
+  clearMirror: typeof clearCodexOAuthTokensForAccount,
+  clearMirrorResult:
+    | typeof clearCodexOAuthTokensForAccountResult
+    | undefined,
+  accountId: string,
+  expectedGenerations: readonly number[],
+): boolean {
+  const generations = [...new Set(expectedGenerations)]
+  for (const generation of generations) {
+    let result: CodexOAuthTokenClearResult
+    try {
+      result = clearMirrorResult
+        ? clearMirrorResult(accountId, generation)
+        : (() => {
+            let before: GlobalConfig
+            try {
+              before = readConfig()
+            } catch {
+              return { status: 'failed' as const }
+            }
+            if (!mirrorMatches(before, accountId, generation)) {
+              return { status: 'not_matched' as const }
+            }
+            try {
+              clearMirror(accountId, generation)
+            } catch {
+              return { status: 'failed' as const }
+            }
+            let after: GlobalConfig
+            try {
+              after = readConfig()
+            } catch {
+              return { status: 'failed' as const }
+            }
+            return mirrorMatches(after, accountId, generation)
+              ? { status: 'failed' as const }
+              : { status: 'cleared' as const }
+          })()
+    } catch {
+      return false
+    }
+    if (result.status === 'failed') return false
+    if (
+      result.status === 'not_matched' &&
+      result.accountId === accountId &&
+      result.credentialGeneration !== undefined &&
+      !generations.includes(result.credentialGeneration ?? -1)
+    ) {
+      return false
+    }
+  }
+  return true
+}
+
 async function cleanupPhysicalStores(
   input: NormalizedInput,
   record: CodexCredentialLifecycleRecord,
   hint: TargetHint,
   dependencies: CodexAccountSignOutDependencies,
+  options: {
+    deleteProfiles: boolean
+    credentialGeneration: number
+    configGenerations: readonly number[]
+  },
 ): Promise<PhysicalCleanup> {
   const configuredVaultPath = (dependencies.getVaultPath ?? getVaultPath)()
   const roots = [
@@ -874,13 +1103,20 @@ async function cleanupPhysicalStores(
         path => vaultRootForProfilePath(path) === root,
       ),
     }
-    const cleaned = cleanupVault(
-      root,
-      input.accountId,
-      input.expectedCredentialGeneration,
-      record,
-      scopedHint,
-    )
+    const cleaned = options.deleteProfiles
+      ? deleteVault(
+          root,
+          input.accountId,
+          options.credentialGeneration,
+          scopedHint,
+        )
+      : cleanupVault(
+          root,
+          input.accountId,
+          options.credentialGeneration,
+          record,
+          scopedHint,
+        )
     vault = {
       ok: vault.ok && cleaned.ok,
       profilePaths: [...new Set([...vault.profilePaths, ...cleaned.profilePaths])],
@@ -899,13 +1135,21 @@ async function cleanupPhysicalStores(
     (dependencies.clearConfigMirror
       ? undefined
       : clearCodexOAuthTokensForAccountResult)
-  const configOk = cleanupConfigMirror(
-    dependencies.readConfig ?? getGlobalConfig,
-    clearMirror,
-    clearMirrorResult,
-    input.accountId,
-    input.expectedCredentialGeneration,
-  )
+  const configOk = options.configGenerations.length === 1
+    ? cleanupConfigMirror(
+        dependencies.readConfig ?? getGlobalConfig,
+        clearMirror,
+        clearMirrorResult,
+        input.accountId,
+        options.configGenerations[0]!,
+      )
+    : cleanupConfigMirrorGenerations(
+        dependencies.readConfig ?? getGlobalConfig,
+        clearMirror,
+        clearMirrorResult,
+        input.accountId,
+        options.configGenerations,
+      )
   return {
     ok: vault.ok && configOk,
     profilePaths: vault.profilePaths,
@@ -1141,10 +1385,153 @@ async function replaceActiveAccount(
   }
 }
 
-async function executeSignOut(
+type PostCleanupExecution =
+  | {
+      kind: 'applied'
+      sideEffectFailed: boolean
+      activeReplacement: ActiveReplacement
+    }
+  | {
+      kind: 'superseded'
+      record?: CodexCredentialLifecycleRecord
+    }
+  | {
+      kind: 'retryable_unknown'
+      record?: CodexCredentialLifecycleRecord
+    }
+
+async function applyPostCleanupEffects(
+  normalized: NormalizedInput,
+  operationKind: 'sign_out' | 'delete',
+  execution: Extract<TransactionExecution, { kind: 'ready' }>,
+  hint: TargetHint,
+  targetWasActive: boolean,
+  dependencies: CodexAccountSignOutDependencies,
+): Promise<PostCleanupExecution> {
+  const lifecycle = dependencies.lifecycle ?? codexCredentialLifecycle
+  try {
+    return await lifecycle.withTransaction(
+      normalized.accountId,
+      {
+        operationKind,
+        operationId: normalized.operationId,
+      },
+      async () => {
+        const currentResult = safeReadLifecycle(
+          lifecycle,
+          normalized.accountId,
+        )
+        if (currentResult.status !== 'valid') {
+          return {
+            kind:
+              currentResult.status === 'absent'
+                ? ('superseded' as const)
+                : ('retryable_unknown' as const),
+          }
+        }
+        if (!isCurrentCleanupRecord(currentResult.record, execution.record)) {
+          return {
+            kind: 'superseded' as const,
+            record: currentResult.record,
+          }
+        }
+
+        let sideEffectFailed =
+          execution.retirementFailed || execution.completionFailed
+        const source =
+          hint.source === 'vault' || execution.cleanup.profilePaths.length > 0
+            ? 'vault'
+            : 'config'
+        try {
+          if (operationKind === 'delete') {
+            ;(
+              dependencies.reconcileDeletedPool ??
+              reconcileCodexAccountDeletion
+            )(normalized.accountId)
+          } else {
+            const reconcile =
+              dependencies.reconcilePool ?? reconcileCodexAccountSignOut
+            if (source === 'vault') {
+              const paths =
+                execution.cleanupComplete &&
+                execution.cleanup.profilePaths.length > 0
+                  ? execution.cleanup.profilePaths
+                  : execution.cleanup.discoveredPaths.length > 0
+                    ? execution.cleanup.discoveredPaths
+                    : hint.vaultFilePaths
+              const profile: CodexAccountSignOutProfile = {
+                accountId: normalized.accountId,
+                ...(safeAlias(execution.cleanup.alias ?? hint.alias)
+                  ? {
+                      alias: safeAlias(
+                        execution.cleanup.alias ?? hint.alias,
+                      ),
+                    }
+                  : {}),
+                vaultFilePaths: paths,
+                credentialGeneration: execution.record.credentialGeneration,
+              }
+              reconcile(profile)
+            } else {
+              reconcile({ accountId: normalized.accountId, source: 'config' })
+            }
+          }
+        } catch {
+          sideEffectFailed = true
+        }
+
+        const activeReplacement = targetWasActive
+          ? await replaceActiveAccount(normalized, targetWasActive, dependencies)
+          : { status: 'unchanged' as const, activeAccountId: null }
+        if (activeReplacement.status === 'retryable_unknown') {
+          sideEffectFailed = true
+        }
+
+        try {
+          if (dependencies.repairLeases) {
+            dependencies.repairLeases(normalized.accountId)
+          } else {
+            repairLeasesForUnavailableAccount(normalized.accountId, {
+              touchReplacementUsage: false,
+              persistMainActive: false,
+              reason: operationKind === 'delete' ? 'deletion' : 'unavailable',
+            })
+          }
+        } catch {
+          sideEffectFailed = true
+        }
+
+        try {
+          ;(dependencies.resetCodexCacheContext ?? resetCodexCacheContext)()
+          ;(dependencies.invalidateUsageCache ?? invalidateUsageCache)()
+          await (
+            dependencies.clearAuthCaches ??
+            (() => clearAuthRelatedCaches({ refreshGrowthBook: false }))
+          )()
+        } catch {
+          sideEffectFailed = true
+        }
+
+        return {
+          kind: 'applied' as const,
+          sideEffectFailed,
+          activeReplacement,
+        }
+      },
+    )
+  } catch {
+    return {
+      kind: 'retryable_unknown',
+      record: execution.record,
+    }
+  }
+}
+
+async function executeAccountLifecycleCleanup(
   input: CodexAccountSignOutInput,
   dependencies: CodexAccountSignOutDependencies,
   recovery: boolean,
+  operationKind: 'sign_out' | 'delete',
 ): Promise<CodexAccountSignOutResult> {
   const normalized = normalizeInput(input)
   if (!normalized) {
@@ -1202,7 +1589,13 @@ async function executeSignOut(
 
   const matchingCommitted =
     recordBefore !== undefined &&
-    isSameSignedOutOperation(recordBefore, normalized)
+    isSameCleanupOperation(recordBefore, normalized, operationKind)
+  const deletionOfDeniedState =
+    operationKind === 'delete' &&
+    recordBefore !== undefined &&
+    (recordBefore.state === 'signed_out' ||
+      recordBefore.state === 'reauth_required') &&
+    recordBefore.credentialGeneration === normalized.expectedCredentialGeneration
   if (
     !recovery &&
     (resolution.kind === 'none' || resolution.kind === 'ambiguous') &&
@@ -1221,10 +1614,7 @@ async function executeSignOut(
   if (
     !recovery &&
     resolution.kind === 'signed_out' &&
-    !(
-      recordBefore &&
-      isSameSignedOutOperation(recordBefore, normalized)
-    )
+    !(matchingCommitted || deletionOfDeniedState)
   ) {
     return resultFor(
       normalized,
@@ -1242,7 +1632,7 @@ async function executeSignOut(
     execution = await lifecycle.withTransaction(
       normalized.accountId,
       {
-        operationKind: 'sign_out',
+        operationKind,
         operationId: normalized.operationId,
       },
       async permit => {
@@ -1250,25 +1640,53 @@ async function executeSignOut(
           lifecycle,
           normalized.accountId,
         )
-        if (currentResult.status !== 'valid') {
-          return currentResult.status === 'absent'
-            ? { kind: 'superseded' as const }
-            : { kind: 'retryable_unknown' as const }
+        if (currentResult.status === 'absent') {
+          if (
+            operationKind !== 'delete' ||
+            recovery ||
+            normalized.expectedCredentialGeneration !== 0
+          ) {
+            return { kind: 'superseded' as const }
+          }
+        } else if (currentResult.status !== 'valid') {
+          return { kind: 'retryable_unknown' as const }
         }
         let record: CodexCredentialLifecycleRecord
         let alreadyCommitted = false
-        if (isSameSignedOutOperation(currentResult.record, normalized)) {
+        let preserveLifecycle = false
+        if (
+          currentResult.status === 'valid' &&
+          isSameCleanupOperation(currentResult.record, normalized, operationKind)
+        ) {
           record = currentResult.record
           alreadyCommitted = true
         } else if (
+          operationKind === 'delete' &&
           !recovery &&
-          currentResult.record.state === 'credentialed' &&
+          currentResult.status === 'valid' &&
+          (currentResult.record.state === 'signed_out' ||
+            currentResult.record.state === 'reauth_required') &&
           currentResult.record.credentialGeneration ===
             normalized.expectedCredentialGeneration
         ) {
-          const signedOut = lifecycle.signOut(permit, {
-            expectedGeneration: normalized.expectedCredentialGeneration,
-          })
+          record = currentResult.record
+          preserveLifecycle = true
+        } else if (
+          !recovery &&
+          (currentResult.status === 'absent' ||
+            (currentResult.status === 'valid' &&
+              currentResult.record.state === 'credentialed' &&
+              currentResult.record.credentialGeneration ===
+                normalized.expectedCredentialGeneration))
+        ) {
+          const signedOut =
+            operationKind === 'delete'
+              ? lifecycle.deleteAccount(permit, {
+                  expectedGeneration: normalized.expectedCredentialGeneration,
+                })
+              : lifecycle.signOut(permit, {
+                  expectedGeneration: normalized.expectedCredentialGeneration,
+                })
           if (
             signedOut.status !== 'applied' ||
             signedOut.record.state !== 'signed_out' ||
@@ -1287,9 +1705,18 @@ async function executeSignOut(
           }
           record = signedOut.record
         } else {
-          return { kind: 'superseded' as const, record: currentResult.record }
+          return {
+            kind: 'superseded' as const,
+            ...(currentResult.status === 'valid'
+              ? { record: currentResult.record }
+              : {}),
+          }
         }
 
+        const cleanupGeneration =
+          operationKind === 'delete' && preserveLifecycle
+            ? Math.max(0, record.credentialGeneration - 1)
+            : normalized.expectedCredentialGeneration
         let retirementFailed = false
         try {
           (
@@ -1297,7 +1724,7 @@ async function executeSignOut(
             retireCodexWebSocketSessions
           )({
             accountId: normalized.accountId,
-            credentialGeneration: normalized.expectedCredentialGeneration,
+            credentialGeneration: cleanupGeneration,
           })
         } catch {
           retirementFailed = true
@@ -1311,6 +1738,14 @@ async function executeSignOut(
             record,
             hint,
             dependencies,
+            {
+              deleteProfiles: operationKind === 'delete',
+              credentialGeneration: cleanupGeneration,
+              configGenerations:
+                operationKind === 'delete' && preserveLifecycle
+                  ? [record.credentialGeneration, cleanupGeneration]
+                  : [normalized.expectedCredentialGeneration],
+            },
           )
         } catch {
           cleanup = {
@@ -1328,6 +1763,20 @@ async function executeSignOut(
             cleanup,
             retirementFailed,
             completionFailed: false,
+            preserveLifecycle,
+          }
+        }
+
+        if (preserveLifecycle) {
+          return {
+            kind: 'ready' as const,
+            record,
+            alreadyCommitted,
+            cleanupComplete: true,
+            cleanup,
+            retirementFailed,
+            completionFailed: false,
+            preserveLifecycle,
           }
         }
 
@@ -1336,7 +1785,7 @@ async function executeSignOut(
             accountId: normalized.accountId,
             credentialGeneration: record.credentialGeneration,
             operationId: record.operationId,
-            operationKind: 'sign_out',
+            operationKind,
           })
           if (completed.status === 'applied') {
             return {
@@ -1347,6 +1796,7 @@ async function executeSignOut(
               cleanup,
               retirementFailed,
               completionFailed: false,
+              preserveLifecycle,
             }
           }
           if (completed.status === 'superseded') {
@@ -1363,6 +1813,7 @@ async function executeSignOut(
             cleanup,
             retirementFailed,
             completionFailed: true,
+            preserveLifecycle,
           }
         } catch {
           return {
@@ -1373,6 +1824,7 @@ async function executeSignOut(
             cleanup,
             retirementFailed,
             completionFailed: true,
+            preserveLifecycle,
           }
         }
       },
@@ -1398,71 +1850,33 @@ async function executeSignOut(
     )
   }
 
-  let sideEffectFailed =
-    execution.retirementFailed || execution.completionFailed
-  const source =
-    hint.source === 'vault' || execution.cleanup.profilePaths.length > 0
-      ? 'vault'
-      : 'config'
-  try {
-    const reconcile =
-      dependencies.reconcilePool ?? reconcileCodexAccountSignOut
-    if (source === 'vault') {
-      const paths =
-        execution.cleanupComplete && execution.cleanup.profilePaths.length > 0
-          ? execution.cleanup.profilePaths
-          : execution.cleanup.discoveredPaths.length > 0
-            ? execution.cleanup.discoveredPaths
-            : hint.vaultFilePaths
-      const profile: CodexAccountSignOutProfile = {
-        accountId: normalized.accountId,
-        ...(safeAlias(execution.cleanup.alias ?? hint.alias)
-          ? { alias: safeAlias(execution.cleanup.alias ?? hint.alias) }
-          : {}),
-        vaultFilePaths: paths,
-        credentialGeneration: execution.record.credentialGeneration,
-      }
-      reconcile(profile)
-    } else {
-      reconcile({ accountId: normalized.accountId, source: 'config' })
-    }
-  } catch {
-    sideEffectFailed = true
+  const postCleanup = await applyPostCleanupEffects(
+    normalized,
+    operationKind,
+    execution,
+    hint,
+    targetWasActive,
+    dependencies,
+  )
+  if (postCleanup.kind === 'superseded') {
+    return resultFor(
+      normalized,
+      'superseded',
+      postCleanup.record,
+      targetWasActive,
+    )
   }
-
-  try {
-    if (dependencies.repairLeases) {
-      dependencies.repairLeases(normalized.accountId)
-    } else {
-      repairLeasesForUnavailableAccount(normalized.accountId, {
-        touchReplacementUsage: false,
-        persistMainActive: false,
-      })
-    }
-  } catch {
-    sideEffectFailed = true
-  }
-
-  const activeReplacement = targetWasActive
-    ? await replaceActiveAccount(normalized, targetWasActive, dependencies)
-    : { status: 'unchanged' as const, activeAccountId: null }
-  if (activeReplacement.status === 'retryable_unknown') {
-    sideEffectFailed = true
-  }
-
-  try {
-    ;(dependencies.resetCodexCacheContext ?? resetCodexCacheContext)()
-    ;(dependencies.invalidateUsageCache ?? invalidateUsageCache)()
-    await (
-      dependencies.clearAuthCaches ??
-      (() => clearAuthRelatedCaches({ refreshGrowthBook: false }))
-    )()
-  } catch {
-    sideEffectFailed = true
+  if (postCleanup.kind === 'retryable_unknown') {
+    return resultFor(
+      normalized,
+      'retryable_unknown',
+      postCleanup.record,
+      targetWasActive,
+    )
   }
 
   let status: CodexAccountSignOutStatus
-  if (sideEffectFailed) {
+  if (postCleanup.sideEffectFailed) {
     status = 'retryable_unknown'
   } else if (!execution.cleanupComplete) {
     status = recovery ? 'retryable_unknown' : 'cleanup_pending'
@@ -1476,7 +1890,7 @@ async function executeSignOut(
     status,
     execution.record,
     targetWasActive,
-    activeReplacement.activeAccountId,
+    postCleanup.activeReplacement.activeAccountId,
   )
 }
 
@@ -1484,19 +1898,39 @@ export async function signOutCodexAccount(
   input: CodexAccountSignOutInput,
   dependencies: CodexAccountSignOutDependencies = {},
 ): Promise<CodexAccountSignOutResult> {
-  return executeSignOut(input, dependencies, false)
+  return executeAccountLifecycleCleanup(input, dependencies, false, 'sign_out')
 }
 
 export async function recoverCodexAccountSignOut(
   input: CodexAccountSignOutInput,
   dependencies: CodexAccountSignOutDependencies = {},
 ): Promise<CodexAccountSignOutResult> {
-  return executeSignOut(input, dependencies, true)
+  return executeAccountLifecycleCleanup(input, dependencies, true, 'sign_out')
+}
+
+export async function deleteCodexAccount(
+  input: CodexAccountDeletionInput,
+  dependencies: CodexAccountSignOutDependencies = {},
+): Promise<CodexAccountDeletionResult> {
+  return executeAccountLifecycleCleanup(input, dependencies, false, 'delete')
+}
+
+export async function recoverCodexAccountDeletion(
+  input: CodexAccountDeletionInput,
+  dependencies: CodexAccountSignOutDependencies = {},
+): Promise<CodexAccountDeletionResult> {
+  return executeAccountLifecycleCleanup(input, dependencies, true, 'delete')
 }
 
 export const performCodexAccountSignOut = signOutCodexAccount
 export const recoverLostCodexAccountSignOut = recoverCodexAccountSignOut
+export const performCodexAccountDeletion = deleteCodexAccount
+export const recoverLostCodexAccountDeletion = recoverCodexAccountDeletion
 
 export function createCodexAccountSignOutOperationId(): string {
+  return randomUUID()
+}
+
+export function createCodexAccountDeletionOperationId(): string {
   return randomUUID()
 }

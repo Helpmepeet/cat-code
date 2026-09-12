@@ -858,7 +858,19 @@ export function createCodexCredentialLifecycle(
     const { details } = getPermit(permit, 'delete')
     const expectedGeneration = getExpectedGeneration(generationOptions)
     const current = readForMutation(details.accountId)
-    if (current === undefined) return { status: 'no_action' }
+    if (current === undefined) {
+      if (expectedGeneration !== 0) return superseded('missing')
+      const record = makeRecord({
+        accountId: details.accountId,
+        credentialGeneration: 1,
+        state: 'signed_out',
+        operationId: details.operationId,
+        operationKind: 'delete',
+        cleanup: 'pending',
+      })
+      writeRecord(record)
+      return applied(record, true)
+    }
     if (current.credentialGeneration !== expectedGeneration) {
       return superseded('generation_mismatch', current)
     }
@@ -866,6 +878,9 @@ export function createCodexCredentialLifecycle(
       // A denial record is the durable tombstone. Deleting a vault profile must
       // not remove or rewrite it once the credential is already invalid.
       return { status: 'no_action', record: current }
+    }
+    if (current.state !== 'credentialed') {
+      return superseded('state_mismatch', current)
     }
     const record = makeRecord({
       accountId: details.accountId,
