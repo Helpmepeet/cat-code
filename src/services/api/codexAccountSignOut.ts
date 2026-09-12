@@ -17,6 +17,7 @@ import {
 } from '../../utils/auth.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 import { getGlobalConfig, type GlobalConfig } from '../../utils/config.js'
+import { logForDebugging } from '../../utils/debug.js'
 import { acquireMutationLockSync, lock } from '../../utils/lockfile.js'
 import { invalidateUsageCache } from './codexUsage.js'
 import {
@@ -183,6 +184,8 @@ const CODEX_ALIAS_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/
 const VAULT_LOCK_WAIT_MS = 10_000
 const ACTIVE_REPLACEMENT_LOCK_WAIT_MS = 30_000
 
+// Active-account cleanup can lock both its target and a replacement candidate.
+// Taking this coordination lock first gives every process the same lock order.
 async function withActiveReplacementLock<T>(
   lifecycle: Pick<CodexCredentialLifecycle, 'getPaths'>,
   accountId: string,
@@ -199,6 +202,12 @@ async function withActiveReplacementLock<T>(
         retries: 0,
         stale: 120_000,
         update: 30_000,
+        onCompromised: error => {
+          logForDebugging(
+            `[codex-signout] Active replacement lock compromised: ${error.message}`,
+            { level: 'error' },
+          )
+        },
       })
       break
     } catch (error) {
