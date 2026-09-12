@@ -209,17 +209,17 @@ function createStatsAccumulator(options: ProcessOptions) {
       if (inRange) {
         eligibleMainMessages.push({ message, timestamp })
         activeDates.add(dateKey)
+        const activity = dailyActivityMap.get(dateKey) || {
+          date: dateKey,
+          messageCount: 0,
+          sessionCount: 0,
+          toolCallCount: 0,
+        }
         if (!isSubagentFile) {
-          const activity = dailyActivityMap.get(dateKey) || {
-            date: dateKey,
-            messageCount: 0,
-            sessionCount: 0,
-            toolCallCount: 0,
-          }
           activity.messageCount++
-          dailyActivityMap.set(dateKey, activity)
           totalMessages++
         }
+        dailyActivityMap.set(dateKey, activity)
       }
 
       if (message.type === 'assistant') {

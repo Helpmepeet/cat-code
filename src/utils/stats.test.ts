@@ -305,6 +305,49 @@ describe('rolling range aggregation', () => {
     }
   })
 
+  test('keeps a recent subagent tool call when its parent was last active yesterday', async () => {
+    const { mkdirSync } = await import('fs')
+    const { aggregateClaudeCodeStatsForRange } = await import('./stats.js')
+    tempDir = mkdtempSync(join(tmpdir(), 'cat-code-stats-subagent-day-'))
+    const project = join(tempDir, 'projects', 'fixture-project')
+    const subagents = join(project, 'parent-session', 'subagents')
+    mkdirSync(subagents, { recursive: true })
+    const previousConfig = process.env.CLAUDE_CONFIG_DIR
+    process.env.CLAUDE_CONFIG_DIR = tempDir
+    const at = (daysAgo: number) => {
+      const value = new Date()
+      value.setHours(12, 0, 0, 0)
+      value.setDate(value.getDate() - daysAgo)
+      return value
+    }
+    const parent = {
+      ...assistantRecord('parent', { input_tokens: 100, output_tokens: 20 }, 0),
+      timestamp: at(1).toISOString(),
+    }
+    const child = {
+      ...assistantRecord('child', { input_tokens: 50, output_tokens: 10 }, 0),
+      isSidechain: true,
+      timestamp: at(0).toISOString(),
+      message: {
+        ...assistantRecord('child', { input_tokens: 50, output_tokens: 10 }, 0).message,
+        content: [{ type: 'tool_use', id: 'tool-child', name: 'Read', input: { file_path: 'fixture.ts' } }],
+      },
+    }
+    writeFileSync(join(project, 'parent.jsonl'), JSON.stringify(parent))
+    writeFileSync(join(subagents, 'agent-child.jsonl'), JSON.stringify(child))
+    try {
+      const stats = await aggregateClaudeCodeStatsForRange('7d')
+      expect(stats.dailyActivity).toEqual([
+        { date: at(1).toISOString().slice(0, 10), messageCount: 1, sessionCount: 1, toolCallCount: 0 },
+        { date: at(0).toISOString().slice(0, 10), messageCount: 0, sessionCount: 0, toolCallCount: 1 },
+      ])
+      expect(stats.dailyModelTokens[1]?.tokensByModel[MODEL]).toBe(60)
+    } finally {
+      if (previousConfig === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfig
+    }
+  })
+
   test('distinguishes an absent projects directory from an incomplete project read', async () => {
     const { mkdirSync } = await import('fs')
     const { spyOn } = await import('bun:test')
