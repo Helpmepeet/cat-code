@@ -16,6 +16,19 @@ import WSNode from 'ws'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { logForDebugging, TURN_LOCK_STALL_PREFIX } from '../../utils/debug.js'
 import { isCodexAuthErrorCode } from './codexErrorCodes.js'
+import type {
+  CodexCredentialHandle,
+  CodexCredentialUseOptions,
+} from './codexCredentialUse.js'
+
+async function startCredentialSend<T>(
+  handle: CodexCredentialHandle,
+  start: (authorizedHandle: CodexCredentialHandle) => PromiseLike<T> | T,
+  options?: CodexCredentialUseOptions,
+): Promise<T> {
+  const { startCodexCredentialSend } = await import('./codexCredentialUse.js')
+  return startCodexCredentialSend(handle, start, options)
+}
 
 // Optional callback invoked when a stale previous_response_id is detected and
 // the turn is retried as a full send. Registered by the fetch adapter so that
@@ -107,9 +120,26 @@ export function _setWebSocketFactoryForTest(factory: WebSocketFactory | null): v
     new WSNode(url, options) as unknown as WebSocketLike)
 }
 
+export type CodexWebSocketCredentialContext = Readonly<{
+  credential: CodexCredentialHandle
+  credentialUse?: CodexCredentialUseOptions
+}>
+
+type ResolvedCredentialContext = {
+  context: CodexWebSocketCredentialContext
+  signal?: AbortSignal
+}
+
+type WebSocketSessionPhase = 'opening' | 'idle' | 'streaming'
+
 interface WsSession {
   ws: WebSocketLike
-  accountId: string | null
+  readonly accountId: string
+  readonly credentialGeneration: number
+  readonly credential: CodexCredentialHandle
+  readonly credentialUse?: CodexCredentialUseOptions
+  phase: Exclude<WebSocketSessionPhase, 'opening'>
+  retireAfterStream: boolean
   // x-codex-turn-state: sticky routing token received in the WebSocket upgrade
   // response headers. Used for diagnostics; request echo is handled at connect
   // time via headers, not as a response.create body field.
@@ -131,11 +161,125 @@ const sessions = new Map<string, WsSession>()
 const sessionOpenVersions = new Map<string, number>()
 
 interface PendingOpenSession {
-  accountId: string | null
+  readonly accountId: string
+  readonly credentialGeneration: number
+  readonly credential: CodexCredentialHandle
+  readonly credentialUse?: CodexCredentialUseOptions
+  readonly phase: 'opening'
   promise: Promise<WsSession>
+  invalidated: boolean
+  close: () => void
 }
 
 const openingSessions = new Map<string, PendingOpenSession>()
+const retiredCredentialKeys = new Set<string>()
+
+function credentialKey(accountId: string, credentialGeneration: number): string {
+  return `${accountId}\u0000${credentialGeneration}`
+}
+
+function isCredentialRetired(
+  accountId: string,
+  credentialGeneration: number,
+): boolean {
+  return retiredCredentialKeys.has(credentialKey(accountId, credentialGeneration))
+}
+
+function credentialContextForRequest(
+  authHeaders: Record<string, string>,
+  credential: CodexWebSocketCredentialContext | CodexCredentialHandle | undefined,
+): CodexWebSocketCredentialContext {
+  if (credential) {
+    const context =
+      'credentialGeneration' in credential
+        ? { credential }
+        : credential
+    const headerAccountId = authHeaders['chatgpt-account-id']
+    if (headerAccountId && headerAccountId !== context.credential.accountId) {
+      throw new Error('WebSocket credential account does not match auth headers')
+    }
+    return context
+  }
+
+  // The transport tests predate credential lifecycle binding. Keep their
+  // low-level socket coverage isolated from production: every production caller
+  // supplies the immutable handle and lifecycle options.
+  if (!webSocketFactoryIsTest) {
+    throw new Error('WebSocket credential context is required')
+  }
+  const accountId = authHeaders['chatgpt-account-id'] ?? 'codex-websocket-test'
+  const testCredential = Object.freeze({
+    accountId,
+    accessToken: authHeaders.Authorization?.replace(/^Bearer /, '') || 'test-token',
+    refreshToken: 'test-refresh-token',
+    expiresAt: Date.now() + 60 * 60_000,
+    credentialGeneration: 1,
+    credentialSource: 'config',
+    credentialPath: '/test/codex-websocket-config.json',
+  }) as CodexCredentialHandle
+  const testLifecycle = {
+    read: (lifecycleAccountId: string) => ({
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId: lifecycleAccountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'codex-websocket-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }),
+    async withTransaction<T>(
+      _accountId: string,
+      _options: unknown,
+      callback: (permit: never) => T | Promise<T>,
+    ): Promise<T> {
+      return callback({} as never)
+    },
+  } as unknown as CodexCredentialUseOptions['lifecycle']
+  return {
+    credential: testCredential,
+    credentialUse: { lifecycle: testLifecycle },
+  }
+}
+
+function resolveCredentialContext(
+  authHeaders: Record<string, string>,
+  credentialOrSignal:
+    | CodexWebSocketCredentialContext
+    | CodexCredentialHandle
+    | AbortSignal
+    | undefined,
+  signalOrContext?: AbortSignal | CodexWebSocketCredentialContext | CodexCredentialHandle,
+  contextOrSignal?: CodexWebSocketCredentialContext | CodexCredentialHandle | AbortSignal,
+): ResolvedCredentialContext {
+  const isSignal = (value: unknown): value is AbortSignal =>
+    Boolean(value && typeof value === 'object' && 'aborted' in value)
+  const isCredential = (
+    value: unknown,
+  ): value is CodexWebSocketCredentialContext | CodexCredentialHandle =>
+    Boolean(value && typeof value === 'object' && 'credentialGeneration' in value) ||
+    Boolean(value && typeof value === 'object' && 'credential' in value)
+
+  let signal: AbortSignal | undefined
+  let suppliedCredential:
+    | CodexWebSocketCredentialContext
+    | CodexCredentialHandle
+    | undefined
+  for (const value of [credentialOrSignal, signalOrContext, contextOrSignal]) {
+    if (!value) continue
+    if (isSignal(value)) {
+      signal = value
+    } else if (isCredential(value)) {
+      suppliedCredential = value
+    }
+  }
+  return {
+    context: credentialContextForRequest(authHeaders, suppliedCredential),
+    signal,
+  }
+}
 
 interface ConversationTurnQueue {
   tail: Promise<void>
@@ -294,7 +438,35 @@ export function clearWebSocketSession(conversationId: string): void {
     sessions.delete(conversationId)
     logForDebugging(`[codex-ws] session cleared for ${conversationId.slice(0, 8)}`)
   }
-  openingSessions.delete(conversationId)
+  const opening = openingSessions.get(conversationId)
+  if (opening) {
+    opening.invalidated = true
+    opening.close()
+    openingSessions.delete(conversationId)
+  }
+}
+
+function discardSession(
+  conversationId: string,
+  session: WsSession,
+  logMessage: string,
+): void {
+  const isCurrentSession = sessions.get(conversationId) === session
+  if (isCurrentSession) {
+    sessionOpenVersions.set(
+      conversationId,
+      (sessionOpenVersions.get(conversationId) ?? 0) + 1,
+    )
+  }
+  try { session.ws.close() } catch { /* ignore */ }
+  session.lastResponseId = null
+  session.lastRequestSignature = null
+  session.lastRequestInput = []
+  session.lastResponseOutputItems = []
+  if (isCurrentSession) {
+    sessions.delete(conversationId)
+  }
+  logForDebugging(logMessage)
 }
 
 /**
@@ -314,12 +486,33 @@ export function clearWebSocketSession(conversationId: string): void {
  * baseline across it — reusing the existing socket-swap pattern instead of
  * duplicating it.
  */
-export function closeSocketPreservingState(conversationId: string): void {
+export function closeSocketPreservingState(
+  conversationId: string,
+  expectedSession?: WsSession,
+): void {
   const session = sessions.get(conversationId)
   if (!session) {
     // No session to preserve; fall back to the full teardown so any pending
     // open is invalidated.
     clearWebSocketSession(conversationId)
+    return
+  }
+  if (expectedSession && session !== expectedSession) {
+    if (expectedSession.retireAfterStream) {
+      discardSession(
+        conversationId,
+        expectedSession,
+        `[codex-ws] retired socket closed, continuation discarded for ${conversationId.slice(0, 8)}`,
+      )
+    }
+    return
+  }
+  if (session.retireAfterStream) {
+    discardSession(
+      conversationId,
+      session,
+      `[codex-ws] retired socket closed, continuation discarded for ${conversationId.slice(0, 8)}`,
+    )
     return
   }
   // Invalidate any in-flight open() so a racing connect resolves to a closed
@@ -329,10 +522,67 @@ export function closeSocketPreservingState(conversationId: string): void {
     (sessionOpenVersions.get(conversationId) ?? 0) + 1,
   )
   try { session.ws.close() } catch { /* ignore */ }
-  openingSessions.delete(conversationId)
+  session.phase = 'idle'
   logForDebugging(
     `[codex-ws] socket closed, continuation preserved for ${conversationId.slice(0, 8)}`,
   )
+}
+
+export type CodexWebSocketRetirement = Readonly<{
+  accountId: string
+  credentialGeneration: number
+}>
+
+/**
+ * Retire every WebSocket resource bound to one immutable credential
+ * generation. A stream already in progress is allowed to deliver its terminal
+ * event to its caller, but its continuation baseline is discarded.
+ */
+export function retireCodexWebSocketSessions(
+  retirement: CodexWebSocketRetirement,
+): void {
+  const { accountId, credentialGeneration } = retirement
+  retiredCredentialKeys.add(credentialKey(accountId, credentialGeneration))
+
+  const openingEntries = [...openingSessions.entries()]
+  for (const [conversationId, opening] of openingEntries) {
+    if (
+      opening.accountId !== accountId ||
+      opening.credentialGeneration !== credentialGeneration
+    ) {
+      continue
+    }
+    opening.invalidated = true
+    opening.close()
+    if (openingSessions.get(conversationId) === opening) {
+      openingSessions.delete(conversationId)
+    }
+  }
+
+  for (const [conversationId, session] of [...sessions.entries()]) {
+    if (
+      session.accountId !== accountId ||
+      session.credentialGeneration !== credentialGeneration
+    ) {
+      continue
+    }
+    if (session.phase === 'streaming') {
+      session.retireAfterStream = true
+      logForDebugging(
+        `[codex-ws] socket marked retire_after_stream conv=${conversationId.slice(0, 8)}`,
+      )
+      continue
+    }
+    discardSession(
+      conversationId,
+      session,
+      `[codex-ws] idle socket retired conv=${conversationId.slice(0, 8)}`,
+    )
+  }
+}
+
+export function _clearRetiredCodexWebSocketCredentialsForTest(): void {
+  retiredCredentialKeys.clear()
 }
 
 /**
@@ -343,11 +593,48 @@ export function closeSocketPreservingState(conversationId: string): void {
 async function openSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  context: CodexWebSocketCredentialContext,
+  pending: PendingOpenSession,
   signal?: AbortSignal,
 ): Promise<WsSession> {
   return new Promise((resolve, reject) => {
     const openVersion = sessionOpenVersions.get(conversationId) ?? 0
-    const ws = webSocketFactory(CODEX_WS_URL, {
+    let ws: WebSocketLike | null = null
+
+    let capturedTurnState: string | null = null
+
+    let settled = false
+    let timeout: ReturnType<typeof setTimeout>
+    const cleanup = () => {
+      clearTimeout(timeout)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const rejectOpen = (error: Error, closeSocket = false) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (closeSocket) {
+        try { ws?.close() } catch { /* ignore */ }
+      }
+      reject(error)
+    }
+    pending.close = () => {
+      pending.invalidated = true
+      rejectOpen(new Error('WebSocket session retired before open'), true)
+    }
+    const onAbort = () => {
+      rejectOpen(createWebSocketAbortError(signal!), true)
+    }
+
+    timeout = setTimeout(() => {
+      rejectOpen(new Error('WebSocket connect timeout'), true)
+    }, 15_000)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    if (signal?.aborted) {
+      onAbort()
+    }
+
+    ws = webSocketFactory(CODEX_WS_URL, {
       headers: {
         ...authHeaders,
         'OpenAI-Beta': WS_BETA_HEADER,
@@ -355,8 +642,6 @@ async function openSession(
         'x-client-request-id': conversationId,
       },
     })
-
-    let capturedTurnState: string | null = null
 
     // Bun's ws compatibility layer currently warns on `upgrade` listeners.
     // Keep capture active for Node-style ws runtimes and injected tests; Bun
@@ -373,61 +658,67 @@ async function openSession(
       })
     }
 
-    let settled = false
-    let timeout: ReturnType<typeof setTimeout>
-    const cleanup = () => {
-      clearTimeout(timeout)
-      signal?.removeEventListener('abort', onAbort)
-    }
-    const rejectOpen = (error: Error, closeSocket = false) => {
-      if (settled) return
-      settled = true
-      cleanup()
-      if (closeSocket) {
-        try { ws.close() } catch { /* ignore */ }
-      }
-      reject(error)
-    }
-    const onAbort = () => {
-      rejectOpen(createWebSocketAbortError(signal!), true)
-    }
-
-    timeout = setTimeout(() => {
-      rejectOpen(new Error('WebSocket connect timeout'), true)
-    }, 15_000)
-    signal?.addEventListener('abort', onAbort, { once: true })
-    if (signal?.aborted) {
-      onAbort()
-    }
-
     ws.on('open', () => {
       if (settled) {
         try { ws.close() } catch { /* ignore */ }
         return
       }
-      if ((sessionOpenVersions.get(conversationId) ?? 0) !== openVersion) {
+      if (
+        pending.invalidated ||
+        isCredentialRetired(
+          context.credential.accountId,
+          context.credential.credentialGeneration,
+        ) ||
+        (sessionOpenVersions.get(conversationId) ?? 0) !== openVersion
+      ) {
         rejectOpen(new Error('WebSocket session cleared before open'), true)
         return
       }
-      settled = true
-      cleanup()
-      const session: WsSession = {
-        ws,
-        accountId: authHeaders['chatgpt-account-id'] ?? null,
-        turnState: capturedTurnState,
-        lastResponseId: null,
-        lastRequestSignature: null,
-        lastRequestInput: [],
-        lastResponseOutputItems: [],
-      }
-      sessions.set(conversationId, session)
-      logForDebugging(
-        `[codex-ws] connected for ${conversationId.slice(0, 8)}` +
-        (capturedTurnState
-          ? ` turn_state=${capturedTurnState.slice(0, 12)}...`
-          : ' turn_state=none'),
-      )
-      resolve(session)
+      void startCredentialSend(
+        context.credential,
+        authorizedCredential => {
+          if (
+            settled ||
+            pending.invalidated ||
+            isCredentialRetired(
+              authorizedCredential.accountId,
+              authorizedCredential.credentialGeneration,
+            )
+          ) {
+            throw new Error('WebSocket credential retired before open')
+          }
+          settled = true
+          cleanup()
+          const session: WsSession = {
+            ws,
+            accountId: context.credential.accountId,
+            credentialGeneration: context.credential.credentialGeneration,
+            credential: context.credential,
+            credentialUse: context.credentialUse,
+            phase: 'idle',
+            retireAfterStream: false,
+            turnState: capturedTurnState,
+            lastResponseId: null,
+            lastRequestSignature: null,
+            lastRequestInput: [],
+            lastResponseOutputItems: [],
+          }
+          sessions.set(conversationId, session)
+          logForDebugging(
+            `[codex-ws] connected for ${conversationId.slice(0, 8)}` +
+            (capturedTurnState
+              ? ` turn_state=${capturedTurnState.slice(0, 12)}...`
+              : ' turn_state=none'),
+          )
+          resolve(session)
+        },
+        context.credentialUse,
+      ).catch(error => {
+        rejectOpen(
+          error instanceof Error ? error : new Error('WebSocket credential use failed'),
+          true,
+        )
+      })
     })
 
     ws.on('error', () => {
@@ -469,20 +760,39 @@ function waitForSessionWithSignal(
 async function getOrOpenSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  context: CodexWebSocketCredentialContext,
   signal?: AbortSignal,
 ): Promise<WsSession> {
-  const requestedAccountId = authHeaders['chatgpt-account-id'] ?? null
+  const requestedAccountId = context.credential.accountId
+  const requestedGeneration = context.credential.credentialGeneration
+  if (isCredentialRetired(requestedAccountId, requestedGeneration)) {
+    throw new Error('WebSocket credential generation is retired')
+  }
   const existing = sessions.get(conversationId)
   if (
     existing &&
     existing.ws.readyState === WS_OPEN &&
-    existing.accountId === requestedAccountId
+    existing.accountId === requestedAccountId &&
+    existing.credentialGeneration === requestedGeneration &&
+    !existing.retireAfterStream
   ) {
     return existing
   }
   const opening = openingSessions.get(conversationId)
-  if (opening && opening.accountId === requestedAccountId) {
+  if (
+    opening &&
+    opening.accountId === requestedAccountId &&
+    opening.credentialGeneration === requestedGeneration &&
+    !opening.invalidated
+  ) {
     return waitForSessionWithSignal(opening.promise, signal)
+  }
+  if (opening) {
+    opening.invalidated = true
+    opening.close()
+    if (openingSessions.get(conversationId) === opening) {
+      openingSessions.delete(conversationId)
+    }
   }
   // Stale/closed session — remove and reconnect
   if (existing) {
@@ -491,25 +801,21 @@ async function getOrOpenSession(
     // response.completed that lines up with this event is evidence of
     // account/session churn being the physical close reason.
     const oldAcct = existing.accountId ? existing.accountId.slice(0, 8) : 'none'
-    const newAcct = authHeaders['chatgpt-account-id']
-      ? authHeaders['chatgpt-account-id'].slice(0, 8)
-      : 'none'
-    // Item 3 rule 4: account rotation is NOT a transient reconnect. `sessions`
-    // is keyed by conversationId only, so preserving lastResponseId here would
-    // make the new account's first request chain the OLD account's
-    // previous_response_id (which that account/node never saw) — a guaranteed
-    // "not found" full send at best, a mis-chain at worst. Only preserve the
-    // continuation baseline when the account is unchanged (a pure socket swap).
-    const accountChanged = existing.accountId !== requestedAccountId
+    const newAcct = requestedAccountId.slice(0, 8)
+    const credentialChanged =
+      existing.accountId !== requestedAccountId ||
+      existing.credentialGeneration !== requestedGeneration
     const reason =
       existing.ws.readyState !== WS_OPEN
         ? `ws_readyState=${existing.ws.readyState}`
-        : `account_changed old=${oldAcct} new=${newAcct}`
+        : credentialChanged
+          ? `credential_changed old=${oldAcct}/${existing.credentialGeneration} new=${newAcct}/${requestedGeneration}`
+          : 'socket_reuse_disabled'
     logForDebugging(
       `[codex-ws] reconnecting conv=${conversationId.slice(0, 8)} ${reason}`,
       { level: 'warn' },
     )
-    const preserved = accountChanged
+    const preserved = credentialChanged || existing.retireAfterStream
       ? null
       : {
           lastResponseId: existing.lastResponseId,
@@ -519,7 +825,12 @@ async function getOrOpenSession(
         }
     try { existing.ws.close() } catch { /* ignore */ }
     sessions.delete(conversationId)
-    const fresh = await openTrackedSession(conversationId, authHeaders, signal)
+    const fresh = await openTrackedSession(
+      conversationId,
+      authHeaders,
+      context,
+      signal,
+    )
     if (preserved) {
       fresh.lastResponseId = preserved.lastResponseId
       fresh.lastRequestSignature = preserved.lastRequestSignature
@@ -532,36 +843,66 @@ async function getOrOpenSession(
       )
     } else {
       logForDebugging(
-        `[codex-ws] continuation dropped on account rotation ` +
-        `conv=${conversationId.slice(0, 8)} old=${oldAcct} new=${newAcct}`,
+        `[codex-ws] continuation dropped on credential change ` +
+        `conv=${conversationId.slice(0, 8)} old=${oldAcct}/${existing.credentialGeneration} ` +
+        `new=${newAcct}/${requestedGeneration}`,
         { level: 'warn' },
       )
     }
     return fresh
   }
-  return openTrackedSession(conversationId, authHeaders, signal)
+  return openTrackedSession(conversationId, authHeaders, context, signal)
 }
 
 function openTrackedSession(
   conversationId: string,
   authHeaders: Record<string, string>,
+  context: CodexWebSocketCredentialContext,
   signal?: AbortSignal,
 ): Promise<WsSession> {
-  const requestedAccountId = authHeaders['chatgpt-account-id'] ?? null
+  const requestedAccountId = context.credential.accountId
+  const requestedGeneration = context.credential.credentialGeneration
   const opening = openingSessions.get(conversationId)
-  if (opening && opening.accountId === requestedAccountId) {
+  if (
+    opening &&
+    opening.accountId === requestedAccountId &&
+    opening.credentialGeneration === requestedGeneration &&
+    !opening.invalidated
+  ) {
     return waitForSessionWithSignal(opening.promise, signal)
   }
-
-  const promise = openSession(conversationId, authHeaders, signal).finally(() => {
+  if (opening) {
+    opening.invalidated = true
+    opening.close()
+    if (openingSessions.get(conversationId) === opening) {
+      openingSessions.delete(conversationId)
+    }
+  }
+  const pending: PendingOpenSession = {
+    accountId: requestedAccountId,
+    credentialGeneration: requestedGeneration,
+    credential: context.credential,
+    credentialUse: context.credentialUse,
+    phase: 'opening',
+    promise: Promise.resolve(undefined as never),
+    invalidated: false,
+    close: () => {
+      pending.invalidated = true
+    },
+  }
+  const promise = openSession(
+    conversationId,
+    authHeaders,
+    context,
+    pending,
+    signal,
+  ).finally(() => {
     if (openingSessions.get(conversationId)?.promise === promise) {
       openingSessions.delete(conversationId)
     }
   })
-  openingSessions.set(conversationId, {
-    accountId: requestedAccountId,
-    promise,
-  })
+  pending.promise = promise
+  openingSessions.set(conversationId, pending)
   return promise
 }
 
@@ -573,9 +914,25 @@ function openTrackedSession(
 export async function ensureWebSocketSession(
   conversationId: string,
   authHeaders: Record<string, string>,
-  signal?: AbortSignal,
+  credentialOrSignal?:
+    | CodexWebSocketCredentialContext
+    | CodexCredentialHandle
+    | AbortSignal,
+  signalOrContext?: AbortSignal | CodexWebSocketCredentialContext | CodexCredentialHandle,
+  contextOrSignal?: CodexWebSocketCredentialContext | CodexCredentialHandle | AbortSignal,
 ): Promise<void> {
-  await getOrOpenSession(conversationId, authHeaders, signal)
+  const resolved = resolveCredentialContext(
+    authHeaders,
+    credentialOrSignal,
+    signalOrContext,
+    contextOrSignal,
+  )
+  await getOrOpenSession(
+    conversationId,
+    authHeaders,
+    resolved.context,
+    resolved.signal,
+  )
 }
 
 /**
@@ -597,14 +954,26 @@ export async function* streamTurnViaWebSocketLocked(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
-  signal?: AbortSignal,
+  credentialOrSignal?:
+    | CodexWebSocketCredentialContext
+    | CodexCredentialHandle
+    | AbortSignal,
+  signalOrContext?: AbortSignal | CodexWebSocketCredentialContext | CodexCredentialHandle,
+  contextOrSignal?: CodexWebSocketCredentialContext | CodexCredentialHandle | AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
+  const resolved = resolveCredentialContext(
+    authHeaders,
+    credentialOrSignal,
+    signalOrContext,
+    contextOrSignal,
+  )
+  const { context, signal } = resolved
   const releaseTurn = await acquireConversationTurn(conversationId, signal)
   try {
     if (signal?.aborted) {
       throw createWebSocketAbortError(signal)
     }
-    await ensureWebSocketSession(conversationId, authHeaders, signal)
+    await ensureWebSocketSession(conversationId, authHeaders, context, signal)
     if (signal?.aborted) {
       closeSocketPreservingState(conversationId)
       throw createWebSocketAbortError(signal)
@@ -615,6 +984,7 @@ export async function* streamTurnViaWebSocketLocked(
       authHeaders,
       fullInputLength,
       signal,
+      context,
     )
   } finally {
     releaseTurn()
@@ -964,8 +1334,20 @@ export async function* streamTurnViaWebSocket(
   codexBody: Record<string, unknown>,
   authHeaders: Record<string, string>,
   fullInputLength: number,
-  signal?: AbortSignal,
+  credentialOrSignal?:
+    | CodexWebSocketCredentialContext
+    | CodexCredentialHandle
+    | AbortSignal,
+  signalOrContext?: AbortSignal | CodexWebSocketCredentialContext | CodexCredentialHandle,
+  contextOrSignal?: CodexWebSocketCredentialContext | CodexCredentialHandle | AbortSignal,
 ): AsyncGenerator<Record<string, unknown>> {
+  const resolved = resolveCredentialContext(
+    authHeaders,
+    credentialOrSignal,
+    signalOrContext,
+    contextOrSignal,
+  )
+  const { context, signal } = resolved
   let retryingAfterStaleResponseId = false
   // Allow up to 2 retries:
   //   attempt 0 → normal (may use previous_response_id)
@@ -983,6 +1365,7 @@ export async function* streamTurnViaWebSocket(
         fullInputLength,
         retryingAfterStaleResponseId,
         signal,
+        context,
       )
       return
     } catch (err) {
@@ -1014,10 +1397,18 @@ async function* _streamTurnAttempt(
   fullInputLength: number,
   retryingAfterStaleResponseId?: boolean,
   signal?: AbortSignal,
+  context?: CodexWebSocketCredentialContext,
 ): AsyncGenerator<Record<string, unknown>> {
-  const session = await getOrOpenSession(conversationId, authHeaders, signal)
+  const resolvedContext =
+    context ?? credentialContextForRequest(authHeaders, undefined)
+  const session = await getOrOpenSession(
+    conversationId,
+    authHeaders,
+    resolvedContext,
+    signal,
+  )
   if (signal?.aborted) {
-    closeSocketPreservingState(conversationId)
+    closeSocketPreservingState(conversationId, session)
     throw createWebSocketAbortError(signal)
   }
 
@@ -1278,8 +1669,8 @@ async function* _streamTurnAttempt(
       return
     }
     terminalError = error
-    if (options?.closeSocket) {
-      closeSocketPreservingState(conversationId)
+    if (options?.closeSocket || session.retireAfterStream) {
+      closeSocketPreservingState(conversationId, session)
     }
     enqueue({ error })
   }
@@ -1362,17 +1753,36 @@ async function* _streamTurnAttempt(
   }
 
   // Send the request.
-  const sendTs = Date.now()
+  let sendTs = 0
   let firstEventTs: number | null = null
   if (signal?.aborted) {
     session.ws.off('message', onMessage)
     session.ws.off('error', onError)
     session.ws.off('close', onClose)
-    closeSocketPreservingState(conversationId)
+    closeSocketPreservingState(conversationId, session)
     throw createWebSocketAbortError(signal)
   }
   try {
-    session.ws.send(JSON.stringify(requestBody))
+    await startCredentialSend(
+      session.credential,
+      () => {
+        if (
+          sessions.get(conversationId) !== session ||
+          session.retireAfterStream ||
+          isCredentialRetired(
+            session.accountId,
+            session.credentialGeneration,
+          ) ||
+          session.ws.readyState !== WS_OPEN
+        ) {
+          throw new Error('WebSocket credential generation is retired')
+        }
+        sendTs = Date.now()
+        session.phase = 'streaming'
+        session.ws.send(JSON.stringify(requestBody))
+      },
+      session.credentialUse,
+    )
     signal?.addEventListener('abort', onAbort, { once: true })
     if (signal?.aborted) {
       onAbort()
@@ -1385,7 +1795,7 @@ async function* _streamTurnAttempt(
     // Item 3 rule 2a: a send throw means the socket is unusable, but nothing
     // was committed this turn — kill the socket and keep the baseline so the
     // next turn reconnects and continues instead of paying a full send.
-    closeSocketPreservingState(conversationId)
+    closeSocketPreservingState(conversationId, session)
     throw err
   }
 
@@ -1426,7 +1836,17 @@ async function* _streamTurnAttempt(
           reachedTerminalDisposition = true
           const response = event.response as Record<string, unknown> | undefined
           const responseId = typeof response?.id === 'string' ? response.id : null
-          if (responseId) {
+          const retiredAfterStream =
+            session.retireAfterStream ||
+            isCredentialRetired(session.accountId, session.credentialGeneration)
+          if (retiredAfterStream) {
+            session.phase = 'idle'
+            discardSession(
+              conversationId,
+              session,
+              `[codex-ws] retired stream completed, continuation discarded for ${conversationId.slice(0, 8)}`,
+            )
+          } else if (responseId) {
             session.lastResponseId = responseId
             session.lastRequestSignature = requestSignature
             session.lastRequestInput = cloneJsonValue(fullInput)
@@ -1479,6 +1899,9 @@ async function* _streamTurnAttempt(
             })
           }
 
+          if (!retiredAfterStream) {
+            session.phase = 'idle'
+          }
           clearIdle()
           return
         }
@@ -1492,7 +1915,7 @@ async function* _streamTurnAttempt(
         // CodexAccountCapError) so rotation still drops state where it must.
         if (event.type === 'response.failed') {
           reachedTerminalDisposition = true
-          closeSocketPreservingState(conversationId)
+          closeSocketPreservingState(conversationId, session)
           clearIdle()
           return
         }
@@ -1519,7 +1942,7 @@ async function* _streamTurnAttempt(
         `conv=${conversationId.slice(0, 8)}`,
         { level: 'warn' },
       )
-      closeSocketPreservingState(conversationId)
+      closeSocketPreservingState(conversationId, session)
     }
   }
 }

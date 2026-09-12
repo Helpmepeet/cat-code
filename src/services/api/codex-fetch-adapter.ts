@@ -44,6 +44,7 @@ import {
   CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
+  type CodexWebSocketCredentialContext,
 } from './codex-websocket-transport.js'
 import {
   CODEX_ACCOUNT_LIMIT_ERROR_CODES,
@@ -3865,6 +3866,10 @@ export function createCodexFetch(
             authHeaders,
             fullInput.length,
             wsAbortController.signal,
+            {
+              credential: currentCredential,
+              credentialUse: options.credentialUse,
+            } satisfies CodexWebSocketCredentialContext,
           )
           const wsSourceWithAbortCleanup: AsyncIterable<Record<string, unknown>> = {
             async *[Symbol.asyncIterator]() {
