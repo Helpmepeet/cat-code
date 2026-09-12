@@ -123,7 +123,7 @@ describe('query auto-compaction request assembly', () => {
 
     for await (const _message of query({
       messages,
-      systemPrompt: ['system prompt'],
+      systemPrompt: asSystemPrompt(['system prompt']),
       userContext: {},
       systemContext: {},
       canUseTool: async () => ({

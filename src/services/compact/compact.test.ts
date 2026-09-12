@@ -211,7 +211,7 @@ describe('compactConversation', () => {
         systemContext: {},
         toolUseContext: context,
         forkContextMessages: messages,
-      }),
+      }, true),
     ).rejects.toThrow('Request timed out')
     expect(messages[0]?.message.content).toBe('Keep this original constraint.')
   })

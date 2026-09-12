@@ -388,6 +388,7 @@ describe('reactiveCompactOnPromptTooLong', () => {
     )
 
     const { messages } = fourRoundConversation()
+    const originalOldestMessage = messages[0]
     const context = createToolUseContext(messages)
     const outcome = await reactiveCompactOnPromptTooLong(
       messages,
@@ -398,7 +399,7 @@ describe('reactiveCompactOnPromptTooLong', () => {
     expect(outcome.ok).toBe(false)
     expect(outcome.reason).toBe('error')
     expect(outcome.error).toEqual(new Error('Request timed out'))
-    expect(messages[0]?.message.content).toBe('OLDEST_USER_PROMPT')
+    expect(messages[0]).toBe(originalOldestMessage)
   })
 
   test('keeps transient reactive failures out of the auto-compact failure budget', async () => {
