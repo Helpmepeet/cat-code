@@ -111,8 +111,9 @@ ipcMain.on(channels.CH_SET_APPEARANCE, () => {})
 ipcMain.on(channels.CH_SET_GLASS_MODE, () => {})
 
 for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.sessionId, frame)
+const initialReadyCount = rendererReadyCount
 await window.loadFile(join(rendererDir, 'index.html'))
-await waitForBootstrap(window, rendererReadyCount)
+await waitForBootstrap(window, initialReadyCount)
 const warmup = createFixture(workload, manifest.warmupMs)
 await deliverFixture(warmup, false)
 coordinator.flush()
