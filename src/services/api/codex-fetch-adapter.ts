@@ -2826,13 +2826,21 @@ export async function translateCodexStreamToAnthropic(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   transportContext?: CodexStreamTransportContext,
 ): Promise<Response> {
+  const abortController = new AbortController()
   return buildAnthropicStreamResponse(
-    httpSseToEvents(codexResponse),
+    httpSseToEvents(codexResponse, abortController.signal),
     codexModel,
     requestCacheMetadata,
     undefined,
     transportContext,
+    reason => abortController.abort(codexStreamCancellationReason(reason)),
   )
+}
+
+function codexStreamCancellationReason(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new DOMException('The operation was aborted.', 'AbortError')
 }
 
 function parseAnthropicSseBlocks(
@@ -3510,15 +3518,19 @@ async function primeCodexEvents(
 
   return {
     async *[Symbol.asyncIterator]() {
-      for (const event of bufferedEvents) {
-        yield event
-      }
-      while (true) {
-        const next = await iterator.next()
-        if (next.done) {
-          return
+      try {
+        for (const event of bufferedEvents) {
+          yield event
         }
-        yield next.value
+        while (true) {
+          const next = await iterator.next()
+          if (next.done) {
+            return
+          }
+          yield next.value
+        }
+      } finally {
+        await iterator.return?.()
       }
     },
   }
@@ -3724,6 +3736,11 @@ export function createCodexFetch(
       'conversation-id': conversationId,
     }
 
+    const httpAbortController = new AbortController()
+    const httpRequestSignal = init?.signal
+      ? AbortSignal.any([init.signal, httpAbortController.signal])
+      : httpAbortController.signal
+
     const performHttpRequest = async (): Promise<{
       response: Response
       transportContext: CodexStreamTransportContext
@@ -3733,7 +3750,7 @@ export function createCodexFetch(
       try {
         codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
           method: 'POST',
-          signal: init?.signal,
+          signal: httpRequestSignal,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
@@ -3824,13 +3841,12 @@ export function createCodexFetch(
         }
         throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
-      const initialOutputAbortController = new AbortController()
       return {
         events: await primeCodexEvents(
-          httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+          httpSseToEvents(codexResponse, httpAbortController.signal),
           requestCacheMetadata,
           'http',
-          error => initialOutputAbortController.abort(error),
+          error => httpAbortController.abort(error),
         ),
         transportContext,
       }
@@ -3900,11 +3916,9 @@ export function createCodexFetch(
               requestStartedAtMs: wsRequestStartedAtMs,
             },
             reason => {
-              const abortReason =
-                reason instanceof Error
-                  ? reason
-                  : new DOMException('The operation was aborted.', 'AbortError')
+              const abortReason = codexStreamCancellationReason(reason)
               wsAbortController.abort(abortReason)
+              httpAbortController.abort(abortReason)
             },
           )
         } catch (wsError) {
@@ -4014,12 +4028,11 @@ export function createCodexFetch(
     }
 
     if (isStreamingAnthropicRequest) {
-      const initialOutputAbortController = new AbortController()
       const events = await primeCodexEvents(
-        httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+        httpSseToEvents(codexResponse, httpAbortController.signal),
         requestCacheMetadata,
         'http',
-        error => initialOutputAbortController.abort(error),
+        error => httpAbortController.abort(error),
       )
       return buildAnthropicStreamResponse(
         events,
@@ -4027,6 +4040,7 @@ export function createCodexFetch(
         requestCacheMetadata,
         undefined,
         transportContext,
+        reason => httpAbortController.abort(codexStreamCancellationReason(reason)),
       )
     }
 

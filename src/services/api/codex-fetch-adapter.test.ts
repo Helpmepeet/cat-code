@@ -1349,7 +1349,11 @@ describe('codex-fetch-adapter', () => {
         Authorization: `Bearer ${accessToken}`,
         'chatgpt-account-id': 'acct_test_streaming',
       })
-      expect(fetchCalls[0]?.init?.signal).toBe(abortController.signal)
+      const forwardedSignal = fetchCalls[0]?.init?.signal
+      expect(forwardedSignal?.aborted).toBe(false)
+      abortController.abort()
+      expect(forwardedSignal?.aborted).toBe(true)
+      expect(forwardedSignal?.reason).toBe(abortController.signal.reason)
       expect(body).toContain('event: message_stop')
       expect(body).toContain('"input_tokens":7')
       expect(body).toContain('"cache_read_input_tokens":3')
@@ -2691,6 +2695,91 @@ describe('codex-fetch-adapter', () => {
     const { error } = await readSseUntilError(response)
     expect(error).toBe(abortError)
     expect(partialStreamFailureOf(error)).toBeNull()
+    expect(source.body!.locked).toBe(false)
+  })
+
+  test.each(['immediately', 'after visible output'])(
+    'canceling a createCodexFetch HTTP response %s releases its upstream reader',
+    async timing => {
+      const originalFetch = globalThis.fetch
+      const originalTimeout = process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+      process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '100'
+      const conversationId = `conv_http_body_cancel_${timing}`
+      let sourceController!: ReadableStreamDefaultController<Uint8Array>
+      let cancellationReason: unknown
+      let forwardedSignal: AbortSignal | null | undefined
+      const source = new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          sourceController = controller
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+            type: 'response.output_text.delta', delta: 'started',
+          })}\n\n`))
+        },
+        cancel(reason) {
+          cancellationReason = reason
+        },
+      }))
+      globalThis.fetch = (async (_input, init) => {
+        forwardedSignal = init?.signal
+        return source
+      }) as typeof globalThis.fetch
+
+      try {
+        _markStickyHttpFallbackForTest(conversationId, 'test')
+        const response = await createCodexFetch(
+          createAccessToken('acct_http_body_cancel'),
+          conversationId,
+        )('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'gpt-5.6-luna',
+            _openaiInstructionAssembly: { instructions: 'Test.', inputMessages: [] },
+          }),
+        })
+        const reader = response.body!.getReader()
+        if (timing === 'after visible output') {
+          const decoder = new TextDecoder()
+          while (true) {
+            const chunk = await reader.read()
+            expect(chunk.done).toBe(false)
+            if (decoder.decode(chunk.value).includes('text_delta')) break
+          }
+        }
+        await reader.cancel()
+        await new Promise(resolve => setTimeout(resolve, 0))
+
+        expect(cancellationReason).toMatchObject({ name: 'AbortError' })
+        expect(forwardedSignal?.aborted).toBe(true)
+        expect(source.body!.locked).toBe(false)
+      } finally {
+        sourceController.error(new DOMException('Test cleanup', 'AbortError'))
+        globalThis.fetch = originalFetch
+        resetCodexCacheContext()
+        if (originalTimeout === undefined) delete process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+        else process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = originalTimeout
+      }
+    },
+  )
+
+  test('canceling an HTTP translation releases a stalled source', async () => {
+    let cancellationReason: unknown
+    const source = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+          type: 'response.output_text.delta', delta: 'started',
+        })}\n\n`))
+      },
+      cancel(reason) {
+        cancellationReason = reason
+      },
+    }))
+
+    const response = await translateCodexStreamToAnthropic(source, 'gpt-5.6-luna')
+    await response.body!.cancel()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(cancellationReason).toMatchObject({ name: 'AbortError' })
     expect(source.body!.locked).toBe(false)
   })
 
