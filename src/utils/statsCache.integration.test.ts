@@ -28,7 +28,10 @@ function install(records: Array<{ sessionId: string }>, legacy = false) {
     bySession.set(item.sessionId, values)
   }
   for (const [sessionId, values] of bySession) {
-    writeFileSync(join(project, `${sessionId}.jsonl`), `${values.map(JSON.stringify).join('\n')}\n`)
+    writeFileSync(
+      join(project, `${sessionId}.jsonl`),
+      `${values.map(value => JSON.stringify(value)).join('\n')}\n`,
+    )
   }
   if (legacy) {
     cpSync(join(import.meta.dir, 'fixtures', 'stats-cache-v3-cross-day.json'), join(config, 'stats-cache.json'))
@@ -61,7 +64,7 @@ describe('all-time stats cache integration', () => {
     const result = await run('2026-09-12T12:00:00.000Z')
     expect(result).toMatchObject({ totalSessions: 1, totalMessages: 2,
       inputTokens: 200, longestDuration: 7_200_000 })
-    expect(result.notice).toContain('pre-migration')
+    expect(result.notice).toBe('Some older activity may be estimated.')
     expect(JSON.parse(readFileSync(join(config!, 'stats-cache.json'), 'utf8')).version).toBe(3)
     expect(JSON.parse(readFileSync(join(config!, 'stats-cache-v4.json'), 'utf8')).version).toBe(4)
 
@@ -69,12 +72,12 @@ describe('all-time stats cache integration', () => {
     const existing = readFileSync(transcript, 'utf8')
     writeFileSync(
       transcript,
-      `${existing}${JSON.stringify(record('after-migration', '2026-09-12T03:00:00.000Z'))}\n`,
+      `${existing}${JSON.stringify(record('two', '2026-09-12T01:00:00.000Z'))}\n${JSON.stringify(record('after-migration', '2026-09-12T01:00:00.000Z'))}\n`,
     )
     const afterMigration = await run('2026-09-12T12:30:00.000Z')
     const repeat = await run('2026-09-12T12:45:00.000Z')
     expect(afterMigration).toMatchObject({ totalSessions: 1, totalMessages: 3,
-      inputTokens: 300, longestDuration: 14_400_000 })
+      inputTokens: 300, longestDuration: 7_200_000 })
     expect(repeat).toEqual(afterMigration)
   })
 

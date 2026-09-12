@@ -75,8 +75,8 @@ describe('processSessionFiles token aggregation', () => {
       [legacyFile, newFile],
       {
         fromDate: '2026-09-12',
-        afterTimestampBySession: new Map([
-          ['legacy-session', '2026-09-12T00:30:00.000Z'],
+        afterRecordBySession: new Map([
+          ['legacy-session', { observedMessageCount: 1 }],
         ]),
       },
     )

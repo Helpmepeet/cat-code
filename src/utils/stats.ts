@@ -109,8 +109,11 @@ type ProcessOptions = {
   fromDate?: string
   // Only include data from dates <= this date (YYYY-MM-DD format)
   toDate?: string
-  // Count only messages observed after an aggregate-only legacy checkpoint.
-  afterTimestampBySession?: ReadonlyMap<string, string>
+  // Count only records appended after an aggregate-only legacy checkpoint.
+  afterRecordBySession?: ReadonlyMap<
+    string,
+    { observedMessageCount: number }
+  >
 }
 
 /**
@@ -118,7 +121,7 @@ type ProcessOptions = {
  * sidechain/shot attribution are range-local, not derivable from daily totals.
  */
 function createStatsAccumulator(options: ProcessOptions) {
-  const { fromDate, toDate, afterTimestampBySession } = options
+  const { fromDate, toDate, afterRecordBySession } = options
   const dailyActivityMap = new Map<string, DailyActivity>()
   const dailyModelTokensMap = new Map<string, { [modelName: string]: number }>()
   const sessions: SessionStats[] = []
@@ -138,7 +141,7 @@ function createStatsAccumulator(options: ProcessOptions) {
     const parentSessionId = isSubagentFile
       ? basename(dirname(dirname(sessionFile)))
       : sessionId
-    const checkpoint = afterTimestampBySession?.get(parentSessionId)
+    const checkpoint = afterRecordBySession?.get(parentSessionId)
     const messages: TranscriptMessage[] = []
 
     for (const entry of entries) {
@@ -195,9 +198,20 @@ function createStatsAccumulator(options: ProcessOptions) {
       message: TranscriptMessage
       timestamp: Date
     }> = []
+    const observedRecordIds = new Set<string>()
+    let messageIndex = 0
 
     // Process messages for tool usage and model stats
     for (const message of mainMessages) {
+      const beforeCheckpoint =
+        checkpoint !== undefined &&
+        messageIndex < checkpoint.observedMessageCount
+      messageIndex++
+      if (beforeCheckpoint) {
+        observedRecordIds.add(message.uuid)
+      } else if (checkpoint && observedRecordIds.has(message.uuid)) {
+        continue
+      }
       const timestamp = new Date(message.timestamp)
       if (isNaN(timestamp.getTime())) {
         logForDebugging(`Skipping message with invalid timestamp: ${sessionFile}`)
@@ -207,7 +221,7 @@ function createStatsAccumulator(options: ProcessOptions) {
       const inRange =
         (!fromDate || !isDateBefore(dateKey, fromDate)) &&
         (!toDate || !isDateBefore(toDate, dateKey)) &&
-        (!checkpoint || message.timestamp > checkpoint)
+        !beforeCheckpoint
 
       if (inRange) {
         eligibleMainMessages.push({ message, timestamp })
@@ -743,9 +757,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       const legacySessionCheckpoints = Object.fromEntries(
         legacySessions.map(session => [
           session.sessionId,
-          new Date(
-            new Date(session.timestamp).getTime() + session.duration,
-          ).toISOString(),
+          { observedMessageCount: session.messageCount },
         ]),
       )
       result = {
@@ -790,7 +802,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
         toDate: yesterday,
-        afterTimestampBySession: legacyCheckpoints,
+        afterRecordBySession: legacyCheckpoints,
       })
 
       if (
@@ -816,7 +828,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     await processSessionFiles(allSessionFiles, {
       fromDate: today,
       toDate: today,
-      afterTimestampBySession: new Map(
+      afterRecordBySession: new Map(
         Object.entries(
           updatedCache.legacyMigration?.legacySessionCheckpoints ?? {},
         ),

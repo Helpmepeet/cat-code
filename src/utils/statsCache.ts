@@ -88,7 +88,9 @@ export type PersistedStatsCache = {
   legacyMigration?: {
     sourceVersion: number
     notice: string
-    legacySessionCheckpoints?: { [sessionId: string]: string }
+    legacySessionCheckpoints?: {
+      [sessionId: string]: { observedMessageCount: number }
+    }
   }
 }
 
@@ -161,8 +163,7 @@ function migrateStatsCache(
       ? {
           legacyMigration: {
             sourceVersion: parsed.version,
-            notice:
-              'All-time totals include a preserved legacy cache whose pre-migration per-session attribution cannot be reconstructed exactly. Activity observed after migration is tracked separately.',
+            notice: 'Some older activity may be estimated.',
             legacySessionCheckpoints: {},
           },
         }
