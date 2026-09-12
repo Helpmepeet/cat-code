@@ -24,6 +24,7 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import { existsSync } from 'node:fs'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
@@ -34,6 +35,7 @@ import {
 } from '../../src/utils/transcriptLease.js'
 import {
   getSessionQueueOperations,
+  getTranscriptPathForSession,
   type SessionQueueOperation,
 } from '../../src/utils/sessionStorage.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
@@ -259,6 +261,17 @@ export async function resumeEngineSession(
   cwd: string,
   agentDefinitions: AgentDefinitionsResult,
 ): Promise<SidecarResumeResult> {
+  // Preserve project-scoped lookup semantics before competing for the global
+  // per-session lease. This is a metadata-only existence check: mutable JSONL,
+  // queue state, interruption records, and SessionStart hooks remain unread
+  // until ownership is held. A removal after this check is handled by the
+  // owned loader's ordinary null path and releases the lease.
+  if (!existsSync(getTranscriptPathForSession(resumeEngineSessionId))) {
+    throw new SidecarResumeError(
+      resumeEngineSessionId,
+      'no conversation found (transcript missing or unreadable)',
+    )
+  }
   const loaded = await loadOwnedConversationForResume(resumeEngineSessionId)
   if (!loaded) {
     // Missing/corrupt transcript — never fall through to a fresh session.
