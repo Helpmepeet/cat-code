@@ -500,6 +500,14 @@ export function App() {
   )
   const promptDraftsRef = useRef(promptDrafts)
   promptDraftsRef.current = promptDrafts
+  const updatePromptDrafts = useCallback(
+    (update: (current: PromptDraftState) => PromptDraftState): void => {
+      const next = update(promptDraftsRef.current)
+      promptDraftsRef.current = next
+      setPromptDrafts(next)
+    },
+    [],
+  )
   // Typing rewrites the draft on every keystroke and `setItem` is synchronous on
   // this thread, so the write is debounced rather than run per character.
   useEffect(() => {
@@ -1973,7 +1981,7 @@ export function App() {
     (sessionId: SessionId, selectedPrompt: unknown): boolean => {
       const restored = restoreSelectedPrompt(selectedPrompt)
       if (!restored) return false
-      setPromptDrafts(current =>
+      updatePromptDrafts(current =>
         reducePromptDrafts(current, sessionId, restored.text),
       )
       setPasteState(current =>
@@ -2360,7 +2368,7 @@ export function App() {
     const pending = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
     if (pending === null) return
     setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
-    setPromptDrafts(drafts =>
+    updatePromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
         sessionId,
@@ -2401,8 +2409,7 @@ export function App() {
       retained,
     )
     refusedSubmitPrefixesRef.current = restored.recovery
-    promptDraftsRef.current = restored.drafts
-    setPromptDrafts(promptDraftsRef.current)
+    updatePromptDrafts(() => restored.drafts)
     if (restored.images !== null) {
       setImageAttachmentState(state =>
         reduceSessionImagesRestored(state, sessionId, restored.images ?? []),
@@ -2424,7 +2431,7 @@ export function App() {
     (sessionId: SessionId, prompts: readonly RecalledPrompt[]) => {
       const { text, images } = foldRecalledPrompts(prompts)
       if (text.length === 0 && images.length === 0) return
-      setPromptDrafts(drafts =>
+      updatePromptDrafts(drafts =>
         reducePromptDrafts(
           drafts,
           sessionId,
@@ -2909,7 +2916,7 @@ export function App() {
     // A parked prompt that is later released comes back as its expanded text
     // (`restoreDraftWithPending`) — the pills are gone, the content is not.
     const retireDraft = (): void => {
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
       setImageAttachmentState(prev =>
         reduceSessionImagesReplaced(prev, sessionId, []),
@@ -3080,7 +3087,7 @@ export function App() {
       value: string,
       reason: DraftWriteReason = 'edit',
     ) => {
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
+      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
       setPasteState(prev =>

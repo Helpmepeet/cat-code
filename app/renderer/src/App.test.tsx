@@ -3211,7 +3211,10 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // CURRENT draft (round8 finding 1).
   expect(restoreBody).toContain('applyRefusedSubmitRestoration(')
   expect(restoreBody).toContain('refusedSubmitPrefixesRef.current = restored.recovery')
-  expect(restoreBody).toContain('promptDraftsRef.current = restored.drafts')
+  expect(restoreBody).toContain('updatePromptDrafts(() => restored.drafts)')
+  // Every draft producer shares the synchronous ref-backed updater. A raw
+  // setter elsewhere can queue an edit/recall that a following refusal loses.
+  expect(source.match(/\bsetPromptDrafts\(/g)).toHaveLength(1)
   expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, restored.images')
   // The ordered snapshot is handed in rather than looked up. The reducer marks
   // already-restored entries, so duplicate answers emit no second snapshot.

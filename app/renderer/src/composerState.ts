@@ -1212,6 +1212,12 @@ export function reduceSubmitAnswers(
   for (const sessionId of touchedSessions) {
     const entries = next[sessionId] ?? []
     if (!entries.some(entry => entry.settlement === 'refused' && !entry.restored)) {
+      if (
+        entries.length > 0 &&
+        entries.every(entry => entry.settlement === 'refused')
+      ) {
+        next = reduceRetainedSubmitCleared(next, sessionId)
+      }
       continue
     }
     for (const entry of entries) {

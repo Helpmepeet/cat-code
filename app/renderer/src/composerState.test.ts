@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { AgentConfigSnapshot, ServerFrame } from '../../shared/protocol.js'
-import { selectPromptDraft } from './appModel.js'
+import { reducePromptDrafts, selectPromptDraft } from './appModel.js'
 import {
   applyRefusedSubmitRestoration,
   createRetainedSubmitState,
@@ -1694,6 +1694,41 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(applyRefusedSubmitRestoration(
       first.drafts, first.recovery, S1, [a, b],
     )).toEqual(second)
+  })
+
+  test('an interleaved recall is preserved when another refusal arrives before render', () => {
+    const a = { submitId: 'A', text: 'A', images: [] }
+    const b = { submitId: 'B', text: 'B', images: [] }
+    const first = applyRefusedSubmitRestoration(
+      { [S1]: 'LIVE' }, new Map(), S1, [a],
+    )
+    const recalledDrafts = reducePromptDrafts(
+      first.drafts,
+      S1,
+      restoreDraftWithPending(selectPromptDraft(first.drafts, S1), 'RECALLED'),
+    )
+    const second = applyRefusedSubmitRestoration(
+      recalledDrafts, first.recovery, S1, [a, b],
+    )
+    const draft = selectPromptDraft(second.drafts, S1)
+    expect(draft).toBe('B\nRECALLED\nA\nLIVE')
+    expect(draft.split('\n').filter(line => line === 'A')).toHaveLength(1)
+  })
+
+  test('accepting the final sibling clears already-restored transport copies', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'A', text: 'A', images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'B', text: 'B', images: [],
+    })
+    const refused = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'A', false)])
+    expect(refused.state[S1]?.[0]).toMatchObject({ restored: true })
+    const accepted = reduceSubmitAnswers(
+      refused.state, [submitAnswerFrame(S1, 'B', true)],
+    )
+    expect(accepted).toEqual({ state: {}, restored: [] })
   })
 
   test('an older refusal arriving later cannot replace the newer refused image', () => {
