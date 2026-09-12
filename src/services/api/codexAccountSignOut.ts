@@ -738,7 +738,15 @@ function cleanupConfigMirror(
     } catch {
       return false
     }
-    return result.status !== 'failed'
+    if (result.status === 'failed') return false
+    if (
+      result.status === 'not_matched' &&
+      result.accountId === accountId &&
+      result.credentialGeneration !== expectedGeneration
+    ) {
+      return false
+    }
+    return true
   }
 
   let before: GlobalConfig
@@ -1303,9 +1311,13 @@ async function executeSignOut(
   }
 
   try {
-    (
-      dependencies.repairLeases ?? repairLeasesForUnavailableAccount
-    )(normalized.accountId)
+    const repairLeases =
+      dependencies.repairLeases ??
+      ((accountId: string) =>
+        repairLeasesForUnavailableAccount(accountId, {
+          touchReplacementUsage: false,
+        }))
+    repairLeases(normalized.accountId)
   } catch {
     sideEffectFailed = true
   }

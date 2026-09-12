@@ -1435,7 +1435,11 @@ export function clearCodexOAuthTokens(): void {
  */
 export type CodexOAuthTokenClearResult =
   | Readonly<{ status: 'cleared' }>
-  | Readonly<{ status: 'not_matched' }>
+  | Readonly<{
+      status: 'not_matched'
+      accountId?: string
+      credentialGeneration?: number | null
+    }>
   | Readonly<{ status: 'failed' }>
 
 export function clearCodexOAuthTokensForAccountResult(
@@ -1448,6 +1452,8 @@ export function clearCodexOAuthTokensForAccountResult(
 
   let matched = false
   let saved = false
+  let unmatchedAccountId: string | undefined
+  let unmatchedGeneration: number | null | undefined
   try {
     saved = saveGlobalConfig(current => {
       const stored = current.codexOAuth
@@ -1455,6 +1461,15 @@ export function clearCodexOAuthTokensForAccountResult(
         stored?.credentialGeneration === undefined
           ? 0
           : stored.credentialGeneration
+      unmatchedAccountId = stored?.accountId
+      unmatchedGeneration =
+        stored?.credentialGeneration === undefined
+          ? stored
+            ? 0
+            : undefined
+          : isValidCodexCredentialGeneration(stored.credentialGeneration)
+            ? stored.credentialGeneration
+            : null
       if (
         !stored ||
         stored.accountId !== accountId ||
@@ -1472,7 +1487,13 @@ export function clearCodexOAuthTokensForAccountResult(
   }
 
   if (!matched) {
-    return { status: 'not_matched' }
+    return {
+      status: 'not_matched',
+      ...(unmatchedAccountId ? { accountId: unmatchedAccountId } : {}),
+      ...(unmatchedGeneration !== undefined
+        ? { credentialGeneration: unmatchedGeneration }
+        : {}),
+    }
   }
   if (process.env.NODE_ENV === 'test') {
     delete getGlobalConfig().codexOAuth

@@ -73,6 +73,10 @@ export type CodexLeaseSnapshot = {
   }>
 }
 
+export type CodexLeaseRepairOptions = Readonly<{
+  touchReplacementUsage?: boolean
+}>
+
 type CodexLeaseFailoverOptions = {
   markAccountCapped?: boolean
 }
@@ -500,6 +504,7 @@ export function failoverCodexLease(
  */
 export function repairLeasesForUnavailableAccount(
   unavailableAccountId: string,
+  options: CodexLeaseRepairOptions = {},
 ): void {
   const affected = Array.from(codexLeasesByOwnerId.values()).filter(
     (lease) => lease.accountId === unavailableAccountId,
@@ -522,7 +527,9 @@ export function repairLeasesForUnavailableAccount(
         selectionReason: `repaired from unavailable account ${unavailableAccountId}`,
         updatedAt: now,
       })
-      touchPoolAccountUsage(selection.account.accountId)
+      if (options.touchReplacementUsage !== false) {
+        touchPoolAccountUsage(selection.account.accountId)
+      }
       changed = true
     } catch (error) {
       changed = codexLeasesByOwnerId.delete(lease.ownerId) || changed
@@ -538,7 +545,9 @@ export function repairLeasesForUnavailableAccount(
 }
 
 export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
-  repairLeasesForUnavailableAccount(deletedAccountId)
+  repairLeasesForUnavailableAccount(deletedAccountId, {
+    touchReplacementUsage: true,
+  })
 }
 
 function leaseRepairRank(lease: CodexLease): number {

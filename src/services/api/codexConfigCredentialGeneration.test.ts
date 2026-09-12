@@ -154,6 +154,21 @@ describe('Codex config credential generation', () => {
         clearCodexOAuthTokensForAccount('replacement-account', 2),
       ).toBe(true)
       expect(getCodexOAuthTokens()).toBeNull()
+
+      saveCodexOAuthTokens({
+        accessToken: 'same-account-new-access',
+        refreshToken: 'same-account-new-refresh',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'same-account',
+        credentialGeneration: 2,
+      })
+      expect(
+        clearCodexOAuthTokensForAccount('same-account', 1),
+      ).toBe(false)
+      expect(getCodexOAuthTokens()).toMatchObject({
+        accountId: 'same-account',
+        credentialGeneration: 2,
+      })
     } finally {
       if (previousNodeEnv === undefined) {
         delete process.env.NODE_ENV
