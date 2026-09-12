@@ -781,7 +781,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   // The rest of the doctrine still applies: an unnamed session still gets the
   // whole guideline, including the create-only-when-asked rule.
   expect(unnamed).toContain(
-    'nothing obliges an acknowledgment; a short okay or silence can both be right',
+    'Nothing obliges an acknowledgment; a short okay or silence can both be right',
   )
   // The relay to the user carries the outcome, not the peer's evidence: one
   // creator reproduced its peer's whole command list and the user read the
