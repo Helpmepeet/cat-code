@@ -129,7 +129,7 @@ Not run: application build/GUI/security battery, live provider calls, or power p
 Reason: documentation-only audit; no application implementation or measured-energy claim.
 ```
 
-An independent subagent review was requested after this completed draft. Its findings and their disposition will be recorded with the final report.
+Independent subagent review completed after the draft: **GREEN, no open findings**. The reviewer rechecked the production paths, independently reran the 26 passing tests, and reproduced the synthetic timing result. One low-severity clarification was incorporated: context analysis already has a local estimator, and the opportunity is to use it before generation-based counting. See the [independent review and evidence](/Users/pt/cat-code/docs/reports/2026-09-12-multi-session-compute-review.md). This accepts the report's findings, not unmeasured energy savings.
 
 **Reproduce the narrow transcript experiment**
 
