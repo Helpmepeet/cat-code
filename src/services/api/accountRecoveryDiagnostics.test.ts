@@ -4,47 +4,56 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { setSessionProvider } from '../../bootstrap/state.js'
 import {
+  accountRecoveryTestConfigDir,
+  resetAccountRecoveryTestConfig,
+} from './accountRecoveryDiagnostics.test-setup.js'
+
+const { setSessionProvider } = await import('../../bootstrap/state.js')
+const {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
-} from './accountDiagnostics.js'
-import {
+} = await import('./accountDiagnostics.js')
+const {
   getActiveClaudeAccount,
   resetClaudeAccountPoolForTest,
   seedClaudeAccountPoolForTest,
-  type ClaudePoolAccount,
-} from './claudeAccountPool.js'
-import {
+} = await import('./claudeAccountPool.js')
+type ClaudePoolAccount = import('./claudeAccountPool.js').ClaudePoolAccount
+const {
   CodexAccountAuthError,
   CodexAccountCapError,
   CodexResponseFailedError,
   createCodexFetch,
   resetCodexCacheContext,
-} from './codex-fetch-adapter.js'
-import { createCodexCredentialHandle } from './codexCredentialUse.js'
-import type { CodexCredentialLifecycle } from './codexCredentialLifecycle.js'
-import {
+} = await import('./codex-fetch-adapter.js')
+const { createCodexCredentialHandle } = await import('./codexCredentialUse.js')
+const {
+  codexCredentialLifecycle,
+  createCodexCredentialLifecycle,
+} = await import('./codexCredentialLifecycle.js')
+type CodexCredentialLifecycle = import('./codexCredentialLifecycle.js').CodexCredentialLifecycle
+const {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
   seedCodexLeaseForTest,
-} from './codexAccountLeaseManager.js'
-import {
+} = await import('./codexAccountLeaseManager.js')
+const {
   getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
-  type PoolAccount,
-} from './codexAccountPool.js'
-import { getAnthropicClient } from './client.js'
-import { getClaudeAIOAuthTokens } from '../../utils/auth.js'
-import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
-import {
+} = await import('./codexAccountPool.js')
+type PoolAccount = import('./codexAccountPool.js').PoolAccount
+const { getAnthropicClient } = await import('./client.js')
+const { getClaudeAIOAuthTokens } = await import('../../utils/auth.js')
+const { _resetKeepAliveForTesting } = await import('../../utils/proxy.js')
+const {
   CannotRetryError,
   CodexAccountUnavailableError,
   _resetCodexNetworkOutageDelaysForTest,
   _setCodexNetworkOutageDelaysForTest,
   withRetry,
-} from './withRetry.js'
+} = await import('./withRetry.js')
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -124,8 +133,18 @@ describe('account recovery diagnostics', () => {
   const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
   let diagnostics: Array<Record<string, unknown>> = []
   const macroState = globalThis as typeof globalThis & { MACRO?: { VERSION: string } }
+  const accountRecoveryLifecycle = createCodexCredentialLifecycle({
+    directory: join(accountRecoveryTestConfigDir, 'codex-credential-lifecycle'),
+  })
 
   beforeEach(() => {
+    resetAccountRecoveryTestConfig()
+    expect(codexCredentialLifecycle.getPaths('account-one').directory).toBe(
+      join(accountRecoveryTestConfigDir, 'codex-credential-lifecycle'),
+    )
+    expect(accountRecoveryLifecycle.read('account-one')).toEqual({
+      status: 'absent',
+    })
     process.env.ANTHROPIC_API_KEY = 'test-anthropic-key'
     macroState.MACRO = { VERSION: 'test-version' }
     diagnostics = []
