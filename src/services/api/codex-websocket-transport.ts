@@ -1399,7 +1399,7 @@ async function* _streamTurnAttempt(
   // has no response-id correlation, so an open socket is the whole hazard.
   let reachedTerminalDisposition = false
 
-  // Yield events until response.completed, error, or close.
+  // Yield events until a terminal response event, error, or close.
   try {
     while (true) {
       // Drain the queue first.
@@ -1483,14 +1483,16 @@ async function* _streamTurnAttempt(
           return
         }
 
-        // response.failed: the attempt produced no committed baseline (state is
-        // only recorded on response.completed above), so the PREVIOUS good
-        // baseline is still valid to chain from. Item 3 rule 3: kill the socket
-        // (its late events must not bleed into the next turn) but keep the
-        // continuation baseline. Account-cap response.failed events are
-        // reclassified upstream (createCodexResponseFailedError → clear +
-        // CodexAccountCapError) so rotation still drops state where it must.
-        if (event.type === 'response.failed') {
+        // A failed or incomplete response produced no committed baseline (state
+        // only records on response.completed above), so the previous completed
+        // baseline remains valid. Kill the physical stream to prevent late
+        // events from reaching the next turn while preserving that baseline.
+        // Account failures are reclassified upstream, where account rotation
+        // clears the conversation state.
+        if (
+          event.type === 'response.failed' ||
+          event.type === 'response.incomplete'
+        ) {
           reachedTerminalDisposition = true
           closeSocketPreservingState(conversationId)
           clearIdle()
