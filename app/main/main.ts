@@ -124,6 +124,8 @@ import {
 } from './attachmentGate.js'
 import {
   createLiveFrameDeliveryCoordinator,
+  createAttachedFrameDeliveryCoordinator,
+  createRendererReadyTracker,
   createRendererLossTransition,
   type LiveFrameDeliveryCoordinator,
   type LiveFrameDeliveryOrigin,
@@ -605,7 +607,10 @@ let latestRendererSnapshot: DebugRendererSnapshot | null = null
  */
 const attachmentGate = new AttachmentGate()
 let liveFrameDelivery: LiveFrameDeliveryCoordinator | null = null
+let attachedFrameDelivery: ReturnType<typeof createAttachedFrameDeliveryCoordinator> | null = null
 let handleRendererDeliveryFailure: ((error: unknown) => void) | null = null
+let markRendererDocumentReady: ((documentId: string) => void) | null = null
+let disposeRendererRecovery: (() => void) | null = null
 const replayFlushTimers = new Map<SessionId, ReturnType<typeof setTimeout>>()
 const restoringSessions = new Set<SessionId>()
 
@@ -1585,9 +1590,14 @@ function createWindow(): void {
   // still in flight during teardown.
   window.on('closed', () => {
     cancelWindowBoundsSave()
+    attachedFrameDelivery?.reset()
+    attachedFrameDelivery = null
     liveFrameDelivery?.dispose()
     liveFrameDelivery = null
     handleRendererDeliveryFailure = null
+    markRendererDocumentReady = null
+    disposeRendererRecovery?.()
+    disposeRendererRecovery = null
     if (mainWindow === window) mainWindow = null
   })
 
@@ -1608,9 +1618,8 @@ function createWindow(): void {
       rendererDocumentId = randomUUID()
       rendererSubscriptionEpoch = 0
       logOperational('renderer.navigation.started', 'info', { navigation: 'document' })
-      liveFrameDelivery?.invalidateDocument()
       cancelAllReplayFlushes()
-      attachmentGate.onNavigationStart()
+      attachedFrameDelivery?.onNavigationStart()
     }
   })
 
@@ -1712,10 +1721,10 @@ function createWindow(): void {
     isDisposed: () => window.isDestroyed(),
     onUnavailable: () => {
       rendererGone = true
-      liveFrameDelivery?.invalidateDocument()
       stopRendererHealthTimer()
       cancelAllReplayFlushes()
-      attachmentGate.onNavigationStart()
+      if (attachedFrameDelivery) attachedFrameDelivery.onNavigationStart()
+      else attachmentGate.onNavigationStart()
     },
     decide: reason => rendererRecovery.decide(reason),
     onReload: (reason, attempt) => {
@@ -1727,7 +1736,22 @@ function createWindow(): void {
       loadRenderer()
     },
     onGiveUp: giveUpOnRenderer,
+    timeoutReason: 'load-failed',
   })
+  disposeRendererRecovery = () => rendererLossTransition.dispose()
+  const rendererReadyTracker = createRendererReadyTracker(() => {
+    rendererLossTransition.documentReady()
+    if (rendererRecovering) {
+      rendererRecovering = false
+      rendererRecoveryDialogShown = false
+      const pid = readRendererOsProcessId()
+      logOperational('renderer.recovery.succeeded', 'info', pid === null ? {} : { pid })
+      startRendererHealthTimer()
+    }
+  })
+  markRendererDocumentReady = documentId => {
+    rendererReadyTracker.ready(documentId)
+  }
   handleRendererDeliveryFailure = error => {
     logOperational('diagnostic', 'error', {
       source: 'rendererDelivery',
@@ -1737,10 +1761,17 @@ function createWindow(): void {
   }
   liveFrameDelivery?.dispose()
   liveFrameDelivery = createLiveFrameDeliveryCoordinator({
+    // The measured policy remains immediate until the isolated Electron
+    // benchmark proves a candidate against the fixed CPU and commit-latency bars.
+    delayMs: 0,
     sendNow: sendServerFramesNow,
     isDestinationAvailable: () => deliverableContents() !== null,
     onSendFailure: error => handleRendererDeliveryFailure?.(error),
   })
+  attachedFrameDelivery = createAttachedFrameDeliveryCoordinator(
+    attachmentGate,
+    liveFrameDelivery,
+  )
 
   // Stderr lines are dev only: a packaged build must not gain a stderr surface.
   // Both are filtered where the operational record is not, because a diagnostic
@@ -1757,16 +1788,7 @@ function createWindow(): void {
         process.stderr.write(`[main] the window failed to load (code ${code}).\n`)
       }
       if (rendererRecovering && code !== -3) {
-        const decision = rendererRecovery.decide('load-failed')
-        if (decision.action === 'reload') {
-          logOperational('renderer.recovery.started', 'warn', {
-            count: decision.attempt,
-            reason: 'load-failed',
-          })
-          loadRenderer()
-        } else if (decision.action === 'give-up') {
-          giveUpOnRenderer('load-failed')
-        }
+        rendererLossTransition.loadFailed('load-failed')
       }
     }
   })
@@ -1795,7 +1817,6 @@ function createWindow(): void {
   // same way any reload does (F2).
   window.webContents.on('did-finish-load', () => {
     rendererGone = false
-    rendererLossTransition.documentReady()
     rendererOsProcessId = readRendererOsProcessId()
     const pid: Record<string, number> =
       rendererOsProcessId === null ? {} : { pid: rendererOsProcessId }
@@ -1807,14 +1828,6 @@ function createWindow(): void {
     if (!windowCreatedLogged) {
       windowCreatedLogged = true
       logOperational('window.created', 'info', pid)
-    }
-    if (rendererRecovering) {
-      rendererRecovering = false
-      rendererRecoveryDialogShown = false
-      // A reload is a different OS process, so the crash report for a SECOND
-      // death would otherwise have nothing live to match against.
-      logOperational('renderer.recovery.succeeded', 'info', pid)
-      startRendererHealthTimer()
     }
   })
   let unresponsiveAt: number | null = null
@@ -1928,12 +1941,8 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     // Receipt is true whether the attachment gate forwards immediately or
     // buffers for replay; record that before deciding its outcome.
     traceFrame(traced, 'host.received')
-    const ordinaryLiveOrigin =
-      attachmentGate.isAttached &&
-      !attachmentGate.isReplayCoalescing(event.sessionId)
-    const gated = attachmentGate.onFrame(event.sessionId, traced)
+    const gated = attachedFrameDelivery?.onFrame(event.sessionId, traced) ?? []
     if (gated.length === 0) traceFrame(traced, 'attachment.buffered')
-    deliver(gated, ordinaryLiveOrigin ? 'ordinary-live' : 'immediate')
     if (
       attachmentGate.hasPendingReplayCoalescing(event.sessionId) &&
       attachmentGate.isLazyReplayCoalescing(event.sessionId)
@@ -2226,6 +2235,7 @@ function registerIpcHandlers(): void {
     // An IPC message from the renderer is positive proof of a live committed
     // frame, and the mount effect that sends it can beat `did-finish-load`, so
     // clearing the flag only there left the one-shot replay below discarded.
+    markRendererDocumentReady?.(payload.documentId)
     rendererGone = false
     rendererDocumentId = payload.documentId
     rendererSubscriptionEpoch++
@@ -3467,9 +3477,16 @@ function ensureHost(): Host {
     // so the persist here uses a synchronous atomic write. Restart persisting a
     // cache is acceptable (a bounded extra sync write).
     evictReplay: appSessionId => {
-      persistTranscriptCache(appSessionId)
-      cancelReplayFlush(appSessionId)
-      attachmentGate.clearSession(appSessionId)
+      const beforeClear = () => {
+        persistTranscriptCache(appSessionId)
+        cancelReplayFlush(appSessionId)
+      }
+      if (attachedFrameDelivery) {
+        attachedFrameDelivery.evictSession(appSessionId, beforeClear)
+      } else {
+        beforeClear()
+        attachmentGate.clearSession(appSessionId)
+      }
     },
   })
   wireHostEvents(host)
@@ -3666,6 +3683,7 @@ function teardownOnSignal(signal: 'SIGINT' | 'SIGTERM'): void {
   shutdownRuntime()
   cancelAllReplayFlushes()
   liveFrameDelivery?.dispose()
+  disposeRendererRecovery?.()
   // Without these the launch has no completion record, so every later export
   // reads a Ctrl-C run as an interrupted launch and reports the whole window's
   // evidence as incomplete. Same pair `before-quit` writes; both are synchronous
@@ -3707,10 +3725,14 @@ app.on('window-all-closed', () => {
   scheduleDebugStateExport.cancel()
   // F2 — drop buffered frames from the closed window so a macOS reopen never
   // replays dead-session frames into the new renderer.
-  attachmentGate.reset()
+  attachedFrameDelivery?.reset()
+  attachedFrameDelivery = null
   liveFrameDelivery?.dispose()
   liveFrameDelivery = null
   handleRendererDeliveryFailure = null
+  markRendererDocumentReady = null
+  disposeRendererRecovery?.()
+  disposeRendererRecovery = null
   cancelAllReplayFlushes()
   if (process.platform !== 'darwin') {
     app.quit()
@@ -3724,6 +3746,7 @@ app.on('before-quit', () => {
   shutdownRuntime()
   stopBackgroundDrivers()
   liveFrameDelivery?.dispose()
+  disposeRendererRecovery?.()
   logOperational('app.shutdown.completed', 'info')
   logOperational('process.exited', 'info', { role: 'electron-main', expected: true })
   operationalLog.close()

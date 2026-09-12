@@ -1,8 +1,10 @@
-import type { ServerFrame } from '../shared/protocol.js'
+import type { ServerFrame, SessionId } from '../shared/protocol.js'
+import type { AttachmentGate } from './attachmentGate.js'
 
 export const LIVE_FRAME_BATCH_DELAY_MS = 8
 export const LIVE_FRAME_BATCH_MAX_FRAMES = 32
 export const LIVE_FRAME_BATCH_MAX_BYTES = 256 * 1024
+export const RENDERER_RECOVERY_WATCHDOG_MS = 15_000
 
 export type LiveFrameDeliveryOrigin = 'ordinary-live' | 'immediate'
 export type LiveFrameFlushReason =
@@ -49,6 +51,47 @@ export type LiveFrameDeliveryCoordinator = {
   stats(): LiveFrameBatcherStats
 }
 
+export function createAttachedFrameDeliveryCoordinator(
+  attachmentGate: AttachmentGate,
+  delivery: LiveFrameDeliveryCoordinator,
+) {
+  return {
+    onFrame(sessionId: SessionId, frame: ServerFrame): ServerFrame[] {
+      const ordinaryLiveOrigin =
+        attachmentGate.isAttached &&
+        !attachmentGate.isReplayCoalescing(sessionId)
+      const gated = attachmentGate.onFrame(sessionId, frame)
+      delivery.deliver(gated, ordinaryLiveOrigin ? 'ordinary-live' : 'immediate')
+      return gated
+    },
+    onNavigationStart(): void {
+      delivery.invalidateDocument()
+      attachmentGate.onNavigationStart()
+    },
+    evictSession(sessionId: SessionId, beforeClear: () => void): void {
+      delivery.flush()
+      beforeClear()
+      attachmentGate.clearSession(sessionId)
+    },
+    reset(): void {
+      delivery.dispose()
+      attachmentGate.reset()
+    },
+  }
+}
+
+export function createRendererReadyTracker(onNewDocument: (documentId: string) => void) {
+  let readyDocumentId: string | null = null
+  return {
+    ready(documentId: string): boolean {
+      if (documentId === readyDocumentId) return false
+      readyDocumentId = documentId
+      onNewDocument(documentId)
+      return true
+    },
+  }
+}
+
 export function createRendererLossTransition<Reason extends string>(options: {
   isDisposed: () => boolean
   onUnavailable: () => void
@@ -58,20 +101,66 @@ export function createRendererLossTransition<Reason extends string>(options: {
     | Readonly<{ action: 'ignore' }>
   onReload: (reason: Reason, attempt: number) => void
   onGiveUp: (reason: Reason) => void
+  timeoutReason: Reason
+  timeoutMs?: number
+  setTimer?: (callback: () => void, delayMs: number) => TimerHandle
+  clearTimer?: (timer: TimerHandle) => void
 }) {
-  let handledForDocument = false
+  const timeoutMs = options.timeoutMs ?? RENDERER_RECOVERY_WATCHDOG_MS
+  const setTimer = options.setTimer ?? ((callback, ms) => setTimeout(callback, ms))
+  const clearTimer = options.clearTimer ?? (timer => clearTimeout(timer))
+  let state: 'idle' | 'recovering' | 'exhausted' = 'idle'
+  let disposed = false
+  let watchdog: TimerHandle | null = null
+  let watchdogGeneration = 0
+
+  const cancelWatchdog = () => {
+    watchdogGeneration++
+    if (watchdog !== null) clearTimer(watchdog)
+    watchdog = null
+  }
+
+  const begin = (reason: Reason, markUnavailable: boolean): boolean => {
+    if (disposed || options.isDisposed()) return false
+    if (markUnavailable) options.onUnavailable()
+    cancelWatchdog()
+    state = 'recovering'
+    const decision = options.decide(reason)
+    if (decision.action === 'reload') {
+      const armedGeneration = watchdogGeneration
+      watchdog = setTimer(() => {
+        if (disposed || state !== 'recovering' || armedGeneration !== watchdogGeneration) return
+        watchdog = null
+        begin(options.timeoutReason, false)
+      }, timeoutMs)
+      options.onReload(reason, decision.attempt)
+    } else if (decision.action === 'give-up') {
+      state = 'exhausted'
+      options.onGiveUp(reason)
+    } else {
+      state = 'exhausted'
+    }
+    return true
+  }
+
   return {
     lose(reason: Reason): boolean {
-      if (handledForDocument || options.isDisposed()) return false
-      handledForDocument = true
-      options.onUnavailable()
-      const decision = options.decide(reason)
-      if (decision.action === 'reload') options.onReload(reason, decision.attempt)
-      else if (decision.action === 'give-up') options.onGiveUp(reason)
-      return true
+      if (state !== 'idle') return false
+      return begin(reason, true)
+    },
+    loadFailed(reason: Reason): boolean {
+      if (state !== 'recovering') return false
+      return begin(reason, false)
     },
     documentReady(): void {
-      handledForDocument = false
+      state = 'idle'
+      cancelWatchdog()
+    },
+    dispose(): void {
+      if (disposed) return
+      disposed = true
+      state = 'exhausted'
+      cancelWatchdog()
     },
   }
 }
@@ -130,6 +219,11 @@ export function createLiveFrameDeliveryCoordinator(
   let timer: TimerHandle | null = null
   let generation = 0
   let disposed = false
+  let processingDelivery = false
+  const deliveryRequests: Array<{
+    frames: ServerFrame[]
+    origin: LiveFrameDeliveryOrigin
+  }> = []
   const counters: MutableStats = {
     acceptedFrames: 0,
     sendCount: 0,
@@ -159,6 +253,7 @@ export function createLiveFrameDeliveryCoordinator(
 
   const failDelivery = (error: unknown) => {
     abandonPending()
+    deliveryRequests.length = 0
     try {
       options.onSendFailure(error)
     } catch {
@@ -211,12 +306,11 @@ export function createLiveFrameDeliveryCoordinator(
     }, Math.max(0, oldestAt + delayMs - now()))
   }
 
-  const deliver = (
+  const processDelivery = (
     frames: ServerFrame[],
     origin: LiveFrameDeliveryOrigin = 'immediate',
   ) => {
     if (disposed || frames.length === 0) return
-    counters.acceptedFrames += frames.length
     const frame = frames[0]
     const eligible =
       delayMs > 0 &&
@@ -265,16 +359,37 @@ export function createLiveFrameDeliveryCoordinator(
     counters.maxQueuedBytes = Math.max(counters.maxQueuedBytes, pendingBytes)
   }
 
+  const deliver = (
+    frames: ServerFrame[],
+    origin: LiveFrameDeliveryOrigin = 'immediate',
+  ) => {
+    if (disposed || frames.length === 0) return
+    counters.acceptedFrames += frames.length
+    deliveryRequests.push({ frames, origin })
+    if (processingDelivery) return
+    processingDelivery = true
+    try {
+      while (!disposed && deliveryRequests.length > 0) {
+        const request = deliveryRequests.shift()
+        if (request) processDelivery(request.frames, request.origin)
+      }
+    } finally {
+      processingDelivery = false
+    }
+  }
+
   return {
     deliver,
     flush: () => drain('manual'),
     invalidateDocument() {
       abandonPending()
+      deliveryRequests.length = 0
     },
     dispose() {
       if (disposed) return
       disposed = true
       abandonPending()
+      deliveryRequests.length = 0
     },
     stats() {
       return {

@@ -1,7 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 import type { ServerFrame } from '../shared/protocol.js'
+import { AttachmentGate } from './attachmentGate.js'
 import {
+  createAttachedFrameDeliveryCoordinator,
   createLiveFrameDeliveryCoordinator,
+  createRendererReadyTracker,
   createRendererLossTransition,
   isBatchableLiveFrame,
   serializedServerFrameUtf8Bytes,
@@ -212,6 +215,29 @@ describe('live frame delivery coordinator', () => {
     expect(deliveries).toEqual([[base('queued')]])
   })
 
+  test('serializes a nested delivery behind the outer frame and keeps caps', () => {
+    const deliveries: ServerFrame[][] = []
+    let nested = false
+    let coordinator: ReturnType<typeof createLiveFrameDeliveryCoordinator>
+    coordinator = createLiveFrameDeliveryCoordinator({
+      maxFrames: 1,
+      isDestinationAvailable: () => true,
+      onSendFailure: () => {},
+      sendNow: frames => {
+        deliveries.push(frames)
+        if (!nested) {
+          nested = true
+          coordinator.deliver([base('c')], 'ordinary-live')
+        }
+      },
+    })
+    coordinator.deliver([base('a')], 'ordinary-live')
+    coordinator.deliver([base('b')], 'ordinary-live')
+    coordinator.flush()
+    expect(deliveries).toEqual([[base('a')], [base('b')], [base('c')]])
+    expect(coordinator.stats().maxQueuedFrames).toBe(1)
+  })
+
   test('zero-delay policy preserves immediate delivery', () => {
     const h = harness({ delayMs: 0 })
     h.coordinator.deliver([base('a')], 'ordinary-live')
@@ -230,6 +256,7 @@ describe('renderer loss transition', () => {
       decide: () => { decisions++; return { action: 'reload', attempt: decisions } },
       onReload: (_reason, attempt) => { reloads += attempt },
       onGiveUp: () => {},
+      timeoutReason: 'load-failed',
     })
     expect(transition.lose('send-failed')).toBe(true)
     expect(transition.lose('later-process-gone')).toBe(false)
@@ -247,10 +274,87 @@ describe('renderer loss transition', () => {
       decide: () => ({ action: 'give-up' }),
       onReload: () => {},
       onGiveUp: () => { giveUps++ },
+      timeoutReason: 'load-failed',
     })
     expect(transition.lose('closed')).toBe(false)
     disposed = false
     expect(transition.lose('exhausted')).toBe(true)
     expect(giveUps).toBe(1)
+  })
+
+  test('a replacement that dies before readiness advances through the watchdog', () => {
+    let decisions = 0
+    const timers: Array<() => void> = []
+    const transition = createRendererLossTransition<string>({
+      isDisposed: () => false,
+      onUnavailable: () => {},
+      decide: () => ({ action: 'reload', attempt: ++decisions }),
+      onReload: () => {}, onGiveUp: () => {}, timeoutReason: 'load-failed',
+      setTimer: callback => { timers.push(callback); return callback as unknown as ReturnType<typeof setTimeout> },
+      clearTimer: () => {},
+    })
+    transition.lose('send-failed')
+    expect(transition.lose('old-process-gone-after-navigation')).toBe(false)
+    timers[0]?.()
+    expect(decisions).toBe(2)
+  })
+
+  test('new readiness re-arms recovery before replay; StrictMode readiness does not', () => {
+    let decisions = 0
+    const transition = createRendererLossTransition<string>({
+      isDisposed: () => false, onUnavailable: () => {},
+      decide: () => ({ action: 'reload', attempt: ++decisions }),
+      onReload: () => {}, onGiveUp: () => {}, timeoutReason: 'load-failed',
+    })
+    transition.lose('old-send-failed')
+    const ready = createRendererReadyTracker(() => transition.documentReady())
+    let coordinator: ReturnType<typeof createLiveFrameDeliveryCoordinator>
+    coordinator = createLiveFrameDeliveryCoordinator({
+      delayMs: 0, isDestinationAvailable: () => true,
+      sendNow: () => { throw new Error('replay send failed') },
+      onSendFailure: () => { transition.lose('new-replay-failed') },
+    })
+    expect(ready.ready('replacement')).toBe(true)
+    coordinator.deliver([barrier('replay')])
+    expect(decisions).toBe(2)
+    expect(ready.ready('replacement')).toBe(false)
+    coordinator.deliver([barrier('strict-repeat')])
+    expect(decisions).toBe(2)
+  })
+})
+
+describe('attachment and live-delivery composition', () => {
+  test('flushes the FIFO prefix before session eviction and clears replay', () => {
+    const gate = new AttachmentGate()
+    gate.onRendererReady()
+    const h = harness()
+    const attached = createAttachedFrameDeliveryCoordinator(gate, h.coordinator)
+    attached.onFrame('a', base('a'))
+    attached.onFrame('b', base('b'))
+    let deliveriesSeenAtEviction = 0
+    attached.evictSession('a', () => { deliveriesSeenAtEviction = h.deliveries.length })
+    expect(h.deliveries).toEqual([[base('a'), base('b')]])
+    expect(deliveriesSeenAtEviction).toBe(1)
+    attached.onNavigationStart()
+    expect(gate.onRendererReady().map(frame => frame.sessionId)).toEqual(['b'])
+  })
+
+  test('send loss during eviction re-arms attachment before host publication', () => {
+    const gate = new AttachmentGate()
+    gate.onRendererReady()
+    let available = true
+    let attached: ReturnType<typeof createAttachedFrameDeliveryCoordinator>
+    const delivery = createLiveFrameDeliveryCoordinator({
+      isDestinationAvailable: () => available,
+      sendNow: () => {},
+      onSendFailure: () => attached.onNavigationStart(),
+    })
+    attached = createAttachedFrameDeliveryCoordinator(gate, delivery)
+    attached.onFrame('a', base('a'))
+    available = false
+    let detachedAtPublication = false
+    attached.evictSession('a', () => { detachedAtPublication = !gate.isAttached })
+    expect(detachedAtPublication).toBe(true)
+    expect(gate.onRendererReady()).toEqual([])
   })
 })
