@@ -1428,6 +1428,210 @@ export function clearCodexOAuthTokens(): void {
   })
 }
 
+/**
+ * Remove the Codex config mirror only when it still contains the exact
+ * credential generation that a caller invalidated. The comparison happens in
+ * saveGlobalConfig's fresh locked updater, not against this process's cache.
+ */
+export type CodexOAuthTokenClearResult =
+  | Readonly<{ status: 'cleared' }>
+  | Readonly<{ status: 'not_matched' }>
+  | Readonly<{ status: 'failed' }>
+
+export function clearCodexOAuthTokensForAccountResult(
+  accountId: string,
+  expectedGeneration: number,
+): CodexOAuthTokenClearResult {
+  if (!isValidCodexCredentialGeneration(expectedGeneration)) {
+    return { status: 'failed' }
+  }
+
+  let matched = false
+  let saved = false
+  try {
+    saved = saveGlobalConfig(current => {
+      const stored = current.codexOAuth
+      const generation =
+        stored?.credentialGeneration === undefined
+          ? 0
+          : stored.credentialGeneration
+      if (
+        !stored ||
+        stored.accountId !== accountId ||
+        generation !== expectedGeneration
+      ) {
+        return current
+      }
+
+      matched = true
+      const { codexOAuth: _removed, ...rest } = current
+      return rest as typeof current
+    })
+  } catch {
+    return { status: 'failed' }
+  }
+
+  if (!matched) {
+    return { status: 'not_matched' }
+  }
+  if (process.env.NODE_ENV === 'test') {
+    delete getGlobalConfig().codexOAuth
+    saved = true
+  }
+  if (!saved) {
+    return { status: 'failed' }
+  }
+
+  const remaining = getGlobalConfig().codexOAuth
+  const remainingGeneration =
+    remaining?.credentialGeneration === undefined
+      ? 0
+      : remaining.credentialGeneration
+  return !(
+    remaining?.accountId === accountId &&
+    remainingGeneration === expectedGeneration
+  )
+    ? { status: 'cleared' }
+    : { status: 'failed' }
+}
+
+export function clearCodexOAuthTokensForAccount(
+  accountId: string,
+  expectedGeneration: number,
+): boolean {
+  return (
+    clearCodexOAuthTokensForAccountResult(accountId, expectedGeneration)
+      .status === 'cleared'
+  )
+}
+
+export type CodexOAuthActiveAccountReplacementResult = Readonly<{
+  status: 'replaced' | 'pointer_changed' | 'failed'
+  activeAccountId: string | null
+}>
+
+/**
+ * Change the persisted active Codex account and its config mirror as one
+ * conditional config update. A caller must validate replacement credentials
+ * before entering this updater.
+ */
+export function replaceCodexOAuthActiveAccountIfCurrent(
+  expectedActiveAccountId: string | null,
+  replacement: CodexTokens | null,
+): CodexOAuthActiveAccountReplacementResult {
+  if (
+    expectedActiveAccountId !== null &&
+    !isValidCodexAccountId(expectedActiveAccountId)
+  ) {
+    return { status: 'failed', activeAccountId: null }
+  }
+  if (
+    replacement &&
+    (typeof replacement.accessToken !== 'string' ||
+      replacement.accessToken.length === 0 ||
+      typeof replacement.refreshToken !== 'string' ||
+      replacement.refreshToken.length === 0 ||
+      typeof replacement.expiresAt !== 'number' ||
+      !Number.isFinite(replacement.expiresAt) ||
+      !isValidCodexAccountId(replacement.accountId) ||
+      !isValidCodexCredentialGeneration(
+        replacement.credentialGeneration ?? 0,
+      ))
+  ) {
+    return { status: 'failed', activeAccountId: null }
+  }
+
+  let pointerChanged = false
+  let currentActiveAccountId: string | null = null
+  let saved = false
+  try {
+    saved = saveGlobalConfig(current => {
+      currentActiveAccountId =
+        typeof current.activeCodexAccountId === 'string'
+          ? current.activeCodexAccountId
+          : null
+      if (currentActiveAccountId !== expectedActiveAccountId) {
+        pointerChanged = true
+        return current
+      }
+
+      const next = {
+        ...current,
+        activeCodexAccountId: replacement?.accountId,
+        codexOAuth: replacement
+          ? {
+              accessToken: replacement.accessToken,
+              refreshToken: replacement.refreshToken,
+              expiresAt: replacement.expiresAt,
+              accountId: replacement.accountId,
+              credentialGeneration: replacement.credentialGeneration ?? 0,
+            }
+          : undefined,
+      }
+      return next
+    })
+  } catch {
+    return {
+      status: 'failed',
+      activeAccountId: currentActiveAccountId,
+    }
+  }
+
+  if (pointerChanged) {
+    return {
+      status: 'pointer_changed',
+      activeAccountId: currentActiveAccountId,
+    }
+  }
+  if (!saved) {
+    return { status: 'failed', activeAccountId: currentActiveAccountId }
+  }
+  if (process.env.NODE_ENV === 'test' && replacement === null) {
+    delete getGlobalConfig().codexOAuth
+  }
+
+  const persisted = getGlobalConfig()
+  const persistedActiveAccountId =
+    typeof persisted.activeCodexAccountId === 'string'
+      ? persisted.activeCodexAccountId
+      : null
+  const mirror = getCodexOAuthTokens()
+  const mirrorMatches =
+    replacement === null
+      ? mirror === null
+      : mirror?.accountId === replacement.accountId &&
+        mirror.accessToken === replacement.accessToken &&
+        mirror.refreshToken === replacement.refreshToken &&
+        mirror.expiresAt === replacement.expiresAt &&
+        (mirror.credentialGeneration ?? 0) ===
+          (replacement.credentialGeneration ?? 0)
+
+  if (
+    persistedActiveAccountId !== (replacement?.accountId ?? null) ||
+    !mirrorMatches
+  ) {
+    return {
+      status: 'failed',
+      activeAccountId: persistedActiveAccountId,
+    }
+  }
+
+  return {
+    status: 'replaced',
+    activeAccountId: persistedActiveAccountId,
+  }
+}
+
+function isValidCodexAccountId(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 128 &&
+    value.trim() === value &&
+    !/[\u0000-\u001f\u007f/\\]/.test(value)
+  )
+}
+
 
 let lastCredentialsMtimeMs = 0
 

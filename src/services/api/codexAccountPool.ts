@@ -593,6 +593,75 @@ export function getCodexProfileInventory(): CodexProfileInventory {
   }
 }
 
+export type CodexAccountSignOutProfile = Readonly<{
+  accountId: string
+  alias?: string
+  vaultFilePaths: readonly string[]
+  credentialGeneration: number
+}>
+
+/**
+ * Remove one denied account from this process's routing pool without rebuilding
+ * or re-ranking any other account. The active index is left empty when its
+ * account is removed so active replacement can make its own conditional
+ * persisted decision.
+ */
+export function reconcileCodexAccountSignOut(
+  input: CodexAccountSignOutProfile | Readonly<{
+    accountId: string
+    source: 'config'
+  }>,
+): void {
+  const targetIndex = pool.accounts.findIndex(
+    account => account.accountId === input.accountId,
+  )
+  if (targetIndex >= 0) {
+    if (pool.activeIndex === targetIndex) {
+      pool.activeIndex = -1
+    } else if (targetIndex < pool.activeIndex) {
+      pool.activeIndex -= 1
+    }
+    pool.accounts = pool.accounts.filter(
+      account => account.accountId !== input.accountId,
+    )
+  }
+
+  const signedOutProfiles = profileInventory.signedOutProfiles.filter(
+    profile => profile.accountId !== input.accountId,
+  )
+  const previousProfile = profileInventory.signedOutProfiles.find(
+    profile => profile.accountId === input.accountId,
+  )
+  const duplicateVaultIdentities = profileInventory.duplicateVaultIdentities.filter(
+    identity => identity.accountId !== input.accountId,
+  )
+
+  if ('vaultFilePaths' in input) {
+    const vaultFilePaths = [...input.vaultFilePaths].sort()
+    const alias = input.alias ?? previousProfile?.alias
+    signedOutProfiles.push({
+      accountId: input.accountId,
+      ...(alias ? { alias } : {}),
+      source: 'vault',
+      ...(vaultFilePaths[0] ? { vaultFilePath: vaultFilePaths[0] } : {}),
+      vaultFilePaths,
+      profileState: 'signed_out',
+      credentialGeneration: input.credentialGeneration,
+      credentialGenerationState: getCredentialGenerationState(
+        input.credentialGeneration,
+      ),
+      lifecycleState: 'signed_out',
+      lifecycleReadStatus: 'valid',
+    })
+  }
+
+  profileInventory = {
+    accounts: pool.accounts,
+    signedOutProfiles,
+    duplicateVaultIdentities,
+  }
+}
+
 export function markPoolAccountStatus(
   accountId: string,
   status: PoolAccount['status'],
@@ -679,6 +748,50 @@ export type CodexAccountResolution =
   | { kind: 'ambiguous'; matches: CodexAccountLookup[]; matchType: PoolAccountResolutionMatchType }
 
 export type CodexAccountLookup = PoolAccount | SignedOutCodexProfile
+
+export type CodexTargetedSignOutResolution =
+  | { kind: 'none' }
+  | {
+      kind: 'credentialed'
+      account: PoolAccount
+      targetWasActive: boolean
+    }
+  | { kind: 'signed_out'; profile: SignedOutCodexProfile }
+  | { kind: 'ambiguous' }
+
+/**
+ * Resolve an exact account id without treating a metadata-only profile or a
+ * duplicate vault identity as a credentialed account.
+ */
+export function resolveCodexAccountForTargetedSignOut(
+  accountId: string,
+): CodexTargetedSignOutResolution {
+  const duplicate = profileInventory.duplicateVaultIdentities.some(
+    identity => identity.accountId === accountId,
+  )
+  const accounts = pool.accounts.filter(account => account.accountId === accountId)
+  const profiles = profileInventory.signedOutProfiles.filter(
+    profile => profile.accountId === accountId,
+  )
+  if (duplicate || accounts.length > 1 || profiles.length > 1) {
+    return { kind: 'ambiguous' }
+  }
+  if (accounts.length === 1 && profiles.length === 0) {
+    return {
+      kind: 'credentialed',
+      account: accounts[0]!,
+      targetWasActive:
+        pool.accounts[pool.activeIndex]?.accountId === accountId,
+    }
+  }
+  if (accounts.length === 0 && profiles.length === 1) {
+    return { kind: 'signed_out', profile: profiles[0]! }
+  }
+  if (accounts.length > 0 || profiles.length > 0) {
+    return { kind: 'ambiguous' }
+  }
+  return { kind: 'none' }
+}
 
 export function resolveCodexAccountByPrefix(
   prefix: string,

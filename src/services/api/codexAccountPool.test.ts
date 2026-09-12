@@ -26,8 +26,10 @@ import {
   mergePoolAccountsForTest,
   REDEEM_HINT_LAG_GRACE_MS,
   removeCodexAccount,
+  reconcileCodexAccountSignOut,
   resetCodexAccountPoolForTest,
   retireSupersededConfigMirror,
+  resolveCodexAccountForTargetedSignOut,
   resolveCodexAccountByPrefix,
   saveCodexTokenToVault,
   seedCodexAccountPoolForTest,
@@ -1249,6 +1251,103 @@ describe('codexAccountPool appendAccount', () => {
     const updated = getPoolStatus().accounts.find((account) => account.accountId === 'vault-account')
     expect(updated?.source).toBe('vault')
     expect(updated?.vaultFilePath).toBe('/tmp/vault/accounts/78c.json')
+  })
+})
+
+describe('targeted Codex sign-out pool reconciliation', () => {
+  beforeEach(() => {
+    resetCodexAccountPoolForTest()
+  })
+
+  test('resolves only one exact credentialed account and rejects duplicate identities', () => {
+    const target = buildPoolAccount({
+      accountId: 'target-account',
+      source: 'vault',
+      vaultFilePath: '/tmp/target-account.json',
+    })
+    const unrelated = buildPoolAccount({ accountId: 'unrelated-account' })
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'unrelated-account',
+      accounts: [target, unrelated],
+    })
+
+    expect(resolveCodexAccountForTargetedSignOut('target-account')).toEqual({
+      kind: 'credentialed',
+      account: expect.objectContaining({ accountId: 'target-account' }),
+      targetWasActive: false,
+    })
+
+    expect(resolveCodexAccountForTargetedSignOut('missing-account')).toEqual({
+      kind: 'none',
+    })
+  })
+
+  test('removes only target credentials and preserves unrelated runtime objects', () => {
+    const target = buildPoolAccount({
+      accountId: 'target-account',
+      source: 'vault',
+      vaultFilePath: '/tmp/target-account.json',
+    })
+    const unrelated = buildPoolAccount({
+      accountId: 'unrelated-account',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'preserve',
+      lastUsedAt: 42,
+      usagePrimary: 31,
+      usageWeekly: 22,
+      usageFetchedAt: 41,
+    })
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'unrelated-account',
+      accounts: [target, unrelated],
+    })
+    const before = getPoolStatus().accounts[1]
+
+    reconcileCodexAccountSignOut({
+      accountId: 'target-account',
+      alias: 'former',
+      vaultFilePaths: ['/tmp/target-account.json'],
+      credentialGeneration: 2,
+    })
+
+    expect(getPoolStatus().accounts).toHaveLength(1)
+    expect(getPoolStatus().accounts[0]).toBe(before)
+    expect(getPoolStatus().accounts[0]).toMatchObject({
+      accountId: 'unrelated-account',
+      status: 'capped',
+      lastError: 'preserve',
+      lastUsedAt: 42,
+      usagePrimary: 31,
+      usageWeekly: 22,
+      usageFetchedAt: 41,
+    })
+    expect(getSignedOutCodexProfiles()).toEqual([
+      expect.objectContaining({
+        accountId: 'target-account',
+        alias: 'former',
+        profileState: 'signed_out',
+        credentialGeneration: 2,
+      }),
+    ])
+  })
+
+  test('config-only reconciliation leaves no saved-profile row', () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'config-account',
+      accounts: [buildPoolAccount({
+        accountId: 'config-account',
+        source: 'config',
+      })],
+    })
+
+    reconcileCodexAccountSignOut({
+      accountId: 'config-account',
+      source: 'config',
+    })
+
+    expect(getPoolStatus().accounts).toEqual([])
+    expect(getSignedOutCodexProfiles()).toEqual([])
   })
 })
 
