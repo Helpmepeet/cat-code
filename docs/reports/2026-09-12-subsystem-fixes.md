@@ -8,16 +8,17 @@ The account UI amendment reviewed as AC3 was still uncommitted in the original w
 
 | Findings | Owner | Status | Evidence |
 |---|---|---|---|
-| UA1–UA4 | fix_analytics | In progress | Pending |
-| AC1–AC3 | fix_accounts | In progress | Pending |
-| CO1–CO3 | fix_compaction | In progress | Pending |
+| UA1–UA4 | fix_analytics | Fixed | `8c302e35`; 134 focused tests passed |
+| AC1–AC3 | fix_accounts | Fixed | `b885d3d2`; recovery 3, pool 85, lease 36, retry 2 and desired probes 3 passed |
+| CO1–CO3 | fix_compaction | Fixed | `b78b71e2`; 137 focused tests passed, one intentional feature-off skip |
 | RS1–RS3 | Pending dispatch | Pending | Pending |
-| PE1–PE2 | Pending dispatch | Pending | Pending |
+| PE1–PE2 | fix_analytics | In progress | Pending |
 | MC1 | Pending dispatch | Pending | Pending |
-| QU1–QU2 | Pending dispatch | Pending | Pending |
-| PR1–PR2 | Pending dispatch | Pending | Pending |
-| HI1–HI2 | Pending dispatch | Pending | Pending |
-| SP1–SP2 | Pending dispatch | Pending | Pending |
+| QU1 | fix_queue_permissions | In progress | Pending |
+| QU2 | fix_analytics | In progress | Pending |
+| PR1–PR2 | fix_accounts | In progress | Pending |
+| HI1–HI2 | fix_accounts | In progress | Pending |
+| SP1–SP2 | fix_queue_permissions | In progress | Pending |
 
 ## Verification
 
