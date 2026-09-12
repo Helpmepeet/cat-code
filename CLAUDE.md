@@ -74,6 +74,7 @@ expect-company note above and §4.
   owner files or a focused map were supplied, start there and skip the workspace
   router. Maps route; source is authoritative.
 - Prompt/instruction/output-style work → `docs/prompts/2026-04-30-prompt-surfaces.md` first.
+- Desktop-app GUI verification: see `docs/migration/process/GUI-VERIFICATION.md`.
 - Desktop-app / migration work → `docs/migration/STATUS.md` (single source of
   truth for program state) + `.claude/rules/migration.md` (orchestrator rules).
   Executing a dispatched migration session: the **Standing rules** section of the
