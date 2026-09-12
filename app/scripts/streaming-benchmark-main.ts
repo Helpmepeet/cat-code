@@ -11,7 +11,8 @@ import type { SessionDescriptor } from '../shared/hostApi.js'
 import type { ServerFrame } from '../shared/protocol.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import { createRawMessageLogState, reduceServerFrame } from '../renderer/src/rawMessageLog.js'
-import { benchmarkCoverageComplete, type BenchmarkObserverSnapshot } from './streaming-benchmark-observer.js'
+import { benchmarkCoverageComplete, type BenchmarkObserverCounters } from './streaming-benchmark-observer.js'
+import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement } from './streaming-benchmark-runtime.js'
 import * as channels from '../shared/ipcChannels.js'
 
 const runDir = required('CATCODE_STREAMING_BENCHMARK_RUN_DIR')
@@ -41,9 +42,10 @@ const fixture = createFixture(workload)
 const scoredTraceIds = new Set(fixture.arrivals.map(item => item.frame.deliveryTrace?.traceId).filter((item): item is string => typeof item === 'string'))
 const scoredAppliedTraceIds = new Set<string>()
 let scoringActive = false
-let rendererDocumentId = ''
-let rendererSubscriptionEpoch = 0
+let rendererSubscription = { documentId: '', epoch: 0 }
 let rendererReadyCount = 0
+const currentDocumentSentTraceIds = new Set<string>()
+const currentDocumentAppliedTraceIds = new Set<string>()
 let syntheticSequence = 1_000_000
 let deliveryTrace = createDeliveryTraceSink({ configDir: join(runDir, 'config'), launchId: `benchmark-warmup-${process.pid}`, sweepIntervalMs: 0 })
 const descriptors: SessionDescriptor[] = Array.from({ length: workload.sessions }, (_, index) => ({
@@ -62,14 +64,15 @@ const window = new BrowserWindow({
 const sendNow = (frames: ServerFrame[]) => {
   sendCount++
   const traced = frames.map(frame => frame.deliveryTrace ? frame : { ...frame, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${frame.sessionId}`, `benchmark-${process.pid}`) })
+  for (const frame of traced) currentDocumentSentTraceIds.add(frame.deliveryTrace!.traceId)
   for (const frame of traced) deliveryTrace.mark({
     sessionId: frame.sessionId, trace: frame.deliveryTrace!, stage: 'main.ipc.queued', frameKind: frame.kind,
-    messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererDocumentId, subscriptionEpoch: rendererSubscriptionEpoch,
+    messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererSubscription.documentId, subscriptionEpoch: rendererSubscription.epoch,
   })
   window.webContents.send(channels.CH_SERVER_FRAME, traced)
   for (const frame of traced) deliveryTrace.mark({
     sessionId: frame.sessionId, trace: frame.deliveryTrace!, stage: 'main.ipc.sent', frameKind: frame.kind,
-    messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererDocumentId, subscriptionEpoch: rendererSubscriptionEpoch,
+    messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererSubscription.documentId, subscriptionEpoch: rendererSubscription.epoch,
   })
 }
 const createCoordinator = () => createLiveFrameDeliveryCoordinator({ delayMs, sendNow,
@@ -81,8 +84,12 @@ ipcMain.handle(channels.CH_HOST_LIST, () => descriptors)
 ipcMain.handle(channels.CH_HOST_SESSIONS_CATALOG, () => ({ entries: [], truncated: false, capturedAtMs: 0 }))
 ipcMain.on(channels.CH_RENDERER_READY, (_event, payload: { documentId?: unknown }) => {
   if (typeof payload?.documentId !== 'string') throw new Error('invalid renderer document id')
-  rendererDocumentId = payload.documentId
-  rendererSubscriptionEpoch++
+  const documentChanged = payload.documentId !== rendererSubscription.documentId
+  rendererSubscription = advanceDocumentSubscription(rendererSubscription, payload.documentId)
+  if (documentChanged) {
+    currentDocumentSentTraceIds.clear()
+    currentDocumentAppliedTraceIds.clear()
+  }
   rendererReadyCount++
   const replay = gate.onRendererReady()
   if (replay.length > 0) sendNow(replay)
@@ -90,6 +97,10 @@ ipcMain.on(channels.CH_RENDERER_READY, (_event, payload: { documentId?: unknown 
 ipcMain.on(channels.CH_DELIVERY_ACK, (_event, payload: { acknowledgements?: DeliveryAcknowledgement[] }) => {
   if (!payload || Object.keys(payload).length !== 1 || !Array.isArray(payload.acknowledgements) || payload.acknowledgements.length < 1 || payload.acknowledgements.length > 64) return
   for (const acknowledgement of payload.acknowledgements) {
+    if (!isCurrentDocumentAcknowledgement(rendererSubscription, acknowledgement)) {
+      deliveryTrace.recordAcknowledgementRejected({ sessionId: acknowledgement.sessionId, streamEpoch: acknowledgement.streamEpoch, sequence: acknowledgement.sequence, reason: 'stale_document' })
+      continue
+    }
     if (!deliveryTrace.accepts(acknowledgement.sessionId, acknowledgement.streamEpoch, acknowledgement.sequence, acknowledgement.documentId, acknowledgement.subscriptionEpoch)) {
       deliveryTrace.recordAcknowledgementRejected({ sessionId: acknowledgement.sessionId, streamEpoch: acknowledgement.streamEpoch, sequence: acknowledgement.sequence, reason: 'unknown_sequence' })
       continue
@@ -105,6 +116,7 @@ ipcMain.on(channels.CH_DELIVERY_ACK, (_event, payload: { acknowledgements?: Deli
     if (scoringActive && acknowledgement.stage === 'renderer.state.applied' && scoredTraceIds.has(acknowledgement.traceId)) {
       scoredAppliedTraceIds.add(acknowledgement.traceId)
     }
+    if (acknowledgement.stage === 'renderer.state.applied') currentDocumentAppliedTraceIds.add(acknowledgement.traceId)
   }
 })
 ipcMain.on(channels.CH_RENDERER_FAULT, (_event, payload) => {
@@ -121,9 +133,10 @@ await waitForBootstrap(window, initialReadyCount)
 const warmup = createFixture(workload, manifest.warmupMs)
 await deliverFixture(warmup, false)
 coordinator.flush()
-await sleep(100)
-// Reset through a fresh document and fresh attachment/coordinator state. This
-// warms the same reducers and IPC path without carrying warmup state or stats.
+await waitForCurrentDocumentAcknowledgements()
+// Score in a fresh renderer document with fresh attachment/coordinator state.
+// Warmup exercises the same Electron/main/IPC/React path, but no claim is made
+// that renderer-document state or JavaScript JIT state survives this reload.
 coordinator.dispose()
 deliveryTrace.close()
 deliveryTrace = createDeliveryTraceSink({ configDir: join(runDir, 'config'), launchId: `benchmark-scored-${process.pid}`, sweepIntervalMs: 0 })
@@ -135,9 +148,7 @@ for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.session
 const priorReadyCount = rendererReadyCount
 await window.reload()
 await waitForBootstrap(window, priorReadyCount)
-// Let bootstrap acknowledgement batches finish before scored counters and CPU
-// begin. Those frames prove fixture readiness but are not part of the workload.
-await sleep(100)
+await waitForCurrentDocumentAcknowledgements()
 await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.reset()')
 sendCount = 0
 scoredAppliedTraceIds.clear()
@@ -205,11 +216,19 @@ function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, m
 async function waitForCoverage(target: BrowserWindow, expected: number) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    const value = await target.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.snapshot()') as BenchmarkObserverSnapshot
+    const value = await target.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.counters()') as BenchmarkObserverCounters
     if (benchmarkCoverageComplete(value, expected)) return
     await sleep(20)
   }
   throw new Error('final commit/state coverage barrier timed out')
+}
+async function waitForCurrentDocumentAcknowledgements() {
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    if ([...currentDocumentSentTraceIds].every(traceId => currentDocumentAppliedTraceIds.has(traceId))) return
+    await sleep(20)
+  }
+  throw new Error(`bootstrap acknowledgement barrier timed out (${currentDocumentAppliedTraceIds.size}/${currentDocumentSentTraceIds.size})`)
 }
 async function waitForAcknowledgements(expected: number) {
   const deadline = Date.now() + 10_000
@@ -303,10 +322,14 @@ function cpuSnapshot(metrics = app.getAppMetrics()): CpuPoint[] {
 function cpuDeltas(before: CpuPoint[], after: CpuPoint[]) {
   const previous = new Map(before.map(item => [item.pid, item]))
   const samePids = before.length === after.length && after.every(item => previous.has(item.pid))
+  const completeCumulative = samePids && after.every(item => item.cumulative !== null && previous.get(item.pid)?.cumulative !== null)
   return {
-    valid: samePids && after.every(item => item.cumulative !== null && previous.get(item.pid)?.cumulative !== null),
-    reason: samePids ? null : 'process_set_changed',
-    processes: after.map(item => ({ ...item, cumulativeDeltaSeconds: item.cumulative === null || previous.get(item.pid)?.cumulative === null
-      ? null : item.cumulative - previous.get(item.pid)!.cumulative! })),
+    valid: completeCumulative,
+    reason: !samePids ? 'process_set_changed' : completeCumulative ? null : 'cumulative_cpu_unavailable',
+    processes: after.map(item => {
+      const prior = previous.get(item.pid)
+      return { ...item, cumulativeDeltaSeconds: !prior || item.cumulative === null || prior.cumulative === null
+        ? null : item.cumulative - prior.cumulative }
+    }),
   }
 }

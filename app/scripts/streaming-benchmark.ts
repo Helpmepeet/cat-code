@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
-import { reapOwnedProcessGroup } from './streaming-benchmark-cleanup.js'
+import { cleanupInterruptedRun, reapOwnedProcessGroup } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
 const requestedWorkload = valueAfter('--workload')
@@ -22,6 +22,7 @@ const sourcePaths = [
   'shared/ipcChannels.ts', 'renderer/src/App.tsx', 'renderer/src/rawMessageLog.ts', 'preload/preload.ts',
   'scripts/streaming-benchmark.ts', 'scripts/streaming-benchmark-main.ts', 'scripts/streaming-benchmark-observer.ts',
   'scripts/streaming-benchmark-cleanup.ts', 'scripts/streaming-benchmark.vite.config.ts', 'package.json',
+  'scripts/streaming-benchmark-runtime.ts',
   '../docs/reports/2026-09-12-live-streaming-measurements/fixture.ts',
 ] as const
 const hashesBefore = sourceHashes()
@@ -29,6 +30,20 @@ const scratch = mkdtempSync(join(tmpdir(), 'catcode-streaming-benchmark-'))
 const rendererOut = join(scratch, 'renderer')
 const bundleOut = join(scratch, 'bundle')
 mkdirSync(bundleOut)
+let activeProcessGroupId: number | null = null
+let interrupting = false
+for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
+  process.on(signal, () => {
+    if (interrupting) return
+    interrupting = true
+    void cleanupInterruptedRun({
+      processGroupId: activeProcessGroupId,
+      removeScratch: () => rmSync(scratch, { recursive: true, force: true }),
+      exit: code => process.exit(code),
+      exitCode,
+    })
+  })
+}
 
 try {
   await bundle(resolve(appRoot, 'preload/preload.ts'), bundleOut, 'preload.cjs', 'cjs', { __CATCODE_DEV_HARNESS__: 'false' })
@@ -87,6 +102,7 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   const child = spawn(executable, [main], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
   const ownedRootPid = child.pid
   if (!ownedRootPid) return { ok: false, error: 'Electron did not return a pid' }
+  activeProcessGroupId = ownedRootPid
   let stderr = ''
   child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8_192) })
   const outcome = await new Promise<{ ok: boolean; timedOut?: boolean; error?: string }>(resolvePromise => {
@@ -100,7 +116,11 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   })
   // This runs before callers read result.json. Missing/malformed output and all
   // later exceptions therefore occur only after the exact owned group is gone.
-  await reapOwnedProcessGroup(ownedRootPid, { initialWaitMs: outcome.timedOut ? 0 : 5_000 })
+  try {
+    await reapOwnedProcessGroup(ownedRootPid, { initialWaitMs: outcome.timedOut ? 0 : 5_000 })
+  } finally {
+    if (activeProcessGroupId === ownedRootPid) activeProcessGroupId = null
+  }
   return outcome
 }
 

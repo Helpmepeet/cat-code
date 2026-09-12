@@ -65,9 +65,14 @@ export function benchmarkObserverSnapshot() {
 }
 
 export type BenchmarkObserverSnapshot = ReturnType<typeof benchmarkObserverSnapshot>
+export type BenchmarkObserverCounters = ReturnType<typeof benchmarkObserverCounters>
+
+export function benchmarkObserverCounters() {
+  return { committedFrameCount: committed.size, overflowed, layoutCommitCount }
+}
 
 /** Exact completion: incomplete, overflowed, and over-counted samples all fail. */
-export function benchmarkCoverageComplete(snapshot: BenchmarkObserverSnapshot, expected: number): boolean {
+export function benchmarkCoverageComplete(snapshot: BenchmarkObserverCounters, expected: number): boolean {
   return Number.isSafeInteger(expected) && expected >= 0 && !snapshot.overflowed && snapshot.committedFrameCount === expected
 }
 
@@ -83,10 +88,10 @@ export function resetBenchmarkObserver(): void {
 
 declare global {
   interface Window {
-    __CATCODE_STREAMING_BENCHMARK__?: { snapshot: typeof benchmarkObserverSnapshot; reset: typeof resetBenchmarkObserver }
+    __CATCODE_STREAMING_BENCHMARK__?: { snapshot: typeof benchmarkObserverSnapshot; counters: typeof benchmarkObserverCounters; reset: typeof resetBenchmarkObserver }
   }
 }
-if (typeof window !== 'undefined') window.__CATCODE_STREAMING_BENCHMARK__ = { snapshot: benchmarkObserverSnapshot, reset: resetBenchmarkObserver }
+if (typeof window !== 'undefined') window.__CATCODE_STREAMING_BENCHMARK__ = { snapshot: benchmarkObserverSnapshot, counters: benchmarkObserverCounters, reset: resetBenchmarkObserver }
 
 function identityOf(frame: ServerFrame): Identity | null {
   const trace = frame.deliveryTrace

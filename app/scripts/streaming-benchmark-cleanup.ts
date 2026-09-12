@@ -28,6 +28,24 @@ export async function reapOwnedProcessGroup(
   throw new Error(`owned Electron process group ${processGroupId} remained after SIGKILL`)
 }
 
+export async function cleanupInterruptedRun({
+  processGroupId,
+  removeScratch,
+  exit,
+  exitCode,
+  reap = reapOwnedProcessGroup,
+}: {
+  processGroupId: number | null
+  removeScratch(): void
+  exit(code: number): void
+  exitCode: number
+  reap?: typeof reapOwnedProcessGroup
+}): Promise<void> {
+  if (processGroupId !== null) await reap(processGroupId, { initialWaitMs: 0 })
+  removeScratch()
+  exit(exitCode)
+}
+
 async function waitGone(processGroupId: number, waitMs: number, pollMs: number, ops: ProcessGroupOps): Promise<boolean> {
   const attempts = Math.max(1, Math.ceil(waitMs / Math.max(1, pollMs)))
   for (let index = 0; index < attempts; index++) {

@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
+import { cleanupInterruptedRun, reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
 
 function harness(states: boolean[]) {
   const signals: Array<{ id: number; signal: NodeJS.Signals }> = []
@@ -27,4 +27,16 @@ test('escalates a surviving owned group to SIGKILL', async () => {
   const h = harness([true, true, true, true, false])
   await reapOwnedProcessGroup(43, { initialWaitMs: 0, termWaitMs: 1, killWaitMs: 1, pollMs: 1, ops: h.ops })
   expect(h.signals).toEqual([{ id: 43, signal: 'SIGTERM' }, { id: 43, signal: 'SIGKILL' }])
+})
+
+test('interruption awaits owned-group cleanup before scratch deletion and exit', async () => {
+  const order: string[] = []
+  await cleanupInterruptedRun({
+    processGroupId: 44,
+    reap: async id => { order.push(`reap:${id}`) },
+    removeScratch: () => { order.push('scratch') },
+    exit: code => { order.push(`exit:${code}`) },
+    exitCode: 130,
+  })
+  expect(order).toEqual(['reap:44', 'scratch', 'exit:130'])
 })
