@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
+import { reapOwnedProcessGroup } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
 const requestedWorkload = valueAfter('--workload')
@@ -20,7 +21,7 @@ const sourcePaths = [
   'main/liveFrameBatcher.ts', 'main/attachmentGate.ts', 'main/deliveryTraceSink.ts', 'shared/deliveryTrace.ts',
   'shared/ipcChannels.ts', 'renderer/src/App.tsx', 'renderer/src/rawMessageLog.ts', 'preload/preload.ts',
   'scripts/streaming-benchmark.ts', 'scripts/streaming-benchmark-main.ts', 'scripts/streaming-benchmark-observer.ts',
-  'scripts/streaming-benchmark.vite.config.ts', 'package.json',
+  'scripts/streaming-benchmark-cleanup.ts', 'scripts/streaming-benchmark.vite.config.ts', 'package.json',
   '../docs/reports/2026-09-12-live-streaming-measurements/fixture.ts',
 ] as const
 const hashesBefore = sourceHashes()
@@ -88,22 +89,19 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   if (!ownedRootPid) return { ok: false, error: 'Electron did not return a pid' }
   let stderr = ''
   child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8_192) })
-  return await new Promise(resolvePromise => {
+  const outcome = await new Promise<{ ok: boolean; timedOut?: boolean; error?: string }>(resolvePromise => {
     let settled = false
-    const finish = (value: { ok: boolean; error?: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolvePromise(value) } }
+    const finish = (value: { ok: boolean; timedOut?: boolean; error?: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolvePromise(value) } }
     const timer = setTimeout(() => {
-      // The fresh detached process group belongs solely to this sample. Signal
-      // that exact group, including its Electron helpers, without discovery or
-      // a name-based sweep.
-      try { process.kill(-ownedRootPid, 'SIGTERM') } catch {}
-      setTimeout(() => {
-        try { process.kill(-ownedRootPid, 'SIGKILL') } catch {}
-        finish({ ok: false, error: `Electron process group ${ownedRootPid} timed out` })
-      }, 2_000)
+      finish({ ok: false, timedOut: true, error: `Electron process group ${ownedRootPid} timed out` })
     }, timeoutMs)
     child.once('error', error => finish({ ok: false, error: error.message }))
     child.once('exit', (code, signal) => finish(code === 0 ? { ok: true } : { ok: false, error: `pid ${ownedRootPid} exited code=${code} signal=${signal}: ${stderr}` }))
   })
+  // This runs before callers read result.json. Missing/malformed output and all
+  // later exceptions therefore occur only after the exact owned group is gone.
+  await reapOwnedProcessGroup(ownedRootPid, { initialWaitMs: outcome.timedOut ? 0 : 5_000 })
+  return outcome
 }
 
 async function verifyOwnedPidsExited(value: unknown): Promise<void> {

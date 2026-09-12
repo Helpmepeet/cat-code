@@ -25,10 +25,12 @@ if (!['original', '0', '8', '16'].includes(policyName)) throw new Error(`unknown
 const delayMs = policyName === 'original' ? 0 : Number(policyName)
 const BOOTSTRAP_TRANSCRIPT_MARKER = 'CATCODE_SYNTHETIC_STREAMING_BENCHMARK_READY'
 
-app.setPath('userData', join(runDir, 'user-data'))
-app.setPath('sessionData', join(runDir, 'session-data'))
-mkdirSync(app.getPath('userData'), { recursive: true })
-mkdirSync(app.getPath('sessionData'), { recursive: true })
+const userDataDir = join(runDir, 'user-data')
+const sessionDataDir = join(runDir, 'session-data')
+mkdirSync(userDataDir, { recursive: true })
+mkdirSync(sessionDataDir, { recursive: true })
+app.setPath('userData', userDataDir)
+app.setPath('sessionData', sessionDataDir)
 
 await app.whenReady()
 let gate = new AttachmentGate()
@@ -140,6 +142,7 @@ await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK
 sendCount = 0
 scoredAppliedTraceIds.clear()
 scoringActive = true
+const expectedChanging = rawChangingFrames(fixture.initial, fixture.arrivals.map(item => item.frame))
 
 // Align main's monotonic clock to the renderer clock. Half the minimum round
 // trip bounds the offset uncertainty; before and after samples expose drift.
@@ -149,7 +152,6 @@ const cpuStart = process.cpuUsage()
 const wallStart = performance.now()
 await deliverFixture(fixture, true, wallStart)
 coordinator.flush()
-const expectedChanging = rawChangingFrames(fixture.initial, fixture.arrivals.map(item => item.frame))
 await waitForCoverage(window, expectedChanging.length)
 await waitForAcknowledgements(scoredTraceIds.size)
 const wallEnd = performance.now()
