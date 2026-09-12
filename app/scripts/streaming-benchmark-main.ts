@@ -11,6 +11,7 @@ import type { SessionDescriptor } from '../shared/hostApi.js'
 import type { ServerFrame } from '../shared/protocol.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import { createRawMessageLogState, reduceServerFrame } from '../renderer/src/rawMessageLog.js'
+import { benchmarkCoverageComplete, type BenchmarkObserverSnapshot } from './streaming-benchmark-observer.js'
 import * as channels from '../shared/ipcChannels.js'
 
 const runDir = required('CATCODE_STREAMING_BENCHMARK_RUN_DIR')
@@ -22,6 +23,7 @@ const workload = manifest.workloads.find(item => item.id === workloadId)
 if (!workload) throw new Error(`unknown workload ${workloadId}`)
 if (!['original', '0', '8', '16'].includes(policyName)) throw new Error(`unknown policy ${policyName}`)
 const delayMs = policyName === 'original' ? 0 : Number(policyName)
+const BOOTSTRAP_TRANSCRIPT_MARKER = 'CATCODE_SYNTHETIC_STREAMING_BENCHMARK_READY'
 
 app.setPath('userData', join(runDir, 'user-data'))
 app.setPath('sessionData', join(runDir, 'session-data'))
@@ -126,13 +128,17 @@ deliveryTrace = createDeliveryTraceSink({ configDir: join(runDir, 'config'), lau
 gate.reset()
 gate = new AttachmentGate()
 coordinator = createCoordinator()
-sendCount = 0
 arrivalByTraceId.clear()
 for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.sessionId, frame)
 const priorReadyCount = rendererReadyCount
 await window.reload()
 await waitForBootstrap(window, priorReadyCount)
+// Let bootstrap acknowledgement batches finish before scored counters and CPU
+// begin. Those frames prove fixture readiness but are not part of the workload.
+await sleep(100)
 await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.reset()')
+sendCount = 0
+scoredAppliedTraceIds.clear()
 scoringActive = true
 
 // Align main's monotonic clock to the renderer clock. Half the minimum round
@@ -194,20 +200,11 @@ function required(name: string): string {
   return value
 }
 function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
-async function waitForObserver(target: BrowserWindow) {
-  const deadline = Date.now() + 10_000
-  while (Date.now() < deadline) {
-    if (await target.webContents.executeJavaScript("typeof window.__CATCODE_STREAMING_BENCHMARK__?.snapshot === 'function'")) return
-    await sleep(20)
-  }
-  throw new Error('benchmark observer did not mount')
-}
 async function waitForCoverage(target: BrowserWindow, expected: number) {
   const deadline = Date.now() + 10_000
   while (Date.now() < deadline) {
-    const value = await target.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.snapshot()')
-    const covered = value.commits.reduce((sum: number, item: { frames: unknown[] }) => sum + item.frames.length, 0)
-    if (covered >= expected && value.pending.length === 0) return
+    const value = await target.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.snapshot()') as BenchmarkObserverSnapshot
+    if (benchmarkCoverageComplete(value, expected)) return
     await sleep(20)
   }
   throw new Error('final commit/state coverage barrier timed out')
@@ -243,6 +240,11 @@ function bootstrapFrames(initial: readonly ServerFrame[]): ServerFrame[] {
       anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true,
     } })
   }
+  const first = descriptors[0]
+  if (first) extras.push({ kind: 'event', protocolVersion: 1, sessionId: first.appSessionId, event: {
+    type: 'message', message: { type: 'assistant', uuid: 'benchmark-bootstrap-marker', parent_tool_use_id: null,
+      session_id: first.appSessionId, message: { id: 'benchmark-bootstrap-marker', role: 'assistant', content: [{ type: 'text', text: BOOTSTRAP_TRANSCRIPT_MARKER }] } } as never,
+  } })
   return [...initial, ...extras]
 }
 
@@ -279,11 +281,12 @@ async function waitForBootstrap(target: BrowserWindow, priorReadyCount: number) 
     const view = await target.webContents.executeJavaScript(`({
       visible: document.visibilityState === 'visible',
       titleVisible: document.body.textContent.includes('Synthetic 1'),
+      transcriptMarkerVisible: document.body.textContent.includes('${BOOTSTRAP_TRANSCRIPT_MARKER}'),
       trustGate: document.body.textContent.includes('Trust this workspace?'),
       signInGate: document.querySelector('[aria-label="Sign in"]') !== null,
       observer: window.__CATCODE_STREAMING_BENCHMARK__?.snapshot?.()
     })`)
-    if (rendererReadyCount > priorReadyCount && view.visible && view.titleVisible && !view.trustGate && !view.signInGate && view.observer?.layoutCommitCount > 0) return
+    if (rendererReadyCount > priorReadyCount && view.visible && view.titleVisible && view.transcriptMarkerVisible && !view.trustGate && !view.signInGate && view.observer?.layoutCommitCount > 0) return
     await sleep(20)
   }
   throw new Error('renderer did not reach committed visible transcript bootstrap')

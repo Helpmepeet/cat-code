@@ -1,6 +1,6 @@
 import { beforeEach, expect, test } from 'bun:test'
 import type { ServerFrame } from '../shared/protocol.js'
-import { benchmarkObserveBatch, benchmarkObserveCommit, benchmarkObserverSnapshot, benchmarkWrapRawReducer, resetBenchmarkObserver } from './streaming-benchmark-observer.js'
+import { benchmarkCoverageComplete, benchmarkObserveBatch, benchmarkObserveCommit, benchmarkObserverSnapshot, benchmarkWrapRawReducer, resetBenchmarkObserver } from './streaming-benchmark-observer.js'
 import { streamingBenchmarkTransform } from './streaming-benchmark.vite.config.js'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -40,6 +40,17 @@ test('a genuine raw-log no-op receives no false commit timestamp', () => {
   const state: State = { sessions: { s: { messages: [] } } }
   benchmarkObserveCommit(5, noOp(state, frame(1)))
   expect(benchmarkObserverSnapshot()).toMatchObject({ commits: [], noRawStateChangeCount: 1, committedFrameCount: 0 })
+})
+
+test('completion requires exact real-snapshot coverage and rejects incomplete or overflowed state', () => {
+  const state: State = { sessions: { s: { messages: [] } } }
+  const committed = reduce(state, frame(1))
+  benchmarkObserveCommit(5, committed)
+  const snapshot = benchmarkObserverSnapshot()
+  expect(benchmarkCoverageComplete(snapshot, 1)).toBe(true)
+  expect(benchmarkCoverageComplete(snapshot, 2)).toBe(false)
+  expect(benchmarkCoverageComplete({ ...snapshot, overflowed: true }, 1)).toBe(false)
+  expect(benchmarkCoverageComplete(snapshot, 0)).toBe(false)
 })
 
 test('the exact-checked transform instruments reducer lineage and layout endpoint', async () => {

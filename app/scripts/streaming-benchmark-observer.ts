@@ -64,6 +64,13 @@ export function benchmarkObserverSnapshot() {
   }
 }
 
+export type BenchmarkObserverSnapshot = ReturnType<typeof benchmarkObserverSnapshot>
+
+/** Exact completion: incomplete, overflowed, and over-counted samples all fail. */
+export function benchmarkCoverageComplete(snapshot: BenchmarkObserverSnapshot, expected: number): boolean {
+  return Number.isSafeInteger(expected) && expected >= 0 && !snapshot.overflowed && snapshot.committedFrameCount === expected
+}
+
 export function resetBenchmarkObserver(): void {
   generation++
   committed.clear()
