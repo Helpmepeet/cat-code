@@ -81,5 +81,15 @@ describe('stats cache session reconciliation', () => {
       messageCount: 3,
       timestamp: '2026-09-10T23:00:00.000Z',
     })
+
+    // Identity survives independently of transcript availability, so restoring
+    // the same file later updates its summary instead of adding a new session.
+    const restored = mergeCacheWithNewStats(
+      third,
+      fragment('2026-09-13T01:00:00.000Z'),
+      '2026-09-13',
+    )
+    expect(restored.totalSessions).toBe(1)
+    expect(restored.longestSession?.duration).toBe(180_000_000)
   })
 })

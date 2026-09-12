@@ -73,13 +73,14 @@ export type PersistedStatsCache = {
   totalSpeculationTimeSavedMs: number
   // Shot distribution: map of shot count → number of sessions (ant-only)
   shotDistribution?: { [shotCount: number]: number }
-  /** Bounded by retained transcript files; retired identities stay in totals. */
+  /** One compact summary per session; no transcript messages are retained. */
   sessionIndex: { [sessionId: string]: SessionStats }
   /** Records the unavoidable attribution limit when adopting an aggregate-only cache. */
   legacyMigration?: {
     sourceVersion: number
     ignoreThroughDate: string
     notice: string
+    legacySessionIds?: string[]
   }
 }
 
@@ -154,7 +155,8 @@ function migrateStatsCache(
             sourceVersion: parsed.version,
             ignoreThroughDate: getTodayDateString(),
             notice:
-              'All-time totals include a preserved legacy cache whose per-session attribution cannot be reconstructed exactly. Activity appended on the migration day may be represented only by that legacy snapshot.',
+              'All-time totals include a preserved legacy cache whose per-session attribution cannot be reconstructed exactly. Later activity in sessions already represented by that cache may be omitted.',
+            legacySessionIds: [],
           },
         }
       : parsed.legacyMigration

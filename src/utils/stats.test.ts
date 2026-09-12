@@ -49,6 +49,36 @@ afterEach(() => {
 })
 
 describe('processSessionFiles token aggregation', () => {
+  test('counts provably new sessions while excluding legacy-attributed sessions', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'cat-code-stats-legacy-'))
+    const legacyFile = join(tempDir, 'legacy-session.jsonl')
+    const newFile = join(tempDir, 'new-session.jsonl')
+    const legacy = {
+      ...assistantRecord('legacy', { input_tokens: 100, output_tokens: 0 }, 0),
+      timestamp: '2026-09-12T01:00:00.000Z',
+    }
+    const recent = {
+      ...assistantRecord('new', { input_tokens: 200, output_tokens: 0 }, 0),
+      timestamp: '2026-09-12T02:00:00.000Z',
+    }
+    writeFileSync(legacyFile, `${JSON.stringify(legacy)}\n`)
+    writeFileSync(newFile, `${JSON.stringify(recent)}\n`)
+
+    const stats = await _forTest.processSessionFiles(
+      [legacyFile, newFile],
+      {
+        fromDate: '2026-09-12',
+        excludeSessionIds: new Set(['legacy-session']),
+      },
+    )
+
+    expect(stats.totalMessages).toBe(1)
+    expect(stats.sessionStats.map(session => session.sessionId)).toEqual([
+      'new-session',
+    ])
+    expect(stats.modelUsage[MODEL]?.inputTokens).toBe(200)
+  })
+
   test('counts input-side tokens once and takes max output across records sharing one message id', async () => {
     // Streaming split: both records carry the message_start input/cache seed,
     // only the last carries the final output total.

@@ -109,6 +109,8 @@ type ProcessOptions = {
   fromDate?: string
   // Only include data from dates <= this date (YYYY-MM-DD format)
   toDate?: string
+  // Omit sessions already represented by an aggregate-only legacy cache.
+  excludeSessionIds?: ReadonlySet<string>
 }
 
 /**
@@ -116,7 +118,7 @@ type ProcessOptions = {
  * sidechain/shot attribution are range-local, not derivable from daily totals.
  */
 function createStatsAccumulator(options: ProcessOptions) {
-  const { fromDate, toDate } = options
+  const { fromDate, toDate, excludeSessionIds } = options
   const dailyActivityMap = new Map<string, DailyActivity>()
   const dailyModelTokensMap = new Map<string, { [modelName: string]: number }>()
   const sessions: SessionStats[] = []
@@ -132,6 +134,11 @@ function createStatsAccumulator(options: ProcessOptions) {
 
   function add(sessionFile: string, entries: Entry[]): void {
     const sessionId = basename(sessionFile, '.jsonl')
+    const isSubagentFile = sessionFile.includes(`${sep}subagents${sep}`)
+    const parentSessionId = isSubagentFile
+      ? basename(dirname(dirname(sessionFile)))
+      : sessionId
+    if (excludeSessionIds?.has(parentSessionId)) return
     const messages: TranscriptMessage[] = []
 
     for (const entry of entries) {
@@ -146,16 +153,10 @@ function createStatsAccumulator(options: ProcessOptions) {
 
     // Subagent transcripts mark all messages as sidechain. We still want
     // their token usage counted, but not as separate sessions.
-    const isSubagentFile = sessionFile.includes(`${sep}subagents${sep}`)
-
     // Extract shot count from PR attribution in gh pr create calls (ant-only)
     // This must run before the sidechain filter since subagent transcripts
     // mark all messages as sidechain
     if (feature('SHOT_STATS') && shotDistributionMap) {
-      const parentSessionId = isSubagentFile
-        ? basename(dirname(dirname(sessionFile)))
-        : sessionId
-
       if (!sessionsWithShotCount.has(parentSessionId)) {
         const shotCount = extractShotCountFromMessages(messages)
         if (shotCount !== null) {
@@ -724,44 +725,40 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     // Determine what needs to be processed
     // - If no cache: process everything up to yesterday, then today separately
     // - If cache exists: process from day after lastComputedDate to yesterday, then today
-    const retainedSessionIds = new Set(
-      allSessionFiles
-        .filter(file => !file.includes(`${sep}subagents${sep}`))
-        .map(file => basename(file, '.jsonl')),
-    )
-    const retainedSessionIndex = Object.fromEntries(
-      Object.entries(cache.sessionIndex).filter(([sessionId]) =>
-        retainedSessionIds.has(sessionId),
-      ),
-    )
-    let result =
-      Object.keys(retainedSessionIndex).length ===
-      Object.keys(cache.sessionIndex).length
-        ? cache
-        : { ...cache, sessionIndex: retainedSessionIndex }
-    if (result !== cache) await saveStatsCache(result)
+    let result = cache
 
     // A v1-v3 cache has durable aggregate history but no identities. Preserve
     // its totals exactly and seed identity/span metadata from retained files;
     // their events are not added again on the migration day.
     if (cache.legacyMigration && Object.keys(result.sessionIndex).length === 0) {
       const retained = await processSessionFiles(allSessionFiles)
+      const legacyBoundary = cache.lastComputedDate
+      const legacySessionIds = retained.sessionStats
+        .filter(
+          session =>
+            legacyBoundary &&
+            !isDateBefore(legacyBoundary, toDateString(new Date(session.timestamp))),
+        )
+        .map(session => session.sessionId)
       result = {
         ...cache,
-        lastComputedDate: cache.legacyMigration.ignoreThroughDate,
         sessionIndex: Object.fromEntries(
-          retained.sessionStats.map(session => [session.sessionId, session]),
+          retained.sessionStats
+            .filter(session => legacySessionIds.includes(session.sessionId))
+            .map(session => [session.sessionId, session]),
         ),
+        legacyMigration: {
+          ...cache.legacyMigration,
+          legacySessionIds,
+        },
       }
       await saveStatsCache(result)
     }
 
-    if (
-      result.legacyMigration &&
-      !isDateBefore(result.legacyMigration.ignoreThroughDate, getTodayDateString())
-    ) {
-      // The legacy snapshot remains authoritative through its migration day.
-    } else if (!result.lastComputedDate) {
+    const excludedLegacySessions = new Set(
+      result.legacyMigration?.legacySessionIds ?? [],
+    )
+    if (!result.lastComputedDate) {
       // No cache - process all historical data (everything before today)
       logForDebugging('Stats cache empty, processing all historical data')
       const historicalStats = await processSessionFiles(allSessionFiles, {
@@ -785,6 +782,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
         toDate: yesterday,
+        excludeSessionIds: excludedLegacySessions,
       })
 
       if (
@@ -807,13 +805,13 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   // This doesn't need to be in the lock since it doesn't modify the cache
   const today = getTodayDateString()
   const todayStats =
-    updatedCache.legacyMigration &&
-    !isDateBefore(updatedCache.legacyMigration.ignoreThroughDate, today)
-      ? undefined
-      : await processSessionFiles(allSessionFiles, {
-          fromDate: today,
-          toDate: today,
-        })
+    await processSessionFiles(allSessionFiles, {
+      fromDate: today,
+      toDate: today,
+      excludeSessionIds: new Set(
+        updatedCache.legacyMigration?.legacySessionIds ?? [],
+      ),
+    })
 
   // Combine cache with today's stats
   return cacheToStats(updatedCache, todayStats)
