@@ -46,7 +46,7 @@ for (const withTool of [true, false]) test(`a worker receives its delivery-failu
         tools: [buildTool({
           name: 'ReviewNop', description: 'fixture tool', inputSchema: z.object({}),
           async *call() { yield { type: 'result' as const, data: 'done' } },
-        })], commands: [], mcpClients: [], mcpResources: {},
+        } as any)], commands: [], mcpClients: [], mcpResources: {},
         debug: false, verbose: false, isNonInteractiveSession: true,
         thinkingConfig: { type: 'disabled' },
         mainLoopModel: 'gpt-5.6-luna', mainLoopProvider: 'openai',

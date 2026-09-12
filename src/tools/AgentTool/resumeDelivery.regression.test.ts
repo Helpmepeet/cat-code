@@ -43,12 +43,13 @@ const { createAgentId } = await import('../../utils/uuid.js')
 const { createUserMessage, createAssistantMessage } = await import('../../utils/messages.js')
 const storage = await import('../../utils/sessionStorage.js')
 const diskOutput = await import('../../utils/task/diskOutput.js')
-const { resetCommandQueue } = await import('../../utils/messageQueueManager.js')
+const { enqueuePendingNotification, resetCommandQueue } = await import('../../utils/messageQueueManager.js')
 const { ResumeAgentTool } = await import('../../tools/ResumeAgentTool/ResumeAgentTool.js')
 const { SendMessageTool } = await import('../../tools/SendMessageTool/SendMessageTool.js')
 
 test('a delivered SendMessage instruction remains available on the next ResumeAgent call', async () => {
   const fact = 'The cache directory for this work is violet-733.'
+  const priorOutcome = 'Undelivered: violet-worker-outcome-914'
   const requests: string[] = []
   const agentId = createAgentId('review-resume')
   resetStateForTests()
@@ -116,6 +117,12 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
     await storage.writeAgentMetadata(asAgentId(agentId), {
       agentType: fixtureAgent.agentType, agentName: 'review-worker', description: 'fixture',
     })
+    enqueuePendingNotification({
+      value: priorOutcome,
+      mode: 'task-notification',
+      agentId: asAgentId(agentId),
+      isMeta: true,
+    })
 
     const first = await ResumeAgentTool.call(
       { agentId: 'review-worker', prompt: 'Continue the fixture task.' },
@@ -125,6 +132,7 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
     expect(first.data.success).toBe(true)
     await lifecycles.at(-1)
     await storage.flushSessionStorage()
+    expect(requests[0]).toContain(priorOutcome)
     expect(sendAccepted).toBe(true)
     expect(requests).toHaveLength(2)
     expect(requests[1]).toContain(fact)
