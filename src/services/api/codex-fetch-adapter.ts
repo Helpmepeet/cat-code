@@ -1578,6 +1578,20 @@ function formatSSE(event: string, data: string): string {
  */
 const CODEX_HTTP_IDLE_TIMEOUT_PREFIX = 'Codex stream idle timeout after '
 
+class CodexHttpStreamEndedBeforeCompletedError extends APIConnectionError {
+  constructor() {
+    super({ message: 'Codex HTTP stream ended before response.completed' })
+    this.name = 'CodexHttpStreamEndedBeforeCompletedError'
+  }
+}
+
+class CodexHttpResponseIncompleteError extends Error {
+  constructor() {
+    super('Codex HTTP response.incomplete received before response.completed')
+    this.name = 'CodexHttpResponseIncompleteError'
+  }
+}
+
 /**
  * Parses an HTTP SSE Response body into an async iterable of event objects.
  * Each yielded object is the parsed JSON from a `data: ...` SSE line.
@@ -1590,7 +1604,7 @@ async function* httpSseToEvents(
     parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
 
   const reader = codexResponse.body?.getReader()
-  if (!reader) return
+  if (!reader) throw new CodexHttpStreamEndedBeforeCompletedError()
 
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let streamError: Error | null = null
@@ -1630,7 +1644,7 @@ async function* httpSseToEvents(
     while (true) {
       const { done, value } = await reader.read()
       if (streamError) throw streamError
-      if (done) break
+      if (done) throw new CodexHttpStreamEndedBeforeCompletedError()
       resetIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
@@ -1646,12 +1660,20 @@ async function* httpSseToEvents(
 
         let event: Record<string, unknown>
         try { event = JSON.parse(dataStr) } catch { continue }
+        if (event.type === 'response.incomplete') throw new CodexHttpResponseIncompleteError()
         yield event
+        // The protocol terminal event decides completion. Waiting for socket
+        // EOF can time out a response that has already completed successfully.
+        if (event.type === 'response.completed' || event.type === 'response.failed') return
       }
     }
   } finally {
     clearIdleTimer()
     signal?.removeEventListener('abort', abortReader)
+    // Closing a terminal or abandoned iterator must release its HTTP request,
+    // including a response.failed handled by the priming caller.
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }
 
@@ -3337,6 +3359,9 @@ function classifyPostVisibleCodexFailure(
   if (error instanceof CodexWebSocketClosedBeforeCompletedError) {
     return { transport: 'websocket', cause: 'closed', transient: true }
   }
+  if (error instanceof CodexHttpStreamEndedBeforeCompletedError) {
+    return { transport: 'http', cause: 'closed', transient: true }
+  }
   if (error instanceof CodexWebSocketServerError) {
     return {
       transport: 'websocket',
@@ -3351,7 +3376,7 @@ function classifyPostVisibleCodexFailure(
   if (error.message.startsWith(CODEX_HTTP_IDLE_TIMEOUT_PREFIX)) {
     return { transport: 'http', cause: 'idle_timeout', transient: true }
   }
-  if (error instanceof CodexResponseFailedError) {
+  if (error instanceof CodexResponseFailedError || error instanceof CodexHttpResponseIncompleteError) {
     return { transport, cause: 'provider_failure', transient: false }
   }
   return { transport, cause: 'stream_error', transient: false }
