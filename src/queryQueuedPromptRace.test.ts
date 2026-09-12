@@ -1,4 +1,5 @@
 import { afterEach, expect, mock, test } from 'bun:test'
+import { randomUUID } from 'crypto'
 import z from 'zod/v4'
 import { buildTool, type ToolUseContext } from './Tool.js'
 import type { Message } from './types/message.js'
@@ -55,8 +56,8 @@ const probeTool = buildTool({
   mapToolResultToToolResultBlockParam(_output: unknown, toolUseID: string) {
     return { type: 'tool_result' as const, tool_use_id: toolUseID, content: 'ok' }
   },
-  async *call() { yield { type: 'result' as const, data: 'ok' } },
-})
+  async call() { return { data: 'ok' } },
+} as never)
 
 function context(abortController: AbortController, messages: Message[]): ToolUseContext {
   const state = {
@@ -105,18 +106,19 @@ for (const queuedValue of [
     resumePreparation = gate()
     const abortController = new AbortController()
     const initial = [createUserMessage({ content: 'start' })]
-    const yielded: Message[] = []
+    const yielded: any[] = []
+    const queuedUuid = randomUUID()
     let calls = 0
     let nonAbortedCalls = 0
     const run = (async () => {
       for await (const message of query({
         messages: initial,
-        systemPrompt: ['fixture'], userContext: {}, systemContext: {},
+        systemPrompt: ['fixture'] as never, userContext: {}, systemContext: {},
         canUseTool: async (_tool, input) => ({ behavior: 'allow' as const, updatedInput: input }),
         toolUseContext: context(abortController, initial),
         querySource: 'sdk',
         deps: {
-          uuid: () => `queue-race-${calls}`,
+          uuid: randomUUID,
           microcompact: async messages => ({ messages }),
           autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
           callModel: async function* ({ signal }) {
@@ -133,7 +135,7 @@ for (const queuedValue of [
       })) yielded.push(message)
     })()
 
-    enqueue({ mode: 'prompt', value: queuedValue as never, uuid: `queued-${kind}` })
+    enqueue({ mode: 'prompt', value: queuedValue as never, uuid: queuedUuid })
     await preparationStarted.promise
     if (interrupted) abortController.abort('interrupt')
     resumePreparation.release()
@@ -141,11 +143,11 @@ for (const queuedValue of [
 
     expect(getCommandQueueSnapshot()).toHaveLength(interrupted ? 1 : 0)
     if (interrupted) {
-      expect(getCommandQueueSnapshot()[0]?.uuid).toBe(`queued-${kind}`)
+      expect(getCommandQueueSnapshot()[0]?.uuid).toBe(queuedUuid)
     }
     expect(yielded.some(message =>
       message.type === 'attachment' &&
-      (message.attachment as { source_uuid?: string }).source_uuid === `queued-${kind}`,
+      (message.attachment as { source_uuid?: string }).source_uuid === queuedUuid,
     )).toBe(!interrupted)
     expect(calls).toBe(2)
     expect(nonAbortedCalls).toBe(interrupted ? 1 : 2)
