@@ -8,6 +8,7 @@ import { getClaudeConfigHomeDir } from './envUtils.js'
 import { errorMessage, isENOENT } from './errors.js'
 import { getFsImplementation } from './fsOperations.js'
 import { logError } from './log.js'
+import * as lockfile from './lockfile.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { DailyActivity, DailyModelTokens, SessionStats } from './stats.js'
 
@@ -37,9 +38,17 @@ export async function withStatsCacheLock<T>(fn: () => Promise<T>): Promise<T> {
     releaseLock = resolve
   })
 
+  let releaseProcessLock: (() => Promise<void>) | undefined
   try {
+    releaseProcessLock = await lockfile.lock(getStatsCachePath(), {
+      realpath: false,
+      stale: 120_000,
+      update: 30_000,
+      retries: { retries: 100, minTimeout: 10, maxTimeout: 100 },
+    })
     return await fn()
   } finally {
+    await releaseProcessLock?.().catch(() => {})
     // Release the lock
     statsCacheLockPromise = null
     releaseLock?.()
@@ -80,7 +89,7 @@ export type PersistedStatsCache = {
     sourceVersion: number
     ignoreThroughDate: string
     notice: string
-    legacySessionIds?: string[]
+    legacySessionCheckpoints?: { [sessionId: string]: string }
   }
 }
 
@@ -155,8 +164,8 @@ function migrateStatsCache(
             sourceVersion: parsed.version,
             ignoreThroughDate: getTodayDateString(),
             notice:
-              'All-time totals include a preserved legacy cache whose per-session attribution cannot be reconstructed exactly. Later activity in sessions already represented by that cache may be omitted.',
-            legacySessionIds: [],
+              'All-time totals include a preserved legacy cache whose pre-migration per-session attribution cannot be reconstructed exactly. Activity observed after migration is tracked separately.',
+            legacySessionCheckpoints: {},
           },
         }
       : parsed.legacyMigration

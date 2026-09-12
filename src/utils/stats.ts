@@ -109,8 +109,8 @@ type ProcessOptions = {
   fromDate?: string
   // Only include data from dates <= this date (YYYY-MM-DD format)
   toDate?: string
-  // Omit sessions already represented by an aggregate-only legacy cache.
-  excludeSessionIds?: ReadonlySet<string>
+  // Count only messages observed after an aggregate-only legacy checkpoint.
+  afterTimestampBySession?: ReadonlyMap<string, string>
 }
 
 /**
@@ -118,7 +118,7 @@ type ProcessOptions = {
  * sidechain/shot attribution are range-local, not derivable from daily totals.
  */
 function createStatsAccumulator(options: ProcessOptions) {
-  const { fromDate, toDate, excludeSessionIds } = options
+  const { fromDate, toDate, afterTimestampBySession } = options
   const dailyActivityMap = new Map<string, DailyActivity>()
   const dailyModelTokensMap = new Map<string, { [modelName: string]: number }>()
   const sessions: SessionStats[] = []
@@ -138,7 +138,7 @@ function createStatsAccumulator(options: ProcessOptions) {
     const parentSessionId = isSubagentFile
       ? basename(dirname(dirname(sessionFile)))
       : sessionId
-    if (excludeSessionIds?.has(parentSessionId)) return
+    const checkpoint = afterTimestampBySession?.get(parentSessionId)
     const messages: TranscriptMessage[] = []
 
     for (const entry of entries) {
@@ -206,7 +206,8 @@ function createStatsAccumulator(options: ProcessOptions) {
       const dateKey = toDateString(timestamp)
       const inRange =
         (!fromDate || !isDateBefore(dateKey, fromDate)) &&
-        (!toDate || !isDateBefore(toDate, dateKey))
+        (!toDate || !isDateBefore(toDate, dateKey)) &&
+        (!checkpoint || message.timestamp > checkpoint)
 
       if (inRange) {
         eligibleMainMessages.push({ message, timestamp })
@@ -733,30 +734,37 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     if (cache.legacyMigration && Object.keys(result.sessionIndex).length === 0) {
       const retained = await processSessionFiles(allSessionFiles)
       const legacyBoundary = cache.lastComputedDate
-      const legacySessionIds = retained.sessionStats
+      const legacySessions = retained.sessionStats
         .filter(
           session =>
             legacyBoundary &&
             !isDateBefore(legacyBoundary, toDateString(new Date(session.timestamp))),
         )
-        .map(session => session.sessionId)
+      const legacySessionCheckpoints = Object.fromEntries(
+        legacySessions.map(session => [
+          session.sessionId,
+          new Date(
+            new Date(session.timestamp).getTime() + session.duration,
+          ).toISOString(),
+        ]),
+      )
       result = {
         ...cache,
         sessionIndex: Object.fromEntries(
-          retained.sessionStats
-            .filter(session => legacySessionIds.includes(session.sessionId))
-            .map(session => [session.sessionId, session]),
+          legacySessions.map(session => [session.sessionId, session]),
         ),
         legacyMigration: {
           ...cache.legacyMigration,
-          legacySessionIds,
+          legacySessionCheckpoints,
         },
       }
       await saveStatsCache(result)
     }
 
-    const excludedLegacySessions = new Set(
-      result.legacyMigration?.legacySessionIds ?? [],
+    const legacyCheckpoints = new Map(
+      Object.entries(
+        result.legacyMigration?.legacySessionCheckpoints ?? {},
+      ),
     )
     if (!result.lastComputedDate) {
       // No cache - process all historical data (everything before today)
@@ -782,7 +790,7 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
         toDate: yesterday,
-        excludeSessionIds: excludedLegacySessions,
+        afterTimestampBySession: legacyCheckpoints,
       })
 
       if (
@@ -808,8 +816,10 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     await processSessionFiles(allSessionFiles, {
       fromDate: today,
       toDate: today,
-      excludeSessionIds: new Set(
-        updatedCache.legacyMigration?.legacySessionIds ?? [],
+      afterTimestampBySession: new Map(
+        Object.entries(
+          updatedCache.legacyMigration?.legacySessionCheckpoints ?? {},
+        ),
       ),
     })
 
