@@ -56,6 +56,60 @@ afterEach(() => {
 })
 
 describe('all-time stats cache integration', () => {
+  test('checkpoints parent and worker transcripts independently', async () => {
+    install([
+      record('parent-one', '2026-09-11T10:00:00.000Z'),
+      record('parent-two', '2026-09-11T11:00:00.000Z'),
+    ])
+    const workerDir = join(
+      config!, 'projects', 'fixture', 'cross-day-session', 'subagents',
+    )
+    mkdirSync(workerDir, { recursive: true })
+    const workerFile = join(workerDir, 'agent-worker.jsonl')
+    const workerRecords = Array.from({ length: 6 }, (_, index) => ({
+      ...record(`worker-${index}`, `2026-09-11T10:0${index}:00.000Z`),
+      isSidechain: true,
+    }))
+    writeFileSync(
+      workerFile,
+      `${workerRecords.map(value => JSON.stringify(value)).join('\n')}\n`,
+    )
+    cpSync(
+      join(import.meta.dir, 'fixtures', 'stats-cache-v3-subagent.json'),
+      join(config!, 'stats-cache.json'),
+    )
+
+    const migrated = await run('2026-09-12T12:00:00.000Z')
+    expect(migrated).toMatchObject({
+      totalSessions: 1,
+      totalMessages: 2,
+      inputTokens: 800,
+    })
+    const cache = JSON.parse(
+      readFileSync(join(config!, 'stats-cache-v4.json'), 'utf8'),
+    )
+    expect(cache.legacyMigration.legacySessionCheckpoints).toMatchObject({
+      'cross-day-session': { observedMessageCount: 2 },
+      'cross-day-session/subagents/agent-worker': { observedMessageCount: 6 },
+    })
+
+    const appended = {
+      ...record('worker-new', '2026-09-12T01:00:00.000Z'),
+      isSidechain: true,
+    }
+    writeFileSync(
+      workerFile,
+      `${readFileSync(workerFile, 'utf8')}${JSON.stringify(appended)}\n`,
+    )
+    const updated = await run('2026-09-12T12:30:00.000Z')
+    expect(updated).toMatchObject({
+      totalSessions: 1,
+      totalMessages: 2,
+      inputTokens: 900,
+    })
+    expect(await run('2026-09-12T12:45:00.000Z')).toEqual(updated)
+  })
+
   test('adopts an actual-base v3 fixture without cross-day inflation', async () => {
     install([
       record('one', '2026-09-11T23:00:00.000Z'),

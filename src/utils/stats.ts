@@ -99,6 +99,7 @@ type ProcessedStats = {
   totalMessages: number
   totalSpeculationTimeSavedMs: number
   shotDistribution?: { [shotCount: number]: number }
+  recordCountsBySessionKey: { [sessionKey: string]: number }
 }
 
 /**
@@ -134,6 +135,7 @@ function createStatsAccumulator(options: ProcessOptions) {
     : undefined
   // Track parent sessions that already recorded a shot count (dedup across subagents)
   const sessionsWithShotCount = new Set<string>()
+  const recordCountsBySessionKey = new Map<string, number>()
 
   function add(sessionFile: string, entries: Entry[]): void {
     const sessionId = basename(sessionFile, '.jsonl')
@@ -141,7 +143,10 @@ function createStatsAccumulator(options: ProcessOptions) {
     const parentSessionId = isSubagentFile
       ? basename(dirname(dirname(sessionFile)))
       : sessionId
-    const checkpoint = afterRecordBySession?.get(parentSessionId)
+    const sessionKey = isSubagentFile
+      ? `${parentSessionId}/subagents/${sessionId}`
+      : sessionId
+    const checkpoint = afterRecordBySession?.get(sessionKey)
     const messages: TranscriptMessage[] = []
 
     for (const entry of entries) {
@@ -178,6 +183,7 @@ function createStatsAccumulator(options: ProcessOptions) {
       ? messages
       : messages.filter(m => !m.isSidechain)
     if (mainMessages.length === 0) return
+    recordCountsBySessionKey.set(sessionKey, mainMessages.length)
 
     // Streaming splits one API response into several persisted records that
     // share one API message.id. Every split carries the message_start
@@ -360,6 +366,7 @@ function createStatsAccumulator(options: ProcessOptions) {
       ...(feature('SHOT_STATS') && shotDistributionMap
         ? { shotDistribution: Object.fromEntries(shotDistributionMap) }
         : {}),
+      recordCountsBySessionKey: Object.fromEntries(recordCountsBySessionKey),
     }
   }
 
@@ -755,10 +762,18 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
             !isDateBefore(legacyBoundary, toDateString(new Date(session.timestamp))),
         )
       const legacySessionCheckpoints = Object.fromEntries(
-        legacySessions.map(session => [
-          session.sessionId,
-          { observedMessageCount: session.messageCount },
-        ]),
+        Object.entries(retained.recordCountsBySessionKey)
+          .filter(([sessionKey]) =>
+            legacySessions.some(
+              session =>
+                sessionKey === session.sessionId ||
+                sessionKey.startsWith(`${session.sessionId}/subagents/`),
+            ),
+          )
+          .map(([sessionKey, observedMessageCount]) => [
+            sessionKey,
+            { observedMessageCount },
+          ]),
       )
       result = {
         ...cache,
