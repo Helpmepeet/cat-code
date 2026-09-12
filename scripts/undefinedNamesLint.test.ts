@@ -1,6 +1,78 @@
-import { describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { parseUndefinedNames } from './undefinedNamesLint.js'
+
+const fixtureRoots: string[] = []
+
+afterEach(() => {
+  for (const root of fixtureRoots.splice(0)) {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+function runLint(checker?: { stdout?: string; stderr?: string; status: number }) {
+  const root = mkdtempSync(join(tmpdir(), 'undefined-name-lint-'))
+  fixtureRoots.push(root)
+  const bin = join(root, 'bin')
+  mkdirSync(bin)
+  if (checker) {
+    writeFileSync(
+      join(bin, 'bunx'),
+      `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(checker.stdout ?? '')});\nprocess.stderr.write(${JSON.stringify(checker.stderr ?? '')});\nprocess.exit(${checker.status});\n`,
+      { mode: 0o700 },
+    )
+  }
+  const result = Bun.spawnSync(
+    [process.execPath, fileURLToPath(new URL('./undefinedNamesLint.ts', import.meta.url)), root],
+    { env: { ...process.env, PATH: bin }, stdout: 'pipe', stderr: 'pipe' },
+  )
+  return {
+    status: result.exitCode,
+    output: result.stdout.toString() + result.stderr.toString(),
+  }
+}
+
+describe('undefined-name lint command', () => {
+  test('accepts a successful checker and the known-red source diagnostics', () => {
+    for (const checker of [
+      { status: 0 },
+      { status: 2, stdout: "src/example.ts(1,1): error TS2345: Argument of type 'x' is not assignable to parameter of type 'y'.\n" },
+    ]) {
+      const result = runLint(checker)
+      expect(result.status).toBe(0)
+      expect(result.output).toContain('undefined-name lint passed')
+    }
+  })
+
+  test('fails when the checker executable cannot start', () => {
+    const result = runLint()
+    expect(result.status).not.toBe(0)
+    expect(result.output).not.toContain('undefined-name lint passed')
+  })
+
+  test('fails on checker configuration errors', () => {
+    const result = runLint({ status: 1, stdout: "error TS5058: The specified path does not exist: 'tsconfig.json'.\n" })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain('TS5058')
+    expect(result.output).not.toContain('undefined-name lint passed')
+  })
+
+  test('does not treat a crash after source diagnostics as a completed check', () => {
+    const result = runLint({ status: 137, stdout: 'src/example.ts(1,1): error TS2345: Invalid argument.\n' })
+    expect(result.status).not.toBe(0)
+    expect(result.output).not.toContain('undefined-name lint passed')
+  })
+
+  test('fails on undefined names reported through stderr', () => {
+    const result = runLint({ status: 2, stderr: "src/example.ts(1,1): error TS2304: Cannot find name 'missing'.\n" })
+    expect(result.status).not.toBe(0)
+    expect(result.output).toContain("'missing' is used but never imported or declared")
+  })
+})
 
 describe('parseUndefinedNames', () => {
   test('catches a value used but never imported', () => {
