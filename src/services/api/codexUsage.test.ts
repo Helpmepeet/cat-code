@@ -12,22 +12,32 @@ import {
   installStreamJsonAccountDiagnosticHook,
 } from './accountDiagnostics.js'
 import {
+  createCodexCredentialHandle,
+  type CodexCredentialHandle,
+} from './codexCredentialUse.js'
+import {
   resetCodexLeaseManagerForTest,
   seedCodexLeaseForTest,
 } from './codexAccountLeaseManager.js'
 import {
   buildPoolUsageDisplayAccounts,
   emitCachedUsageWarningsForActiveSink,
-  fetchPoolUsage,
+  fetchAccountUsage,
+  fetchPoolUsage as fetchPoolUsageProduction,
   formatPoolUsage,
   invalidateUsageCache,
-  consumeUsageLimitReset,
+  consumeUsageLimitReset as consumeUsageLimitResetProduction,
   resetPoolUsageSchedulerForTest,
-  schedulePoolUsageRefresh,
+  schedulePoolUsageRefresh as schedulePoolUsageRefreshProduction,
   sortPoolUsageDisplayAccounts,
   type AccountUsage,
+  type FetchPoolUsageOptions,
   type PoolUsageSnapshot,
 } from './codexUsage.js'
+import type {
+  CodexCredentialLifecycle,
+  CodexCredentialLifecycleReadResult,
+} from './codexCredentialLifecycle.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -40,11 +50,10 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
-    credentialGeneration: overrides.credentialGeneration ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 1,
     credentialGenerationState:
       overrides.credentialGenerationState ??
-      (overrides.credentialGeneration === undefined ||
-      overrides.credentialGeneration === 0
+      (overrides.credentialGeneration === 0
         ? 'legacy_unbound'
         : 'lifecycle_bound'),
     alias: overrides.alias,
@@ -94,6 +103,79 @@ function buildUsage(
     fetchedAt: Date.now(),
     ...overrides,
   }
+}
+
+function createTestCredentialLifecycle(
+  read: (accountId: string) => CodexCredentialLifecycleReadResult,
+): CodexCredentialLifecycle {
+  return {
+    read,
+    async withTransaction<T>(
+      _accountId: string,
+      _options: unknown,
+      callback: (permit: never) => T | Promise<T>,
+    ): Promise<T> {
+      return callback({} as never)
+    },
+  } as unknown as CodexCredentialLifecycle
+}
+
+const allowTestCredentialLifecycle = createTestCredentialLifecycle(accountId => ({
+  status: 'valid' as const,
+  record: {
+    version: 1 as const,
+    accountId,
+    credentialGeneration: 1,
+    state: 'credentialed' as const,
+    operationId: 'usage-test',
+    operationKind: 'login' as const,
+    changedAt: '2026-09-12T00:00:00.000Z',
+  },
+}))
+
+function fetchPoolUsageForTest(
+  forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
+): Promise<PoolUsageSnapshot> {
+  const options =
+    typeof forceRefreshOrOptions === 'boolean'
+      ? { forceRefresh: forceRefreshOrOptions }
+      : forceRefreshOrOptions
+  return fetchPoolUsageProduction({
+    ...options,
+    credentialUse: { lifecycle: allowTestCredentialLifecycle },
+  })
+}
+
+function consumeUsageLimitResetForTest(
+  account: { accountId: string; accessToken: string },
+  redeemRequestId: string,
+) {
+  return consumeUsageLimitResetProduction(
+    buildCredentialHandle(account.accountId, account.accessToken),
+    redeemRequestId,
+    { lifecycle: allowTestCredentialLifecycle },
+  )
+}
+
+function buildCredentialHandle(
+  accountId: string,
+  accessToken = `access-${accountId}`,
+  credentialGeneration = 1,
+): CodexCredentialHandle {
+  return createCodexCredentialHandle({
+    accountId,
+    accessToken,
+    refreshToken: `refresh-${accountId}`,
+    expiresAt: Date.now() + 60_000,
+    credentialGeneration,
+    credentialSource: 'config',
+  })
+}
+
+function schedulePoolUsageRefreshForTest(): void {
+  schedulePoolUsageRefreshProduction({
+    lifecycle: allowTestCredentialLifecycle,
+  })
 }
 
 function usageBody(usedPercent: number, limitReached = false): Response {
@@ -225,6 +307,88 @@ describe('codexUsage display helpers', () => {
     expect(displayAccounts[2]?.error).toBe('HTTP 401')
   })
 
+  test('fetchAccountUsage sends once for an exact credential generation', async () => {
+    const account = buildPoolAccount({ accountId: 'usage-exact-account' })
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return usageBody(12)
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const usage = await fetchAccountUsage(account, {
+        lifecycle: allowTestCredentialLifecycle,
+      })
+      expect(usage?.accountId).toBe(account.accountId)
+      expect(fetchCount).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('fetchAccountUsage sends nothing for a signed-out, stale, or malformed lifecycle', async () => {
+    const account = buildPoolAccount({ accountId: 'usage-denied-account' })
+    const deniedLifecycles: Array<{
+      name: string
+      lifecycle: CodexCredentialLifecycle
+    }> = [
+      {
+        name: 'signed-out',
+        lifecycle: createTestCredentialLifecycle(accountId => ({
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'signed_out' as const,
+            operationId: 'usage-sign-out',
+            operationKind: 'sign_out' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        })),
+      },
+      {
+        name: 'stale',
+        lifecycle: createTestCredentialLifecycle(accountId => ({
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 2,
+            state: 'credentialed' as const,
+            operationId: 'usage-new-login',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        })),
+      },
+      {
+        name: 'malformed',
+        lifecycle: createTestCredentialLifecycle(() => ({ status: 'malformed' })),
+      },
+    ]
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return usageBody(12)
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      for (const denied of deniedLifecycles) {
+        fetchCount = 0
+        expect(
+          await fetchAccountUsage(account, { lifecycle: denied.lifecycle }),
+          denied.name,
+        ).toBeNull()
+        expect(fetchCount, denied.name).toBe(0)
+      }
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
   test('sorts healthy usage rows ahead of capped and unavailable rows', () => {
     const displayAccounts = sortPoolUsageDisplayAccounts([
       {
@@ -303,7 +467,7 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      await fetchPoolUsageForTest({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -355,7 +519,7 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      await fetchPoolUsageForTest({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -404,7 +568,7 @@ describe('codexUsage display helpers', () => {
     invalidateUsageCache()
     let snapshot: PoolUsageSnapshot
     try {
-      snapshot = await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      snapshot = await fetchPoolUsageForTest({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -445,7 +609,7 @@ describe('codexUsage display helpers', () => {
     invalidateUsageCache()
     let snapshot: PoolUsageSnapshot
     try {
-      snapshot = await fetchPoolUsage({ forceRefresh: true })
+      snapshot = await fetchPoolUsageForTest({ forceRefresh: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -500,7 +664,7 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsageForTest(true)
       expect(snapshot.errors).toEqual([])
       expect(snapshot.accounts).toHaveLength(1)
     } finally {
@@ -561,7 +725,7 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsageForTest(true)
       const byId = new Map(snapshot.accounts.map((usage) => [usage.accountId, usage]))
       expect(byId.get('with-credits')?.resetCreditsAvailable).toBe(2)
       expect(byId.get('without-field')?.resetCreditsAvailable).toBeUndefined()
@@ -598,7 +762,7 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsageForTest(true)
       expect(snapshot.accounts).toEqual([])
       expect(snapshot.errors).toEqual([
         { accountId: 'timeout-account', error: 'The operation was aborted.' },
@@ -630,11 +794,71 @@ describe('codexUsage display helpers', () => {
 
     try {
       await expect(
-        consumeUsageLimitReset(
+        consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         ),
       ).resolves.toEqual({ kind: 'reset', windowsReset: 2 })
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset sends only for an exact credential generation', async () => {
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({ code: 'reset', windows_reset: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const outcome = await consumeUsageLimitResetProduction(
+        buildCredentialHandle('reset-exact-account'),
+        'redeem-exact',
+        { lifecycle: allowTestCredentialLifecycle },
+      )
+      expect(outcome).toEqual({ kind: 'reset', windowsReset: 1 })
+      expect(fetchCount).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+  })
+
+  test('consumeUsageLimitReset sends nothing for a stale credential generation', async () => {
+    const staleLifecycle = createTestCredentialLifecycle(accountId => ({
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 2,
+        state: 'credentialed' as const,
+        operationId: 'reset-new-login',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }))
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response(JSON.stringify({ code: 'reset', windows_reset: 1 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const outcome = await consumeUsageLimitResetProduction(
+        buildCredentialHandle('reset-stale-account'),
+        'redeem-stale',
+        { lifecycle: staleLifecycle },
+      )
+      expect(outcome.kind).toBe('network_error')
+      expect(fetchCount).toBe(0)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -658,7 +882,7 @@ describe('codexUsage display helpers', () => {
           })) as unknown as typeof globalThis.fetch
 
         await expect(
-          consumeUsageLimitReset(
+          consumeUsageLimitResetForTest(
             { accountId: 'main-account', accessToken: 'access-main' },
             'redeem-123',
           ),
@@ -679,7 +903,7 @@ describe('codexUsage display helpers', () => {
 
     try {
       await expect(
-        consumeUsageLimitReset(
+        consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         ),
@@ -706,7 +930,7 @@ describe('codexUsage display helpers', () => {
             headers: { 'content-type': 'application/json' },
           })) as unknown as typeof globalThis.fetch
 
-        const outcome = await consumeUsageLimitReset(
+        const outcome = await consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         )
@@ -724,7 +948,7 @@ describe('codexUsage display helpers', () => {
 
     try {
       await expect(
-        consumeUsageLimitReset(
+        consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         ),
@@ -746,7 +970,7 @@ describe('codexUsage display helpers', () => {
 
     try {
       await expect(
-        consumeUsageLimitReset(
+        consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         ),
@@ -776,7 +1000,7 @@ describe('codexUsage display helpers', () => {
 
     try {
       await expect(
-        consumeUsageLimitReset(
+        consumeUsageLimitResetForTest(
           { accountId: 'main-account', accessToken: 'access-main' },
           'redeem-123',
         ),
@@ -829,7 +1053,7 @@ describe('codexUsage display helpers', () => {
     const beforeIndex = getPoolStatus().activeIndex
     invalidateUsageCache()
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsageForTest(true)
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -877,8 +1101,8 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage(true)
-      await fetchPoolUsage({ updateRoutingHints: true })
+      await fetchPoolUsageForTest(true)
+      await fetchPoolUsageForTest({ updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -911,8 +1135,8 @@ describe('codexUsage display helpers', () => {
     try {
       // Unforced: neither caller demanded an observation newer than the read
       // already on the wire, so one endpoint request answers both.
-      const first = fetchPoolUsage()
-      const second = fetchPoolUsage({ updateRoutingHints: true })
+      const first = fetchPoolUsageForTest()
+      const second = fetchPoolUsageForTest({ updateRoutingHints: true })
 
       expect(fetchCount).toBe(1)
       resolveResponse?.(
@@ -991,9 +1215,9 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage()
-      schedulePoolUsageRefresh()
-      schedulePoolUsageRefresh()
+      await fetchPoolUsageForTest()
+      schedulePoolUsageRefreshForTest()
+      schedulePoolUsageRefreshForTest()
       await new Promise(resolve => setTimeout(resolve, 1_100))
     } finally {
       globalThis.fetch = originalFetch
@@ -1025,10 +1249,10 @@ describe('codexUsage display helpers', () => {
     try {
       // A background read is on the wire, then something changes the state the
       // forced caller needs to see (a redeemed reset, a completed turn).
-      const stale = fetchPoolUsage({ updateRoutingHints: true })
+      const stale = fetchPoolUsageForTest({ updateRoutingHints: true })
       invalidateUsageCache()
 
-      const forced = fetchPoolUsage({ forceRefresh: true })
+      const forced = fetchPoolUsageForTest({ forceRefresh: true })
       resolveFirst?.(usageBody(10))
       const [, forcedSnapshot] = await Promise.all([stale, forced])
 
@@ -1062,8 +1286,8 @@ describe('codexUsage display helpers', () => {
     try {
       // No invalidation between the two: the forced caller must escape the
       // shared read on its own, not because something else cleared it.
-      const background = fetchPoolUsage()
-      const forced = fetchPoolUsage({ forceRefresh: true })
+      const background = fetchPoolUsageForTest()
+      const forced = fetchPoolUsageForTest({ forceRefresh: true })
       resolveFirst?.(usageBody(10))
       const [, forcedSnapshot] = await Promise.all([background, forced])
 
@@ -1093,11 +1317,11 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage()
-      const stuck = fetchPoolUsage({ forceRefresh: true })
+      await fetchPoolUsageForTest()
+      const stuck = fetchPoolUsageForTest({ forceRefresh: true })
       void stuck.catch(() => {})
 
-      const cached = await fetchPoolUsage()
+      const cached = await fetchPoolUsageForTest()
       expect(cached.accounts[0]?.primaryWindow.usedPercent).toBe(10)
       expect(fetchCount).toBe(2)
     } finally {
@@ -1122,10 +1346,10 @@ describe('codexUsage display helpers', () => {
     try {
       // A tool loop: requests keep completing while a poll is pending. The poll
       // must still land on schedule instead of being deferred by each one.
-      schedulePoolUsageRefresh()
+      schedulePoolUsageRefreshForTest()
       for (let i = 0; i < 6; i += 1) {
         await new Promise(resolve => setTimeout(resolve, 120))
-        schedulePoolUsageRefresh()
+        schedulePoolUsageRefreshForTest()
       }
       await new Promise(resolve => setTimeout(resolve, 400))
 
@@ -1156,14 +1380,14 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      const stale = fetchPoolUsage({ updateRoutingHints: true })
+      const stale = fetchPoolUsageForTest({ updateRoutingHints: true })
       invalidateUsageCache()
       resolveFirst?.(usageBody(77))
       await stale
 
       // The pre-invalidation reading must not have become the shared cache: an
       // unforced read afterwards has to go to the endpoint, not replay it.
-      const after = await fetchPoolUsage()
+      const after = await fetchPoolUsageForTest()
       expect(fetchCount).toBe(2)
       expect(after.accounts[0]?.primaryWindow.usedPercent).toBe(20)
 
@@ -1171,6 +1395,85 @@ describe('codexUsage display helpers', () => {
         entry => entry.accountId === 'main-account',
       )
       expect(account?.usagePrimary).not.toBe(77)
+    } finally {
+      globalThis.fetch = originalFetch
+      resetPoolUsageSchedulerForTest()
+    }
+  })
+
+  test('pool usage keeps account generations and fences a stale result', async () => {
+    const validAccount = buildPoolAccount({ accountId: 'pool-valid-account' })
+    const signedOutAccount = buildPoolAccount({ accountId: 'pool-signed-out-account' })
+    seedCodexAccountPoolForTest({
+      activeAccountId: validAccount.accountId,
+      accounts: [validAccount, signedOutAccount],
+    })
+
+    const lifecycle = createTestCredentialLifecycle(accountId => {
+      if (accountId === signedOutAccount.accountId) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'signed_out' as const,
+            operationId: 'pool-sign-out',
+            operationKind: 'sign_out' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      }
+      return {
+        status: 'valid' as const,
+        record: {
+          version: 1 as const,
+          accountId,
+          credentialGeneration: 1,
+          state: 'credentialed' as const,
+          operationId: 'pool-login',
+          operationKind: 'login' as const,
+          changedAt: '2026-09-12T00:00:00.000Z',
+        },
+      }
+    })
+
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    let resolveFirst: ((response: Response) => void) | undefined
+    globalThis.fetch = (() => {
+      fetchCount += 1
+      if (fetchCount === 1) {
+        return new Promise<Response>(resolve => {
+          resolveFirst = resolve
+        })
+      }
+      return Promise.resolve(usageBody(20))
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      const stale = fetchPoolUsageProduction({
+        forceRefresh: true,
+        updateRoutingHints: true,
+        credentialUse: { lifecycle },
+      })
+      expect(fetchCount).toBe(1)
+
+      invalidateUsageCache()
+      resolveFirst?.(usageBody(77))
+      const staleSnapshot = await stale
+
+      expect(staleSnapshot.accounts).toHaveLength(1)
+      expect(staleSnapshot.accounts[0]?.accountId).toBe(validAccount.accountId)
+      expect(staleSnapshot.accounts[0]?.primaryWindow.usedPercent).toBe(77)
+      expect(getPoolStatus().accounts[0]?.usagePrimary).not.toBe(77)
+
+      const current = await fetchPoolUsageProduction({
+        updateRoutingHints: true,
+        credentialUse: { lifecycle },
+      })
+      expect(fetchCount).toBe(2)
+      expect(current.accounts[0]?.primaryWindow.usedPercent).toBe(20)
     } finally {
       globalThis.fetch = originalFetch
       resetPoolUsageSchedulerForTest()
@@ -1191,10 +1494,10 @@ describe('codexUsage display helpers', () => {
       })) as unknown as typeof globalThis.fetch
 
     try {
-      const owner = fetchPoolUsage()
+      const owner = fetchPoolUsageForTest()
       // Rides the owner's request rather than issuing its own, so it is the
       // sharer, not the fetch, that would write the hints here.
-      const sharer = fetchPoolUsage({ updateRoutingHints: true })
+      const sharer = fetchPoolUsageForTest({ updateRoutingHints: true })
       invalidateUsageCache()
       resolveFirst?.(usageBody(88))
       await Promise.all([owner, sharer])
@@ -1223,7 +1526,7 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      schedulePoolUsageRefresh()
+      schedulePoolUsageRefreshForTest()
       invalidateUsageCache()
       await new Promise(resolve => setTimeout(resolve, 1_200))
       expect(fetchCount).toBe(0)
@@ -1248,10 +1551,10 @@ describe('codexUsage display helpers', () => {
 
     try {
       // Warm a cache the poll must ignore: only a forced read reaches the wire.
-      await fetchPoolUsage()
+      await fetchPoolUsageForTest()
       expect(fetchCount).toBe(1)
 
-      schedulePoolUsageRefresh()
+      schedulePoolUsageRefreshForTest()
       await new Promise(resolve => setTimeout(resolve, 1_200))
       expect(fetchCount).toBe(2)
 
@@ -1262,7 +1565,7 @@ describe('codexUsage display helpers', () => {
 
       // A second completed request inside the floor must not buy another
       // all-account fan-out.
-      schedulePoolUsageRefresh()
+      schedulePoolUsageRefreshForTest()
       await new Promise(resolve => setTimeout(resolve, 1_200))
       expect(fetchCount).toBe(2)
     } finally {
@@ -1330,7 +1633,7 @@ describe('codexUsage display helpers', () => {
     }) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      await fetchPoolUsageForTest({ forceRefresh: true, updateRoutingHints: true })
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()
@@ -1356,8 +1659,6 @@ describe('codexUsage display helpers', () => {
         buildPoolAccount({
           accountId: 'main-account',
           alias: 'main',
-          source: 'vault',
-          vaultFilePath: '/tmp/main-account.json',
         }),
       ],
     })
@@ -1371,7 +1672,7 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsageForTest(true)
       expect(snapshot.accounts).toEqual([])
       expect(snapshot.errors).toEqual([
         { accountId: 'main-account', error: 'HTTP 401' },
@@ -1431,7 +1732,7 @@ describe('codexUsage display helpers', () => {
       )) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsageForTest(true)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1500,7 +1801,7 @@ describe('codexUsage display helpers', () => {
 
     const emitted: unknown[] = []
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsageForTest(true)
       installStreamJsonAccountDiagnosticHook({
         emit: message => {
           emitted.push(message)
@@ -1572,7 +1873,7 @@ describe('codexUsage display helpers', () => {
       )) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsageForTest(true)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1627,7 +1928,7 @@ describe('codexUsage display helpers', () => {
       )) as unknown as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage(true)
+      await fetchPoolUsageForTest(true)
     } finally {
       globalThis.fetch = originalFetch
     }
@@ -1853,7 +2154,7 @@ describe('codexUsage display helpers', () => {
       stalledBodyResponse(init?.signal)) as unknown as typeof globalThis.fetch
 
     try {
-      const pending = consumeUsageLimitReset(
+      const pending = consumeUsageLimitResetForTest(
         { accountId: 'stall-account', accessToken: 'access-stall' },
         'redeem-stall',
       )
@@ -1896,7 +2197,7 @@ describe('codexUsage display helpers', () => {
       stalledBodyResponse(init?.signal)) as unknown as typeof globalThis.fetch
 
     try {
-      const pending = fetchPoolUsage(true)
+      const pending = fetchPoolUsageForTest(true)
       await new Promise(resolve => realSetTimeout(resolve, 0))
       timers.runPending()
 
@@ -1934,7 +2235,7 @@ describe('codexUsage display helpers', () => {
       usageBody(12)) as unknown as typeof globalThis.fetch
 
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsageForTest(true)
       expect(snapshot.errors).toEqual([])
       expect(snapshot.accounts).toHaveLength(1)
       expect(snapshot.accounts[0].primaryWindow.usedPercent).toBe(12)

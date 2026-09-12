@@ -90,6 +90,30 @@ function buildPoolAccount(
   }
 }
 
+const allowUsageCredentialLifecycle = {
+  read(accountId: string) {
+    return {
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'usage-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }
+  },
+  async withTransaction<T>(
+    _accountId: string,
+    _options: unknown,
+    callback: (permit: never) => T | Promise<T>,
+  ): Promise<T> {
+    return callback({} as never)
+  },
+} as unknown as CodexCredentialLifecycle
+
 function codexCompletedStreamResponse(): Response {
   return new Response(
     [
@@ -875,7 +899,11 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      await fetchPoolUsage({
+        forceRefresh: true,
+        updateRoutingHints: true,
+        credentialUse: { lifecycle: allowUsageCredentialLifecycle },
+      })
     } finally {
       globalThis.fetch = realFetch
     }

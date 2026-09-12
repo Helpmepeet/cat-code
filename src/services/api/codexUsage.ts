@@ -18,6 +18,12 @@ import {
   emitAccountDiagnostic,
   hasAccountDiagnosticSink,
 } from './accountDiagnostics.js'
+import {
+  createCodexCredentialHandle,
+  startCodexCredentialSend,
+  type CodexCredentialHandle,
+  type CodexCredentialUseOptions,
+} from './codexCredentialUse.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +76,7 @@ export interface PoolUsageDisplayAccount {
 export type FetchPoolUsageOptions = {
   forceRefresh?: boolean
   updateRoutingHints?: boolean
+  credentialUse?: CodexCredentialUseOptions
 }
 
 export type ConsumeResetOutcome =
@@ -111,21 +118,26 @@ const warnedNearCapAccountIds = new Set<string>()
 // ── Public API ─────────────────────────────────────────────────────────────
 
 /**
- * Fetch usage for a single account by its access token.
+ * Fetch usage for a single account credential snapshot.
  * Returns null on any failure (network, auth, parse).
  */
 export async function fetchAccountUsage(
   account: PoolAccount,
+  credentialUse: CodexCredentialUseOptions = {},
 ): Promise<AccountUsage | null> {
-  const { usage } = await fetchAccountUsageResult(account)
+  const { usage } = await fetchAccountUsageResult(account, credentialUse)
   return usage
 }
 
 export async function consumeUsageLimitReset(
-  account: Pick<PoolAccount, 'accountId' | 'accessToken'>,
+  account: CodexCredentialHandle,
   redeemRequestId: string,
+  credentialUse: CodexCredentialUseOptions = {},
 ): Promise<ConsumeResetOutcome> {
-  const accountPrefix = account.accountId.slice(0, 12)
+  const accountPrefix =
+    typeof account?.accountId === 'string'
+      ? account.accountId.slice(0, 12)
+      : 'unknown'
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -136,17 +148,22 @@ export async function consumeUsageLimitReset(
     let response: Response
     let bodyText: string
     try {
-      response = await globalThis.fetch(WHAM_RESET_CONSUME_URL, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${account.accessToken}`,
-          Accept: 'application/json',
-          'chatgpt-account-id': account.accountId,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ redeem_request_id: redeemRequestId }),
-        signal: controller.signal,
-      })
+      response = await startCodexCredentialSend(
+        account,
+        authorizedAccount =>
+          globalThis.fetch(WHAM_RESET_CONSUME_URL, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${authorizedAccount.accessToken}`,
+              Accept: 'application/json',
+              'chatgpt-account-id': authorizedAccount.accountId,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ redeem_request_id: redeemRequestId }),
+            signal: controller.signal,
+          }),
+        credentialUse,
+      )
       bodyText = await response.text()
     } finally {
       clearTimeout(timeout)
@@ -216,18 +233,28 @@ export async function consumeUsageLimitReset(
 
 async function fetchAccountUsageResult(
   account: PoolAccount,
+  credentialUse: CodexCredentialUseOptions = {},
 ): Promise<{ error: string | null; usage: AccountUsage | null }> {
-  const first = await fetchAccountUsageOnce(account.accessToken, account.accountId)
-  return first.result
+  try {
+    const credential = createPoolAccountCredentialHandle(account)
+    const first = await fetchAccountUsageOnce(credential, credentialUse)
+    return first.result
+  } catch (error) {
+    return {
+      error: error instanceof Error ? error.message : String(error),
+      usage: null,
+    }
+  }
 }
 
 async function fetchAccountUsageOnce(
-  accessToken: string,
-  accountId: string,
+  credential: CodexCredentialHandle,
+  credentialUse: CodexCredentialUseOptions = {},
 ): Promise<{
   status: number | null
   result: { error: string | null; usage: AccountUsage | null }
 }> {
+  const accountId = credential.accountId
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
@@ -238,16 +265,21 @@ async function fetchAccountUsageOnce(
     let response: Response
     let data: Record<string, unknown>
     try {
-      response = await globalThis.fetch(WHAM_USAGE_URL, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: 'application/json',
-          'chatgpt-account-id': accountId,
-          originator: 'codex_cli_rs',
-        },
-        signal: controller.signal,
-      })
+      response = await startCodexCredentialSend(
+        credential,
+        authorizedCredential =>
+          globalThis.fetch(WHAM_USAGE_URL, {
+            method: 'GET',
+            headers: {
+              Authorization: `Bearer ${authorizedCredential.accessToken}`,
+              Accept: 'application/json',
+              'chatgpt-account-id': authorizedCredential.accountId,
+              originator: 'codex_cli_rs',
+            },
+            signal: controller.signal,
+          }),
+        credentialUse,
+      )
 
       if (!response.ok) {
         const error = `HTTP ${response.status}`
@@ -350,7 +382,9 @@ export async function fetchPoolUsage(
  * are advisory scoring inputs on a 5-hour window, and because one poll costs a
  * GET per pool account.
  */
-export function schedulePoolUsageRefresh(): void {
+export function schedulePoolUsageRefresh(
+  credentialUse?: CodexCredentialUseOptions,
+): void {
   if (scheduledPoolUsageRefresh !== null) {
     // A poll is already armed; the trailing one already covers this request.
     return
@@ -367,7 +401,11 @@ export function schedulePoolUsageRefresh(): void {
     // drop the cache on every tool-loop iteration and send unforced readers to
     // the network in between, which is the cost the floor above exists to stop.
     invalidateUsageCache()
-    void fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true }).catch(() => {})
+    void fetchPoolUsage({
+      forceRefresh: true,
+      updateRoutingHints: true,
+      credentialUse,
+    }).catch(() => {})
   }, delay)
   // Never hold a process open for a best-effort background poll; the sibling
   // Codex timers (codexTokenRefresh.ts) do the same.
@@ -385,12 +423,19 @@ async function fetchUncachedPoolUsage(
 ): Promise<PoolUsageSnapshot> {
   const generation = usageCacheGeneration
   const { accounts } = getPoolStatus()
+  // Each request carries the account entry observed for this snapshot. Pool
+  // updates replace entries when credentials change; copying the fields here
+  // keeps an in-flight read from being relabelled by a later login.
+  const accountSnapshot = accounts.map(account => ({ ...account }))
   const results: AccountUsage[] = []
   const errors: Array<{ accountId: string; error: string }> = []
 
-  const promises = accounts.map(async (acct) => {
+  const promises = accountSnapshot.map(async (acct) => {
     try {
-      const { usage, error } = await fetchAccountUsageResult(acct)
+      const { usage, error } = await fetchAccountUsageResult(
+        acct,
+        options.credentialUse,
+      )
       if (usage) {
         results.push(usage)
       } else {
@@ -431,6 +476,20 @@ async function fetchUncachedPoolUsage(
 
   cachedSnapshot = snapshot
   return snapshot
+}
+
+function createPoolAccountCredentialHandle(
+  account: PoolAccount,
+): CodexCredentialHandle {
+  return createCodexCredentialHandle({
+    accountId: account.accountId,
+    accessToken: account.accessToken,
+    refreshToken: account.refreshToken,
+    expiresAt: account.expiresAt,
+    credentialGeneration: account.credentialGeneration,
+    credentialSource: account.source,
+    credentialPath: account.vaultFilePath,
+  })
 }
 
 export function emitCachedUsageWarningsForActiveSink(): void {
