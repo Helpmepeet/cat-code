@@ -1102,6 +1102,9 @@ async function* queryLoop(
               toolUseContext.setAppStateForTasks ??
                 toolUseContext.setAppState,
             )
+            await toolUseContext.onLocalAgentMessagesDelivered?.(
+              submittedLocalAgentMessageIds,
+            )
             confirmedLocalAgentMessageIds = true
           }
 
@@ -1851,6 +1854,43 @@ async function* queryLoop(
       }
 
       if (toolUseContext.agentId) {
+        const targetedNotifications = getCommandsByMaxPriority('later').filter(
+          cmd =>
+            cmd.mode === 'task-notification' &&
+            cmd.agentId === toolUseContext.agentId,
+        )
+        if (targetedNotifications.length > 0) {
+          const notificationAttachments: AttachmentMessage[] = []
+          for await (const attachment of getAttachmentMessages(
+            null,
+            toolUseContext,
+            null,
+            targetedNotifications,
+            [...messagesForQuery, ...assistantMessages],
+            querySource,
+          )) {
+            notificationAttachments.push(attachment)
+          }
+          removeFromQueue(targetedNotifications)
+          state = {
+            messages: [
+              ...messagesForQuery,
+              ...assistantMessages,
+              ...notificationAttachments,
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
+            hasAttemptedReactiveCompact: false,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount,
+            transition: { reason: 'next_turn' },
+          }
+          continue
+        }
         const localContinuation = claimPendingMessagesOrClose(
           toolUseContext.agentId,
           toolUseContext.agentRunId,
@@ -2139,7 +2179,7 @@ async function* queryLoop(
       querySource.startsWith('repl_main_thread') || querySource === 'sdk'
     const currentAgentId = toolUseContext.agentId
     const queuedCommandsSnapshot = getCommandsByMaxPriority(
-      sleepRan ? 'later' : 'next',
+      sleepRan || !isMainThread ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false

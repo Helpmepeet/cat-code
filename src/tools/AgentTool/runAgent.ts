@@ -46,6 +46,7 @@ import type { Command } from '../../types/command.js'
 import type { AgentId } from '../../types/ids.js'
 import type {
   AssistantMessage,
+  AttachmentMessage,
   Message,
   ProgressMessage,
   RequestStartEvent,
@@ -57,8 +58,13 @@ import type {
 } from '../../types/message.js'
 import {
   createAttachmentMessage,
+  getQueuedCommandAttachments,
   type Attachment,
 } from '../../utils/attachments.js'
+import {
+  getCommandsByMaxPriority,
+  remove as removeFromQueue,
+} from '../../utils/messageQueueManager.js'
 import { getWorkerCapabilityPromptLine } from '../../utils/agentCapabilities.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
@@ -126,6 +132,7 @@ async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
   registerCleanup?: (cleanup: () => Promise<void>) => void,
+  authorizedNamedServers?: ReadonlySet<string>,
 ): Promise<{
   clients: MCPServerConnection[]
   tools: Tools
@@ -196,6 +203,13 @@ async function initializeAgentMcpServers(
       // Reference by name - look up in existing MCP configs
       // This uses the memoized connectToServer, so we may get a shared client
       name = spec
+      if (authorizedNamedServers && !authorizedNamedServers.has(name)) {
+        logForDebugging(
+          `[Agent: ${agentDefinition.agentType}] Skipping MCP server not present in the inherited authorized runtime: ${name}`,
+          { level: 'warn' },
+        )
+        continue
+      }
       config = getMcpConfigByName(spec)
       if (!config) {
         logForDebugging(
@@ -942,6 +956,13 @@ async function* runAgentInCleanupScope({
     agentDefinition,
     parentMcpClients,
     cleanup => setupCleanups.push(cleanup),
+    parentMcpRuntime || mcpRuntimeInputs
+      ? new Set(
+          parentMcpClients
+            .filter(client => client.type === 'connected')
+            .map(client => client.name),
+        )
+      : undefined,
   )
 
   // Merge agent MCP tools with resolved agent tools, deduplicating by name.
@@ -1042,6 +1063,19 @@ async function* runAgentInCleanupScope({
     contentReplacementState,
   })
 
+  // A prior worker run can finish before a delivery outcome addressed to this
+  // worker is observed. Put those reports into the first resumed request so a
+  // no-tool completion cannot strand them in the process-global queue.
+  const startupNotifications = getCommandsByMaxPriority('later').filter(
+    command =>
+      command.mode === 'task-notification' && command.agentId === agentId,
+  )
+  if (startupNotifications.length > 0) {
+    const attachments = await getQueuedCommandAttachments(startupNotifications)
+    initialMessages.push(...attachments.map(createAttachmentMessage))
+    removeFromQueue(startupNotifications)
+  }
+
   // Preserve tool use results for subagents with viewable transcripts (in-process teammates)
   if (preserveToolUseResults) {
     agentToolUseContext.preserveToolUseResults = true
@@ -1105,6 +1139,22 @@ async function* runAgentInCleanupScope({
     lastRecordedUuid =
       seededChainTailUuid ??
       findLastChainParticipantUuid(initialMessages)
+  }
+  const submittedLocalMessages = new Map<string, AttachmentMessage>()
+  agentToolUseContext.onLocalAgentMessagesDelivered = async messageIds => {
+    for (const messageId of messageIds) {
+      const delivered = submittedLocalMessages.get(messageId)
+      if (!delivered) continue
+      await recordSidechainTranscript(
+        [delivered],
+        agentId,
+        lastRecordedUuid,
+      ).catch(err =>
+        logForDebugging(`Failed to record delivered worker instruction: ${err}`),
+      )
+      lastRecordedUuid = delivered.uuid as UUID
+      submittedLocalMessages.delete(messageId)
+    }
   }
 
   // Escalation is terminal, and the harness is what makes it so. There is no
@@ -1179,6 +1229,15 @@ async function* runAgentInCleanupScope({
         // what makes a rename of `origin` a compile error here instead of a
         // silently dead diagnostic.
         const deliveredAttachment = message.attachment as Attachment
+        if (
+          deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.commandMode === 'local-agent-message'
+        ) {
+          submittedLocalMessages.set(
+            deliveredAttachment.source_uuid,
+            message as AttachmentMessage,
+          )
+        }
         if (
           deliveredAttachment.type === 'queued_command' &&
           deliveredAttachment.commandMode !== 'local-agent-message' &&

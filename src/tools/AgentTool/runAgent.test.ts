@@ -9,6 +9,8 @@ import { join } from 'path'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
 import {
   allocateWorkerName,
+  releaseWorkerName,
+  tryReserveWorkerName,
   resetWorkerNamesForTests,
 } from '../../utils/workerNames.js'
 import { asSessionId } from '../../types/ids.js'
@@ -198,13 +200,23 @@ function runFailingSetup(harness: ReturnType<typeof createAppStateHarness>) {
 }
 
 function expectNoLeakedWorkerName() {
-  // Every role now draws from one pool of 12 distinct names. If a finished run
-  // kept its reservation, one of these 12 allocations has to fall back to a
-  // suffixed name (`Ada-2`), which is what a leak looks like from the outside.
-  const names = Array.from({ length: 12 }, () =>
-    allocateWorkerName('implementor'),
-  )
-  expect(names.filter(name => name?.includes('-'))).toEqual([])
+  const knownNames = [
+    'Ada', 'Katherine', 'Johnson', 'Hamilton', 'Ritchie', 'Kay', 'Wilkes',
+    'Goldstine', 'Backus', 'Engelbart', 'Cerf', 'Barton', 'Hopper', 'Turing',
+    'McCarthy', 'Lamarr', 'Knuth', 'Dijkstra', 'Allen', 'Berners-Lee', 'Naur',
+    'Iverson', 'Minsky', 'Shannon', 'Lovelace', 'Boole', 'Babbage', 'Torvalds',
+    'Matsumoto', 'Raskin', 'Thompson', 'Kernighan', 'Stroustrup', 'Meyer',
+    'Ousterhout', 'Liskov', 'Karger', 'Sutherland', 'Metcalfe', 'Kahn', 'Codd',
+    'Brooks', 'Hamming', 'Sperry', 'Hollerith', 'Zuse', 'Tukey', 'Nielsen',
+    'Moggridge', 'Norman', 'Abelson', 'Sussman', 'Miller', 'Reddy', 'Ullman',
+    'Aho', 'Sedgewick', 'Tarjan', 'Karp', 'Rivest', 'Shamir', 'Adleman',
+    'Diffie', 'Hellman', 'Moser', 'Conway', 'Moore', 'Lampson', 'Wirth',
+    'Hoare', 'Hewitt', 'Milner', 'Kiczales', 'Cardelli', 'Peyton-Jones',
+  ]
+  for (const name of knownNames) {
+    expect(tryReserveWorkerName(name)).toBe(true)
+  }
+  for (const name of knownNames) releaseWorkerName(name)
 }
 
 describe('runAgent setup-failure cleanup', () => {
