@@ -1437,12 +1437,12 @@ export class SidecarServer {
         (server, connection, message) => server.handleStatsQuery(connection, message),
       ],
       // P4-5 account lifecycle verbs, dispatched to the engine's own account
-      // machinery. `account.profileDeleted` is deliberately NOT in
-      // `ACCOUNT_VERB_TYPES` and has its own handler.
+      // machinery. Host-originated account invalidations are deliberately NOT
+      // in `ACCOUNT_VERB_TYPES` and have their own handler.
       [
-        ['account.profileDeleted'],
+        ['account.profileDeleted', 'account.profileSignedOut'],
         (server, connection, message) =>
-          server.handleAccountProfileDeleted(connection, message),
+          server.handleAccountProfileInvalidation(connection, message),
       ],
       [
         ACCOUNT_VERB_TYPES,
@@ -3045,6 +3045,23 @@ export class SidecarServer {
       })
   }
 
+  private handleAccountProfileInvalidation(
+    connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    const type =
+      typeof rawMessage === 'object' &&
+      rawMessage !== null &&
+      'type' in rawMessage
+        ? rawMessage.type
+        : undefined
+    if (type === 'account.profileSignedOut') {
+      this.handleAccountProfileSignedOut(connection, rawMessage)
+      return
+    }
+    this.handleAccountProfileDeleted(connection, rawMessage)
+  }
+
   private handleAccountProfileDeleted(
     connection: Connection,
     rawMessage: unknown,
@@ -3069,6 +3086,7 @@ export class SidecarServer {
         if (!changed) return
         this.broadcastAccountsSnapshot()
         this.broadcastRunControlsSnapshot()
+        this.broadcastLeaseSnapshot()
         void this.refreshSettingsSnapshot()
       })
       .catch(error => {
@@ -3078,6 +3096,43 @@ export class SidecarServer {
           'internal_error',
           error instanceof Error ? error.message : String(error),
           false,
+        )
+      })
+      .finally(() => {
+        this.inFlightDurableWrites -= 1
+      })
+  }
+
+  private handleAccountProfileSignedOut(
+    _connection: Connection,
+    rawMessage: unknown,
+  ): void {
+    const parsed = accountProfileSignedOutMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.log(
+        `[sidecar] rejected account.profileSignedOut: ${
+          parsed.error.issues[0]?.message ?? 'invalid account sign-out notice'
+        }`,
+      )
+      return
+    }
+    if (!this.accounts) return
+
+    this.inFlightDurableWrites += 1
+    void this.accounts
+      .applyExternallyCommittedSignOut(parsed.data)
+      .then(changed => {
+        if (!changed) return
+        this.broadcastAccountsSnapshot()
+        this.broadcastRunControlsSnapshot()
+        this.broadcastLeaseSnapshot()
+        void this.refreshSettingsSnapshot()
+      })
+      .catch(error => {
+        this.log(
+          `[sidecar] account sign-out notice failed: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
         )
       })
       .finally(() => {
@@ -5376,7 +5431,12 @@ export class SidecarServer {
  * which is the sender's typed answer rather than a stranger's banner. Every
  * renderer-authored kind keeps its error frame unchanged.
  */
-const MAIN_ORIGINATED_MESSAGE_TYPES = new Set(['host.result', 'peer.deliver', 'app.park'])
+const MAIN_ORIGINATED_MESSAGE_TYPES = new Set([
+  'host.result',
+  'peer.deliver',
+  'app.park',
+  'account.profileSignedOut',
+])
 
 function isMainOriginatedMessage(message: unknown): boolean {
   if (typeof message !== 'object' || message === null) return false
@@ -5757,6 +5817,19 @@ function checkStrictKeys(message: unknown): string | null {
     ['account.oauthAlias', new Set(['type', 'requestId', 'alias'])],
     ['account.oauthCancel', new Set(['type', 'requestId'])],
     ['account.profileDeleted', new Set(['type', 'requestId', 'accountId'])],
+    [
+      'account.profileSignedOut',
+      new Set([
+        'type',
+        'requestId',
+        'operationId',
+        'accountId',
+        'oldCredentialGeneration',
+        'signedOutLifecycleGeneration',
+        'outcome',
+        'lifecycleState',
+      ]),
+    ],
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
@@ -6171,6 +6244,19 @@ const accountProfileDeletedMessageSchema = z.object({
   requestId: accountRequestIdSchema,
   accountId: accountIdSchema,
 })
+
+const accountProfileSignedOutMessageSchema = z
+  .object({
+    type: z.literal('account.profileSignedOut'),
+    requestId: accountRequestIdSchema,
+    operationId: accountRequestIdSchema,
+    accountId: accountIdSchema,
+    oldCredentialGeneration: accountCredentialGenerationSchema,
+    signedOutLifecycleGeneration: accountCredentialGenerationSchema,
+    outcome: z.enum(['committed', 'already_committed', 'cleanup_pending']),
+    lifecycleState: z.literal('signed_out'),
+  })
+  .strict()
 
 /**
  * P4-15 — sidecar-LOCAL schema for the workspace-trust accept verb (protocol.ts:

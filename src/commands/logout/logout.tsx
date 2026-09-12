@@ -59,6 +59,7 @@ export async function performLogout({
 // clearing anything memoized that must be invalidated when user/session/auth changes
 export async function clearAuthRelatedCaches(options: {
   refreshGrowthBook?: boolean
+  persistConfig?: boolean
 } = {}): Promise<void> {
   // Clear the OAuth token cache
   getClaudeAIOAuthTokens.cache?.clear?.();
@@ -93,10 +94,12 @@ export async function clearAuthRelatedCaches(options: {
 
   // Clear disk-cached extra usage disabled reason so check1mAccess.ts
   // re-evaluates model access for the new account
-  saveGlobalConfig(current => ({
-    ...current,
-    cachedExtraUsageDisabledReason: undefined,
-  }));
+  if (options.persistConfig !== false) {
+    saveGlobalConfig(current => ({
+      ...current,
+      cachedExtraUsageDisabledReason: undefined,
+    }));
+  }
 }
 export async function call(): Promise<React.ReactNode> {
   const claudePool = getClaudePoolStatus();

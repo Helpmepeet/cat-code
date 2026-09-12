@@ -333,6 +333,25 @@ export type AccountProfileDeletedMessage = {
   accountId: string
 }
 
+/**
+ * Host-originated invalidation after a sign-out lifecycle commit in another
+ * engine process. This is intentionally outside `AccountVerbMessage`: no
+ * renderer or preload sender can author it.
+ */
+export type AccountProfileSignedOutMessage = {
+  type: 'account.profileSignedOut'
+  requestId: string
+  operationId: string
+  accountId: string
+  oldCredentialGeneration: number
+  signedOutLifecycleGeneration: number
+  outcome: Extract<
+    AccountSignOutOutcome,
+    'committed' | 'already_committed' | 'cleanup_pending'
+  >
+  lifecycleState: 'signed_out'
+}
+
 export type AccountVerbMessage =
   | AccountSwitchMessage
   | AccountRenameMessage
@@ -914,6 +933,7 @@ export type SidecarClientMessage =
   | AskUserQuestionAnswerMessage
   | AccountVerbMessage
   | AccountProfileDeletedMessage
+  | AccountProfileSignedOutMessage
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage

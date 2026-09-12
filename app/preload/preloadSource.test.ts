@@ -324,6 +324,10 @@ test('the account-pool refresh sender is fixed and carries no renderer payload',
 
 test('account deletion terminates in a one-shot worker, not a session forward', () => {
   const source = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const invalidation = readFileSync(
+    new URL('../main/accountInvalidation.ts', import.meta.url),
+    'utf8',
+  )
   const start = source.indexOf('ipcMain.handle(\n    CH_HOST_ACCOUNT_DELETE')
   const end = source.indexOf(
     'ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE',
@@ -344,7 +348,7 @@ test('account deletion terminates in a one-shot worker, not a session forward', 
   expect(handler).not.toContain('forward(')
   expect(source).toContain('accountProfileMutationAbort?.abort()')
   expect(source).toContain('accountsPoolPublicationGate.canPublish(generation)')
-  expect(source).toContain("type: 'account.profileDeleted'")
+  expect(invalidation).toContain("type: 'account.profileDeleted'")
 })
 
 test('destructive account verbs cannot use the generic session relay', () => {
@@ -354,6 +358,7 @@ test('destructive account verbs cannot use the generic session relay', () => {
   expect(preload).toContain(
     "if (verb.type === 'account.delete' || verb.type === 'account.logout') return",
   )
+  expect(preload).not.toContain("'account.profileSignedOut'")
   const relayStart = main.indexOf('const RELAYED_VERB_CHANNELS')
   const relayEnd = main.indexOf(
     '\n\n/**\n * Register the renderer→supervisor IPC handlers',
@@ -364,6 +369,7 @@ test('destructive account verbs cannot use the generic session relay', () => {
   const relay = main.slice(relayStart, relayEnd)
   expect(relay).not.toContain("'account.delete'")
   expect(relay).not.toContain("'account.logout'")
+  expect(relay).not.toContain("'account.profileSignedOut'")
   expect(relay).toContain('RELAYED_ACCOUNT_VERB_TYPES')
   expect(protocol).toContain("'account.switch'")
   expect(protocol).toContain("'account.rename'")

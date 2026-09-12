@@ -193,6 +193,10 @@ import {
   type SingleFlightDriver,
 } from './singleFlightDriver.js'
 import {
+  accountProfileSignedOutNoticeForReceipt,
+  createAccountInvalidationDispatcher,
+} from './accountInvalidation.js'
+import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   parseAccountDeleteMessage,
   parseAccountLogoutMessage,
@@ -244,6 +248,7 @@ import {
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountResultFrame,
+  type AccountProfileSignedOutMessage,
   type AccountSignOutReceipt,
   type AskUserQuestionAnswerMessage,
   type PermissionSetModeMode,
@@ -671,10 +676,21 @@ let accountsPoolDriver: SingleFlightDriver | null = null
 let accountProfileMutationInFlight = false
 let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
-const pendingAccountDeletionNotices = new Map<
-  SessionId,
-  Map<string, string>
->()
+const accountInvalidation = createAccountInvalidationDispatcher({
+  send: (sessionId, notice) => {
+    try {
+      supervisor?.send(sessionId, notice)
+      return true
+    } catch (error) {
+      process.stderr.write(
+        `[main] account invalidation notice to ${sessionId} deferred: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+      return false
+    }
+  },
+})
 
 /**
  * Kill switch for the worker a driver may have IN FLIGHT at teardown. `stop()`
@@ -1046,60 +1062,28 @@ function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
   return contents !== undefined && !contents.isDestroyed() && event.sender === contents
 }
 
-function sendAccountDeletionNotice(
-  sessionId: SessionId,
-  accountId: string,
-  requestId: string,
-): boolean {
-  try {
-    supervisor?.send(sessionId, {
-      type: 'account.profileDeleted',
-      requestId,
-      accountId,
-    })
-    return true
-  } catch (error) {
-    process.stderr.write(
-      `[main] account deletion notice to ${sessionId} deferred: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-    return false
-  }
-}
-
 function notifySidecarsOfAccountDeletion(
   accountId: string,
   requestId: string,
 ): void {
-  for (const session of supervisor?.listSessions() ?? []) {
-    if (
-      session.status === 'failed' ||
-      session.status === 'exited'
-    ) {
-      continue
-    }
-    if (
-      session.status === 'ready' &&
-      sendAccountDeletionNotice(session.sessionId, accountId, requestId)
-    ) {
-      continue
-    }
-    const pending =
-      pendingAccountDeletionNotices.get(session.sessionId) ?? new Map()
-    pending.set(accountId, requestId)
-    pendingAccountDeletionNotices.set(session.sessionId, pending)
-  }
+  accountInvalidation.notifyDeletion(
+    accountId,
+    requestId,
+    supervisor?.listSessions() ?? [],
+  )
 }
 
-function flushAccountDeletionNotices(sessionId: SessionId): void {
-  const pending = pendingAccountDeletionNotices.get(sessionId)
-  if (!pending) return
-  for (const [accountId, requestId] of pending) {
-    if (!sendAccountDeletionNotice(sessionId, accountId, requestId)) return
-    pending.delete(accountId)
-  }
-  if (pending.size === 0) pendingAccountDeletionNotices.delete(sessionId)
+function notifySidecarsOfAccountSignOut(
+  notice: AccountProfileSignedOutMessage,
+): void {
+  accountInvalidation.notifySignOut(
+    notice,
+    supervisor?.listSessions() ?? [],
+  )
+}
+
+function flushAccountInvalidationNotices(sessionId: SessionId): void {
+  accountInvalidation.flush(sessionId)
 }
 
 /**
@@ -1851,7 +1835,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     }
     if (frame.kind === 'ready') {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
-      flushAccountDeletionNotices(event.sessionId)
+      flushAccountInvalidationNotices(event.sessionId)
       // §4 step 5/6 — releases anything waiting on this row's wake and re-sends
       // whatever it never acked.
       peerPlane?.onReady(event.sessionId)
@@ -1873,7 +1857,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       })
     }
     if (isTerminalLifecycleFrame(frame)) {
-      pendingAccountDeletionNotices.delete(event.sessionId)
+      accountInvalidation.clear(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing
       // else, so it is cleared here rather than left to read as stale.
       peerPlane?.onSessionDown(event.sessionId)
@@ -3158,6 +3142,16 @@ function registerHostControlPlane(): void {
         }
         accepted = true
         const outcome = delivered.receipt.outcome
+        const notice =
+          delivered.receipt.accountId === verb.accountId &&
+          delivered.receipt.expectedCredentialGeneration ===
+            verb.expectedCredentialGeneration
+            ? accountProfileSignedOutNoticeForReceipt(
+                delivered.requestId,
+                delivered.receipt,
+              )
+            : null
+        if (notice) notifySidecarsOfAccountSignOut(notice)
         return {
           kind: 'account.result',
           protocolVersion: PROTOCOL_VERSION,
@@ -3755,7 +3749,7 @@ function stopBackgroundDrivers(): void {
   accountsPoolAbort = null
   accountProfileMutationAbort?.abort()
   accountProfileMutationAbort = null
-  pendingAccountDeletionNotices.clear()
+  accountInvalidation.clearAll()
   idleParkDriver?.stop()
   idleParkDriver = null
   // The window that reported them is going away; a stale visible set must not

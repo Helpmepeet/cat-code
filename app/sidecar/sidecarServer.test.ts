@@ -6291,7 +6291,7 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   expect(deleted).toBe(false)
 })
 
-test('host deletion notice clears a live sidecar pool without emitting account.result', async () => {
+test('host deletion notice reconciles a live sidecar pool without rerunning deletion', async () => {
   seedCodexAccountPoolForTest({
     accounts: [acctFixture({ accountId: 'deleted-account' })],
     activeAccountId: 'deleted-account',
@@ -6322,7 +6322,7 @@ test('host deletion notice clears a live sidecar pool without emitting account.r
   )
   await flush()
 
-  expect(deleted).toEqual(['deleted-account'])
+  expect(deleted).toEqual([])
   expect(
     received.some(
       frame =>
@@ -6363,6 +6363,167 @@ test('host deletion notice rejects extra keys before changing local state', () =
   expect(
     received.some(frame => frame.kind === 'error' && frame.code === 'bad_request'),
   ).toBe(true)
+})
+
+test('host sign-out notice removes only the exact generation and re-broadcasts local snapshots', async () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({
+      accountId: 'signed-out-account',
+      credentialGeneration: 1,
+      vaultFilePath: '/test-vault/accounts/signed-out-account.json',
+    })],
+    activeAccountId: 'signed-out-account',
+  })
+  const retirements: unknown[] = []
+  const lifecycle: NonNullable<
+    Parameters<typeof makeAccountsDomain>[0]
+  >['lifecycle'] = {
+    read: accountId => ({
+      status: 'valid',
+      record: {
+        version: 1,
+        accountId,
+        credentialGeneration: 2,
+        state: 'signed_out',
+        operationId: 'signout-operation',
+        operationKind: 'sign_out',
+        cleanup: 'complete',
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }),
+  }
+  const accounts = makeAccountsDomain({
+    lifecycle,
+    retireWebSockets: retirement => {
+      retirements.push(retirement)
+    },
+    clearAuthCaches: async () => {},
+  })
+  const { domain: runControls } = fakeRunControlsDomain()
+  const settings = fakeSettingsDomain()
+  const leases = createSidecarLeaseDomain(makePermissionStore())
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts, runControls, settings, leases },
+  )
+  const beforeAccounts = received.filter(f => f.kind === 'accounts.snapshot').length
+  const beforeRunControls = received.filter(f => f.kind === 'run-controls.snapshot').length
+  const beforeSettings = received.filter(f => f.kind === 'settings.snapshot').length
+  const beforeLeases = received.filter(f => f.kind === 'lease.snapshot').length
+
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.profileSignedOut',
+      requestId: 'signout-request',
+      operationId: 'signout-operation',
+      accountId: 'signed-out-account',
+      oldCredentialGeneration: 1,
+      signedOutLifecycleGeneration: 2,
+      outcome: 'committed',
+      lifecycleState: 'signed_out',
+    }),
+  )
+  await waitFor(
+    () =>
+      received.filter(f => f.kind === 'accounts.snapshot').length >
+      beforeAccounts,
+  )
+
+  expect(retirements).toEqual([
+    { accountId: 'signed-out-account', credentialGeneration: 1 },
+  ])
+  expect(
+    received.filter(f => f.kind === 'accounts.snapshot').length,
+  ).toBeGreaterThan(beforeAccounts)
+  expect(
+    received.filter(f => f.kind === 'run-controls.snapshot').length,
+  ).toBeGreaterThan(beforeRunControls)
+  expect(
+    received.filter(f => f.kind === 'settings.snapshot').length,
+  ).toBeGreaterThan(beforeSettings)
+  expect(
+    received.filter(f => f.kind === 'lease.snapshot').length,
+  ).toBeGreaterThan(beforeLeases)
+  expect(received.some(f => f.kind === 'account.result')).toBe(false)
+  expect(
+    received
+      .filter(
+        (frame): frame is Extract<ServerFrame, { kind: 'accounts.snapshot' }> =>
+          frame.kind === 'accounts.snapshot',
+      )
+      .at(-1)
+      ?.accounts.accounts,
+  ).toEqual([])
+})
+
+test('host sign-out notice rejects malformed, extra, negative, fractional, and secret fields silently', () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({
+      accountId: 'signed-out-account',
+      credentialGeneration: 1,
+    })],
+    activeAccountId: 'signed-out-account',
+  })
+  const logs: string[] = []
+  const accounts = makeAccountsDomain({
+    lifecycle: {
+      read: () => ({
+        status: 'valid',
+        record: {
+          version: 1,
+          accountId: 'signed-out-account',
+          credentialGeneration: 2,
+          state: 'signed_out',
+          operationId: 'signout-operation',
+          operationKind: 'sign_out',
+          changedAt: '2026-09-12T00:00:00.000Z',
+        },
+      }),
+    },
+    clearAuthCaches: async () => {},
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts, log: line => logs.push(line) },
+  )
+  const valid = {
+    type: 'account.profileSignedOut',
+    requestId: 'signout-request',
+    operationId: 'signout-operation',
+    accountId: 'signed-out-account',
+    oldCredentialGeneration: 1,
+    signedOutLifecycleGeneration: 2,
+    outcome: 'committed',
+    lifecycleState: 'signed_out',
+  }
+  const invalidMessages: unknown[] = [
+    { ...valid, operationId: '' },
+    { ...valid, accountId: '' },
+    { ...valid, oldCredentialGeneration: -1 },
+    { ...valid, signedOutLifecycleGeneration: 2.5 },
+    { ...valid, accessToken: 'SECRET' },
+    { ...valid, vaultFilePath: '/secret/profile.json' },
+  ]
+
+  for (const message of invalidMessages) {
+    server.handleData(conn, rawFrame(message))
+  }
+
+  expect(
+    logs.filter(line => line.includes('rejected account.profileSignedOut')),
+  ).toHaveLength(4)
+  expect(logs.filter(line => line.includes('unexpected key'))).toHaveLength(2)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+  expect(
+    received
+      .filter(
+        (frame): frame is Extract<ServerFrame, { kind: 'accounts.snapshot' }> =>
+          frame.kind === 'accounts.snapshot',
+      )
+      .at(-1)
+      ?.accounts.accounts,
+  ).toHaveLength(1)
 })
 
 test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
