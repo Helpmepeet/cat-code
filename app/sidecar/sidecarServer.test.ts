@@ -880,6 +880,27 @@ test('IDLE-PARK boundary — a valid app.park on an idle session gates the exit 
   expect(received.some(f => f.kind === 'error')).toBe(false)
 })
 
+test('IDLE-PARK boundary — a decoded batch stops after app.park', () => {
+  const { server, parkCount } = makeParkServer(new AppSessionController(probeAdapter()))
+  const { socket, received } = makeSocket()
+  const conn = server.addConnection(socket)
+
+  server.handleData(
+    conn,
+    Buffer.concat([
+      clientFrame({ type: 'app.park', requestId: 'park-batch' }),
+      clientFrame({
+        type: 'app.submit',
+        requestId: 'submit-after-park',
+        prompt: 'must not start',
+      }),
+    ]),
+  )
+
+  expect(parkCount()).toBe(1)
+  expect(sawUserTurn(received)).toBe(false)
+})
+
 test('IDLE-PARK boundary — an app.park with an extra key is rejected (no park)', () => {
   const { server, parkCount, logged } = makeParkServer(new AppSessionController(probeAdapter()))
   const { socket, received } = makeSocket()

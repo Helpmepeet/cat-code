@@ -655,7 +655,7 @@ function restoreReplayEventFrame(
  * session while keeping ancient ones, so a reload replays a transcript with a
  * hole in it.
  */
-test('a recovered frame is not retained, and does not evict the live tail', () => {
+test('a recovered frame is not retained and marks the replay tail incomplete', () => {
   const buffer = new FrameReplayBuffer(4)
   buffer.record(SID, readyFrame())
   buffer.record(SID, assistantEventFrame(1))
@@ -668,10 +668,33 @@ test('a recovered frame is not retained, and does not evict the live tail', () =
   expect(snapshot.some(frame => frame.kind === 'event' && frame.recovered === true)).toBe(
     false,
   )
-  // The live tail is intact AND uncut: nothing was evicted, so no truncation
-  // notice was minted either.
-  expect(snapshot.map(frame => frame.kind)).toEqual(['ready', 'event', 'event'])
-  expect(snapshot.find(isReplayTruncationFrame)).toBeUndefined()
+  // The live tail is intact, while reload gets an honest boundary and an
+  // anchor even though capacity itself never evicted a frame.
+  expect(snapshot.map(frame => frame.kind)).toEqual(['ready', 'error', 'event', 'event'])
+  expect(snapshot.find(isReplayTruncationFrame)).toBeDefined()
+  expect(buffer.viewAnchorUuid(SID)).toBe(
+    '00000000-0000-4000-8000-000000000001',
+  )
+})
+
+test('a load-earlier completion is not replayed without its recovered prefix', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(SID, recoveredEventFrame(90))
+  buffer.record(SID, {
+    kind: 'history.loadEarlier.result',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    requestId: 'recover',
+    ok: true,
+    message: 'Earlier messages loaded.',
+    added: 1,
+    complete: true,
+  })
+
+  expect(
+    buffer.snapshot().some(frame => frame.kind === 'history.loadEarlier.result'),
+  ).toBe(false)
 })
 
 /** The other half: `replay` alone is still ordinary retained transcript. */

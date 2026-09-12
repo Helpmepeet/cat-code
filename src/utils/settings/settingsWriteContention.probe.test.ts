@@ -37,10 +37,13 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import {
   existsSync,
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'fs'
 import { tmpdir } from 'os'
@@ -64,6 +67,7 @@ function spawnChild(
     env: {
       PATH: process.env.PATH ?? '',
       NODE_ENV: 'development',
+      CLAUDE_CONFIG_DIR: join(cwd, 'probe-config'),
       PROBE_CWD: cwd,
       ...env,
     },
@@ -114,6 +118,45 @@ afterAll(() => {
 })
 
 describe('settings-write contention (two real processes, one localSettings file)', () => {
+  test('processes saving through different symlinks serialize updates to their shared target', async () => {
+    const targetPath = join(scratch, 'shared-target.json')
+    const cwdA = join(scratch, 'alias-a')
+    const cwdB = join(scratch, 'alias-b')
+    const goFile = join(scratch, 'go-settings-alias-write')
+    const holdLockFile = join(scratch, 'alias-target-locked')
+    writeFileSync(targetPath, '{}\n')
+    for (const cwd of [cwdA, cwdB]) {
+      mkdirSync(join(cwd, '.cat-code'), { recursive: true })
+      symlinkSync(targetPath, join(cwd, '.cat-code', 'settings.local.json'))
+    }
+
+    const a = spawnChild(cwdA, {
+      PROBE_RULE: 'echo alias-a',
+      PROBE_GO_FILE: goFile,
+      PROBE_HOLD_LOCK_FILE: holdLockFile,
+    })
+    const b = spawnChild(cwdB, {
+      PROBE_RULE: 'echo alias-b',
+      PROBE_GO_FILE: goFile,
+      PROBE_WAIT_FOR_LOCK_FILE: holdLockFile,
+    })
+    await releaseBarrier(goFile)
+    const [resultA, resultB] = await Promise.all([a.result, b.result])
+
+    expect(resultA.ok).toBe(true)
+    expect(resultB.ok).toBe(true)
+    const written = JSON.parse(readFileSync(targetPath, 'utf8'))
+    expect(written.permissions.allow).toEqual([
+      'Bash(echo alias-a)',
+      'Bash(echo alias-b)',
+    ])
+    for (const cwd of [cwdA, cwdB]) {
+      expect(
+        lstatSync(join(cwd, '.cat-code', 'settings.local.json')).isSymbolicLink(),
+      ).toBe(true)
+    }
+  })
+
   test('two processes adding different always-allow rules to the same cwd both land', async () => {
     const cwd = join(scratch, 'shared-cwd')
     const settingsPath = join(cwd, '.cat-code', 'settings.local.json')

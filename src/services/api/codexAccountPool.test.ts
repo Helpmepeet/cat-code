@@ -13,6 +13,7 @@ import {
   getCodexAccountAvailability,
   getCodexPlanMetadataFromIdToken,
   getPoolStatus,
+  hasSelectableAccountOtherThan,
   getRedemptionEligibility,
   getCodexProfileInventory,
   getSignedOutCodexProfiles,
@@ -189,6 +190,19 @@ async function establishSignedOutLifecycle(
 
 describe('codexAccountPool availability', () => {
   const NOW = Date.parse('2026-04-21T00:00:00+00:00')
+
+  test('replacement eligibility is relative to the failed account', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({ accountId: 'failed', status: 'capped' }),
+        buildPoolAccount({ accountId: 'replacement' }),
+      ],
+      activeAccountId: 'replacement',
+    })
+
+    expect(hasSelectableAccountOtherThan('failed')).toBe(true)
+    expect(hasSelectableAccountOtherThan('replacement')).toBe(false)
+  })
 
   test('expired plan metadata is a warning, not a blocker', () => {
     const account = buildPoolAccount({

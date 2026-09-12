@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from './codexUsageSharedCache.js'
 
 import {
   getPoolStatus,
@@ -262,6 +263,9 @@ function stalledBodyResponse(signal: AbortSignal | null | undefined): Response {
 
 describe('codexUsage display helpers', () => {
   beforeEach(() => {
+    // These tests exercise local cache/timer behavior with a fake fetch. The
+    // cross-process suite separately covers disk sharing in temporary homes.
+    setSharedUsageCacheDirectoryForTest(null)
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()

@@ -132,6 +132,7 @@ export type ReactiveCompactOutcome = {
   ok: boolean
   result?: CompactionResult
   reason?: ReactiveCompactFailureReason
+  error?: unknown
 }
 
 /**
@@ -370,7 +371,7 @@ export async function reactiveCompactOnPromptTooLong(
         return { ok: false, reason: 'aborted' }
       }
       logError(error)
-      return { ok: false, reason: 'error' }
+      return { ok: false, reason: 'error', error }
     }
 
     summary = getAssistantMessageText(summaryResponse)
@@ -422,6 +423,13 @@ export async function reactiveCompactOnPromptTooLong(
     return {
       ok: false,
       reason: context.abortController.signal.aborted ? 'aborted' : 'exhausted',
+    }
+  }
+  if (summaryResponse.isApiErrorMessage) {
+    return {
+      ok: false,
+      reason: summary.startsWith(ERROR_MESSAGE_USER_ABORT) ? 'aborted' : 'error',
+      error: new Error(summary),
     }
   }
   if (startsWithApiErrorPrefix(summary)) {

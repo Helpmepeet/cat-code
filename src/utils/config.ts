@@ -1136,37 +1136,6 @@ export function getCustomApiKeyStatus(
   return 'new'
 }
 
-function saveConfig<A extends object>(
-  file: string,
-  config: A,
-  defaultConfig: A,
-): void {
-  // Ensure the directory exists before writing the config file
-  const dir = dirname(file)
-  const fs = getFsImplementation()
-  // mkdirSync is already recursive in FsOperations implementation
-  fs.mkdirSync(dir)
-
-  // Filter out any values that match the defaults
-  const filteredConfig = pickBy(
-    config,
-    (value, key) =>
-      jsonStringify(value) !== jsonStringify(defaultConfig[key as keyof A]),
-  )
-  // Write config file with secure permissions - mode only applies to new files
-  writeFileSyncAndFlush_DEPRECATED(
-    file,
-    jsonStringify(filteredConfig, null, 2),
-    {
-      encoding: 'utf-8',
-      mode: 0o600,
-    },
-  )
-  if (file === getGlobalClaudeFile()) {
-    globalConfigWriteCount++
-  }
-}
-
 /**
  * Returns true if a write was performed; false if the write was skipped
  * (no changes, or auth-loss guard tripped). Callers use this to decide
@@ -1701,34 +1670,7 @@ export function saveCurrentProjectConfig(
     logForDebugging(`Failed to save config with lock: ${error}`, {
       level: 'error',
     })
-
-    // Same race window as saveGlobalConfig's fallback -- refuse to write
-    // defaults over good cached config. See GH #3117.
-    const config = getConfig(getGlobalClaudeFile(), createDefaultGlobalConfig)
-    if (wouldLoseAuthState(config)) {
-      logForDebugging(
-        'saveCurrentProjectConfig fallback: re-read config is missing auth that cache has; refusing to write. See GH #3117.',
-        { level: 'error' },
-      )
-      logEvent('tengu_config_auth_loss_prevented', {})
-      return
-    }
-    const currentProjectConfig =
-      config.projects?.[absolutePath] ?? DEFAULT_PROJECT_CONFIG
-    const newProjectConfig = updater(currentProjectConfig)
-    // Skip if no changes (same reference returned)
-    if (newProjectConfig === currentProjectConfig) {
-      return
-    }
-    written = {
-      ...config,
-      projects: {
-        ...config.projects,
-        [absolutePath]: newProjectConfig,
-      },
-    }
-    saveConfig(getGlobalClaudeFile(), written, DEFAULT_GLOBAL_CONFIG)
-    writeThroughGlobalConfigCache(written)
+    logEvent('tengu_config_save_failed', {})
   }
 }
 

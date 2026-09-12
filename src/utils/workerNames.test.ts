@@ -40,23 +40,12 @@ describe('workerNames', () => {
 
   test('uses a suffixed handle when the pool is exhausted', () => {
     Math.random = () => 0
-    for (const name of [
-      'Ada',
-      'Katherine',
-      'Johnson',
-      'Hamilton',
-      'Ritchie',
-      'Kay',
-      'Wilkes',
-      'Goldstine',
-      'Backus',
-      'Engelbart',
-      'Cerf',
-      'Barton',
-    ]) {
-      reserveWorkerName(name)
-    }
+    const names = Array.from(
+      { length: 75 },
+      () => allocateWorkerName('implementor'),
+    )
 
+    expect(new Set(names).size).toBe(75)
     expect(allocateWorkerName('implementor')).toBe('Ada-2')
   })
 

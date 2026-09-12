@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import type { UUID } from 'crypto'
 import type {
   ContentBlockParam,
   ToolResultBlockParam,
@@ -59,7 +60,6 @@ import {
   isDeferredTool,
   TOOL_SEARCH_TOOL_NAME,
 } from '../../tools/ToolSearchTool/prompt.js'
-import { getAllBaseTools } from '../../tools.js'
 import type { HookProgress } from '../../types/hooks.js'
 import type {
   AssistantMessage,
@@ -443,19 +443,10 @@ export async function* runToolUse(
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
   const toolName = toolUse.name
-  // First try to find in the available tools (what the model sees)
-  let tool = findToolByName(toolUseContext.options.tools, toolName)
-
-  // If not found, check if it's a deprecated tool being called by alias
-  // (e.g., old transcripts calling "KillShell" which is now an alias for "TaskStop")
-  // Only fall back for tools where the name matches an alias, not the primary name
-  if (!tool) {
-    const fallbackTool = findToolByName(getAllBaseTools(), toolName)
-    // Only use fallback if the tool was found via alias (deprecated name)
-    if (fallbackTool && fallbackTool.aliases?.includes(toolName)) {
-      tool = fallbackTool
-    }
-  }
+  // Resolve canonical names and aliases only inside the pool granted to this
+  // execution. Looking an alias up in the global registry would reintroduce a
+  // capability that the current worker/session deliberately excluded.
+  const tool = findToolByName(toolUseContext.options.tools, toolName)
   const messageId = assistantMessage.message.id
   const requestId = assistantMessage.requestId
   const mcpServerType = getMcpServerType(
@@ -1240,6 +1231,24 @@ async function checkPermissionsAndCallTool(
 
     return resultingMessages
   }
+
+  // Permission can be asynchronous. A terminal handoff or interruption may
+  // cancel the owning query while that decision is pending; re-check before
+  // crossing the execution boundary so the tool cannot start afterward.
+  if (toolUseContext.abortController.signal.aborted) {
+    const content = createToolResultStopMessage(toolUseID)
+    content.content = withMemoryCorrectionHint(CANCEL_MESSAGE)
+    resultingMessages.push({
+      message: createUserMessage({
+        content: [content],
+        toolUseResult: CANCEL_MESSAGE,
+        toolResultStatus: 'cancelled',
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+      }),
+    })
+    return resultingMessages
+  }
+
   logEvent('tengu_tool_use_can_use_tool_allowed', {
     messageID:
       messageId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1319,6 +1328,7 @@ async function checkPermissionsAndCallTool(
   const startTime = Date.now()
 
   startSessionActivity('tool_exec')
+  toolUseContext.onToolExecutionStart?.()
   // If processedInput still points at the backfill clone, no hook/permission
   // replaced it — pass the pre-backfill callInput so call() sees the model's
   // original field values. Otherwise converge on the hook-supplied input.

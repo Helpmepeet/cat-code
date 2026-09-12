@@ -784,6 +784,41 @@ test('a reader whose transcript is already whole never reads disk again', async 
   })
 })
 
+test('a newer main view anchor reopens a connection completeness latch', async () => {
+  const older = historyMessage(randomUUID(), 'recovered')
+  const anchor = historyMessage(randomUUID(), 'on screen')
+  const newerAnchor = historyMessage(randomUUID(), 'new retained head')
+  let reads = 0
+  const server = makeServer({
+    history: [anchor],
+    historySourceTruncated: true,
+    loadEarlierHistory: async () => {
+      reads += 1
+      return reads === 1
+        ? { messages: [older, anchor], truncated: false }
+        : { messages: [older, anchor, newerAnchor], truncated: false }
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  server.handleData(connection, frame({ type: 'history.loadEarlier', requestId: 'first' }))
+  await Bun.sleep(0)
+  expect(reads).toBe(1)
+
+  server.handleData(connection, frame({
+    type: 'history.loadEarlier',
+    requestId: 'after-reload',
+    viewAnchorUuid: newerAnchor.uuid,
+  }))
+  await Bun.sleep(0)
+
+  expect(reads).toBe(2)
+  expect(results(received).at(-1)).toMatchObject({
+    requestId: 'after-reload',
+    ok: true,
+  })
+})
+
 test('an incomplete read does NOT latch, so the head stays reachable', async () => {
   const oldest = historyMessage('m-1', 'oldest')
   const older = historyMessage('m-2', 'older')

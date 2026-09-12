@@ -136,6 +136,7 @@ import {
   reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreSelectedPrompt,
+  applyRefusedSubmitRestoration,
   restoreDraftWithPending,
   selectAgentMentionItems,
   selectFileAttachment,
@@ -293,6 +294,7 @@ import {
 import {
   createLeaseState,
   reduceLeaseState,
+  selectLastMainFailoverAccountId,
   selectLeaseSnapshot,
   selectSessionCodexAccount,
 } from './leaseState.js'
@@ -498,6 +500,14 @@ export function App() {
   )
   const promptDraftsRef = useRef(promptDrafts)
   promptDraftsRef.current = promptDrafts
+  const updatePromptDrafts = useCallback(
+    (update: (current: PromptDraftState) => PromptDraftState): void => {
+      const next = update(promptDraftsRef.current)
+      promptDraftsRef.current = next
+      setPromptDrafts(next)
+    },
+    [],
+  )
   // Typing rewrites the draft on every keystroke and `setItem` is synchronous on
   // this thread, so the write is debounced rather than run per character.
   useEffect(() => {
@@ -550,6 +560,9 @@ export function App() {
   // so a state value read inside it would always be the first one.
   const retainedSubmitsRef = useRef<RetainedSubmitState>(
     createRetainedSubmitState(),
+  )
+  const refusedSubmitPrefixesRef = useRef(
+    new Map<SessionId, import('./composerState.js').RefusedDraftRestoreState>(),
   )
   // D1b — recall requests this page is waiting on or has answered, each against
   // the session it was asked for. A ref for the same reason as the one above, and
@@ -1070,8 +1083,14 @@ export function App() {
       // without touching a retained copy.
       const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)
       retainedSubmitsRef.current = answers.state
+      const restoredBySession = new Map<SessionId, RetainedSubmit[]>()
       for (const { sessionId, retained } of answers.restored) {
-        restoreRefusedSubmit(sessionId, retained)
+        const entries = restoredBySession.get(sessionId) ?? []
+        entries.push(retained)
+        restoredBySession.set(sessionId, entries)
+      }
+      for (const [sessionId, retained] of restoredBySession) {
+        restoreRefusedSubmits(sessionId, retained)
       }
       // D1b — the messages a recall took back, put where the user can edit them,
       // plus the one thing about the outcome the user has to be told. BOTH sit
@@ -1289,6 +1308,7 @@ export function App() {
           retainedSubmitsRef.current,
           event.appSessionId,
         )
+        refusedSubmitPrefixesRef.current.delete(event.appSessionId)
         forgetRecallRequests(recallRequestsRef.current, event.appSessionId)
         dispatchQueuedPrompts({
           type: 'session-removed',
@@ -1969,7 +1989,7 @@ export function App() {
     (sessionId: SessionId, selectedPrompt: unknown): boolean => {
       const restored = restoreSelectedPrompt(selectedPrompt)
       if (!restored) return false
-      setPromptDrafts(current =>
+      updatePromptDrafts(current =>
         reducePromptDrafts(current, sessionId, restored.text),
       )
       setPasteState(current =>
@@ -2356,7 +2376,7 @@ export function App() {
     const pending = selectPendingSubmit(pendingSubmitsRef.current, sessionId)
     if (pending === null) return
     setPendingSubmits(prev => reducePendingSubmitCleared(prev, sessionId))
-    setPromptDrafts(drafts =>
+    updatePromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
         sessionId,
@@ -2382,36 +2402,32 @@ export function App() {
   // says why the message bounced, and the message reappearing in the composer
   // is the rest of the story. A second red line restating it would be noise.
   //
-  // The attachments REPLACE whatever is attached now, the same way a released
-  // parked prompt does: only one image is ever held
-  // (`reduceImageAttachmentAdded`), and the refused one is the one the user is
-  // waiting on. Text is merged instead, so a draft typed during the round trip
-  // survives underneath it. `reduceSessionImagesRestored` is the guarded form:
-  // an EMPTY `retained.images` means this submit never carried one, so it must
-  // leave an image attached to the CURRENT draft alone rather than clear it.
-  // The copy is handed IN rather than looked up: `reduceSubmitAnswers` already
-  // retired exactly the entry this answer named, so there is nothing left here to
-  // find and no head to take by mistake.
-  const restoreRefusedSubmit = useCallback((
+  // Attachments restore in submission order, so the newest refused attachment
+  // wins just as attaching them one after another would. Text is merged once,
+  // so the original submit order stays ahead of a draft typed during the round
+  // trip. Empty attachment lists leave the current draft's attachment alone.
+  const restoreRefusedSubmits = useCallback((
     sessionId: SessionId,
-    retained: RetainedSubmit,
+    retained: readonly RetainedSubmit[],
   ) => {
-    setPromptDrafts(drafts =>
-      reducePromptDrafts(
-        drafts,
-        sessionId,
-        restoreDraftWithPending(
-          selectPromptDraft(drafts, sessionId),
-          retained.text,
-        ),
-      ),
+    const restored = applyRefusedSubmitRestoration(
+      promptDraftsRef.current,
+      refusedSubmitPrefixesRef.current,
+      sessionId,
+      retained,
     )
-    setImageAttachmentState(state =>
-      reduceSessionImagesRestored(state, sessionId, retained.images),
-    )
-    setFileAttachmentState(state =>
-      reduceSessionFileAttachmentRestored(state, sessionId, retained.file),
-    )
+    refusedSubmitPrefixesRef.current = restored.recovery
+    updatePromptDrafts(() => restored.drafts)
+    if (restored.images !== null) {
+      setImageAttachmentState(state =>
+        reduceSessionImagesRestored(state, sessionId, restored.images ?? []),
+      )
+    }
+    if (restored.file !== null) {
+      setFileAttachmentState(state =>
+        reduceSessionFileAttachmentRestored(state, sessionId, restored.file),
+      )
+    }
   }, [])
 
   // D1b — the composer half of a recall, and deliberately the SAME shape as the
@@ -2423,7 +2439,7 @@ export function App() {
     (sessionId: SessionId, prompts: readonly RecalledPrompt[]) => {
       const { text, images } = foldRecalledPrompts(prompts)
       if (text.length === 0 && images.length === 0) return
-      setPromptDrafts(drafts =>
+      updatePromptDrafts(drafts =>
         reducePromptDrafts(
           drafts,
           sessionId,
@@ -2508,6 +2524,7 @@ export function App() {
       retainedSubmitsRef.current,
       sessionId,
     )
+    refusedSubmitPrefixesRef.current.delete(sessionId)
     forgetRecallRequests(recallRequestsRef.current, sessionId)
     if (shellRef.current.previews[sessionId]) {
       const plan = previewClosePlan(
@@ -2907,7 +2924,7 @@ export function App() {
     // A parked prompt that is later released comes back as its expanded text
     // (`restoreDraftWithPending`) — the pills are gone, the content is not.
     const retireDraft = (): void => {
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
+      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, ''))
       setPasteState(prev => reduceSessionPastesCleared(prev, sessionId))
       setImageAttachmentState(prev =>
         reduceSessionImagesReplaced(prev, sessionId, []),
@@ -3078,7 +3095,7 @@ export function App() {
       value: string,
       reason: DraftWriteReason = 'edit',
     ) => {
-      setPromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
+      updatePromptDrafts(drafts => reducePromptDrafts(drafts, sessionId, value))
       // Prune only on a genuine edit; a transient ↑/↓ history-nav write must NOT
       // drop a live, uncommitted paste that ↓ is about to restore.
       setPasteState(prev =>
@@ -3368,6 +3385,10 @@ export function App() {
 	      )
 	      const panelProvider = rail.provider
 	      const panelLeases = selectLeaseSnapshot(leases, sessionId)
+	      const panelLastMainFailoverAccountId = selectLastMainFailoverAccountId(
+	        leases,
+	        sessionId,
+	      )
 	      // The face names the account this session ROUTES through, which is its
 	      // main lease, not the pool's persisted active row. See
 	      // `selectSessionCodexAccount` for why the two drift.
@@ -3376,6 +3397,7 @@ export function App() {
 	          ? selectSessionCodexAccount({
 	              roster: panelAccounts,
 	              leases: panelLeases,
+	              lastMainFailoverAccountId: panelLastMainFailoverAccountId,
 	              accounts,
 	              sessionId,
 	            })

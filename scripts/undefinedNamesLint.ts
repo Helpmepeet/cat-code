@@ -20,6 +20,21 @@ export type UndefinedName = {
 }
 
 const DIAGNOSTIC = /^(.+?)\((\d+),(\d+)\): error TS(?:2304|2503): Cannot find (?:name|namespace) '([^']+)'/
+const SOURCE_DIAGNOSTIC = /^(.+)\(\d+,\d+\): error TS\d+:/
+
+function isSourceDiagnosticOutput(output: string): boolean {
+  let inDiagnostic = false
+  return output.split(/\r?\n/).every(line => {
+    if (!line.trim()) return true
+    const diagnostic = line.match(SOURCE_DIAGNOSTIC)
+    if (diagnostic) {
+      if (diagnostic[1]!.endsWith('.json')) return false
+      inDiagnostic = true
+      return true
+    }
+    return inDiagnostic && /^[ \t]/.test(line)
+  })
+}
 
 export function parseUndefinedNames(tscOutput: string): UndefinedName[] {
   const found: UndefinedName[] = []
@@ -40,12 +55,26 @@ if (import.meta.main) {
   const repoRoot = resolve(process.argv[2] ?? process.cwd())
   const tsc = spawnSync(
     'bunx',
-    ['tsc', '-p', 'tsconfig.json', '--noEmit'],
+    ['tsc', '-p', 'tsconfig.json', '--noEmit', '--pretty', 'false'],
     { cwd: repoRoot, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   )
-  // tsc exits non-zero on the known-red baseline; only its stdout matters here.
-  const undefinedNames = parseUndefinedNames(tsc.stdout ?? '')
-  if (undefinedNames.length > 0) {
+  const output = [tsc.stdout, tsc.stderr].filter(Boolean).join('\n')
+  // Accept tsc's diagnostic exit statuses only when it actually checked source.
+  const checkerFailed =
+    tsc.error ||
+    tsc.signal ||
+    !isSourceDiagnosticOutput(tsc.stdout ?? '') ||
+    !isSourceDiagnosticOutput(tsc.stderr ?? '') ||
+    (tsc.status !== 0 &&
+      ((tsc.status !== 1 && tsc.status !== 2) ||
+        !/^.+\(\d+,\d+\): error TS\d+:/m.test(output)))
+  const undefinedNames = parseUndefinedNames(output)
+  if (checkerFailed) {
+    const reason = tsc.error?.message ?? tsc.signal ?? `exit status ${tsc.status}`
+    console.error(`undefined-name lint failed: TypeScript checker did not complete (${reason})`)
+    if (output.trim()) console.error(output.trim())
+    process.exitCode = 1
+  } else if (undefinedNames.length > 0) {
     for (const { column, file, line, name } of undefinedNames) {
       console.error(`error: ${file}:${line}:${column} '${name}' is used but never imported or declared`)
     }

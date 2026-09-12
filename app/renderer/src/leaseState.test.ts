@@ -18,6 +18,7 @@ import {
   leaseAccountLabel,
   leaseHeldLabel,
   reduceLeaseState,
+  selectLastMainFailoverAccountId,
   selectLeaseAgentCount,
   selectLeaseConcentrationNote,
   selectLeaseForLabel,
@@ -74,8 +75,12 @@ test('a lease snapshot lands under its own session and never leaks across sessio
 })
 
 test('session removal drops a retained lease key', () => {
-  expect(reduceLeaseState({ bySession: { gone: undefined } }, { type: 'session-removed', sessionId: 'gone' }))
-    .toEqual({ bySession: {} })
+  expect(
+    reduceLeaseState(
+      { bySession: { gone: undefined }, lastMainFailoverAccountIds: {} },
+      { type: 'session-removed', sessionId: 'gone' },
+    ),
+  ).toEqual({ bySession: {}, lastMainFailoverAccountIds: {} })
 })
 
 test('a later snapshot replaces the earlier one for that session', () => {
@@ -611,6 +616,147 @@ test('the main lease outranks the pool default, so a failover renames the face',
   // Metadata stays the roster's fresh copy, not anything re-derived from the lease.
   expect(resolved?.alias).toBe('basalt')
   expect(resolved?.usagePrimary).toBe(77)
+})
+
+test('a main failover keeps naming the routed account after its per-turn lease releases', () => {
+  const accounts = accountsStateWithSession(
+    's1',
+    accountsSnapshot([
+      poolRow({ id: 'acct-a', alias: 'aurora', isDefault: true }),
+      poolRow({ id: 'acct-b', alias: 'basalt' }),
+    ]),
+  )
+  let leaseStore = createLeaseState()
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame(
+      's1',
+      snapshot({
+        owners: [
+          owner({
+            ownerId: 'main-thread',
+            ownerType: 'main',
+            accountId: 'acct-b',
+            selectionKind: 'failover',
+          }),
+        ],
+      }),
+    ),
+  })
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame('s1', snapshot({ owners: [] })),
+  })
+
+  expect(
+    selectSessionCodexAccount({
+      roster: ROSTER,
+      leases: selectLeaseSnapshot(leaseStore, 's1'),
+      lastMainFailoverAccountId: selectLastMainFailoverAccountId(leaseStore, 's1'),
+      accounts,
+      sessionId: 's1',
+    })?.id,
+  ).toBe('acct-b')
+})
+
+test('a successful idle manual switch supersedes the retained main failover', () => {
+  let leaseStore = createLeaseState()
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame(
+      's1',
+      snapshot({
+        owners: [
+          owner({
+            ownerId: 'main-thread',
+            ownerType: 'main',
+            accountId: 'acct-b',
+            selectionKind: 'failover',
+          }),
+        ],
+      }),
+    ),
+  })
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame('s1', snapshot({ owners: [] })),
+  })
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: {
+      kind: 'account.result',
+      protocolVersion: 2,
+      sessionId: 's1',
+      requestId: 'manual-switch',
+      verb: 'account.switch',
+      ok: true,
+      message: 'Switched account',
+    },
+  })
+
+  expect(selectLastMainFailoverAccountId(leaseStore, 's1')).toBeNull()
+  expect(
+    selectSessionCodexAccount({
+      roster: accountsSnapshot([
+        poolRow({ id: 'acct-a', alias: 'aurora' }),
+        poolRow({ id: 'acct-b', alias: 'basalt' }),
+        poolRow({ id: 'acct-c', alias: 'cinder', isDefault: true }),
+      ]),
+      leases: selectLeaseSnapshot(leaseStore, 's1'),
+      lastMainFailoverAccountId: selectLastMainFailoverAccountId(leaseStore, 's1'),
+      accounts: accountsStateWithSession(
+        's1',
+        accountsSnapshot([
+          poolRow({ id: 'acct-a', alias: 'aurora' }),
+          poolRow({ id: 'acct-b', alias: 'basalt' }),
+          poolRow({ id: 'acct-c', alias: 'cinder', isDefault: true }),
+        ]),
+      ),
+      sessionId: 's1',
+    })?.id,
+  ).toBe('acct-c')
+})
+
+test('a parked session retains its last successful main failover account', () => {
+  let leaseStore = createLeaseState()
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: frame(
+      's1',
+      snapshot({
+        owners: [
+          owner({
+            ownerId: 'main-thread',
+            ownerType: 'main',
+            accountId: 'acct-b',
+            selectionKind: 'failover',
+          }),
+        ],
+      }),
+    ),
+  })
+  leaseStore = reduceLeaseState(leaseStore, {
+    type: 'frame',
+    frame: {
+      kind: 'lifecycle',
+      protocolVersion: 2,
+      sessionId: 's1',
+      status: 'exited',
+    } satisfies LifecycleFrame,
+  })
+
+  expect(
+    selectSessionCodexAccount({
+      roster: ROSTER,
+      leases: selectLeaseSnapshot(leaseStore, 's1'),
+      lastMainFailoverAccountId: selectLastMainFailoverAccountId(leaseStore, 's1'),
+      accounts: accountsStateWithSession(
+        's1',
+        accountsSnapshot([poolRow({ isDefault: true }), poolRow({ id: 'acct-b', alias: 'basalt' })]),
+      ),
+      sessionId: 's1',
+    })?.id,
+  ).toBe('acct-b')
 })
 
 test('a subagent lease never names the main face', () => {

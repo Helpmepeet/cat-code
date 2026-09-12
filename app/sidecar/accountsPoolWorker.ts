@@ -47,15 +47,12 @@
  * booleans below are read through a separate, disk-write-free path and stay
  * accurate regardless.
  *
- * The ONE outbound network call is `fetchPoolUsage`, the same read-only (GET,
- * existing tokens, no refresh, no completion burn) call the sidecar accounts
- * domain already makes. It is what keeps the headroom numbers live; a failure
- * degrades to "pool without fresh usage" and never fails the run. Its
- * module-level cache (`codexUsage.ts:93`, 1-minute TTL) does not help this
- * process: each run is a fresh disposable worker, so `cachedSnapshot` always
- * starts `null` here and every run performs a live fetch regardless of poll
- * interval — see `accountsPoolRunner.ts`'s cadence comment for the actual
- * reason the interval is 60 s.
+ * Usage observations come from `fetchPoolUsage`, the same read-only path the
+ * sidecar accounts domain uses. Its engine-owned private cache shares recent
+ * observations and coalesces unforced reads across processes. A cache miss may
+ * issue GET requests using existing tokens; it never refreshes credentials or
+ * generates a completion. Failures leave the pool without fresh usage and do
+ * not fail the worker run. Forced refreshes bypass that shared observation.
  *
  * It also aggregates the Accounts page's usage analytics for both ranges
  * (`readUsageStats`), for the same reason the pool read moved here: that page
@@ -317,16 +314,13 @@ async function main(): Promise<void> {
  */
 async function readUsageStats(): Promise<UsageStatsByRange | null> {
   try {
-    const { tryGetUsageStatsSnapshot } = await import('./statsDomain.js')
-    const [sevenDay, thirtyDay] = await Promise.all([
-      tryGetUsageStatsSnapshot('7d'),
-      tryGetUsageStatsSnapshot('30d'),
-    ])
-    if (!sevenDay || !thirtyDay) {
+    const { tryGetUsageStatsSnapshots } = await import('./statsDomain.js')
+    const snapshots = await tryGetUsageStatsSnapshots()
+    if (!snapshots) {
       process.stderr.write('[accounts-worker] usage stats read failed\n')
       return null
     }
-    return { '7d': sevenDay, '30d': thirtyDay }
+    return snapshots
   } catch (error) {
     process.stderr.write(
       `[accounts-worker] usage stats skipped: ${errorText(error)}\n`,

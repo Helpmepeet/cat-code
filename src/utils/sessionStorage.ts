@@ -402,6 +402,9 @@ export type AgentMetadata = {
   agentType: string
   /** Friendly system/user-facing name for targeting this subagent. */
   agentName?: string
+  /** Explicit cwd override assigned by AgentTool call (mutually exclusive with
+   * worktree isolation). */
+  assignedCwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -422,8 +425,9 @@ export type AgentMetadata = {
  * a fork silently degrades to general-purpose (4KB system prompt, no
  * inherited history). Sidecar file avoids JSONL schema changes.
  *
- * Also stores the worktreePath when the agent was spawned with worktree
- * isolation, enabling resume to restore the correct cwd.
+ * Also stores an explicit assignedCwd (when provided), and the worktreePath
+ * when the agent was spawned with worktree isolation, enabling resume to
+ * restore the correct cwd.
  */
 export async function writeAgentMetadata(
   agentId: AgentId,
@@ -4896,7 +4900,12 @@ export async function loadTranscriptFile(
         buf,
         fileSessionId ?? undefined,
       )
-      buf = walkChainBeforeParse(buf, bufferedActiveTip?.tipUuid)
+      // Active-tip descendants can cross a compaction boundary through
+      // logicalParentUuid. Let the parsed branch tracker select them; filtering
+      // first by the physical parent chain would discard them irreversibly.
+      if (!bufferedActiveTip) {
+        buf = walkChainBeforeParse(buf)
+      }
     }
 
     // First pass: process metadata-only lines collected during the boundary scan.
@@ -4945,7 +4954,14 @@ export async function loadTranscriptFile(
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }
         if (activeConversationTip && !entry.isSidechain) {
-          const parent = entry.parentUuid
+          // `null` is a meaningful root for an ordinary message: after a
+          // rewind before the first prompt, the replacement turn starts a new
+          // root chain and must advance the explicitly-null active tip. Only a
+          // compact boundary may replace its physical null parent with the
+          // logical pre-compaction parent.
+          const parent = isCompactBoundaryMessage(entry)
+            ? (entry.parentUuid ?? entry.logicalParentUuid)
+            : entry.parentUuid
           const extendsActiveBranch =
             activeConversationRoot === null
               ? parent === null ||

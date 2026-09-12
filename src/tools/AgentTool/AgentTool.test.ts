@@ -2,14 +2,16 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { rm } from 'fs/promises'
+import { mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { PassThrough } from 'stream'
 import stripAnsi from 'strip-ansi'
 import * as React from 'react'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
+import { getCwd } from '../../utils/cwd.js'
 import { readSessionState } from '../../utils/workerState.js'
+import { asSessionId } from '../../types/ids.js'
 import {
   allocateWorkerName,
   resetWorkerNamesForTests,
@@ -28,19 +30,42 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
-import { createAssistantMessage } from '../../utils/messages.js'
+import {
+  createAssistantMessage,
+  createUserMessage,
+} from '../../utils/messages.js'
+import {
+  clearSessionMessagesCache,
+  flushSessionStorage,
+  readAgentMetadata,
+  recordTranscript,
+  resetProjectForTesting,
+} from '../../utils/sessionStorage.js'
+import { releaseActiveTranscriptLease } from '../../utils/transcriptLease.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
 
+const realQueryModule = await import('../../query.js')
+let queryScript: () => AsyncGenerator<Message> = async function* () {}
+mock.module('../../query.js', () => ({
+  ...realQueryModule,
+  query: () => queryScript(),
+}))
+
 const realRunAgentModule = await import('./runAgent.js')
+const realRunAgent = realRunAgentModule.runAgent
 let capturedRunAgentParams:
   | Parameters<typeof realRunAgentModule.runAgent>[0]
   | undefined
+let useRealRunAgent = false
 mock.module('./runAgent.js', () => ({
   ...realRunAgentModule,
   runAgent: (params: Parameters<typeof realRunAgentModule.runAgent>[0]) => {
     capturedRunAgentParams = params
+    if (useRealRunAgent) {
+      return realRunAgent(params)
+    }
     return (async function* () {
       yield createAssistantMessage({ content: 'fixture complete' })
     })()
@@ -119,6 +144,58 @@ async function renderToPlainText(node: React.ReactNode): Promise<string> {
   return stripAnsi(output)
 }
 
+const baseInput = {
+  description: 'do a thing',
+  prompt: 'go',
+}
+
+function createToolContextForCwd(additionalWorkingDirectories: string[] = []) {
+  const appState = getDefaultAppState()
+  const permissionContext = {
+    ...appState.toolPermissionContext,
+    mode: 'acceptEdits',
+    additionalWorkingDirectories: new Map(
+      additionalWorkingDirectories.map(dir => [
+        dir,
+        {
+          path: dir,
+          source: 'session',
+        },
+      ]),
+    ),
+  }
+
+  return {
+    options: {
+      agentDefinitions: {
+        allAgents: getBuiltInAgents(),
+        activeAgents: getBuiltInAgents(),
+      },
+      tools: [],
+      commands: [],
+      mcpClients: [],
+      mcpResources: {},
+      mainLoopModel: 'gpt-5.6-luna',
+      debug: false,
+      verbose: false,
+      thinkingConfig: { type: 'disabled' as const },
+      isNonInteractiveSession: true,
+      customSystemPrompt: undefined,
+      appendSystemPrompt: undefined,
+    },
+    abortController: new AbortController(),
+    readFileState: new Map(),
+    toolUseId: 'agent-cwd',
+    contentReplacementState: {},
+    renderedSystemPrompt: undefined,
+    getAppState: () => ({
+      ...appState,
+      toolPermissionContext: permissionContext,
+    }),
+    setAppState: () => undefined,
+  } as never
+}
+
 const originalRandom = Math.random
 const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
 const originalSdkDisableBuiltins =
@@ -127,6 +204,8 @@ const originalSdkDisableBuiltins =
 afterEach(() => {
   Math.random = originalRandom
   capturedRunAgentParams = undefined
+  useRealRunAgent = false
+  queryScript = async function* () {}
   resolvePendingMcpPoll = undefined
   resetWorkerNamesForTests()
   if (originalCoordinatorMode === undefined) {
@@ -144,8 +223,6 @@ afterEach(() => {
 })
 
 describe('AgentTool effort input', () => {
-  const baseInput = { description: 'do a thing', prompt: 'go' }
-
   test('accepts Astra as an explicit model override', () => {
     const parsed = inputSchema().safeParse({
       ...baseInput,
@@ -176,6 +253,196 @@ describe('AgentTool effort input', () => {
     expect(
       inputSchema().safeParse({ ...baseInput, effort: 'turbo' }).success,
     ).toBe(false)
+  })
+})
+
+describe('AgentTool cwd input', () => {
+  test('schema accepts cwd', () => {
+    const parsed = inputSchema().safeParse({
+      ...baseInput,
+      cwd: '/tmp',
+    })
+
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.cwd).toBe('/tmp')
+  })
+
+  test('rejects relative cwd', async () => {
+    capturedRunAgentParams = undefined
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: 'agent-dir',
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow('Custom cwd must be an absolute path.')
+    expect(capturedRunAgentParams).toBeUndefined()
+  })
+
+  test('rejects missing cwd directory', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const missingDir = join(tempDir, 'missing')
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: missingDir,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(`Cannot use cwd ${missingDir}: directory does not exist.`)
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects cwd that is not a directory', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const fileCwd = join(tempDir, 'not-dir')
+    await writeFile(fileCwd, 'nope')
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: fileCwd,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(`Cannot use cwd ${fileCwd}: not a directory.`)
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects cwd outside allowed working directories', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const outsideDir = join(tempDir, 'outside')
+    await mkdir(outsideDir, { recursive: true })
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: outsideDir,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(
+      `Cannot use cwd ${outsideDir}: it is outside allowed working directories.`,
+    )
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects explicit cwd with worktree isolation', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const cwd = join(tempDir, 'cwd')
+    await mkdir(cwd, { recursive: true })
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd,
+          isolation: 'worktree',
+        },
+        createToolContextForCwd([cwd]),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow('Cannot set a custom cwd with worktree isolation.')
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('passes explicit cwd and forwards it to agent launch params', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const cwd = join(tempDir, 'cwd')
+    await mkdir(cwd, { recursive: true })
+
+    await AgentTool.call(
+      {
+        ...baseInput,
+        cwd,
+      },
+      createToolContextForCwd([cwd]),
+      undefined as never,
+      undefined as never,
+    )
+
+    expect(capturedRunAgentParams?.cwd).toBe(cwd)
+    expect(capturedRunAgentParams?.worktreePath).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('executes the child under explicit cwd and persists that assignment', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-cfg-'))
+    const projectDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-project-'))
+    const cwd = join(projectDir, 'assigned')
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    let observedChildCwd: string | undefined
+    await mkdir(cwd, { recursive: true })
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), projectDir)
+      clearSessionMessagesCache()
+      useRealRunAgent = true
+      await recordTranscript([
+        createUserMessage({ content: 'parent setup' }),
+      ])
+      await flushSessionStorage()
+      queryScript = async function* () {
+        observedChildCwd = getCwd()
+        yield createAssistantMessage({ content: 'child completed' })
+      }
+
+      await AgentTool.call(
+        {
+          ...baseInput,
+          subagent_type: 'general-purpose',
+          cwd,
+        },
+        createToolContextForCwd([cwd]),
+        undefined as never,
+        undefined as never,
+      )
+
+      await flushSessionStorage()
+      expect(observedChildCwd).toBe(cwd)
+      const agentId = capturedRunAgentParams?.override?.agentId
+      expect(agentId).toBeDefined()
+      const metadata = await readAgentMetadata(agentId!)
+      expect(metadata?.assignedCwd).toBe(cwd)
+      expect(metadata?.worktreePath).toBeUndefined()
+    } finally {
+      clearSessionMessagesCache()
+      await releaseActiveTranscriptLease()
+      resetProjectForTesting()
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousPersistence === undefined) {
+        delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      } else {
+        process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousPersistence
+      }
+      await rm(configDir, { recursive: true, force: true }).catch(() => {})
+      await rm(projectDir, { recursive: true, force: true }).catch(() => {})
+    }
   })
 })
 

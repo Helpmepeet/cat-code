@@ -23,6 +23,8 @@ import {
   getActiveAccount,
   getPoolStatus,
   canFailover,
+  hasSelectableAccountOtherThan,
+  isCodexAccountSwitchable,
   poolManagesCredentials,
   markPoolAccountCapped,
   markPoolAccountQuarantined,
@@ -621,8 +623,62 @@ export async function* withRetry<T, Client = Anthropic>(
         const currentLease =
           getCurrentCodexLease() ??
           (options.ownerId ? getCodexLeaseForOwner(options.ownerId) : undefined)
-        const canRotateBeforeCap = canFailover()
-        if (currentLease && canRotateBeforeCap) {
+        const hasReplacement = hasSelectableAccountOtherThan(error.accountId)
+        const currentLeaseAccount = currentLease
+          ? getPoolStatus().accounts.find(
+              account => account.accountId === currentLease.accountId,
+            )
+          : undefined
+        if (
+          currentLease &&
+          currentLease.accountId !== error.accountId &&
+          currentLeaseAccount &&
+          isCodexAccountSwitchable(currentLeaseAccount)
+        ) {
+          assertCodexLeaseFailoverBudget(error, attempt, error.accountId)
+          markPoolAccountCapped(error.accountId, error.message, {
+            rerollActive: false,
+          })
+          emitCodexFailoverSucceeded(
+            retryContext.model,
+            currentLease.accountId,
+            'usage cap recovery continued on current lease',
+          )
+          logForDebugging(
+            `[codex-pool] Request account ${error.accountId} capped after lease ${currentLease.ownerId} had already moved to ${currentLease.accountId}; retrying current lease`,
+          )
+          options.onCodexAccountSwitch?.()
+          client = null
+          noteCodexLeaseFailover()
+          continue
+        }
+        if (
+          currentLease &&
+          currentLease.accountId !== error.accountId &&
+          hasReplacement
+        ) {
+          assertCodexLeaseFailoverBudget(error, attempt, error.accountId)
+          markPoolAccountCapped(error.accountId, error.message, {
+            rerollActive: false,
+          })
+          const nextLease = failoverCodexLease(
+            currentLease.ownerId,
+            currentLease.accountId,
+            `current lease account was unavailable after delayed failure from ${error.accountId}`,
+            { markAccountCapped: false },
+          )
+          persistMainLeaseActiveAccount(nextLease)
+          emitCodexFailoverSucceeded(
+            retryContext.model,
+            nextLease.accountId,
+            'usage cap recovery replaced unavailable current lease',
+          )
+          options.onCodexAccountSwitch?.()
+          client = null
+          noteCodexLeaseFailover()
+          continue
+        }
+        if (currentLease && hasReplacement) {
           try {
             assertCodexLeaseFailoverBudget(error, attempt, currentLease.accountId)
             const nextLease = failoverCodexLease(
@@ -674,7 +730,7 @@ export async function* withRetry<T, Client = Anthropic>(
 
           // No active lease — this is a main-session (no subagent) request.
           // Directly rotate the pool's active account and retry when possible.
-          if (!currentLease && canRotateBeforeCap) {
+          if (!currentLease && hasReplacement) {
             const next = switchToAccount(null)
             if (next) {
               emitCodexFailoverSucceeded(

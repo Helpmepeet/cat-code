@@ -3,6 +3,17 @@ import { recipientNameKey } from './recipientIdentity.js'
 const GENERIC_WORKER_NAMES = [
   'Ada', 'Katherine', 'Johnson', 'Hamilton', 'Ritchie', 'Kay',
   'Wilkes', 'Goldstine', 'Backus', 'Engelbart', 'Cerf', 'Barton',
+  'Hopper', 'Turing', 'McCarthy', 'Lamarr', 'Knuth', 'Dijkstra',
+  'Allen', 'Berners-Lee', 'Naur', 'Iverson', 'Minsky', 'Shannon',
+  'Lovelace', 'Boole', 'Babbage', 'Torvalds', 'Matsumoto', 'Raskin',
+  'Thompson', 'Kernighan', 'Stroustrup', 'Meyer', 'Ousterhout', 'Liskov',
+  'Karger', 'Sutherland', 'Metcalfe', 'Kahn', 'Codd', 'Brooks',
+  'Hamming', 'Sperry', 'Hollerith', 'Zuse', 'Tukey', 'Nielsen',
+  'Moggridge', 'Norman', 'Abelson', 'Sussman', 'Miller', 'Reddy',
+  'Ullman', 'Aho', 'Sedgewick', 'Tarjan', 'Karp', 'Rivest',
+  'Shamir', 'Adleman', 'Diffie', 'Hellman', 'Moser', 'Conway',
+  'Moore', 'Lampson', 'Wirth', 'Hoare', 'Hewitt', 'Milner',
+  'Kiczales', 'Cardelli', 'Peyton-Jones',
 ]
 
 const activeNames = new Set<string>()

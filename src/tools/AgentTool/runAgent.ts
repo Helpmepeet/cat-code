@@ -46,6 +46,7 @@ import type { Command } from '../../types/command.js'
 import type { AgentId } from '../../types/ids.js'
 import type {
   AssistantMessage,
+  AttachmentMessage,
   Message,
   ProgressMessage,
   RequestStartEvent,
@@ -57,8 +58,13 @@ import type {
 } from '../../types/message.js'
 import {
   createAttachmentMessage,
+  getQueuedCommandAttachments,
   type Attachment,
 } from '../../utils/attachments.js'
+import {
+  getCommandsByMaxPriority,
+  remove as removeFromQueue,
+} from '../../utils/messageQueueManager.js'
 import { getWorkerCapabilityPromptLine } from '../../utils/agentCapabilities.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
@@ -126,6 +132,7 @@ async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
   registerCleanup?: (cleanup: () => Promise<void>) => void,
+  authorizedNamedServers?: ReadonlyMap<string, MCPServerConnection>,
 ): Promise<{
   clients: MCPServerConnection[]
   tools: Tools
@@ -196,6 +203,22 @@ async function initializeAgentMcpServers(
       // Reference by name - look up in existing MCP configs
       // This uses the memoized connectToServer, so we may get a shared client
       name = spec
+      if (authorizedNamedServers) {
+        const authorizedClient = authorizedNamedServers.get(name)
+        if (!authorizedClient) {
+          logForDebugging(
+            `[Agent: ${agentDefinition.agentType}] Skipping MCP server not present in the inherited authorized runtime: ${name}`,
+            { level: 'warn' },
+          )
+          continue
+        }
+        agentClients.push(authorizedClient)
+        if (authorizedClient.type === 'connected') {
+          const tools = await fetchToolsForClient(authorizedClient)
+          agentTools.push(...tools)
+        }
+        continue
+      }
       config = getMcpConfigByName(spec)
       if (!config) {
         logForDebugging(
@@ -378,6 +401,8 @@ async function* runAgentInCleanupScope({
   mcpRuntimeInputs,
   mcpRuntimeSnapshot,
   worktreePath,
+  cwd,
+  seededMessagesForPersistence,
   description,
   agentName,
   transcriptSubdir,
@@ -454,9 +479,14 @@ async function* runAgentInCleanupScope({
    * snapshot itself; with no live MCP source at all, the parent's static
    * options are used as before. */
   mcpRuntimeSnapshot?: McpRuntimeSnapshot
+  /** Explicit cwd override. Persisted to metadata for resume restoration. */
+  cwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
+  /** Seeded messages already present in transcript persistence, used to avoid
+   * duplicate sidechain writes when resuming. */
+  seededMessagesForPersistence?: Message[]
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
@@ -561,7 +591,24 @@ async function* runAgentInCleanupScope({
     ? filterIncompleteToolCalls(forkContextMessages)
     : []
   const initialMessages: Message[] = [...contextMessages, ...promptMessages]
-
+  const seededMessageUuids = new Set(
+    (seededMessagesForPersistence ?? []).map(message => message.uuid),
+  )
+  const findLastChainParticipantUuid = (
+    messages: Message[],
+  ): UUID | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message?.type !== 'progress') {
+        return message.uuid
+      }
+    }
+    return null
+  }
+  const seededChainTailUuid =
+    seededMessageUuids.size > 0
+      ? findLastChainParticipantUuid(seededMessagesForPersistence)
+      : null
   const agentReadFileState =
     forkContextMessages !== undefined
       ? cloneFileStateCache(toolUseContext.readFileState)
@@ -732,15 +779,28 @@ async function* runAgentInCleanupScope({
       : builtAgentSystemPrompt,
   )
 
-  // Determine abortController:
-  // - Override takes precedence
-  // - Async agents get a new unlinked controller (runs independently)
-  // - Sync agents share parent's controller
+  // Every worker owns its controller. Synchronous workers additionally follow
+  // parent cancellation in one direction, so a terminal worker handoff cannot
+  // abort the parent query that must receive it.
   const agentAbortController = override?.abortController
     ? override.abortController
-    : isAsync
-      ? new AbortController()
-      : toolUseContext.abortController
+    : new AbortController()
+  let detachParentAbort = () => {}
+  if (!override?.abortController && !isAsync) {
+    const parentSignal = toolUseContext.abortController.signal
+    const forwardParentAbort = () => {
+      agentAbortController.abort(parentSignal.reason)
+    }
+    if (parentSignal.aborted) {
+      forwardParentAbort()
+    } else {
+      parentSignal.addEventListener('abort', forwardParentAbort, { once: true })
+      detachParentAbort = () => {
+        parentSignal.removeEventListener('abort', forwardParentAbort)
+      }
+      setupCleanups.push(detachParentAbort)
+    }
+  }
 
   // Execute SubagentStart hooks and collect additional context
   const additionalContexts: string[] = []
@@ -911,6 +971,13 @@ async function* runAgentInCleanupScope({
     agentDefinition,
     parentMcpClients,
     cleanup => setupCleanups.push(cleanup),
+    parentMcpRuntime || mcpRuntimeInputs
+      ? new Map(
+          parentMcpClients
+            .filter(client => client.type === 'connected')
+            .map(client => [client.name, client]),
+        )
+      : undefined,
   )
 
   // Merge agent MCP tools with resolved agent tools, deduplicating by name.
@@ -1011,6 +1078,26 @@ async function* runAgentInCleanupScope({
     contentReplacementState,
   })
 
+  // A prior worker run can finish before a delivery outcome addressed to this
+  // worker is observed. Put those reports into the first resumed request so a
+  // no-tool completion cannot strand them in the process-global queue.
+  const startupNotifications = getCommandsByMaxPriority('later').filter(
+    command =>
+      command.mode === 'task-notification' && command.agentId === agentId,
+  )
+  if (startupNotifications.length > 0) {
+    const attachments = await getQueuedCommandAttachments(startupNotifications)
+    initialMessages.push(...attachments.map(createAttachmentMessage))
+    removeFromQueue(startupNotifications)
+  }
+
+  const persistedInitialMessages =
+    seededMessageUuids.size > 0
+      ? initialMessages.filter(
+          message => !seededMessageUuids.has(message.uuid),
+        )
+      : initialMessages
+
   // Preserve tool use results for subagents with viewable transcripts (in-process teammates)
   if (preserveToolUseResults) {
     agentToolUseContext.preserveToolUseResults = true
@@ -1030,12 +1117,17 @@ async function* runAgentInCleanupScope({
   // Record initial messages before the query loop starts, plus the agentType
   // so resume can route correctly when subagent_type is omitted. Both writes
   // are fire-and-forget — persistence failure shouldn't block the agent.
-  void recordSidechainTranscript(initialMessages, agentId).catch(_err =>
+  void recordSidechainTranscript(
+    persistedInitialMessages,
+    agentId,
+    seededMessageUuids.size > 0 ? seededChainTailUuid : undefined,
+  ).catch(_err =>
     logForDebugging(`Failed to record sidechain transcript: ${_err}`),
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
     ...(workerName && { agentName: workerName }),
+    ...(cwd && { assignedCwd: cwd }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     parentSessionId: getSessionId(),
@@ -1062,7 +1154,30 @@ async function* runAgentInCleanupScope({
   }
 
   // Track the last recorded message UUID for parent chain continuity
-  let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
+  let lastRecordedUuid: UUID | null = findLastChainParticipantUuid(
+    persistedInitialMessages,
+  )
+  if (lastRecordedUuid === null) {
+    lastRecordedUuid =
+      seededChainTailUuid ??
+      findLastChainParticipantUuid(initialMessages)
+  }
+  const submittedLocalMessages = new Map<string, AttachmentMessage>()
+  agentToolUseContext.onLocalAgentMessagesDelivered = async messageIds => {
+    for (const messageId of messageIds) {
+      const delivered = submittedLocalMessages.get(messageId)
+      if (!delivered) continue
+      await recordSidechainTranscript(
+        [delivered],
+        agentId,
+        lastRecordedUuid,
+      ).catch(err =>
+        logForDebugging(`Failed to record delivered worker instruction: ${err}`),
+      )
+      lastRecordedUuid = delivered.uuid as UUID
+      submittedLocalMessages.delete(messageId)
+    }
+  }
 
   // Escalation is terminal, and the harness is what makes it so. There is no
   // reply channel into a running worker, so the only thing a worker could do
@@ -1074,6 +1189,7 @@ async function* runAgentInCleanupScope({
   // token total off the LAST assistant message, so a synthetic terminal
   // carrying the zeroed default would report the whole run as 0 tokens.
   let lastAssistantUsage: AssistantMessage['message']['usage'] | undefined
+  let completedTerminalEscalation = false
 
   try {
     for await (const message of query({
@@ -1137,6 +1253,15 @@ async function* runAgentInCleanupScope({
         const deliveredAttachment = message.attachment as Attachment
         if (
           deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.commandMode === 'local-agent-message'
+        ) {
+          submittedLocalMessages.set(
+            deliveredAttachment.source_uuid,
+            message as AttachmentMessage,
+          )
+        }
+        if (
+          deliveredAttachment.type === 'queued_command' &&
           deliveredAttachment.commandMode !== 'local-agent-message' &&
           deliveredAttachment.origin
         ) {
@@ -1179,6 +1304,13 @@ async function* runAgentInCleanupScope({
             ? findCompletedAskParentSessionCall(message, pendingEscalations)
             : undefined
         if (escalation) {
+          // A terminal handoff owns the worker from this point onward. Cancel
+          // the query before publishing it so queued tools are rejected and a
+          // tool waiting on permission cannot cross into execution afterward.
+          // The blocked result remains authoritative below rather than being
+          // rewritten as a generic aborted worker outcome.
+          completedTerminalEscalation = true
+          agentAbortController.abort('terminal_handoff')
           // The run's result is written here rather than left to the model,
           // because the model has already stopped being asked for one: the
           // loop ends on this message. finalizeAgentTool takes the last
@@ -1203,7 +1335,10 @@ async function* runAgentInCleanupScope({
       }
     }
 
-    if (agentAbortController.signal.aborted) {
+    if (
+      agentAbortController.signal.aborted &&
+      !completedTerminalEscalation
+    ) {
       throw new AbortError()
     }
 
@@ -1212,6 +1347,7 @@ async function* runAgentInCleanupScope({
       agentDefinition.callback()
     }
   } finally {
+    detachParentAbort()
     // Reaching here means setup completed, so this block owns every pre-loop
     // resource too. Disarm the setup scope first so the two never both release.
     setupCleanups.length = 0

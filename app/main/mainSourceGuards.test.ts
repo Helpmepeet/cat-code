@@ -264,7 +264,7 @@ test('HR2/HR6: a host.request is consumed by main and never reaches the renderer
   const branch = bridge.indexOf("if (frame.kind === 'host.request')")
   expect(branch).toBeGreaterThanOrEqual(0)
   const handled = bridge.indexOf('peerPlane?.handleRequest(', branch)
-  const gate = bridge.indexOf('attachmentGate.onFrame(event.sessionId, traced)')
+  const gate = bridge.indexOf('attachedFrameDelivery?.onFrame(event.sessionId, traced)')
   const returnStatement = bridge.indexOf('return', handled)
   expect(handled).toBeGreaterThan(branch)
   expect(returnStatement).toBeGreaterThan(handled)

@@ -1111,12 +1111,27 @@ export function getAgentPendingMessageAttachments(
 export function createAgentPendingMessageAttachment(
   message: LocalAgentMessageDelivery,
 ): Attachment {
+  const origin = message.originAgentId
+    ? {
+        kind: 'teammate' as const,
+        messages: [
+          {
+            kind: 'teammate' as const,
+            from: message.originAgentId,
+            text:
+              typeof message.message === 'string'
+                ? message.message
+                : extractTextContent(message.message, '\n'),
+          },
+        ],
+      }
+    : { kind: 'coordinator' as const }
   return {
     type: 'queued_command' as const,
     prompt: message.message,
     source_uuid: message.id as UUID,
     commandMode: 'local-agent-message',
-    origin: { kind: 'coordinator' as const },
+    origin,
     isMeta: true,
   }
 }

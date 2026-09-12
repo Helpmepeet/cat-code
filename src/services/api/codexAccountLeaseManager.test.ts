@@ -28,6 +28,7 @@ import {
 } from './codexAccountPool.js'
 import type { PoolAccount } from './codexAccountPool.js'
 import { fetchPoolUsage, invalidateUsageCache } from './codexUsage.js'
+import { setSharedUsageCacheDirectoryForTest } from './codexUsageSharedCache.js'
 import {
   CannotRetryError,
   _resetCodexNetworkOutageDelaysForTest,
@@ -148,6 +149,7 @@ describe('codexAccountLeaseManager', () => {
   let moduleUnderTest: typeof import('./codexAccountLeaseManager.js')
 
   beforeEach(async () => {
+    setSharedUsageCacheDirectoryForTest(null)
     moduleUnderTest = await import('./codexAccountLeaseManager.js')
     setSessionProvider(null)
     resetCodexAccountPoolForTest()

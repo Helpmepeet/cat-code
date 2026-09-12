@@ -25,6 +25,7 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
 import { getCodexLeaseExhaustedMessage } from '../api/codexAccountLeaseManager.js'
+import { API_TIMEOUT_ERROR_MESSAGE } from '../api/errors.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
 import {
@@ -154,7 +155,8 @@ function isTransientAutoCompactFailure(error: unknown): boolean {
   if (
     isAbortError(error) ||
     hasExactErrorMessage(error, ERROR_MESSAGE_USER_ABORT) ||
-    hasExactErrorMessage(error, ERROR_MESSAGE_INCOMPLETE_RESPONSE)
+    hasExactErrorMessage(error, ERROR_MESSAGE_INCOMPLETE_RESPONSE) ||
+    hasExactErrorMessage(error, API_TIMEOUT_ERROR_MESSAGE)
   ) {
     return true
   }
@@ -609,6 +611,9 @@ async function tryReactivePrefixCompaction(
       // exists to stop retrying, so it must NOT be classified transient.
       if (outcome.reason === 'aborted') {
         throw new Error(ERROR_MESSAGE_USER_ABORT)
+      }
+      if (outcome.error !== undefined) {
+        throw outcome.error
       }
       throw new Error(`Reactive compaction failed: ${outcome.reason}`)
     }

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from '../../services/api/codexUsageSharedCache.js'
 
 import {
   createCodexLeaseForTest,
@@ -102,6 +103,7 @@ describe('/accounts', () => {
   const realFetchPoolUsage = fetchPoolUsage
 
   beforeEach(() => {
+    setSharedUsageCacheDirectoryForTest(null)
     spyOn(codexUsageModule, 'fetchPoolUsage').mockImplementation(
       (
         forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,

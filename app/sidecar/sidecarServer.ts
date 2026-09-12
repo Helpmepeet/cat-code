@@ -1315,6 +1315,18 @@ export class SidecarServer {
       }
 
       this.handleFrame(connection, result.payload)
+      // Parking/closure may happen synchronously inside dispatch. Stop only
+      // the already-decoded tail of this batch; a separately delivered frame
+      // still reaches the ordinary handler so correlated refusal semantics are
+      // preserved while the socket remains present.
+      if (
+        this.closed ||
+        this.parking ||
+        connection.closed ||
+        !this.connections.has(connection)
+      ) {
+        return
+      }
     }
   }
 
@@ -4457,7 +4469,7 @@ export class SidecarServer {
     // Already whole for this reader: a previous read reached the head, so there
     // is provably nothing above it. Answered from the latch, because the read
     // that would confirm it costs the full ceiling plus every subagent file.
-    if (connection.loadEarlierComplete) {
+    if (connection.loadEarlierComplete && viewAnchorUuid === undefined) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
         message: loadEarlierMessage(0, true),

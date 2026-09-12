@@ -1562,6 +1562,71 @@ describe('streamTurnViaWebSocket', () => {
     expect(resumed.previous_response_id).toBe('resp_001')
   })
 
+  test('response.incomplete ends the turn and preserves the last completed baseline', async () => {
+    const sessionsList = installMultiFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH)
+
+    sessionsList[0]!.responses = [completedEvent('resp_001')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+
+    sessionsList[0]!.responses = [{
+      type: 'response.incomplete',
+      response: {
+        id: 'resp_incomplete',
+        incomplete_details: { reason: 'max_output_tokens' },
+      },
+    }]
+    const abortController = new AbortController()
+    const turn = streamTurnViaWebSocket(
+      CONV_ID,
+      {
+        instructions: 'sys',
+        input: [
+          { role: 'user', content: 'first' },
+          { role: 'user', content: 'second' },
+        ],
+      },
+      AUTH,
+      2,
+      abortController.signal,
+    )
+
+    expect((await turn.next()).value?.type).toBe('response.incomplete')
+    const nextEvent = turn.next()
+    const terminal = await Promise.race([
+      nextEvent,
+      new Promise<'still-waiting'>(resolve =>
+        setTimeout(() => resolve('still-waiting'), 20),
+      ),
+    ])
+    if (terminal === 'still-waiting') {
+      abortController.abort()
+      await nextEvent.catch(() => undefined)
+    }
+    expect(terminal).not.toBe('still-waiting')
+    expect(terminal).toMatchObject({ done: true })
+    expect(sessionsList[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+
+    await ensureWebSocketSession(CONV_ID, AUTH)
+    sessionsList[1]!.responses = [completedEvent('resp_003')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'first' }] },
+        AUTH,
+        1,
+      ),
+    )
+    expect(sessionsList[1]!.getSent()[0]!.previous_response_id).toBe('resp_001')
+  })
+
   // Rule 2b: a chained-request server error that is NOT 'not found' must still
   // reset the baseline, so the next send is a clean full send rather than a
   // poisoned incremental that would loop through sticky HTTP fallback forever.

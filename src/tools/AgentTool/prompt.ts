@@ -95,6 +95,12 @@ export async function getPrompt(
   // (fork semantics, directive-style prompts) and swap in fork-aware examples.
   const forkEnabled = isForkSubagentEnabled()
 
+  const delegationGuidance = `DELEGATION BOUNDARIES:
+- Give the worker a bounded objective, relevant context, constraints, and acceptance criteria. Delegate only when permitted by the applicable instructions.
+- When the selected worker is in the same capability tier or stronger for the task, let it investigate, synthesize findings, and choose its approach within that scope. Supply exact implementation steps when the user requires them or they are already decided.
+- For a weaker worker, narrow the assignment and provide more concrete guidance where needed. Do not infer capability from price alone; if relative capability is unknown, state what is known and provide enough context without inventing a model ranking.
+- Freedom to choose a method does not expand permissions or the assigned scope. Assess the worker's findings, actual changes, and verification evidence before relying on its result.`
+
   const whenToForkSection = forkEnabled
     ? `
 
@@ -102,7 +108,7 @@ export async function getPrompt(
 
 Fork yourself (omit \`subagent_type\`) when the intermediate tool output isn't worth keeping in your context. The criterion is qualitative — "will I need this output again" — not task size.
 - **Research**: fork open-ended questions. If research can be broken into independent questions, launch parallel forks in one message. A fork beats a fresh subagent for this — it inherits context and shares your cache.
-- **Implementation**: prefer to fork implementation work that requires more than a couple of edits. Do research before jumping to implementation.
+- **Implementation**: prefer to fork implementation work that requires more than a couple of edits. A fork may investigate and implement within the assigned scope.
 
 Forks are cheap because they share your prompt cache. Don't set \`model\` on a fork — a different model can't reuse the parent's cache. Pass a short \`name\` (one or two words, lowercase) so the user can see the fork in the teams panel and steer it mid-run.
 
@@ -127,9 +133,7 @@ ${forkEnabled ? 'When spawning a fresh agent (with a `subagent_type`), it starts
 
 ${forkEnabled ? 'For fresh agents, terse' : 'Terse'} command-style prompts produce shallow, generic work.
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
-
-**Handoff completeness.** When spawning an agent for implementation or review, the prompt must include: exact file paths, the current state (uncommitted changes, prior failed attempts, or dirty baseline the agent needs to know about), what "done" looks like, and any constraints the agent must follow. A prompt missing this context wastes a full agent cycle.
+**Handoff completeness.** Include known files and evidence, relevant current state (uncommitted changes, prior failed attempts, or a dirty baseline), what "done" looks like, and the constraints the agent must follow. Distinguish established facts from hypotheses. If the affected files or solution are not yet known, make finding them part of the bounded assignment; do not invent paths or require the parent to solve the task first.
 `
 
   const isGPTPromptStyle = provider === 'openai'
@@ -252,7 +256,7 @@ ${
 }`
 
   if (isCoordinator) {
-    return shared
+    return `${shared}\n\n${delegationGuidance}`
   }
 
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
@@ -295,6 +299,8 @@ When NOT to use the ${AGENT_TOOL_NAME} tool:
 
   // Non-coordinator gets the full prompt with all sections
   return `${shared}
+
+${delegationGuidance}
 ${whenNotToUseSection}
 
 ${usageHeader}

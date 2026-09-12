@@ -11,7 +11,7 @@ import {
 import { getProjectRoot } from '../bootstrap/state.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir, isEnvTruthy } from './envUtils.js'
-import { isFsInaccessible } from './errors.js'
+import { getErrnoCode, isFsInaccessible } from './errors.js'
 import { normalizePathForComparison } from './file.js'
 import type { FrontmatterData } from './frontmatterParser.js'
 import { parseFrontmatter } from './frontmatterParser.js'
@@ -571,6 +571,17 @@ async function loadMarkdownFiles(dir: string): Promise<
     // existence (TOCTOU). findMarkdownFilesNative already catches internally;
     // ripGrep rejects on inaccessible target paths.
     if (isFsInaccessible(e)) return []
+    // rg reports a missing search directory as exit code 2, not an ENOENT
+    // exception. Confirm the optional scope is absent before ignoring that
+    // failure; usage errors from an existing directory must still propagate.
+    if (e instanceof Error && 'code' in e && e.code === 2) {
+      try {
+        await stat(dir)
+      } catch (directoryError) {
+        const code = getErrnoCode(directoryError)
+        if (code === 'ENOENT' || code === 'ENOTDIR') return []
+      }
+    }
     throw e
   }
 

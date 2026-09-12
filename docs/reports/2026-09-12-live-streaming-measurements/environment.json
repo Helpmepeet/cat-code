@@ -1,0 +1,17 @@
+{
+  "recordedAt": "2026-09-12T11:53:44.676Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "release": "25.6.0",
+  "cpu": "Apple M4 Pro",
+  "logicalCpus": 12,
+  "totalMemoryGiB": 24,
+  "bun": "1.4.0",
+  "electronPackage": "33.4.11",
+  "loadAverage": [
+    7.70361328125,
+    6.55517578125,
+    5.7880859375
+  ],
+  "note": "Between-run snapshot; normal user background applications were left running."
+}

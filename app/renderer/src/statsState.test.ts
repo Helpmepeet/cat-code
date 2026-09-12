@@ -138,6 +138,26 @@ describe('statsState', () => {
     expect(breakdown[0]?.outputTokens).toBe(10000)
   })
 
+  test('keeps fallback model colors stable across cards, insertion orders, and ranges', () => {
+    const day = {
+      date: '2026-08-14',
+      tokensByModel: { 'gpt-5.6-sol': 10, 'gpt-5.6-luna': 90 },
+    }
+    const lines = computeChartSeries([day]).series
+    const bars = computeModelBreakdown({
+      'gpt-5.6-sol': { inputTokens: 10, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+      'gpt-5.6-luna': { inputTokens: 90, outputTokens: 0, cacheCreationInputTokens: 0, cacheReadInputTokens: 0 },
+    })
+    const reversedRange = computeChartSeries([{ ...day, tokensByModel: { 'gpt-5.6-luna': 1, 'gpt-5.6-sol': 100 } }]).series
+
+    for (const model of ['gpt-5.6-sol', 'gpt-5.6-luna']) {
+      const expected = getModelColor(model)
+      expect(lines.find(item => item.name === model)?.color).toBe(expected)
+      expect(bars.find(item => item.modelName === model)?.color).toBe(expected)
+      expect(reversedRange.find(item => item.name === model)?.color).toBe(expected)
+    }
+  })
+
   /* --------------------------------------------------------------------- *
    * X-axis label placement
    * --------------------------------------------------------------------- */

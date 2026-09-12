@@ -1,6 +1,6 @@
 ---
 name: cat-code-migration-session
-description: Use when executing a dispatched Cat Code desktop-migration backlog session (P4-x, P5-x, …) or making any non-trivial change under app/ in the cat-code repo — routes to the authoritative rulebooks and enforces the always-true invariants (locked decisions, security baseline, GUI protocol, STATUS bookkeeping). Do not use for the orchestrator loop that generates backlogs and hands out prompts (that is .claude/rules/migration.md), or for engine-only (src/) work.
+description: "Use for a dispatched Cat Code desktop-migration backlog session or non-trivial changes under app/. Consult migration rulebooks and invariants. Not for the backlog-dispatch orchestrator or engine-only src/ work."
 ---
 
 # Cat Code Migration Session (worker side)
@@ -57,8 +57,8 @@ deviations became review-and-fix immunity, and every blessed deviation the
 operator saw live was reversed on sight.) Surfaces that render UI with a
 prototype counterpart carry the visual-fidelity acceptance: done means it *reads
 as* the prototype side-by-side, not merely that data is wired — prove it through
-the FIDELITY block in `verifying-cat-code-changes`, which fails a fidelity claim
-on any open, unapproved mismatch.
+a comparison of the relevant prototype and actual states. Open, unapproved
+mismatches prevent a fidelity-pass claim.
 
 **Security baseline is a hard gate** (`decisions/SECURITY-MINIMUM.md` +
 Addendum): closed inbound allowlist validated AT THE SIDECAR; T4 goalSnapshot
@@ -80,15 +80,14 @@ stale pre-computed value still loses updates.
 
 ## Verification
 
-Invoke the `verifying-cat-code-changes` skill — DESKTOP battery mandatory;
-tripwire re-fire if you touched the `SDKMessage` union; hardening smoke on any
-boundary/preload change. **Touched a UI surface with a prototype counterpart?
-The skill's FIDELITY block is also mandatory — a state-by-state
-prototype-vs-actual comparison artifact with zero open, unapproved mismatches —
-and you report the SURFACE ACCEPTANCE tiers separately, never a single ✅: "GUI
-not run" blocks the fidelity/overall verdict, not the engineering one.**
-Migration dev-loop turns use `gpt-5.4-mini` at low effort on a healthy account
-(GUI-VERIFICATION.md §Model) — never burn frontier quota to fire a tool-call turn.
+Use `CLAUDE.md` §3 and the current backlog's Standing rules for the applicable
+verification commands. For prototype-backed UI changes, compare the affected
+states against the prototype and identify any unapproved differences. Report
+engineering checks and visual acceptance separately; unperformed GUI checks
+remain unverified and do not erase completed engineering evidence.
+
+The GUI process below owns app-driving constraints; its Model section owns
+migration dev-loop model settings.
 
 ## GUI verification protocol
 

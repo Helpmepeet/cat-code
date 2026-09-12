@@ -256,8 +256,8 @@ function createLane({
 
   const ensureOpen = (): boolean => {
     try {
-      ensurePrivateDirectory(directory)
       if (fd === null) {
+        ensurePrivateDirectory(directory)
         file = join(directory, `${prefix}${launchId}-${now().getTime()}.jsonl`)
         fd = openSync(file, 'a', 0o600)
         chmodSync(file, 0o600)
