@@ -8,17 +8,17 @@ The account UI amendment reviewed as AC3 was still uncommitted in the original w
 
 | Findings | Owner | Status | Evidence |
 |---|---|---|---|
-| UA1–UA4 | fix_analytics | Fixed | `8c302e35`; 134 focused tests passed |
+| UA1–UA4 | fix_analytics | Fixed | `8c302e35`, `e0381f57`; 134 focused tests passed; subagent-only active-day regression passed |
 | AC1–AC3 | fix_accounts | Fixed | `b885d3d2`; recovery 3, pool 85, lease 36, retry 2 and desired probes 3 passed |
 | CO1–CO3 | fix_compaction | Fixed | `b78b71e2`; 137 focused tests passed, one intentional feature-off skip |
-| RS1–RS3 | Pending dispatch | Pending | Pending |
-| PE1–PE2 | fix_analytics | In progress | Pending |
-| MC1 | Pending dispatch | Pending | Pending |
-| QU1 | fix_queue_permissions | In progress | Pending |
-| QU2 | fix_analytics | In progress | Pending |
-| PR1–PR2 | fix_accounts | In progress | Pending |
-| HI1–HI2 | fix_accounts | In progress | Pending |
-| SP1–SP2 | fix_queue_permissions | In progress | Pending |
+| RS1–RS3 | fix_analytics | In progress | Pending |
+| PE1–PE2 | fix_analytics | Fixed | `7a9d666e`; peer/composer/App suite 245 passed |
+| MC1 | fix_analytics | In progress | Pending |
+| QU1 | fix_queue_permissions | Implemented; full-flow coverage in progress | `46af30b8`; query race control/interruption tests 4 passed |
+| QU2 | fix_analytics | Fixed | `7a9d666e`; out-of-order multi-batch refusal regression passed |
+| PR1–PR2 | fix_accounts | Implemented; permanent process coverage in progress | `a56684a6`; real lease race and park probes passed |
+| HI1–HI2 | fix_accounts | Implemented; second-read coverage in progress | `a56684a6`; history probes and focused replay/storage/projector suites passed |
+| SP1–SP2 | fix_queue_permissions | Implemented; full query handoff coverage in progress | `c4543282`, `46af30b8`; focused authority/settlement tests passed |
 
 ## Verification
 
