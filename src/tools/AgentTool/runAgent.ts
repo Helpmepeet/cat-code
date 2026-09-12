@@ -132,7 +132,7 @@ async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
   registerCleanup?: (cleanup: () => Promise<void>) => void,
-  authorizedNamedServers?: ReadonlySet<string>,
+  authorizedNamedServers?: ReadonlyMap<string, MCPServerConnection>,
 ): Promise<{
   clients: MCPServerConnection[]
   tools: Tools
@@ -203,11 +203,20 @@ async function initializeAgentMcpServers(
       // Reference by name - look up in existing MCP configs
       // This uses the memoized connectToServer, so we may get a shared client
       name = spec
-      if (authorizedNamedServers && !authorizedNamedServers.has(name)) {
-        logForDebugging(
-          `[Agent: ${agentDefinition.agentType}] Skipping MCP server not present in the inherited authorized runtime: ${name}`,
-          { level: 'warn' },
-        )
+      if (authorizedNamedServers) {
+        const authorizedClient = authorizedNamedServers.get(name)
+        if (!authorizedClient) {
+          logForDebugging(
+            `[Agent: ${agentDefinition.agentType}] Skipping MCP server not present in the inherited authorized runtime: ${name}`,
+            { level: 'warn' },
+          )
+          continue
+        }
+        agentClients.push(authorizedClient)
+        if (authorizedClient.type === 'connected') {
+          const tools = await fetchToolsForClient(authorizedClient)
+          agentTools.push(...tools)
+        }
         continue
       }
       config = getMcpConfigByName(spec)
@@ -600,13 +609,6 @@ async function* runAgentInCleanupScope({
     seededMessageUuids.size > 0
       ? findLastChainParticipantUuid(seededMessagesForPersistence)
       : null
-  const persistedInitialMessages =
-    seededMessageUuids.size > 0
-      ? initialMessages.filter(
-          message => !seededMessageUuids.has(message.uuid),
-        )
-      : initialMessages
-
   const agentReadFileState =
     forkContextMessages !== undefined
       ? cloneFileStateCache(toolUseContext.readFileState)
@@ -777,15 +779,28 @@ async function* runAgentInCleanupScope({
       : builtAgentSystemPrompt,
   )
 
-  // Determine abortController:
-  // - Override takes precedence
-  // - Async agents get a new unlinked controller (runs independently)
-  // - Sync agents share parent's controller
+  // Every worker owns its controller. Synchronous workers additionally follow
+  // parent cancellation in one direction, so a terminal worker handoff cannot
+  // abort the parent query that must receive it.
   const agentAbortController = override?.abortController
     ? override.abortController
-    : isAsync
-      ? new AbortController()
-      : toolUseContext.abortController
+    : new AbortController()
+  let detachParentAbort = () => {}
+  if (!override?.abortController && !isAsync) {
+    const parentSignal = toolUseContext.abortController.signal
+    const forwardParentAbort = () => {
+      agentAbortController.abort(parentSignal.reason)
+    }
+    if (parentSignal.aborted) {
+      forwardParentAbort()
+    } else {
+      parentSignal.addEventListener('abort', forwardParentAbort, { once: true })
+      detachParentAbort = () => {
+        parentSignal.removeEventListener('abort', forwardParentAbort)
+      }
+      setupCleanups.push(detachParentAbort)
+    }
+  }
 
   // Execute SubagentStart hooks and collect additional context
   const additionalContexts: string[] = []
@@ -957,10 +972,10 @@ async function* runAgentInCleanupScope({
     parentMcpClients,
     cleanup => setupCleanups.push(cleanup),
     parentMcpRuntime || mcpRuntimeInputs
-      ? new Set(
+      ? new Map(
           parentMcpClients
             .filter(client => client.type === 'connected')
-            .map(client => client.name),
+            .map(client => [client.name, client]),
         )
       : undefined,
   )
@@ -1075,6 +1090,13 @@ async function* runAgentInCleanupScope({
     initialMessages.push(...attachments.map(createAttachmentMessage))
     removeFromQueue(startupNotifications)
   }
+
+  const persistedInitialMessages =
+    seededMessageUuids.size > 0
+      ? initialMessages.filter(
+          message => !seededMessageUuids.has(message.uuid),
+        )
+      : initialMessages
 
   // Preserve tool use results for subagents with viewable transcripts (in-process teammates)
   if (preserveToolUseResults) {
@@ -1325,6 +1347,7 @@ async function* runAgentInCleanupScope({
       agentDefinition.callback()
     }
   } finally {
+    detachParentAbort()
     // Reaching here means setup completed, so this block owns every pre-loop
     // resource too. Disarm the setup scope first so the two never both release.
     setupCleanups.length = 0

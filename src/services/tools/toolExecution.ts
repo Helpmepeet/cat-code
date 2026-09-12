@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import type { UUID } from 'crypto'
 import type {
   ContentBlockParam,
   ToolResultBlockParam,
@@ -1242,7 +1243,7 @@ async function checkPermissionsAndCallTool(
         content: [content],
         toolUseResult: CANCEL_MESSAGE,
         toolResultStatus: 'cancelled',
-        sourceToolAssistantUUID: assistantMessage.uuid,
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
       }),
     })
     return resultingMessages

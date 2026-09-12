@@ -170,10 +170,11 @@ function startAgent(
   harness: ReturnType<typeof createAppStateHarness>,
   extra: Record<string, unknown> = {},
 ) {
+  const { parentContext = createParentContext(harness), ...runExtra } = extra
   return runAgent({
     agentDefinition: AGENT,
     promptMessages: [],
-    toolUseContext: createParentContext(harness),
+    toolUseContext: parentContext as ToolUseContext,
     canUseTool: (async () => ({
       behavior: 'allow' as const,
       updatedInput: {},
@@ -187,12 +188,16 @@ function startAgent(
       userContext: {},
       systemContext: {},
     },
-    ...extra,
+    ...runExtra,
   })
 }
 
-function runFailingSetup(harness: ReturnType<typeof createAppStateHarness>) {
+function runFailingSetup(
+  harness: ReturnType<typeof createAppStateHarness>,
+  parentContext?: ToolUseContext,
+) {
   return startAgent(harness, {
+    ...(parentContext ? { parentContext } : {}),
     onCacheSafeParams: () => {
       throw new Error('setup boom')
     },
@@ -247,6 +252,28 @@ describe('runAgent setup-failure cleanup', () => {
     await expect(runFailingSetup(harness).next()).rejects.toThrow('setup boom')
 
     expectNoLeakedWorkerName()
+  })
+
+  test('detaches synchronous parent cancellation when setup fails', async () => {
+    const harness = createAppStateHarness()
+    const parentContext = createParentContext(harness)
+    const signal = parentContext.abortController.signal
+    const realAdd = signal.addEventListener.bind(signal)
+    const realRemove = signal.removeEventListener.bind(signal)
+    let added = 0
+    let removed = 0
+    signal.addEventListener = ((...args: Parameters<AbortSignal['addEventListener']>) => {
+      added++
+      return realAdd(...args)
+    }) as AbortSignal['addEventListener']
+    signal.removeEventListener = ((...args: Parameters<AbortSignal['removeEventListener']>) => {
+      removed++
+      return realRemove(...args)
+    }) as AbortSignal['removeEventListener']
+
+    await expect(runFailingSetup(harness, parentContext).next()).rejects.toThrow('setup boom')
+    expect(added).toBe(1)
+    expect(removed).toBe(1)
   })
 
   test("clears the agent's session hooks when setup fails", async () => {

@@ -154,9 +154,15 @@ test('a delivered SendMessage instruction remains available on the next ResumeAg
       followupReachedFirstRun: requests[1]?.includes(fact),
       deliveredRecordRemoved: state.tasks[agentId].pendingMessages.length === 0,
       savedTranscriptHasFact: JSON.stringify(firstTranscript).includes(fact),
+      savedTranscriptHasStartupOutcome: JSON.stringify(firstTranscript).includes(priorOutcome),
       nextResumeHasFact: requests[2]?.includes(fact),
+      nextResumeHasStartupOutcome: requests[2]?.includes(priorOutcome),
     }))
     expect(requests[2]?.includes(fact)).toBe(true)
+    expect(JSON.stringify(firstTranscript).includes(priorOutcome)).toBe(true)
+    expect(requests[2]?.includes(priorOutcome)).toBe(true)
+    expect((JSON.stringify(firstTranscript).match(new RegExp(priorOutcome, 'g')) ?? [])).toHaveLength(1)
+    expect((requests[2]?.match(new RegExp(priorOutcome, 'g')) ?? [])).toHaveLength(1)
   } finally {
     await storage.flushSessionStorage()
     storage.clearSessionMessagesCache()

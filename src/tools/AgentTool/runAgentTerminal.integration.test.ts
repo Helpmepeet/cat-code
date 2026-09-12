@@ -39,7 +39,7 @@ function gate() {
   return { promise, release }
 }
 
-function harness(effectTool: ReturnType<typeof buildTool>, canUseTool: any) {
+function harness(effectTool: ReturnType<typeof buildTool>, canUseTool: any, isAsync = false) {
   let state: any = {
     toolPermissionContext: getEmptyToolPermissionContext(),
     sessionHooks: new Map(), tasks: {}, todos: {}, mcp: { tools: [], clients: [] },
@@ -69,7 +69,7 @@ function harness(effectTool: ReturnType<typeof buildTool>, canUseTool: any) {
         getSystemPrompt: () => 'fixture',
       },
       promptMessages: [], toolUseContext: parentContext, canUseTool,
-      availableTools: tools, useExactTools: true, isAsync: true,
+      availableTools: tools, useExactTools: true, isAsync,
       querySource: 'agent',
       override: { systemPrompt: ['fixture'] as never, userContext: {}, systemContext: {} },
     })) yielded.push(message)
@@ -79,7 +79,7 @@ function harness(effectTool: ReturnType<typeof buildTool>, canUseTool: any) {
       agentType: 'terminal-fixture', isAsync: true,
     })
   })()
-  return { run, yielded }
+  return { run, yielded, parentContext }
 }
 
 function scriptModel(effectName: string) {
@@ -152,6 +152,7 @@ test('real runAgent/query waits for an already-started effect before blocked han
   const result = await execution.run
   expect(finished).toBe(true)
   expect(result.content.map((block: any) => block.text).join('\n')).toContain('status: blocked')
+  expect(execution.parentContext.abortController.signal.aborted).toBe(false)
 })
 
 test('real runAgent/query publishes blocked without waiting forever and rejects a later permission release', async () => {
@@ -182,7 +183,52 @@ test('real runAgent/query publishes blocked without waiting forever and rejects 
   ])
   expect(result.content.map((block: any) => block.text).join('\n')).toContain('status: blocked')
   expect(calls).toBe(0)
+  expect(execution.parentContext.abortController.signal.aborted).toBe(false)
   permissionGate.release()
   await new Promise(resolve => setTimeout(resolve, 20))
   expect(calls).toBe(0)
+})
+
+test('a synchronous worker still stops when its parent is cancelled', async () => {
+  let started = false
+  let childSignal: AbortSignal | undefined
+  const effect = buildTool({
+    name: 'ParentCancellationEffect', inputSchema: z.strictObject({}),
+    isReadOnly: () => true, isConcurrencySafe: () => true,
+    async description() { return 'fixture' }, async prompt() { return 'fixture' },
+    async validateInput() { return { result: true as const } },
+    renderToolUseMessage: () => null, renderToolResultMessage: () => null,
+    renderToolUseErrorMessage: () => null,
+    mapToolResultToToolResultBlockParam(_output: unknown, id: string) {
+      return { type: 'tool_result' as const, tool_use_id: id, content: 'done' }
+    },
+    async call(_input: unknown, context: any) {
+      started = true
+      childSignal = context.abortController.signal
+      await new Promise<void>((_resolve, reject) => {
+        childSignal!.addEventListener('abort', () => reject(new Error('child cancelled')), { once: true })
+      })
+      return { data: 'done' }
+    },
+  } as never)
+  queryDeps = {
+    uuid: () => 'parent-cancellation-query',
+    microcompact: async (messages: any) => ({ messages }),
+    autocompact: async () => ({ wasCompacted: false, consecutiveFailures: 0 }),
+    callModel: async function* () {
+      const assistant = createAssistantMessage({ content: 'run effect' })
+      assistant.message.content = [{ type: 'tool_use', id: 'cancel-effect', name: effect.name, input: {} }]
+      assistant.message.stop_reason = 'tool_use'
+      yield assistant
+    },
+  }
+  const execution = harness(effect, async (_tool: unknown, input: unknown) => ({
+    behavior: 'allow' as const, updatedInput: input,
+  }))
+  for (let i = 0; i < 100 && !started; i++) await new Promise(resolve => setTimeout(resolve, 2))
+  expect(started).toBe(true)
+  expect(childSignal?.aborted).toBe(false)
+  execution.parentContext.abortController.abort('parent_cancelled')
+  expect(childSignal?.aborted).toBe(true)
+  await expect(execution.run).rejects.toThrow()
 })
