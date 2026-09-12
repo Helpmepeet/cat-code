@@ -41,9 +41,13 @@ import type {
   AccountsSnapshot,
   AccountStatus,
   AccountVerbMessage,
+  SignedOutCodexProfileStatus,
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
+import type {
+  AccountSignOutOverlay,
+} from './accountsState.js'
 import { AccountsUsageSection } from './AccountsUsageSection.js'
 import {
   selectAccountRows,
@@ -243,6 +247,14 @@ function ALDialog({
 
 /* ── lifecycle dialogs ── */
 
+type AccountLabel = Pick<AccountStatus, 'id' | 'alias'>
+
+type DeleteTarget = AccountLabel & {
+  expectedCredentialGeneration: number
+  isDefault: boolean
+  signedOut: boolean
+}
+
 /**
  * Sign-in, in both of its meanings: adding an account and restoring one whose
  * credentials died. It is deliberately ONE dialog on ONE verb, because the
@@ -261,7 +273,7 @@ function AddAccountDialog({
   onClose,
 }: {
   /** The account being restored, or undefined when adding a new one. */
-  account?: AccountStatus
+  account?: AccountLabel
   onAuthorize: () => void
   onClose: () => void
 }) {
@@ -374,22 +386,22 @@ function RenameAccountDialog({
 }
 
 function DeleteAccountDialog({
-  account,
+  target,
   hasOtherSwitchable,
   onConfirm,
   onClose,
 }: {
-  account: AccountStatus
+  target: DeleteTarget
   hasOtherSwitchable: boolean
   onConfirm: () => void
   onClose: () => void
 }) {
-  const alias = account.alias ?? account.id
+  const alias = target.alias ?? target.id
   const [submitting, setSubmitting] = useState(false)
   return (
     <ALDialog
       title={`Delete “${alias}”?`}
-      sub="Removes the saved account profile from disk and releases its leases. This can't be undone."
+      sub="Removes the saved account profile and releases its leases. This can't be undone."
       onClose={onClose}
       footer={
         <>
@@ -408,9 +420,10 @@ function DeleteAccountDialog({
       }
     >
       <div className="text-[12.5px] leading-relaxed text-text-muted">
-        The OAuth token and alias for{' '}
-        <span className="font-mono text-text-primary">{alias}</span> are erased.
-        {account.isDefault ? (
+        {target.signedOut ? 'The saved name for ' : 'The credentials and saved name for '}
+        <span className="font-mono text-text-primary">{alias}</span> will be
+        removed.
+        {target.isDefault ? (
           <span className="text-tone-warn">
             {hasOtherSwitchable
               ? ' This is the active account, so another will be activated.'
@@ -424,30 +437,52 @@ function DeleteAccountDialog({
 
 function LogoutAccountDialog({
   account,
+  hasOtherSwitchable,
   onConfirm,
   onClose,
 }: {
   account: AccountStatus
+  hasOtherSwitchable: boolean
   onConfirm: () => void
   onClose: () => void
 }) {
   const alias = account.alias ?? account.id
+  const [submitting, setSubmitting] = useState(false)
   return (
     <ALDialog
       title={`Sign out “${alias}”?`}
-      sub="Clears the active session's credentials. The saved profile stays on disk, so you can sign back in any time, or delete it separately."
+      sub={
+        account.hasVaultProfile
+          ? 'Cat Code stops using this account and removes it from active credential stores. The saved profile stays so you can sign in again or delete it.'
+          : 'Cat Code stops using this account and removes it from active credential stores. No saved profile will be created.'
+      }
       onClose={onClose}
       footer={
         <>
           <GhostBtn onClick={onClose}>Cancel</GhostBtn>
-          <PrimaryBtn onClick={onConfirm}>Sign out</PrimaryBtn>
+          <PrimaryBtn
+            disabled={submitting}
+            onClick={() => {
+              if (submitting) return
+              setSubmitting(true)
+              onConfirm()
+            }}
+          >
+            Sign out
+          </PrimaryBtn>
         </>
       }
     >
       <div className="text-[12.5px] leading-relaxed text-text-muted">
-        The saved profile for{' '}
-        <span className="font-mono text-text-primary">{alias}</span> stays on
-        disk. Delete it separately to remove it entirely.
+        {account.isDefault ? (
+          <>
+            {hasOtherSwitchable
+              ? 'Another usable account will become active.'
+              : 'No other usable account remains, so no account will be active.'}
+          </>
+        ) : (
+          <>Your active account will not change.</>
+        )}
       </div>
     </ALDialog>
   )
@@ -533,14 +568,16 @@ function TouchAllDialog({
 
 function AccountRowMenu({
   account,
+  signOutState,
   onAction,
 }: {
   account: AccountStatus
+  signOutState?: 'submitting' | 'checking' | 'refreshing'
   onAction: (key: AccountMenuKey, account: AccountStatus) => void
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
 
-  const items = selectAccountMenuItems(account)
+  const items = selectAccountMenuItems(account, signOutState)
   if (items.length === 0) return null
 
   return (
@@ -592,10 +629,12 @@ function AccountRowMenu({
 function PoolRow({
   account,
   hero,
+  signOutState,
   onAction,
 }: {
   account: AccountStatus
   hero?: boolean
+  signOutState?: 'submitting' | 'checking' | 'refreshing'
   onAction: (key: AccountMenuKey, account: AccountStatus) => void
 }) {
   const usable = account.status === 'healthy'
@@ -607,6 +646,14 @@ function PoolRow({
   // (Pages.jsx:409 dot vs :417 label).
   const labelTone = toneClasses(statusLabelTone(account))
   const alias = account.alias ?? account.id
+  const transitionLabel =
+    signOutState === 'submitting'
+      ? 'Signing out…'
+      : signOutState === 'checking'
+        ? 'Checking sign-out status'
+        : signOutState === 'refreshing'
+          ? 'Refreshing account…'
+          : null
   return (
     <div
       className={`flex items-center gap-3.5 border ${
@@ -635,7 +682,7 @@ function PoolRow({
         </div>
         <div className="mt-[1px] truncate text-[11px]">
           <span className={pressured ? 'text-tone-warn' : labelTone.text}>
-            {pressured ? 'Near limit' : account.availabilityLabel}
+            {transitionLabel ?? (pressured ? 'Near limit' : account.availabilityLabel)}
           </span>
           {account.lastError ? (
             <span className="text-text-faint"> · {account.lastError}</span>
@@ -664,7 +711,107 @@ function PoolRow({
             : ''}
         </div>
       )}
-      <AccountRowMenu account={account} onAction={onAction} />
+      <AccountRowMenu
+        account={account}
+        signOutState={signOutState}
+        onAction={onAction}
+      />
+    </div>
+  )
+}
+
+function SignedOutProfileMenu({
+  profile,
+  onRelink,
+  onDelete,
+}: {
+  profile: SignedOutCodexProfileStatus
+  onRelink: () => void
+  onDelete: () => void
+}) {
+  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const canDelete =
+    profile.lifecycleGeneration !== null ||
+    profile.credentialGeneration !== null
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-label="Account actions"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen(value => !value)}
+        className={`flex h-7 w-7 items-center justify-center rounded-[7px] text-[17px] leading-none text-text-muted transition-colors hover:bg-shell-hover ${
+          open ? 'bg-white/[0.08]' : ''
+        }`}
+      >
+        ⋯
+      </button>
+      {open ? (
+        <div
+          role="menu"
+          aria-label="Account actions"
+          onKeyDown={handleMenuRovingKeyDown}
+          className="absolute right-0 top-8 z-[20] min-w-[180px] rounded-[10px] border border-white/[0.12] bg-[light-dark(#ffffff,#141417)] p-[5px] shadow-[var(--elev-menu)]"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              close()
+              onRelink()
+            }}
+            className="block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] text-text-primary transition-colors hover:bg-white/[0.06]"
+          >
+            Sign in again
+          </button>
+          {canDelete ? (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                close()
+                onDelete()
+              }}
+              className="block w-full rounded-[7px] px-2.5 py-[7px] text-left text-[12.5px] text-tone-danger transition-colors hover:bg-tone-danger/10"
+            >
+              Delete account
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SignedOutProfileRow({
+  profile,
+  onRelink,
+  onDelete,
+}: {
+  profile: SignedOutCodexProfileStatus
+  onRelink: () => void
+  onDelete: () => void
+}) {
+  return (
+    <div className="flex items-center gap-3.5 rounded-[10px] border border-white/[0.06] bg-white/[0.018] px-3.5 py-[11px] opacity-70">
+      <span className="h-2 w-2 shrink-0 rounded-full bg-text-ghost" />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13px] font-semibold text-text-primary">
+          {profile.alias ?? profile.id}
+        </div>
+        <div className="mt-[1px] text-[11px] text-text-faint">
+          {profile.state === 'recovery_required'
+            ? 'Sign-out needs attention'
+            : 'Signed out'}
+        </div>
+      </div>
+      <SignedOutProfileMenu
+        profile={profile}
+        onRelink={onRelink}
+        onDelete={onDelete}
+      />
     </div>
   )
 }
@@ -741,10 +888,10 @@ function WaitingState() {
 
 type DialogState =
   | { kind: 'add' }
-  | { kind: 'relink'; account: AccountStatus }
+  | { kind: 'relink'; account: AccountLabel }
   | { kind: 'touchall' }
   | { kind: 'rename'; account: AccountStatus }
-  | { kind: 'delete'; account: AccountStatus }
+  | { kind: 'delete'; target: DeleteTarget }
   | { kind: 'logout'; account: AccountStatus }
   | null
 
@@ -758,6 +905,7 @@ export function AccountsPage({
   lastResult,
   usageStats = null,
   activeStatsRange = '7d',
+  signOutOverlays = {},
   onRangeChange,
   onVerb,
 }: {
@@ -765,6 +913,7 @@ export function AccountsPage({
   lastResult: AccountResultFrame | null
   usageStats?: UsageStatsSnapshot | null
   activeStatsRange?: UsageStatsRange
+  signOutOverlays?: Record<string, AccountSignOutOverlay>
   onRangeChange?: (range: UsageStatsRange) => void
   onVerb: (verb: AccountVerbMessage) => void
 }): ReactElement {
@@ -772,6 +921,7 @@ export function AccountsPage({
   const [dialog, setDialog] = useState<DialogState>(null)
   const [dismissedCapKey, setDismissedCapKey] = useState<string | null>(null)
   const [localRange, setLocalRange] = useState<UsageStatsRange>(activeStatsRange)
+  const [pendingAccountId, setPendingAccountId] = useState<string | null>(null)
   const currentRange = onRangeChange ? activeStatsRange : localRange
 
   function handleRangeChange(newRange: UsageStatsRange): void {
@@ -786,6 +936,7 @@ export function AccountsPage({
     const pending = pendingRef.current
     if (lastResult && pending && lastResult.requestId === pending.requestId) {
       pendingRef.current = null
+      setPendingAccountId(null)
       pending.onDone(lastResult)
     }
   }, [lastResult])
@@ -810,7 +961,12 @@ export function AccountsPage({
   // tone whatever the caller asked for: the sign-in verbs are refused outright
   // when no session is open, and an override would paint that refusal as neutral
   // news while nothing had happened.
-  function submit(verb: AccountVerbMessage, tone?: ToastTone): void {
+  function submit(
+    verb: AccountVerbMessage,
+    tone?: ToastTone,
+    targetAccountId?: string,
+  ): void {
+    if (targetAccountId) setPendingAccountId(targetAccountId)
     pendingRef.current = {
       requestId: verb.requestId,
       onDone: result => {
@@ -828,7 +984,42 @@ export function AccountsPage({
       submit(switchVerb(account.id))
       return
     }
+    if (key === 'retry_logout') {
+      const overlay = signOutOverlays[account.id]
+      if (!overlay || overlay.phase !== 'checking') return
+      submit(
+        logoutVerb(
+          overlay.accountId,
+          overlay.expectedCredentialGeneration,
+          overlay.operationId,
+        ),
+        undefined,
+        account.id,
+      )
+      return
+    }
+    if (key === 'delete') {
+      setDialog({
+        kind: 'delete',
+        target: {
+          id: account.id,
+          alias: account.alias,
+          expectedCredentialGeneration: account.credentialGeneration,
+          isDefault: account.isDefault,
+          signedOut: false,
+        },
+      })
+      return
+    }
     setDialog({ kind: key, account })
+  }
+
+  function signOutStateFor(
+    accountId: string,
+  ): 'submitting' | 'checking' | 'refreshing' | undefined {
+    if (pendingAccountId === accountId) return 'submitting'
+    const phase = signOutOverlays[accountId]?.phase
+    return phase === 'checking' || phase === 'refreshing' ? phase : undefined
   }
 
   return (
@@ -1003,13 +1194,20 @@ export function AccountsPage({
 
             {rows.length === 0 ? (
               <div className="rounded-xl border border-dashed border-shell-seam bg-shell-hover/35 px-8 py-10 text-center text-[12.5px] text-text-subtle">
-                No Codex accounts in the pool yet. Add one to sign in.
+                {snapshot.signedOutProfiles.length > 0
+                  ? 'No Codex accounts are signed in. Sign in again or add another account.'
+                  : 'No Codex accounts are signed in. Add one to continue.'}
               </div>
             ) : (
               <>
                 {active ? (
                   <div className="mb-2">
-                    <PoolRow account={active} hero onAction={onRowAction} />
+                    <PoolRow
+                      account={active}
+                      hero
+                      signOutState={signOutStateFor(active.id)}
+                      onAction={onRowAction}
+                    />
                   </div>
                 ) : null}
                 <div className="flex flex-col gap-1.5">
@@ -1017,12 +1215,47 @@ export function AccountsPage({
                     <PoolRow
                       key={account.id}
                       account={account}
+                      signOutState={signOutStateFor(account.id)}
                       onAction={onRowAction}
                     />
                   ))}
                 </div>
               </>
             )}
+            {snapshot.signedOutProfiles.length > 0 ? (
+              <div className="mt-3 border-t border-shell-seam pt-3">
+                <div className="mb-2 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-text-ghost">
+                  Signed out
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  {snapshot.signedOutProfiles.map(profile => (
+                    <SignedOutProfileRow
+                      key={profile.id}
+                      profile={profile}
+                      onRelink={() =>
+                        setDialog({ kind: 'relink', account: profile })
+                      }
+                      onDelete={() => {
+                        const expectedCredentialGeneration =
+                          profile.lifecycleGeneration ??
+                          profile.credentialGeneration
+                        if (expectedCredentialGeneration === null) return
+                        setDialog({
+                          kind: 'delete',
+                          target: {
+                            id: profile.id,
+                            alias: profile.alias,
+                            expectedCredentialGeneration,
+                            isDefault: false,
+                            signedOut: true,
+                          },
+                        })
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </section>
 
           {/* Real engine-backed usage analytics (7d / 30d global range filter) */}
@@ -1065,21 +1298,36 @@ export function AccountsPage({
       ) : null}
       {dialog?.kind === 'delete' ? (
         <DeleteAccountDialog
-          account={dialog.account}
-          hasOtherSwitchable={selectHasOtherSwitchable(snapshot, dialog.account.id)}
-          onConfirm={() => submit(deleteVerb(dialog.account.id))}
+          target={dialog.target}
+          hasOtherSwitchable={selectHasOtherSwitchable(snapshot, dialog.target.id)}
+          onConfirm={() =>
+            submit(
+              deleteVerb(
+                dialog.target.id,
+                dialog.target.expectedCredentialGeneration,
+              ),
+              undefined,
+              dialog.target.id,
+            )
+          }
           onClose={() => setDialog(null)}
         />
       ) : null}
       {dialog?.kind === 'logout' ? (
         <LogoutAccountDialog
           account={dialog.account}
+          hasOtherSwitchable={selectHasOtherSwitchable(
+            snapshot,
+            dialog.account.id,
+          )}
           onConfirm={() =>
             submit(
               logoutVerb(
                 dialog.account.id,
                 dialog.account.credentialGeneration,
               ),
+              undefined,
+              dialog.account.id,
             )
           }
           onClose={() => setDialog(null)}

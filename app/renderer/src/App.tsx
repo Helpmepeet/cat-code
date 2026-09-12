@@ -4320,6 +4320,7 @@ export function App() {
               lastResult={accounts.lastResult}
               usageStats={selectUsageStatsForRange(accounts)}
               activeStatsRange={accounts.activeStatsRange}
+              signOutOverlays={accounts.signOutOverlays}
               onRangeChange={handleStatsRangeChange}
               onVerb={sendAccountVerb}
             />

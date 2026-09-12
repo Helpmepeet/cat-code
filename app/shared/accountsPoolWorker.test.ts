@@ -181,6 +181,7 @@ describe('session-independent account deletion boundary', () => {
     type: 'account.delete',
     requestId: 'request-1',
     accountId: 'account-1',
+    expectedCredentialGeneration: 4,
     confirm: true,
   } as const
 
@@ -189,6 +190,15 @@ describe('session-independent account deletion boundary', () => {
     expect(parseAccountDeleteMessage({ ...verb, confirm: false })).toBeNull()
     expect(parseAccountDeleteMessage({ ...verb, extra: true })).toBeNull()
     expect(parseAccountDeleteMessage({ ...verb, accountId: '' })).toBeNull()
+    expect(
+      parseAccountDeleteMessage({
+        ...verb,
+        expectedCredentialGeneration: -1,
+      }),
+    ).toBeNull()
+    const { expectedCredentialGeneration: _generation, ...withoutGeneration } =
+      verb
+    expect(parseAccountDeleteMessage(withoutGeneration)).toBeNull()
   })
 
   test('round-trips the closed stdin request and redacted worker result', () => {

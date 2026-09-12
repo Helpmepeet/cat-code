@@ -128,7 +128,11 @@ function ndjson(record: unknown): string {
   return `${JSON.stringify(record)}\n`
 }
 
-function deleteInput(accountId = 'acct-0', requestId = 'request-1') {
+function deleteInput(
+  accountId = 'acct-0',
+  requestId = 'request-1',
+  expectedCredentialGeneration = 4,
+) {
   return {
     type: 'account-delete',
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
@@ -136,6 +140,7 @@ function deleteInput(accountId = 'acct-0', requestId = 'request-1') {
       type: 'account.delete',
       requestId,
       accountId,
+      expectedCredentialGeneration,
       confirm: true,
     },
   } as const

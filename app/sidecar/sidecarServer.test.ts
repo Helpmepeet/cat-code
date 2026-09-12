@@ -6280,12 +6280,23 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   // confirm omitted
   server.handleData(
     conn,
-    rawFrame({ type: 'account.delete', requestId: 'r', accountId: 'a' }),
+    rawFrame({
+      type: 'account.delete',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+    }),
   )
   // confirm:false
   server.handleData(
     conn,
-    rawFrame({ type: 'account.delete', requestId: 'r2', accountId: 'a', confirm: false }),
+    rawFrame({
+      type: 'account.delete',
+      requestId: 'r2',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+      confirm: false,
+    }),
   )
   expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBeGreaterThanOrEqual(2)
   expect(deleted).toBe(false)

@@ -59,7 +59,10 @@ const dead = (id: string) =>
     switchable: false,
   })
 
-const menuKeys = (a: AccountStatus) => selectAccountMenuItems(a).map(i => i.key)
+const menuKeys = (
+  a: AccountStatus,
+  signOutState?: 'submitting' | 'checking' | 'refreshing',
+) => selectAccountMenuItems(a, signOutState).map(i => i.key)
 
 describe('selectAccountMenuItems — sign in again', () => {
   test('a dead account offers it', () => {
@@ -104,6 +107,22 @@ describe('selectAccountMenuItems — sign in again', () => {
     expect(keys).toContain('relink')
     expect(keys).not.toContain('rename')
     expect(keys).not.toContain('delete')
+  })
+})
+
+describe('selectAccountMenuItems — targeted sign-out', () => {
+  test('active and inactive credentialed accounts both offer sign-out', () => {
+    expect(menuKeys(account({ isDefault: true }))).toContain('logout')
+    expect(menuKeys(account({ isDefault: false }))).toContain('logout')
+  })
+
+  test('a pending sign-out disables other row actions', () => {
+    expect(menuKeys(account(), 'submitting')).toEqual([])
+    expect(menuKeys(account(), 'refreshing')).toEqual([])
+  })
+
+  test('an unknown result offers only an idempotent status check', () => {
+    expect(menuKeys(account(), 'checking')).toEqual(['retry_logout'])
   })
 })
 

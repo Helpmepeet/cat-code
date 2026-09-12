@@ -6,6 +6,7 @@ import type {
   AccountsSnapshot,
   AccountStatus,
   AccountVerbMessage,
+  SignedOutCodexProfileStatus,
 } from '../../shared/protocol.js'
 import {
   AccountsPage,
@@ -104,6 +105,41 @@ test('renders the pool rows and the ready label from a snapshot', () => {
   expect(html).not.toContain('MOCK')
 })
 
+test('renders saved signed-out profiles outside credentialed pool counts', () => {
+  const snap = snapshot([])
+  snap.signedOutProfiles = [
+    {
+      id: 'signed-out-account',
+      alias: 'former-work',
+      state: 'signed_out',
+      credentialGeneration: 5,
+      lifecycleGeneration: 5,
+      credentialGenerationState: 'lifecycle_bound',
+      lifecycleState: 'signed_out',
+      lifecycleReadStatus: 'valid',
+    } satisfies SignedOutCodexProfileStatus,
+  ]
+
+  const html = renderToStaticMarkup(
+    <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
+  )
+  expect(html).toContain('0 of 0 ready')
+  expect(html).toContain('former-work')
+  expect(html).toContain('Signed out')
+  expect(html).toContain('No Codex accounts are signed in')
+})
+
+test('saved signed-out profile actions offer relink and generation-bound deletion', () => {
+  const source = readFileSync(new URL('./AccountsPage.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('function SignedOutProfileMenu(')
+  const end = source.indexOf('/* ── header pieces', start)
+  const signedOutRows = source.slice(start, end)
+
+  expect(signedOutRows).toContain('Sign in again')
+  expect(signedOutRows).toContain('Delete account')
+  expect(signedOutRows).toContain('profile.lifecycleGeneration')
+})
+
 /* ── (b) menu gating on the real redacted fields ── */
 
 test('menu shows Switch only when switchable', () => {
@@ -129,13 +165,13 @@ test('menu shows Rename and Delete only when hasVaultProfile', () => {
   expect(configOnly).not.toContain('delete')
 })
 
-test('menu shows Sign out only when isDefault', () => {
+test('menu shows Sign out for active and inactive credentialed accounts', () => {
   expect(
     selectAccountMenuItems(account({ isDefault: true })).map(i => i.key),
   ).toContain('logout')
   expect(
     selectAccountMenuItems(account({ isDefault: false })).map(i => i.key),
-  ).not.toContain('logout')
+  ).toContain('logout')
 })
 
 /* ── (c) Switch dispatches account.switch with the account id ── */
@@ -235,10 +271,11 @@ test('an unhealthy active Anthropic account shows health over plan decoration', 
 /* ── (d) Delete dispatches account.delete with confirm:true ── */
 
 test('deleteVerb builds an account.delete verb with confirm true', () => {
-  const verb = deleteVerb('acc-9')
+  const verb = deleteVerb('acc-9', 7)
   expect(verb).toMatchObject({
     type: 'account.delete',
     accountId: 'acc-9',
+    expectedCredentialGeneration: 7,
     confirm: true,
   })
   expect(typeof verb.requestId).toBe('string')
@@ -578,4 +615,3 @@ test('AccountsPage honestly renders empty usage state when 0 sessions exist in w
   expect(html).toContain('No session activity recorded')
   expect(html).toContain('No model activity in this period.')
 })
-

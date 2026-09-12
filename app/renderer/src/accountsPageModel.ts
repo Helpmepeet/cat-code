@@ -48,11 +48,15 @@ export function renameVerb(
   return { type: 'account.rename', requestId: newRequestId(), accountId, alias }
 }
 
-export function deleteVerb(accountId: string): AccountDeleteMessage {
+export function deleteVerb(
+  accountId: string,
+  expectedCredentialGeneration: number,
+): AccountDeleteMessage {
   return {
     type: 'account.delete',
     requestId: newRequestId(),
     accountId,
+    expectedCredentialGeneration,
     confirm: true,
   }
 }
@@ -60,10 +64,11 @@ export function deleteVerb(accountId: string): AccountDeleteMessage {
 export function logoutVerb(
   accountId: string,
   expectedCredentialGeneration: number,
+  requestId = newRequestId(),
 ): AccountLogoutMessage {
   return {
     type: 'account.logout',
-    requestId: newRequestId(),
+    requestId,
     accountId,
     expectedCredentialGeneration,
   }
@@ -161,6 +166,7 @@ export type AccountMenuKey =
   | 'relink'
   | 'rename'
   | 'logout'
+  | 'retry_logout'
   | 'delete'
 export type AccountMenuItem = {
   key: AccountMenuKey
@@ -183,7 +189,12 @@ function isRelinkable(account: AccountStatus): boolean {
 
 export function selectAccountMenuItems(
   account: AccountStatus,
+  signOutState?: 'submitting' | 'checking' | 'refreshing',
 ): AccountMenuItem[] {
+  if (signOutState === 'submitting' || signOutState === 'refreshing') return []
+  if (signOutState === 'checking') {
+    return [{ key: 'retry_logout', label: 'Check sign-out status' }]
+  }
   const items: AccountMenuItem[] = []
   if (account.switchable) {
     items.push({ key: 'switch', label: 'Switch to this account' })
@@ -192,7 +203,7 @@ export function selectAccountMenuItems(
     items.push({ key: 'relink', label: 'Sign in again' })
   }
   if (account.hasVaultProfile) items.push({ key: 'rename', label: 'Rename' })
-  if (account.isDefault) items.push({ key: 'logout', label: 'Sign out' })
+  items.push({ key: 'logout', label: 'Sign out' })
   if (account.hasVaultProfile) {
     items.push({ key: 'delete', label: 'Delete', danger: true })
   }

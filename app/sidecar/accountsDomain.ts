@@ -58,6 +58,7 @@ import {
   setAccountAlias,
   validateCodexAccountAlias,
   type CodexProfileInventory,
+  type CodexTargetedSignOutResolution,
   type PoolAccount,
   type SignedOutCodexProfile,
 } from '../../src/services/api/codexAccountPool.js'
@@ -155,8 +156,11 @@ export type AccountsCommandExecutor = {
   switchAnthropic(accountId: string): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
-  /** Delete a vault account profile. `accountId` already re-resolved + vault-checked. */
-  delete(accountId: string): AccountVerbResult | Promise<AccountVerbResult>
+  /** Delete one exact vault profile generation after engine-owned resolution. */
+  delete(
+    accountId: string,
+    expectedCredentialGeneration: number,
+  ): AccountVerbResult | Promise<AccountVerbResult>
   /**
    * Sign out one targeted account through the engine's lifecycle transaction.
    * The account id and expected generation come from the sidecar-validated verb.
@@ -652,17 +656,10 @@ export function createRealAccountsExecutor(
         ? { ok: true, message: `Renamed to ${alias}` }
         : { ok: false, message: 'Could not rename that account.' }
     },
-    async delete(accountId) {
-      const account = getPoolStatus().accounts.find(
-        candidate => candidate.accountId === accountId,
-      )
-      if (!account) {
-        return { ok: false, message: 'Could not delete that account.' }
-      }
-
+    async delete(accountId, expectedCredentialGeneration) {
       const result = await deleteTransaction({
         accountId,
-        expectedCredentialGeneration: account.credentialGeneration,
+        expectedCredentialGeneration,
         operationId: createCodexAccountDeletionOperationId(),
       })
       if (
@@ -739,6 +736,10 @@ export function createSidecarAccountsDomain(
     reloadAnthropicPool?: () => Promise<void>
     /** Read the engine's complete Codex profile inventory; injectable for tests. */
     readProfileInventory?: () => CodexProfileInventory
+    /** Exact-id lifecycle resolver; injectable for boundary tests. */
+    resolveDeletionTarget?: (
+      accountId: string,
+    ) => CodexTargetedSignOutResolution
     /** Lifecycle state is injected only by tests; production uses the engine singleton. */
     lifecycle?: Pick<CodexCredentialLifecycle, 'read'>
     /** Targeted cleanup seams keep boundary tests off live sockets and caches. */
@@ -760,6 +761,8 @@ export function createSidecarAccountsDomain(
     options.reloadAnthropicPool ?? (async () => loadClaudePoolForObservation())
   const readProfileInventory =
     options.readProfileInventory ?? getCodexProfileInventory
+  const resolveDeletionTarget =
+    options.resolveDeletionTarget ?? resolveCodexAccountForTargetedSignOut
   const lifecycle = options.lifecycle ?? codexCredentialLifecycle
   const retireWebSockets =
     options.retireWebSockets ?? retireCodexWebSocketSessions
@@ -819,6 +822,19 @@ export function createSidecarAccountsDomain(
       // Keep the last known pool; the caller reports the miss.
     }
     return resolveAccount(accountId)
+  }
+
+  async function resolveDeletionTargetForWrite(
+    accountId: string,
+  ): Promise<CodexTargetedSignOutResolution> {
+    const known = resolveDeletionTarget(accountId)
+    if (known.kind !== 'none') return known
+    try {
+      await reloadPool()
+    } catch {
+      return known
+    }
+    return resolveDeletionTarget(accountId)
   }
 
   /**
@@ -1201,11 +1217,46 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.rename', result, poolChanged: result.ok }
         }
         case 'account.delete': {
-          const account = await resolveAccountForWrite(verb.accountId)
-          if (!account) {
+          const target = await resolveDeletionTargetForWrite(verb.accountId)
+          if (target.kind !== 'credentialed' && target.kind !== 'signed_out') {
             return notFound('account.delete')
           }
-          const result = await executor.delete(account.accountId)
+          if (
+            target.kind === 'credentialed' &&
+            target.account.source !== 'vault'
+          ) {
+            return {
+              verb: 'account.delete',
+              result: {
+                ok: false,
+                message: 'Only saved account profiles can be deleted.',
+              },
+              poolChanged: false,
+            }
+          }
+          const observedGeneration =
+            target.kind === 'credentialed'
+              ? target.account.credentialGeneration
+              : target.profile.lifecycleGeneration ??
+                target.profile.credentialGeneration ??
+                null
+          if (
+            observedGeneration === null ||
+            observedGeneration !== verb.expectedCredentialGeneration
+          ) {
+            return {
+              verb: 'account.delete',
+              result: {
+                ok: false,
+                message: 'That account changed before deletion started.',
+              },
+              poolChanged: false,
+            }
+          }
+          const result = await executor.delete(
+            verb.accountId,
+            verb.expectedCredentialGeneration,
+          )
           return { verb: 'account.delete', result, poolChanged: result.ok }
         }
         case 'account.logout': {

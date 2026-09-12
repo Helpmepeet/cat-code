@@ -445,7 +445,7 @@ describe('real Codex delete executor cleanup', () => {
           replacementActiveAccountId: remaining.accountId,
         } satisfies CodexAccountDeletionResult
       },
-    }).delete(deleted.accountId)
+    }).delete(deleted.accountId, deleted.credentialGeneration)
 
     expect(result).toEqual({ ok: true, message: 'Account deleted.' })
     expect(deletionInput).toMatchObject({
@@ -481,7 +481,7 @@ describe('real Codex delete executor cleanup', () => {
           replacementActiveAccountId: null,
         } satisfies CodexAccountDeletionResult
       },
-    }).delete(deleted.accountId)
+    }).delete(deleted.accountId, deleted.credentialGeneration)
 
     expect(result).toEqual({
       ok: false,
@@ -1221,12 +1221,14 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       type: 'account.delete',
       requestId: 'delete-a',
       accountId: 'a',
+      expectedCredentialGeneration: 0,
       confirm: true,
     })
     const second = domain.runVerb({
       type: 'account.delete',
       requestId: 'delete-b',
       accountId: 'b',
+      expectedCredentialGeneration: 0,
       confirm: true,
     })
     await flush()
@@ -1253,9 +1255,87 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     })
     const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const rename = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'new' })
-    const del = await domain.runVerb({ type: 'account.delete', requestId: 'r', accountId: 'a', confirm: true })
+    const del = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+      confirm: true,
+    })
     expect(rename.result.ok).toBe(false)
-    expect(del.result.ok).toBe(true)
+    expect(del.result.ok).toBe(false)
+  })
+
+  test('delete refuses a stale credential generation without dispatching', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a', credentialGeneration: 8 })],
+      activeAccountId: 'a',
+    })
+    let deletes = 0
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: async () => {
+          deletes += 1
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'stale-delete',
+      accountId: 'a',
+      expectedCredentialGeneration: 7,
+      confirm: true,
+    })
+
+    expect(out.result.ok).toBe(false)
+    expect(out.poolChanged).toBe(false)
+    expect(deletes).toBe(0)
+  })
+
+  test('delete accepts a signed-out saved profile only at its exact lifecycle generation', async () => {
+    const calls: Array<{
+      accountId: string
+      expectedCredentialGeneration: number
+    }> = []
+    const domain = makeAccountsDomain({
+      resolveDeletionTarget: () => ({
+        kind: 'signed_out',
+        profile: {
+          accountId: 'signed-out-a',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePath: '/test-vault/accounts/signed-out-a.json',
+          vaultFilePaths: ['/test-vault/accounts/signed-out-a.json'],
+          profileState: 'signed_out',
+          credentialGeneration: 9,
+          lifecycleGeneration: 9,
+          credentialGenerationState: 'lifecycle_bound',
+          lifecycleState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      }),
+      executor: fakeExecutor({
+        delete: async (accountId, expectedCredentialGeneration) => {
+          calls.push({ accountId, expectedCredentialGeneration })
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'delete-signed-out',
+      accountId: 'signed-out-a',
+      expectedCredentialGeneration: 9,
+      confirm: true,
+    })
+
+    expect(out.result.ok).toBe(true)
+    expect(calls).toEqual([
+      { accountId: 'signed-out-a', expectedCredentialGeneration: 9 },
+    ])
   })
 
   test('touchAll surfaces per-account results and marks the pool changed', async () => {

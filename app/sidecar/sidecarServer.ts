@@ -5802,7 +5802,16 @@ function checkStrictKeys(message: unknown): string | null {
     // targeted generation (destructive/stale-sensitive operations fail closed).
     ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider'])],
     ['account.rename', new Set(['type', 'requestId', 'accountId', 'alias'])],
-    ['account.delete', new Set(['type', 'requestId', 'accountId', 'confirm'])],
+    [
+      'account.delete',
+      new Set([
+        'type',
+        'requestId',
+        'accountId',
+        'expectedCredentialGeneration',
+        'confirm',
+      ]),
+    ],
     ['account.logout', new Set([
       'type',
       'requestId',
@@ -6202,6 +6211,7 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
     type: z.literal('account.delete'),
     requestId: accountRequestIdSchema,
     accountId: accountIdSchema,
+    expectedCredentialGeneration: accountCredentialGenerationSchema,
     confirm: z.literal(true),
   }),
   z.object({

@@ -254,11 +254,16 @@ export type AccountRenameMessage = {
   alias: string
 }
 
-/** Delete a vault-backed account profile. Destructive → requires `confirm`. */
+/**
+ * Delete a vault-backed account profile at one exact lifecycle generation.
+ * Destructive → requires `confirm`; generation matching protects a newer login
+ * from a delayed delete submitted from a stale Accounts row.
+ */
 export type AccountDeleteMessage = {
   type: 'account.delete'
   requestId: string
   accountId: string
+  expectedCredentialGeneration: number
   confirm: true
 }
 

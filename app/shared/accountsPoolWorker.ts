@@ -136,6 +136,7 @@ export function parseAccountDeleteMessage(
     type: oneOf(['account.delete'] as const),
     requestId: isBoundedText,
     accountId: isBoundedText,
+    expectedCredentialGeneration: isSafeNonnegativeInteger,
     confirm: oneOf([true] as const),
   })
 }
