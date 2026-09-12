@@ -18,6 +18,12 @@ import { SLEEP_TOOL_NAME } from './tools/SleepTool/prompt.js'
 import { buildTool } from './Tool.js'
 import { asSystemPrompt } from './utils/systemPromptType.js'
 import z from 'zod/v4'
+import {
+  resetStateForTests,
+  setMainLoopModelOverride,
+  setSessionProvider,
+} from './bootstrap/state.js'
+import { getMainLoopModel } from './utils/model/model.js'
 
 function createAssistantMessage(text: string, uuid: string): AssistantMessage {
   return {
@@ -90,6 +96,53 @@ function createToolUseContext(messages: Message[]): ToolUseContext {
 }
 
 describe('query auto-compaction request assembly', () => {
+  test('uses the resolved plan-mode model only for the current compaction request', async () => {
+    setSessionProvider('firstParty')
+    setMainLoopModelOverride('haiku')
+    const messages = [createUserMessage({ content: 'Plan the migration.' })]
+    const toolUseContext = createToolUseContext(messages)
+    toolUseContext.options.mainLoopModel = getMainLoopModel()
+    toolUseContext.options.mainLoopProvider = 'firstParty'
+    ;(toolUseContext.getAppState().toolPermissionContext as { mode: string }).mode =
+      'plan'
+    let compactModel: string | undefined
+    let compactProvider: string | undefined
+    const deps: QueryDeps = {
+      uuid: () => 'plan-model-query',
+      microcompact: async input => ({ messages: input }),
+      autocompact: async (_messages, context, cacheSafeParams) => {
+        compactModel = context.options.mainLoopModel
+        compactProvider = context.options.mainLoopProvider
+        expect(cacheSafeParams.toolUseContext).toBe(context)
+        return { wasCompacted: false }
+      },
+      callModel: async function* () {
+        yield createAssistantMessage('Plan complete.', 'plan-response')
+      },
+    }
+
+    for await (const _message of query({
+      messages,
+      systemPrompt: ['system prompt'],
+      userContext: {},
+      systemContext: {},
+      canUseTool: async () => ({
+        behavior: 'allow',
+        decisionReason: { type: 'other', reason: 'test' },
+      }),
+      querySource: 'repl_main_thread',
+      toolUseContext,
+      deps,
+    })) {
+      // drain
+    }
+
+    expect(compactModel).toBe('claude-sonnet-5')
+    expect(compactProvider).toBe('firstParty')
+    expect(toolUseContext.options.mainLoopModel).toContain('haiku')
+    resetStateForTests()
+  })
+
   test('sends post-compact messages to both generic and OpenAI request assembly', async () => {
     const originalUserMessage = createUserMessage({ content: 'pre compact user text' })
     const preservedUserMessage = createUserMessage({

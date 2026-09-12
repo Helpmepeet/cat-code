@@ -127,11 +127,15 @@ describe('compactConversation', () => {
   const originalProjectDir = getSessionProjectDir()
   let tempDir: string
   let streamingRequests: Array<Record<string, unknown>>
+  let summaryResponse: AssistantMessage
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'compact-conversation-'))
     switchSession('compact-session', tempDir)
     streamingRequests = []
+    summaryResponse = createAssistantMessage(
+      '<summary>Keep the compacted conversation moving.</summary>',
+    )
 
     await mock.module('../analytics/growthbook.js', () => ({
       getFeatureValue_CACHED_MAY_BE_STALE: mock(
@@ -144,9 +148,7 @@ describe('compactConversation', () => {
       getMaxOutputTokensForModel: mock(() => 4096),
       queryModelWithStreaming: mock(async function* (request: unknown) {
         streamingRequests.push(request as Record<string, unknown>)
-        yield createAssistantMessage(
-          '<summary>Keep the compacted conversation moving.</summary>',
-        )
+        yield summaryResponse
       }),
     }))
   })
@@ -190,6 +192,56 @@ describe('compactConversation', () => {
 
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
+  })
+
+  test('rejects a typed streaming summary error without replacing context', async () => {
+    const { compactConversation } = await import('./compact.js')
+    summaryResponse = createAssistantMessage('Request timed out')
+    summaryResponse.isApiErrorMessage = true
+    const messages = [
+      createUserMessage({ content: 'Keep this original constraint.' }),
+      createAssistantMessage('I will keep it.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    await expect(
+      compactConversation(messages, context, {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      }),
+    ).rejects.toThrow('Request timed out')
+    expect(messages[0]?.message.content).toBe('Keep this original constraint.')
+  })
+
+  test('rejects a typed error from partial compaction', async () => {
+    const { partialCompactConversation } = await import('./compact.js')
+    summaryResponse = createAssistantMessage('Request timed out')
+    summaryResponse.isApiErrorMessage = true
+    const messages = [
+      createUserMessage({ content: 'Keep this prefix.' }),
+      createAssistantMessage('Summarize the remaining conversation.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    await expect(
+      partialCompactConversation(
+        messages,
+        1,
+        context,
+        {
+          systemPrompt: asSystemPrompt(['system prompt']),
+          userContext: {},
+          systemContext: {},
+          toolUseContext: context,
+          forkContextMessages: messages,
+        },
+        undefined,
+        'from',
+      ),
+    ).rejects.toThrow('Request timed out')
   })
 
   test('marks the summary when a peer message is inside the summarized span', async () => {

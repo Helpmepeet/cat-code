@@ -610,15 +610,27 @@ async function* queryLoop(
       toolUseContext.options.mainLoopProvider,
     )
 
+    // Compaction budgets and summary requests must use the model selected for
+    // this iteration. Keep the user's configured base model on the durable
+    // context so leaving plan mode restores it naturally.
+    const compactionToolUseContext: ToolUseContext = {
+      ...toolUseContext,
+      options: {
+        ...toolUseContext.options,
+        mainLoopModel: currentModel,
+        mainLoopProvider: currentProvider,
+      },
+    }
+
     queryCheckpoint('query_autocompact_start')
     const { compactionResult, consecutiveFailures } = await deps.autocompact(
       messagesForQuery,
-      toolUseContext,
+      compactionToolUseContext,
       {
         systemPrompt,
         userContext,
         systemContext,
-        toolUseContext,
+        toolUseContext: compactionToolUseContext,
         forkContextMessages: messagesForQuery,
       },
       querySource,
