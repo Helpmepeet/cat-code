@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = resolve(here, '..')
 const appSource = resolve(appRoot, 'renderer/src/App.tsx')
-const observerImport = `import { benchmarkObserveBatch, benchmarkObserveCommit } from '../../scripts/streaming-benchmark-observer.js'\n`
+const observerImport = `import { benchmarkObserveBatch, benchmarkObserveCommit, benchmarkWrapRawReducer } from '../../scripts/streaming-benchmark-observer.js'\n`
 
 export function streamingBenchmarkTransform(): Plugin {
   return {
@@ -20,12 +20,17 @@ export function streamingBenchmarkTransform(): Plugin {
         `export function App() {`,
         `  const [state, dispatch] = useReducer(\n    reduceServerFrameBatched,\n    undefined,\n    createRawMessageLogState,\n  )`,
         `    const unsubscribe = bridge.subscribe(frames => {`,
+        `const reduceServerFrameBatched = withBatch(reduceServerFrame)`,
       ]
       for (const anchor of anchors) {
         if (source.split(anchor).length !== 2) throw new Error(`App.tsx benchmark anchor drifted: ${anchor.slice(0, 48)}`)
       }
       let transformed = observerImport + source
       transformed = transformed.replace(`import {\n  useCallback,\n  useEffect,`, `import {\n  useCallback,\n  useEffect,\n  useLayoutEffect,`)
+      transformed = transformed.replace(
+        `const reduceServerFrameBatched = withBatch(reduceServerFrame)`,
+        `const reduceServerFrameBatched = withBatch(benchmarkWrapRawReducer(reduceServerFrame))`,
+      )
       transformed = transformed.replace(
         anchors[2],
         `${anchors[2]}\n  useLayoutEffect(() => { benchmarkObserveCommit(performance.now(), state) }, [state])`,
