@@ -1,12 +1,14 @@
 # Live streaming batching implementation
 
-Date: 2026-09-12. Status: **core implemented and independently reviewed; headless subset passed; production policy remains immediate pending authorized Electron measurement**.
+Date: 2026-09-12. Status: **core implemented and independently reviewed; measurements complete; retain immediate delivery because neither fixed delay met the CPU target**.
 
 Plan: [Live streaming batching implementation plan](../migration/specs/2026-09-12-live-streaming-batching-plan.md).
 
 Review: [Implementation and measurement preparation review](2026-09-12-live-streaming-batching-implementation-review.md). Measurement fixtures and commands: [Live streaming measurements](2026-09-12-live-streaming-measurements/README.md).
 
 ## Outcome
+
+The subsequent authorized pilot and 72-sample Electron matrix are complete. Neither 8 ms nor 16 ms reached the required 20% CPU reduction in the paced four-session workload, so neither qualifies for global activation. Production remains at `delayMs: 0`. See the [measured results and independent verdict](2026-09-12-live-streaming-batching-results.md).
 
 Electron main now has a production-wired, bounded delivery coordinator for ordinary live text and thinking deltas. It preserves the original frames in one cross-session FIFO and supports immediate, 8 ms and 16 ms policies. Production explicitly selects `delayMs: 0`: the candidate policy is not enabled until real Electron CPU and renderer-commit latency evidence meets the plan's fixed bars.
 
@@ -40,14 +42,14 @@ The required unfiltered `bun test app/` was attempted with an isolated config di
 
 ## Open evidence and exact remaining runs
 
-The implementation does **not** claim lower Electron main+renderer CPU, acceptable actual React commit latency, smooth visual streaming or battery-life improvement. Production stays immediate for that reason.
+The focused Electron measurements establish lower CPU in several synthetic busy workloads, with the limits documented in the results. They do not establish the plan's full acceptance, smooth visual streaming, whole-application CPU savings or battery-life improvement. Production stays immediate because the fixed CPU bar was not met.
 
-1. Run the prepared isolated Electron benchmark matrix after per-run authorization. Compare immediate, 8 ms and 16 ms for 1/4/8 sessions and record main+renderer CPU, send/dispatch/commit counts, queue age/bytes, clock uncertainty and actual arrival-to-commit p95/p99. Enable a nonzero production delay only if the fixed CPU and latency bars pass.
+1. **Measurement complete:** 12 valid pilot samples plus a separate 72/72 valid matrix; independent review confirmed the data and the decision to retain immediate delivery. No fixed-delay candidate is selected for activation.
 2. Run `bun run --cwd app test:hardening` after per-run authorization and isolation preparation. It launches the actual production main. The existing runner isolates `CLAUDE_CONFIG_DIR` but still inherits the parent environment and Electron profile defaults; isolate those before describing this as a profile-independent run. It was not run in this implementation session.
-3. Run the fresh GUI acceptance from the plan with isolated temporary config/workspaces: simultaneous streams, typing and scrolling, permission presentation, stop/completion, tab switching, reload, session close and macOS close/reactivation. No provider or GUI run was performed here.
+3. Before any future activation, run the fresh GUI acceptance from the plan with isolated temporary config/workspaces: simultaneous streams, typing and scrolling, permission presentation, stop/completion, tab switching, reload, session close and macOS close/reactivation. The synthetic Electron benchmark did not provide this full acceptance; no provider call occurred.
 
 ## Scope flags
 
-- ⬜ **Measured selection deferred:** immediate delivery remains the production policy until the authorized Electron evidence selects 8 ms, 16 ms, or retains immediate.
+- ✅ **Measured selection complete:** retain immediate delivery; the fixed-delay candidates missed the paced four-session CPU target.
 - ⬜ **Hardening and GUI acceptance pending:** both require an Electron launch authorized for that run.
 - No public protocol/version, security boundary, replay cap, provider behavior, credential or live session data changed.

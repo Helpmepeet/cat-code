@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "input": "/tmp/catcode-streaming-electron-pilot-20260912-04",
+  "input": "/Users/pt/cat-code/docs/reports/2026-09-12-live-streaming-measurements/electron-pilot",
   "status": "incomplete-pilot-matrix",
   "expectedSamples": 72,
   "observedSamples": 12,
@@ -69,7 +69,7 @@
   "unexpected": [],
   "scope": "Instrumented focused Electron delivery pipeline; excludes engine/supervisor/host workers, production recovery/health timers, and operational logging outside delivery tracing.",
   "cpuAccounting": "Combined Electron CPU sums Browser and Tab cumulative CPU deltas only; mainCpuMicros is validated but never added.",
-  "clockCaveat": "Arrival-to-commit percentiles depend on cross-process monotonic-clock calibration; uncertainty is reported per sample and is not subtracted.",
+  "clockCaveat": "Arrival-to-commit percentiles depend on cross-process monotonic-clock calibration. The conservative per-sample bound adds half the endpoint offset drift to the larger endpoint uncertainty; paired bounds sum candidate and baseline bounds.",
   "sourceHashes": {
     "main/liveFrameBatcher.ts": "32d9226bc02959b14280f81d2b79a9c20184e16e1d37d8f85919dc4fe793fdc8",
     "main/attachmentGate.ts": "7f72e84ef225426d6d725d5e3dfa43698cd0b4b1ef0368683aee43a2f3298386",
@@ -99,7 +99,8 @@
       "commitCount": 805,
       "latencyP95Ms": 4.510968735098686,
       "latencyP99Ms": 5.194926741059135,
-      "clockAlignmentUncertaintyMs": 0.027395500000011452
+      "rawClockAlignmentUncertaintyMs": 0.027395500000011452,
+      "conservativeClockAlignmentUncertaintyMs": 0.03536425298045742
     },
     {
       "repetition": 0,
@@ -111,7 +112,8 @@
       "commitCount": 224,
       "latencyP95Ms": 20.119312255960722,
       "latencyP99Ms": 21.148271261920854,
-      "clockAlignmentUncertaintyMs": 0.03339575596055511
+      "rawClockAlignmentUncertaintyMs": 0.03339575596055511,
+      "conservativeClockAlignmentUncertaintyMs": 0.06497925596056575
     },
     {
       "repetition": 0,
@@ -123,7 +125,8 @@
       "commitCount": 403,
       "latencyP95Ms": 11.98858374702013,
       "latencyP99Ms": 12.88558376490164,
-      "clockAlignmentUncertaintyMs": 0.031207999999992353
+      "rawClockAlignmentUncertaintyMs": 0.031207999999992353,
+      "conservativeClockAlignmentUncertaintyMs": 0.04179125298003328
     },
     {
       "repetition": 0,
@@ -135,7 +138,8 @@
       "commitCount": 802,
       "latencyP95Ms": 4.288593744038735,
       "latencyP99Ms": 5.23188575596032,
-      "clockAlignmentUncertaintyMs": 0.03066650000005211
+      "rawClockAlignmentUncertaintyMs": 0.03066650000005211,
+      "conservativeClockAlignmentUncertaintyMs": 0.05721874403934635
     },
     {
       "repetition": 1,
@@ -147,7 +151,8 @@
       "commitCount": 803,
       "latencyP95Ms": 4.436052252980517,
       "latencyP99Ms": 5.08859323509887,
-      "clockAlignmentUncertaintyMs": 0.03133349999995971
+      "rawClockAlignmentUncertaintyMs": 0.03133349999995971,
+      "conservativeClockAlignmentUncertaintyMs": 0.061114747019814786
     },
     {
       "repetition": 1,
@@ -159,7 +164,8 @@
       "commitCount": 222,
       "latencyP95Ms": 20.199458258940467,
       "latencyP99Ms": 21.11645825894084,
-      "clockAlignmentUncertaintyMs": 0.027791499999921143
+      "rawClockAlignmentUncertaintyMs": 0.027791499999921143,
+      "conservativeClockAlignmentUncertaintyMs": 0.04437474701944666
     },
     {
       "repetition": 1,
@@ -171,7 +177,8 @@
       "commitCount": 404,
       "latencyP95Ms": 11.887781479138539,
       "latencyP99Ms": 13.341656479138692,
-      "clockAlignmentUncertaintyMs": 0.038457999999991443
+      "rawClockAlignmentUncertaintyMs": 0.038457999999991443,
+      "conservativeClockAlignmentUncertaintyMs": 0.07334349701977771
     },
     {
       "repetition": 1,
@@ -183,7 +190,8 @@
       "commitCount": 804,
       "latencyP95Ms": 4.472405994039491,
       "latencyP99Ms": 5.247656000000461,
-      "clockAlignmentUncertaintyMs": 0.025042000000212283
+      "rawClockAlignmentUncertaintyMs": 0.025042000000212283,
+      "conservativeClockAlignmentUncertaintyMs": 0.03834400000016558
     },
     {
       "repetition": 2,
@@ -195,7 +203,8 @@
       "commitCount": 804,
       "latencyP95Ms": 4.450094238079146,
       "latencyP99Ms": 5.176552255959905,
-      "clockAlignmentUncertaintyMs": 0.035770999999954256
+      "rawClockAlignmentUncertaintyMs": 0.035770999999954256,
+      "conservativeClockAlignmentUncertaintyMs": 0.0488022559603678
     },
     {
       "repetition": 2,
@@ -207,7 +216,8 @@
       "commitCount": 221,
       "latencyP95Ms": 20.25253126192092,
       "latencyP99Ms": 21.215989255960267,
-      "clockAlignmentUncertaintyMs": 0.02470800000003237
+      "rawClockAlignmentUncertaintyMs": 0.02470800000003237,
+      "conservativeClockAlignmentUncertaintyMs": 0.04755173807927804
     },
     {
       "repetition": 2,
@@ -219,7 +229,8 @@
       "commitCount": 404,
       "latencyP95Ms": 12.178968505960256,
       "latencyP99Ms": 13.288176488079444,
-      "clockAlignmentUncertaintyMs": 0.030000000000086402
+      "rawClockAlignmentUncertaintyMs": 0.030000000000086402,
+      "conservativeClockAlignmentUncertaintyMs": 0.05511448807931174
     },
     {
       "repetition": 2,
@@ -231,7 +242,8 @@
       "commitCount": 803,
       "latencyP95Ms": 4.5599794850986655,
       "latencyP99Ms": 5.355020485098976,
-      "clockAlignmentUncertaintyMs": 0.036291500000061205
+      "rawClockAlignmentUncertaintyMs": 0.036291500000061205,
+      "conservativeClockAlignmentUncertaintyMs": 0.06614550298002086
     }
   ],
   "groups": [
@@ -264,10 +276,15 @@
         "min": 5.23188575596032,
         "max": 5.355020485098976
       },
-      "clockAlignmentUncertaintyMs": {
+      "rawClockAlignmentUncertaintyMs": {
         "median": 0.03066650000005211,
         "min": 0.025042000000212283,
         "max": 0.036291500000061205
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.05721874403934635,
+        "min": 0.03834400000016558,
+        "max": 0.06614550298002086
       }
     },
     {
@@ -299,10 +316,15 @@
         "min": 5.08859323509887,
         "max": 5.194926741059135
       },
-      "clockAlignmentUncertaintyMs": {
+      "rawClockAlignmentUncertaintyMs": {
         "median": 0.03133349999995971,
         "min": 0.027395500000011452,
         "max": 0.035770999999954256
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.0488022559603678,
+        "min": 0.03536425298045742,
+        "max": 0.061114747019814786
       }
     },
     {
@@ -334,10 +356,15 @@
         "min": 12.88558376490164,
         "max": 13.341656479138692
       },
-      "clockAlignmentUncertaintyMs": {
+      "rawClockAlignmentUncertaintyMs": {
         "median": 0.031207999999992353,
         "min": 0.030000000000086402,
         "max": 0.038457999999991443
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.05511448807931174,
+        "min": 0.04179125298003328,
+        "max": 0.07334349701977771
       }
     },
     {
@@ -369,10 +396,15 @@
         "min": 21.11645825894084,
         "max": 21.215989255960267
       },
-      "clockAlignmentUncertaintyMs": {
+      "rawClockAlignmentUncertaintyMs": {
         "median": 0.027791499999921143,
         "min": 0.02470800000003237,
         "max": 0.03339575596055511
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.04755173807927804,
+        "min": 0.04437474701944666,
+        "max": 0.06497925596056575
       }
     }
   ],
@@ -384,7 +416,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 26.49299937810791,
       "addedP95Ms": 15.830718511921987,
-      "addedP99Ms": 15.916385505960534
+      "addedP99Ms": 15.916385505960534,
+      "latencyUncertaintyMs": 0.1221979999999121,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 0,
@@ -393,7 +428,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 28.745047593062978,
       "addedP95Ms": 15.608343520862036,
-      "addedP99Ms": 15.95334452086172
+      "addedP99Ms": 15.95334452086172,
+      "latencyUncertaintyMs": 0.10034350894102317,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 0,
@@ -402,7 +440,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 20.95186654344449,
       "addedP95Ms": 7.699990002981394,
-      "addedP99Ms": 7.653698008941319
+      "addedP99Ms": 7.653698008941319,
+      "latencyUncertaintyMs": 0.09900999701937963,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 0,
@@ -411,7 +452,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 23.373679518266744,
       "addedP95Ms": 7.4776150119214435,
-      "addedP99Ms": 7.690657023842505
+      "addedP99Ms": 7.690657023842505,
+      "latencyUncertaintyMs": 0.0771555059604907,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 1,
@@ -420,7 +464,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 19.330647951393257,
       "addedP95Ms": 15.727052264900976,
-      "addedP99Ms": 15.868802258940377
+      "addedP99Ms": 15.868802258940377,
+      "latencyUncertaintyMs": 0.08271874701961224,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 1,
@@ -429,7 +476,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 16.701044832435006,
       "addedP95Ms": 15.76340600595995,
-      "addedP99Ms": 16.02786502384197
+      "addedP99Ms": 16.02786502384197,
+      "latencyUncertaintyMs": 0.10548949403926144,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 1,
@@ -438,7 +488,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 15.735931565399916,
       "addedP95Ms": 7.415375485099048,
-      "addedP99Ms": 8.09400047913823
+      "addedP99Ms": 8.09400047913823,
+      "latencyUncertaintyMs": 0.1116874970199433,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 1,
@@ -447,7 +500,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 12.989150395790128,
       "addedP95Ms": 7.451729226158022,
-      "addedP99Ms": 8.253063244039822
+      "addedP99Ms": 8.253063244039822,
+      "latencyUncertaintyMs": 0.1344582440395925,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 2,
@@ -456,7 +512,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 16.478146895320624,
       "addedP95Ms": 15.692551776822256,
-      "addedP99Ms": 15.860968770861291
+      "addedP99Ms": 15.860968770861291,
+      "latencyUncertaintyMs": 0.1136972410592989,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 2,
@@ -465,7 +524,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 12.606309521272014,
       "addedP95Ms": 15.802437023841776,
-      "addedP99Ms": 16.039437000000362
+      "addedP99Ms": 16.039437000000362,
+      "latencyUncertaintyMs": 0.09635399403964584,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 2,
@@ -474,7 +536,10 @@
       "baselinePolicy": "original",
       "cpuReductionPercent": 13.666271757951359,
       "addedP95Ms": 7.618989020861591,
-      "addedP99Ms": 7.933156002980468
+      "addedP99Ms": 7.933156002980468,
+      "latencyUncertaintyMs": 0.1212599910593326,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     },
     {
       "repetition": 2,
@@ -483,7 +548,10 @@
       "baselinePolicy": "0",
       "cpuReductionPercent": 9.664083788898836,
       "addedP95Ms": 7.72887426788111,
-      "addedP99Ms": 8.111624232119539
+      "addedP99Ms": 8.111624232119539,
+      "latencyUncertaintyMs": 0.10391674403967954,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
     }
   ]
 }

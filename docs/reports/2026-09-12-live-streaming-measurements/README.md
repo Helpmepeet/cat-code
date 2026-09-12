@@ -69,4 +69,4 @@ bun run --cwd app typecheck
 bun run app/scripts/streaming-benchmark.ts --workload long-history-8
 ```
 
-The independent reviewer approved preparation through `8d769d4c` for an authorized pilot and this matrix, with the scope limits above. Runtime/performance acceptance remains pending.
+The independent reviewer approved preparation through `8d769d4c` for an authorized pilot and this matrix, with the scope limits above. The subsequent authorized study completed a [12-sample pilot](electron-pilot/summary.md) and a separate [72-sample matrix](electron-matrix/summary.md). Independent review confirmed the measured decision to retain immediate delivery: neither fixed delay met the paced four-session CPU target. See the [results](../2026-09-12-live-streaming-batching-results.md) for the latency boundary, sparse-traffic uncertainty and remaining production acceptance.

@@ -33,3 +33,9 @@ The prepared workload compares original immediate delivery, the new coordinator 
 Keep the plan's fixed selection bars: at least 20% combined main/renderer CPU reduction in the declared paced workloads, added p95 latency at most 20 ms and p99 at most 32 ms, no sparse-workload regression above 5% beyond noise, and no idle work. These are proposed acceptance targets, not estimates or measured outcomes. Retain immediate delivery if the evidence does not support a candidate.
 
 The focused Electron benchmark omits engine, supervisor and host workers, production recovery/health timers and operational logging outside delivery tracing. Report its results as delivery-pipeline CPU, not whole-application CPU or energy. Actual production hardening and fresh GUI/lifecycle acceptance remain separate gates before enabling batching.
+
+## Authorized measurement follow-up
+
+Subsequent runtime checks exposed and fixed fixture-only module loading, readiness-await and selected-session bootstrap issues through `ded44a7d`. Bootstrap now has one bounded traced marker per synthetic session, at most eight; bulk history remains untraced and all scored frames preserve full tracing. The initial one-marker preparation description above records the earlier checkpoint.
+
+The independent reviewer validated the complete **12-sample pilot and separate 72-sample matrix**, reproduced the quantiles, and confirmed the decision: **retain production delay 0**. Neither fixed delay reached 20% lower CPU in paced four-session traffic. The sparse 16 ms p95 boundary remains borderline after conservatively including clock drift; sparse CPU attribution is uncertain because the immediate baselines also vary. Full findings and archived evidence are in the [measurement report](2026-09-12-live-streaming-batching-results.md). Production hardening and full GUI acceptance are not claimed by these measurements.
