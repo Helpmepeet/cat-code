@@ -1071,8 +1071,14 @@ export function App() {
       // without touching a retained copy.
       const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)
       retainedSubmitsRef.current = answers.state
+      const restoredBySession = new Map<SessionId, RetainedSubmit[]>()
       for (const { sessionId, retained } of answers.restored) {
-        restoreRefusedSubmit(sessionId, retained)
+        const entries = restoredBySession.get(sessionId) ?? []
+        entries.push(retained)
+        restoredBySession.set(sessionId, entries)
+      }
+      for (const [sessionId, retained] of restoredBySession) {
+        restoreRefusedSubmits(sessionId, retained)
       }
       // D1b — the messages a recall took back, put where the user can edit them,
       // plus the one thing about the outcome the user has to be told. BOTH sit
@@ -2375,36 +2381,33 @@ export function App() {
   // says why the message bounced, and the message reappearing in the composer
   // is the rest of the story. A second red line restating it would be noise.
   //
-  // The attachments REPLACE whatever is attached now, the same way a released
-  // parked prompt does: only one image is ever held
-  // (`reduceImageAttachmentAdded`), and the refused one is the one the user is
-  // waiting on. Text is merged instead, so a draft typed during the round trip
-  // survives underneath it. `reduceSessionImagesRestored` is the guarded form:
-  // an EMPTY `retained.images` means this submit never carried one, so it must
-  // leave an image attached to the CURRENT draft alone rather than clear it.
-  // The copy is handed IN rather than looked up: `reduceSubmitAnswers` already
-  // retired exactly the entry this answer named, so there is nothing left here to
-  // find and no head to take by mistake.
-  const restoreRefusedSubmit = useCallback((
+  // Attachments restore in submission order, so the newest refused attachment
+  // wins just as attaching them one after another would. Text is merged once,
+  // so the original submit order stays ahead of a draft typed during the round
+  // trip. Empty attachment lists leave the current draft's attachment alone.
+  const restoreRefusedSubmits = useCallback((
     sessionId: SessionId,
-    retained: RetainedSubmit,
+    retained: readonly RetainedSubmit[],
   ) => {
+    const text = retained.map(entry => entry.text).filter(Boolean).join('\n')
     setPromptDrafts(drafts =>
       reducePromptDrafts(
         drafts,
         sessionId,
         restoreDraftWithPending(
           selectPromptDraft(drafts, sessionId),
-          retained.text,
+          text,
         ),
       ),
     )
-    setImageAttachmentState(state =>
-      reduceSessionImagesRestored(state, sessionId, retained.images),
-    )
-    setFileAttachmentState(state =>
-      reduceSessionFileAttachmentRestored(state, sessionId, retained.file),
-    )
+    for (const entry of retained) {
+      setImageAttachmentState(state =>
+        reduceSessionImagesRestored(state, sessionId, entry.images),
+      )
+      setFileAttachmentState(state =>
+        reduceSessionFileAttachmentRestored(state, sessionId, entry.file),
+      )
+    }
   }, [])
 
   // D1b — the composer half of a recall, and deliberately the SAME shape as the

@@ -99,7 +99,9 @@ function isolatedWorkspace(): Workspace {
  * tests need exact control of the bytes: a torn tail, a forged tag, a key.
  * ------------------------------------------------------------------------- */
 
-type Message = { role: 'user' | 'assistant'; content: unknown }
+type Message =
+  | { role: 'user' | 'assistant'; content: unknown }
+  | { attachment: unknown }
 
 function writeTranscript(
   workspace: Workspace,
@@ -116,7 +118,7 @@ function writeTranscript(
     uuids.push(uuid)
     lines.push(
       JSON.stringify({
-        type: message.role,
+        type: 'attachment' in message ? 'attachment' : message.role,
         uuid,
         parentUuid,
         isSidechain: false,
@@ -125,7 +127,9 @@ function writeTranscript(
         userType: 'external',
         version: 'test',
         timestamp: new Date(Date.UTC(2026, 8, 3, 0, 0, index)).toISOString(),
-        message: { role: message.role, content: message.content },
+        ...('attachment' in message
+          ? { attachment: message.attachment }
+          : { message: { role: message.role, content: message.content } }),
       }),
     )
     parentUuid = uuid
@@ -1077,6 +1081,73 @@ test('a query is matched before the caps, so a cut can never hide a hit', async 
 
   expect(result.turns?.length).toBe(1)
   expect(result.turns?.[0]?.said).not.toContain('HIDDEN-BY-THE-CAP')
+  expect(result.summary).toContain('the part left out')
+})
+
+test('a busy peer delivery opens its own readable turn with its source identity', async () => {
+  const workspace = isolatedWorkspace()
+  const sourceUuid = randomUUID()
+  const { engineSessionId } = writeTranscript(workspace, [
+    ...exchange('original request', 'working on it'),
+    {
+      attachment: {
+        type: 'queued_command',
+        prompt: 'PEER-BUSY-MARKER check the migration file',
+        source_uuid: sourceUuid,
+        commandMode: 'task-notification',
+        origin: { kind: 'peer', from: 'Alex', fromSessionId: randomUUID() },
+      },
+    },
+    text('assistant', 'the migration file is clean'),
+  ])
+  const requester = listing(peerRow('Bear', engineSessionId)).requestHost
+
+  const result = await read(requester, {
+    peer: 'Bear',
+    query: 'PEER-BUSY-MARKER',
+  })
+  expect(result.turns).toEqual([
+    {
+      asked: 'PEER-BUSY-MARKER check the migration file',
+      said: 'the migration file is clean',
+      touched: [],
+    },
+  ])
+  expect(result.truncated).toBe(false)
+
+  const before = await read(requester, { peer: 'Bear', before: sourceUuid })
+  expect(before.status).toBe('ok')
+  expect(before.turns?.map(turn => turn.asked)).toEqual(['original request'])
+})
+
+test('a long tool target is searched before display shortening and reports the cut', async () => {
+  const workspace = isolatedWorkspace()
+  const lateTarget = 'app/main/late-target.ts'
+  const command = `echo ${'safe '.repeat(40)} ${lateTarget}`
+  const { engineSessionId } = writeTranscript(workspace, [
+    text('user', 'check the affected files'),
+    {
+      role: 'assistant',
+      content: [
+        {
+          type: 'tool_use',
+          id: 'tool-long-target',
+          name: 'Bash',
+          input: { command },
+        },
+      ],
+    },
+    text('assistant', 'done'),
+  ])
+
+  const result = await read(listing(peerRow('Bear', engineSessionId)).requestHost, {
+    peer: 'Bear',
+    query: lateTarget,
+  })
+
+  expect(result.turns).toHaveLength(1)
+  expect(result.turns?.[0]?.touched.join(' ')).not.toContain(lateTarget)
+  expect(result.truncated).toBe(true)
   expect(result.summary).toContain('the part left out')
 })
 

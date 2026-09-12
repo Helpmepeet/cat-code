@@ -1038,6 +1038,7 @@ export type RetainedSubmit = {
   text: string
   images: ImageAttachment[]
   file?: FileAttachment | null
+  settlement?: 'refused'
 }
 
 /**
@@ -1156,7 +1157,7 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
 
 /**
  * Resolve a whole arrival batch against the retained copies: the state after it,
- * plus the messages that must go back into a composer, in arrival order.
+ * plus messages that can go back into a composer in original submit order.
  *
  * Batch-shaped rather than frame-shaped so the pairing is testable against a
  * REALISTIC stream. The defects this replaces were invisible to a test that
@@ -1164,8 +1165,10 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
  * result, a staged snapshot, a turn bracket) flowed past the retained copies
  * ahead of the frame that actually answered one.
  *
- * An answer for an id this page is not holding is a no-op, which is what makes a
- * replayed `submit.result` inert after a reload.
+ * Refusals wait until every retained submit ahead of or behind them has settled.
+ * That delay is what preserves submit order when replies arrive in different
+ * batches or out of order. An answer for an id this page is not holding is a
+ * no-op, which makes a replayed `submit.result` inert after a reload.
  */
 export function reduceSubmitAnswers(
   state: RetainedSubmitState,
@@ -1176,13 +1179,40 @@ export function reduceSubmitAnswers(
 } {
   let next = state
   const restored: { sessionId: SessionId; retained: RetainedSubmit }[] = []
+  const touchedSessions = new Set<SessionId>()
   for (const frame of frames) {
     const answer = selectSubmitAnswer(frame)
     if (answer === null) continue
     const retained = selectRetainedSubmit(next, frame.sessionId, answer.submitId)
     if (retained === null) continue
-    next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
-    if (!answer.accepted) restored.push({ sessionId: frame.sessionId, retained })
+    if (retained.settlement !== undefined) continue
+    touchedSessions.add(frame.sessionId)
+    if (answer.accepted) {
+      next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
+      continue
+    }
+    next = {
+      ...next,
+      [frame.sessionId]: (next[frame.sessionId] ?? []).map(entry =>
+        entry.submitId === answer.submitId
+          ? { ...entry, settlement: 'refused' as const }
+          : entry,
+      ),
+    }
+  }
+  for (const sessionId of touchedSessions) {
+    const entries = next[sessionId] ?? []
+    if (
+      entries.length === 0 ||
+      entries.some(entry => entry.settlement === undefined)
+    ) {
+      continue
+    }
+    for (const entry of entries) {
+      const { settlement: _, ...retained } = entry
+      restored.push({ sessionId, retained })
+    }
+    next = reduceRetainedSubmitCleared(next, sessionId)
   }
   return { state: next, restored }
 }

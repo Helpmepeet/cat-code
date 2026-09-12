@@ -3192,13 +3192,14 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   expect(subscribeBody).toContain(
     'const answers = reduceSubmitAnswers(retainedSubmitsRef.current, frames)',
   )
-  expect(subscribeBody).toContain('restoreRefusedSubmit(sessionId, retained)')
+  expect(subscribeBody).toContain('restoreRefusedSubmits(sessionId, retained)')
+  expect(subscribeBody).toContain('const restoredBySession = new Map<SessionId, RetainedSubmit[]>()')
   // Settling now happens inside the batch reducer, so the property to pin is
   // that its result is written back. Dropping this line would leave every
   // answered submit retained forever, holding its base64 image with it.
   expect(subscribeBody).toContain('retainedSubmitsRef.current = answers.state')
 
-  const restoreStart = source.indexOf('const restoreRefusedSubmit = useCallback(')
+  const restoreStart = source.indexOf('const restoreRefusedSubmits = useCallback(')
   const restoreEnd = source.indexOf('\n  const closeTab = useCallback(', restoreStart)
   expect(restoreStart).toBeGreaterThan(-1)
   expect(restoreEnd).toBeGreaterThan(restoreStart)
@@ -3209,20 +3210,21 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // form: an empty `retained.images` must not erase an image attached to the
   // CURRENT draft (round8 finding 1).
   expect(restoreBody).toContain('restoreDraftWithPending(')
-  expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, retained.images)')
+  expect(restoreBody).toContain("retained.map(entry => entry.text).filter(Boolean).join('\\n')")
+  expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, entry.images)')
   // The copy is handed IN rather than looked up, because the batch reducer has
   // already removed it by `submitId`. That is what stops a second frame in the
   // same batch restoring the same copy twice, and it is why this function takes
   // a `RetainedSubmit` instead of reaching into the ref.
   expect(restoreBody).not.toContain('selectRetainedSubmit(')
   expect(source.replace(/\s+/g, ' ')).toContain(
-    'const restoreRefusedSubmit = useCallback(( sessionId: SessionId, retained: RetainedSubmit, ) => {',
+    'const restoreRefusedSubmits = useCallback(( sessionId: SessionId, retained: readonly RetainedSubmit[], ) => {',
   )
 
   // And the removal is committed BEFORE anything is restored from it. Reversed,
   // a restore could run against state that still holds the answered copy.
   expect(subscribeBody.indexOf('retainedSubmitsRef.current = answers.state')).toBeLessThan(
-    subscribeBody.indexOf('restoreRefusedSubmit(sessionId, retained)'),
+    subscribeBody.indexOf('restoreRefusedSubmits(sessionId, retained)'),
   )
 })
 

@@ -1521,6 +1521,47 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(outcome.state[S1]).toBeUndefined()
   })
 
+  test('refusals across out-of-order batches restore original order ahead of the live draft', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-first',
+      text: 'FIRST',
+      images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-second',
+      text: 'SECOND',
+      images: [image],
+    })
+
+    const secondFirst = reduceSubmitAnswers(state, [
+      submitAnswerFrame(S1, 'sub-second', false),
+    ])
+    expect(secondFirst.restored).toEqual([])
+    expect(secondFirst.state[S1]?.[1]?.settlement).toBe('refused')
+
+    const replay = reduceSubmitAnswers(secondFirst.state, [
+      submitAnswerFrame(S1, 'sub-second', false),
+    ])
+    expect(replay).toEqual(secondFirst)
+
+    const firstLater = reduceSubmitAnswers(replay.state, [
+      submitAnswerFrame(S1, 'sub-first', false),
+    ])
+    expect(firstLater.restored.map(item => item.retained.text)).toEqual([
+      'FIRST',
+      'SECOND',
+    ])
+    expect(firstLater.restored[1]?.retained.images).toEqual([image])
+    expect(firstLater.state[S1]).toBeUndefined()
+    expect(
+      restoreDraftWithPending(
+        'CURRENT DRAFT',
+        firstLater.restored.map(item => item.retained.text).join('\n'),
+      ),
+    ).toBe('FIRST\nSECOND\nCURRENT DRAFT')
+  })
+
   test('a park refusal carrying a recall’s id cannot refuse a submit', () => {
     // `handlePromptRecall`'s parking branch answers with the RECALL's requestId
     // on an error frame. Positionally that read as a refusal of whatever submit
