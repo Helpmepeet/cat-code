@@ -25,9 +25,11 @@ test('all workload bootstraps keep a bounded traced marker whose applied ACK sur
   const stages: DeliveryAcknowledgementStage[] = ['preload.received', 'renderer.subscription.received', 'renderer.state.queued', 'renderer.state.applied']
   for (const workload of manifest.workloads) {
     const fixture = createFixture(workload)
-    const marker: ServerFrame = { kind: 'pong', protocolVersion: 1, sessionId: 'bootstrap', nonce: 'marker', deliveryTrace: mintDeliveryTrace(1) }
-    const bootstrap = markerTracedBootstrap(fixture.initial, [], marker)
-    expect(bootstrap.filter(frame => frame.deliveryTrace)).toEqual([marker])
+    const markers: ServerFrame[] = Array.from({ length: workload.sessions }, (_, index) => ({
+      kind: 'pong', protocolVersion: 1, sessionId: `bootstrap-${index}`, nonce: 'marker', deliveryTrace: mintDeliveryTrace(index + 1),
+    }))
+    const bootstrap = markerTracedBootstrap(fixture.initial, [], markers)
+    expect(bootstrap.filter(frame => frame.deliveryTrace)).toEqual(markers)
     const timers: Array<() => void> = []
     const sent: unknown[] = []
     const guard = createRendererIpcGuard({ now: () => 1 })
@@ -39,10 +41,10 @@ test('all workload bootstraps keep a bounded traced marker whose applied ACK sur
       setTimeout: callback => { timers.push(callback); return callback as unknown as ReturnType<typeof setTimeout> },
       clearTimeout: () => {},
     }, { channel: 'ack', maxBatchSize: 64, maxPending: 1024, flushIntervalMs: 50 })
-    for (const stage of stages) queue.push('bootstrap', 1, 1, marker.deliveryTrace!.streamEpoch, marker.deliveryTrace!.traceId, stage)
+    for (const marker of markers) for (const stage of stages) queue.push(marker.sessionId, marker.deliveryTrace!.sequence, 1, marker.deliveryTrace!.streamEpoch, marker.deliveryTrace!.traceId, stage)
     timers[0]?.()
     const acknowledgements = (sent[0] as { acknowledgements: Array<{ stage: string }> }).acknowledgements
-    expect(acknowledgements.some(item => item.stage === 'renderer.state.applied')).toBe(true)
+    expect(acknowledgements.filter(item => item.stage === 'renderer.state.applied')).toHaveLength(workload.sessions)
     expect(queue.pendingCount).toBe(0)
   }
 })

@@ -115,7 +115,15 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   if (!ownedRootPid) return { ok: false, error: 'Electron did not return a pid' }
   processGroups.begin(ownedRootPid)
   let stderr = ''
-  child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8_192) })
+  let stageBuffer = ''
+  child.stderr.on('data', chunk => {
+    const value = String(chunk)
+    stderr = (stderr + value).slice(-8_192)
+    stageBuffer += value
+    const lines = stageBuffer.split('\n')
+    stageBuffer = lines.pop() ?? ''
+    for (const line of lines) if (line.startsWith('[streaming-benchmark] stage=')) process.stderr.write(`${line}\n`)
+  })
   const outcome = await new Promise<{ ok: boolean; timedOut?: boolean; error?: string }>(resolvePromise => {
     let settled = false
     const finish = (value: { ok: boolean; timedOut?: boolean; error?: string }) => { if (!settled) { settled = true; clearTimeout(timer); resolvePromise(value) } }

@@ -16,12 +16,13 @@ export function isCurrentDocumentAcknowledgement(
 }
 
 /** Bulk bootstrap is state setup, outside the scored replay/ACK measurement. */
-export function markerTracedBootstrap(initial: readonly ServerFrame[], snapshots: readonly ServerFrame[], terminalMarker: ServerFrame): ServerFrame[] {
-  if (!terminalMarker.deliveryTrace) throw new Error('bootstrap marker must be traced')
+export function markerTracedBootstrap(initial: readonly ServerFrame[], snapshots: readonly ServerFrame[], terminalMarker: ServerFrame | readonly ServerFrame[]): ServerFrame[] {
+  const markers = Array.isArray(terminalMarker) ? terminalMarker : [terminalMarker]
+  if (markers.length < 1 || markers.some(marker => !marker.deliveryTrace)) throw new Error('bootstrap markers must be traced')
   const withoutTrace = (frame: ServerFrame): ServerFrame => {
     if (!frame.deliveryTrace) return frame
     const { deliveryTrace: _deliveryTrace, ...rest } = frame
     return rest as ServerFrame
   }
-  return [...initial.map(withoutTrace), ...snapshots.map(withoutTrace), terminalMarker]
+  return [...initial.map(withoutTrace), ...snapshots.map(withoutTrace), ...markers]
 }

@@ -82,6 +82,20 @@ const window = new BrowserWindow({
   height: 720,
   webPreferences: { preload: preloadPath, sandbox: true, contextIsolation: true, nodeIntegration: false },
 })
+const rendererDiagnostics: string[] = []
+const rememberRendererDiagnostic = (message: string) => {
+  rendererDiagnostics.push(message.replace(/\s+/g, ' ').slice(0, 512))
+  if (rendererDiagnostics.length > 12) rendererDiagnostics.shift()
+}
+window.webContents.on('console-message', (_event, level, message, line, sourceId) => {
+  if (level >= 2) rememberRendererDiagnostic(`console level=${level} ${sourceId}:${line} ${message}`)
+})
+window.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+  if (isMainFrame) rememberRendererDiagnostic(`load code=${code} url=${url} ${description}`)
+})
+window.webContents.on('render-process-gone', (_event, details) => {
+  rememberRendererDiagnostic(`renderer-gone reason=${details.reason} code=${details.exitCode}`)
+})
 
 const sendNow = (frames: ServerFrame[]) => {
   sendCount++
@@ -114,7 +128,17 @@ ipcMain.on(channels.CH_RENDERER_READY, (_event, payload: { documentId?: unknown 
   }
   rendererReadyCount++
   const replay = gate.onRendererReady()
-  if (replay.length > 0) sendNow(replay)
+  const readyDocumentId = rendererSubscription.documentId
+  // rendererReady is sent from the frame-subscription effect, before the later
+  // host-subscription effect has necessarily mounted. Defer the focused host
+  // roster event and replay one turn so the real App receives both in order.
+  setImmediate(() => {
+    if (readyDocumentId !== rendererSubscription.documentId || window.isDestroyed()) return
+    for (const descriptor of descriptors) {
+      window.webContents.send(channels.CH_HOST_EVENT, { type: 'session-added', session: descriptor })
+    }
+    if (replay.length > 0) sendNow(replay)
+  })
 })
 ipcMain.on(channels.CH_DELIVERY_ACK, (_event, payload: { acknowledgements?: DeliveryAcknowledgement[] }) => {
   if (!payload || Object.keys(payload).length !== 1 || !Array.isArray(payload.acknowledgements) || payload.acknowledgements.length < 1 || payload.acknowledgements.length > 64) return
@@ -229,7 +253,7 @@ const result = {
   finalRawMessageCount: commits.at(-1)?.rawMessageCount ?? -1,
   ownedPids: [process.pid, ...app.getAppMetrics().map(item => item.pid)].filter((pid, index, all) => all.indexOf(pid) === index),
   omittedMainWork: ['engine/supervisor/host workers', 'production window recovery and health timers', 'operational-log writes outside delivery tracing'],
-  bootstrapTracing: 'terminal-marker-only; bulk history replay and its acknowledgement cost are excluded',
+  bootstrapTracing: 'one terminal marker per synthetic session; bulk history replay and its acknowledgement cost are excluded',
 }
 writeFileSync(join(runDir, 'result.json'), `${JSON.stringify(result)}\n`)
 stage('result-saved')
@@ -287,13 +311,14 @@ function bootstrapFrames(initial: readonly ServerFrame[]): ServerFrame[] {
       anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true,
     } })
   }
-  const first = descriptors[0]
-  if (!first) return [...initial, ...extras]
-  const marker: ServerFrame = { kind: 'event', protocolVersion: 1, sessionId: first.appSessionId, event: {
-    type: 'message', message: { type: 'assistant', uuid: 'benchmark-bootstrap-marker', parent_tool_use_id: null,
-      session_id: first.appSessionId, message: { id: 'benchmark-bootstrap-marker', role: 'assistant', content: [{ type: 'text', text: BOOTSTRAP_TRANSCRIPT_MARKER }] } } as never,
-  }, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${first.appSessionId}`, `benchmark-${process.pid}`) }
-  return markerTracedBootstrap(initial, extras, marker)
+  // The initial multi-session batch may choose any session before React commits
+  // the roster. A small marker per synthetic session keeps the visible proof
+  // valid for the session the real selection reducer chooses (at most 8 traces).
+  const markers: ServerFrame[] = descriptors.map(descriptor => ({ kind: 'event', protocolVersion: 1, sessionId: descriptor.appSessionId, event: {
+    type: 'message', message: { type: 'assistant', uuid: `benchmark-bootstrap-marker-${descriptor.appSessionId}`, parent_tool_use_id: null,
+      session_id: descriptor.appSessionId, message: { id: `benchmark-bootstrap-marker-${descriptor.appSessionId}`, role: 'assistant', content: [{ type: 'text', text: BOOTSTRAP_TRANSCRIPT_MARKER }] } } as never,
+  }, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${descriptor.appSessionId}`, `benchmark-${process.pid}`) }))
+  return markerTracedBootstrap(initial, extras, markers)
 }
 
 async function deliverFixture(input: ReturnType<typeof createFixture>, scored: boolean, start = performance.now()) {
@@ -325,19 +350,29 @@ function rawChangingFrames(initial: readonly ServerFrame[], arrivals: readonly S
 
 async function waitForBootstrap(target: BrowserWindow, priorReadyCount: number) {
   const deadline = Date.now() + 10_000
+  let lastView: unknown = null
   while (Date.now() < deadline) {
-    const view = await target.webContents.executeJavaScript(`({
-      visible: document.visibilityState === 'visible',
-      titleVisible: document.body.textContent.includes('Synthetic 1'),
-      transcriptMarkerVisible: document.body.textContent.includes('${BOOTSTRAP_TRANSCRIPT_MARKER}'),
-      trustGate: document.body.textContent.includes('Trust this workspace?'),
-      signInGate: document.querySelector('[aria-label="Sign in"]') !== null,
-      observer: window.__CATCODE_STREAMING_BENCHMARK__?.snapshot?.()
-    })`)
-    if (rendererReadyCount > priorReadyCount && view.visible && view.titleVisible && view.transcriptMarkerVisible && !view.trustGate && !view.signInGate && view.observer?.layoutCommitCount > 0) return
+    try {
+      const view = await target.webContents.executeJavaScript(`(() => {
+        const body = document.body?.textContent ?? ''
+        return {
+          visible: document.visibilityState === 'visible',
+          titleVisible: body.includes('Synthetic 1'),
+          transcriptMarkerVisible: body.includes('${BOOTSTRAP_TRANSCRIPT_MARKER}'),
+          trustGate: body.includes('Trust this workspace?'),
+          signInGate: document.querySelector('[aria-label="Sign in"]') !== null,
+          observer: window.__CATCODE_STREAMING_BENCHMARK__?.counters?.() ?? null,
+          bodySnippet: body.replace(/\\s+/g, ' ').slice(0, 320)
+        }
+      })()`)
+      lastView = { readyCount: rendererReadyCount, ...view }
+      if (rendererReadyCount > priorReadyCount && view.visible && view.titleVisible && view.transcriptMarkerVisible && !view.trustGate && !view.signInGate && view.observer?.layoutCommitCount > 0) return
+    } catch (error) {
+      lastView = { readyCount: rendererReadyCount, evaluationError: error instanceof Error ? error.message : String(error) }
+    }
     await sleep(20)
   }
-  throw new Error('renderer did not reach committed visible transcript bootstrap')
+  throw new Error(`renderer did not reach committed visible transcript bootstrap; last=${JSON.stringify(lastView)}; diagnostics=${JSON.stringify(rendererDiagnostics)}`)
 }
 
 type CpuPoint = { type: string; pid: number; cumulative: number | null; percent: number }
