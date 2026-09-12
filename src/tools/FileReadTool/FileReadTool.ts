@@ -36,7 +36,6 @@ import {
   FILE_NOT_FOUND_CWD_NOTE,
   findSimilarFile,
   getFileIdentity,
-  getFileModificationTimeAsync,
   suggestPathUnderCwd,
 } from '../../utils/file.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
@@ -564,6 +563,7 @@ export const FileReadTool = buildTool({
       existingState &&
       !existingState.isPartialView &&
       existingState.offset !== undefined &&
+      existingState.fileIdentity !== undefined &&
       // An internal refresh may populate the shared cache without returning
       // the contents to the model. A later model-invoked Read must not dedup
       // against that invisible result.
@@ -573,8 +573,8 @@ export const FileReadTool = buildTool({
         existingState.offset === offset && existingState.limit === limit
       if (rangeMatch) {
         try {
-          const mtimeMs = await getFileModificationTimeAsync(fullFilePath)
-          if (mtimeMs === existingState.timestamp) {
+          const currentIdentity = getFileIdentity(fullFilePath)
+          if (fileIdentitiesEqual(existingState.fileIdentity, currentIdentity)) {
             const analyticsExt = getFileExtensionForAnalytics(fullFilePath)
             logEvent('tengu_file_read_dedup', {
               ...(analyticsExt !== undefined && { ext: analyticsExt }),
@@ -587,7 +587,7 @@ export const FileReadTool = buildTool({
             }
           }
         } catch {
-          // stat failed — fall through to full read
+          // An unavailable identity cannot prove that the cached Read is current.
         }
       }
     }

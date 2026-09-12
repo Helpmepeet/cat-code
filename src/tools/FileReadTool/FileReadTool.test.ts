@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  utimesSync,
+  writeFileSync,
+} from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { getAutoMemPath } from '../../memdir/paths.js'
@@ -389,6 +398,77 @@ describe('token overflow prefixes', () => {
     expect(data.file.numLines).toBeLessThan(1_000)
     expect(Buffer.byteLength(text, 'utf8')).toBeLessThanOrEqual(
       DEFAULT_MAX_OUTPUT_TOKENS,
+    )
+  })
+})
+
+describe('read deduplication follows file identity', () => {
+  const sameMtime = new Date('2026-01-01T00:00:00.000Z')
+
+  function writeVersion(name: string, content: string): string {
+    const filePath = join(tmpDir, name)
+    writeFileSync(filePath, content, 'utf-8')
+    utimesSync(filePath, sameMtime, sameMtime)
+    return filePath
+  }
+
+  test('an unchanged file still returns the compact cached-read result', async () => {
+    const filePath = writeVersion('dedup-unchanged.txt', 'original')
+    const context = createContext()
+    await readWith(context, filePath)
+
+    const result = await FileReadTool.call(
+      { file_path: filePath },
+      context as never,
+    )
+
+    expect(result.data.type).toBe('file_unchanged')
+  })
+
+  test('a same-size replacement with the same mtime returns its new contents', async () => {
+    const filePath = writeVersion('dedup-replaced.txt', 'original')
+    const replacement = writeVersion('dedup-replacement.txt', 'modified')
+    const context = createContext()
+    await readWith(context, filePath)
+    renameSync(replacement, filePath)
+
+    const result = await readWith(context, filePath)
+
+    expect(result.file.content).toBe('modified')
+    expect(context.readFileState.get(filePath)?.fileIdentity).toEqual(
+      getFileIdentity(filePath),
+    )
+  })
+
+  test('a same-mtime symlink retarget returns the newly addressed file', async () => {
+    const first = writeVersion('dedup-first.txt', 'original')
+    const second = writeVersion('dedup-second.txt', 'modified')
+    const link = join(tmpDir, 'dedup-link.txt')
+    symlinkSync(first, link)
+    const context = createContext()
+    await readWith(context, link)
+    unlinkSync(link)
+    symlinkSync(second, link)
+
+    const result = await readWith(context, link)
+
+    expect(result.file.content).toBe('modified')
+    expect(context.readFileState.get(link)?.fileIdentity?.canonicalPath).toBe(
+      getFileIdentity(second).canonicalPath,
+    )
+  })
+
+  test('a cached read without a stable identity is read again', async () => {
+    const filePath = writeVersion('dedup-no-identity.txt', 'original')
+    const context = createContext()
+    await readWith(context, filePath)
+    delete context.readFileState.get(filePath)!.fileIdentity
+
+    const result = await readWith(context, filePath)
+
+    expect(result.file.content).toBe('original')
+    expect(context.readFileState.get(filePath)?.fileIdentity).toEqual(
+      getFileIdentity(filePath),
     )
   })
 })
