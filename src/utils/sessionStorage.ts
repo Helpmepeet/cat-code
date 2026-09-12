@@ -4954,11 +4954,14 @@ export async function loadTranscriptFile(
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }
         if (activeConversationTip && !entry.isSidechain) {
-          const parent =
-            entry.parentUuid ??
-            (isCompactBoundaryMessage(entry)
-              ? entry.logicalParentUuid
-              : undefined)
+          // `null` is a meaningful root for an ordinary message: after a
+          // rewind before the first prompt, the replacement turn starts a new
+          // root chain and must advance the explicitly-null active tip. Only a
+          // compact boundary may replace its physical null parent with the
+          // logical pre-compaction parent.
+          const parent = isCompactBoundaryMessage(entry)
+            ? (entry.parentUuid ?? entry.logicalParentUuid)
+            : entry.parentUuid
           const extendsActiveBranch =
             activeConversationRoot === null
               ? parent === null ||

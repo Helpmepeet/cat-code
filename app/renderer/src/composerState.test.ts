@@ -1562,6 +1562,45 @@ describe('D5 — a refused submit comes back, images included', () => {
     ).toBe('FIRST\nSECOND\nCURRENT DRAFT')
   })
 
+  test('a known refusal is released without waiting for a later unanswered submit', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-refused',
+      text: 'KNOWN REFUSAL',
+      images: [image],
+      file: { name: 'evidence.txt', token: 'file-token' },
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-unknown',
+      text: 'STILL IN FLIGHT',
+      images: [],
+    })
+
+    const refused = reduceSubmitAnswers(state, [
+      submitAnswerFrame(S1, 'sub-refused', false),
+    ])
+
+    expect(refused.restored).toEqual([{
+      sessionId: S1,
+      retained: {
+        submitId: 'sub-refused',
+        text: 'KNOWN REFUSAL',
+        images: [image],
+        file: { name: 'evidence.txt', token: 'file-token' },
+      },
+    }])
+    expect(refused.state[S1]).toEqual([{
+      submitId: 'sub-unknown',
+      text: 'STILL IN FLIGHT',
+      images: [],
+    }])
+
+    // A replayed answer cannot restore the released copy twice.
+    expect(reduceSubmitAnswers(refused.state, [
+      submitAnswerFrame(S1, 'sub-refused', false),
+    ])).toEqual({ state: refused.state, restored: [] })
+  })
+
   test('a park refusal carrying a recall’s id cannot refuse a submit', () => {
     // `handlePromptRecall`'s parking branch answers with the RECALL's requestId
     // on an error frame. Positionally that read as a refusal of whatever submit

@@ -1165,10 +1165,13 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
  * result, a staged snapshot, a turn bracket) flowed past the retained copies
  * ahead of the frame that actually answered one.
  *
- * Refusals wait until every retained submit ahead of or behind them has settled.
- * That delay is what preserves submit order when replies arrive in different
- * batches or out of order. An answer for an id this page is not holding is a
- * no-op, which makes a replayed `submit.result` inert after a reload.
+ * A refusal is released as soon as every EARLIER retained submit has settled.
+ * Later unanswered submits are irrelevant: making a known refusal wait for one
+ * can hide its only editable copy forever. A later refusal still waits behind
+ * an earlier unknown submit, so releases can always be prepended to the live
+ * draft in original submission order. An answer for an id this page is not
+ * holding is a no-op, which makes a replayed `submit.result` inert after a
+ * reload.
  */
 export function reduceSubmitAnswers(
   state: RetainedSubmitState,
@@ -1202,17 +1205,18 @@ export function reduceSubmitAnswers(
   }
   for (const sessionId of touchedSessions) {
     const entries = next[sessionId] ?? []
-    if (
-      entries.length === 0 ||
-      entries.some(entry => entry.settlement === undefined)
-    ) {
-      continue
-    }
+    let releasedCount = 0
     for (const entry of entries) {
+      if (entry.settlement === undefined) break
       const { settlement: _, ...retained } = entry
       restored.push({ sessionId, retained })
+      releasedCount += 1
     }
-    next = reduceRetainedSubmitCleared(next, sessionId)
+    if (releasedCount === 0) continue
+    const waiting = entries.slice(releasedCount)
+    next = waiting.length === 0
+      ? reduceRetainedSubmitCleared(next, sessionId)
+      : { ...next, [sessionId]: waiting }
   }
   return { state: next, restored }
 }

@@ -31,6 +31,7 @@ import { randomUUID } from 'node:crypto'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const minter = join(here, 'mintTranscript.fixture.ts')
+const rewindMinter = join(here, 'rewindResumeSeedMint.fixture.ts')
 const seedProbe = join(here, 'resumeSeedProbe.fixture.ts')
 const leaseRaceWriter = join(here, 'resumeLeaseRace.fixture.ts')
 const leaseHook = join(here, 'resumeLeaseHook.fixture.ts')
@@ -177,6 +178,48 @@ test('F1: the resumed transcript is the live turn context of the engine the side
   // The visible replay may carry an archival prefix, but its aligned tail is
   // still the exact visible model seed; recovery sentinels stay internal.
   expect(result.replayMatchesVisibleEngineSeed).toBe(true)
+}, TEST_TIMEOUT_MS)
+
+test('F2: a first-message rewind replacement seeds the cold-resumed live engine', async () => {
+  const configHome = tmp('catcode-f2-cfg-')
+  const cwd = tmp('catcode-f2-wd-')
+  const engineSessionId = randomUUID()
+  const marker = `rewound-${randomUUID()}`
+
+  const mint = await runChild({
+    entry: rewindMinter,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+    extraEnv: { TEST_ENABLE_SESSION_PERSISTENCE: '1' },
+  })
+  if (mint.code !== 0) {
+    throw new Error(`rewind mint failed (exit ${mint.code}): ${mint.stderr}`)
+  }
+
+  const probe = await runChild({
+    entry: seedProbe,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+  })
+  if (probe.code !== 0) {
+    throw new Error(
+      `rewind seed probe failed (exit ${probe.code}): ${probe.stderr}\nstdout: ${probe.stdout}`,
+    )
+  }
+  const line = probe.stdout.split('\n').find(l => l.startsWith('SEED_RESULT='))
+  expect(line).toBeDefined()
+  const result = JSON.parse(line!.slice('SEED_RESULT='.length)) as {
+    seededCount: number
+    engineHeldCount: number
+    engineHasMarker: boolean
+    engineHeldUuidsMatchResumed: boolean
+  }
+  expect(result.seededCount).toBe(2)
+  expect(result.engineHeldCount).toBe(2)
+  expect(result.engineHasMarker).toBe(true)
+  expect(result.engineHeldUuidsMatchResumed).toBe(true)
 }, TEST_TIMEOUT_MS)
 
 test('P5-5c: a second sidecar cannot resume the same engine transcript', async () => {
