@@ -12,8 +12,11 @@ import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   fitsAccountsPoolRecordLimit,
   parseAccountDeleteMessage,
+  parseAccountLogoutMessage,
   parseAccountsPoolWorkerDeleteRequest,
   parseAccountsPoolWorkerResult,
+  parseAccountsPoolWorkerSignOutRequest,
+  parseAccountSignOutReceipt,
   parseAccountsSnapshot,
   parseUsageStatsByRange,
   parseUsageStatsSnapshot,
@@ -238,6 +241,122 @@ describe('session-independent account deletion boundary', () => {
         },
       }),
     ).toBeNull()
+  })
+})
+
+describe('session-independent targeted account sign-out boundary', () => {
+  const verb = {
+    type: 'account.logout',
+    requestId: 'request-logout',
+    accountId: 'account-1',
+    expectedCredentialGeneration: 7,
+  } as const
+  const receipt = {
+    outcome: 'committed',
+    accountId: 'account-1',
+    expectedCredentialGeneration: 7,
+    observedCredentialGeneration: 8,
+    lifecycleState: 'signed_out',
+    operationId: 'request-logout',
+    targetWasActive: true,
+    replacementActiveAccountId: 'account-2',
+  } as const
+
+  test('accepts the exact targeted input and receipt', () => {
+    expect(parseAccountLogoutMessage(verb)).toEqual(verb)
+    expect(
+      parseAccountsPoolWorkerSignOutRequest({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        verb,
+      }),
+    ).toEqual({
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      verb,
+    })
+    expect(parseAccountSignOutReceipt(receipt)).toEqual(receipt)
+    expect(
+      parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt,
+      }),
+    ).toEqual({
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: verb.requestId,
+      verb: 'account.logout',
+      receipt,
+    })
+  })
+
+  test('rejects missing, negative, fractional, extra, and secret fields', () => {
+    expect(parseAccountLogoutMessage({ ...verb, accountId: undefined })).toBeNull()
+    expect(
+      parseAccountLogoutMessage({ ...verb, expectedCredentialGeneration: -1 }),
+    ).toBeNull()
+    expect(
+      parseAccountLogoutMessage({
+        ...verb,
+        expectedCredentialGeneration: 1.5,
+      }),
+    ).toBeNull()
+    expect(parseAccountLogoutMessage({ ...verb, extra: true })).toBeNull()
+    expect(
+      parseAccountLogoutMessage({ ...verb, accessToken: 'secret' }),
+    ).toBeNull()
+
+    expect(parseAccountSignOutReceipt({ ...receipt, extra: true })).toBeNull()
+    expect(
+      parseAccountSignOutReceipt({
+        ...receipt,
+        refreshToken: 'secret',
+      }),
+    ).toBeNull()
+    expect(
+      parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt: { ...receipt, observedCredentialGeneration: -1 },
+      }),
+    ).toBeNull()
+  })
+
+  test('accepts every controlled outcome shape without a pool snapshot', () => {
+    for (const outcome of [
+      'committed',
+      'already_committed',
+      'superseded',
+      'cleanup_pending',
+      'retryable_unknown',
+    ] as const) {
+      const parsed = parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt: {
+          ...receipt,
+          outcome,
+          observedCredentialGeneration:
+            outcome === 'superseded' || outcome === 'retryable_unknown'
+              ? null
+              : receipt.observedCredentialGeneration,
+          lifecycleState:
+            outcome === 'superseded' || outcome === 'retryable_unknown'
+              ? null
+              : receipt.lifecycleState,
+          targetWasActive: false,
+          replacementActiveAccountId: null,
+        },
+      })
+      expect(parsed?.type).toBe('account-sign-out')
+    }
   })
 })
 

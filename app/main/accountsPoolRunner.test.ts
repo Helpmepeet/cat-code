@@ -9,7 +9,11 @@ import type {
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../shared/protocol.js'
-import { ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION } from '../shared/accountsPoolWorker.js'
+import {
+  ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+  type AccountsPoolWorkerSignOutRequest,
+  type AccountsPoolWorkerSignOutResult,
+} from '../shared/accountsPoolWorker.js'
 import {
   ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolPublicationGate,
@@ -155,6 +159,55 @@ function deleteResult(
   }
 }
 
+function signOutInput(
+  accountId = 'acct-0',
+  requestId = 'request-logout',
+  expectedCredentialGeneration = 4,
+): AccountsPoolWorkerSignOutRequest {
+  return {
+    type: 'account-sign-out',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    verb: {
+      type: 'account.logout',
+      requestId,
+      accountId,
+      expectedCredentialGeneration,
+    },
+  }
+}
+
+function signOutResult(
+  input = signOutInput(),
+  outcome: AccountsPoolWorkerSignOutResult['receipt']['outcome'] = 'committed',
+  overrides: Partial<AccountsPoolWorkerSignOutResult['receipt']> = {},
+): AccountsPoolWorkerSignOutResult {
+  const observed =
+    outcome === 'superseded' || outcome === 'retryable_unknown'
+      ? null
+      : input.verb.expectedCredentialGeneration + 1
+  const lifecycleState =
+    outcome === 'superseded' || outcome === 'retryable_unknown'
+      ? null
+      : 'signed_out'
+  return {
+    type: 'account-sign-out',
+    version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+    requestId: input.verb.requestId,
+    verb: 'account.logout',
+    receipt: {
+      outcome,
+      accountId: input.verb.accountId,
+      expectedCredentialGeneration: input.verb.expectedCredentialGeneration,
+      observedCredentialGeneration: observed,
+      lifecycleState,
+      operationId: input.verb.requestId,
+      targetWasActive: false,
+      replacementActiveAccountId: null,
+      ...overrides,
+    },
+  }
+}
+
 function usageStats(range: UsageStatsRange, totalTokens: number): UsageStatsSnapshot {
   return {
     range,
@@ -244,6 +297,55 @@ describe('runAccountsPoolWorker — accept + deliver', () => {
     expect(outcome).toBe('delivered')
     expect(JSON.parse(stdin)).toEqual(input)
     expect(delivered).toEqual(['request-1'])
+  })
+
+  test('writes one targeted sign-out request and delivers its receipt without a pool', async () => {
+    const input = signOutInput()
+    let stdin = ''
+    const delivered: AccountsPoolWorkerSignOutResult[] = []
+    const outcome = await runAccountsPoolWorker({
+      command: 'bun',
+      args: ['--account-sign-out'],
+      cwd: process.cwd(),
+      input,
+      spawnWorker: fakeSpawn({
+        onStdinEnd: data => {
+          stdin = String(data)
+        },
+        stdout: ndjson(signOutResult(input)),
+      }),
+      onAccountSignOut: result => delivered.push(result),
+    })
+
+    expect(outcome).toBe('delivered')
+    expect(JSON.parse(stdin)).toEqual(input)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]?.receipt.outcome).toBe('committed')
+  })
+
+  test('correlates and semantically validates every sign-out outcome', async () => {
+    for (const outcome of [
+      'committed',
+      'already_committed',
+      'superseded',
+      'cleanup_pending',
+      'retryable_unknown',
+    ] as const) {
+      const input = signOutInput()
+      const delivered: AccountsPoolWorkerSignOutResult[] = []
+      const result = signOutResult(input, outcome)
+      await expect(
+        runAccountsPoolWorker({
+          command: 'bun',
+          args: ['--account-sign-out'],
+          cwd: process.cwd(),
+          input,
+          spawnWorker: fakeSpawn({ stdout: ndjson(result) }),
+          onAccountSignOut: value => delivered.push(value),
+        }),
+      ).resolves.toBe('delivered')
+      expect(delivered[0]?.receipt.outcome).toBe(outcome)
+    }
   })
 
   test('usageStats reaches onUsageStats when the record carries it', async () => {
@@ -460,6 +562,78 @@ describe('runAccountsPoolWorker — fail closed', () => {
       }),
     ).rejects.toThrow(/retained target/)
     expect(called).toBe(false)
+  })
+
+  test('rejects sign-out correlation mismatches and inconsistent committed receipts', async () => {
+    const input = signOutInput()
+    const cases: Array<{ result: AccountsPoolWorkerSignOutResult; error: RegExp }> = [
+      {
+        result: { ...signOutResult(input), requestId: 'different-request' },
+        error: /requestId mismatch/,
+      },
+      {
+        result: {
+          ...signOutResult(input),
+          receipt: { ...signOutResult(input).receipt, accountId: 'other-account' },
+        },
+        error: /accountId mismatch/,
+      },
+      {
+        result: {
+          ...signOutResult(input),
+          receipt: {
+            ...signOutResult(input).receipt,
+            expectedCredentialGeneration: 2,
+          },
+        },
+        error: /generation mismatch/,
+      },
+      {
+        result: {
+          ...signOutResult(input),
+          receipt: { ...signOutResult(input).receipt, operationId: 'other-op' },
+        },
+        error: /operationId mismatch/,
+      },
+      {
+        result: {
+          ...signOutResult(input),
+          receipt: {
+            ...signOutResult(input).receipt,
+            observedCredentialGeneration: 4,
+          },
+        },
+        error: /committed receipt is inconsistent/,
+      },
+      {
+        result: {
+          ...signOutResult(input),
+          receipt: {
+            ...signOutResult(input).receipt,
+            targetWasActive: false,
+            replacementActiveAccountId: 'replacement',
+          },
+        },
+        error: /replacement is inconsistent/,
+      },
+    ]
+
+    for (const item of cases) {
+      let called = false
+      await expect(
+        runAccountsPoolWorker({
+          command: 'bun',
+          args: ['--account-sign-out'],
+          cwd: process.cwd(),
+          input,
+          spawnWorker: fakeSpawn({ stdout: ndjson(item.result) }),
+          onAccountSignOut: () => {
+            called = true
+          },
+        }),
+      ).rejects.toThrow(item.error)
+      expect(called).toBe(false)
+    }
   })
 
   test('rejects on a non-zero exit with no record', async () => {

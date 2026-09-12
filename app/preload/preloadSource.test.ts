@@ -33,6 +33,12 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_ACCOUNT_DELETE = 'catcode:host:account-delete'",
   )
   expect(source).toContain('deleteAccount(verb: AccountDeleteMessage)')
+  expect(channels).toContain(
+    "export const CH_HOST_ACCOUNT_SIGN_OUT = 'catcode:host:account-sign-out'",
+  )
+  expect(source).toContain(
+    'signOutAccount(verb: AccountLogoutMessage): Promise<AccountResultFrame>',
+  )
   // P4-15 — workspace-trust accept verb sender rides its own fixed channel (HC3).
   expect(channels).toContain(
     "export const CH_WORKSPACE_TRUST_VERB = 'catcode:workspace-trust-verb'",
@@ -127,7 +133,7 @@ test('every fixed renderer-to-main sender passes through the shared IPC guard', 
     "export const CH_HOST_SET_PEER_WAKE_BLOCKED = 'catcode:host:set-peer-wake-blocked'",
   )
   expect(source).toContain('setPeerWakeBlocked(')
-  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(44)
+  expect(source.match(/sendGuard\.assertAllowed/g)).toHaveLength(45)
   // D1b — the recall sender is fixed and one-way like the rest (HC3).
   expect(channels).toContain("export const CH_PROMPT_RECALL = 'catcode:prompt-recall'")
   expect(source).toContain(
@@ -171,7 +177,7 @@ test('preload and main ride one shared channel list, not two hand-copied ones', 
   const names = [...channels.matchAll(/^export const (CH_[A-Z_0-9]+) = '/gm)].map(
     match => match[1],
   )
-  expect(names.length).toBe(46)
+  expect(names.length).toBe(47)
 
   for (const source of [preload, main]) {
     expect(source).toContain("} from '../shared/ipcChannels.js'")
@@ -258,7 +264,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     })
   expect(unreadableInvokes).toEqual([])
   const invokeChannels = readableInvokes.map(m => m[1])
-  expect(invokeChannels.length).toBe(16)
+  expect(invokeChannels.length).toBe(17)
   const allowed = new Set([
     'CH_HOST_CREATE',
     'CH_HOST_CREATE_IN_WORKSPACE',
@@ -274,6 +280,7 @@ test('control-plane senders are fixed per-method channels (HC3), no generic invo
     'CH_HOST_SAVE_TEXT',
     'CH_HOST_OPEN_WORKSPACE_FILE',
     'CH_HOST_ACCOUNT_DELETE',
+    'CH_HOST_ACCOUNT_SIGN_OUT',
     'CH_SAVE_DIAGNOSTICS',
     'CH_RESTART',
   ])
@@ -335,9 +342,56 @@ test('account deletion terminates in a one-shot worker, not a session forward', 
   expect(handler).toContain('notifySidecarsOfAccountDeletion(')
   expect(handler).not.toContain('activeSessionId')
   expect(handler).not.toContain('forward(')
-  expect(source).toContain('accountDeleteAbort?.abort()')
+  expect(source).toContain('accountProfileMutationAbort?.abort()')
   expect(source).toContain('accountsPoolPublicationGate.canPublish(generation)')
   expect(source).toContain("type: 'account.profileDeleted'")
+})
+
+test('destructive account verbs cannot use the generic session relay', () => {
+  const preload = readFileSync(new URL('./preload.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const protocol = readFileSync(new URL('../shared/protocol.ts', import.meta.url), 'utf8')
+  expect(preload).toContain(
+    "if (verb.type === 'account.delete' || verb.type === 'account.logout') return",
+  )
+  const relayStart = main.indexOf('const RELAYED_VERB_CHANNELS')
+  const relayEnd = main.indexOf(
+    '\n\n/**\n * Register the renderer→supervisor IPC handlers',
+    relayStart,
+  )
+  expect(relayStart).toBeGreaterThan(-1)
+  expect(relayEnd).toBeGreaterThan(relayStart)
+  const relay = main.slice(relayStart, relayEnd)
+  expect(relay).not.toContain("'account.delete'")
+  expect(relay).not.toContain("'account.logout'")
+  expect(relay).toContain('RELAYED_ACCOUNT_VERB_TYPES')
+  expect(protocol).toContain("'account.switch'")
+  expect(protocol).toContain("'account.rename'")
+  expect(protocol).toContain("'account.touchAll'")
+})
+
+test('targeted sign-out uses a sender-checked one-shot worker with one recovery', () => {
+  const source = readFileSync(new URL('../main/main.ts', import.meta.url), 'utf8')
+  const start = source.indexOf('ipcMain.handle(\n    CH_HOST_ACCOUNT_SIGN_OUT')
+  const end = source.indexOf(
+    'ipcMain.handle(CH_HOST_OPEN_WORKSPACE_FILE',
+    start,
+  )
+  expect(start).toBeGreaterThan(-1)
+  expect(end).toBeGreaterThan(start)
+  const handler = source.slice(start, end)
+
+  expect(handler).toContain('isMainWindowSender(event)')
+  expect(handler).toContain('parseAccountLogoutMessage(input)')
+  expect(handler).toContain("'--account-sign-out'")
+  expect(handler).toContain("'--account-sign-out-recovery'")
+  expect(handler).toContain('accountProfileMutationInFlight')
+  expect(handler).toContain('accountsPoolPublicationGate.invalidate()')
+  expect(handler).toContain('forceKillOnAbort: true')
+  expect(handler).toContain('queueMicrotask(refreshAccountsPoolNow)')
+  expect(handler).toContain("outcome: 'retryable_unknown'")
+  expect(handler).not.toContain('forward(')
+  expect(handler).toContain('firstWorkerAborted')
 })
 
 test('P4-35: the file sink carries no destination the renderer could author (HC1)', () => {

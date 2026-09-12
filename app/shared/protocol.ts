@@ -2595,6 +2595,29 @@ export type AccountsSnapshotFrame = {
   accounts: AccountsSnapshot
 }
 
+export type AccountSignOutOutcome =
+  | 'committed'
+  | 'already_committed'
+  | 'superseded'
+  | 'cleanup_pending'
+  | 'retryable_unknown'
+
+export type AccountSignOutReceipt = {
+  outcome: AccountSignOutOutcome
+  accountId: string
+  expectedCredentialGeneration: number
+  observedCredentialGeneration: number | null
+  lifecycleState:
+    | 'login_prepared'
+    | 'credentialed'
+    | 'signed_out'
+    | 'reauth_required'
+    | null
+  operationId: string
+  targetWasActive: boolean
+  replacementActiveAccountId: string | null
+}
+
 /** The outcome of one account verb (echoes the renderer-minted `requestId`, T5a-analog). */
 export type AccountResultFrame = {
   kind: 'account.result'
@@ -2613,6 +2636,8 @@ export type AccountResultFrame = {
     alias: string | null
     result: 'OK' | 'LOCKED' | 'FAILED'
   }>
+  /** Present only for the host-owned targeted `account.logout` route. */
+  signOut?: AccountSignOutReceipt
 }
 
 /* ------------------------------------------------------------------------- *
@@ -3945,6 +3970,13 @@ export type CatCodeBridge = {
    * write to a one-shot engine worker; no credential material crosses this API.
    */
   deleteAccount(verb: AccountDeleteMessage): Promise<AccountResultFrame>
+  /**
+   * Sign out one global Codex credential without borrowing a chat session as the
+   * command carrier. Main validates the targeted generation and delegates the
+   * transaction to a bounded one-shot engine worker; no credential material
+   * crosses this API.
+   */
+  signOutAccount(verb: AccountLogoutMessage): Promise<AccountResultFrame>
   /**
    * P4-15 — accept trust for the addressed session's OWN cwd (the session-create
    * trust gate). The sidecar persists via the engine's `saveCurrentProjectConfig`

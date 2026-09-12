@@ -213,6 +213,7 @@ async function runProductionHardeningSmoke(
       'accountVerb',
       'answerQuestions',
       'deleteAccount',
+      'signOutAccount',
       'ping',
       'refreshAccountsPool',
       // Send-now is bound to an engine-minted queued prompt id and revalidated

@@ -1725,12 +1725,17 @@ export function App() {
 
   // Session-local account controls still address their pane's sidecar. Deleting
   // a saved profile is global durable state instead, so the Accounts page sends
-  // that one verb to main's session-independent engine worker.
+  // those global mutations to main's session-independent engine worker.
   const sendAccountVerb = useCallback(
     (verb: AccountVerbMessage) => {
-      if (verb.type === 'account.delete') {
-        void getBridge()
-          .deleteAccount(verb)
+      if (verb.type === 'account.delete' || verb.type === 'account.logout') {
+        const request =
+          verb.type === 'account.delete'
+            ? getBridge().deleteAccount(verb)
+            : getBridge().signOutAccount(verb)
+        // The host method has no session dependency, so Accounts remains
+        // usable while every chat session is closed.
+        void request
           .then(frame => {
             dispatchAccounts({ type: 'frame', frame })
           })
@@ -1742,9 +1747,12 @@ export function App() {
                 protocolVersion: PROTOCOL_VERSION,
                 sessionId: '',
                 requestId: verb.requestId,
-                verb: 'account.delete',
+                verb: verb.type,
                 ok: false,
-                message: 'Could not delete that account.',
+                message:
+                  verb.type === 'account.delete'
+                    ? 'Could not delete that account.'
+                    : 'Could not confirm account sign-out.',
               },
             })
           })
