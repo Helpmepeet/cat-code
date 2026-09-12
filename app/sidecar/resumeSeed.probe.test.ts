@@ -32,6 +32,7 @@ import { randomUUID } from 'node:crypto'
 const here = dirname(fileURLToPath(import.meta.url))
 const minter = join(here, 'mintTranscript.fixture.ts')
 const seedProbe = join(here, 'resumeSeedProbe.fixture.ts')
+const leaseRaceWriter = join(here, 'resumeLeaseRace.fixture.ts')
 
 // Each child boots the full engine graph + init(); well past Bun's 5s default
 // on a cold module cache (same headroom as the P3-1 probes).
@@ -225,6 +226,57 @@ test('P5-5c: a second sidecar cannot resume the same engine transcript', async (
     configHome,
   })
   expect(afterExit.code).toBe(0)
+}, TEST_TIMEOUT_MS)
+
+test('PR1: retry after a writer release loads the completed durable turn', async () => {
+  const configHome = tmp('catcode-resume-race-cfg-')
+  const cwd = tmp('catcode-resume-race-wd-')
+  const engineSessionId = randomUUID()
+  const marker = `late-${randomUUID()}`
+  const readyFile = join(configHome, 'writer.ready')
+  const appendFile = join(configHome, 'writer.append')
+  const writer = startChild({
+    entry: leaseRaceWriter,
+    args: [engineSessionId, readyFile, appendFile, marker],
+    cwd,
+    configHome,
+    extraEnv: { TEST_ENABLE_SESSION_PERSISTENCE: '1' },
+  })
+  while (!existsSync(readyFile)) await Bun.sleep(20)
+
+  const blocked = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  expect(blocked.code).not.toBe(0)
+  expect(blocked.stderr).toContain('already open in another Cat Code process')
+  writeFileSync(appendFile, 'append and release')
+  expect((await writer.result).code).toBe(0)
+
+  const resumed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  expect(resumed.code).toBe(0)
+  const line = resumed.stdout.split('\n').find(value => value.startsWith('SEED_RESULT='))
+  expect(line).toBeDefined()
+  expect(JSON.parse(line!.slice('SEED_RESULT='.length)).engineHasMarker).toBe(true)
+}, TEST_TIMEOUT_MS)
+
+test('PR1: an unloadable resume releases ownership for a later valid resume', async () => {
+  const configHome = tmp('catcode-resume-hook-cfg-')
+  const cwd = tmp('catcode-resume-hook-wd-')
+  const engineSessionId = randomUUID()
+  const marker = `hook-${randomUUID()}`
+  const failed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  expect(failed.code).not.toBe(0)
+  expect(failed.stderr).toContain('transcript missing or unreadable')
+
+  const mint = await runChild({
+    entry: minter,
+    args: [engineSessionId, marker],
+    cwd,
+    configHome,
+    extraEnv: { TEST_ENABLE_SESSION_PERSISTENCE: '1' },
+  })
+  expect(mint.code).toBe(0)
+  const resumed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  expect(resumed.code).toBe(0)
+  expect(resumed.stdout).toContain('"engineHasMarker":true')
 }, TEST_TIMEOUT_MS)
 
 test('F1/F2 projection wiring: archival display replay preserves the exact visible engine-seed tail', () => {
