@@ -3209,13 +3209,12 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // because only one is ever held. `reduceSessionImagesRestored` is the guarded
   // form: an empty `retained.images` must not erase an image attached to the
   // CURRENT draft (round8 finding 1).
-  expect(restoreBody).toContain('restoreDraftWithPending(')
-  expect(restoreBody).toContain("retained.map(entry => entry.text).filter(Boolean).join('\\n')")
+  expect(restoreBody).toContain('restoreDraftWithRefusedSnapshot(')
+  expect(restoreBody).toContain('refusedSubmitPrefixesRef.current.get(sessionId)')
+  expect(restoreBody).toContain('refusedSubmitPrefixesRef.current.set(sessionId, restored.state)')
   expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, entry.images)')
-  // The copy is handed IN rather than looked up, because the batch reducer has
-  // already removed it by `submitId`. That is what stops a second frame in the
-  // same batch restoring the same copy twice, and it is why this function takes
-  // a `RetainedSubmit` instead of reaching into the ref.
+  // The ordered snapshot is handed in rather than looked up. The reducer marks
+  // already-restored entries, so duplicate answers emit no second snapshot.
   expect(restoreBody).not.toContain('selectRetainedSubmit(')
   expect(source.replace(/\s+/g, ' ')).toContain(
     'const restoreRefusedSubmits = useCallback(( sessionId: SessionId, retained: readonly RetainedSubmit[], ) => {',

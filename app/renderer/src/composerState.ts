@@ -1039,6 +1039,7 @@ export type RetainedSubmit = {
   images: ImageAttachment[]
   file?: FileAttachment | null
   settlement?: 'refused'
+  restored?: true
 }
 
 /**
@@ -1165,11 +1166,11 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
  * result, a staged snapshot, a turn bracket) flowed past the retained copies
  * ahead of the frame that actually answered one.
  *
- * A refusal is released as soon as every EARLIER retained submit has settled.
- * Later unanswered submits are irrelevant: making a known refusal wait for one
- * can hide its only editable copy forever. A later refusal still waits behind
- * an earlier unknown submit, so releases can always be prepended to the live
- * draft in original submission order. An answer for an id this page is not
+ * Every newly known refusal is released immediately. Refused entries stay in
+ * the ordered queue (marked `restored`) until the other outstanding answers
+ * arrive, allowing a later batch to emit the complete refused sequence in
+ * submission order. App replaces its previously inserted prefix with that
+ * sequence instead of prepending it again. An answer for an id this page is not
  * holding is a no-op, which makes a replayed `submit.result` inert after a
  * reload.
  */
@@ -1205,20 +1206,54 @@ export function reduceSubmitAnswers(
   }
   for (const sessionId of touchedSessions) {
     const entries = next[sessionId] ?? []
-    let releasedCount = 0
-    for (const entry of entries) {
-      if (entry.settlement === undefined) break
-      const { settlement: _, ...retained } = entry
-      restored.push({ sessionId, retained })
-      releasedCount += 1
+    if (!entries.some(entry => entry.settlement === 'refused' && !entry.restored)) {
+      continue
     }
-    if (releasedCount === 0) continue
-    const waiting = entries.slice(releasedCount)
-    next = waiting.length === 0
+    for (const entry of entries) {
+      if (entry.settlement !== 'refused') continue
+      const { settlement: _, restored: __, ...retained } = entry
+      restored.push({ sessionId, retained })
+    }
+    const marked = entries.map(entry =>
+      entry.settlement === 'refused' ? { ...entry, restored: true as const } : entry,
+    )
+    next = marked.every(entry => entry.settlement === 'refused')
       ? reduceRetainedSubmitCleared(next, sessionId)
-      : { ...next, [sessionId]: waiting }
+      : { ...next, [sessionId]: marked }
   }
   return { state: next, restored }
+}
+
+/** Replace App's exact prior refusal prefix while preserving later live edits. */
+export type RefusedDraftRestoreState = {
+  prefix: string
+  submitIds: readonly string[]
+}
+
+export function restoreDraftWithRefusedSnapshot(
+  draft: string,
+  previous: RefusedDraftRestoreState | null,
+  refused: readonly RetainedSubmit[],
+): { draft: string; state: RefusedDraftRestoreState; retained: readonly RetainedSubmit[] } {
+  let liveDraft = draft
+  const previousIntact = previous !== null && (
+    draft === previous.prefix || draft.startsWith(`${previous.prefix}\n`)
+  )
+  if (previousIntact) {
+    liveDraft = draft === previous.prefix
+      ? ''
+      : draft.slice(previous.prefix.length + 1)
+  }
+  const previousIds = new Set(previous?.submitIds ?? [])
+  const retained = previousIntact
+    ? refused
+    : refused.filter(entry => !previousIds.has(entry.submitId))
+  const prefix = retained.map(entry => entry.text).filter(Boolean).join('\n')
+  return {
+    draft: restoreDraftWithPending(liveDraft, prefix),
+    state: { prefix, submitIds: retained.map(entry => entry.submitId) },
+    retained,
+  }
 }
 
 // ── The messages a recall takes back (D1b) ───────────────────────────────────

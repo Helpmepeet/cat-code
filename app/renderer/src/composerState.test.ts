@@ -61,6 +61,7 @@ import {
   reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreSelectedPrompt,
+  restoreDraftWithRefusedSnapshot,
   restoreDraftWithPending,
   composerPromptPlaceholder,
   selectComposerGate,
@@ -1537,13 +1538,13 @@ describe('D5 — a refused submit comes back, images included', () => {
     const secondFirst = reduceSubmitAnswers(state, [
       submitAnswerFrame(S1, 'sub-second', false),
     ])
-    expect(secondFirst.restored).toEqual([])
+    expect(secondFirst.restored.map(item => item.retained.text)).toEqual(['SECOND'])
     expect(secondFirst.state[S1]?.[1]?.settlement).toBe('refused')
 
     const replay = reduceSubmitAnswers(secondFirst.state, [
       submitAnswerFrame(S1, 'sub-second', false),
     ])
-    expect(replay).toEqual(secondFirst)
+    expect(replay).toEqual({ state: secondFirst.state, restored: [] })
 
     const firstLater = reduceSubmitAnswers(replay.state, [
       submitAnswerFrame(S1, 'sub-first', false),
@@ -1554,12 +1555,17 @@ describe('D5 — a refused submit comes back, images included', () => {
     ])
     expect(firstLater.restored[1]?.retained.images).toEqual([image])
     expect(firstLater.state[S1]).toBeUndefined()
-    expect(
-      restoreDraftWithPending(
-        'CURRENT DRAFT',
-        firstLater.restored.map(item => item.retained.text).join('\n'),
-      ),
-    ).toBe('FIRST\nSECOND\nCURRENT DRAFT')
+    const secondDraft = restoreDraftWithRefusedSnapshot(
+      'CURRENT DRAFT',
+      null,
+      secondFirst.restored.map(item => item.retained),
+    )
+    expect(secondDraft.draft).toBe('SECOND\nCURRENT DRAFT')
+    expect(restoreDraftWithRefusedSnapshot(
+      secondDraft.draft,
+      secondDraft.state,
+      firstLater.restored.map(item => item.retained),
+    ).draft).toBe('FIRST\nSECOND\nCURRENT DRAFT')
   })
 
   test('a known refusal is released without waiting for a later unanswered submit', () => {
@@ -1589,16 +1595,83 @@ describe('D5 — a refused submit comes back, images included', () => {
         file: { name: 'evidence.txt', token: 'file-token' },
       },
     }])
-    expect(refused.state[S1]).toEqual([{
-      submitId: 'sub-unknown',
-      text: 'STILL IN FLIGHT',
-      images: [],
-    }])
+    expect(refused.state[S1]).toEqual([
+      {
+        submitId: 'sub-refused',
+        text: 'KNOWN REFUSAL',
+        images: [image],
+        file: { name: 'evidence.txt', token: 'file-token' },
+        settlement: 'refused',
+        restored: true,
+      },
+      {
+        submitId: 'sub-unknown',
+        text: 'STILL IN FLIGHT',
+        images: [],
+      },
+    ])
 
     // A replayed answer cannot restore the released copy twice.
     expect(reduceSubmitAnswers(refused.state, [
       submitAnswerFrame(S1, 'sub-refused', false),
     ])).toEqual({ state: refused.state, restored: [] })
+  })
+
+  test('forward-batch refusals replace their prefix without reversing live draft text', () => {
+    let state = createRetainedSubmitState()
+    for (const [submitId, text] of [['A', 'FIRST'], ['B', 'SECOND']] as const) {
+      state = reduceRetainedSubmitHeld(state, S1, { submitId, text, images: [] })
+    }
+    const first = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'A', false)])
+    const firstDraft = restoreDraftWithRefusedSnapshot(
+      'CURRENT', null, first.restored.map(item => item.retained),
+    )
+    const second = reduceSubmitAnswers(first.state, [submitAnswerFrame(S1, 'B', false)])
+    const secondDraft = restoreDraftWithRefusedSnapshot(
+      `${firstDraft.draft} EDITED`,
+      firstDraft.state,
+      second.restored.map(item => item.retained),
+    )
+    expect(secondDraft.draft).toBe('FIRST\nSECOND\nCURRENT EDITED')
+  })
+
+  test('a later known refusal is restored even while an earlier submit stays unknown', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'A', text: 'UNKNOWN', images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'B', text: 'KNOWN', images: [image],
+    })
+    const outcome = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'B', false)])
+    expect(outcome.restored.map(item => item.retained.submitId)).toEqual(['B'])
+    expect(outcome.state[S1]?.[1]).toMatchObject({
+      submitId: 'B', settlement: 'refused', restored: true,
+    })
+    const restored = restoreDraftWithRefusedSnapshot(
+      'LIVE EDIT', null, outcome.restored.map(item => item.retained),
+    )
+    expect(restored.draft).toBe('KNOWN\nLIVE EDIT')
+    expect(restored.retained[0]?.images).toEqual([image])
+
+    // A lifecycle/close cleanup can now discard only the transport copies: the
+    // known refusal has already reached the composer, while unknown A is never
+    // claimed or resent.
+    const cleaned = reduceRetainedSubmitCleared(outcome.state, S1)
+    expect(cleaned[S1]).toBeUndefined()
+  })
+
+  test('editing a restored prefix preserves the edit and does not restore its attachments twice', () => {
+    const old = { submitId: 'A', text: 'OLD', images: [image] }
+    const first = restoreDraftWithRefusedSnapshot('LIVE', null, [old])
+    const next = { submitId: 'B', text: 'NEW', images: [] }
+    const edited = restoreDraftWithRefusedSnapshot(
+      'user rewrote OLD\nLIVE',
+      first.state,
+      [old, next],
+    )
+    expect(edited.draft).toBe('NEW\nuser rewrote OLD\nLIVE')
+    expect(edited.retained).toEqual([next])
   })
 
   test('a park refusal carrying a recall’s id cannot refuse a submit', () => {

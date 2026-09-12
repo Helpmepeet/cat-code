@@ -136,6 +136,7 @@ import {
   reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreSelectedPrompt,
+  restoreDraftWithRefusedSnapshot,
   restoreDraftWithPending,
   selectAgentMentionItems,
   selectFileAttachment,
@@ -551,6 +552,9 @@ export function App() {
   // so a state value read inside it would always be the first one.
   const retainedSubmitsRef = useRef<RetainedSubmitState>(
     createRetainedSubmitState(),
+  )
+  const refusedSubmitPrefixesRef = useRef(
+    new Map<SessionId, import('./composerState.js').RefusedDraftRestoreState>(),
   )
   // D1b — recall requests this page is waiting on or has answered, each against
   // the session it was asked for. A ref for the same reason as the one above, and
@@ -1296,6 +1300,7 @@ export function App() {
           retainedSubmitsRef.current,
           event.appSessionId,
         )
+        refusedSubmitPrefixesRef.current.delete(event.appSessionId)
         forgetRecallRequests(recallRequestsRef.current, event.appSessionId)
         dispatchQueuedPrompts({
           type: 'session-removed',
@@ -2389,18 +2394,22 @@ export function App() {
     sessionId: SessionId,
     retained: readonly RetainedSubmit[],
   ) => {
-    const text = retained.map(entry => entry.text).filter(Boolean).join('\n')
-    setPromptDrafts(drafts =>
-      reducePromptDrafts(
-        drafts,
-        sessionId,
-        restoreDraftWithPending(
-          selectPromptDraft(drafts, sessionId),
-          text,
-        ),
-      ),
+    const previous = refusedSubmitPrefixesRef.current.get(sessionId) ?? null
+    const preview = restoreDraftWithRefusedSnapshot(
+      selectPromptDraft(promptDraftsRef.current, sessionId),
+      previous,
+      retained,
     )
-    for (const entry of retained) {
+    setPromptDrafts(drafts => {
+      const restored = restoreDraftWithRefusedSnapshot(
+        selectPromptDraft(drafts, sessionId),
+        previous,
+        retained,
+      )
+      refusedSubmitPrefixesRef.current.set(sessionId, restored.state)
+      return reducePromptDrafts(drafts, sessionId, restored.draft)
+    })
+    for (const entry of preview.retained) {
       setImageAttachmentState(state =>
         reduceSessionImagesRestored(state, sessionId, entry.images),
       )
@@ -2504,6 +2513,7 @@ export function App() {
       retainedSubmitsRef.current,
       sessionId,
     )
+    refusedSubmitPrefixesRef.current.delete(sessionId)
     forgetRecallRequests(recallRequestsRef.current, sessionId)
     if (shellRef.current.previews[sessionId]) {
       const plan = previewClosePlan(
