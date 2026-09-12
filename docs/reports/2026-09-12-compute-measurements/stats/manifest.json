@@ -1,0 +1,16 @@
+{
+  "repo": "/Users/pt/cat-code",
+  "beforeCommit": "d9f5eef5dad750ceffe411e6913692e8789bc9ca",
+  "afterCommit": "d58b9f10f7fb6d31a033045bc7321bbccccaf885",
+  "sourcePath": "src/utils/stats.ts",
+  "blobs": {
+    "before": {
+      "path": "/var/folders/2p/ftpy23hs0p572q84m6mx0b_c0000gn/T/cat-code-stats-benchmark-9s_riasd/modules/stats-before.ts",
+      "sha256": "3d34994fe2e7a8f927665e0df417fa0f8248e176b466ce3fc361f64e818084d9"
+    },
+    "after": {
+      "path": "/var/folders/2p/ftpy23hs0p572q84m6mx0b_c0000gn/T/cat-code-stats-benchmark-9s_riasd/modules/stats-after.ts",
+      "sha256": "411f29fcac6bf025292676686f7aecfd3000402e7b28609d7960a237d535ee3b"
+    }
+  }
+}
