@@ -286,7 +286,10 @@ describe('rolling range aggregation', () => {
     const old = { ...assistantRecord('old', { input_tokens: 100, output_tokens: 20 }, 0), timestamp: at(8).toISOString() }
     const yesterday = { ...assistantRecord('yesterday', { input_tokens: 100, output_tokens: 20 }, 1), timestamp: at(1).toISOString() }
     const today = { ...assistantRecord('today', { input_tokens: 1200, output_tokens: 450 }, 2), timestamp: at(0).toISOString() }
-    writeFileSync(join(project, 'resumed.jsonl'), [old, yesterday, today].map(JSON.stringify).join('\n'))
+    writeFileSync(
+      join(project, 'resumed.jsonl'),
+      [old, yesterday, today].map(record => JSON.stringify(record)).join('\n'),
+    )
     try {
       const stats = await aggregateClaudeCodeStatsForRange('7d')
       expect(stats.totalSessions).toBe(1)

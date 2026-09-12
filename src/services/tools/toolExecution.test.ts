@@ -13,6 +13,7 @@ import { runTools } from './toolOrchestration.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import { FilePatchError } from '../../tools/FilePatchTool/types.js'
+import { asAgentId } from '../../types/ids.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -378,11 +379,12 @@ describe('tool execution authority', () => {
             id: `${executorKind}-${scope}-${name}`,
             name,
             input: { value: 'x' },
+            caller: { type: 'direct' as const },
           }
           const assistant = createAssistantMessage()
           assistant.message.content = [block]
           const context = createToolUseContext([tool])
-          context.agentId = agentId
+          context.agentId = agentId ? asAgentId(agentId) : undefined
           const canUseTool = async () => ({
             behavior: 'allow' as const,
             updatedInput: { value: 'x' },
@@ -411,13 +413,14 @@ describe('tool execution authority', () => {
         expect(calls).toBe(2)
 
         const deniedContext = createToolUseContext([tool])
-        deniedContext.agentId = agentId
+        deniedContext.agentId = agentId ? asAgentId(agentId) : undefined
         const deniedAssistant = createAssistantMessage()
         const deniedBlock = {
           type: 'tool_use' as const,
           id: `${executorKind}-${scope}-denied-alias`,
           name: 'LegacyFixture',
           input: { value: 'x' },
+          caller: { type: 'direct' as const },
         }
         deniedAssistant.message.content = [deniedBlock]
         const deny = async () => ({
@@ -469,8 +472,8 @@ describe('streaming terminal handoff', () => {
     const context = createToolUseContext([ask, effect])
     const assistant = createAssistantMessage()
     const blocks = [
-      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' } },
-      { type: 'tool_use' as const, id: 'effect', name: effect.name, input: { value: 'x' } },
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+      { type: 'tool_use' as const, id: 'effect', name: effect.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
     ]
     assistant.message.content = blocks
     const executor = new StreamingToolExecutor(
@@ -517,8 +520,8 @@ describe('streaming terminal handoff', () => {
     const context = createToolUseContext([ask, effect])
     const assistant = createAssistantMessage()
     const blocks = [
-      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' } },
-      { type: 'tool_use' as const, id: 'waiting', name: effect.name, input: { value: 'x' } },
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+      { type: 'tool_use' as const, id: 'waiting', name: effect.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
     ]
     assistant.message.content = blocks
     const executor = new StreamingToolExecutor(
