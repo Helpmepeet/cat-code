@@ -16,7 +16,7 @@ async function expectCrossProcessLockContention(
 ): Promise<void> {
   const childPath = join(import.meta.dir, 'atomicFile.probe.child.ts')
   let release: (() => Promise<void>) | undefined
-  let waiter: ReturnType<typeof Bun.spawn> | undefined
+  let waiter: Bun.ReadableSubprocess | undefined
 
   try {
     release = await acquire()
@@ -190,7 +190,7 @@ test('a normal contender waits beyond the old short lock timeout', async () => {
   )
   const readyPath = `${lockPath}.ready`
   const waiterReadyDeadline = Date.now() + 5_000
-  let waiter: ReturnType<typeof Bun.spawn> | undefined
+  let waiter: Bun.ReadableSubprocess | undefined
 
   try {
     while (true) {
@@ -261,7 +261,7 @@ test('file mutation locks serialize target and symlink paths across processes', 
     ],
     { stdout: 'pipe', stderr: 'pipe' },
   )
-  let second: ReturnType<typeof Bun.spawn> | undefined
+  let second: Bun.ReadableSubprocess | undefined
 
   try {
     const readyDeadline = Date.now() + 5_000
@@ -373,7 +373,7 @@ test('FileEdit waits on a target lock when called through a symlink', async () =
   await symlink(targetPath, aliasPath)
 
   let release: (() => Promise<void>) | undefined
-  let editor: ReturnType<typeof Bun.spawn> | undefined
+  let editor: Bun.ReadableSubprocess | undefined
   try {
     release = await acquireFileMutationLock(targetPath)
     editor = Bun.spawn(

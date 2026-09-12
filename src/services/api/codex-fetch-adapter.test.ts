@@ -40,6 +40,12 @@ import {
 } from './codexAccountPool.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
 
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: fetch.preconnect })
+}
+
 function createAccessToken(accountId: string): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
   const payload = btoa(JSON.stringify({
@@ -2587,10 +2593,10 @@ describe('codex-fetch-adapter', () => {
   test('createCodexFetch rejects HTTP EOF before visible output as a connection failure', async () => {
     const originalFetch = globalThis.fetch
     const conversationId = 'conv_http_eof_before_output'
-    globalThis.fetch = (async () => new Response(
+    globalThis.fetch = withFetchPreconnect(async () => new Response(
       `data: ${JSON.stringify({ type: 'response.created' })}\n\n`,
       { headers: { 'Content-Type': 'text/event-stream' } },
-    )) as typeof globalThis.fetch
+    ))
 
     try {
       _markStickyHttpFallbackForTest(conversationId, 'test')
@@ -2822,14 +2828,14 @@ describe('codex-fetch-adapter', () => {
       'data: {"id":"resp_sse_framing","usage":{"input_tokens":4,"output_tokens":3,"input_tokens_details":{"cached_tokens":1}}}}\n\n',
     ]
 
-    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+    globalThis.fetch = withFetchPreconnect(async () => new Response(new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
         controller.close()
       },
     }), {
       headers: { 'Content-Type': 'text/event-stream' },
-    })) as typeof globalThis.fetch
+    }))
 
     try {
       _markStickyHttpFallbackForTest(conversationId, 'test')

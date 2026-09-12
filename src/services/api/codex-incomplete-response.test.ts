@@ -17,6 +17,12 @@ import {
 
 const CONVERSATION_ID = 'conv_ws_incomplete_regression'
 
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: fetch.preconnect })
+}
+
 type WsListener = (...args: unknown[]) => void
 
 class IncompleteWebSocket {
@@ -105,10 +111,10 @@ test('createCodexFetch surfaces a pre-visible websocket incomplete response with
 
   const originalFetch = globalThis.fetch
   let httpRequests = 0
-  globalThis.fetch = (async () => {
+  globalThis.fetch = withFetchPreconnect(async () => {
     httpRequests += 1
     throw new Error('HTTP fallback must not replay an incomplete response')
-  }) as typeof globalThis.fetch
+  })
 
   try {
     await expect(

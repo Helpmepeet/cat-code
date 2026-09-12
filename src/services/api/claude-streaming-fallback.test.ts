@@ -16,6 +16,12 @@ import {
 
 const encoder = new TextEncoder()
 
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: fetch.preconnect })
+}
+
 function sseEvent(event: Record<string, unknown>): Uint8Array {
   return encoder.encode(
     `event: ${String(event.type)}\ndata: ${JSON.stringify(event)}\n\n`,
@@ -88,7 +94,7 @@ describe('Codex partial-stream recovery', () => {
       },
     ]
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       dispatchCount++
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
 
@@ -144,7 +150,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const consume = async () => {
       const events: unknown[] = []
@@ -210,7 +216,7 @@ describe('Codex partial-stream recovery', () => {
     macroState.MACRO = { VERSION: 'test-version' }
     const dispatchedStreamFlags: boolean[] = []
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
       dispatchedStreamFlags.push(body.stream === true)
       if (body.stream === true) {
@@ -255,7 +261,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const events: unknown[] = []
     for await (const event of queryModelWithStreaming({
@@ -293,7 +299,7 @@ describe('Codex partial-stream recovery', () => {
       macroState.MACRO = { VERSION: 'test-version' }
       const dispatchedStreamFlags: boolean[] = []
 
-      const fetchOverride: typeof fetch = async (_input, init) => {
+      const fetchOverride = withFetchPreconnect(async (_input, init) => {
         const body = JSON.parse(String(init?.body)) as { stream?: boolean }
         dispatchedStreamFlags.push(body.stream === true)
         if (body.stream === true) {
@@ -335,7 +341,7 @@ describe('Codex partial-stream recovery', () => {
         }), {
           headers: { 'content-type': 'application/json' },
         })
-      }
+      })
 
       const events: unknown[] = []
       for await (const event of queryModelWithStreaming({
@@ -425,7 +431,7 @@ describe('Codex partial-stream recovery', () => {
       automaticContinuationEligible: true,
     }
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       dispatchCount++
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
       if (body.stream !== true) {
@@ -454,7 +460,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const events: unknown[] = []
     for await (const event of queryModelWithStreaming({
