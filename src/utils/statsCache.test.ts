@@ -4,6 +4,7 @@ import {
   mergeCacheWithNewStats,
   type PersistedStatsCache,
   STATS_CACHE_VERSION,
+  withStatsCacheLock,
 } from './statsCache.js'
 
 const emptyUsage: ModelUsage = {
@@ -54,6 +55,22 @@ function fragment(timestamp: string, messageCount = 1) {
 }
 
 describe('stats cache session reconciliation', () => {
+  test('serializes cache readers so the second observes the first update', async () => {
+    let persisted = 0
+    const first = withStatsCacheLock(async () => {
+      const fresh = persisted
+      await Promise.resolve()
+      persisted = fresh + 1
+    })
+    const second = withStatsCacheLock(async () => {
+      const fresh = persisted
+      persisted = fresh + 1
+    })
+
+    await Promise.all([first, second])
+    expect(persisted).toBe(2)
+  })
+
   test('keeps daily fragments as one all-time session with a full span', () => {
     const first = mergeCacheWithNewStats(
       emptyCache(),
