@@ -505,6 +505,133 @@ describe('targeted Codex account sign-out', () => {
     expect(getGlobalConfigForTest().activeCodexAccountId).toBe(ACCOUNT_C)
   })
 
+  test('concurrent stale processes do not deadlock while replacing different active accounts', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-signout-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-signout-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const accountAPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_A}.json`,
+      ACCOUNT_A,
+    )
+    const accountBPath = writeVaultProfile(
+      vaultPath,
+      `${ACCOUNT_B}.json`,
+      ACCOUNT_B,
+    )
+    await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    await establishCredentialed(lifecyclePath, ACCOUNT_B)
+
+    const lifecycleA = createCodexCredentialLifecycle({
+      directory: lifecyclePath,
+      lockWaitMs: 40,
+    })
+    const lifecycleB = createCodexCredentialLifecycle({
+      directory: lifecyclePath,
+      lockWaitMs: 40,
+    })
+    const lockFailures: string[] = []
+    const observeLifecycle = (
+      lifecycle: CodexCredentialLifecycle,
+      targetAccountId: string,
+    ): CodexCredentialLifecycle => {
+      let targetSignOutTransactions = 0
+      return {
+        ...lifecycle,
+        async withTransaction<T>(accountId, options, callback): Promise<T> {
+          try {
+            return await lifecycle.withTransaction(
+              accountId,
+              options,
+              async permit => {
+                if (
+                  accountId === targetAccountId &&
+                  options.operationKind === 'sign_out' &&
+                  ++targetSignOutTransactions === 2
+                ) {
+                  await new Promise(resolve => setTimeout(resolve, 15))
+                }
+                return callback(permit)
+              },
+            )
+          } catch (error) {
+            if (
+              error &&
+              typeof error === 'object' &&
+              'code' in error &&
+              error.code === 'lock_unavailable'
+            ) {
+              lockFailures.push(`${targetAccountId}->${accountId}`)
+            }
+            throw error
+          }
+        },
+      }
+    }
+    const poolFor = (activeAccountId: string) => ({
+      accounts: [
+        buildPoolAccount(ACCOUNT_A, { vaultFilePath: accountAPath }),
+        buildPoolAccount(ACCOUNT_B, { vaultFilePath: accountBPath }),
+      ],
+      activeIndex: activeAccountId === ACCOUNT_A ? 0 : 1,
+    })
+    let activeAccountId: string | undefined = ACCOUNT_B
+    const dependenciesFor = (
+      lifecycle: CodexCredentialLifecycle,
+      staleActiveAccountId: string,
+    ): CodexAccountSignOutDependencies => ({
+      lifecycle: observeLifecycle(lifecycle, staleActiveAccountId),
+      getVaultPath: () => vaultPath,
+      getPoolStatus: () =>
+        poolFor(staleActiveAccountId) as ReturnType<typeof getPoolStatus>,
+      resolveTarget: accountId => {
+        const pool = poolFor(staleActiveAccountId)
+        const account = pool.accounts.find(
+          candidate => candidate.accountId === accountId,
+        )
+        return account
+          ? {
+              kind: 'credentialed',
+              account,
+              targetWasActive: accountId === staleActiveAccountId,
+            }
+          : { kind: 'none' }
+      },
+      readConfig: () =>
+        ({ activeCodexAccountId }) as ReturnType<typeof getGlobalConfigForTest>,
+      clearConfigMirrorResult: () => ({ status: 'not_matched' }),
+      replaceActiveAccount: (expected, replacement) => {
+        if (activeAccountId !== expected) {
+          return { status: 'pointer_changed', activeAccountId }
+        }
+        activeAccountId = replacement?.accountId
+        return { status: 'replaced', activeAccountId }
+      },
+      reconcilePool: () => {},
+      repairLeases: () => {},
+      resetCodexCacheContext: () => {},
+      invalidateUsageCache: () => {},
+      clearAuthCaches: async () => {},
+    })
+
+    const [resultA, resultB] = await Promise.all([
+      signOutCodexAccount(
+        input(),
+        dependenciesFor(lifecycleA, ACCOUNT_A),
+      ),
+      signOutCodexAccount(
+        input(ACCOUNT_B, 'sign-out-operation-b'),
+        dependenciesFor(lifecycleB, ACCOUNT_B),
+      ),
+    ])
+
+    expect(resultA.accountId).toBe(ACCOUNT_A)
+    expect(resultB.accountId).toBe(ACCOUNT_B)
+    expect(lockFailures).toEqual([])
+    expect(lifecycleRecord(lifecycleA, ACCOUNT_A).state).toBe('signed_out')
+    expect(lifecycleRecord(lifecycleB, ACCOUNT_B).state).toBe('signed_out')
+  })
+
   test('persists no active account when no candidate is switchable', async () => {
     const vaultPath = mkdtempSync(join(tmpdir(), 'codex-signout-vault-'))
     const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-signout-lifecycle-'))

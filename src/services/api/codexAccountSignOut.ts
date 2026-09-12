@@ -17,7 +17,7 @@ import {
 } from '../../utils/auth.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 import { getGlobalConfig, type GlobalConfig } from '../../utils/config.js'
-import { acquireMutationLockSync } from '../../utils/lockfile.js'
+import { acquireMutationLockSync, lock } from '../../utils/lockfile.js'
 import { invalidateUsageCache } from './codexUsage.js'
 import {
   getVaultPath,
@@ -181,6 +181,42 @@ type ActiveReplacement =
 const MAX_IDENTIFIER_LENGTH = 128
 const CODEX_ALIAS_PATTERN = /^[a-zA-Z0-9_-]{1,32}$/
 const VAULT_LOCK_WAIT_MS = 10_000
+const ACTIVE_REPLACEMENT_LOCK_WAIT_MS = 30_000
+
+async function withActiveReplacementLock<T>(
+  lifecycle: Pick<CodexCredentialLifecycle, 'getPaths'>,
+  accountId: string,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const directory = lifecycle.getPaths(accountId).directory
+  const lockTarget = join(directory, '.active-account-replacement')
+  const deadline = Date.now() + ACTIVE_REPLACEMENT_LOCK_WAIT_MS
+  let release: (() => Promise<void>) | undefined
+  for (;;) {
+    try {
+      release = await lock(lockTarget, {
+        realpath: false,
+        retries: 0,
+        stale: 120_000,
+        update: 30_000,
+      })
+      break
+    } catch (error) {
+      const locked =
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        error.code === 'ELOCKED'
+      if (!locked || Date.now() >= deadline) throw error
+      await new Promise(resolve => setTimeout(resolve, 20))
+    }
+  }
+  try {
+    return await callback()
+  } finally {
+    await release()
+  }
+}
 
 function isIdentifier(value: unknown): value is string {
   return (
@@ -1850,7 +1886,7 @@ async function executeAccountLifecycleCleanup(
     )
   }
 
-  const postCleanup = await applyPostCleanupEffects(
+  const applyEffects = () => applyPostCleanupEffects(
     normalized,
     operationKind,
     execution,
@@ -1858,6 +1894,18 @@ async function executeAccountLifecycleCleanup(
     targetWasActive,
     dependencies,
   )
+  let postCleanup: PostCleanupExecution
+  try {
+    postCleanup = targetWasActive
+      ? await withActiveReplacementLock(
+          lifecycle,
+          normalized.accountId,
+          applyEffects,
+        )
+      : await applyEffects()
+  } catch {
+    postCleanup = { kind: 'retryable_unknown', record: execution.record }
+  }
   if (postCleanup.kind === 'superseded') {
     return resultFor(
       normalized,
