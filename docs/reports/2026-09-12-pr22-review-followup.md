@@ -74,3 +74,22 @@ avoid duplicate test discovery; their locations and recovery commit are in
 
 Validation is complete. Fresh Sol implementation passes and final integration
 verification are pending; no follow-up fix is claimed complete in this snapshot.
+
+## Additional type baseline validation
+
+Raw root typechecking at the actual PR base reported 1,875 diagnostics, versus
+1,906 at the reviewed head. A new integration test imports the desktop sidecar
+into the root graph. Adding only that production sidecar import to an isolated
+base archive reproduced the 22 additional desktop diagnostics, leaving 1,897
+at the base with the same graph. Desktop correctness remains governed by its
+separate strict app and scoped sidecar checks.
+
+After normalizing archive paths and checking changed diagnostic text against
+the underlying source, nine added occurrences remain: one UUID annotation in
+the terminal-handoff cancellation guard, four fetch-fixture annotations, and
+four piped subprocess stream annotations. These are validated type-contract
+defects in the PR; the cancellation annotation belongs to the F3 fix, and a
+separate Sol pass will repair the fixture annotations. Three AgentTool schema
+diagnostics changed their printed types but have the same inherited causes.
+This comparison supersedes using only the later local baseline for a claim
+about the entire PR.
