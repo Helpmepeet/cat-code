@@ -35,6 +35,11 @@ import {
   type CodexCredentialLifecycleRecord,
 } from './codexCredentialLifecycle.js'
 import {
+  getCodexLeaseSnapshotForTest,
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from './codexAccountLeaseManager.js'
+import {
   recoverCodexAccountSignOut,
   signOutCodexAccount,
   type CodexAccountSignOutDependencies,
@@ -175,7 +180,6 @@ function dependencies(
   return {
     lifecycle,
     getVaultPath: () => vaultPath,
-    repairLeases: () => {},
     retireWebSockets: () => {},
     resetCodexCacheContext: () => {},
     invalidateUsageCache: () => {},
@@ -198,11 +202,13 @@ function input(
 beforeEach(() => {
   process.env.NODE_ENV = 'test'
   resetCodexAccountPoolForTest()
+  resetCodexLeaseManagerForTest()
   setConfigState(undefined)
 })
 
 afterEach(() => {
   resetCodexAccountPoolForTest()
+  resetCodexLeaseManagerForTest()
   clearCodexOAuthTokens()
   for (const directory of scratchDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true })
@@ -378,6 +384,12 @@ describe('targeted Codex account sign-out', () => {
         }),
       ],
     })
+    seedCodexLeaseForTest({
+      ownerId: 'main-thread',
+      ownerType: 'main',
+      ownerLabel: 'Main thread',
+      accountId: ACCOUNT_A,
+    })
     setConfigState(ACCOUNT_A)
     saveCodexOAuthTokens({
       accessToken: 'target-access',
@@ -404,6 +416,13 @@ describe('targeted Codex account sign-out', () => {
       refreshToken: 'replacement-refresh',
       credentialGeneration: 1,
     })
+    expect(getCodexLeaseSnapshotForTest().leases).toEqual([
+      expect.objectContaining({
+        ownerId: 'main-thread',
+        accountId: ACCOUNT_B,
+        state: 'active',
+      }),
+    ])
     expect(getPoolStatus().accounts[getPoolStatus().activeIndex]?.accountId).toBe(
       ACCOUNT_B,
     )
@@ -783,6 +802,34 @@ describe('targeted Codex account sign-out', () => {
     })
     expect(readFileSync(vaultFilePath, 'utf8')).toBe(before)
   })
+
+  test('resolves a config-only account when the in-memory pool is not loaded', async () => {
+    const vaultPath = mkdtempSync(join(tmpdir(), 'codex-signout-vault-'))
+    const lifecyclePath = mkdtempSync(join(tmpdir(), 'codex-signout-lifecycle-'))
+    scratchDirectories.push(vaultPath, lifecyclePath)
+    const lifecycle = await establishCredentialed(lifecyclePath, ACCOUNT_A)
+    saveCodexOAuthTokens({
+      accessToken: 'config-access',
+      refreshToken: 'config-refresh',
+      expiresAt: Date.now() + 60_000,
+      accountId: ACCOUNT_A,
+      credentialGeneration: 1,
+    })
+    saveGlobalConfig(current => ({
+      ...current,
+      activeCodexAccountId: ACCOUNT_A,
+    }))
+
+    const result = await signOutCodexAccount(
+      input(),
+      dependencies(lifecycle, vaultPath),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(getCodexOAuthTokens()).toBeNull()
+    expect(getSignedOutCodexProfiles()).toEqual([])
+  })
+
 })
 
 function getGlobalConfigForTest(): {

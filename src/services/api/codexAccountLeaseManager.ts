@@ -75,6 +75,8 @@ export type CodexLeaseSnapshot = {
 
 export type CodexLeaseRepairOptions = Readonly<{
   touchReplacementUsage?: boolean
+  persistMainActive?: boolean
+  reason?: 'deletion' | 'unavailable'
 }>
 
 type CodexLeaseFailoverOptions = {
@@ -506,6 +508,7 @@ export function repairLeasesForUnavailableAccount(
   unavailableAccountId: string,
   options: CodexLeaseRepairOptions = {},
 ): void {
+  const reason = options.reason ?? 'unavailable'
   const affected = Array.from(codexLeasesByOwnerId.values()).filter(
     (lease) => lease.accountId === unavailableAccountId,
   ).sort((left, right) => leaseRepairRank(left) - leaseRepairRank(right))
@@ -524,17 +527,28 @@ export function repairLeasesForUnavailableAccount(
         state: 'active',
         selectionKind: 'repaired',
         previousAccountId: unavailableAccountId,
-        selectionReason: `repaired from unavailable account ${unavailableAccountId}`,
+        selectionReason:
+          reason === 'deletion'
+            ? `repaired after deletion of ${unavailableAccountId}`
+            : `repaired from unavailable account ${unavailableAccountId}`,
         updatedAt: now,
       })
       if (options.touchReplacementUsage !== false) {
         touchPoolAccountUsage(selection.account.accountId)
       }
+      if (
+        lease.ownerType === 'main' &&
+        options.persistMainActive !== false
+      ) {
+        setActiveAccountPersisted(selection.account.accountId)
+      }
       changed = true
     } catch (error) {
       changed = codexLeasesByOwnerId.delete(lease.ownerId) || changed
       logForDebugging(
-        `[codex-pool] Dropping lease ${lease.ownerId} after account ${unavailableAccountId} became unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        reason === 'deletion'
+          ? `[codex-pool] Dropping lease ${lease.ownerId} after deletion of ${unavailableAccountId}: ${error instanceof Error ? error.message : String(error)}`
+          : `[codex-pool] Dropping lease ${lease.ownerId} after account ${unavailableAccountId} became unavailable: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
@@ -547,6 +561,8 @@ export function repairLeasesForUnavailableAccount(
 export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
   repairLeasesForUnavailableAccount(deletedAccountId, {
     touchReplacementUsage: true,
+    persistMainActive: true,
+    reason: 'deletion',
   })
 }
 

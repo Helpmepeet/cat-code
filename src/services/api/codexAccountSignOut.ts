@@ -270,6 +270,7 @@ function targetHintFor(
 function targetResolution(
   accountId: string,
   dependencies: CodexAccountSignOutDependencies,
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
 ): CodexTargetedSignOutResolution {
   if (dependencies.resolveTarget) {
     return dependencies.resolveTarget(accountId)
@@ -304,6 +305,55 @@ function targetResolution(
   }
   if (accounts.length > 0 || profiles.length > 0) {
     return { kind: 'ambiguous' }
+  }
+
+  if (
+    status.accounts.length === 0 &&
+    inventory.signedOutProfiles.length === 0 &&
+    inventory.duplicateVaultIdentities.length === 0
+  ) {
+    let config: GlobalConfig
+    try {
+      config = (dependencies.readConfig ?? getGlobalConfig)()
+    } catch {
+      return { kind: 'none' }
+    }
+    const mirror = config.codexOAuth
+    const lifecycleResult = safeReadLifecycle(lifecycle, accountId)
+    if (
+      mirror?.accountId === accountId &&
+      typeof mirror.accessToken === 'string' &&
+      mirror.accessToken.length > 0 &&
+      typeof mirror.refreshToken === 'string' &&
+      mirror.refreshToken.length > 0 &&
+      typeof mirror.expiresAt === 'number' &&
+      Number.isFinite(mirror.expiresAt) &&
+      lifecycleResult.status === 'valid' &&
+      lifecycleResult.record.state === 'credentialed' &&
+      lifecycleResult.record.credentialGeneration ===
+        (mirror.credentialGeneration ?? 0)
+    ) {
+      return {
+        kind: 'credentialed',
+        account: {
+          accountId,
+          accessToken: mirror.accessToken,
+          refreshToken: mirror.refreshToken,
+          expiresAt: mirror.expiresAt,
+          source: 'config',
+          status: 'healthy',
+          lastUsedAt: 0,
+          credentialGeneration: mirror.credentialGeneration ?? 0,
+          credentialGenerationState:
+            mirror.credentialGeneration === 0
+              ? 'legacy_unbound'
+              : 'lifecycle_bound',
+        },
+        targetWasActive:
+          config.activeCodexAccountId === accountId ||
+          mirror.accountId === accountId,
+      }
+    }
   }
   return { kind: 'none' }
 }
@@ -442,6 +492,7 @@ function metadataProfile(
 function scanVault(
   vaultPath: string | null,
   accountId: string,
+  knownPaths: ReadonlySet<string>,
 ): VaultScan {
   if (!vaultPath) {
     return { observations: [], unsafe: false, readFailure: false }
@@ -470,22 +521,43 @@ function scanVault(
       const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as unknown
       const record = asRecord(parsed)
       if (!record) {
-        readFailure = true
+        if (
+          knownPaths.has(filePath) ||
+          basename(file) === `${accountId}.json`
+        ) {
+          readFailure = true
+        }
         continue
       }
       data = record
     } catch {
-      readFailure = true
+      if (
+        knownPaths.has(filePath) ||
+        basename(file) === `${accountId}.json`
+      ) {
+        readFailure = true
+      }
       continue
     }
 
     const identity = readStoredIdentity(data)
     if (identity.kind === 'ambiguous') {
-      unsafe = true
+      if (
+        mentionsAccount(data, accountId) ||
+        knownPaths.has(filePath) ||
+        basename(file) === `${accountId}.json`
+      ) {
+        unsafe = true
+      }
       continue
     }
     if (identity.kind === 'unknown') {
-      unsafe = true
+      if (
+        knownPaths.has(filePath) ||
+        basename(file) === `${accountId}.json`
+      ) {
+        unsafe = true
+      }
       continue
     }
     if (identity.accountId !== accountId) {
@@ -598,6 +670,7 @@ function cleanupVault(
   record: CodexCredentialLifecycleRecord,
   hint: TargetHint,
 ): VaultCleanup {
+  const knownPaths = new Set(hint.vaultFilePaths)
   let last: VaultCleanup = {
     ok: true,
     profilePaths: [],
@@ -605,7 +678,7 @@ function cleanupVault(
   }
 
   for (let pass = 0; pass < 2; pass += 1) {
-    const scan = scanVault(vaultPath, accountId)
+    const scan = scanVault(vaultPath, accountId, knownPaths)
     if (scan.unsafe || scan.readFailure) {
       return {
         ok: false,
@@ -639,10 +712,12 @@ function cleanupVault(
       ],
       ...(cleaned.alias ? { alias: cleaned.alias } : {}),
     }
+    knownPaths.clear()
+    for (const path of last.discoveredPaths) knownPaths.add(path)
     if (!cleaned.ok) return last
   }
 
-  const finalScan = scanVault(vaultPath, accountId)
+  const finalScan = scanVault(vaultPath, accountId, knownPaths)
   if (finalScan.unsafe || finalScan.readFailure) {
     return {
       ok: false,
@@ -861,9 +936,27 @@ function switchablePoolAccount(
 function activeIdAfterPointerChange(
   accountId: string | null,
   dependencies: CodexAccountSignOutDependencies,
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
 ): string | null {
   if (!accountId) return null
-  return switchablePoolAccount(accountId, dependencies) ? accountId : null
+  const account = switchablePoolAccount(accountId, dependencies)
+  if (
+    !account ||
+    typeof account.accessToken !== 'string' ||
+    account.accessToken.length === 0 ||
+    typeof account.refreshToken !== 'string' ||
+    account.refreshToken.length === 0 ||
+    !Number.isFinite(account.expiresAt)
+  ) {
+    return null
+  }
+  const lifecycleResult = safeReadLifecycle(lifecycle, accountId)
+  return lifecycleResult.status === 'valid' &&
+    lifecycleResult.record.state === 'credentialed' &&
+    lifecycleResult.record.credentialGeneration ===
+      account.credentialGeneration
+    ? accountId
+    : null
 }
 
 async function replaceActiveAccount(
@@ -901,8 +994,10 @@ async function replaceActiveAccount(
           const latest = switchablePoolAccount(candidate.accountId, dependencies)
           if (
             !latest ||
-            !latest.accessToken ||
-            !latest.refreshToken ||
+            typeof latest.accessToken !== 'string' ||
+            latest.accessToken.length === 0 ||
+            typeof latest.refreshToken !== 'string' ||
+            latest.refreshToken.length === 0 ||
             !Number.isFinite(latest.expiresAt)
           ) {
             return { status: 'unavailable' as const }
@@ -927,7 +1022,13 @@ async function replaceActiveAccount(
             activeAccountId !== null
           ) {
             return {
-              status: 'pointer_changed' as const,
+              status: activeIdAfterPointerChange(
+                activeAccountId,
+                dependencies,
+                lifecycle,
+              )
+                ? ('pointer_changed' as const)
+                : ('pointer_invalid' as const),
               activeAccountId,
             }
           }
@@ -959,6 +1060,7 @@ async function replaceActiveAccount(
         const activeAccountId = activeIdAfterPointerChange(
           attempt.activeAccountId,
           dependencies,
+          lifecycle,
         )
         if (activeAccountId) setActiveAccount(activeAccountId)
         return {
@@ -966,22 +1068,24 @@ async function replaceActiveAccount(
           activeAccountId,
         }
       }
+      if (attempt.status === 'pointer_invalid') {
+        return { status: 'retryable_unknown', activeAccountId: null }
+      }
       if (attempt.status === 'failed') {
         return {
           status: 'retryable_unknown',
-          activeAccountId: activeIdAfterPointerChange(
-            attempt.activeAccountId,
-            dependencies,
-          ),
+          activeAccountId: null,
         }
       }
-      if (attempt.activeAccountId) setActiveAccount(attempt.activeAccountId)
+      const replacedActiveId = activeIdAfterPointerChange(
+        attempt.activeAccountId,
+        dependencies,
+        lifecycle,
+      )
+      if (replacedActiveId) setActiveAccount(replacedActiveId)
       return {
         status: 'replaced',
-        activeAccountId: activeIdAfterPointerChange(
-          attempt.activeAccountId,
-          dependencies,
-        ),
+        activeAccountId: replacedActiveId,
       }
     } catch {
       return { status: 'retryable_unknown', activeAccountId: null }
@@ -998,8 +1102,12 @@ async function replaceActiveAccount(
     const validActive = activeIdAfterPointerChange(
       activeAccountId,
       dependencies,
+      lifecycle,
     )
-    if (validActive) setActiveAccount(validActive)
+    if (!validActive) {
+      return { status: 'retryable_unknown', activeAccountId: null }
+    }
+    setActiveAccount(validActive)
     return { status: 'none', activeAccountId: validActive }
   }
 
@@ -1008,16 +1116,21 @@ async function replaceActiveAccount(
     if (replacement.status === 'failed') {
       return {
         status: 'retryable_unknown',
-        activeAccountId: activeIdAfterPointerChange(
-          replacement.activeAccountId,
-          dependencies,
-        ),
+        activeAccountId: null,
       }
     }
     const replacedActiveId = activeIdAfterPointerChange(
       replacement.activeAccountId,
       dependencies,
+      lifecycle,
     )
+    if (
+      replacement.status === 'pointer_changed' &&
+      replacement.activeAccountId !== null &&
+      !replacedActiveId
+    ) {
+      return { status: 'retryable_unknown', activeAccountId: null }
+    }
     if (replacedActiveId) setActiveAccount(replacedActiveId)
     return {
       status: replacement.status === 'pointer_changed' ? 'unchanged' : 'none',
@@ -1056,7 +1169,7 @@ async function executeSignOut(
   const lifecycle = dependencies.lifecycle ?? codexCredentialLifecycle
   let resolution: CodexTargetedSignOutResolution
   try {
-    resolution = targetResolution(normalized.accountId, dependencies)
+    resolution = targetResolution(normalized.accountId, dependencies, lifecycle)
   } catch {
     const lifecycleResult = safeReadLifecycle(
       lifecycle,
@@ -1087,7 +1200,14 @@ async function executeSignOut(
       )
   } catch {}
 
-  if (!recovery && (resolution.kind === 'none' || resolution.kind === 'ambiguous')) {
+  const matchingCommitted =
+    recordBefore !== undefined &&
+    isSameSignedOutOperation(recordBefore, normalized)
+  if (
+    !recovery &&
+    (resolution.kind === 'none' || resolution.kind === 'ambiguous') &&
+    !matchingCommitted
+  ) {
     return resultFor(
       normalized,
       lifecycleBefore.status === 'unreadable' ||
@@ -1311,13 +1431,14 @@ async function executeSignOut(
   }
 
   try {
-    const repairLeases =
-      dependencies.repairLeases ??
-      ((accountId: string) =>
-        repairLeasesForUnavailableAccount(accountId, {
-          touchReplacementUsage: false,
-        }))
-    repairLeases(normalized.accountId)
+    if (dependencies.repairLeases) {
+      dependencies.repairLeases(normalized.accountId)
+    } else {
+      repairLeasesForUnavailableAccount(normalized.accountId, {
+        touchReplacementUsage: false,
+        persistMainActive: false,
+      })
+    }
   } catch {
     sideEffectFailed = true
   }
