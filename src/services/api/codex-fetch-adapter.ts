@@ -377,8 +377,26 @@ type CodexResponseFailure = {
 
 export class CodexResponseFailedError extends Error {
   constructor(public readonly failure: CodexResponseFailure) {
-    super(`Codex response.failed (${failure.code}): ${failure.message}`)
+    const responseEventType =
+      failure.type === 'response.incomplete'
+        ? 'response.incomplete'
+        : 'response.failed'
+    super(`Codex ${responseEventType} (${failure.code}): ${failure.message}`)
     this.name = 'CodexResponseFailedError'
+  }
+}
+
+export class CodexResponseIncompleteError extends CodexResponseFailedError {
+  constructor(public readonly reason: string) {
+    super({
+      code: 'response_incomplete',
+      message:
+        reason === 'unknown'
+          ? 'Codex response did not complete'
+          : `Codex response did not complete: ${reason}`,
+      type: 'response.incomplete',
+    })
+    this.name = 'CodexResponseIncompleteError'
   }
 }
 
@@ -563,6 +581,18 @@ function createCodexResponseFailedError(
     return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
   }
   return new CodexResponseFailedError(failure)
+}
+
+function createCodexResponseIncompleteError(
+  event: Record<string, unknown>,
+): CodexResponseIncompleteError {
+  const response = isRecord(event.response) ? event.response : undefined
+  const details = isRecord(response?.incomplete_details)
+    ? response.incomplete_details
+    : undefined
+  return new CodexResponseIncompleteError(
+    readNonEmptyString(details?.reason) ?? 'unknown',
+  )
 }
 
 function createRetryableCodexHttpError(status: number, body: string): APIConnectionError {
@@ -1585,16 +1615,9 @@ class CodexHttpStreamEndedBeforeCompletedError extends APIConnectionError {
   }
 }
 
-class CodexHttpResponseIncompleteError extends Error {
-  constructor() {
-    super('Codex HTTP response.incomplete received before response.completed')
-    this.name = 'CodexHttpResponseIncompleteError'
-  }
-}
-
 /**
  * Parses an HTTP SSE Response body into an async iterable of event objects.
- * Each yielded object is the parsed JSON from a `data: ...` SSE line.
+ * Each yielded object is the parsed JSON from one complete SSE event.
  */
 async function* httpSseToEvents(
   codexResponse: Response,
@@ -1636,6 +1659,8 @@ async function* httpSseToEvents(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let dataLines: string[] = []
+  let discardLeadingLf = false
 
   try {
     if (signal?.aborted) abortReader()
@@ -1644,23 +1669,63 @@ async function* httpSseToEvents(
     while (true) {
       const { done, value } = await reader.read()
       if (streamError) throw streamError
-      if (done) throw new CodexHttpStreamEndedBeforeCompletedError()
+      if (done) {
+        // A line-terminated final data field can still be parsed without a
+        // blank separator. Non-terminal EOF fails below.
+        if (buffer === '' && dataLines.length > 0) {
+          const dataStr = dataLines.join('\n')
+          if (dataStr !== '[DONE]') {
+            let event: Record<string, unknown> | undefined
+            try { event = JSON.parse(dataStr) } catch {}
+            if (event?.type === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
+            }
+            if (event) {
+              yield event
+              if (event.type === 'response.completed' || event.type === 'response.failed') return
+            }
+          }
+        }
+        throw new CodexHttpStreamEndedBeforeCompletedError()
+      }
       resetIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+      while (buffer.length > 0) {
+        if (discardLeadingLf) {
+          if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+          discardLeadingLf = false
+          if (buffer.length === 0) break
+        }
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('event: ')) continue
-        if (!trimmed.startsWith('data: ')) continue
-        const dataStr = trimmed.slice(6)
+        const lineEnd = buffer.search(/[\r\n]/)
+        if (lineEnd === -1) break
+
+        const delimiter = buffer[lineEnd]
+        const line = buffer.slice(0, lineEnd)
+        buffer = buffer.slice(lineEnd + 1)
+        discardLeadingLf = delimiter === '\r'
+
+        if (line !== '') {
+          if (line.startsWith(':')) continue
+          const colon = line.indexOf(':')
+          const field = colon === -1 ? line : line.slice(0, colon)
+          let fieldValue = colon === -1 ? '' : line.slice(colon + 1)
+          if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1)
+          if (field === 'data') dataLines.push(fieldValue)
+          continue
+        }
+
+        if (dataLines.length === 0) continue
+        const dataStr = dataLines.join('\n')
+        dataLines = []
         if (dataStr === '[DONE]') continue
 
         let event: Record<string, unknown>
         try { event = JSON.parse(dataStr) } catch { continue }
-        if (event.type === 'response.incomplete') throw new CodexHttpResponseIncompleteError()
+        if (event.type === 'response.incomplete') {
+          throw createCodexResponseIncompleteError(event)
+        }
         yield event
         // The protocol terminal event decides completion. Waiting for socket
         // EOF can time out a response that has already completed successfully.
@@ -2444,6 +2509,9 @@ async function processCodexEvents(
                 emittedVisibleOutput,
               )
             }
+            else if (eventType === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
+            }
             else if (
               eventType === 'response.web_search_call.in_progress' ||
               eventType === 'response.web_search_call.searching' ||
@@ -3002,14 +3070,17 @@ async function* observeCodexResponseId(
   }
 }
 
-function responseFailedErrorForInitialEvent(
+function responseTerminalErrorForInitialEvent(
   event: Record<string, unknown>,
   requestCacheMetadata?: CodexRequestCacheMetadata,
 ): Error | null {
-  if (event.type !== 'response.failed') {
-    return null
+  if (event.type === 'response.failed') {
+    return createCodexResponseFailedError(event, requestCacheMetadata, false)
   }
-  return createCodexResponseFailedError(event, requestCacheMetadata, false)
+  if (event.type === 'response.incomplete') {
+    return createCodexResponseIncompleteError(event)
+  }
+  return null
 }
 
 function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean {
@@ -3384,7 +3455,7 @@ function classifyPostVisibleCodexFailure(
   if (error.message.startsWith(CODEX_HTTP_IDLE_TIMEOUT_PREFIX)) {
     return { transport: 'http', cause: 'idle_timeout', transient: true }
   }
-  if (error instanceof CodexResponseFailedError || error instanceof CodexHttpResponseIncompleteError) {
+  if (error instanceof CodexResponseFailedError) {
     return { transport, cause: 'provider_failure', transient: false }
   }
   return { transport, cause: 'stream_error', transient: false }
@@ -3481,17 +3552,17 @@ async function primeCodexEvents(
 
       lastEventType = typeof next.value.type === 'string' ? next.value.type : null
 
-      const responseFailedError = responseFailedErrorForInitialEvent(
+      const responseTerminalError = responseTerminalErrorForInitialEvent(
         next.value,
         requestCacheMetadata,
       )
-      if (responseFailedError) {
+      if (responseTerminalError) {
         try {
           await iterator.return?.()
         } catch {
-          // Preserve the response.failed error, matching the existing behavior.
+          // Preserve the terminal provider error.
         }
-        throw responseFailedError
+        throw responseTerminalError
       }
 
       bufferedEvents.push(next.value)

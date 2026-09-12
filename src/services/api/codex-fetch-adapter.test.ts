@@ -2809,6 +2809,53 @@ describe('codex-fetch-adapter', () => {
     }
   })
 
+  test('createCodexFetch parses no-space and multiline HTTP SSE data across chunk boundaries', async () => {
+    const originalFetch = globalThis.fetch
+    const conversationId = 'conv_http_sse_framing'
+    const encoder = new TextEncoder()
+    const chunks = [
+      ': keepalive\r',
+      '\nevent: response.output_text.delta\r\nid: event-1\rdata',
+      ':{"type":"response.output_text.delta",\r\n',
+      'data: "delta":"split and joined"}\r\n\r',
+      '\nevent: response.completed\nretry: 1000\ndata:{"type":"response.completed","response":\n',
+      'data: {"id":"resp_sse_framing","usage":{"input_tokens":4,"output_tokens":3,"input_tokens_details":{"cached_tokens":1}}}}\n\n',
+    ]
+
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      },
+    }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    })) as typeof globalThis.fetch
+
+    try {
+      _markStickyHttpFallbackForTest(conversationId, 'test')
+      const response = await createCodexFetch(
+        createAccessToken('acct_http_sse_framing'),
+        conversationId,
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          stream: true,
+          model: 'gpt-5.6-luna',
+          _openaiInstructionAssembly: { instructions: 'Test.', inputMessages: [] },
+        }),
+      })
+
+      const body = await response.text()
+      expect(body).toContain('split and joined')
+      expect(body).toContain('event: message_stop')
+      expect(body).toContain('"input_tokens":3')
+      expect(body).toContain('"cache_read_input_tokens":1')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
   test('post-visible websocket close seals the open text block before the failure', async () => {
     const response = translateCodexWsStreamToAnthropic(
       (async function* () {
