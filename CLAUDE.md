@@ -110,7 +110,7 @@ instead of assuming.
 
 ### Engine (`src/`, `scripts/`)
 
-When writing or changing Cat Code tests, use the repository `writing-cat-code-tests` skill.
+For regression coverage, test the production behavior at the lowest layer that can expose the failure. Cross process or UI boundaries when that boundary is the risk.
 
 ```bash
 bun run build:dev:full        # THE build gate: maps:lint + undefined-name lint + branch-diff lint + ./cli-dev + version print
@@ -582,8 +582,8 @@ pass; `bun run build:dev:full` green; no public interface change unless the
 task required it; stale-reference sweep done.
 
 **Engine feature** — feature-gate wiring complete (both sides); tests cover
-success, failure, and boundary; `checking-cat-code-change-impact` skill
-checklist answered; docs/maps updated only where the change made them wrong.
+success, failure, and boundary; affected callers, registries, and persisted
+settings remain consistent; docs/maps updated only where the change made them wrong.
 
 **Desktop (`app/`) change** — full app battery green (§3); security baseline
 intact (hardening all-pass); both exhaustiveness tripwires still fire if the
