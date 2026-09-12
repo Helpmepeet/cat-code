@@ -27,7 +27,11 @@ import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
-import { TranscriptInUseError } from '../../src/utils/transcriptLease.js'
+import {
+  activateTranscriptLease,
+  releaseActiveTranscriptLease,
+  TranscriptInUseError,
+} from '../../src/utils/transcriptLease.js'
 import {
   getSessionQueueOperations,
   type SessionQueueOperation,
@@ -230,11 +234,24 @@ export async function resumeEngineSession(
   cwd: string,
   agentDefinitions: AgentDefinitionsResult,
 ): Promise<SidecarResumeResult> {
-  const loaded = await loadConversationForResume(
-    resumeEngineSessionId,
-    undefined,
-  )
+  try {
+    await activateTranscriptLease(resumeEngineSessionId)
+  } catch (error) {
+    if (error instanceof TranscriptInUseError) {
+      throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
+    }
+    throw error
+  }
+
+  let loaded: Awaited<ReturnType<typeof loadConversationForResume>>
+  try {
+    loaded = await loadConversationForResume(resumeEngineSessionId, undefined)
+  } catch (error) {
+    await releaseActiveTranscriptLease().catch(() => {})
+    throw error
+  }
   if (!loaded) {
+    await releaseActiveTranscriptLease()
     // Missing/corrupt transcript — never fall through to a fresh session.
     throw new SidecarResumeError(
       resumeEngineSessionId,
@@ -242,11 +259,11 @@ export async function resumeEngineSession(
     )
   }
 
-  const queueState = await getSessionQueueOperations(resumeEngineSessionId)
-  const undelivered = selectUndeliveredPrompts(queueState)
-
   let processed: Awaited<ReturnType<typeof processResumedConversation>>
+  let undelivered: ReturnType<typeof selectUndeliveredPrompts>
   try {
+    const queueState = await getSessionQueueOperations(resumeEngineSessionId)
+    undelivered = selectUndeliveredPrompts(queueState)
     processed = await processResumedConversation(
       loaded,
       {
@@ -268,6 +285,7 @@ export async function resumeEngineSession(
       },
     )
   } catch (error) {
+    await releaseActiveTranscriptLease().catch(() => {})
     if (error instanceof TranscriptInUseError) {
       throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
     }
@@ -276,6 +294,7 @@ export async function resumeEngineSession(
 
   const engineSessionId = getSessionId()
   if (engineSessionId !== resumeEngineSessionId) {
+    await releaseActiveTranscriptLease().catch(() => {})
     // switchSession should have adopted the id; if not, fail rather than
     // silently write to the wrong transcript.
     throw new SidecarResumeError(

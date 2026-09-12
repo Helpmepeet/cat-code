@@ -446,6 +446,45 @@ describe('session storage', () => {
     ])
   })
 
+  test('active tip follows a compact continuation through logicalParentUuid', async () => {
+    const retained = randomUUID()
+    const replacement = randomUUID()
+    const boundary = randomUUID()
+    const summary = randomUUID()
+    const later = randomUUID()
+    const common = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      userType: 'external',
+      version: 'test',
+    }
+    const entries = [
+      { ...common, type: 'user', uuid: retained, parentUuid: null, timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'retained' } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: retained },
+      { ...common, type: 'user', uuid: replacement, parentUuid: retained, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'user', content: 'replacement' } },
+      { ...common, type: 'system', subtype: 'compact_boundary', uuid: boundary, parentUuid: null, logicalParentUuid: replacement, timestamp: '2026-09-12T00:00:02.000Z', content: 'Conversation compacted', level: 'info', isMeta: false, compactMetadata: { trigger: 'manual', preTokens: 200000 } },
+      { ...common, type: 'user', uuid: summary, parentUuid: boundary, timestamp: '2026-09-12T00:00:03.000Z', isCompactSummary: true, message: { role: 'user', content: 'summary' } },
+      { ...common, type: 'user', uuid: later, parentUuid: summary, timestamp: '2026-09-12T00:00:04.000Z', message: { role: 'user', content: 'post-compaction' } },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadTranscriptFromFile(getTranscriptPathForSession(sessionId))
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      boundary,
+      summary,
+      later,
+    ])
+    const display = await loadDisplayTranscriptFromJsonlPath(
+      getTranscriptPathForSession(sessionId),
+      { maxMessages: 100, maxBytes: 1024 * 1024 },
+    )
+    expect(display.messages.map(message => message.uuid)).toContain(later)
+  })
+
   for (const [label, discardedAssistantText] of [
     ['small transcript', 'discarded answer'],
     ['large transcript', 'x'.repeat(6 * 1024 * 1024)],

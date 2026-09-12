@@ -4900,7 +4900,12 @@ export async function loadTranscriptFile(
         buf,
         fileSessionId ?? undefined,
       )
-      buf = walkChainBeforeParse(buf, bufferedActiveTip?.tipUuid)
+      // Active-tip descendants can cross a compaction boundary through
+      // logicalParentUuid. Let the parsed branch tracker select them; filtering
+      // first by the physical parent chain would discard them irreversibly.
+      if (!bufferedActiveTip) {
+        buf = walkChainBeforeParse(buf)
+      }
     }
 
     // First pass: process metadata-only lines collected during the boundary scan.
@@ -4949,7 +4954,11 @@ export async function loadTranscriptFile(
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }
         if (activeConversationTip && !entry.isSidechain) {
-          const parent = entry.parentUuid
+          const parent =
+            entry.parentUuid ??
+            (isCompactBoundaryMessage(entry)
+              ? entry.logicalParentUuid
+              : undefined)
           const extendsActiveBranch =
             activeConversationRoot === null
               ? parent === null ||
