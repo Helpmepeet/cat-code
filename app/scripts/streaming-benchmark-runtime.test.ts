@@ -6,6 +6,8 @@ import { createRendererIpcGuard } from '../preload/rendererIpcGuard.js'
 import { createFixture, manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgementStage } from '../shared/deliveryTrace.js'
 import type { ServerFrame } from '../shared/protocol.js'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 test('a fresh document restarts at the preload epoch while same-document readiness advances', () => {
   expect(advanceDocumentSubscription({ documentId: 'old', epoch: 7 }, 'new')).toEqual({ documentId: 'new', epoch: 1 })
@@ -43,4 +45,11 @@ test('all workload bootstraps keep a bounded traced marker whose applied ACK sur
     expect(acknowledgements.some(item => item.stage === 'renderer.state.applied')).toBe(true)
     expect(queue.pendingCount).toBe(0)
   }
+})
+
+test('Electron entry finishes module evaluation before awaiting app readiness', () => {
+  const source = readFileSync(resolve(import.meta.dir, 'streaming-benchmark-main.ts'), 'utf8')
+  expect(source).toContain('async function run(): Promise<void>')
+  expect(source).toContain('void run().catch(fatalExit)')
+  expect(source).not.toMatch(/^await app\.whenReady\(\)/m)
 })

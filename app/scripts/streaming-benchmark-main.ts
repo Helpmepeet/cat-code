@@ -25,14 +25,22 @@ const fatalExit = (reason: unknown) => {
 }
 process.once('uncaughtException', fatalExit)
 process.once('unhandledRejection', fatalExit)
+const stage = (name: string) => process.stderr.write(`[streaming-benchmark] stage=${name}\n`)
+function required(name: string): string {
+  const value = process.env[name]
+  if (!value) throw new Error(`${name} is required`)
+  return value
+}
+stage('module-entered')
 
 const runDir = required('CATCODE_STREAMING_BENCHMARK_RUN_DIR')
 const rendererDir = required('CATCODE_STREAMING_BENCHMARK_RENDERER_OUT')
 const preloadPath = required('CATCODE_STREAMING_BENCHMARK_PRELOAD')
 const workloadId = required('CATCODE_STREAMING_BENCHMARK_WORKLOAD')
 const policyName = required('CATCODE_STREAMING_BENCHMARK_POLICY')
-const workload = manifest.workloads.find(item => item.id === workloadId)
-if (!workload) throw new Error(`unknown workload ${workloadId}`)
+const selectedWorkload = manifest.workloads.find(item => item.id === workloadId)
+if (!selectedWorkload) throw new Error(`unknown workload ${workloadId}`)
+const workload = selectedWorkload
 if (!['original', '0', '8', '16'].includes(policyName)) throw new Error(`unknown policy ${policyName}`)
 const delayMs = policyName === 'original' ? 0 : Number(policyName)
 const BOOTSTRAP_TRANSCRIPT_MARKER = 'CATCODE_SYNTHETIC_STREAMING_BENCHMARK_READY'
@@ -44,7 +52,9 @@ mkdirSync(sessionDataDir, { recursive: true })
 app.setPath('userData', userDataDir)
 app.setPath('sessionData', sessionDataDir)
 
-await app.whenReady()
+async function run(): Promise<void> {
+  await app.whenReady()
+  stage('app-ready')
 let gate = new AttachmentGate()
 let coordinator: LiveFrameDeliveryCoordinator | null = null
 let sendCount = 0
@@ -143,11 +153,13 @@ for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.session
 const initialReadyCount = rendererReadyCount
 await window.loadFile(join(rendererDir, 'index.html'))
 await waitForBootstrap(window, initialReadyCount)
+stage('bootstrap-ready')
 mintMissingDeliveryTraces = true
 const warmup = createFixture(workload, manifest.warmupMs)
 await deliverFixture(warmup, false)
 coordinator.flush()
 await waitForCurrentDocumentAcknowledgements()
+stage('warmup-complete')
 // Score in a fresh renderer document with fresh attachment/coordinator state.
 // Warmup exercises the same Electron/main/IPC/React path, but no claim is made
 // that renderer-document state or JavaScript JIT state survives this reload.
@@ -164,6 +176,7 @@ const priorReadyCount = rendererReadyCount
 await window.reload()
 await waitForBootstrap(window, priorReadyCount)
 await waitForCurrentDocumentAcknowledgements()
+stage('scored-bootstrap-ready')
 mintMissingDeliveryTraces = true
 await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.reset()')
 sendCount = 0
@@ -219,16 +232,12 @@ const result = {
   bootstrapTracing: 'terminal-marker-only; bulk history replay and its acknowledgement cost are excluded',
 }
 writeFileSync(join(runDir, 'result.json'), `${JSON.stringify(result)}\n`)
+stage('result-saved')
 coordinator.dispose()
 deliveryTrace.close()
 window.destroy()
 app.quit()
 
-function required(name: string): string {
-  const value = process.env[name]
-  if (!value) throw new Error(`${name} is required`)
-  return value
-}
 function sleep(ms: number) { return new Promise(resolve => setTimeout(resolve, ms)) }
 async function waitForCoverage(target: BrowserWindow, expected: number) {
   const deadline = Date.now() + 10_000
@@ -351,3 +360,6 @@ function cpuDeltas(before: CpuPoint[], after: CpuPoint[]) {
     }),
   }
 }
+}
+
+void run().catch(fatalExit)
