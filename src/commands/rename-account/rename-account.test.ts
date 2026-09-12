@@ -13,6 +13,8 @@ function createCodexAccount(accountId: string, alias: string, vaultFilePath = '/
     source: 'vault' as const,
     status: 'healthy' as const,
     lastUsedAt: 0,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound' as const,
     alias,
     vaultFilePath,
   }

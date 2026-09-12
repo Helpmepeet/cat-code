@@ -90,7 +90,7 @@ function truncatedTranscriptForTest(): TranscriptState {
       engineSessionId: 'engine-truncated-pane-session',
       payload: {
         type: 'app.ready',
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: 1,
         inputEnabled: true,
         activeTurn: false,
         abort: { status: 'idle' },
@@ -141,6 +141,7 @@ function composerField(html: string): string {
 function emptyAccountsSnapshotForTest(): AccountsSnapshot {
   return {
     accounts: [],
+    signedOutProfiles: [],
     activeAccountId: null,
     readyCount: 0,
     poolCount: 0,
@@ -1547,6 +1548,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
   // and a real per-session model override reach the ChipStrip bar (not shape-only).
   const account: AccountStatus = {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'hiby',
     status: 'healthy',
     statusReason: null,
@@ -2823,7 +2825,7 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(inspectorBody).toContain('selectWorkspaceTrustSnapshot(')
   expect(inspectorBody).toContain('selectDiagnosticsSnapshot(diagnostics, activeSessionId)')
 
-  // Deleting a saved profile is global durable state, so it must take the
+  // Global profile mutations are durable state, so both must take the
   // session-independent host path before the fallback that rejects other
   // account verbs when no chat session is open.
   const verbStart = source.indexOf('const sendAccountVerb = useCallback(')
@@ -2834,7 +2836,11 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(verbBody.indexOf("verb.type === 'account.delete'")).toBeLessThan(
     verbBody.indexOf('if (!activeSessionId)'),
   )
+  expect(verbBody.indexOf("verb.type === 'account.logout'")).toBeLessThan(
+    verbBody.indexOf('if (!activeSessionId)'),
+  )
   expect(verbBody).toContain('.deleteAccount(verb)')
+  expect(verbBody).toContain('.signOutAccount(verb)')
   expect(verbBody).toContain('if (!activeSessionId) {')
   expect(verbBody).toContain("kind: 'account.result'")
   expect(verbBody).toContain('requestId: verb.requestId')

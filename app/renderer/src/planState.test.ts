@@ -43,7 +43,7 @@ const BASH_REQUEST: PermissionRequest = {
 function readyFrame(pendingPermissionRequests: PermissionRequest[], sessionId = 'session-1') {
   return {
     kind: 'ready' as const,
-    protocolVersion: 1 as const,
+    protocolVersion: 2 as const,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {

@@ -50,6 +50,8 @@ function createCodexAccount(accountId: string, alias: string, lastUsedAt = 0) {
     source: 'vault' as const,
     status: 'healthy' as const,
     lastUsedAt,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound' as const,
     alias,
   }
 }

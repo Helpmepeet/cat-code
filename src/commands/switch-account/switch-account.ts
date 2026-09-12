@@ -8,6 +8,10 @@ import {
   resolveCodexAccountByPrefix,
   updateAccountUsageHints,
 } from '../../services/api/codexAccountPool.js'
+import type {
+  CodexAccountLookup,
+  PoolAccount,
+} from '../../services/api/codexAccountPool.js'
 import { fetchAccountUsage } from '../../services/api/codexUsage.js'
 import { commitCodexAccountSwitch } from '../../services/api/codexAccountSwitch.js'
 import {
@@ -40,6 +44,10 @@ function countStatuses(accounts: readonly { status: string }[]): Record<string, 
     counts[account.status] = (counts[account.status] ?? 0) + 1
   }
   return counts
+}
+
+function isPoolCodexAccount(account: CodexAccountLookup): account is PoolAccount {
+  return 'status' in account
 }
 
 function emitManualSwitchDiagnostic({
@@ -204,7 +212,7 @@ async function performCodexSwitch(
       : null
 
   if (idPrefix !== null) {
-    if (!candidate) return null
+    if (!candidate || !isPoolCodexAccount(candidate)) return null
 
     if (current?.accountId === candidate.accountId && getAPIProvider() === 'openai') {
       const label = candidate.alias ?? candidate.accountId.slice(0, 12)
@@ -362,14 +370,23 @@ export const call: LocalCommandCall = async (args, context) => {
       if (result) return result
     }
     const codexAnyResolution = resolveCodexAccountByPrefix(prefix)
-    if (codexAnyResolution.kind === 'unique' && !isCodexAccountSwitchable(codexAnyResolution.account)) {
-      emitManualSwitchFailure('matching Codex account is not switchable')
-      return {
-        type: 'text',
-        value: formatCodexSwitchRefusal(
-          codexAnyResolution.account,
-          codexPool.accounts[codexPool.activeIndex],
-        ),
+    if (codexAnyResolution.kind === 'unique') {
+      if (!isPoolCodexAccount(codexAnyResolution.account)) {
+        emitManualSwitchFailure('matching Codex profile is not switchable')
+        return {
+          type: 'text',
+          value: `No healthy account matching "${prefix}". Run /accounts to see available accounts.`,
+        }
+      }
+      if (!isCodexAccountSwitchable(codexAnyResolution.account)) {
+        emitManualSwitchFailure('matching Codex account is not switchable')
+        return {
+          type: 'text',
+          value: formatCodexSwitchRefusal(
+            codexAnyResolution.account,
+            codexPool.accounts[codexPool.activeIndex],
+          ),
+        }
       }
     }
     if (codexAnyResolution.kind === 'ambiguous') {

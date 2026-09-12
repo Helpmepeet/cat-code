@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 
 import { createCodexFetch, mapClaudeModelToCodex } from '../services/api/codex-fetch-adapter.js'
 import { runWithCodexLeaseOwner } from '../services/api/codexAccountLeaseManager.js'
+import { createCodexCredentialHandle } from '../services/api/codexCredentialUse.js'
 import { resolveCodexCoreAccount } from './accounts.js'
 import { CodexCoreError, normalizeCodexCoreError } from './errors.js'
 import { buildCodexCoreRequest, normalizeCodexCoreMessages } from './request.js'
@@ -15,7 +16,18 @@ export async function runCodexLLM(options: RunCodexLLMInput): Promise<CodexLLMRe
     const account = await resolveCodexCoreAccount(options.accountProfile)
     const model = mapClaudeModelToCodex(options.model)
     const conversationId = options.conversationId?.trim() || randomUUID()
-    const codexFetch = createCodexFetch(account.accessToken, conversationId)
+    const codexFetch = createCodexFetch(
+      createCodexCredentialHandle({
+        accountId: account.accountId,
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        expiresAt: account.expiresAt,
+        credentialGeneration: account.credentialGeneration,
+        credentialSource: account.source,
+        credentialPath: account.vaultFilePath,
+      }),
+      conversationId,
+    )
     const request = buildCodexCoreRequest(options, model, conversationId)
 
     const response = await runWithCodexLeaseOwner(undefined, () =>

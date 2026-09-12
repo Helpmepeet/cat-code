@@ -7,14 +7,21 @@ import {
   CodexWebSocketIdleTimeoutError,
   CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
+  _clearRetiredCodexWebSocketCredentialsForTest,
   clearWebSocketSession,
   closeSocketPreservingState,
   ensureWebSocketSession,
   reconcileCanonicalDelta,
   registerSendPathLogger,
+  retireCodexWebSocketSessions,
   streamTurnViaWebSocket,
   streamTurnViaWebSocketLocked,
+  type CodexWebSocketCredentialContext,
 } from './codex-websocket-transport.js'
+import {
+  createCodexCredentialHandle,
+} from './codexCredentialUse.js'
+import type { CodexCredentialLifecycle } from './codexCredentialLifecycle.js'
 
 // ── Fake WebSocket ────────────────────────────────────────────────────────────
 
@@ -96,14 +103,65 @@ const CONV_ID = 'test-conv-id-1111-2222-3333-444444444444'
 const AUTH = { Authorization: 'Bearer tok' }
 
 let fakeWs: FakeWebSocket
+let fakeWsFactoryReady: Promise<void> = Promise.resolve()
+
+function createCredentialContext(
+  accountId: string,
+  credentialGeneration: number,
+  lifecycleGeneration: () => number = () => credentialGeneration,
+): CodexWebSocketCredentialContext {
+  const credential = createCodexCredentialHandle({
+    accountId,
+    accessToken: `access-${accountId}-${credentialGeneration}`,
+    refreshToken: `refresh-${accountId}-${credentialGeneration}`,
+    expiresAt: Date.now() + 60 * 60_000,
+    credentialGeneration,
+    credentialSource: 'config',
+    credentialPath: '/test/codex-websocket-config.json',
+  })
+  const lifecycle = {
+    read(account: string) {
+      return {
+        status: 'valid' as const,
+        record: {
+          version: 1 as const,
+          accountId: account,
+          credentialGeneration: lifecycleGeneration(),
+          state: 'credentialed' as const,
+          operationId: 'websocket-test',
+          operationKind: 'login' as const,
+          changedAt: '2026-09-12T00:00:00.000Z',
+        },
+      }
+    },
+    async withTransaction<T>(
+      _account: string,
+      _options: unknown,
+      callback: (permit: never) => T | Promise<T>,
+    ): Promise<T> {
+      return callback({} as never)
+    },
+  } as unknown as CodexCredentialLifecycle
+  return {
+    credential,
+    credentialUse: { lifecycle },
+  }
+}
 
 function installFakeWs(autoOpen = true): FakeWebSocket {
   fakeWs = new FakeWebSocket()
-  _setWebSocketFactoryForTest(() => fakeWs as never)
-  if (autoOpen) {
-    // Trigger open on next tick so ensureWebSocketSession resolves.
-    Promise.resolve().then(() => fakeWs.triggerOpen())
-  }
+  let markFactoryReady!: () => void
+  fakeWsFactoryReady = new Promise(resolve => {
+    markFactoryReady = resolve
+  })
+  _setWebSocketFactoryForTest(() => {
+    markFactoryReady()
+    if (autoOpen) {
+      // Trigger open after the production path has attached its listeners.
+      Promise.resolve().then(() => fakeWs.triggerOpen())
+    }
+    return fakeWs as never
+  })
   return fakeWs
 }
 
@@ -131,14 +189,292 @@ async function collectEvents(gen: AsyncGenerator<Record<string, unknown>>) {
 
 beforeEach(() => {
   clearWebSocketSession(CONV_ID)
+  _clearRetiredCodexWebSocketCredentialsForTest()
 })
 
 afterEach(() => {
   clearWebSocketSession(CONV_ID)
+  _clearRetiredCodexWebSocketCredentialsForTest()
   _setWebSocketFactoryForTest(null)
 })
 
 describe('streamTurnViaWebSocket', () => {
+
+  test('same account and credential generation reuses the socket', async () => {
+    const sockets: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      sockets.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    const context = createCredentialContext('acct-generation', 1)
+
+    await ensureWebSocketSession(CONV_ID, AUTH, context)
+    await ensureWebSocketSession(CONV_ID, AUTH, context)
+
+    expect(sockets).toHaveLength(1)
+  })
+
+  test('same account and new credential generation drops the old socket baseline', async () => {
+    const sockets: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      sockets.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    const generationOne = createCredentialContext('acct-generation', 1)
+    const generationTwo = createCredentialContext('acct-generation', 2)
+
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+    sockets[0]!.responses = [completedEvent('resp_generation_one')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'one' }] },
+        AUTH,
+        1,
+        generationOne,
+      ),
+    )
+
+    await ensureWebSocketSession(CONV_ID, AUTH, generationTwo)
+    expect(sockets).toHaveLength(2)
+    sockets[1]!.responses = [completedEvent('resp_generation_two')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        {
+          instructions: 'sys',
+          input: [
+            { role: 'user', content: 'one' },
+            { role: 'user', content: 'two' },
+          ],
+        },
+        AUTH,
+        2,
+        generationTwo,
+      ),
+    )
+    expect(sockets[1]!.getSent()[0]!.previous_response_id).toBeUndefined()
+  })
+
+  test('a retained generation cannot send after lifecycle generation advances', async () => {
+    let lifecycleGeneration = 1
+    const generationOne = createCredentialContext(
+      'acct-generation',
+      1,
+      () => lifecycleGeneration,
+    )
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+
+    lifecycleGeneration = 3
+    await expect(
+      collectEvents(
+        streamTurnViaWebSocket(
+          CONV_ID,
+          { instructions: 'sys', input: [{ role: 'user', content: 'stale' }] },
+          AUTH,
+          1,
+          generationOne,
+        ),
+      ),
+    ).rejects.toThrow()
+    expect(fakeWs.getSent()).toHaveLength(0)
+  })
+
+  test('credential mismatch fails before an authenticated socket handshake starts', async () => {
+    const generationOne = createCredentialContext('acct-generation', 1, () => 2)
+    let socketFactoryCalls = 0
+    _setWebSocketFactoryForTest(() => {
+      socketFactoryCalls += 1
+      return new FakeWebSocket() as never
+    })
+
+    await expect(
+      ensureWebSocketSession(CONV_ID, AUTH, generationOne),
+    ).rejects.toThrow()
+    expect(socketFactoryCalls).toBe(0)
+  })
+
+  test('retirement invalidates and closes a pending socket open', async () => {
+    const generationOne = createCredentialContext('acct-generation', 1)
+    installFakeWs(false)
+    const opening = ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+    await fakeWsFactoryReady
+
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+
+    await expect(opening).rejects.toThrow()
+    expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+  })
+
+  test('retirement closes an idle socket and prevents its reuse', async () => {
+    const generationOne = createCredentialContext('acct-generation', 1)
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+
+    expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+    await expect(
+      ensureWebSocketSession(CONV_ID, AUTH, generationOne),
+    ).rejects.toThrow()
+  })
+
+  test('retirement during an active stream delivers completion and discards continuation', async () => {
+    const generationOne = createCredentialContext('acct-generation', 1)
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+    fakeWs.responses = [{ type: 'response.created' }]
+
+    const turn = streamTurnViaWebSocket(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'active' }] },
+      AUTH,
+      1,
+      generationOne,
+    )
+    const created = await turn.next()
+    expect(created.value?.type).toBe('response.created')
+
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+    fakeWs.deliver(completedEvent('resp_retired'))
+
+    const completed = await turn.next()
+    expect(completed.done).toBe(false)
+    expect(completed.value?.type).toBe('response.completed')
+    expect((await turn.next()).done).toBe(true)
+    expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+  })
+
+  test('queued old-generation work obtains the lock but performs no send after retirement', async () => {
+    const generationOne = createCredentialContext('acct-generation', 1)
+    installFakeWs()
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+    fakeWs.responses = [{ type: 'response.created' }]
+
+    const active = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'active' }] },
+      AUTH,
+      1,
+      generationOne,
+    )
+    expect((await active.next()).value?.type).toBe('response.created')
+    const queued = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'queued' }] },
+        AUTH,
+        1,
+        generationOne,
+      ),
+    )
+
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+    fakeWs.deliver(completedEvent('resp_active'))
+    expect((await active.next()).value?.type).toBe('response.completed')
+    expect((await active.next()).done).toBe(true)
+    await expect(queued).rejects.toThrow()
+    expect(fakeWs.getSent()).toHaveLength(1)
+  })
+
+  test('delayed retirement for an old generation leaves the fresh socket intact', async () => {
+    const sockets: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      sockets.push(ws)
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    const generationThree = createCredentialContext('acct-generation', 3)
+    await ensureWebSocketSession(CONV_ID, AUTH, generationThree)
+
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+
+    expect(sockets[0]!.readyState).toBe(FakeWebSocket.OPEN)
+    sockets[0]!.responses = [completedEvent('resp_generation_three')]
+    await collectEvents(
+      streamTurnViaWebSocket(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'fresh' }] },
+        AUTH,
+        1,
+        generationThree,
+      ),
+    )
+    expect(sockets[0]!.getSent()).toHaveLength(1)
+  })
+
+  test('fresh login generation waits for an old stream to drain and cannot use its socket', async () => {
+    const sockets: FakeWebSocket[] = []
+    _setWebSocketFactoryForTest(() => {
+      const ws = new FakeWebSocket()
+      sockets.push(ws)
+      if (sockets.length === 1) {
+        ws.responses = [{ type: 'response.created' }]
+      } else {
+        ws.responses = [completedEvent('resp_generation_three')]
+      }
+      Promise.resolve().then(() => ws.triggerOpen())
+      return ws as never
+    })
+    const generationOne = createCredentialContext('acct-generation', 1)
+    const generationThree = createCredentialContext('acct-generation', 3)
+    await ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+
+    const active = streamTurnViaWebSocketLocked(
+      CONV_ID,
+      { instructions: 'sys', input: [{ role: 'user', content: 'old' }] },
+      AUTH,
+      1,
+      generationOne,
+    )
+    expect((await active.next()).value?.type).toBe('response.created')
+
+    const freshTurn = collectEvents(
+      streamTurnViaWebSocketLocked(
+        CONV_ID,
+        { instructions: 'sys', input: [{ role: 'user', content: 'fresh' }] },
+        AUTH,
+        1,
+        generationThree,
+      ),
+    )
+    retireCodexWebSocketSessions({
+      accountId: 'acct-generation',
+      credentialGeneration: 1,
+    })
+
+    sockets[0]!.deliver(completedEvent('resp_generation_one'))
+    expect((await active.next()).value?.type).toBe('response.completed')
+    expect((await active.next()).done).toBe(true)
+
+    const freshEvents = await freshTurn
+    expect(freshEvents.some(event => event.type === 'response.completed')).toBe(true)
+    expect(sockets).toHaveLength(2)
+    expect(sockets[0]!.getSent()).toHaveLength(1)
+    expect(sockets[1]!.getSent()).toHaveLength(1)
+    expect(sockets[0]!.readyState).toBe(FakeWebSocket.CLOSED)
+  })
 
   // ── Happy path ──────────────────────────────────────────────────────────
 
@@ -160,6 +496,7 @@ describe('streamTurnViaWebSocket', () => {
   test('captures upgrade turn-state but does not echo it in the request body', async () => {
     installFakeWs(false)
     const opened = ensureWebSocketSession(CONV_ID, AUTH)
+    await fakeWsFactoryReady
     fakeWs.triggerUpgrade({ 'x-codex-turn-state': 'turn-state-123' })
     fakeWs.triggerOpen()
     await opened
@@ -959,9 +1296,11 @@ describe('streamTurnViaWebSocket', () => {
 
   test('ensureWebSocketSession throws on connect failure', async () => {
     fakeWs = new FakeWebSocket()
-    _setWebSocketFactoryForTest(() => fakeWs as never)
-    // Trigger error instead of open
-    Promise.resolve().then(() => fakeWs.triggerError())
+    _setWebSocketFactoryForTest(() => {
+      // Trigger error after the production path has attached its listeners.
+      Promise.resolve().then(() => fakeWs.triggerError())
+      return fakeWs as never
+    })
 
     await expect(ensureWebSocketSession(CONV_ID, AUTH)).rejects.toThrow('WebSocket connect error')
   })

@@ -14,11 +14,11 @@ const SNAPSHOT: WorkspaceTrustSnapshot = {
 }
 
 function snapshotFrame(sessionId: string, workspaceTrust: WorkspaceTrustSnapshot): ServerFrame {
-  return { kind: 'workspace-trust.snapshot', protocolVersion: 1, sessionId, workspaceTrust }
+  return { kind: 'workspace-trust.snapshot', protocolVersion: 2, sessionId, workspaceTrust }
 }
 
 function lifecycleFrame(sessionId: string): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 1, sessionId, status: 'exited' }
+  return { kind: 'lifecycle', protocolVersion: 2, sessionId, status: 'exited' }
 }
 
 test('workspace-trust.snapshot frame stores the snapshot per session', () => {
@@ -60,7 +60,7 @@ test('unrelated frame kinds are ignored', () => {
   const state = createWorkspaceTrustState()
   const next = reduceWorkspaceTrustState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 1, sessionId: 'a', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: 2, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
 })
@@ -72,7 +72,7 @@ function trustResultFrame(
 ): ServerFrame {
   return {
     kind: 'workspace.trust.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: 'r',
     ok,

@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test'
 import * as fsModule from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import * as codexPoolModule from '../../src/services/api/codexAccountPool.js'
-import * as leaseManagerModule from '../../src/services/api/codexAccountLeaseManager.js'
-import * as codexFetchAdapterModule from '../../src/services/api/codex-fetch-adapter.js'
-import * as logoutModule from '../../src/commands/logout/logout.js'
 import {
+  getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
+  type CodexProfileInventory,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
 import {
@@ -14,17 +16,34 @@ import {
   seedClaudeAccountPoolForTest,
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
+import {
+  createCodexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+} from '../../src/services/api/codexCredentialLifecycle.js'
+import {
+  getCodexLeaseSnapshotForTest,
+  resetCodexLeaseManagerForTest,
+  seedCodexLeaseForTest,
+} from '../../src/services/api/codexAccountLeaseManager.js'
 import type { OAuthTokens } from '../../src/services/oauth/types.js'
 import type { SettingsJson } from '../../src/utils/settings/types.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type {
+  AccountProfileSignedOutMessage,
   AccountsSnapshotFrame,
   OAuthLoginProgress,
   OAuthLoginProgressFrame,
 } from '../shared/protocol.js'
 import {
+  type CodexAccountDeletionInput,
+  type CodexAccountDeletionResult,
+  type CodexAccountSignOutInput,
+  type CodexAccountSignOutResult,
+} from '../../src/services/api/codexAccountSignOut.js'
+import {
   buildAccountsSnapshot,
   buildAccountStatus,
+  createRealOAuthLoginRunner,
   createRealAnthropicOAuthLoginRunner,
   createRealAccountsExecutor,
   createSidecarAccountsDomain,
@@ -34,6 +53,8 @@ import {
   type OAuthLoginRunner,
   type OAuthPendingLogin,
 } from './accountsDomain.js'
+
+const lifecycleDirectories: string[] = []
 
 /**
  * A token-BEARING fixture. The projection must strip every secret field; the
@@ -48,6 +69,8 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: 1_000,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     vaultFilePath: '/Users/secret/.cat-code/vault/accounts/acct.json',
     alias: 'work-laptop',
     usagePrimary: 40,
@@ -65,6 +88,10 @@ afterEach(() => {
   mock.restore()
   resetCodexAccountPoolForTest()
   resetClaudeAccountPoolForTest()
+  resetCodexLeaseManagerForTest()
+  for (const directory of lifecycleDirectories.splice(0)) {
+    rmSync(directory, { recursive: true, force: true })
+  }
 })
 
 /**
@@ -81,6 +108,68 @@ function makeAccountsDomain(
     reloadAnthropicPool: async () => {},
     ...options,
   })
+}
+
+async function establishSignedOutLifecycle(
+  accountId: string,
+  operationId: string,
+): Promise<CodexCredentialLifecycle> {
+  const directory = mkdtempSync(join(tmpdir(), 'codex-external-signout-'))
+  lifecycleDirectories.push(directory)
+  const lifecycle = createCodexCredentialLifecycle({ directory })
+
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'login', operationId: `login-${accountId}` },
+    permit => {
+      const prepared = lifecycle.prepareLogin(permit)
+      if (prepared.status !== 'applied') {
+        throw new Error('test login preparation failed')
+      }
+      const committed = lifecycle.commitLogin(permit, {
+        expectedGeneration: prepared.record.credentialGeneration,
+      })
+      if (committed.status !== 'applied') {
+        throw new Error('test login commit failed')
+      }
+    },
+  )
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'sign_out', operationId },
+    permit => {
+      const signedOut = lifecycle.signOut(permit, { expectedGeneration: 1 })
+      if (signedOut.status !== 'applied') {
+        throw new Error('test sign-out failed')
+      }
+      const completed = lifecycle.completeCleanup(permit, {
+        accountId,
+        credentialGeneration: 2,
+        operationId,
+        operationKind: 'sign_out',
+      })
+      if (completed.status !== 'applied') {
+        throw new Error('test sign-out cleanup failed')
+      }
+    },
+  )
+  return lifecycle
+}
+
+function externalSignOutNotice(
+  overrides: Partial<AccountProfileSignedOutMessage> = {},
+): AccountProfileSignedOutMessage {
+  return {
+    type: 'account.profileSignedOut',
+    requestId: 'request-target',
+    operationId: 'operation-target',
+    accountId: 'target-account',
+    oldCredentialGeneration: 1,
+    signedOutLifecycleGeneration: 2,
+    outcome: 'committed',
+    lifecycleState: 'signed_out',
+    ...overrides,
+  }
 }
 
 describe('P4-5 read-seam — redaction (the security-critical core)', () => {
@@ -110,12 +199,77 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
     })
     const frame: AccountsSnapshotFrame = {
       kind: 'accounts.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       accounts: snapshot,
     }
     const scan = scanForSecrets(frame)
     expect(scan.ok).toBe(true)
+  })
+
+  test('snapshot separates credentialed accounts from signed-out profiles', () => {
+    const credentialed = poolAccount({
+      accountId: 'credentialed-account',
+      credentialGeneration: 8,
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [credentialed],
+      activeAccountId: credentialed.accountId,
+    })
+    const inventory: CodexProfileInventory = {
+      accounts: [credentialed],
+      signedOutProfiles: [
+        {
+          accountId: 'signed-out-account',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePath: '/Users/secret/.cat-code/vault/signed-out.json',
+          vaultFilePaths: [
+            '/Users/secret/.cat-code/vault/signed-out.json',
+          ],
+          profileState: 'signed_out',
+          credentialGeneration: 9,
+          lifecycleGeneration: 9,
+          credentialGenerationState: 'lifecycle_bound',
+          lifecycleState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      ],
+      duplicateVaultIdentities: [],
+    }
+
+    const snapshot = makeAccountsDomain({
+      executor: fakeExecutor(),
+      readProfileInventory: () => inventory,
+    }).getSnapshot()
+
+    expect(snapshot?.accounts).toHaveLength(1)
+    expect(snapshot?.accounts[0]?.credentialGeneration).toBe(8)
+    expect(snapshot?.signedOutProfiles).toEqual([
+      {
+        id: 'signed-out-account',
+        alias: 'former-work',
+        state: 'signed_out',
+        credentialGeneration: 9,
+        lifecycleGeneration: 9,
+        credentialGenerationState: 'lifecycle_bound',
+        lifecycleState: 'signed_out',
+        lifecycleReadStatus: 'valid',
+      },
+    ])
+    expect(snapshot?.readyCount).toBe(1)
+    expect(snapshot?.poolCount).toBe(1)
+    expect(scanForSecrets(snapshot).ok).toBe(true)
+
+    const signedOut = snapshot?.signedOutProfiles[0]
+    expect(JSON.stringify(signedOut)).not.toContain('SECRET')
+    expect(JSON.stringify(signedOut)).not.toContain('/Users/secret')
+    expect(JSON.stringify(signedOut)).not.toContain('usage')
+    expect(JSON.stringify(signedOut)).not.toContain('plan')
+    expect(signedOut).not.toHaveProperty('accessToken')
+    expect(signedOut).not.toHaveProperty('refreshToken')
+    expect(signedOut).not.toHaveProperty('vaultFilePath')
+    expect(signedOut).not.toHaveProperty('vaultFilePaths')
   })
 
   test('config-only accounts report hasVaultProfile:false', () => {
@@ -257,7 +411,7 @@ function fakeExecutor(over: Partial<AccountsCommandExecutor> = {}): AccountsComm
 const flush = () => new Promise(resolve => setTimeout(resolve, 0))
 
 describe('real Codex delete executor cleanup', () => {
-  test('serializes profile removal and repairs leases and auth caches', async () => {
+  test('delegates deletion with the account generation from the live pool', async () => {
     const deleted = poolAccount({
       accountId: 'delete-me',
       vaultFilePath: '/test-vault/accounts/delete-me.json',
@@ -271,62 +425,37 @@ describe('real Codex delete executor cleanup', () => {
       activeAccountId: deleted.accountId,
     })
 
-    const order: string[] = []
-    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(accountId => {
-      order.push(`remove:${accountId}`)
-      seedCodexAccountPoolForTest({
-        accounts: [remaining],
-        activeAccountId: remaining.accountId,
-      })
-      return true
-    })
-    const repair = spyOn(
-      leaseManagerModule,
-      'repairLeasesForDeletedAccount',
-    ).mockImplementation(accountId => {
-      order.push(`repair:${accountId}`)
-    })
-    const reassign = spyOn(
-      leaseManagerModule,
-      'reassignCodexLeaseToActiveAccount',
-    ).mockImplementation(ownerId => {
-      order.push(`reassign:${ownerId}`)
-    })
-    const releaseLease = spyOn(
-      leaseManagerModule,
-      'releaseCodexLease',
-    ).mockImplementation(() => {})
-    const resetCache = spyOn(
-      codexFetchAdapterModule,
-      'resetCodexCacheContext',
-    ).mockImplementation(() => {
-      order.push('reset-cache')
-    })
-    const clearCaches = spyOn(
-      logoutModule,
-      'clearAuthRelatedCaches',
-    ).mockImplementation(async () => {
-      order.push('clear-auth-caches')
-    })
-
-    const result = await createRealAccountsExecutor().delete(deleted.accountId)
+    let deletionInput: CodexAccountDeletionInput | undefined
+    const result = await createRealAccountsExecutor({
+      deleteTransaction: async input => {
+        deletionInput = input
+        seedCodexAccountPoolForTest({
+          accounts: [remaining],
+          activeAccountId: remaining.accountId,
+        })
+        return {
+          status: 'committed',
+          accountId: input.accountId,
+          lifecycleGeneration: 1,
+          lifecycleState: 'signed_out',
+          credentialGeneration: 1,
+          state: 'signed_out',
+          operationId: input.operationId,
+          targetWasActive: true,
+          replacementActiveAccountId: remaining.accountId,
+        } satisfies CodexAccountDeletionResult
+      },
+    }).delete(deleted.accountId, deleted.credentialGeneration)
 
     expect(result).toEqual({ ok: true, message: 'Account deleted.' })
-    expect(repair).toHaveBeenCalledWith(deleted.accountId)
-    expect(reassign).toHaveBeenCalledWith('main-thread')
-    expect(releaseLease).not.toHaveBeenCalled()
-    expect(resetCache).toHaveBeenCalledTimes(1)
-    expect(clearCaches).toHaveBeenCalledTimes(1)
-    expect(order).toEqual([
-      `remove:${deleted.accountId}`,
-      `repair:${deleted.accountId}`,
-      'reassign:main-thread',
-      'reset-cache',
-      'clear-auth-caches',
-    ])
+    expect(deletionInput).toMatchObject({
+      accountId: deleted.accountId,
+      expectedCredentialGeneration: deleted.credentialGeneration,
+    })
+    expect(deletionInput?.operationId).toEqual(expect.any(String))
   })
 
-  test('releases the main-thread lease after deleting the final account', async () => {
+  test('reports a refused deletion transaction without mutating the pool', async () => {
     const deleted = poolAccount({
       accountId: 'delete-final',
       vaultFilePath: '/test-vault/accounts/delete-final.json',
@@ -336,35 +465,62 @@ describe('real Codex delete executor cleanup', () => {
       activeAccountId: deleted.accountId,
     })
 
-    spyOn(codexPoolModule, 'removeCodexAccount').mockImplementation(() => {
-      seedCodexAccountPoolForTest({ accounts: [] })
-      return true
+    let deletionInput: CodexAccountDeletionInput | undefined
+    const result = await createRealAccountsExecutor({
+      deleteTransaction: async input => {
+        deletionInput = input
+        return {
+          status: 'superseded',
+          accountId: input.accountId,
+          lifecycleGeneration: 2,
+          lifecycleState: 'login_prepared',
+          credentialGeneration: 2,
+          state: 'login_prepared',
+          operationId: input.operationId,
+          targetWasActive: true,
+          replacementActiveAccountId: null,
+        } satisfies CodexAccountDeletionResult
+      },
+    }).delete(deleted.accountId, deleted.credentialGeneration)
+
+    expect(result).toEqual({
+      ok: false,
+      message: 'Could not delete that account.',
     })
-    spyOn(
-      leaseManagerModule,
-      'repairLeasesForDeletedAccount',
-    ).mockImplementation(() => {})
-    const reassign = spyOn(
-      leaseManagerModule,
-      'reassignCodexLeaseToActiveAccount',
-    ).mockImplementation(() => {})
-    const releaseLease = spyOn(
-      leaseManagerModule,
-      'releaseCodexLease',
-    ).mockImplementation(() => {})
-    spyOn(
-      codexFetchAdapterModule,
-      'resetCodexCacheContext',
-    ).mockImplementation(() => {})
-    spyOn(logoutModule, 'clearAuthRelatedCaches').mockImplementation(
-      async () => {},
-    )
+    expect(deletionInput).toMatchObject({
+      accountId: deleted.accountId,
+      expectedCredentialGeneration: deleted.credentialGeneration,
+    })
+    expect(getPoolStatus().accounts).toHaveLength(1)
+  })
+})
 
-    const result = await createRealAccountsExecutor().delete(deleted.accountId)
+describe('real Codex sign-out executor target binding', () => {
+  test('passes the requested account and credential generation to the engine transaction', async () => {
+    let signOutInput: CodexAccountSignOutInput | undefined
+    const result = await createRealAccountsExecutor({
+      signOutTransaction: async input => {
+        signOutInput = input
+        return {
+          status: 'committed',
+          accountId: input.accountId,
+          lifecycleGeneration: 8,
+          lifecycleState: 'signed_out',
+          credentialGeneration: 8,
+          state: 'signed_out',
+          operationId: input.operationId,
+          targetWasActive: false,
+          replacementActiveAccountId: null,
+        } satisfies CodexAccountSignOutResult
+      },
+    }).logout('target-account', 7)
 
-    expect(result.ok).toBe(true)
-    expect(reassign).not.toHaveBeenCalled()
-    expect(releaseLease).toHaveBeenCalledWith('main-thread')
+    expect(result).toEqual({ ok: true, message: 'Signed out.' })
+    expect(signOutInput).toMatchObject({
+      accountId: 'target-account',
+      expectedCredentialGeneration: 7,
+    })
+    expect(signOutInput?.operationId).toEqual(expect.any(String))
   })
 })
 
@@ -774,7 +930,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(out.result.ok).toBe(false)
   })
 
-  test('applyDeletedProfile removes a known local account through the executor', async () => {
+  test('applyDeletedProfile reconciles a known local account without rerunning deletion', async () => {
     seedCodexAccountPoolForTest({
       accounts: [poolAccount({ accountId: 'known' })],
       activeAccountId: 'known',
@@ -791,7 +947,7 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     })
 
     expect(await domain.applyDeletedProfile('known')).toBe(true)
-    expect(deleted).toEqual(['known'])
+    expect(deleted).toEqual([])
     expect(domain.getSnapshot()?.accounts).toEqual([])
   })
 
@@ -844,6 +1000,202 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     expect(deletes).toBe(0)
   })
 
+  test('external sign-out removes only the exact local generation and preserves other state', async () => {
+    const lifecycle = await establishSignedOutLifecycle(
+      'target-account',
+      'operation-target',
+    )
+    const target = poolAccount({
+      accountId: 'target-account',
+      alias: 'former-main',
+      credentialGeneration: 1,
+      vaultFilePath: '/test-vault/accounts/target-account.json',
+      lastUsedAt: 17,
+    })
+    const unrelated = poolAccount({
+      accountId: 'unrelated-account',
+      alias: 'keep-me',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'preserve this error',
+      lastUsedAt: 42,
+      usagePrimary: 31,
+      usageWeekly: 22,
+      usageFetchedAt: 41,
+    })
+    const replacement = poolAccount({
+      accountId: 'replacement-account',
+      alias: 'replacement',
+      lastUsedAt: 43,
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [target, unrelated, replacement],
+      activeAccountId: target.accountId,
+    })
+    const beforeUnrelated = getPoolStatus().accounts[1]!
+    seedCodexLeaseForTest({
+      ownerId: 'target-owner',
+      ownerType: 'subagent',
+      ownerLabel: 'target worker',
+      accountId: target.accountId,
+    })
+    const unrelatedLease = seedCodexLeaseForTest({
+      ownerId: 'unrelated-owner',
+      ownerType: 'subagent',
+      ownerLabel: 'unrelated worker',
+      accountId: unrelated.accountId,
+    })
+    const retirements: unknown[] = []
+    let cacheContextResets = 0
+    let usageInvalidations = 0
+    let authCacheClears = 0
+    let reloads = 0
+    const domain = makeAccountsDomain({
+      lifecycle,
+      reloadPool: async () => {
+        reloads += 1
+      },
+      executor: fakeExecutor({
+        logout: async () => {
+          throw new Error('durable sign-out must not run')
+        },
+      }),
+      retireWebSockets: retirement => {
+        retirements.push(retirement)
+      },
+      resetCodexCacheContext: () => {
+        cacheContextResets += 1
+      },
+      invalidateUsageCache: () => {
+        usageInvalidations += 1
+      },
+      clearAuthCaches: async () => {
+        authCacheClears += 1
+      },
+    })
+
+    expect(await domain.applyExternallyCommittedSignOut(
+      externalSignOutNotice(),
+    )).toBe(true)
+    expect(reloads).toBe(0)
+    expect(retirements).toEqual([
+      { accountId: 'target-account', credentialGeneration: 1 },
+    ])
+    expect(cacheContextResets).toBe(1)
+    expect(usageInvalidations).toBe(1)
+    expect(authCacheClears).toBe(1)
+    expect(getPoolStatus().accounts).toEqual([
+      beforeUnrelated,
+      expect.objectContaining({ accountId: 'replacement-account' }),
+    ])
+    expect(getPoolStatus().accounts[0]).toMatchObject({
+      accountId: 'unrelated-account',
+      status: 'capped',
+      statusReason: 'usage_cap',
+      lastError: 'preserve this error',
+      lastUsedAt: 42,
+      usagePrimary: 31,
+      usageWeekly: 22,
+      usageFetchedAt: 41,
+    })
+    expect(domain.getSnapshot()?.signedOutProfiles).toEqual([
+      expect.objectContaining({
+        id: 'target-account',
+        alias: 'former-main',
+        state: 'signed_out',
+        credentialGeneration: 2,
+        lifecycleGeneration: 2,
+      }),
+    ])
+    const leases = getCodexLeaseSnapshotForTest().leases
+    expect(leases.find(lease => lease.ownerId === 'target-owner')).toMatchObject({
+      accountId: 'replacement-account',
+      selectionKind: 'repaired',
+    })
+    expect(leases.find(lease => lease.ownerId === 'unrelated-owner')).toBe(
+      unrelatedLease,
+    )
+  })
+
+  test('duplicate external sign-out notice is an idempotent no-op', async () => {
+    const lifecycle = await establishSignedOutLifecycle(
+      'target-account',
+      'operation-target',
+    )
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({
+        accountId: 'target-account',
+        credentialGeneration: 1,
+        vaultFilePath: '/test-vault/accounts/target-account.json',
+      })],
+      activeAccountId: 'target-account',
+    })
+    let retirements = 0
+    let cacheClears = 0
+    const domain = makeAccountsDomain({
+      lifecycle,
+      retireWebSockets: () => {
+        retirements += 1
+      },
+      clearAuthCaches: async () => {
+        cacheClears += 1
+      },
+    })
+    const signedOut = externalSignOutNotice()
+
+    expect(await domain.applyExternallyCommittedSignOut(signedOut)).toBe(true)
+    expect(await domain.applyExternallyCommittedSignOut(signedOut)).toBe(false)
+    expect(retirements).toBe(1)
+    expect(cacheClears).toBe(1)
+  })
+
+  test('delayed sign-out notice cannot remove a newer credential generation', async () => {
+    const lifecycle = await establishSignedOutLifecycle(
+      'target-account',
+      'operation-target',
+    )
+    await lifecycle.withTransaction(
+      'target-account',
+      { operationKind: 'login', operationId: 'operation-new' },
+      permit => {
+        const prepared = lifecycle.prepareLogin(permit)
+        if (prepared.status !== 'applied') {
+          throw new Error('test replacement login preparation failed')
+        }
+        const committed = lifecycle.commitLogin(permit, {
+          expectedGeneration: prepared.record.credentialGeneration,
+        })
+        if (committed.status !== 'applied') {
+          throw new Error('test replacement login commit failed')
+        }
+      },
+    )
+    const replacement = poolAccount({
+      accountId: 'target-account',
+      credentialGeneration: 3,
+      alias: 'new-login',
+      vaultFilePath: '/test-vault/accounts/target-account.json',
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [replacement],
+      activeAccountId: replacement.accountId,
+    })
+    let retirements = 0
+    const domain = makeAccountsDomain({
+      lifecycle,
+      retireWebSockets: () => {
+        retirements += 1
+      },
+    })
+
+    expect(await domain.applyExternallyCommittedSignOut(
+      externalSignOutNotice(),
+    )).toBe(false)
+    expect(getPoolStatus().accounts[0]).toBeDefined()
+    expect(getPoolStatus().accounts[0]?.credentialGeneration).toBe(3)
+    expect(retirements).toBe(0)
+  })
+
   test('concurrent async delete verbs keep their results correlated to their caller', async () => {
     seedCodexAccountPoolForTest({
       accounts: [
@@ -869,12 +1221,14 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
       type: 'account.delete',
       requestId: 'delete-a',
       accountId: 'a',
+      expectedCredentialGeneration: 0,
       confirm: true,
     })
     const second = domain.runVerb({
       type: 'account.delete',
       requestId: 'delete-b',
       accountId: 'b',
+      expectedCredentialGeneration: 0,
       confirm: true,
     })
     await flush()
@@ -901,9 +1255,87 @@ describe('P4-5 verbs — pool-resolved business validation + round-trips', () =>
     })
     const domain = makeAccountsDomain({ executor: fakeExecutor() })
     const rename = await domain.runVerb({ type: 'account.rename', requestId: 'r', accountId: 'a', alias: 'new' })
-    const del = await domain.runVerb({ type: 'account.delete', requestId: 'r', accountId: 'a', confirm: true })
+    const del = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+      confirm: true,
+    })
     expect(rename.result.ok).toBe(false)
     expect(del.result.ok).toBe(false)
+  })
+
+  test('delete refuses a stale credential generation without dispatching', async () => {
+    seedCodexAccountPoolForTest({
+      accounts: [poolAccount({ accountId: 'a', credentialGeneration: 8 })],
+      activeAccountId: 'a',
+    })
+    let deletes = 0
+    const domain = makeAccountsDomain({
+      executor: fakeExecutor({
+        delete: async () => {
+          deletes += 1
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'stale-delete',
+      accountId: 'a',
+      expectedCredentialGeneration: 7,
+      confirm: true,
+    })
+
+    expect(out.result.ok).toBe(false)
+    expect(out.poolChanged).toBe(false)
+    expect(deletes).toBe(0)
+  })
+
+  test('delete accepts a signed-out saved profile only at its exact lifecycle generation', async () => {
+    const calls: Array<{
+      accountId: string
+      expectedCredentialGeneration: number
+    }> = []
+    const domain = makeAccountsDomain({
+      resolveDeletionTarget: () => ({
+        kind: 'signed_out',
+        profile: {
+          accountId: 'signed-out-a',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePath: '/test-vault/accounts/signed-out-a.json',
+          vaultFilePaths: ['/test-vault/accounts/signed-out-a.json'],
+          profileState: 'signed_out',
+          credentialGeneration: 9,
+          lifecycleGeneration: 9,
+          credentialGenerationState: 'lifecycle_bound',
+          lifecycleState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      }),
+      executor: fakeExecutor({
+        delete: async (accountId, expectedCredentialGeneration) => {
+          calls.push({ accountId, expectedCredentialGeneration })
+          return { ok: true, message: 'deleted' }
+        },
+      }),
+    })
+
+    const out = await domain.runVerb({
+      type: 'account.delete',
+      requestId: 'delete-signed-out',
+      accountId: 'signed-out-a',
+      expectedCredentialGeneration: 9,
+      confirm: true,
+    })
+
+    expect(out.result.ok).toBe(true)
+    expect(calls).toEqual([
+      { accountId: 'signed-out-a', expectedCredentialGeneration: 9 },
+    ])
   })
 
   test('touchAll surfaces per-account results and marks the pool changed', async () => {
@@ -929,6 +1361,68 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     domain.setOAuthProgressSink(p => captured.push(p))
     return domain
   }
+
+  test('real Codex runner delegates installation and recognizes signed-out profiles', async () => {
+    const calls: Array<{
+      accountId: string
+      alias?: string
+      operationId: string
+    }> = []
+    const inventory: CodexProfileInventory = {
+      accounts: [],
+      signedOutProfiles: [
+        {
+          accountId: 'signed-out-codex',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePaths: ['/tmp/signed-out-codex.json'],
+          profileState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      ],
+      duplicateVaultIdentities: [],
+    }
+    const runner = createRealOAuthLoginRunner({
+      runOAuthFlow: async onUrlReady => {
+        await onUrlReady('https://auth.example/codex')
+        return {
+          accessToken: 'access-token',
+          refreshToken: 'refresh-token',
+          expiresAt: Date.now() + 60_000,
+          accountId: 'signed-out-codex',
+        }
+      },
+      readProfileInventory: () => inventory,
+      createOperationId: () => 'accounts-domain-login',
+      persistLogin: async (received, options) => {
+        calls.push({
+          accountId: received.accountId,
+          alias: options.alias,
+          operationId: options.operationId,
+        })
+        return {
+          accountId: received.accountId,
+          credentialGeneration: 3,
+          source: 'vault',
+        }
+      },
+    })
+
+    const pending = await runner.begin({
+      onWaitingForLogin: () => {},
+      waitForManualCode: async () => '',
+    })
+    expect(pending.isExistingAccount).toBe(true)
+    await pending.persist(undefined)
+
+    expect(calls).toEqual([
+      {
+        accountId: 'signed-out-codex',
+        alias: undefined,
+        operationId: 'accounts-domain-login',
+      },
+    ])
+  })
 
   test('new account: waiting_for_login {url} → waiting_for_alias → success + persists the alias', async () => {
     const captured: OAuthLoginProgress[] = []
@@ -1419,7 +1913,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     for (const progress of captured) {
       const frame: OAuthLoginProgressFrame = {
         kind: 'oauth.login.progress',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         progress,
       }

@@ -28,7 +28,7 @@ function readyFrame(
 ): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     engineSessionId: `engine-${sessionId}`,
     payload: {
@@ -62,7 +62,7 @@ test('upserts requested permissions and removes them when resolved', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       event: { type: 'permission.requested', request: REQUEST },
     },
@@ -71,7 +71,7 @@ test('upserts requested permissions and removes them when resolved', () => {
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       event: {
         type: 'permission.resolved',
@@ -116,7 +116,7 @@ test('an addressed transport error restores a submitted permission for retry', (
     type: 'frame',
     frame: {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       requestId: REQUEST.requestId,
       code: 'internal_error',
@@ -142,7 +142,7 @@ test('permission_not_found removes a stale submitted card instead of re-arming i
     type: 'frame',
     frame: {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       requestId: REQUEST.requestId,
       code: 'permission_not_found',
@@ -243,7 +243,7 @@ test('terminal lifecycle clears permissions owned by the dead sidecar', () => {
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'disconnected',
     },
@@ -264,7 +264,7 @@ test('a dead sidecar keeps the MODE for display while losing every actionable re
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: CONTEXT_SNAPSHOT,
     },
@@ -273,7 +273,7 @@ test('a dead sidecar keeps the MODE for display while losing every actionable re
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'disconnected',
     },
@@ -303,7 +303,7 @@ test('a re-attach carries the mode across the gap before the fresh context lands
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: CONTEXT_SNAPSHOT,
     },
@@ -312,7 +312,7 @@ test('a re-attach carries the mode across the gap before the fresh context lands
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'disconnected',
     },
@@ -338,7 +338,7 @@ test('selectLastPermissionMode prefers the live context and answers null when no
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: CONTEXT_SNAPSHOT,
     },
@@ -350,7 +350,7 @@ test('selectLastPermissionMode prefers the live context and answers null when no
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'exited',
     },
@@ -363,7 +363,7 @@ test('selectLastPermissionMode prefers the live context and answers null when no
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: { ...CONTEXT_SNAPSHOT, mode: 'plan' },
     },
@@ -423,7 +423,7 @@ test('permission and lifecycle frames cannot clear another session queue', () =>
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'disconnected',
     },
@@ -452,7 +452,7 @@ test('resolved and error frames are isolated even when sessions reuse a request 
     type: 'frame',
     frame: {
       kind: 'event',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       event: {
         type: 'permission.resolved',
@@ -465,7 +465,7 @@ test('resolved and error frames are isolated even when sessions reuse a request 
     type: 'frame',
     frame: {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       requestId: REQUEST.requestId,
       code: 'bad_request',
@@ -482,7 +482,7 @@ test('resolved and error frames are isolated even when sessions reuse a request 
     type: 'frame',
     frame: {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-2',
       requestId: REQUEST.requestId,
       code: 'bad_request',
@@ -526,7 +526,7 @@ function requestedFrame(
 ): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     event: { type: 'permission.requested', request },
   }
@@ -542,7 +542,7 @@ function resolvedFrame(
 ): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     event: { type: 'permission.resolved', request, response },
   }
@@ -625,7 +625,7 @@ test('C3 — the permission.context frame is stored and selectable per session',
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: CONTEXT_SNAPSHOT,
     },
@@ -643,7 +643,7 @@ test('C3 — a reattach ready frame keeps the last snapshot until the next one l
     type: 'frame',
     frame: {
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       context: CONTEXT_SNAPSHOT,
     },

@@ -20,7 +20,7 @@ function result(
 ): HistoryLoadEarlierResultFrame {
   return {
     kind: 'history.loadEarlier.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'a',
     ok: true,
     message: 'Loaded the rest of this session.',

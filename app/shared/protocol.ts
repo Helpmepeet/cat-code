@@ -1,5 +1,5 @@
 /**
- * CatCode desktop IPC protocol — v1.
+ * CatCode desktop IPC protocol — v2.
  *
  * This is the versioned engine/session protocol (PROGRAM-PLAN §5, layer 1): the
  * typed seam between the renderer, the Electron main process, the Electron-free
@@ -9,10 +9,11 @@
  *
  * Design constraints baked in here on purpose:
  *
- *  - **sessionId slot NOW (PHASE0-REVIEW F3).** v1 addresses every frame to a
+ *  - **sessionId slot NOW (PHASE0-REVIEW F3).** The first protocol version
+ *    addressed every frame to a
  *    session even though P1-0 runs a single sidecar. P0-4 mandates one engine
  *    process per session (N-process), so the supervisor routes by sessionId; we
- *    reserve the field in v1 so Phase 3 multiplexing does not break the wire.
+ *    reserve the field so Phase 3 multiplexing does not break the wire.
  *
  *  - **Outbound = raw SDKMessage (TRANSPORT-DECISION.md §2/§4).** The engine→UI
  *    direction ships the whole `AppSessionEvent` (incl. `event.message:
@@ -30,6 +31,13 @@
  *    its meaning — the resolved model id — because `selectContextUsage` matches
  *    it against `result.modelUsage` keys, so re-spelling it would break the
  *    live gauge.
+ *
+ *  - **Breaking account logout target.** `PROTOCOL_VERSION` is 2 because
+ *    `account.logout` now requires an account id and its expected credential
+ *    generation. The active-only `{type, requestId}` shape is no longer valid.
+ *    This preserves the targeted lifecycle and stale-request protections from
+ *    `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and
+ *    `docs/migration/decisions/SECURITY-MINIMUM.md`.
  *
  *  - **Inbound = the allowlisted client message types (SECURITY-MINIMUM §2).**
  *    `app.submit` / `app.abort` / `permission.response` / `app.ping` reuse the
@@ -73,7 +81,7 @@ import type {
 } from './settingsEditable.js'
 
 /** Protocol wire version. Bump only on a breaking frame-shape change. */
-export const PROTOCOL_VERSION = 1 as const
+export const PROTOCOL_VERSION = 2 as const
 
 /**
  * A session address. In P1-0 there is exactly one sidecar and one sessionId,
@@ -246,18 +254,30 @@ export type AccountRenameMessage = {
   alias: string
 }
 
-/** Delete a vault-backed account profile. Destructive → requires `confirm`. */
+/**
+ * Delete a vault-backed account profile at one exact lifecycle generation.
+ * Destructive → requires `confirm`; generation matching protects a newer login
+ * from a delayed delete submitted from a stale Accounts row.
+ */
 export type AccountDeleteMessage = {
   type: 'account.delete'
   requestId: string
   accountId: string
+  expectedCredentialGeneration: number
   confirm: true
 }
 
-/** Sign out the active account (clears its token; the profile stays on disk). */
+/**
+ * Sign out one credentialed account using optimistic generation matching. The
+ * profile stays on disk; the sidecar re-resolves the target before dispatch.
+ * (`docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`,
+ * `docs/migration/decisions/SECURITY-MINIMUM.md`)
+ */
 export type AccountLogoutMessage = {
   type: 'account.logout'
   requestId: string
+  accountId: string
+  expectedCredentialGeneration: number
 }
 
 /** Refresh OAuth tokens for every unlocked vault account (per-account result). */
@@ -316,6 +336,25 @@ export type AccountProfileDeletedMessage = {
   type: 'account.profileDeleted'
   requestId: string
   accountId: string
+}
+
+/**
+ * Host-originated invalidation after a sign-out lifecycle commit in another
+ * engine process. This is intentionally outside `AccountVerbMessage`: no
+ * renderer or preload sender can author it.
+ */
+export type AccountProfileSignedOutMessage = {
+  type: 'account.profileSignedOut'
+  requestId: string
+  operationId: string
+  accountId: string
+  oldCredentialGeneration: number
+  signedOutLifecycleGeneration: number
+  outcome: Extract<
+    AccountSignOutOutcome,
+    'committed' | 'already_committed' | 'cleanup_pending'
+  >
+  lifecycleState: 'signed_out'
 }
 
 export type AccountVerbMessage =
@@ -402,7 +441,8 @@ export type RemoteVerbMessage =
  * key's control type, source ∈ editable layers) and never trusts the frame. A
  * new provenance-carrying `settings.snapshot` is re-emitted when the write lands.
  *
- * **P4-41 — reset-to-default, additive under v1, NO `PROTOCOL_VERSION` bump.**
+ * **P4-41 — reset-to-default, additive when introduced, NO `PROTOCOL_VERSION`
+ * bump.**
  * The verb gained no field and no new frame kind: `value` may now be `null`,
  * meaning REMOVE this key from this layer rather than write a value to it. Every
  * frame that was valid before is still valid and still means the same thing, so
@@ -478,8 +518,8 @@ export type ContextBreakdownVerbMessage = ContextBreakdownRequestMessage
  * unable to author it (the frame is on the sidecar's closed allowlist purely as
  * defence-in-depth). It carries NO renderer-authored state — just a `requestId`;
  * there is no ack/result frame, the sidecar's `PARKED_EXIT_CODE` self-exit is the
- * authoritative signal (host classifies the exit, §2). Additive under v1 — no
- * `PROTOCOL_VERSION` bump.
+ * authoritative signal (host classifies the exit, §2). Additive when introduced
+ * — no `PROTOCOL_VERSION` bump.
  */
 export type AppParkMessage = {
   type: 'app.park'
@@ -517,8 +557,8 @@ export type AppParkMessage = {
  * this frame). The sidecar validates it with its own local Zod schema plus a
  * closed `checkStrictKeys` entry that REJECTS any extra property rather than
  * stripping it, and enforces one in-flight request per session at the boundary
- * rather than trusting the renderer's disabled control. Additive under v1 — no
- * `PROTOCOL_VERSION` bump.
+ * rather than trusting the renderer's disabled control. Additive when introduced
+ * — no `PROTOCOL_VERSION` bump.
  */
 export const HISTORY_LOAD_EARLIER_VERB_TYPES = [
   'history.loadEarlier',
@@ -560,7 +600,7 @@ export type HistoryLoadEarlierMessage = {
    * equality against uuids from the sidecar's OWN disk read and steers no file,
    * no budget, and no amount.
    *
-   * Additive under v1 — no `PROTOCOL_VERSION` bump. Absent means "main has
+   * Additive when introduced — no `PROTOCOL_VERSION` bump. Absent means "main has
    * nothing to add", which is the pre-existing behaviour.
    */
   viewAnchorUuid?: string
@@ -578,7 +618,7 @@ export type HistoryLoadEarlierMessage = {
  * Both are app-owned vocabulary validated by sidecar-LOCAL schemas plus a closed
  * `checkStrictKeys` entry, exactly like C2 and the load-earlier verb: the
  * engine's shared `appClientMessageSchema` is deliberately NOT extended.
- * Additive under v1 — no `PROTOCOL_VERSION` bump.
+ * Additive when introduced — no `PROTOCOL_VERSION` bump.
  * ------------------------------------------------------------------------- */
 
 /**
@@ -898,6 +938,7 @@ export type SidecarClientMessage =
   | AskUserQuestionAnswerMessage
   | AccountVerbMessage
   | AccountProfileDeletedMessage
+  | AccountProfileSignedOutMessage
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
@@ -938,7 +979,7 @@ export type ReadyFrame = {
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
   engineSessionId: string
-  /** Desktop restore state. Additive under v1; absent means no interrupted turn. */
+  /** Desktop restore state. Additive when introduced; absent means no interrupted turn. */
   turnInterrupted?: boolean
   payload: AppReadyPayload
 }
@@ -964,7 +1005,7 @@ export type ReadyFrame = {
  * The decision that makes it safe (recorded here inline, the way the C2 account
  * verbs' reasoning is recorded above):
  *
- *  - **Additive under v1 — NO `PROTOCOL_VERSION` bump.** No frame changed shape:
+ *  - **Additive when introduced — NO `PROTOCOL_VERSION` bump.** No frame changed shape:
  *    an optional field appeared on a message the frame already carried whole.
  *    A renderer that ignores `origin` behaves exactly as before, and an engine
  *    that predates it (a resumed transcript, an older sidecar) simply omits it —
@@ -997,7 +1038,7 @@ export type EventFrame = {
    * Present (`true`) ONLY on restored-history frames a resumed sidecar replays
    * at attach (F2 — decisions/RESTORE-HISTORY.md): the same resumed `Message[]`
    * that seeded the engine's turn context (F1), converted by the engine's own
-   * `toSDKMessages`. Additive under v1; a renderer may ignore it (rows render
+   * `toSDKMessages`. Additive when introduced; a renderer may ignore it (rows render
    * identically) or use it for a "restored" divider / notification suppression.
    * Never set on live events.
    */
@@ -1022,7 +1063,7 @@ export type EventFrame = {
    * ring (does not retain it at all, so eviction can never leave a retained
    * tail with a hole in it, B2).
    *
-   * Additive under v1 — no `PROTOCOL_VERSION` bump. A consumer that ignores it
+   * Additive when introduced — no `PROTOCOL_VERSION` bump. A consumer that ignores it
    * behaves exactly as before.
    */
   recovered?: true
@@ -1766,7 +1807,7 @@ export type LeaseStrategy = 'spread' | 'follow-main'
 
 /**
  * WHY a lease sits where it does, mirrored from the engine's
- * `CodexLeaseSelectionKind`. Additive in protocol v1: the renderer previously had
+ * `CodexLeaseSelectionKind`. Additive when introduced: the renderer previously had
  * to recover this by prefix-matching `selectionReason`, which is a log string that
  * interpolates account ids and is free to be reworded on either side of the seam.
  */
@@ -2348,7 +2389,7 @@ export type SessionExportMessage = {
   requestId: string
 }
 
-/** Fork the current active conversation at HEAD. Retained as additive v1 vocabulary. */
+/** Fork the current active conversation at HEAD. Retained as existing vocabulary. */
 export type SessionBranchMessage = {
   type: 'session.branch'
   requestId: string
@@ -2445,7 +2486,7 @@ export type SessionActionResultFrame = {
  *     not possible without the account-diagnostic sink. That sink
  *     (`accountDiagnostics.ts`, already secret-scrubbed) is the named reactive
  *     hook for P4-15 (reauth banner) + P4-17 (welcome table); wiring it is
- *     deferred to P4-15, which owns the reauth surface. v1 is thus attach +
+ *     deferred to P4-15, which owns the reauth surface. The protocol is thus attach +
  *     verb-driven re-emit, matching the settings seam's spawn-time posture.
  */
 
@@ -2458,6 +2499,12 @@ export type AccountStatus = {
    * against the live pool (T6) — it is never trusted as state.
    */
   id: string
+  /**
+   * Immutable optimistic-concurrency metadata from the engine's credential
+   * lifecycle. It is non-secret, never rendered as user text, and never an
+   * authority for the sidecar.
+   */
+  readonly credentialGeneration: number
   alias: string | null
   status: 'healthy' | 'dead' | 'capped' | 'quarantined'
   /** `PoolAccountStatusReason` (usage_cap/auth_dead/runtime_cap/…) or null. */
@@ -2507,9 +2554,33 @@ export type AnthropicAccountStatus = {
   subscriptionType: string | null
 }
 
+/**
+ * Redacted Codex profile that has no routable credential. This shape deliberately
+ * omits vault paths, credential material, usage, plan metadata, and raw errors.
+ * (`docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`,
+ * `docs/migration/decisions/SECURITY-MINIMUM.md`)
+ */
+export type SignedOutCodexProfileStatus = {
+  id: string
+  alias: string | null
+  state: 'signed_out' | 'recovery_required'
+  credentialGeneration: number | null
+  lifecycleGeneration: number | null
+  credentialGenerationState: 'lifecycle_bound' | 'legacy_unbound' | null
+  lifecycleState:
+    | 'login_prepared'
+    | 'credentialed'
+    | 'signed_out'
+    | 'reauth_required'
+    | null
+  lifecycleReadStatus: 'absent' | 'valid' | 'malformed' | 'unreadable'
+}
+
 export type AccountsSnapshot = {
   /** Redacted account rows, pool order (the pool's `activeIndex` account first-class via `isDefault`). */
   accounts: AccountStatus[]
+  /** Redacted vault profiles without routable credentials, kept outside pool counts. */
+  signedOutProfiles: SignedOutCodexProfileStatus[]
   /** The persisted active account's id, or null when the pool is empty/uninitialized. */
   activeAccountId: string | null
   /** Healthy + not-usage-capped count (the "N of M ready" header stat). */
@@ -2549,6 +2620,29 @@ export type AccountsSnapshotFrame = {
   accounts: AccountsSnapshot
 }
 
+export type AccountSignOutOutcome =
+  | 'committed'
+  | 'already_committed'
+  | 'superseded'
+  | 'cleanup_pending'
+  | 'retryable_unknown'
+
+export type AccountSignOutReceipt = {
+  outcome: AccountSignOutOutcome
+  accountId: string
+  expectedCredentialGeneration: number
+  observedCredentialGeneration: number | null
+  lifecycleState:
+    | 'login_prepared'
+    | 'credentialed'
+    | 'signed_out'
+    | 'reauth_required'
+    | null
+  operationId: string
+  targetWasActive: boolean
+  replacementActiveAccountId: string | null
+}
+
 /** The outcome of one account verb (echoes the renderer-minted `requestId`, T5a-analog). */
 export type AccountResultFrame = {
   kind: 'account.result'
@@ -2567,6 +2661,8 @@ export type AccountResultFrame = {
     alias: string | null
     result: 'OK' | 'LOCKED' | 'FAILED'
   }>
+  /** Present only for the host-owned targeted `account.logout` route. */
+  signOut?: AccountSignOutReceipt
 }
 
 /* ------------------------------------------------------------------------- *
@@ -3899,6 +3995,13 @@ export type CatCodeBridge = {
    * write to a one-shot engine worker; no credential material crosses this API.
    */
   deleteAccount(verb: AccountDeleteMessage): Promise<AccountResultFrame>
+  /**
+   * Sign out one global Codex credential without borrowing a chat session as the
+   * command carrier. Main validates the targeted generation and delegates the
+   * transaction to a bounded one-shot engine worker; no credential material
+   * crosses this API.
+   */
+  signOutAccount(verb: AccountLogoutMessage): Promise<AccountResultFrame>
   /**
    * P4-15 — accept trust for the addressed session's OWN cwd (the session-create
    * trust gate). The sidecar persists via the engine's `saveCurrentProjectConfig`

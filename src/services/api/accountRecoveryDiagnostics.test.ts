@@ -4,45 +4,56 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
-import { setSessionProvider } from '../../bootstrap/state.js'
 import {
+  accountRecoveryTestConfigDir,
+  resetAccountRecoveryTestConfig,
+} from './accountRecoveryDiagnostics.test-setup.js'
+
+const { setSessionProvider } = await import('../../bootstrap/state.js')
+const {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
-} from './accountDiagnostics.js'
-import {
+} = await import('./accountDiagnostics.js')
+const {
   getActiveClaudeAccount,
   resetClaudeAccountPoolForTest,
   seedClaudeAccountPoolForTest,
-  type ClaudePoolAccount,
-} from './claudeAccountPool.js'
-import {
+} = await import('./claudeAccountPool.js')
+type ClaudePoolAccount = import('./claudeAccountPool.js').ClaudePoolAccount
+const {
   CodexAccountAuthError,
   CodexAccountCapError,
   CodexResponseFailedError,
   createCodexFetch,
   resetCodexCacheContext,
-} from './codex-fetch-adapter.js'
-import {
+} = await import('./codex-fetch-adapter.js')
+const { createCodexCredentialHandle } = await import('./codexCredentialUse.js')
+const {
+  codexCredentialLifecycle,
+  createCodexCredentialLifecycle,
+} = await import('./codexCredentialLifecycle.js')
+type CodexCredentialLifecycle = import('./codexCredentialLifecycle.js').CodexCredentialLifecycle
+const {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
   seedCodexLeaseForTest,
-} from './codexAccountLeaseManager.js'
-import {
+} = await import('./codexAccountLeaseManager.js')
+const {
   getPoolStatus,
   resetCodexAccountPoolForTest,
   seedCodexAccountPoolForTest,
-  type PoolAccount,
-} from './codexAccountPool.js'
-import { getAnthropicClient } from './client.js'
-import { getClaudeAIOAuthTokens } from '../../utils/auth.js'
-import { _resetKeepAliveForTesting } from '../../utils/proxy.js'
-import {
+} = await import('./codexAccountPool.js')
+type PoolAccount = import('./codexAccountPool.js').PoolAccount
+const { getAnthropicClient } = await import('./client.js')
+const { getClaudeAIOAuthTokens } = await import('../../utils/auth.js')
+const { _resetKeepAliveForTesting } = await import('../../utils/proxy.js')
+const {
   CannotRetryError,
   CodexAccountUnavailableError,
   _resetCodexNetworkOutageDelaysForTest,
   _setCodexNetworkOutageDelaysForTest,
   withRetry,
-} from './withRetry.js'
+} = await import('./withRetry.js')
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -72,6 +83,13 @@ function buildPoolAccount(
     source: overrides.source ?? 'config',
     status: overrides.status ?? 'healthy',
     lastUsedAt: overrides.lastUsedAt ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 0,
+    credentialGenerationState:
+      overrides.credentialGenerationState ??
+      (overrides.credentialGeneration === undefined ||
+      overrides.credentialGeneration === 0
+        ? 'legacy_unbound'
+        : 'lifecycle_bound'),
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -115,8 +133,18 @@ describe('account recovery diagnostics', () => {
   const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
   let diagnostics: Array<Record<string, unknown>> = []
   const macroState = globalThis as typeof globalThis & { MACRO?: { VERSION: string } }
+  const accountRecoveryLifecycle = createCodexCredentialLifecycle({
+    directory: join(accountRecoveryTestConfigDir, 'codex-credential-lifecycle'),
+  })
 
   beforeEach(() => {
+    resetAccountRecoveryTestConfig()
+    expect(codexCredentialLifecycle.getPaths('account-one').directory).toBe(
+      join(accountRecoveryTestConfigDir, 'codex-credential-lifecycle'),
+    )
+    expect(accountRecoveryLifecycle.read('account-one')).toEqual({
+      status: 'absent',
+    })
     process.env.ANTHROPIC_API_KEY = 'test-anthropic-key'
     macroState.MACRO = { VERSION: 'test-version' }
     diagnostics = []
@@ -292,15 +320,49 @@ describe('account recovery diagnostics', () => {
     // per-request token carries source: 'pool' — that is what enables HTTP
     // credential-error classification (matching getAnthropicClient()).
     const token = buildCodexToken('account-one')
+    const lifecycle = {
+      read(accountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'credentialed' as const,
+            operationId: 'diagnostic-test',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
     await expect(
-      createCodexFetch(token, undefined, {
+      createCodexFetch(createCodexCredentialHandle({
+        accountId: 'account-one',
+        accessToken: token,
+        refreshToken: 'refresh-account-one',
+        expiresAt: Date.now() + 60 * 60_000,
+        credentialGeneration: 1,
+        credentialSource: 'config',
+      }), undefined, {
         resolveTokensForRequest: async () => ({
           accessToken: token,
           refreshToken: 'refresh-account-one',
           expiresAt: Date.now() + 60 * 60_000,
           accountId: 'account-one',
+          credentialGeneration: 1,
+          credentialSource: 'config',
+          credentialPath: '/test/account-recovery-config.json',
           source: 'pool',
         }),
+        credentialUse: { lifecycle },
       })(
         'https://api.anthropic.com/v1/messages',
         {
@@ -330,6 +392,8 @@ describe('account recovery diagnostics', () => {
             access_token: buildCodexToken('account-one'),
             refresh_token: 'refresh-account-one',
             account_id: 'account-one',
+            expires_at: Date.now() + 60 * 60_000,
+            credential_generation: 1,
           },
           alias: 'main',
         },
@@ -348,8 +412,13 @@ describe('account recovery diagnostics', () => {
           source: 'vault',
           vaultFilePath: staleAccountPath,
           refreshToken: 'refresh-account-one',
+          credentialGeneration: 1,
         }),
-        buildPoolAccount({ accountId: 'account-two', alias: 'backup' }),
+        buildPoolAccount({
+          accountId: 'account-two',
+          alias: 'backup',
+          credentialGeneration: 1,
+        }),
       ],
     })
     seedCodexLeaseForTest({
@@ -412,6 +481,29 @@ describe('account recovery diagnostics', () => {
       throw new Error(`Unexpected account route: ${requestAccountId ?? 'none'}`)
     }) as typeof globalThis.fetch
 
+    const lifecycle = {
+      read(accountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 1,
+            state: 'credentialed' as const,
+            operationId: 'auth-failover-test',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
     let attempts = 0
     try {
       for await (const _message of withRetry(
@@ -423,6 +515,7 @@ describe('account recovery diagnostics', () => {
             codexLeaseOwnerId: 'subagent-auth',
             codexLeaseOwnerType: 'subagent',
             codexConversationIdOverride: 'conv_auth_recovery_sdk',
+            codexCredentialUse: { lifecycle },
           }),
         async client => {
           attempts += 1

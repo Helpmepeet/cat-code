@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type {
   AccountResultFrame,
+  AccountSignOutReceipt,
   AccountsSnapshot,
   AccountsSnapshotFrame,
   LifecycleFrame,
@@ -26,9 +27,11 @@ import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
     anthropicRouteAvailable: false,
+    signedOutProfiles: [],
     accounts: [
       {
         id: 'a',
+        credentialGeneration: 0,
         alias: 'main',
         status: 'healthy',
         statusReason: null,
@@ -48,6 +51,7 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
       },
       {
         id: 'b',
+        credentialGeneration: 1,
         alias: 'backup',
         status: 'capped',
         statusReason: 'usage_cap',
@@ -80,7 +84,41 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
 }
 
 function snapFrame(sessionId: string, accounts: AccountsSnapshot): AccountsSnapshotFrame {
-  return { kind: 'accounts.snapshot', protocolVersion: 1, sessionId, accounts }
+  return { kind: 'accounts.snapshot', protocolVersion: 2, sessionId, accounts }
+}
+
+function signOutResult(
+  receipt: AccountSignOutReceipt,
+): AccountResultFrame {
+  return {
+    kind: 'account.result',
+    protocolVersion: 2,
+    sessionId: 's1',
+    requestId: receipt.operationId,
+    verb: 'account.logout',
+    ok:
+      receipt.outcome === 'committed' ||
+      receipt.outcome === 'already_committed' ||
+      receipt.outcome === 'cleanup_pending',
+    message: 'Sign-out result',
+    signOut: receipt,
+  }
+}
+
+function signOutReceipt(
+  overrides: Partial<AccountSignOutReceipt> = {},
+): AccountSignOutReceipt {
+  return {
+    outcome: 'committed',
+    accountId: 'b',
+    expectedCredentialGeneration: 1,
+    observedCredentialGeneration: 2,
+    lifecycleState: 'signed_out',
+    operationId: 'operation-sign-out-b',
+    targetWasActive: false,
+    replacementActiveAccountId: null,
+    ...overrides,
+  }
 }
 
 describe('accountsState reducer', () => {
@@ -94,7 +132,7 @@ describe('accountsState reducer', () => {
     let state = createAccountsState()
     const result: AccountResultFrame = {
       kind: 'account.result',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       requestId: 'r1',
       verb: 'account.switch',
@@ -118,7 +156,7 @@ describe('accountsState reducer', () => {
     state = reduceAccountsState(state, { type: 'frame', frame: snapFrame('s1', snapshot()) })
     const death: LifecycleFrame = {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       status: 'exited',
     } as LifecycleFrame
@@ -132,7 +170,7 @@ describe('P4-15 OAuth login progress projection', () => {
     progress: OAuthLoginProgressFrame['progress'],
     sessionId = 's1',
   ): OAuthLoginProgressFrame {
-    return { kind: 'oauth.login.progress', protocolVersion: 1, sessionId, progress }
+    return { kind: 'oauth.login.progress', protocolVersion: 2, sessionId, progress }
   }
 
   test('reduces oauth.login.progress into the per-session view; selector reads it', () => {
@@ -181,7 +219,7 @@ describe('P4-15 OAuth login progress projection', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         status: 'exited',
       } as never,
@@ -225,7 +263,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -253,7 +291,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'account.result',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         requestId: 'mutation',
         verb: 'account.rename',
@@ -273,7 +311,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -288,7 +326,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: snapshot(),
       } as AccountsSnapshotFrame,
@@ -298,13 +336,242 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         status: 'exited',
       } as LifecycleFrame,
     })
     expect(state.sessions.s1).toBeNull()
     expect(selectGlobalAccountsSnapshot(state)).not.toBeNull()
+  })
+})
+
+describe('targeted sign-out renderer overlay', () => {
+  test('a committed inactive sign-out hides only its credential and preserves the active account', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(signOutReceipt()),
+    })
+
+    const projected = selectGlobalAccountsSnapshot(state)
+    expect(projected?.accounts.map(account => account.id)).toEqual(['a'])
+    expect(projected?.activeAccountId).toBe('a')
+    expect(projected?.accounts[0]?.isDefault).toBe(true)
+    expect(projected?.poolCount).toBe(1)
+    expect(projected?.readyCount).toBe(1)
+    expect(projected?.signedOutProfiles).toContainEqual(
+      expect.objectContaining({
+        id: 'b',
+        state: 'signed_out',
+        lifecycleGeneration: 2,
+      }),
+    )
+  })
+
+  test('an active sign-out applies the authoritative replacement, including no replacement', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({
+          accountId: 'a',
+          expectedCredentialGeneration: 0,
+          operationId: 'operation-sign-out-a',
+          targetWasActive: true,
+          replacementActiveAccountId: 'b',
+        }),
+      ),
+    })
+    let projected = selectGlobalAccountsSnapshot(state)
+    expect(projected?.accounts.map(account => account.id)).toEqual(['b'])
+    expect(projected?.activeAccountId).toBe('b')
+    expect(projected?.accounts[0]?.isDefault).toBe(true)
+    expect(projected?.accounts[0]?.switchable).toBe(false)
+
+    state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot({ accounts: [snapshot().accounts[0]!], poolCount: 1 }),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({
+          accountId: 'a',
+          expectedCredentialGeneration: 0,
+          operationId: 'operation-sign-out-only-a',
+          targetWasActive: true,
+          replacementActiveAccountId: null,
+        }),
+      ),
+    })
+    projected = selectGlobalAccountsSnapshot(state)
+    expect(projected?.accounts).toEqual([])
+    expect(projected?.activeAccountId).toBeNull()
+  })
+
+  test('a config-only sign-out removes credentials without inventing a saved profile', () => {
+    const configAccount = {
+      ...snapshot().accounts[0]!,
+      hasVaultProfile: false,
+      source: 'config' as const,
+    }
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot({ accounts: [configAccount], poolCount: 1 }),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({
+          accountId: 'a',
+          expectedCredentialGeneration: 0,
+          operationId: 'operation-sign-out-config',
+          targetWasActive: true,
+        }),
+      ),
+    })
+
+    const projected = selectGlobalAccountsSnapshot(state)
+    expect(projected?.accounts).toEqual([])
+    expect(projected?.signedOutProfiles).toEqual([])
+  })
+
+  test('retryable unknown keeps the row visible and offers a same-operation status check', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({
+          outcome: 'retryable_unknown',
+          observedCredentialGeneration: null,
+          lifecycleState: null,
+        }),
+      ),
+    })
+
+    expect(selectGlobalAccountsSnapshot(state)?.accounts).toHaveLength(2)
+    expect(state.signOutOverlays.b).toMatchObject({
+      phase: 'checking',
+      operationId: 'operation-sign-out-b',
+    })
+  })
+
+  test('a superseded result never hides the newer login and clears only after observing its generation', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({
+          outcome: 'superseded',
+          observedCredentialGeneration: 3,
+          lifecycleState: 'credentialed',
+        }),
+      ),
+    })
+
+    expect(selectGlobalAccountsSnapshot(state)?.accounts).toHaveLength(2)
+    expect(state.signOutOverlays.b?.phase).toBe('refreshing')
+
+    state = reduceAccountsState(state, { type: 'pool', pool: snapshot() })
+    expect(state.signOutOverlays.b?.phase).toBe('refreshing')
+
+    const refreshed = snapshot()
+    refreshed.accounts[1] = {
+      ...refreshed.accounts[1]!,
+      credentialGeneration: 3,
+    }
+    state = reduceAccountsState(state, { type: 'pool', pool: refreshed })
+    expect(state.signOutOverlays.b).toBeUndefined()
+  })
+
+  test('a delayed old pool cannot resurrect a committed credential row', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(signOutReceipt()),
+    })
+    state = reduceAccountsState(state, { type: 'pool', pool: snapshot() })
+    expect(selectGlobalAccountsSnapshot(state)?.accounts.map(row => row.id)).toEqual(['a'])
+
+    const reconciled = snapshot({
+      accounts: [snapshot().accounts[0]!],
+      poolCount: 1,
+      signedOutProfiles: [
+        {
+          id: 'b',
+          alias: 'backup',
+          state: 'signed_out',
+          credentialGeneration: 2,
+          lifecycleGeneration: 2,
+          credentialGenerationState: 'lifecycle_bound',
+          lifecycleState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      ],
+    })
+    state = reduceAccountsState(state, { type: 'pool', pool: reconciled })
+    expect(state.signOutOverlays.b).toBeUndefined()
+    expect(selectGlobalAccountsSnapshot(state)?.signedOutProfiles[0]?.id).toBe('b')
+  })
+
+  test('a signed-out profile clears the overlay only at the receipt generation', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({ observedCredentialGeneration: 4 }),
+      ),
+    })
+
+    const signedOutAt = (lifecycleGeneration: number): AccountsSnapshot =>
+      snapshot({
+        accounts: [snapshot().accounts[0]!],
+        poolCount: 1,
+        signedOutProfiles: [
+          {
+            id: 'b',
+            alias: 'backup',
+            state: 'signed_out',
+            credentialGeneration: lifecycleGeneration,
+            lifecycleGeneration,
+            credentialGenerationState: 'lifecycle_bound',
+            lifecycleState: 'signed_out',
+            lifecycleReadStatus: 'valid',
+          },
+        ],
+      })
+
+    state = reduceAccountsState(state, {
+      type: 'pool',
+      pool: signedOutAt(2),
+    })
+    expect(state.signOutOverlays.b?.phase).toBe('signed_out')
+    expect(selectGlobalAccountsSnapshot(state)?.accounts.map(row => row.id)).toEqual(['a'])
+
+    state = reduceAccountsState(state, {
+      type: 'pool',
+      pool: signedOutAt(4),
+    })
+    expect(state.signOutOverlays.b).toBeUndefined()
   })
 })
 
@@ -372,7 +639,7 @@ describe('accountsState selectors', () => {
       type: 'frame',
       frame: {
         kind: 'stats.usage.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         stats: snap7d,
       },

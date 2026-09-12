@@ -2,9 +2,11 @@
  * Accounts-pool worker (accounts owner — `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md`).
  * ONE disposable engine-graph process. In its ordinary mode it reads the global
  * account pool once. In `--account-delete` mode it accepts one strictly validated
- * confirmed delete over stdin and runs it through `accountsDomain`. Both modes
- * emit one bounded NDJSON result and exit. The worker is separate from live
- * N-process sidecars, so global profile deletion never borrows a chat session.
+ * confirmed delete over stdin and runs it through `accountsDomain`; in
+ * `--account-sign-out` mode it accepts one targeted lifecycle request and emits
+ * the engine's bounded receipt. All modes emit one bounded NDJSON result and
+ * exit. The worker is separate from live N-process sidecars, so global profile
+ * mutations never borrow a chat session.
  *
  * Main re-spawns it on a timer and remains engine-free. This worker reuses the
  * EXISTING redaction (`buildAccountsSnapshot`, the same pure projection the
@@ -69,12 +71,17 @@ import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
   parseAccountsPoolWorkerDeleteRequest,
+  parseAccountsPoolWorkerSignOutRequest,
   shedOversizeUsageStats,
   type AccountsPoolWorkerDeleteRequest,
   type AccountsPoolWorkerResult,
+  type AccountsPoolWorkerSignOutRequest,
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { UsageStatsByRange } from '../shared/protocol.js'
+import type {
+  AccountSignOutReceipt,
+  UsageStatsByRange,
+} from '../shared/protocol.js'
 import {
   bootstrapWorkerEngine,
   emitWorkerRecord,
@@ -92,29 +99,94 @@ async function main(): Promise<void> {
   const deleteRequest = process.argv.includes('--account-delete')
     ? await readDeleteRequest()
     : null
+  const signOutRecovery = process.argv.includes('--account-sign-out-recovery')
+  const signOutRequest = process.argv.includes('--account-sign-out')
+    ? await readSignOutRequest()
+    : null
+  if (signOutRecovery && !signOutRequest) {
+    throw new Error('account sign-out recovery requires account sign-out mode')
+  }
 
   // Engine imports happen only after SIMPLE is fixed for the process. The static
   // imports above are engine-free (shared boundary + secretGuard), so the
   // ~189 MB engine import is paid only here, per run.
   const [
-    { getPoolStatus, loadPoolForObservation },
+    { getCodexProfileInventory, getPoolStatus, loadPoolForObservation },
     { loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
+    { recoverCodexAccountSignOut, signOutCodexAccount },
   ] = await Promise.all([
     import('../../src/services/api/codexAccountPool.js'),
     import('../../src/services/api/claudeAccountPool.js'),
     import('./accountsDomain.js'),
+    import('../../src/services/api/codexAccountSignOut.js'),
   ])
   // Both pool loads below read the global config, so the config latch this
   // opens is load-bearing here, not just hygiene.
   await bootstrapWorkerEngine()
 
-  // Both loads are disk-only (vault + config) observation; neither refreshes
-  // a token or writes a vault file (see the file header). `buildAccountsSnapshot`
-  // below reads the Anthropic pool through its own `getClaudePoolStatus()`
-  // default parameter, a pure in-memory read of the singleton state
-  // `loadClaudePoolForObservation` just populated — no disk access, no write.
+  // The Codex load is disk-only observation; it neither refreshes a token nor
+  // writes a vault file (see the file header). Sign-out needs this fresh pool
+  // before resolving the targeted account, but it does not need the optional
+  // Anthropic observation.
   await loadPoolForObservation()
+
+  if (signOutRequest) {
+    const input = {
+      accountId: signOutRequest.verb.accountId,
+      expectedCredentialGeneration:
+        signOutRequest.verb.expectedCredentialGeneration,
+      operationId: signOutRequest.verb.requestId,
+    }
+    let receipt: AccountSignOutReceipt
+    try {
+      const transaction = signOutRecovery
+        ? await recoverCodexAccountSignOut(input)
+        : await signOutCodexAccount(input)
+      receipt = {
+        outcome: transaction.status,
+        accountId: transaction.accountId,
+        expectedCredentialGeneration:
+          signOutRequest.verb.expectedCredentialGeneration,
+        observedCredentialGeneration: transaction.lifecycleGeneration,
+        lifecycleState: transaction.lifecycleState,
+        operationId: transaction.operationId,
+        targetWasActive: transaction.targetWasActive,
+        replacementActiveAccountId: transaction.replacementActiveAccountId,
+      }
+    } catch {
+      receipt = {
+        outcome: 'retryable_unknown',
+        accountId: signOutRequest.verb.accountId,
+        expectedCredentialGeneration:
+          signOutRequest.verb.expectedCredentialGeneration,
+        observedCredentialGeneration: null,
+        lifecycleState: null,
+        operationId: signOutRequest.verb.requestId,
+        targetWasActive: false,
+        replacementActiveAccountId: null,
+      }
+    }
+    const result: AccountsPoolWorkerResult = {
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: signOutRequest.verb.requestId,
+      verb: 'account.logout',
+      receipt,
+    }
+    if (!scanForSecrets(result).ok) {
+      process.stderr.write('[accounts-worker] blocked secret-keyed sign-out result\n')
+      await emit({
+        type: 'failure',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        reason: 'internal',
+      })
+      process.exit(0)
+    }
+    await emit(result)
+    process.exit(0)
+  }
+
   loadClaudePoolForObservation()
 
   const deleteOutcome = deleteRequest
@@ -152,6 +224,7 @@ async function main(): Promise<void> {
       undefined,
       anthropic.routeAvailable,
       anthropic.subscriptionActive,
+      getCodexProfileInventory(),
     )
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot
@@ -331,6 +404,31 @@ async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
   }
   const request = parseAccountsPoolWorkerDeleteRequest(raw)
   if (!request) throw new Error('accounts delete request failed validation')
+  return request
+}
+
+async function readSignOutRequest(): Promise<AccountsPoolWorkerSignOutRequest> {
+  const input = Buffer.from(
+    await new Response(Bun.stdin.stream()).arrayBuffer(),
+  )
+  if (input.byteLength > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
+    throw new Error('accounts sign-out request exceeds record limit')
+  }
+  const lines = input
+    .toString('utf8')
+    .split('\n')
+    .filter(line => line.length > 0)
+  if (lines.length !== 1) {
+    throw new Error('accounts sign-out worker requires exactly one request record')
+  }
+  let raw: unknown
+  try {
+    raw = JSON.parse(lines[0]!)
+  } catch {
+    throw new Error('accounts sign-out request is not valid JSON')
+  }
+  const request = parseAccountsPoolWorkerSignOutRequest(raw)
+  if (!request) throw new Error('accounts sign-out request failed validation')
   return request
 }
 

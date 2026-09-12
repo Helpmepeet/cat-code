@@ -39,6 +39,13 @@ function buildPoolAccount(
     status: overrides.status ?? 'healthy',
     statusReason: overrides.statusReason,
     lastUsedAt: overrides.lastUsedAt ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 0,
+    credentialGenerationState:
+      overrides.credentialGenerationState ??
+      (overrides.credentialGeneration === undefined ||
+      overrides.credentialGeneration === 0
+        ? 'legacy_unbound'
+        : 'lifecycle_bound'),
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,

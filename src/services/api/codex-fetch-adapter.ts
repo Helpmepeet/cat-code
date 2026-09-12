@@ -21,6 +21,12 @@ import { logForDebugging, RECOVERED_TERMINAL_TEXT_PREFIX } from '../../utils/deb
 import { logEvent } from '../analytics/index.js'
 import { getCurrentCodexLease } from './codexAccountLeaseManager.js'
 import {
+  CodexCredentialUseError,
+  startCodexCredentialSend,
+  type CodexCredentialHandle,
+  type CodexCredentialUseOptions,
+} from './codexCredentialUse.js'
+import {
   CodexPartialStreamReplaySkippedError,
   extractConnectionErrorDetails,
   type CodexPartialStreamCause,
@@ -38,6 +44,7 @@ import {
   CodexWebSocketServerError,
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
+  type CodexWebSocketCredentialContext,
 } from './codex-websocket-transport.js'
 import {
   CODEX_ACCOUNT_LIMIT_ERROR_CODES,
@@ -369,6 +376,29 @@ export class CodexAccountAuthError extends Error {
   }
 }
 
+function normalizeCodexCredentialUseError(
+  error: unknown,
+  accountId: string,
+): Error {
+  if (!(error instanceof CodexCredentialUseError)) {
+    return error instanceof Error
+      ? error
+      : new APIConnectionError({ message: 'Codex credential use failed.' })
+  }
+  if (
+    error.code === 'invalid_binding' ||
+    error.code === 'state_mismatch' ||
+    error.code === 'generation_mismatch' ||
+    error.code === 'profile_mismatch'
+  ) {
+    return new CodexAccountAuthError(accountId, 401)
+  }
+  return new APIConnectionError({
+    message: error.message,
+    cause: error,
+  })
+}
+
 type CodexResponseFailure = {
   code: string
   message: string
@@ -649,29 +679,6 @@ export function mapClaudeModelToCodex(claudeModel: string | null): string {
  */
 export function isCodexModel(model: string): boolean {
   return CODEX_MODELS.some(m => m.id === model)
-}
-
-// ── JWT helpers ─────────────────────────────────────────────────────
-
-const JWT_CLAIM_PATH = 'https://api.openai.com/auth'
-
-/**
- * Extracts the account ID from a Codex JWT token.
- * @param token - The JWT token to extract the account ID from
- * @returns The account ID
- * @throws Error if the token is invalid or account ID cannot be extracted
- */
-function extractAccountId(token: string): string {
-  try {
-    const parts = token.split('.')
-    if (parts.length !== 3) throw new Error('Invalid token')
-    const payload = JSON.parse(atob(parts[1]))
-    const accountId = payload?.[JWT_CLAIM_PATH]?.chatgpt_account_id
-    if (!accountId) throw new Error('No account ID in token')
-    return accountId
-  } catch {
-    throw new Error('Failed to extract account ID from Codex token')
-  }
 }
 
 // ── Types ───────────────────────────────────────────────────────────
@@ -3680,25 +3687,22 @@ function normalizeInitialWebSocketError(
 
 const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex/responses'
 
-type CodexFetchResolvedTokens = {
-  accessToken: string
-  refreshToken: string
-  expiresAt: number
-  accountId: string
+type CodexFetchResolvedTokens = CodexCredentialHandle & {
   source?: 'pool' | 'config'
 }
 
-type CodexFetchOptions = {
+export type CodexFetchOptions = {
   resolveTokensForRequest?: () => Promise<CodexFetchResolvedTokens | null>
+  credentialUse?: CodexCredentialUseOptions
 }
 
 /**
  * Creates a fetch function that intercepts Anthropic API calls and routes them to Codex.
- * @param accessToken - The Codex access token for authentication
+ * @param credential - The installed Codex credential binding
  * @returns A fetch function that translates Anthropic requests to Codex format
  */
 export function createCodexFetch(
-  accessToken: string,
+  credential: CodexCredentialHandle,
   conversationIdOverride?: string,
   options: CodexFetchOptions = {},
 ): (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> {
@@ -3736,8 +3740,9 @@ export function createCodexFetch(
         message: 'No healthy Codex account is available for this request.',
       })
     }
-    const currentToken = resolvedTokens?.accessToken || accessToken
-    const currentAccountId = resolvedTokens?.accountId ?? extractAccountId(currentToken)
+    const currentCredential = resolvedTokens ?? credential
+    const currentToken = currentCredential.accessToken
+    const currentAccountId = currentCredential.accountId
     const poolManagedCredentials = resolvedTokens?.source === 'pool'
 
     // Translate to Codex format
@@ -3816,24 +3821,40 @@ export function createCodexFetch(
       response: Response
       transportContext: CodexStreamTransportContext
     }> => {
-      const requestStartedAtMs = Date.now()
+      let requestStartedAtMs = Date.now()
       let codexResponse: Response
       try {
-        codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
-          method: 'POST',
-          signal: httpRequestSignal,
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-            ...authHeaders,
-            'conversation-id': conversationId,
-            session_id: conversationId,
-            'x-client-request-id': conversationId,
-            'OpenAI-Beta': 'responses=experimental',
+        codexResponse = await startCodexCredentialSend(
+          currentCredential,
+          authorizedCredential => {
+            requestStartedAtMs = Date.now()
+            return globalThis.fetch(CODEX_BASE_URL, {
+              method: 'POST',
+              signal: httpRequestSignal,
+              headers: {
+                'Content-Type': 'application/json',
+                Accept: 'text/event-stream',
+                ...authHeaders,
+                Authorization: `Bearer ${authorizedCredential.accessToken}`,
+                'chatgpt-account-id': authorizedCredential.accountId,
+                'conversation-id': conversationId,
+                session_id: conversationId,
+                'x-client-request-id': conversationId,
+                'OpenAI-Beta': 'responses=experimental',
+              },
+              body: JSON.stringify(codexBody),
+            })
           },
-          body: JSON.stringify(codexBody),
-        })
+          options.credentialUse,
+        )
       } catch (error) {
+        const normalizedError = normalizeCodexCredentialUseError(
+          error,
+          currentAccountId,
+        )
+        if (normalizedError !== error) {
+          throw normalizedError
+        }
         const details = extractConnectionErrorDetails(error)
         const detailSuffix = details
           ? ` (${details.code}${details.isSSLError ? ', ssl' : ''}: ${details.message})`
@@ -3957,6 +3978,10 @@ export function createCodexFetch(
             authHeaders,
             fullInput.length,
             wsAbortController.signal,
+            {
+              credential: currentCredential,
+              credentialUse: options.credentialUse,
+            } satisfies CodexWebSocketCredentialContext,
           )
           const wsSourceWithAbortCleanup: AsyncIterable<Record<string, unknown>> = {
             async *[Symbol.asyncIterator]() {

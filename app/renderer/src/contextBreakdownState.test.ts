@@ -38,7 +38,7 @@ const BREAKDOWN: ContextBreakdownSnapshot = {
 function frame(breakdown: ContextBreakdownSnapshot): ServerFrame {
   return {
     kind: 'context-breakdown.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SID,
     breakdown,
   } as ServerFrame

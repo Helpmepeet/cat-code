@@ -1,5 +1,8 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { APIConnectionError } from '@anthropic-ai/sdk'
+import { mkdtempSync, rmSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
@@ -18,7 +21,7 @@ import {
   _setStickyFallbackNowForTest,
   CodexAccountAuthError,
   CodexAccountCapError,
-  createCodexFetch,
+  createCodexFetch as createCodexFetchProduction,
   mapClaudeModelToCodex,
   mapConversationIdToTrackingKey,
   mapEffortToCodex,
@@ -28,6 +31,7 @@ import {
   translateToCodexBody,
   truncateCodexToolOutputText,
   CODEX_TOOL_OUTPUT_MAX_CHARS,
+  type CodexFetchOptions,
 } from './codex-fetch-adapter.js'
 import {
   findCodexPartialStreamFailure,
@@ -39,6 +43,14 @@ import {
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
+import {
+  createCodexCredentialHandle,
+  type CodexCredentialHandle,
+} from './codexCredentialUse.js'
+import {
+  createCodexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+} from './codexCredentialLifecycle.js'
 
 function withFetchPreconnect(
   implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
@@ -54,6 +66,70 @@ function createAccessToken(accountId: string): string {
     },
   }))
   return `${header}.${payload}.signature`
+}
+
+function accountIdFromAccessToken(accessToken: string): string {
+  const payload = accessToken.split('.')[1]
+  if (!payload) throw new Error('test access token has no payload')
+  const parsed = JSON.parse(
+    Buffer.from(payload, 'base64url').toString('utf8'),
+  ) as {
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: string
+    }
+  }
+  return parsed['https://api.openai.com/auth'].chatgpt_account_id
+}
+
+function createTestCredentialHandle(accessToken: string): CodexCredentialHandle {
+  return createCodexCredentialHandle({
+    accountId: accountIdFromAccessToken(accessToken),
+    accessToken,
+    refreshToken: 'test-refresh-token',
+    expiresAt: Date.now() + 60 * 60_000,
+    credentialGeneration: 1,
+    credentialSource: 'config',
+    credentialPath: '/test/codex-fetch-adapter-config.json',
+  })
+}
+
+const allowTestCredentialLifecycle = {
+  read(accountId: string) {
+    return {
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'adapter-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }
+  },
+  async withTransaction<T>(
+    _accountId: string,
+    _options: unknown,
+    callback: (permit: never) => T | Promise<T>,
+  ): Promise<T> {
+    return callback({} as never)
+  },
+} as unknown as CodexCredentialLifecycle
+
+function createCodexFetch(
+  accessToken: string,
+  conversationIdOverride?: string,
+  options: CodexFetchOptions = {},
+): ReturnType<typeof createCodexFetchProduction> {
+  return createCodexFetchProduction(
+    createTestCredentialHandle(accessToken),
+    conversationIdOverride,
+    {
+      credentialUse: { lifecycle: allowTestCredentialLifecycle },
+      ...options,
+    },
+  )
 }
 
 type WsListener = (...args: unknown[]) => void
@@ -367,6 +443,9 @@ describe('codex-fetch-adapter', () => {
               refreshToken: 'refresh-header-auth',
               expiresAt: Date.now() + 60 * 60_000,
               accountId,
+              credentialGeneration: 1,
+              credentialSource: 'config',
+              credentialPath: '/test/codex-fetch-adapter-config.json',
               source: 'pool',
             }),
           })(
@@ -431,6 +510,9 @@ describe('codex-fetch-adapter', () => {
           refreshToken: 'refresh-deferred-header-auth',
           expiresAt: Date.now() + 60 * 60_000,
           accountId,
+          credentialGeneration: 1,
+          credentialSource: 'config',
+          credentialPath: '/test/codex-fetch-adapter-config.json',
           source: 'pool',
         }),
       })(
@@ -463,6 +545,101 @@ describe('codex-fetch-adapter', () => {
       _setWebSocketFactoryForTest(null)
       clearWebSocketSession(conversationId)
       resetCodexCacheContext()
+    }
+  })
+
+  test('deferred HTTP fallback revalidates the original credential generation before fetch', async () => {
+    const accountId = 'acct_fallback_generation'
+    const accessToken = createAccessToken(accountId)
+    const conversationId = 'conv_fallback_generation'
+    const directory = mkdtempSync(join(tmpdir(), 'codex-fallback-generation-'))
+    const lifecycle = createCodexCredentialLifecycle({
+      directory: join(directory, 'lifecycle'),
+    })
+    const originalFetch = globalThis.fetch
+    let fakeWs: FakeWebSocket | undefined
+    let httpFetches = 0
+
+    globalThis.fetch = (async () => {
+      httpFetches++
+      return new Response('', { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await lifecycle.withTransaction(
+        accountId,
+        { operationKind: 'login', operationId: 'login-fallback' },
+        permit => {
+          const prepared = lifecycle.prepareLogin(permit)
+          if (prepared.status !== 'applied') {
+            throw new Error('failed to prepare fallback test lifecycle')
+          }
+          const committed = lifecycle.commitLogin(permit, {
+            expectedGeneration: prepared.record.credentialGeneration,
+          })
+          if (committed.status !== 'applied') {
+            throw new Error('failed to commit fallback test lifecycle')
+          }
+        },
+      )
+      fakeWs = installFakeWs()
+      fakeWs.responseBatches = [
+        [
+          {
+            type: 'response.output_item.done',
+            item: { type: 'reasoning' },
+          },
+          { __close: { code: 1000, reason: 'connection closed' } },
+        ],
+      ]
+      const originalCredential = createCodexCredentialHandle({
+        accountId,
+        accessToken,
+        refreshToken: 'refresh-fallback-generation',
+        expiresAt: Date.now() + 60 * 60_000,
+        credentialGeneration: 1,
+        credentialSource: 'vault',
+        credentialPath: join(directory, 'account.json'),
+      })
+      const response = await createCodexFetchProduction(
+        originalCredential,
+        conversationId,
+        { credentialUse: { lifecycle } },
+      )(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'gpt-5.6-luna',
+            _openaiInstructionAssembly: {
+              instructions: 'Be precise.',
+              inputMessages: [],
+            },
+          }),
+        },
+      )
+
+      await lifecycle.withTransaction(
+        accountId,
+        { operationKind: 'sign_out', operationId: 'sign-out-before-fallback' },
+        permit => {
+          const signedOut = lifecycle.signOut(permit, {
+            expectedGeneration: 1,
+          })
+          expect(signedOut.status).toBe('applied')
+        },
+      )
+
+      await expect(response.text()).rejects.toBeInstanceOf(CodexAccountAuthError)
+      expect(httpFetches).toBe(0)
+      expect(originalCredential.credentialGeneration).toBe(1)
+    } finally {
+      globalThis.fetch = originalFetch
+      _setWebSocketFactoryForTest(null)
+      clearWebSocketSession(conversationId)
+      resetCodexCacheContext()
+      rmSync(directory, { recursive: true, force: true })
     }
   })
 
@@ -3681,6 +3858,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
           {
             accountId: 'acct_http_backup',
@@ -3690,6 +3869,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
         ],
       })
@@ -3716,6 +3897,9 @@ describe('codex-fetch-adapter', () => {
               refreshToken: 'refresh-a',
               expiresAt: Date.now() + 60_000,
               accountId: 'acct_http_classification',
+              credentialGeneration: 1,
+              credentialSource: 'config',
+              credentialPath: '/test/codex-fetch-adapter-config.json',
               source: 'pool',
             }),
           },
@@ -3801,6 +3985,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
           {
             accountId: 'acct_http_backup',
@@ -3810,6 +3996,8 @@ describe('codex-fetch-adapter', () => {
             source: 'vault',
             status: 'healthy',
             lastUsedAt: 0,
+            credentialGeneration: 0,
+            credentialGenerationState: 'legacy_unbound',
           },
         ],
       })
@@ -3832,6 +4020,9 @@ describe('codex-fetch-adapter', () => {
                 refreshToken: 'refresh-a',
                 expiresAt: Date.now() + 5 * 60_000,
                 accountId: 'acct_http_classification',
+                credentialGeneration: 1,
+                credentialSource: 'config',
+                credentialPath: '/test/codex-fetch-adapter-config.json',
                 source: 'pool',
               }),
             },

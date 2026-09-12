@@ -18,7 +18,9 @@ import { contextBridge, ipcRenderer } from 'electron'
 import type { DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import type {
   AccountDeleteMessage,
+  AccountLogoutMessage,
   AccountVerbMessage,
+  AccountResultFrame,
   AskUserQuestionAnswer,
   CatCodeBridge,
   PermissionResponseInput,
@@ -102,6 +104,7 @@ import {
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
   CH_HOST_ACCOUNT_DELETE,
+  CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
   CH_HOST_VISIBLE_SESSIONS,
 } from '../shared/ipcChannels.js'
@@ -270,6 +273,7 @@ const bridge: CatCodeBridge = {
     // P4-5 — HC3 fixed sender. The renderer supplies only a decided verb payload;
     // main light-coerces the type and the sidecar is the trust boundary (schema +
     // pool-resolved re-validation). No token ever crosses in either direction.
+    if (verb.type === 'account.delete' || verb.type === 'account.logout') return
     const payload = { sessionId, verb }
     sendGuard.assertAllowed(payload)
     ipcRenderer.send(CH_ACCOUNT_VERB, payload)
@@ -277,6 +281,12 @@ const bridge: CatCodeBridge = {
   deleteAccount(verb: AccountDeleteMessage) {
     sendGuard.assertAllowed(verb)
     return ipcRenderer.invoke(CH_HOST_ACCOUNT_DELETE, verb)
+  },
+  signOutAccount(verb: AccountLogoutMessage): Promise<AccountResultFrame> {
+    sendGuard.assertAllowed(verb)
+    return ipcRenderer.invoke(CH_HOST_ACCOUNT_SIGN_OUT, verb) as Promise<
+      AccountResultFrame
+    >
   },
   workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void {
     // P4-15 — HC3 fixed sender for the trust-gate accept. Same posture as

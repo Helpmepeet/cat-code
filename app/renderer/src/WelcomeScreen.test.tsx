@@ -20,6 +20,7 @@ function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspa
 
 function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
   return {
+    credentialGeneration: 0,
     alias: over.id,
     status: 'healthy',
     statusReason: null,
@@ -43,6 +44,7 @@ function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
 function pool(accounts: AccountStatus[]): AccountsSnapshot {
   return {
     accounts,
+    signedOutProfiles: [],
     activeAccountId: accounts.find(a => a.isDefault)?.id ?? null,
     readyCount: accounts.filter(a => a.status === 'healthy' && !a.usageLimitReached).length,
     poolCount: accounts.length,

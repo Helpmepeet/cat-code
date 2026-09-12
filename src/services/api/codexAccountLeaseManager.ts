@@ -73,6 +73,12 @@ export type CodexLeaseSnapshot = {
   }>
 }
 
+export type CodexLeaseRepairOptions = Readonly<{
+  touchReplacementUsage?: boolean
+  persistMainActive?: boolean
+  reason?: 'deletion' | 'unavailable'
+}>
+
 type CodexLeaseFailoverOptions = {
   markAccountCapped?: boolean
 }
@@ -494,15 +500,17 @@ export function failoverCodexLease(
 }
 
 /**
- * Re-resolve or release every lease that was pointing at a now-deleted
- * account. Called from /delete-account after the pool has dropped the
+ * Re-resolve or release every lease that was pointing at an unavailable
  * account. Each affected lease tries to acquire a fresh account using its
- * own strategy; leases that cannot find a healthy alternative are dropped
- * so they don't keep pointing at storage that no longer exists.
+ * own strategy; leases that cannot find a healthy alternative are dropped.
  */
-export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
+export function repairLeasesForUnavailableAccount(
+  unavailableAccountId: string,
+  options: CodexLeaseRepairOptions = {},
+): void {
+  const reason = options.reason ?? 'unavailable'
   const affected = Array.from(codexLeasesByOwnerId.values()).filter(
-    (lease) => lease.accountId === deletedAccountId,
+    (lease) => lease.accountId === unavailableAccountId,
   ).sort((left, right) => leaseRepairRank(left) - leaseRepairRank(right))
 
   let changed = false
@@ -518,16 +526,29 @@ export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
         accountId: selection.account.accountId,
         state: 'active',
         selectionKind: 'repaired',
-        previousAccountId: deletedAccountId,
-        selectionReason: `repaired after deletion of ${deletedAccountId}`,
+        previousAccountId: unavailableAccountId,
+        selectionReason:
+          reason === 'deletion'
+            ? `repaired after deletion of ${unavailableAccountId}`
+            : `repaired from unavailable account ${unavailableAccountId}`,
         updatedAt: now,
       })
-      touchPoolAccountUsage(selection.account.accountId)
+      if (options.touchReplacementUsage !== false) {
+        touchPoolAccountUsage(selection.account.accountId)
+      }
+      if (
+        lease.ownerType === 'main' &&
+        options.persistMainActive !== false
+      ) {
+        setActiveAccountPersisted(selection.account.accountId)
+      }
       changed = true
     } catch (error) {
       changed = codexLeasesByOwnerId.delete(lease.ownerId) || changed
       logForDebugging(
-        `[codex-pool] Dropping lease ${lease.ownerId} after deletion of ${deletedAccountId}: ${error instanceof Error ? error.message : String(error)}`,
+        reason === 'deletion'
+          ? `[codex-pool] Dropping lease ${lease.ownerId} after deletion of ${unavailableAccountId}: ${error instanceof Error ? error.message : String(error)}`
+          : `[codex-pool] Dropping lease ${lease.ownerId} after account ${unavailableAccountId} became unavailable: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
   }
@@ -535,6 +556,14 @@ export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
   if (changed) {
     notifyCodexLeaseChange()
   }
+}
+
+export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
+  repairLeasesForUnavailableAccount(deletedAccountId, {
+    touchReplacementUsage: true,
+    persistMainActive: true,
+    reason: 'deletion',
+  })
 }
 
 function leaseRepairRank(lease: CodexLease): number {

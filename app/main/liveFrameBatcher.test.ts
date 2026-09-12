@@ -13,7 +13,7 @@ import {
 type EventServerFrame = Extract<ServerFrame, { kind: 'event' }>
 
 const base = (sessionId: string): EventServerFrame => ({
-  kind: 'event', protocolVersion: 1, sessionId,
+  kind: 'event', protocolVersion: 2, sessionId,
   event: { type: 'message', message: { type: 'stream_event', event: {
     type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: sessionId },
   } } } as never,
@@ -24,7 +24,7 @@ const thinking = (id: string): EventServerFrame => ({
     type: 'content_block_delta', index: 2, delta: { type: 'thinking_delta', thinking: id },
   } } } as never,
 })
-const barrier = (id: string): ServerFrame => ({ kind: 'pong', protocolVersion: 1, sessionId: id, nonce: id })
+const barrier = (id: string): ServerFrame => ({ kind: 'pong', protocolVersion: 2, sessionId: id, nonce: id })
 
 function harness(options: { delayMs?: number; maxFrames?: number; maxBytes?: number } = {}) {
   let time = 0

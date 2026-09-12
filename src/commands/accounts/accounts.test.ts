@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { setSharedUsageCacheDirectoryForTest } from '../../services/api/codexUsageSharedCache.js'
 
 import {
@@ -14,7 +14,13 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
-import { fetchPoolUsage, invalidateUsageCache } from '../../services/api/codexUsage.js'
+import * as codexUsageModule from '../../services/api/codexUsage.js'
+import {
+  fetchPoolUsage,
+  invalidateUsageCache,
+  type FetchPoolUsageOptions,
+} from '../../services/api/codexUsage.js'
+import type { CodexCredentialLifecycle } from '../../services/api/codexCredentialLifecycle.js'
 import { call } from './accounts.js'
 
 function createCodexAccount(
@@ -27,12 +33,38 @@ function createCodexAccount(
     accessToken: `${accountId}-access`,
     refreshToken: `${accountId}-refresh`,
     expiresAt: Date.now() + 60_000,
-    source: 'vault',
+    source: 'config',
     status: 'healthy',
     lastUsedAt,
+    credentialGeneration: 1,
+    credentialGenerationState: 'lifecycle_bound',
     alias,
   }
 }
+
+const allowUsageCredentialLifecycle = {
+  read(accountId: string) {
+    return {
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'usage-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }
+  },
+  async withTransaction<T>(
+    _accountId: string,
+    _options: unknown,
+    callback: (permit: never) => T | Promise<T>,
+  ): Promise<T> {
+    return callback({} as never)
+  },
+} as unknown as CodexCredentialLifecycle
 
 function usageResponse(accountId: string, usedPercent: number): Response {
   return new Response(
@@ -68,7 +100,25 @@ function usageResponse(accountId: string, usedPercent: number): Response {
 
 describe('/accounts', () => {
   const realFetch = globalThis.fetch
-  beforeEach(() => setSharedUsageCacheDirectoryForTest(null))
+  const realFetchPoolUsage = fetchPoolUsage
+
+  beforeEach(() => {
+    setSharedUsageCacheDirectoryForTest(null)
+    spyOn(codexUsageModule, 'fetchPoolUsage').mockImplementation(
+      (
+        forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
+      ) => {
+        const options =
+          typeof forceRefreshOrOptions === 'boolean'
+            ? { forceRefresh: forceRefreshOrOptions }
+            : forceRefreshOrOptions
+        return realFetchPoolUsage({
+          ...options,
+          credentialUse: { lifecycle: allowUsageCredentialLifecycle },
+        })
+      },
+    )
+  })
 
   afterEach(() => {
     globalThis.fetch = realFetch

@@ -22,6 +22,10 @@ import {
 } from '../../services/oauth/client.js'
 import { getOauthProfileFromOauthToken } from '../../services/oauth/getOauthProfile.js'
 import { OAuthService } from '../../services/oauth/index.js'
+import {
+  createCodexOAuthLoginOperationId,
+  persistCodexOAuthLogin,
+} from '../../services/api/codexLoginPersistence.js'
 import type { OAuthTokens } from '../../services/oauth/types.js'
 import {
   clearOAuthTokenCache,
@@ -30,7 +34,6 @@ import {
   getOauthAccountInfo,
   getSubscriptionType,
   isUsing3PServices,
-  saveCodexOAuthTokens,
   saveOAuthTokensIfNeeded,
   validateForceLoginOrgForToken,
   type OrgValidationResult,
@@ -56,6 +59,34 @@ import {
 function hasAnyAnthropicScope(scopes: string[] | undefined): boolean {
   if (!scopes?.length) return false
   return scopes.some((s) => s.startsWith('user:') || s.startsWith('org:'))
+}
+
+export type CodexOAuthTokenInstallOptions = Readonly<{
+  operationId?: string
+  alias?: string
+  persistLogin?: typeof persistCodexOAuthLogin
+  createOperationId?: typeof createCodexOAuthLoginOperationId
+}>
+
+export async function installCodexOAuthTokens(
+  tokens: OAuthTokens,
+  options: CodexOAuthTokenInstallOptions = {},
+): Promise<void> {
+  const accountId = tokens.tokenAccount?.uuid ?? tokens.profile?.account.uuid
+  await (options.persistLogin ?? persistCodexOAuthLogin)(
+    {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken ?? '',
+      expiresAt: tokens.expiresAt ?? Date.now() + 3600_000,
+      accountId: accountId ?? '',
+    },
+    {
+      operationId:
+        options.operationId ??
+        (options.createOperationId ?? createCodexOAuthLoginOperationId)(),
+      ...(options.alias ? { alias: options.alias } : {}),
+    },
+  )
 }
 
 export function parseManualOAuthCallbackInput(
@@ -114,13 +145,6 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
   const isAnthropicAuth = shouldUseClaudeAIAuth(tokens.scopes)
   const isAnthropicConsole = !isAnthropicAuth && hasAnyAnthropicScope(tokens.scopes)
   const isCodex = !isAnthropicAuth && !isAnthropicConsole
-
-  // For Codex logins, clear old state (Codex pool handles its own persistence).
-  // For Anthropic logins, skip the destructive logout — we preserve existing
-  // accounts in the Claude vault instead of wiping them.
-  if (isCodex) {
-    await performLogout({ clearOnboarding: false })
-  }
 
   // Reuse pre-fetched profile if available, otherwise fetch fresh
   const profile =
@@ -201,13 +225,10 @@ export async function installOAuthTokens(tokens: OAuthTokens): Promise<void> {
     }
   } else {
     // Third-party provider (e.g. OpenAI Codex) — tokens carry no Anthropic
-    // scopes. Skip Anthropic API key creation entirely and store the tokens
-    // in their own dedicated config slot.
-    saveCodexOAuthTokens({
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken ?? '',
-      expiresAt: tokens.expiresAt ?? Date.now() + 3600_000,
-      accountId: (tokens.tokenAccount?.uuid ?? ''),
+    // scopes. Skip Anthropic API key creation entirely and use the lifecycle
+    // authorized Codex credential installation.
+    await installCodexOAuthTokens(tokens, {
+      operationId: createCodexOAuthLoginOperationId(),
     })
   }
 

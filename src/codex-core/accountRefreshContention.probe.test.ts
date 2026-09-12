@@ -49,6 +49,7 @@ import {
 } from 'fs'
 import { tmpdir } from 'os'
 import { basename, dirname, join } from 'path'
+import { createCodexCredentialLifecycle } from '../services/api/codexCredentialLifecycle.js'
 
 /**
  * Scenarios are isolated per-HOME (scenarioDirs below) AND use distinct
@@ -301,6 +302,29 @@ function readyMarkers(goFile: string): number {
   }
 }
 
+async function establishProbeLifecycle(
+  directory: string,
+  accountId: string,
+): Promise<void> {
+  const lifecycle = createCodexCredentialLifecycle({ directory })
+  await lifecycle.withTransaction(
+    accountId,
+    { operationKind: 'login', operationId: `probe-login-${accountId}` },
+    permit => {
+      const prepared = lifecycle.prepareLogin(permit)
+      if (prepared.status !== 'applied') {
+        throw new Error('probe lifecycle preparation failed')
+      }
+      const committed = lifecycle.commitLogin(permit, {
+        expectedGeneration: prepared.record.credentialGeneration,
+      })
+      if (committed.status !== 'applied') {
+        throw new Error('probe lifecycle commit failed')
+      }
+    },
+  )
+}
+
 async function waitFor(
   condition: () => boolean,
   timeoutMs: number,
@@ -350,11 +374,16 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_ACCOUNT_ID: ACCOUNT_ID,
           PROBE_ACCESS_TOKEN: mintAccessJwt(ACCOUNT_ID, 0),
           PROBE_REFRESH_TOKEN: 'R0',
+          PROBE_CREDENTIAL_GENERATION: '1',
           // Inside the refresh skew (60s) → maybeRefreshAccount refreshes; not
           // yet expired → the pool does not pre-mark the account dead.
           PROBE_EXPIRES_AT: String(Date.now() + 30_000),
         })
         expect(seed.ok).toBe(true)
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          ACCOUNT_ID,
+        )
 
         const goFile = join(scratch, 'go-config')
         const contenderEnv = {
@@ -417,6 +446,7 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
                 access_token: mintAccessJwt(ACCOUNT_ID, 0),
                 refresh_token: 'R0',
                 account_id: ACCOUNT_ID,
+                credential_generation: 1,
                 expires_at: Date.now() + 30_000,
               },
               version: 1,
@@ -434,7 +464,12 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_ACCOUNT_ID: ACCOUNT_ID,
           PROBE_REFRESH_TOKEN: 'R0',
           PROBE_VAULT_FILE: vaultFile,
+          PROBE_CREDENTIAL_GENERATION: '1',
         }
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          ACCOUNT_ID,
+        )
         const a = spawnChild(dirs, contenderEnv)
         const b = spawnChild(dirs, contenderEnv)
         await releaseBarrier(goFile)
@@ -487,9 +522,14 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_ACCOUNT_ID: CRASH_ACCOUNT_ID,
           PROBE_ACCESS_TOKEN: mintAccessJwt(CRASH_ACCOUNT_ID, 0),
           PROBE_REFRESH_TOKEN: seedToken,
+          PROBE_CREDENTIAL_GENERATION: '1',
           PROBE_EXPIRES_AT: String(Date.now() + 30_000),
         })
         expect(seed.ok).toBe(true)
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          CRASH_ACCOUNT_ID,
+        )
 
         // Child A: fires the refresh; the mock commits the rotation; A is
         // SIGKILLed while awaiting the response (its in_flight ledger entry
@@ -510,6 +550,13 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
         // stale after 60s. Simulate that expiry so the test stays fast — the
         // staleness mechanism itself is upstream-tested.
         rmSync(join(dirs.config, 'codex-raw-refresh.lock'), { recursive: true, force: true })
+        const lifecycle = createCodexCredentialLifecycle({
+          directory: join(dirs.config, 'codex-credential-lifecycle'),
+        })
+        rmSync(
+          lifecycle.getPaths(CRASH_ACCOUNT_ID).lockPath,
+          { recursive: true, force: true },
+        )
 
         // Child B: finds in_flight for the same token hash → probes it ONCE →
         // definitive invalid_grant → terminal reauth_required + honest error.
@@ -552,14 +599,13 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
   )
 
   /* ----------------------------------------------------------------------- *
-   * Scenario 4 — identity-mismatch rotation under contention. The winner's
-   * refresh of account A returns account B; the loser still holds A's dead
-   * token. The tombstone (reauth_required + rotatedToAccountId, written under
-   * the lock) must stop the loser WITHOUT a second burn.
+   * Scenario 4 — identity-mismatch rotation under contention. A refresh of
+   * account A returns account B; lifecycle reauth_required plus the raw ledger
+   * must stop every contender WITHOUT a second burn or a B installation.
    * ----------------------------------------------------------------------- */
 
   test(
-    'identity-mismatch contention: tombstone stops the loser; exactly one rotation is spent',
+    'identity-mismatch contention: lifecycle tombstone stops contenders; exactly one rotation is spent',
     async () => {
       const seedToken = 'R0-idsw'
       const server = new StrictRotationServer(seedToken, {
@@ -572,9 +618,14 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_ACCOUNT_ID: IDSW_ACCOUNT_ID,
           PROBE_ACCESS_TOKEN: mintAccessJwt(IDSW_ACCOUNT_ID, 0),
           PROBE_REFRESH_TOKEN: seedToken,
+          PROBE_CREDENTIAL_GENERATION: '1',
           PROBE_EXPIRES_AT: String(Date.now() + 30_000),
         })
         expect(seed.ok).toBe(true)
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          IDSW_ACCOUNT_ID,
+        )
 
         const goFile = join(scratch, 'go-idsw')
         const contenderEnv = {
@@ -592,27 +643,24 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
         // touch the network with A's dead token.
         expect(server.attempts).toEqual([{ token: seedToken, outcome: 'rotated' }])
 
-        // Exactly one child wins and comes back as the NEW identity. The loser
-        // fails on the tombstone ("no longer usable") — or, if its pool init
-        // raced past the winner's persist, on profile-not-found; both are
-        // no-burn outcomes, and the tombstone itself is asserted below.
+        // Neither child installs the returned identity. The lifecycle tombstone
+        // requires an explicit login before either identity is usable again.
         const results = [resultA, resultB]
         const winners = results.filter(r => r.ok)
         const losers = results.filter(r => !r.ok)
-        expect(winners).toHaveLength(1)
-        expect(losers).toHaveLength(1)
-        expect(winners[0]?.accountId).toBe(NEW_IDENTITY_ID)
-        expect(losers[0]?.error ?? '').toMatch(
-          /no longer usable|No Codex account\/profile matched/,
-        )
+        expect(winners).toHaveLength(0)
+        expect(losers).toHaveLength(2)
+        expect(losers.every(r => (r.error ?? '').includes('Please re-login'))).toBe(true)
 
         const tombstone = readLedger(dirs)[IDSW_ACCOUNT_ID]
         expect(tombstone?.state).toBe('reauth_required')
         expect(tombstone?.rotatedToAccountId).toBe(NEW_IDENTITY_ID)
 
-        // The persisted config store now holds the NEW identity's tokens.
+        // The persisted config store still holds A's burned token. B was never
+        // written by the raw refresh path.
         const readBack = await runChild(dirs, { PROBE_MODE: 'read-config' })
-        expect(readBack.tokens?.accountId).toBe(NEW_IDENTITY_ID)
+        expect(readBack.tokens?.accountId).toBe(IDSW_ACCOUNT_ID)
+        expect(readBack.tokens?.refreshToken).toBe(seedToken)
       } finally {
         server.stop()
       }
@@ -659,6 +707,7 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
                 access_token: mintAccessJwt(IMAGE_ACCOUNT_ID, 0),
                 refresh_token: 'R0',
                 account_id: IMAGE_ACCOUNT_ID,
+                credential_generation: 1,
                 // Within the 60s refresh skew but not expired → the resolver
                 // refreshes it and the pool does not pre-mark it dead.
                 expires_at: Date.now() + 30_000,
@@ -678,6 +727,10 @@ describe('DR-2 cross-process refresh contention (two real engine processes)', ()
           PROBE_GO_FILE: goFile,
           PROBE_ACCOUNT_ID: IMAGE_ACCOUNT_ID,
         }
+        await establishProbeLifecycle(
+          join(dirs.config, 'codex-credential-lifecycle'),
+          IMAGE_ACCOUNT_ID,
+        )
         const a = spawnChild(dirs, contenderEnv)
         const b = spawnChild(dirs, contenderEnv)
         await releaseBarrier(goFile)

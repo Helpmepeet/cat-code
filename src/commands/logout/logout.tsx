@@ -2,7 +2,10 @@ import * as React from 'react';
 import { setPromptCache1hAllowlist, setPromptCache1hEligible } from '../../bootstrap/state.js';
 import { clearTrustedDeviceTokenCache } from '../../bridge/trustedDevice.js';
 import { Text } from '../../ink.js';
-import { refreshGrowthBookAfterAuthChange } from '../../services/analytics/growthbook.js';
+import {
+  refreshGrowthBookAfterAuthChange,
+  resetGrowthBook,
+} from '../../services/analytics/growthbook.js';
 import { getGroveNoticeConfig, getGroveSettings } from '../../services/api/grove.js';
 import { resetClaudeAiLimits } from '../../services/claudeAiLimits.js';
 import { clearPolicyLimitsCache } from '../../services/policyLimits/index.js';
@@ -54,7 +57,10 @@ export async function performLogout({
 }
 
 // clearing anything memoized that must be invalidated when user/session/auth changes
-export async function clearAuthRelatedCaches(): Promise<void> {
+export async function clearAuthRelatedCaches(options: {
+  refreshGrowthBook?: boolean
+  persistConfig?: boolean
+} = {}): Promise<void> {
   // Clear the OAuth token cache
   getClaudeAIOAuthTokens.cache?.clear?.();
   invalidateUsageCache();
@@ -64,7 +70,8 @@ export async function clearAuthRelatedCaches(): Promise<void> {
 
   // Clear user data cache BEFORE GrowthBook refresh so it picks up fresh credentials
   resetUserCache();
-  refreshGrowthBookAfterAuthChange();
+  if (options.refreshGrowthBook === false) resetGrowthBook();
+  else refreshGrowthBookAfterAuthChange();
 
   // Clear Grove config cache
   getGroveNoticeConfig.cache?.clear?.();
@@ -87,10 +94,12 @@ export async function clearAuthRelatedCaches(): Promise<void> {
 
   // Clear disk-cached extra usage disabled reason so check1mAccess.ts
   // re-evaluates model access for the new account
-  saveGlobalConfig(current => ({
-    ...current,
-    cachedExtraUsageDisabledReason: undefined,
-  }));
+  if (options.persistConfig !== false) {
+    saveGlobalConfig(current => ({
+      ...current,
+      cachedExtraUsageDisabledReason: undefined,
+    }));
+  }
 }
 export async function call(): Promise<React.ReactNode> {
   const claudePool = getClaudePoolStatus();

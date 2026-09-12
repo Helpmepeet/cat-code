@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import type {
   AccountStatus,
   AccountsSnapshot,
+  SignedOutCodexProfileStatus,
   UsageStatsByRange,
   UsageStatsSnapshot,
 } from './protocol.js'
@@ -11,8 +12,11 @@ import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   fitsAccountsPoolRecordLimit,
   parseAccountDeleteMessage,
+  parseAccountLogoutMessage,
   parseAccountsPoolWorkerDeleteRequest,
   parseAccountsPoolWorkerResult,
+  parseAccountsPoolWorkerSignOutRequest,
+  parseAccountSignOutReceipt,
   parseAccountsSnapshot,
   parseUsageStatsByRange,
   parseUsageStatsSnapshot,
@@ -22,6 +26,7 @@ import {
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'work',
     status: 'healthy',
     statusReason: null,
@@ -43,9 +48,26 @@ function account(over: Partial<AccountStatus> = {}): AccountStatus {
   }
 }
 
+function signedOutProfile(
+  over: Partial<SignedOutCodexProfileStatus> = {},
+): SignedOutCodexProfileStatus {
+  return {
+    id: 'acct-signed-out',
+    alias: 'former-work',
+    state: 'signed_out',
+    credentialGeneration: 4,
+    lifecycleGeneration: 4,
+    credentialGenerationState: 'lifecycle_bound',
+    lifecycleState: 'signed_out',
+    lifecycleReadStatus: 'valid',
+    ...over,
+  }
+}
+
 function pool(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
     accounts: [account()],
+    signedOutProfiles: [],
     activeAccountId: 'acct-1',
     readyCount: 1,
     poolCount: 1,
@@ -129,6 +151,21 @@ describe('parseAccountsPoolWorkerResult — accepts', () => {
     expect(parsed?.accounts).toEqual([])
   })
 
+  test('accepts signed-out profiles outside credentialed rows and counts', () => {
+    const snapshot = pool({
+      accounts: [account({ credentialGeneration: 7 })],
+      signedOutProfiles: [signedOutProfile()],
+      readyCount: 1,
+      poolCount: 1,
+    })
+    const parsed = parseAccountsSnapshot(JSON.parse(JSON.stringify(snapshot)))
+    expect(parsed).toEqual(snapshot)
+    expect(parsed?.accounts).toHaveLength(1)
+    expect(parsed?.signedOutProfiles).toHaveLength(1)
+    expect(parsed?.readyCount).toBe(1)
+    expect(parsed?.poolCount).toBe(1)
+  })
+
   test('a worker-reported failure parses as a failure', () => {
     const parsed = parseAccountsPoolWorkerResult({
       type: 'failure',
@@ -144,6 +181,7 @@ describe('session-independent account deletion boundary', () => {
     type: 'account.delete',
     requestId: 'request-1',
     accountId: 'account-1',
+    expectedCredentialGeneration: 4,
     confirm: true,
   } as const
 
@@ -152,6 +190,15 @@ describe('session-independent account deletion boundary', () => {
     expect(parseAccountDeleteMessage({ ...verb, confirm: false })).toBeNull()
     expect(parseAccountDeleteMessage({ ...verb, extra: true })).toBeNull()
     expect(parseAccountDeleteMessage({ ...verb, accountId: '' })).toBeNull()
+    expect(
+      parseAccountDeleteMessage({
+        ...verb,
+        expectedCredentialGeneration: -1,
+      }),
+    ).toBeNull()
+    const { expectedCredentialGeneration: _generation, ...withoutGeneration } =
+      verb
+    expect(parseAccountDeleteMessage(withoutGeneration)).toBeNull()
   })
 
   test('round-trips the closed stdin request and redacted worker result', () => {
@@ -207,6 +254,122 @@ describe('session-independent account deletion boundary', () => {
   })
 })
 
+describe('session-independent targeted account sign-out boundary', () => {
+  const verb = {
+    type: 'account.logout',
+    requestId: 'request-logout',
+    accountId: 'account-1',
+    expectedCredentialGeneration: 7,
+  } as const
+  const receipt = {
+    outcome: 'committed',
+    accountId: 'account-1',
+    expectedCredentialGeneration: 7,
+    observedCredentialGeneration: 8,
+    lifecycleState: 'signed_out',
+    operationId: 'request-logout',
+    targetWasActive: true,
+    replacementActiveAccountId: 'account-2',
+  } as const
+
+  test('accepts the exact targeted input and receipt', () => {
+    expect(parseAccountLogoutMessage(verb)).toEqual(verb)
+    expect(
+      parseAccountsPoolWorkerSignOutRequest({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        verb,
+      }),
+    ).toEqual({
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      verb,
+    })
+    expect(parseAccountSignOutReceipt(receipt)).toEqual(receipt)
+    expect(
+      parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt,
+      }),
+    ).toEqual({
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      requestId: verb.requestId,
+      verb: 'account.logout',
+      receipt,
+    })
+  })
+
+  test('rejects missing, negative, fractional, extra, and secret fields', () => {
+    expect(parseAccountLogoutMessage({ ...verb, accountId: undefined })).toBeNull()
+    expect(
+      parseAccountLogoutMessage({ ...verb, expectedCredentialGeneration: -1 }),
+    ).toBeNull()
+    expect(
+      parseAccountLogoutMessage({
+        ...verb,
+        expectedCredentialGeneration: 1.5,
+      }),
+    ).toBeNull()
+    expect(parseAccountLogoutMessage({ ...verb, extra: true })).toBeNull()
+    expect(
+      parseAccountLogoutMessage({ ...verb, accessToken: 'secret' }),
+    ).toBeNull()
+
+    expect(parseAccountSignOutReceipt({ ...receipt, extra: true })).toBeNull()
+    expect(
+      parseAccountSignOutReceipt({
+        ...receipt,
+        refreshToken: 'secret',
+      }),
+    ).toBeNull()
+    expect(
+      parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt: { ...receipt, observedCredentialGeneration: -1 },
+      }),
+    ).toBeNull()
+  })
+
+  test('accepts every controlled outcome shape without a pool snapshot', () => {
+    for (const outcome of [
+      'committed',
+      'already_committed',
+      'superseded',
+      'cleanup_pending',
+      'retryable_unknown',
+    ] as const) {
+      const parsed = parseAccountsPoolWorkerResult({
+        type: 'account-sign-out',
+        version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+        requestId: verb.requestId,
+        verb: 'account.logout',
+        receipt: {
+          ...receipt,
+          outcome,
+          observedCredentialGeneration:
+            outcome === 'superseded' || outcome === 'retryable_unknown'
+              ? null
+              : receipt.observedCredentialGeneration,
+          lifecycleState:
+            outcome === 'superseded' || outcome === 'retryable_unknown'
+              ? null
+              : receipt.lifecycleState,
+          targetWasActive: false,
+          replacementActiveAccountId: null,
+        },
+      })
+      expect(parsed?.type).toBe('account-sign-out')
+    }
+  })
+})
+
 describe('parseAccountsPoolWorkerResult — fails closed', () => {
   test('a wrong boundary version is rejected', () => {
     expect(
@@ -245,6 +408,55 @@ describe('parseAccountsPoolWorkerResult — fails closed', () => {
     const partial = { ...account() } as Record<string, unknown>
     delete partial.switchable
     expect(parseAccountsSnapshot(pool({ accounts: [partial as never] }))).toBeNull()
+  })
+
+  test('rejects malformed credential and signed-out profile generations', () => {
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          accounts: [account({ credentialGeneration: -1 as never })],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            signedOutProfile({ lifecycleGeneration: 1.5 as never }),
+          ],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            signedOutProfile({ credentialGeneration: '4' as never }),
+          ],
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  test('rejects an extra signed-out profile path or secret key', () => {
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            { ...signedOutProfile(), vaultFilePath: '/secret/profile.json' } as never,
+          ],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            { ...signedOutProfile(), accessToken: 'must-not-cross' } as never,
+          ],
+        }),
+      ),
+    ).toBeNull()
   })
 
   test('an out-of-vocabulary status is rejected', () => {

@@ -58,11 +58,11 @@ function item(over: Partial<TaskSnapshotItem> = {}): TaskSnapshotItem {
 }
 
 function tasksFrame(sessionId: SessionId, tasks: TasksSnapshot): ServerFrame {
-  return { kind: 'tasks.snapshot', protocolVersion: 1, sessionId, tasks }
+  return { kind: 'tasks.snapshot', protocolVersion: 2, sessionId, tasks }
 }
 
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 1, sessionId, status: 'disconnected' }
+  return { kind: 'lifecycle', protocolVersion: 2, sessionId, status: 'disconnected' }
 }
 
 test('reduces tasks snapshots by session id', () => {

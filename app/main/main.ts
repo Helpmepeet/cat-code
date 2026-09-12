@@ -115,6 +115,7 @@ import {
   CH_HOST_SAVE_TEXT,
   CH_HOST_OPEN_WORKSPACE_FILE,
   CH_HOST_ACCOUNT_DELETE,
+  CH_HOST_ACCOUNT_SIGN_OUT,
   CH_HOST_EVENT,
   CH_HOST_VISIBLE_SESSIONS,
 } from '../shared/ipcChannels.js'
@@ -200,8 +201,14 @@ import {
   type SingleFlightDriver,
 } from './singleFlightDriver.js'
 import {
+  accountProfileSignedOutNoticeForReceipt,
+  createAccountInvalidationDispatcher,
+} from './accountInvalidation.js'
+import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   parseAccountDeleteMessage,
+  parseAccountLogoutMessage,
+  type AccountsPoolWorkerSignOutResult,
   type AccountsPoolWorkerDeleteResult,
 } from '../shared/accountsPoolWorker.js'
 import {
@@ -249,6 +256,8 @@ import {
   TASK_CONTROL_VERB_TYPES,
   WORKSPACE_TRUST_VERB_TYPES,
   type AccountResultFrame,
+  type AccountProfileSignedOutMessage,
+  type AccountSignOutReceipt,
   type AskUserQuestionAnswerMessage,
   type PermissionSetModeMode,
   type ServerFrame,
@@ -677,13 +686,24 @@ let sessionsCatalogDriver: SingleFlightDriver | null = null
  * lifecycle as `sessionsCatalogDriver`.
  */
 let accountsPoolDriver: SingleFlightDriver | null = null
-let accountDeleteInFlight = false
-let accountDeleteAbort: AbortController | null = null
+let accountProfileMutationInFlight = false
+let accountProfileMutationAbort: AbortController | null = null
 const accountsPoolPublicationGate = createAccountsPoolPublicationGate()
-const pendingAccountDeletionNotices = new Map<
-  SessionId,
-  Map<string, string>
->()
+const accountInvalidation = createAccountInvalidationDispatcher({
+  send: (sessionId, notice) => {
+    try {
+      supervisor?.send(sessionId, notice)
+      return true
+    } catch (error) {
+      process.stderr.write(
+        `[main] account invalidation notice to ${sessionId} deferred: ${
+          error instanceof Error ? error.message : String(error)
+        }\n`,
+      )
+      return false
+    }
+  },
+})
 
 /**
  * Kill switch for the worker a driver may have IN FLIGHT at teardown. `stop()`
@@ -1000,7 +1020,7 @@ function startAccountsPoolRefresh(): void {
     intervalMs: ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
     logLabel: 'accounts-runner',
     run: () => {
-      if (accountDeleteInFlight) return Promise.resolve()
+      if (accountProfileMutationInFlight) return Promise.resolve()
       const generation = accountsPoolPublicationGate.beginRead()
       const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
       const withUsageStats = runCarriesUsageStats(runIndex)
@@ -1055,60 +1075,28 @@ function isMainWindowSender(event: Pick<IpcMainEvent, 'sender'>): boolean {
   return contents !== undefined && !contents.isDestroyed() && event.sender === contents
 }
 
-function sendAccountDeletionNotice(
-  sessionId: SessionId,
-  accountId: string,
-  requestId: string,
-): boolean {
-  try {
-    supervisor?.send(sessionId, {
-      type: 'account.profileDeleted',
-      requestId,
-      accountId,
-    })
-    return true
-  } catch (error) {
-    process.stderr.write(
-      `[main] account deletion notice to ${sessionId} deferred: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`,
-    )
-    return false
-  }
-}
-
 function notifySidecarsOfAccountDeletion(
   accountId: string,
   requestId: string,
 ): void {
-  for (const session of supervisor?.listSessions() ?? []) {
-    if (
-      session.status === 'failed' ||
-      session.status === 'exited'
-    ) {
-      continue
-    }
-    if (
-      session.status === 'ready' &&
-      sendAccountDeletionNotice(session.sessionId, accountId, requestId)
-    ) {
-      continue
-    }
-    const pending =
-      pendingAccountDeletionNotices.get(session.sessionId) ?? new Map()
-    pending.set(accountId, requestId)
-    pendingAccountDeletionNotices.set(session.sessionId, pending)
-  }
+  accountInvalidation.notifyDeletion(
+    accountId,
+    requestId,
+    supervisor?.listSessions() ?? [],
+  )
 }
 
-function flushAccountDeletionNotices(sessionId: SessionId): void {
-  const pending = pendingAccountDeletionNotices.get(sessionId)
-  if (!pending) return
-  for (const [accountId, requestId] of pending) {
-    if (!sendAccountDeletionNotice(sessionId, accountId, requestId)) return
-    pending.delete(accountId)
-  }
-  if (pending.size === 0) pendingAccountDeletionNotices.delete(sessionId)
+function notifySidecarsOfAccountSignOut(
+  notice: AccountProfileSignedOutMessage,
+): void {
+  accountInvalidation.notifySignOut(
+    notice,
+    supervisor?.listSessions() ?? [],
+  )
+}
+
+function flushAccountInvalidationNotices(sessionId: SessionId): void {
+  accountInvalidation.flush(sessionId)
 }
 
 /**
@@ -1904,7 +1892,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
     }
     if (frame.kind === 'ready') {
       logOperational('sidecar.ready', 'info', { frame: 'ready' }, event.sessionId)
-      flushAccountDeletionNotices(event.sessionId)
+      flushAccountInvalidationNotices(event.sessionId)
       // §4 step 5/6 — releases anything waiting on this row's wake and re-sends
       // whatever it never acked.
       peerPlane?.onReady(event.sessionId)
@@ -1926,7 +1914,7 @@ function wireRendererBridge(sup: SidecarSupervisor): void {
       })
     }
     if (isTerminalLifecycleFrame(frame)) {
-      pendingAccountDeletionNotices.delete(event.sessionId)
+      accountInvalidation.clear(event.sessionId)
       // Presence is a fact about a LIVE row. Absence means not live, nothing
       // else, so it is cleared here rather than left to read as stale.
       peerPlane?.onSessionDown(event.sessionId)
@@ -2023,11 +2011,17 @@ function sendHostEvent(event: HostEvent): void {
  * main, CH_STATS_QUERY checks a second field, CH_PERMISSION and
  * CH_ANSWER_QUESTIONS carry engine-minted ids.
  */
+const RELAYED_ACCOUNT_VERB_TYPES = ACCOUNT_VERB_TYPES.filter(
+  type => type !== 'account.delete' && type !== 'account.logout',
+)
+
 const RELAYED_VERB_CHANNELS: ReadonlyArray<
   readonly [channel: string, verbTypes: readonly string[]]
 > = [
-  // P4-5 — sidecar re-validates schema + pool-resolved business rules.
-  [CH_ACCOUNT_VERB, ACCOUNT_VERB_TYPES],
+  // Session-local account verbs still use the sidecar's pool-resolved business
+  // rules. Global profile mutations have dedicated host handlers below and
+  // never enter this session relay.
+  [CH_ACCOUNT_VERB, RELAYED_ACCOUNT_VERB_TYPES],
   // P4-15 — sidecar re-validates schema + the engine's trust persist for its OWN
   // cwd. HC1: no path crosses, the verb carries only a `requestId`.
   [CH_WORKSPACE_TRUST_VERB, WORKSPACE_TRUST_VERB_TYPES],
@@ -2997,7 +2991,10 @@ function registerHostControlPlane(): void {
 
   ipcMain.handle(
     CH_HOST_ACCOUNT_DELETE,
-    async (_e, input: unknown): Promise<AccountResultFrame> => {
+    async (
+      event: IpcMainInvokeEvent,
+      input: unknown,
+    ): Promise<AccountResultFrame> => {
       const verb = parseAccountDeleteMessage(input)
       const failure = (
         message: string,
@@ -3011,15 +3008,18 @@ function registerHostControlPlane(): void {
         ok: false,
         message,
       })
+      if (!isMainWindowSender(event)) {
+        return failure('Account deletion request refused.', '')
+      }
       if (!verb) return failure('Invalid account deletion request.', '')
-      if (accountDeleteInFlight) {
+      if (accountProfileMutationInFlight) {
         return failure('Another account deletion is already in progress.')
       }
 
-      accountDeleteInFlight = true
+      accountProfileMutationInFlight = true
       accountsPoolPublicationGate.invalidate()
       const abort = new AbortController()
-      accountDeleteAbort = abort
+      accountProfileMutationAbort = abort
       const delivery: { value: AccountsPoolWorkerDeleteResult | null } = {
         value: null,
       }
@@ -3071,8 +3071,167 @@ function registerHostControlPlane(): void {
         )
         return failure('Could not delete that account.')
       } finally {
-        if (accountDeleteAbort === abort) accountDeleteAbort = null
-        accountDeleteInFlight = false
+        if (accountProfileMutationAbort === abort) {
+          accountProfileMutationAbort = null
+        }
+        accountProfileMutationInFlight = false
+      }
+    },
+  )
+
+  ipcMain.handle(
+    CH_HOST_ACCOUNT_SIGN_OUT,
+    async (
+      event: IpcMainInvokeEvent,
+      input: unknown,
+    ): Promise<AccountResultFrame> => {
+      const verb = parseAccountLogoutMessage(input)
+      const failure = (
+        message: string,
+        requestId = verb?.requestId ?? '',
+        signOut: AccountSignOutReceipt | undefined = undefined,
+      ): AccountResultFrame => ({
+        kind: 'account.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: '',
+        requestId,
+        verb: 'account.logout',
+        ok: false,
+        message,
+        ...(signOut === undefined ? {} : { signOut }),
+      })
+      if (!isMainWindowSender(event)) {
+        return failure('Account sign-out request refused.', '')
+      }
+      if (!verb) return failure('Invalid account sign-out request.', '')
+      if (accountProfileMutationInFlight) {
+        return failure('Another account change is already in progress.')
+      }
+      const retryableUnknown = (): AccountSignOutReceipt => ({
+        outcome: 'retryable_unknown',
+        accountId: verb.accountId,
+        expectedCredentialGeneration: verb.expectedCredentialGeneration,
+        observedCredentialGeneration: null,
+        lifecycleState: null,
+        operationId: verb.requestId,
+        targetWasActive: false,
+        replacementActiveAccountId: null,
+      })
+      const unresolved = (): AccountResultFrame =>
+        failure(
+          'Could not confirm account sign-out.',
+          verb.requestId,
+          retryableUnknown(),
+        )
+
+      accountProfileMutationInFlight = true
+      accountsPoolPublicationGate.invalidate()
+      let accepted = false
+      let firstWorkerAborted = false
+      const runSignOutWorker = async (
+        recovery: boolean,
+      ): Promise<AccountsPoolWorkerSignOutResult | null> => {
+        const abort = new AbortController()
+        accountProfileMutationAbort = abort
+        const delivery: {
+          value: AccountsPoolWorkerSignOutResult | null
+        } = { value: null }
+        try {
+          const launch = sidecarLaunch()
+          const outcome = await runAccountsPoolWorker({
+            command: launch.command,
+            args: launch.argsFor('accounts-pool', [
+              '--bare',
+              '--account-sign-out',
+              ...(recovery ? ['--account-sign-out-recovery'] : []),
+            ]),
+            cwd: process.cwd(),
+            signal: abort.signal,
+            forceKillOnAbort: true,
+            input: {
+              type: 'account-sign-out',
+              version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+              verb,
+            },
+            onAccountSignOut: result => {
+              delivery.value = result
+            },
+            log: line => process.stderr.write(`${line}\n`),
+          })
+          return outcome === 'delivered' ? delivery.value : null
+        } catch (error) {
+          if (!recovery && abort.signal.aborted) firstWorkerAborted = true
+          throw error
+        } finally {
+          if (accountProfileMutationAbort === abort) {
+            accountProfileMutationAbort = null
+          }
+        }
+      }
+
+      const messageForOutcome = (
+        outcome: AccountsPoolWorkerSignOutResult['receipt']['outcome'],
+      ): string => {
+        switch (outcome) {
+          case 'committed':
+            return 'Account signed out.'
+          case 'already_committed':
+            return 'Account is already signed out.'
+          case 'superseded':
+            return 'Account changed before sign-out completed.'
+          case 'cleanup_pending':
+            return 'Account sign-out is still pending.'
+          case 'retryable_unknown':
+            return 'Could not confirm account sign-out.'
+        }
+      }
+
+      try {
+        let delivered: AccountsPoolWorkerSignOutResult | null = null
+        try {
+          delivered = await runSignOutWorker(false)
+        } catch {
+          if (firstWorkerAborted) {
+            return unresolved()
+          }
+        }
+        if (!delivered) {
+          try {
+            delivered = await runSignOutWorker(true)
+          } catch {
+            delivered = null
+          }
+        }
+        if (!delivered) {
+          return unresolved()
+        }
+        accepted = true
+        const outcome = delivered.receipt.outcome
+        const notice =
+          delivered.receipt.accountId === verb.accountId &&
+          delivered.receipt.expectedCredentialGeneration ===
+            verb.expectedCredentialGeneration
+            ? accountProfileSignedOutNoticeForReceipt(
+                delivered.requestId,
+                delivered.receipt,
+              )
+            : null
+        if (notice) notifySidecarsOfAccountSignOut(notice)
+        return {
+          kind: 'account.result',
+          protocolVersion: PROTOCOL_VERSION,
+          sessionId: '',
+          requestId: delivered.requestId,
+          verb: 'account.logout',
+          ok: outcome === 'committed' || outcome === 'already_committed',
+          message: messageForOutcome(outcome),
+          signOut: delivered.receipt,
+        }
+      } catch {
+        return unresolved()
+      } finally {
+        accountProfileMutationInFlight = false
+        if (accepted) queueMicrotask(refreshAccountsPoolNow)
       }
     },
   )
@@ -3660,9 +3819,9 @@ function stopBackgroundDrivers(): void {
   accountsPoolDriver = null
   accountsPoolAbort?.abort()
   accountsPoolAbort = null
-  accountDeleteAbort?.abort()
-  accountDeleteAbort = null
-  pendingAccountDeletionNotices.clear()
+  accountProfileMutationAbort?.abort()
+  accountProfileMutationAbort = null
+  accountInvalidation.clearAll()
   idleParkDriver?.stop()
   idleParkDriver = null
   // The window that reported them is going away; a stale visible set must not

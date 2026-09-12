@@ -298,6 +298,7 @@ test('the one-shot worker deletes a vault profile without any session process', 
         type: 'account.delete',
         requestId: 'delete-request',
         accountId,
+        expectedCredentialGeneration: 0,
         confirm: true,
       },
     })}\n`,
@@ -321,4 +322,97 @@ test('the one-shot worker deletes a vault profile without any session process', 
   expect(result.pool.accounts).toEqual([])
   expect(JSON.stringify(result)).not.toContain('probe-access-token')
   expect(existsSync(vaultFile)).toBe(false)
+}, 180_000)
+
+test('the one-shot worker signs out one targeted vault profile and emits only its receipt', async () => {
+  const cwd = temp('catcode-accounts-signout-cwd-')
+  const fakeHome = temp('catcode-accounts-signout-home-')
+  const configDir = temp('catcode-accounts-signout-config-')
+  assertHermeticHome(fakeHome)
+  const accountsDir = join(fakeHome, 'codex-vault', 'accounts')
+  mkdirSync(accountsDir, { recursive: true })
+  const accountId = 'account-to-sign-out'
+  writeFileSync(
+    join(accountsDir, 'account-to-sign-out.json'),
+    JSON.stringify({
+      tokens: {
+        access_token: 'probe-access-token',
+        refresh_token: 'probe-refresh-token',
+        account_id: accountId,
+      },
+      alias: 'sign-out-me',
+    }),
+    { mode: 0o600 },
+  )
+  const lifecycleDir = join(configDir, 'codex-credential-lifecycle')
+  mkdirSync(lifecycleDir, { recursive: true })
+  writeFileSync(
+    join(
+      lifecycleDir,
+      `account-${Buffer.from(accountId).toString('base64url')}.json`,
+    ),
+    JSON.stringify({
+      version: 1,
+      accountId,
+      credentialGeneration: 0,
+      state: 'credentialed',
+      operationId: 'probe-login',
+      operationKind: 'login',
+      changedAt: new Date().toISOString(),
+    }),
+    { mode: 0o600 },
+  )
+
+  const proc = Bun.spawn(
+    ['bun', 'run', worker, '--bare', '--account-sign-out'],
+    {
+      cwd,
+      env: {
+        ...process.env,
+        NODE_ENV: 'development',
+        CLAUDE_CONFIG_DIR: configDir,
+        HOME: fakeHome,
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_AUTH_TOKEN: undefined,
+        CLAUDE_CODE_OAUTH_TOKEN: undefined,
+      },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  )
+  proc.stdin.write(
+    `${JSON.stringify({
+      type: 'account-sign-out',
+      version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
+      verb: {
+        type: 'account.logout',
+        requestId: 'sign-out-request',
+        accountId,
+        expectedCredentialGeneration: 0,
+      },
+    })}\n`,
+  )
+  proc.stdin.end()
+  const [code, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ])
+  if (!stdout.trim()) {
+    throw new Error(`account sign-out worker emitted no result: ${stderr.trim()}`)
+  }
+  const result = parseAccountsPoolWorkerResult(JSON.parse(stdout.trim()))
+
+  expect(code).toBe(0)
+  expect(result?.type).toBe('account-sign-out')
+  if (result?.type !== 'account-sign-out') return
+  expect(result.requestId).toBe('sign-out-request')
+  expect(result.receipt.outcome).toBe('committed')
+  expect(result.receipt.accountId).toBe(accountId)
+  expect(result.receipt.expectedCredentialGeneration).toBe(0)
+  expect(result.receipt.observedCredentialGeneration).toBe(1)
+  expect(result.receipt.lifecycleState).toBe('signed_out')
+  expect(JSON.stringify(result)).not.toContain('probe-access-token')
+  expect(JSON.stringify(result)).not.toContain('probe-refresh-token')
 }, 180_000)

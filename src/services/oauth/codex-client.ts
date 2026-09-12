@@ -42,6 +42,12 @@ export type CodexTokens = {
   idToken?: string
   /** Email from the OIDC id_token or access token when OpenAI provides it */
   accountEmail?: string
+  /**
+   * Local binding metadata added after OAuth returns. The token endpoint does
+   * not mint this value; credential writers carry it from the lifecycle
+   * transaction that authorized the installed credential.
+   */
+  credentialGeneration?: number
 }
 
 type TokenSuccessResult = {

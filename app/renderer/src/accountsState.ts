@@ -2,14 +2,34 @@ import type {
   AccountResultFrame,
   AccountsSnapshot,
   AccountStatus,
+  AccountSignOutReceipt,
   AnthropicAccountStatus,
   OAuthLoginProgress,
   ServerFrame,
   SessionId,
+  SignedOutCodexProfileStatus,
   UsageStatsByRange,
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
+
+export type AccountSignOutOverlayPhase =
+  | 'signed_out'
+  | 'reconciling'
+  | 'checking'
+  | 'refreshing'
+
+export type AccountSignOutOverlay = {
+  accountId: string
+  expectedCredentialGeneration: number
+  observedCredentialGeneration: number | null
+  operationId: string
+  phase: AccountSignOutOverlayPhase
+  account: AccountStatus | null
+  targetWasActive: boolean
+  replacementActiveAccountId: string | null
+  sequence: number
+}
 
 /**
  * Renderer projection of the P4-5 accounts read-seam.
@@ -46,6 +66,8 @@ export type AccountsState = {
    */
   lastSessions: Record<SessionId, AccountsSnapshot>
   lastResult: AccountResultFrame | null
+  signOutOverlays: Record<string, AccountSignOutOverlay>
+  nextSignOutOverlaySequence: number
   /**
    * P4-15 — the live OAuth login progress per session (the first-run surface +
    * reauth banner drive their sub-states from it). Transient: set by the
@@ -97,6 +119,8 @@ export function createAccountsState(): AccountsState {
     sessions: {},
     lastSessions: {},
     lastResult: null,
+    signOutOverlays: {},
+    nextSignOutOverlaySequence: 1,
     oauthProgress: {},
     usageStats: {
       '7d': null,
@@ -106,12 +130,216 @@ export function createAccountsState(): AccountsState {
   }
 }
 
+function findKnownAccount(
+  state: AccountsState,
+  accountId: string,
+): AccountStatus | null {
+  const fromPool = state.pool?.accounts.find(account => account.id === accountId)
+  if (fromPool) return fromPool
+  for (const snapshot of Object.values(state.lastSessions)) {
+    const account = snapshot.accounts.find(candidate => candidate.id === accountId)
+    if (account) return account
+  }
+  return state.signOutOverlays[accountId]?.account ?? null
+}
+
+function withoutOverlay(
+  overlays: Record<string, AccountSignOutOverlay>,
+  accountId: string,
+): Record<string, AccountSignOutOverlay> {
+  if (!(accountId in overlays)) return overlays
+  const next = { ...overlays }
+  delete next[accountId]
+  return next
+}
+
+function reduceAccountSignOutResult(
+  state: AccountsState,
+  frame: AccountResultFrame,
+  receipt: AccountSignOutReceipt,
+): AccountsState {
+  if (receipt.outcome === 'superseded') {
+    if (
+      receipt.observedCredentialGeneration === null ||
+      receipt.observedCredentialGeneration <=
+        receipt.expectedCredentialGeneration
+    ) {
+      return {
+        ...state,
+        lastResult: frame,
+        signOutOverlays: withoutOverlay(
+          state.signOutOverlays,
+          receipt.accountId,
+        ),
+      }
+    }
+    const overlay: AccountSignOutOverlay = {
+      accountId: receipt.accountId,
+      expectedCredentialGeneration: receipt.expectedCredentialGeneration,
+      observedCredentialGeneration: receipt.observedCredentialGeneration,
+      operationId: receipt.operationId,
+      phase: 'refreshing',
+      account: findKnownAccount(state, receipt.accountId),
+      targetWasActive: false,
+      replacementActiveAccountId: null,
+      sequence: state.nextSignOutOverlaySequence,
+    }
+    return {
+      ...state,
+      lastResult: frame,
+      signOutOverlays: {
+        ...state.signOutOverlays,
+        [receipt.accountId]: overlay,
+      },
+      nextSignOutOverlaySequence: state.nextSignOutOverlaySequence + 1,
+    }
+  }
+
+  const phase: AccountSignOutOverlayPhase =
+    receipt.outcome === 'cleanup_pending'
+      ? 'reconciling'
+      : receipt.outcome === 'retryable_unknown'
+        ? 'checking'
+        : 'signed_out'
+  const overlay: AccountSignOutOverlay = {
+    accountId: receipt.accountId,
+    expectedCredentialGeneration: receipt.expectedCredentialGeneration,
+    observedCredentialGeneration: receipt.observedCredentialGeneration,
+    operationId: receipt.operationId,
+    phase,
+    account: findKnownAccount(state, receipt.accountId),
+    targetWasActive: receipt.targetWasActive,
+    replacementActiveAccountId: receipt.replacementActiveAccountId,
+    sequence: state.nextSignOutOverlaySequence,
+  }
+  return {
+    ...state,
+    lastResult: frame,
+    signOutOverlays: {
+      ...state.signOutOverlays,
+      [receipt.accountId]: overlay,
+    },
+    nextSignOutOverlaySequence: state.nextSignOutOverlaySequence + 1,
+  }
+}
+
+function observedProfileGeneration(
+  profile: SignedOutCodexProfileStatus | undefined,
+): number | null {
+  return profile?.lifecycleGeneration ?? profile?.credentialGeneration ?? null
+}
+
+function reconcileSignOutOverlays(
+  overlays: Record<string, AccountSignOutOverlay>,
+  snapshot: AccountsSnapshot,
+): Record<string, AccountSignOutOverlay> {
+  let next = overlays
+  for (const overlay of Object.values(overlays)) {
+    const account = snapshot.accounts.find(row => row.id === overlay.accountId)
+    const profile = snapshot.signedOutProfiles.find(
+      row => row.id === overlay.accountId,
+    )
+    const profileGeneration = observedProfileGeneration(profile)
+    const requiredSignedOutGeneration =
+      overlay.observedCredentialGeneration ??
+      overlay.expectedCredentialGeneration + 1
+    const signedOutObserved =
+      profileGeneration !== null &&
+      profileGeneration >= requiredSignedOutGeneration
+    const credentialedObserved =
+      account !== undefined &&
+      (overlay.phase === 'refreshing'
+        ? overlay.observedCredentialGeneration !== null &&
+          account.credentialGeneration >= overlay.observedCredentialGeneration
+        : account.credentialGeneration >
+          (overlay.observedCredentialGeneration ??
+            overlay.expectedCredentialGeneration))
+    if (signedOutObserved || credentialedObserved) {
+      next = withoutOverlay(next, overlay.accountId)
+    }
+  }
+  return next
+}
+
+function syntheticSignedOutProfile(
+  overlay: AccountSignOutOverlay,
+): SignedOutCodexProfileStatus | null {
+  if (
+    !overlay.account?.hasVaultProfile ||
+    overlay.observedCredentialGeneration === null
+  ) {
+    return null
+  }
+  return {
+    id: overlay.accountId,
+    alias: overlay.account.alias,
+    state: overlay.phase === 'reconciling' ? 'recovery_required' : 'signed_out',
+    credentialGeneration: overlay.observedCredentialGeneration,
+    lifecycleGeneration: overlay.observedCredentialGeneration,
+    credentialGenerationState: 'lifecycle_bound',
+    lifecycleState: 'signed_out',
+    lifecycleReadStatus: 'valid',
+  }
+}
+
+function applySignOutOverlays(
+  snapshot: AccountsSnapshot,
+  overlays: Record<string, AccountSignOutOverlay>,
+): AccountsSnapshot {
+  const hidden = Object.values(overlays).filter(
+    overlay =>
+      overlay.phase === 'signed_out' || overlay.phase === 'reconciling',
+  )
+  if (hidden.length === 0) return snapshot
+
+  const hiddenIds = new Set(hidden.map(overlay => overlay.accountId))
+  const latestActive = hidden
+    .filter(overlay => overlay.targetWasActive)
+    .sort((a, b) => b.sequence - a.sequence)[0]
+  const activeAccountId = latestActive
+    ? latestActive.replacementActiveAccountId
+    : snapshot.activeAccountId
+  const accounts = snapshot.accounts
+    .filter(account => !hiddenIds.has(account.id))
+    .map(account => ({
+      ...account,
+      isDefault: account.id === activeAccountId,
+      switchable:
+        account.id === activeAccountId ? false : account.switchable,
+    }))
+  const signedOutProfiles = [...snapshot.signedOutProfiles]
+  for (const overlay of hidden) {
+    if (signedOutProfiles.some(profile => profile.id === overlay.accountId)) {
+      continue
+    }
+    const profile = syntheticSignedOutProfile(overlay)
+    if (profile) signedOutProfiles.push(profile)
+  }
+  return {
+    ...snapshot,
+    accounts,
+    signedOutProfiles,
+    activeAccountId,
+    readyCount: accounts.filter(
+      account => account.status === 'healthy' && !account.usageLimitReached,
+    ).length,
+    poolCount: accounts.length,
+  }
+}
+
 export function reduceAccountsState(
   state: AccountsState,
   action: AccountsAction,
 ): AccountsState {
   if (action.type === 'pool') {
-    return { ...state, pool: action.pool }
+    return {
+      ...state,
+      pool: action.pool,
+      signOutOverlays: reconcileSignOutOverlays(
+        state.signOutOverlays,
+        action.pool,
+      ),
+    }
   }
 
   if (action.type === 'session-removed') {
@@ -169,7 +397,10 @@ export function reduceAccountsState(
   }
 
   if (frame.kind === 'account.result') {
-    return { ...state, lastResult: frame }
+    if (frame.verb !== 'account.logout' || !frame.signOut) {
+      return { ...state, lastResult: frame }
+    }
+    return reduceAccountSignOutResult(state, frame, frame.signOut)
   }
 
   if (frame.kind === 'stats.usage.snapshot') {
@@ -258,7 +489,16 @@ export function selectFirstAccountsSnapshot(
 export function selectGlobalAccountsSnapshot(
   state: AccountsState,
 ): AccountsSnapshot | null {
-  return state.pool ?? selectFirstAccountsSnapshot(state)
+  const snapshot = state.pool ?? selectFirstAccountsSnapshot(state)
+  if (!snapshot) return null
+  return applySignOutOverlays(snapshot, state.signOutOverlays)
+}
+
+export function selectAccountSignOutOverlay(
+  state: AccountsState,
+  accountId: string,
+): AccountSignOutOverlay | null {
+  return state.signOutOverlays[accountId] ?? null
 }
 
 /** The rows in pool order (the active account is flagged via `isDefault`). */

@@ -18,6 +18,7 @@ import {
   resetCodexCacheContext,
 } from './codex-fetch-adapter.js'
 import { resolveCodexOAuthTokensForLeaseOwner } from './client.js'
+import { createCodexCredentialHandle } from './codexCredentialUse.js'
 import { classifyAPIError } from './errors.js'
 import {
   getPoolStatus,
@@ -39,6 +40,10 @@ import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
 } from './accountDiagnostics.js'
+import {
+  createCodexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+} from './codexCredentialLifecycle.js'
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -66,6 +71,12 @@ function buildPoolAccount(
     status: overrides.status ?? 'healthy',
     statusReason: overrides.statusReason,
     lastUsedAt: overrides.lastUsedAt ?? 0,
+    credentialGeneration: overrides.credentialGeneration ?? 1,
+    credentialGenerationState:
+      overrides.credentialGenerationState ??
+      (overrides.credentialGeneration === 0
+        ? 'legacy_unbound'
+        : 'lifecycle_bound'),
     alias: overrides.alias,
     lastError: overrides.lastError,
     usagePrimary: overrides.usagePrimary,
@@ -76,8 +87,33 @@ function buildPoolAccount(
       'usageFetchedAt' in overrides ? overrides.usageFetchedAt : Date.now(),
     planType: overrides.planType,
     planExpiresAt: overrides.planExpiresAt,
+    vaultFilePath: overrides.vaultFilePath,
   }
 }
+
+const allowUsageCredentialLifecycle = {
+  read(accountId: string) {
+    return {
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'usage-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }
+  },
+  async withTransaction<T>(
+    _accountId: string,
+    _options: unknown,
+    callback: (permit: never) => T | Promise<T>,
+  ): Promise<T> {
+    return callback({} as never)
+  },
+} as unknown as CodexCredentialLifecycle
 
 function codexCompletedStreamResponse(): Response {
   return new Response(
@@ -132,7 +168,43 @@ describe('codexAccountLeaseManager', () => {
     accessToken: string,
     conversationIdOverride?: string,
   ): ReturnType<typeof createCodexFetch> {
-    return createCodexFetch(accessToken, conversationIdOverride, {
+    const payload = accessToken.split('.')[1]
+    const accountId = payload
+      ? JSON.parse(
+          Buffer.from(payload, 'base64url').toString('utf8'),
+        )['https://api.openai.com/auth'].chatgpt_account_id as string
+      : 'initial-test-account'
+    const lifecycle = {
+      read(requestedAccountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId: requestedAccountId,
+            credentialGeneration: 1,
+            state: 'credentialed' as const,
+            operationId: 'lease-test',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
+    return createCodexFetch(createCodexCredentialHandle({
+      accountId,
+      accessToken,
+      refreshToken: 'test-refresh',
+      expiresAt: Date.now() + 60_000,
+      credentialGeneration: 1,
+      credentialSource: 'config',
+    }), conversationIdOverride, {
       resolveTokensForRequest: () => {
         const lease = moduleUnderTest.getCurrentCodexLease()
         return resolveCodexOAuthTokensForLeaseOwner({
@@ -140,6 +212,7 @@ describe('codexAccountLeaseManager', () => {
           codexLeaseOwnerType: lease?.ownerType,
         })
       },
+      credentialUse: { lifecycle },
     })
   }
 
@@ -362,6 +435,7 @@ describe('codexAccountLeaseManager', () => {
           accessToken: liveAccessToken,
           refreshToken: 'live-refresh',
           source: 'vault',
+          vaultFilePath: '/test/solo-account.json',
         }),
       ],
     })
@@ -373,6 +447,8 @@ describe('codexAccountLeaseManager', () => {
     expect(tokens?.source).toBe('pool')
     expect(tokens?.accessToken).toBe(liveAccessToken)
     expect(tokens?.refreshToken).toBe('live-refresh')
+    expect(tokens?.credentialGeneration).toBe(1)
+    expect(tokens?.credentialSource).toBe('vault')
   })
 
   test('single vault account without config entry resolves through the pool', async () => {
@@ -386,6 +462,7 @@ describe('codexAccountLeaseManager', () => {
           accessToken: liveAccessToken,
           refreshToken: 'vault-refresh',
           source: 'vault',
+          vaultFilePath: '/test/vault-only.json',
         }),
       ],
     })
@@ -398,6 +475,8 @@ describe('codexAccountLeaseManager', () => {
       accountId: 'vault-only',
       accessToken: liveAccessToken,
       refreshToken: 'vault-refresh',
+      credentialGeneration: 1,
+      credentialSource: 'vault',
       source: 'pool',
     })
   })
@@ -419,6 +498,8 @@ describe('codexAccountLeaseManager', () => {
     expect(tokens).toMatchObject({
       accountId: 'config-only',
       refreshToken: 'config-refresh',
+      credentialGeneration: 0,
+      credentialSource: 'config',
       source: 'config',
     })
   })
@@ -820,7 +901,11 @@ describe('codexAccountLeaseManager', () => {
     }) as typeof globalThis.fetch
 
     try {
-      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+      await fetchPoolUsage({
+        forceRefresh: true,
+        updateRoutingHints: true,
+        credentialUse: { lifecycle: allowUsageCredentialLifecycle },
+      })
     } finally {
       globalThis.fetch = realFetch
     }
@@ -993,9 +1078,37 @@ describe('codexAccountLeaseManager', () => {
 
     try {
       process.env.CLAUDE_CONFIG_DIR = scratchConfigDir
+      const lifecycle = createCodexCredentialLifecycle({
+        directory: join(scratchConfigDir, 'codex-credential-lifecycle'),
+      })
+      await lifecycle.withTransaction(
+        'solo-auth',
+        { operationKind: 'login', operationId: 'solo-auth-login' },
+        permit => {
+          const prepared = lifecycle.prepareLogin(permit)
+          if (prepared.status !== 'applied') throw new Error('prepare failed')
+          const committed = lifecycle.commitLogin(permit, {
+            expectedGeneration: prepared.record.credentialGeneration,
+          })
+          if (committed.status !== 'applied') throw new Error('commit failed')
+        },
+      )
+      saveCodexOAuthTokens({
+        accessToken: buildCodexToken('solo-auth'),
+        refreshToken: 'refresh-solo-auth',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'solo-auth',
+        credentialGeneration: 1,
+      })
       seedCodexAccountPoolForTest({
         activeAccountId: 'solo-auth',
-        accounts: [buildPoolAccount({ accountId: 'solo-auth' })],
+        accounts: [
+          buildPoolAccount({
+            accountId: 'solo-auth',
+            credentialGeneration: 1,
+            refreshToken: 'refresh-solo-auth',
+          }),
+        ],
       })
       globalThis.fetch = (async input => {
         const url = String(input)

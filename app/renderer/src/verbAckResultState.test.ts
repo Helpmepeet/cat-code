@@ -32,7 +32,7 @@ function recallAnswer(
 ): PromptRecallResultFrame {
   return {
     kind: 'prompt-recall.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     requestId,
     ok,
@@ -51,7 +51,7 @@ function taskControlResult(
 ): VerbAckResultFrame {
   return {
     kind: 'task-control.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: `task-${sessionId}-${ok}`,
     verb: 'task.stop',
@@ -67,7 +67,7 @@ function runControlResult(
 ): VerbAckResultFrame {
   return {
     kind: 'run-control.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: `run-${sessionId}-${ok}`,
     verb: 'model.set',
@@ -83,7 +83,7 @@ function settingsResult(
 ): VerbAckResultFrame {
   return {
     kind: 'settings.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: `settings-${sessionId}-${ok}`,
     verb: 'settings.setValue',
@@ -99,7 +99,7 @@ function promptForceResult(
 ): VerbAckResultFrame {
   return {
     kind: 'prompt-force.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: `force-${sessionId}-${ok}`,
     promptId: 'queued-1',
@@ -114,7 +114,7 @@ function correlatedBadRequest(
 ): VerbAckResultFrame {
   return {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     requestId: `bad-request-${sessionId}`,
     code: 'bad_request',
@@ -171,7 +171,7 @@ test('an uncorrelated boundary rejection remains ignored', () => {
   const state = createVerbAckResultState()
   const frame: ServerFrame = {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     code: 'bad_request',
     message: 'framing error',
@@ -189,12 +189,12 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   const before = state
   state = reduceVerbAckResultState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's2', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's2', status: 'disconnected' },
   })
   expect(state).toBe(before) // untracked session → no change
   state = reduceVerbAckResultState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
   expect(selectLatestVerbAckResult(state, 's1')).toBeNull()
 })
@@ -204,7 +204,7 @@ test('an unrelated frame kind is ignored (no consumer, no crash)', () => {
   const before = state
   const unrelated: ServerFrame = {
     kind: 'run-controls.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     runControls: {
       model: {
@@ -242,7 +242,7 @@ for (const [kind, build] of BUILDERS) {
 test('a stale task.background refusal is a warning, not a danger error', () => {
   const frame: VerbAckResultFrame = {
     kind: 'task-control.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     requestId: 'background-stale',
     verb: 'task.background',
@@ -265,7 +265,7 @@ function promptRecallResult(
 ): VerbAckResultFrame {
   return {
     kind: 'prompt-recall.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     requestId: `recall-${ok}`,
     ok,
@@ -301,7 +301,7 @@ test('D1b — a recall that never reached the session says so', () => {
   expect(
     recallDeliveryFailureNotice({
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       requestId: 'recall-1',
       code: 'session_not_found',
@@ -451,7 +451,7 @@ test('D1b — the undeliverable notice claims only what the renderer knows', () 
     expect(
       recallDeliveryFailureNotice({
         kind: 'error',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         requestId: 'recall-1',
         code,

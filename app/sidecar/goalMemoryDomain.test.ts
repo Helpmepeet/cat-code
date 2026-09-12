@@ -78,7 +78,7 @@ test('builds a thread goal display snapshot with the engine summary text', () =>
 
   const frame: ThreadGoalSnapshotFrame = {
     kind: 'thread-goal.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     goal: snapshot,
   }
@@ -197,7 +197,7 @@ test('builds a memory metadata snapshot without exposing file contents', () => {
 
   const frame: MemorySnapshotFrame = {
     kind: 'memory.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     memory: snapshot,
   }
@@ -356,7 +356,7 @@ test('a memory frame carrying agent rows is still secretGuard-clean', () => {
   })
   const frame: MemorySnapshotFrame = {
     kind: 'memory.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     memory: snapshot,
   }

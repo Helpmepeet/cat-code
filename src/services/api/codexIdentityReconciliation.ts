@@ -26,6 +26,7 @@ export type CodexIdentityMismatchTokens = {
   refreshToken: string
   idToken?: string
   expiresAt: number
+  credentialGeneration: number
 }
 
 export type CodexIdentityMismatchVaultSave = {
@@ -76,6 +77,7 @@ export function reconcileCodexIdentityMismatch({
           accessToken: tokens.accessToken,
           refreshToken: tokens.refreshToken,
           accountId: newAccountId,
+          credentialGeneration: tokens.credentialGeneration,
           idToken: tokens.idToken,
           expiresAt: tokens.expiresAt,
         },
@@ -96,6 +98,7 @@ export function reconcileCodexIdentityMismatch({
       idToken: tokens.idToken,
       expiresAt: tokens.expiresAt,
       accountId: newAccountId,
+      credentialGeneration: tokens.credentialGeneration,
     },
     {
       preserveCapped: true,

@@ -27,7 +27,8 @@
  *     is not possible without the account-diagnostic sink
  *     (`accountDiagnostics.ts`, already secret-scrubbed). That sink is the named
  *     reactive hook for P4-15 (reauth banner) + P4-17 (welcome table); wiring it
- *     is deferred to P4-15. v1 re-broadcasts after any pool-mutating verb this
+ *     is deferred to P4-15. The current behavior re-broadcasts after any
+ *     pool-mutating verb this
  *     session drives, matching the settings seam's spawn-time posture.
  *
  * MUTATION verbs (`runVerb`) dispatch to the engine's OWN account machinery
@@ -45,19 +46,27 @@
 import { existsSync } from 'node:fs'
 
 import {
-  appendAccount,
   describeCodexAccountAvailability,
   getCodexAccountAvailability,
+  getCodexProfileInventory,
   getPoolStatus,
   isCodexAccountSwitchable,
-  removeCodexAccount,
   loadPoolForObservation,
-  saveCodexTokenToVault,
+  reconcileCodexAccountDeletion,
+  reconcileCodexAccountSignOut,
+  resolveCodexAccountForTargetedSignOut,
   setAccountAlias,
   validateCodexAccountAlias,
+  type CodexProfileInventory,
+  type CodexTargetedSignOutResolution,
   type PoolAccount,
+  type SignedOutCodexProfile,
 } from '../../src/services/api/codexAccountPool.js'
 import { commitCodexAccountSwitch } from '../../src/services/api/codexAccountSwitch.js'
+import {
+  createCodexOAuthLoginOperationId,
+  persistCodexOAuthLogin,
+} from '../../src/services/api/codexLoginPersistence.js'
 import {
   getClaudePoolStatus,
   loadClaudePoolForObservation,
@@ -66,13 +75,33 @@ import {
   type ClaudePoolAccount,
 } from '../../src/services/api/claudeAccountPool.js'
 import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
-import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
 import {
-  reassignCodexLeaseToActiveAccount,
-  releaseCodexLease,
-  repairLeasesForDeletedAccount,
+  fetchPoolUsage,
+  invalidateUsageCache,
+} from '../../src/services/api/codexUsage.js'
+import {
+  createCodexAccountDeletionOperationId,
+  createCodexAccountSignOutOperationId,
+  deleteCodexAccount,
+  signOutCodexAccount,
+  type CodexAccountDeletionInput,
+  type CodexAccountDeletionResult,
+  type CodexAccountSignOutInput,
+  type CodexAccountSignOutResult,
+} from '../../src/services/api/codexAccountSignOut.js'
+import {
+  repairLeasesForUnavailableAccount,
 } from '../../src/services/api/codexAccountLeaseManager.js'
+import {
+  retireCodexWebSocketSessions,
+  type CodexWebSocketRetirement,
+} from '../../src/services/api/codex-websocket-transport.js'
 import { resetCodexCacheContext } from '../../src/services/api/codex-fetch-adapter.js'
+import {
+  codexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+  type CodexCredentialLifecycleReadResult,
+} from '../../src/services/api/codexCredentialLifecycle.js'
 import {
   installOAuthTokens,
   parseManualOAuthCallbackInput,
@@ -80,11 +109,9 @@ import {
 import { OAuthService } from '../../src/services/oauth/index.js'
 import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
 import {
-  clearCodexOAuthTokens,
   clearOAuthTokenCache,
   hasAnthropicCredentials,
   isClaudeAISubscriber,
-  saveCodexOAuthTokens,
   validateForceLoginOrgForToken,
 } from '../../src/utils/auth.js'
 import { clearAuthRelatedCaches } from '../../src/commands/logout/logout.js'
@@ -92,12 +119,14 @@ import { getInitialSettings } from '../../src/utils/settings/settings.js'
 import type {
   AccountResultFrame,
   AccountLoginProvider,
+  AccountProfileSignedOutMessage,
   AccountsSnapshot,
   AnthropicAccountStatus,
   AccountStatus,
   AccountVerbMessage,
   AccountVerbType,
   OAuthLoginProgress,
+  SignedOutCodexProfileStatus,
 } from '../shared/protocol.js'
 
 /** Pure — the redacted outcome payload a verb produces (no transport, no secret). */
@@ -127,10 +156,19 @@ export type AccountsCommandExecutor = {
   switchAnthropic(accountId: string): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
   rename(accountId: string, alias: string): AccountVerbResult
-  /** Delete a vault account profile. `accountId` already re-resolved + vault-checked. */
-  delete(accountId: string): AccountVerbResult | Promise<AccountVerbResult>
-  /** Sign out the active account (clears its token; profile stays). */
-  logout(): AccountVerbResult
+  /** Delete one exact vault profile generation after engine-owned resolution. */
+  delete(
+    accountId: string,
+    expectedCredentialGeneration: number,
+  ): AccountVerbResult | Promise<AccountVerbResult>
+  /**
+   * Sign out one targeted account through the engine's lifecycle transaction.
+   * The account id and expected generation come from the sidecar-validated verb.
+   */
+  logout(
+    accountId: string,
+    expectedCredentialGeneration: number,
+  ): AccountVerbResult | Promise<AccountVerbResult>
   /** Refresh OAuth tokens for every unlocked vault account. */
   touchAll(): Promise<AccountVerbResult>
   /**
@@ -173,6 +211,13 @@ export type SidecarAccountsDomain = {
    * process-local account pool without producing a transport result.
    */
   applyDeletedProfile(accountId: string): Promise<boolean>
+  /**
+   * Apply a sign-out committed by main to this process-local pool. The lifecycle
+   * record is re-read here before any local resource is retired.
+   */
+  applyExternallyCommittedSignOut(
+    notice: AccountProfileSignedOutMessage,
+  ): Promise<boolean>
   /**
    * P4-15 — register the sink the OAuth login controller pushes progress through.
    * The server sets it once and broadcasts each `OAuthLoginProgress` as an
@@ -270,47 +315,55 @@ export type AnthropicOAuthRunnerDependencies = {
 
 /**
  * The REAL runner — consumes the engine's `runCodexOAuthFlow` and performs the
- * engine's own token persistence (`saveCodexOAuthTokens` + vault + `appendAccount`,
- * the identical writes `ConsoleOAuthFlow.persistCodexLogin` performs,
- * `ConsoleOAuthFlow.tsx:213`). Only exercised by a LIVE login (the operator step);
- * headless tests inject a fake so no browser/port/vault is ever touched.
+ * engine's lifecycle-authorized credential installation. Only exercised by a
+ * LIVE login (the operator step); headless tests inject a fake so no
+ * browser/port/vault is ever touched.
  */
-export function createRealOAuthLoginRunner(): OAuthLoginRunner {
+export type CodexOAuthRunnerDependencies = {
+  persistLogin?: typeof persistCodexOAuthLogin
+  createOperationId?: typeof createCodexOAuthLoginOperationId
+  readProfileInventory?: typeof getCodexProfileInventory
+  runOAuthFlow?: typeof runCodexOAuthFlow
+}
+
+export function createRealOAuthLoginRunner(
+  dependencies: CodexOAuthRunnerDependencies = {},
+): OAuthLoginRunner {
+  const persistLogin = dependencies.persistLogin ?? persistCodexOAuthLogin
+  const createOperationId =
+    dependencies.createOperationId ?? createCodexOAuthLoginOperationId
+  const readProfileInventory =
+    dependencies.readProfileInventory ?? getCodexProfileInventory
+  const runOAuthFlow = dependencies.runOAuthFlow ?? runCodexOAuthFlow
   return {
     async begin({ onWaitingForLogin, waitForManualCode }) {
-      const tokens: CodexTokens = await runCodexOAuthFlow(
+      const tokens: CodexTokens = await runOAuthFlow(
         async url => {
           onWaitingForLogin(url)
         },
         () => waitForManualCode(),
       )
-      const existing = getPoolStatus().accounts.find(
-        a => a.accountId === tokens.accountId,
-      )
+      const inventory = readProfileInventory()
+      const existing =
+        inventory.accounts.find(a => a.accountId === tokens.accountId) ??
+        inventory.signedOutProfiles.find(
+          profile => profile.accountId === tokens.accountId,
+        )
+      const operationId = createOperationId()
+      const isExistingAccount = existing !== undefined
       return {
-        isExistingAccount: existing !== undefined,
+        isExistingAccount,
         validateAlias(alias) {
           const trimmed = alias.trim()
           if (!trimmed) return { ok: true }
           return validateCodexAccountAlias(trimmed, tokens.accountId)
         },
-        persist(alias) {
+        async persist(alias) {
           const trimmed = alias?.trim() || undefined
-          // The engine's OWN credential writes — NOT a re-implementation.
-          saveCodexOAuthTokens(tokens)
-          const saved = saveCodexTokenToVault(
-            { ...tokens, alias: trimmed },
-            { writer: 'accountsDomain.oauthPersist' },
-          )
-          appendAccount(
-            { ...tokens, alias: trimmed },
-            {
-              writer: 'accountsDomain.oauthPersist',
-              source: saved ? 'vault' : 'config',
-              vaultFilePath: saved?.filePath,
-              activate: true,
-            },
-          )
+          await persistLogin(tokens, {
+            operationId,
+            ...(trimmed ? { alias: trimmed } : {}),
+          })
         },
       }
     },
@@ -412,6 +465,7 @@ export function buildAccountStatus(
   const availability = getCodexAccountAvailability(account, now).kind
   return {
     id: account.accountId,
+    credentialGeneration: account.credentialGeneration,
     alias: account.alias ?? null,
     status: account.status,
     statusReason: account.statusReason ?? null,
@@ -431,6 +485,22 @@ export function buildAccountStatus(
     planType: account.planType ?? null,
     // Authoritative rule + not-already-default (the renderer never re-derives it).
     switchable: !isDefault && isCodexAccountSwitchable(account, now),
+  }
+}
+
+/** Project one non-routable Codex profile through an explicit redaction whitelist. */
+export function buildSignedOutCodexProfileStatus(
+  profile: SignedOutCodexProfile,
+): SignedOutCodexProfileStatus {
+  return {
+    id: profile.accountId,
+    alias: profile.alias ?? null,
+    state: profile.profileState,
+    credentialGeneration: profile.credentialGeneration ?? null,
+    lifecycleGeneration: profile.lifecycleGeneration ?? null,
+    credentialGenerationState: profile.credentialGenerationState ?? null,
+    lifecycleState: profile.lifecycleState ?? null,
+    lifecycleReadStatus: profile.lifecycleReadStatus,
   }
 }
 
@@ -471,7 +541,12 @@ export function resolveAnthropicRouteAvailable(
   }
 }
 
-/** Project the whole pool status to the redacted snapshot. Pure. */
+/**
+ * Project the engine's complete Codex profile inventory to the redacted
+ * snapshot. The optional inventory is supplied by production callers after the
+ * engine's observation read; direct pool-only calls retain the credentialed
+ * projection used by focused tests.
+ */
 export function buildAccountsSnapshot(
   poolStatus: {
     accounts: readonly PoolAccount[]
@@ -482,13 +557,15 @@ export function buildAccountsSnapshot(
   anthropicPoolStatus = getClaudePoolStatus(),
   anthropicRouteAvailable = resolveAnthropicRouteAvailable(),
   anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
+  profileInventory?: CodexProfileInventory,
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]
   const activeAccountId = activeAccount?.accountId ?? null
-  const accounts = poolStatus.accounts.map((account, index) =>
-    buildAccountStatus(account, index === poolStatus.activeIndex, now),
+  const credentialedAccounts = profileInventory?.accounts ?? poolStatus.accounts
+  const accounts = credentialedAccounts.map(account =>
+    buildAccountStatus(account, account.accountId === activeAccountId, now),
   )
-  const readyCount = poolStatus.accounts.filter(
+  const readyCount = credentialedAccounts.filter(
     a => a.status === 'healthy' && a.usageLimitReached !== true,
   ).length
   const anthropicActive =
@@ -501,9 +578,13 @@ export function buildAccountsSnapshot(
   )
   return {
     accounts,
+    signedOutProfiles:
+      profileInventory?.signedOutProfiles.map(
+        buildSignedOutCodexProfileStatus,
+      ) ?? [],
     activeAccountId,
     readyCount,
-    poolCount: poolStatus.accounts.length,
+    poolCount: credentialedAccounts.length,
     initialized: poolStatus.initialized,
     anthropicAccounts,
     anthropicActiveAccountId: anthropicActive?.accountUuid ?? null,
@@ -529,9 +610,17 @@ export function createRealAccountsExecutor(
      * transaction without touching a real vault.
      */
     commitSwitch?: (accountId: string) => Promise<PoolAccount | null>
+    deleteTransaction?: (
+      input: CodexAccountDeletionInput,
+    ) => Promise<CodexAccountDeletionResult>
+    signOutTransaction?: (
+      input: CodexAccountSignOutInput,
+    ) => Promise<CodexAccountSignOutResult>
   } = {},
 ): AccountsCommandExecutor {
   const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
+  const deleteTransaction = options.deleteTransaction ?? deleteCodexAccount
+  const signOutTransaction = options.signOutTransaction ?? signOutCodexAccount
   return {
     // The desktop switch must run the SAME transaction the terminal
     // `/switch-account` runs, not just the pool write. `switchToAccount` alone
@@ -567,31 +656,31 @@ export function createRealAccountsExecutor(
         ? { ok: true, message: `Renamed to ${alias}` }
         : { ok: false, message: 'Could not rename that account.' }
     },
-    async delete(accountId) {
-      const account = getPoolStatus().accounts.find(
-        candidate => candidate.accountId === accountId,
-      )
-      if (!account?.vaultFilePath) {
+    async delete(accountId, expectedCredentialGeneration) {
+      const result = await deleteTransaction({
+        accountId,
+        expectedCredentialGeneration,
+        operationId: createCodexAccountDeletionOperationId(),
+      })
+      if (
+        result.status !== 'committed' &&
+        result.status !== 'already_committed'
+      ) {
         return { ok: false, message: 'Could not delete that account.' }
       }
 
-      if (!removeCodexAccount(accountId)) {
-        return { ok: false, message: 'Could not delete that account.' }
-      }
-
-      repairLeasesForDeletedAccount(accountId)
-      if (getPoolStatus().activeIndex >= 0) {
-        reassignCodexLeaseToActiveAccount('main-thread')
-      } else {
-        releaseCodexLease('main-thread')
-      }
-      resetCodexCacheContext()
-      await clearAuthRelatedCaches()
       return { ok: true, message: 'Account deleted.' }
     },
-    logout() {
-      clearCodexOAuthTokens()
-      return { ok: true, message: 'Signed out.' }
+    async logout(accountId, expectedCredentialGeneration) {
+      const result = await signOutTransaction({
+        accountId,
+        expectedCredentialGeneration,
+        operationId: createCodexAccountSignOutOperationId(),
+      })
+      return result.status === 'committed' ||
+        result.status === 'already_committed'
+        ? { ok: true, message: 'Signed out.' }
+        : { ok: false, message: 'Could not sign out that account.' }
     },
     async touchAll() {
       const results = await touchAll()
@@ -645,6 +734,20 @@ export function createSidecarAccountsDomain(
     reloadPool?: () => Promise<void>
     /** The Anthropic twin of `reloadPool`; same disk-only observation load. */
     reloadAnthropicPool?: () => Promise<void>
+    /** Read the engine's complete Codex profile inventory; injectable for tests. */
+    readProfileInventory?: () => CodexProfileInventory
+    /** Exact-id lifecycle resolver; injectable for boundary tests. */
+    resolveDeletionTarget?: (
+      accountId: string,
+    ) => CodexTargetedSignOutResolution
+    /** Lifecycle state is injected only by tests; production uses the engine singleton. */
+    lifecycle?: Pick<CodexCredentialLifecycle, 'read'>
+    /** Targeted cleanup seams keep boundary tests off live sockets and caches. */
+    retireWebSockets?: (retirement: CodexWebSocketRetirement) => void
+    repairLeases?: (accountId: string) => void
+    resetCodexCacheContext?: () => void
+    invalidateUsageCache?: () => void
+    clearAuthCaches?: () => Promise<void>
   } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
@@ -656,6 +759,33 @@ export function createSidecarAccountsDomain(
   const reloadPool = options.reloadPool ?? loadPoolForObservation
   const reloadAnthropicPool =
     options.reloadAnthropicPool ?? (async () => loadClaudePoolForObservation())
+  const readProfileInventory =
+    options.readProfileInventory ?? getCodexProfileInventory
+  const resolveDeletionTarget =
+    options.resolveDeletionTarget ?? resolveCodexAccountForTargetedSignOut
+  const lifecycle = options.lifecycle ?? codexCredentialLifecycle
+  const retireWebSockets =
+    options.retireWebSockets ?? retireCodexWebSocketSessions
+  const repairLeases =
+    options.repairLeases ??
+    ((accountId: string) => {
+      repairLeasesForUnavailableAccount(accountId, {
+        touchReplacementUsage: false,
+        persistMainActive: false,
+        reason: 'unavailable',
+      })
+    })
+  const resetCacheContext =
+    options.resetCodexCacheContext ?? resetCodexCacheContext
+  const invalidateUsage =
+    options.invalidateUsageCache ?? invalidateUsageCache
+  const clearAuthCaches =
+    options.clearAuthCaches ??
+    (() =>
+      clearAuthRelatedCaches({
+        refreshGrowthBook: false,
+        persistConfig: false,
+      }))
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
@@ -694,6 +824,19 @@ export function createSidecarAccountsDomain(
     return resolveAccount(accountId)
   }
 
+  async function resolveDeletionTargetForWrite(
+    accountId: string,
+  ): Promise<CodexTargetedSignOutResolution> {
+    const known = resolveDeletionTarget(accountId)
+    if (known.kind !== 'none') return known
+    try {
+      await reloadPool()
+    } catch {
+      return known
+    }
+    return resolveDeletionTarget(accountId)
+  }
+
   /**
    * The Anthropic twin of `resolveAccountForWrite`. The Claude pool singleton
    * has the same spawn-time-only lifetime, and the accounts page lists an
@@ -712,6 +855,101 @@ export function createSidecarAccountsDomain(
       // Keep the last known pool; the caller reports the miss.
     }
     return resolveAnthropicAccount(accountId)
+  }
+
+  async function invalidateLocalAccountCaches(): Promise<void> {
+    try {
+      resetCacheContext()
+    } catch {}
+    try {
+      invalidateUsage()
+    } catch {}
+    try {
+      await clearAuthCaches()
+    } catch {}
+  }
+
+  async function applyDeletedProfile(accountId: string): Promise<boolean> {
+    const account = resolveAccount(accountId)
+    if (!account) return false
+    if (account.vaultFilePath && existsSync(account.vaultFilePath)) return false
+
+    try {
+      retireWebSockets({
+        accountId,
+        credentialGeneration: account.credentialGeneration,
+      })
+    } catch {}
+    reconcileCodexAccountDeletion(accountId)
+    try {
+      repairLeases(accountId)
+    } catch {}
+    await invalidateLocalAccountCaches()
+    return true
+  }
+
+  async function applyExternallyCommittedSignOut(
+    notice: AccountProfileSignedOutMessage,
+  ): Promise<boolean> {
+    const lifecycleResult: CodexCredentialLifecycleReadResult = (() => {
+      try {
+        return lifecycle.read(notice.accountId)
+      } catch {
+        return { status: 'unreadable' }
+      }
+    })()
+    if (
+      lifecycleResult.status !== 'valid' ||
+      lifecycleResult.record.accountId !== notice.accountId ||
+      lifecycleResult.record.state !== 'signed_out' ||
+      lifecycleResult.record.operationKind !== 'sign_out' ||
+      lifecycleResult.record.operationId !== notice.operationId ||
+      lifecycleResult.record.credentialGeneration !==
+        notice.signedOutLifecycleGeneration ||
+      notice.signedOutLifecycleGeneration !==
+        notice.oldCredentialGeneration + 1
+    ) {
+      return false
+    }
+
+    const resolution = resolveCodexAccountForTargetedSignOut(notice.accountId)
+    if (resolution.kind !== 'credentialed') return false
+    if (
+      resolution.account.credentialGeneration !==
+      notice.oldCredentialGeneration
+    ) {
+      return false
+    }
+
+    try {
+      retireWebSockets({
+        accountId: notice.accountId,
+        credentialGeneration: notice.oldCredentialGeneration,
+      })
+    } catch {}
+
+    if (resolution.account.source === 'vault') {
+      reconcileCodexAccountSignOut({
+        accountId: resolution.account.accountId,
+        ...(resolution.account.alias
+          ? { alias: resolution.account.alias }
+          : {}),
+        vaultFilePaths: resolution.account.vaultFilePath
+          ? [resolution.account.vaultFilePath]
+          : [],
+        credentialGeneration: notice.signedOutLifecycleGeneration,
+      })
+    } else {
+      reconcileCodexAccountSignOut({
+        accountId: resolution.account.accountId,
+        source: 'config',
+      })
+    }
+    try {
+      repairLeases(notice.accountId)
+    } catch {}
+    await invalidateLocalAccountCaches()
+    return true
   }
 
   /* ── OAuth login controller (P4-15) ──────────────────────────────────────
@@ -885,6 +1123,9 @@ export function createSidecarAccountsDomain(
           getPoolStatus(),
           Date.now(),
           getClaudePoolStatus(),
+          undefined,
+          undefined,
+          readProfileInventory(),
         )
       } catch {
         return null
@@ -895,13 +1136,9 @@ export function createSidecarAccountsDomain(
       return executor.refreshUsage()
     },
 
-    async applyDeletedProfile(accountId) {
-      const account = resolveAccount(accountId)
-      if (!account) return false
-      if (account.vaultFilePath && existsSync(account.vaultFilePath)) return false
-      const result = await executor.delete(account.accountId)
-      return result.ok
-    },
+    applyDeletedProfile,
+
+    applyExternallyCommittedSignOut,
 
     setOAuthProgressSink(sink) {
       progressSink = sink
@@ -980,22 +1217,53 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.rename', result, poolChanged: result.ok }
         }
         case 'account.delete': {
-          const account = await resolveAccountForWrite(verb.accountId)
-          if (!account) {
+          const target = await resolveDeletionTargetForWrite(verb.accountId)
+          if (target.kind !== 'credentialed' && target.kind !== 'signed_out') {
             return notFound('account.delete')
           }
-          if (!account.vaultFilePath) {
+          if (
+            target.kind === 'credentialed' &&
+            target.account.source !== 'vault'
+          ) {
             return {
               verb: 'account.delete',
-              result: { ok: false, message: 'Only vault-backed accounts can be deleted.' },
+              result: {
+                ok: false,
+                message: 'Only saved account profiles can be deleted.',
+              },
               poolChanged: false,
             }
           }
-          const result = await executor.delete(account.accountId)
+          const observedGeneration =
+            target.kind === 'credentialed'
+              ? target.account.credentialGeneration
+              : target.profile.lifecycleGeneration ??
+                target.profile.credentialGeneration ??
+                null
+          if (
+            observedGeneration === null ||
+            observedGeneration !== verb.expectedCredentialGeneration
+          ) {
+            return {
+              verb: 'account.delete',
+              result: {
+                ok: false,
+                message: 'That account changed before deletion started.',
+              },
+              poolChanged: false,
+            }
+          }
+          const result = await executor.delete(
+            verb.accountId,
+            verb.expectedCredentialGeneration,
+          )
           return { verb: 'account.delete', result, poolChanged: result.ok }
         }
         case 'account.logout': {
-          const result = executor.logout()
+          const result = await executor.logout(
+            verb.accountId,
+            verb.expectedCredentialGeneration,
+          )
           return { verb: 'account.logout', result, poolChanged: result.ok }
         }
         case 'account.touchAll': {

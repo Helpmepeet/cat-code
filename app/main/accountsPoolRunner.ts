@@ -6,7 +6,8 @@
  * reads bounded NDJSON, validates the single result record fail-closed, re-scans
  * for secret-keyed material, and hands the accepted redacted result to main.
  * Ordinary runs deliver a pool snapshot; the explicit one-shot delete mode writes
- * one validated request to stdin and delivers its outcome plus the fresh pool.
+ * one validated request to stdin and delivers its outcome plus the fresh pool,
+ * while targeted sign-out delivers only its lifecycle receipt.
  *
  * The spawn/framing/teardown mechanism lives in `ndjsonWorker.ts` and the
  * refresh cadence in `singleFlightDriver.ts`; what stays here is the pool's own
@@ -18,12 +19,18 @@
 import type { spawn } from 'node:child_process'
 
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { AccountsSnapshot, UsageStatsByRange } from '../shared/protocol.js'
+import type {
+  AccountSignOutReceipt,
+  AccountsSnapshot,
+  UsageStatsByRange,
+} from '../shared/protocol.js'
 import {
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
   parseAccountsPoolWorkerResult,
   type AccountsPoolWorkerDeleteRequest,
   type AccountsPoolWorkerDeleteResult,
+  type AccountsPoolWorkerSignOutRequest,
+  type AccountsPoolWorkerSignOutResult,
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
@@ -92,9 +99,8 @@ export function runCarriesUsageStats(runIndex: number): boolean {
 }
 
 /**
- * An unanswered SIGTERM becomes a SIGKILL after this long. Unique to this
- * runner: a destructive account-delete worker must not outlive Electron
- * teardown.
+ * An unanswered SIGTERM becomes a SIGKILL after this long. Profile mutation
+ * workers must not outlive Electron teardown.
  */
 const ACCOUNTS_FORCE_KILL_AFTER_MS = 2_000
 
@@ -107,10 +113,10 @@ export type AccountsPoolRunOptions = {
   timeoutMs?: number
   spawnWorker?: typeof spawn
   /**
-   * Present only for the one-shot, session-independent account-delete mode.
+   * Present only for a one-shot, session-independent account profile mutation.
    * The exact closed request is written once to stdin before it is closed.
    */
-  input?: AccountsPoolWorkerDeleteRequest
+  input?: AccountsPoolWorkerDeleteRequest | AccountsPoolWorkerSignOutRequest
   /**
    * Destructive one-shot writes cannot outlive Electron teardown. Abort sends
    * SIGKILL immediately because app.exit can destroy escalation timers.
@@ -120,6 +126,8 @@ export type AccountsPoolRunOptions = {
   onPool?: (pool: AccountsSnapshot) => void
   /** Called at most once for an accepted account-delete result. */
   onAccountDelete?: (result: AccountsPoolWorkerDeleteResult) => void
+  /** Called at most once for an accepted targeted account-sign-out result. */
+  onAccountSignOut?: (result: AccountsPoolWorkerSignOutResult) => void
   /**
    * Called at most ONCE, and only when the accepted record actually carried
    * `usageStats` — the field is optional so a failed stats read still delivers
@@ -132,6 +140,61 @@ export type AccountsPoolRunOptions = {
 }
 
 export type AccountsPoolRunOutcome = 'delivered' | 'failure' | 'empty'
+
+/**
+ * Validate the correlation and semantic invariants that cannot be expressed by
+ * the structural worker parser alone. A receipt with a successful outcome must
+ * describe the generation transition the engine committed; otherwise main must
+ * reject it before exposing the result or scheduling an observation.
+ */
+export function validateAccountSignOutResult(
+  result: AccountsPoolWorkerSignOutResult,
+  input: AccountsPoolWorkerSignOutRequest,
+): string | null {
+  const verb = input.verb
+  const receipt: AccountSignOutReceipt = result.receipt
+  if (result.requestId !== verb.requestId) {
+    return 'accounts worker sign-out result requestId mismatch'
+  }
+  if (receipt.accountId !== verb.accountId) {
+    return 'accounts worker sign-out result accountId mismatch'
+  }
+  if (
+    receipt.expectedCredentialGeneration !==
+    verb.expectedCredentialGeneration
+  ) {
+    return 'accounts worker sign-out result generation mismatch'
+  }
+  if (receipt.operationId !== verb.requestId) {
+    return 'accounts worker sign-out result operationId mismatch'
+  }
+  if (
+    receipt.replacementActiveAccountId === receipt.accountId ||
+    (!receipt.targetWasActive && receipt.replacementActiveAccountId !== null)
+  ) {
+    return 'accounts worker sign-out replacement is inconsistent'
+  }
+  if (
+    (receipt.observedCredentialGeneration === null) !==
+    (receipt.lifecycleState === null)
+  ) {
+    return 'accounts worker sign-out lifecycle observation is inconsistent'
+  }
+  if (
+    receipt.outcome === 'committed' ||
+    receipt.outcome === 'already_committed' ||
+    receipt.outcome === 'cleanup_pending'
+  ) {
+    if (
+      receipt.observedCredentialGeneration !==
+        verb.expectedCredentialGeneration + 1 ||
+      receipt.lifecycleState !== 'signed_out'
+    ) {
+      return 'accounts worker sign-out committed receipt is inconsistent'
+    }
+  }
+  return null
+}
 
 /**
  * Spawn one worker, deliver the single pool record. Resolves with the outcome;
@@ -198,6 +261,10 @@ export async function runAccountsPoolWorker(
             protocolError = 'unexpected accounts worker delete result'
             return 'stop'
           }
+          if (options.input.type !== 'account-delete') {
+            protocolError = 'unexpected accounts worker delete result'
+            return 'stop'
+          }
           if (result.requestId !== options.input.verb.requestId) {
             protocolError = 'accounts worker delete result requestId mismatch'
             return 'stop'
@@ -209,6 +276,23 @@ export async function runAccountsPoolWorker(
             )
           ) {
             protocolError = 'accounts worker successful delete retained target account'
+            return 'stop'
+          }
+        } else if (result.type === 'account-sign-out') {
+          if (
+            !options.input ||
+            options.input.type !== 'account-sign-out' ||
+            !options.onAccountSignOut
+          ) {
+            protocolError = 'unexpected accounts worker sign-out result'
+            return 'stop'
+          }
+          const semanticError = validateAccountSignOutResult(
+            result,
+            options.input,
+          )
+          if (semanticError !== null) {
+            protocolError = semanticError
             return 'stop'
           }
         } else if (options.input || !options.onPool) {
@@ -239,6 +323,12 @@ export async function runAccountsPoolWorker(
   if (acceptedResult?.type === 'account-delete') {
     try {
       options.onAccountDelete?.(acceptedResult)
+    } catch (error) {
+      throw new Error('accounts worker result callback failed', { cause: error })
+    }
+  } else if (acceptedResult?.type === 'account-sign-out') {
+    try {
+      options.onAccountSignOut?.(acceptedResult)
     } catch (error) {
       throw new Error('accounts worker result callback failed', { cause: error })
     }

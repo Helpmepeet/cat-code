@@ -299,10 +299,10 @@ async function calibrate(target: BrowserWindow) {
 function bootstrapFrames(initial: readonly ServerFrame[]): ServerFrame[] {
   const extras: ServerFrame[] = []
   for (const descriptor of descriptors) {
-    extras.push({ kind: 'workspace-trust.snapshot', protocolVersion: 1, sessionId: descriptor.appSessionId,
+    extras.push({ kind: 'workspace-trust.snapshot', protocolVersion: 2, sessionId: descriptor.appSessionId,
       workspaceTrust: { trusted: true, detectedRepo: null, trustRoot: runDir } })
-    extras.push({ kind: 'accounts.snapshot', protocolVersion: 1, sessionId: descriptor.appSessionId, accounts: {
-      accounts: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true,
+    extras.push({ kind: 'accounts.snapshot', protocolVersion: 2, sessionId: descriptor.appSessionId, accounts: {
+      accounts: [], signedOutProfiles: [], activeAccountId: null, readyCount: 0, poolCount: 0, initialized: true,
       anthropicAccounts: [], anthropicActiveAccountId: null, anthropicReadyCount: 0,
       anthropicPoolCount: 0, anthropicInitialized: true, anthropicRouteAvailable: true,
     } })
@@ -310,7 +310,7 @@ function bootstrapFrames(initial: readonly ServerFrame[]): ServerFrame[] {
   // The initial multi-session batch may choose any session before React commits
   // the roster. A small marker per synthetic session keeps the visible proof
   // valid for the session the real selection reducer chooses (at most 8 traces).
-  const markers: ServerFrame[] = descriptors.map(descriptor => ({ kind: 'event', protocolVersion: 1, sessionId: descriptor.appSessionId, event: {
+  const markers: ServerFrame[] = descriptors.map(descriptor => ({ kind: 'event', protocolVersion: 2, sessionId: descriptor.appSessionId, event: {
     type: 'message', message: { type: 'assistant', uuid: `benchmark-bootstrap-marker-${descriptor.appSessionId}`, parent_tool_use_id: null,
       session_id: descriptor.appSessionId, message: { id: `benchmark-bootstrap-marker-${descriptor.appSessionId}`, role: 'assistant', content: [{ type: 'text', text: BOOTSTRAP_TRANSCRIPT_MARKER }] } } as never,
   }, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${descriptor.appSessionId}`, `benchmark-${process.pid}`) }))

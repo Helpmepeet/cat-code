@@ -28,9 +28,12 @@
 
 import type {
   AccountDeleteMessage,
+  AccountLogoutMessage,
   AccountStatus,
+  AccountSignOutReceipt,
   AccountsSnapshot,
   AnthropicAccountStatus,
+  SignedOutCodexProfileStatus,
   UsageStatsByRange,
   UsageStatsDailyActivityItem,
   UsageStatsDailyModelTokens,
@@ -75,7 +78,7 @@ export type AccountsPoolWorkerPoolResult = {
    * ~5 KB) against a worker that already pays the engine import and a network
    * usage fetch every run.
    *
-   * OPTIONAL on purpose, and the reason this stayed boundary-version 1: a stats
+   * OPTIONAL on purpose, and the reason this stays boundary-version 1: a stats
    * read that fails must not cost the pool its delivery, so the worker omits the
    * field and main still emits the accounts event. Absent means "this run had
    * none", never "the user has no history" — the renderer keeps its last good
@@ -106,10 +109,25 @@ export type AccountsPoolWorkerDeleteResult = {
   pool: AccountsSnapshot
 }
 
+export type AccountsPoolWorkerSignOutRequest = {
+  type: 'account-sign-out'
+  version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
+  verb: AccountLogoutMessage
+}
+
+export type AccountsPoolWorkerSignOutResult = {
+  type: 'account-sign-out'
+  version: typeof ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION
+  requestId: string
+  verb: 'account.logout'
+  receipt: AccountSignOutReceipt
+}
+
 export type AccountsPoolWorkerResult =
   | AccountsPoolWorkerPoolResult
   | AccountsPoolWorkerFailureResult
   | AccountsPoolWorkerDeleteResult
+  | AccountsPoolWorkerSignOutResult
 
 export function parseAccountDeleteMessage(
   value: unknown,
@@ -118,7 +136,19 @@ export function parseAccountDeleteMessage(
     type: oneOf(['account.delete'] as const),
     requestId: isBoundedText,
     accountId: isBoundedText,
+    expectedCredentialGeneration: isSafeNonnegativeInteger,
     confirm: oneOf([true] as const),
+  })
+}
+
+export function parseAccountLogoutMessage(
+  value: unknown,
+): AccountLogoutMessage | null {
+  return narrowExact(value, {
+    type: oneOf(['account.logout'] as const),
+    requestId: isBoundedText,
+    accountId: isBoundedText,
+    expectedCredentialGeneration: isSafeNonnegativeInteger,
   })
 }
 
@@ -134,6 +164,47 @@ export function parseAccountsPoolWorkerDeleteRequest(
   const verb = parseAccountDeleteMessage(request.verb)
   if (!verb) return null
   return { ...request, verb }
+}
+
+export function parseAccountsPoolWorkerSignOutRequest(
+  value: unknown,
+): AccountsPoolWorkerSignOutRequest | null {
+  const request = narrowExact(value, {
+    type: oneOf(['account-sign-out'] as const),
+    version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+    verb: isRecord,
+  })
+  if (!request) return null
+  const verb = parseAccountLogoutMessage(request.verb)
+  if (!verb) return null
+  return { ...request, verb }
+}
+
+export function parseAccountSignOutReceipt(
+  value: unknown,
+): AccountSignOutReceipt | null {
+  return narrowExact(value, {
+    outcome: oneOf([
+      'committed',
+      'already_committed',
+      'superseded',
+      'cleanup_pending',
+      'retryable_unknown',
+    ] as const),
+    accountId: isBoundedText,
+    expectedCredentialGeneration: isSafeNonnegativeInteger,
+    observedCredentialGeneration: isSafeNonnegativeIntegerOrNull,
+    lifecycleState: oneOf([
+      'login_prepared',
+      'credentialed',
+      'signed_out',
+      'reauth_required',
+      null,
+    ] as const),
+    operationId: isBoundedText,
+    targetWasActive: isBoolean,
+    replacementActiveAccountId: isBoundedTextOrNull,
+  })
 }
 
 /**
@@ -194,6 +265,19 @@ export function parseAccountsPoolWorkerResult(
     const pool = parseAccountsSnapshot(deletion.pool)
     if (!pool) return null
     return { ...deletion, pool }
+  }
+  if (value.type === 'account-sign-out') {
+    const signOut = narrowExact(value, {
+      type: oneOf(['account-sign-out'] as const),
+      version: oneOf([ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION] as const),
+      requestId: isBoundedText,
+      verb: oneOf(['account.logout'] as const),
+      receipt: isRecord,
+    })
+    if (!signOut) return null
+    const receipt = parseAccountSignOutReceipt(signOut.receipt)
+    if (!receipt) return null
+    return { ...signOut, receipt }
   }
   if (value.type === 'failure') {
     return narrowExact(value, {
@@ -334,6 +418,7 @@ function parseNumberMap(value: unknown): Record<string, number> | null {
 export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
   const snapshot = narrowExact(value, {
     accounts: isUnknownArray,
+    signedOutProfiles: isUnknownArray,
     activeAccountId: isStringOrNull,
     readyCount: isNumber,
     poolCount: isNumber,
@@ -357,6 +442,12 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
     if (!account) return null
     accounts.push(account)
   }
+  const signedOutProfiles: SignedOutCodexProfileStatus[] = []
+  for (const candidate of snapshot.signedOutProfiles) {
+    const profile = parseSignedOutCodexProfileStatus(candidate)
+    if (!profile) return null
+    signedOutProfiles.push(profile)
+  }
   const anthropicAccounts: AnthropicAccountStatus[] = []
   for (const candidate of snapshot.anthropicAccounts) {
     const account = parseAnthropicAccountStatus(candidate)
@@ -364,12 +455,13 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
     anthropicAccounts.push(account)
   }
 
-  return { ...snapshot, accounts, anthropicAccounts }
+  return { ...snapshot, accounts, signedOutProfiles, anthropicAccounts }
 }
 
 function parseAccountStatus(value: unknown): AccountStatus | null {
   return narrowExact(value, {
-    id: isString,
+    id: isBoundedText,
+    credentialGeneration: isSafeNonnegativeInteger,
     alias: isStringOrNull,
     status: oneOf(['healthy', 'dead', 'capped', 'quarantined'] as const),
     statusReason: isStringOrNull,
@@ -387,6 +479,33 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
     lastError: isStringOrNull,
     planType: isStringOrNull,
     switchable: isBoolean,
+  })
+}
+
+function parseSignedOutCodexProfileStatus(
+  value: unknown,
+): SignedOutCodexProfileStatus | null {
+  return narrowExact(value, {
+    id: isBoundedText,
+    alias: isStringOrNull,
+    state: oneOf(['signed_out', 'recovery_required'] as const),
+    credentialGeneration: isSafeNonnegativeIntegerOrNull,
+    lifecycleGeneration: isSafeNonnegativeIntegerOrNull,
+    credentialGenerationState: oneOf(
+      ['lifecycle_bound', 'legacy_unbound', null] as const,
+    ),
+    lifecycleState: oneOf(
+      [
+        'login_prepared',
+        'credentialed',
+        'signed_out',
+        'reauth_required',
+        null,
+      ] as const,
+    ),
+    lifecycleReadStatus: oneOf(
+      ['absent', 'valid', 'malformed', 'unreadable'] as const,
+    ),
   })
 }
 
@@ -410,4 +529,18 @@ function isBoundedText(value: unknown): value is string {
     value.length > 0 &&
     value.length <= MAX_TEXT_FIELD_CHARS
   )
+}
+
+function isBoundedTextOrNull(value: unknown): value is string | null {
+  return value === null || isBoundedText(value)
+}
+
+function isSafeNonnegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isSafeNonnegativeIntegerOrNull(
+  value: unknown,
+): value is number | null {
+  return value === null || isSafeNonnegativeInteger(value)
 }
