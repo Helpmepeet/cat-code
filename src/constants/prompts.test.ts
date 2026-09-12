@@ -52,6 +52,8 @@ describe('GPT read discipline guidance', () => {
       const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
 
       expect(guidance).toContain('Grep to locate')
+      expect(guidance).toContain('Read files systematically when the requested coverage requires it')
+      expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('head_limit')
     } finally {
       if (savedEmbeddedSearch === undefined) {
@@ -72,6 +74,8 @@ describe('GPT read discipline guidance', () => {
       const guidance = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
 
       expect(guidance).toContain('READ DISCIPLINE:')
+      expect(guidance).toContain('Read files systematically when the requested coverage requires it')
+      expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('`find` or `grep` via the Bash tool')
       expect(guidance).not.toContain('Grep')
       expect(guidance).not.toContain('Glob')

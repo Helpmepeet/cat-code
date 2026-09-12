@@ -258,7 +258,7 @@ test('normal startup prepares the live MCP snapshot source and cancels URL elici
   ).toEqual({ action: 'cancel' })
 })
 
-test('normal startup appends the desktop file-reference instruction', async () => {
+test('normal startup appends the desktop interface and file-reference instructions', async () => {
   // The engine's tone section teaches the TERMINAL convention
   // (`src/constants/prompts.ts:502` — bare `file_path:line_number`, an OSC 8
   // hyperlink in the TUI). A renderer has no OSC 8, so a desktop session must
@@ -272,6 +272,7 @@ test('normal startup appends the desktop file-reference instruction', async () =
   expect(queryEngineConfig.appendSystemPrompt).toStartWith(
     DESKTOP_SYSTEM_PROMPT_ADDENDUM,
   )
+  expect(queryEngineConfig.appendSystemPrompt).toContain('Interface: Cat Code desktop app, in a session tab.')
   expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
 })
 
@@ -781,7 +782,7 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   // The rest of the doctrine still applies: an unnamed session still gets the
   // whole guideline, including the create-only-when-asked rule.
   expect(unnamed).toContain(
-    'nothing obliges an acknowledgment; a short okay or silence can both be right',
+    'Nothing obliges an acknowledgment; a short okay or silence can both be right',
   )
   // The relay to the user carries the outcome, not the peer's evidence: one
   // creator reproduced its peer's whole command list and the user read the

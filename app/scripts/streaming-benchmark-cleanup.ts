@@ -1,0 +1,96 @@
+export type ProcessGroupOps = {
+  alive(processGroupId: number): boolean
+  signal(processGroupId: number, signal: NodeJS.Signals): void
+  sleep(ms: number): Promise<void>
+}
+
+const realOps: ProcessGroupOps = {
+  alive: processGroupId => {
+    try { process.kill(-processGroupId, 0); return true } catch { return false }
+  },
+  signal: (processGroupId, signal) => { process.kill(-processGroupId, signal) },
+  sleep: ms => new Promise(resolve => setTimeout(resolve, ms)),
+}
+
+/** Reap only the detached process group minted for one benchmark sample. */
+export async function reapOwnedProcessGroup(
+  processGroupId: number,
+  options: { initialWaitMs?: number; termWaitMs?: number; killWaitMs?: number; pollMs?: number; ops?: ProcessGroupOps } = {},
+): Promise<void> {
+  if (!Number.isSafeInteger(processGroupId) || processGroupId < 1) throw new Error('invalid owned process group id')
+  const ops = options.ops ?? realOps
+  const pollMs = options.pollMs ?? 25
+  if (await waitGone(processGroupId, options.initialWaitMs ?? 5_000, pollMs, ops)) return
+  try { ops.signal(processGroupId, 'SIGTERM') } catch {}
+  if (await waitGone(processGroupId, options.termWaitMs ?? 2_000, pollMs, ops)) return
+  try { ops.signal(processGroupId, 'SIGKILL') } catch {}
+  if (await waitGone(processGroupId, options.killWaitMs ?? 2_000, pollMs, ops)) return
+  throw new Error(`owned Electron process group ${processGroupId} remained after SIGKILL`)
+}
+
+export async function cleanupInterruptedRun({
+  processGroupId,
+  removeScratch,
+  exit,
+  exitCode,
+  reap = reapOwnedProcessGroup,
+}: {
+  processGroupId: number | null
+  removeScratch(): void
+  exit(code: number): void
+  exitCode: number
+  reap?: typeof reapOwnedProcessGroup
+}): Promise<void> {
+  if (processGroupId !== null) await reap(processGroupId, { initialWaitMs: 0 })
+  removeScratch()
+  exit(exitCode)
+}
+
+export class OwnedProcessGroupLifecycle {
+  private activeId: number | null = null
+  private cleanup: Promise<void> | null = null
+  private interrupted = false
+
+  constructor(private readonly reap: typeof reapOwnedProcessGroup = reapOwnedProcessGroup) {}
+
+  begin(processGroupId: number): void {
+    if (this.interrupted) throw new Error('benchmark interrupted; refusing to start another sample')
+    if (this.activeId !== null) throw new Error(`owned process group ${this.activeId} is still active`)
+    this.activeId = processGroupId
+  }
+
+  interrupt(): Promise<void> {
+    this.interrupted = true
+    return this.reapActive(0)
+  }
+
+  reapActive(initialWaitMs = 5_000): Promise<void> {
+    if (this.activeId === null) return Promise.resolve()
+    if (this.cleanup) return this.cleanup
+    const ownedId = this.activeId
+    this.cleanup = this.reap(ownedId, { initialWaitMs }).then(() => {
+      if (this.activeId === ownedId) this.activeId = null
+      this.cleanup = null
+    })
+    // Keep a rejected promise and the active id: ownership is not cleared until
+    // reaping is confirmed, and every waiter observes the same failure.
+    return this.cleanup
+  }
+
+  get canStartSample(): boolean { return !this.interrupted && this.activeId === null }
+  get activeProcessGroupId(): number | null { return this.activeId }
+}
+
+export function boundedFailureDetail(message: string, stderr: string, maxChars = 8_192): string {
+  const tail = stderr.slice(-Math.max(0, maxChars)).trim() || '(empty)'
+  return `${message}; stderr tail: ${tail}`
+}
+
+async function waitGone(processGroupId: number, waitMs: number, pollMs: number, ops: ProcessGroupOps): Promise<boolean> {
+  const attempts = Math.max(1, Math.ceil(waitMs / Math.max(1, pollMs)))
+  for (let index = 0; index < attempts; index++) {
+    if (!ops.alive(processGroupId)) return true
+    await ops.sleep(pollMs)
+  }
+  return !ops.alive(processGroupId)
+}

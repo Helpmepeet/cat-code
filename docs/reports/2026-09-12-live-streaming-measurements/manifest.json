@@ -1,0 +1,109 @@
+{
+  "status": "Frozen workload definition; not a measured performance result",
+  "originalSourceCheckpoint": "3cc530e7b85ab35e619f92de22ad35b562b03c62",
+  "manifest": {
+    "version": 1,
+    "seed": "streaming-2026-09-12-v1",
+    "warmupMs": 1000,
+    "durationMs": 4000,
+    "repetitions": 3,
+    "policies": [
+      "original",
+      "0",
+      "8",
+      "16"
+    ],
+    "workloads": [
+      {
+        "id": "sparse-1",
+        "sessions": 1,
+        "intervalMs": 100,
+        "history": 0,
+        "burst": 1,
+        "barrierEvery": 0
+      },
+      {
+        "id": "paced-4",
+        "sessions": 4,
+        "intervalMs": 20,
+        "history": 0,
+        "burst": 1,
+        "barrierEvery": 0
+      },
+      {
+        "id": "paced-8",
+        "sessions": 8,
+        "intervalMs": 20,
+        "history": 0,
+        "burst": 1,
+        "barrierEvery": 0
+      },
+      {
+        "id": "long-history-8",
+        "sessions": 8,
+        "intervalMs": 20,
+        "history": 1200,
+        "burst": 1,
+        "barrierEvery": 0
+      },
+      {
+        "id": "burst-4",
+        "sessions": 4,
+        "intervalMs": 100,
+        "history": 0,
+        "burst": 5,
+        "barrierEvery": 0
+      },
+      {
+        "id": "barriers-4",
+        "sessions": 4,
+        "intervalMs": 20,
+        "history": 0,
+        "burst": 1,
+        "barrierEvery": 10
+      }
+    ],
+    "historyTextCharacters": 400,
+    "deltaText": "sample text ภาษาไทย ",
+    "aggregation": "Report every sample and per-policy medians; compare identical workload hashes. Rotate policy order by repetition. No app-wide CPU/commit/battery claim from the headless tier."
+  },
+  "manifestHash": "726eedb32f5cf2fd7eda9fff1b46e7116bf15228002e0c9051afcac6e509ffcc",
+  "fixtures": [
+    {
+      "workload": "sparse-1",
+      "initialFrames": 4,
+      "arrivalFrames": 43,
+      "hash": "60543819d6faeba28b7316a0d949d4d9ae226a3abf574f6384cb00d66f6a01b0"
+    },
+    {
+      "workload": "paced-4",
+      "initialFrames": 16,
+      "arrivalFrames": 812,
+      "hash": "062ae7115ae4b37feedfb78fe30919f4a0458fb33e44a608a44466651938a277"
+    },
+    {
+      "workload": "paced-8",
+      "initialFrames": 32,
+      "arrivalFrames": 1624,
+      "hash": "e6cbe62dc4143f93d208f272294970033c5402f0671c4e983d7f21d9bcc23532"
+    },
+    {
+      "workload": "long-history-8",
+      "initialFrames": 9632,
+      "arrivalFrames": 1624,
+      "hash": "96ab97f03de1e38c2bebcd679a888e43453b53ba31b438b8a84cd81f75ada328"
+    },
+    {
+      "workload": "burst-4",
+      "initialFrames": 16,
+      "arrivalFrames": 812,
+      "hash": "5a4d08dd929c50349cec3065993906ed1137bfa08bdb0690278f596f881d9595"
+    },
+    {
+      "workload": "barriers-4",
+      "initialFrames": 16,
+      "arrivalFrames": 972,
+      "hash": "0e96d20a6f8bfe183c44c4197090917ae95138400a379edd30b6bb2b94dde51b"
+    }
+  ]
+}

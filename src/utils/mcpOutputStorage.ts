@@ -45,17 +45,13 @@ export function getLargeOutputInstructions(
   const baseInstructions =
     `Error: result (${contentLength.toLocaleString()} characters) exceeds maximum allowed tokens. Output has been saved to ${rawOutputPath}.\n` +
     `Format: ${formatDescription}\n` +
-    `Use offset and limit parameters to read specific portions of the file, search within it for specific content, and jq to make structured queries.\n` +
-    `REQUIREMENTS FOR SUMMARIZATION/ANALYSIS/REVIEW:\n` +
-    `- You MUST read the content from the file at ${rawOutputPath} in sequential chunks until 100% of the content has been read.\n`
+    `Use offset and limit parameters to read specific portions of the file, search within it for specific content, and jq to make structured queries.\n`
 
-  const truncationWarning = maxReadLength
-    ? `- If you receive truncation warnings when reading the file ("[N lines truncated]"), reduce the chunk size until you have read 100% of the content without truncation ***DO NOT PROCEED UNTIL YOU HAVE DONE THIS***. Bash output is limited to ${maxReadLength.toLocaleString()} chars.\n`
-    : `- If you receive truncation warnings when reading the file, reduce the chunk size until you have read 100% of the content without truncation.\n`
+  const readLimit = maxReadLength
+    ? `Bash output is limited to ${maxReadLength.toLocaleString()} chars.\n`
+    : ''
 
-  const completionRequirement = `- Before producing ANY summary or analysis, you MUST explicitly describe what portion of the content you have read. ***If you did not read the entire content, you MUST explicitly state this.***\n`
-
-  return baseInstructions + truncationWarning + completionRequirement
+  return baseInstructions + readLimit
 }
 
 /**

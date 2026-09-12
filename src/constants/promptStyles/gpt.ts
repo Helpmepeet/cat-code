@@ -247,12 +247,12 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
   // gets no rule rather than a pointer to something it cannot call.
   const readDisciplineLead = embedded
     ? hasBashTool
-      ? `READ DISCIPLINE: Use targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
+      ? `READ DISCIPLINE: Prefer targeted \`find\` or \`grep\` via the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. For large files, prefer offset/limit to read in manageable chunks.`
       : null
     : enabledTools.has(GREP_TOOL_NAME)
-      ? `READ DISCIPLINE: ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, use offset/limit instead of a full read.`
+      ? `READ DISCIPLINE: Prefer ${GREP_TOOL_NAME} to locate, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. Keep ${GREP_TOOL_NAME}'s default head_limit; never pass head_limit:0 unless you genuinely need every match. For large files, prefer offset/limit to read in manageable chunks.`
       : hasBashTool
-        ? `READ DISCIPLINE: Use targeted \`rg\` or \`rg --files\` through the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range — do not sweep a directory file-by-file. For large files, use offset/limit instead of a full read.`
+        ? `READ DISCIPLINE: Prefer targeted \`rg\` or \`rg --files\` through the ${BASH_TOOL_NAME} tool to locate files, then ${FILE_READ_TOOL_NAME} the specific file or line range when that can answer the question. Read files systematically when the requested coverage requires it. For large files, prefer offset/limit to read in manageable chunks.`
         : null
   const readDiscipline =
     hasReadTool && readDisciplineLead !== null
@@ -321,6 +321,8 @@ export function getGPTOutputSection(): string {
   return `# Communicating with the User
 
 For multi-step work, state the first step before using tools. Update the user when a finding or milestone changes what they need to know, with the result and next step. Routine tool calls do not need narration.
+
+During prolonged work or waits, give an occasional brief update on what is happening or what you are waiting for, even when there is no new finding. Base it on observed status and avoid repetitive updates.
 
 Make the final answer self-contained: give the outcome, relevant evidence and validation, and anything unresolved. Preserve the requested artifact's format and level of detail. Use enough explanation to support the conclusion, without recapping routine process or offering unrequested extra work.
 
