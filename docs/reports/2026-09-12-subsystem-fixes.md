@@ -1,6 +1,6 @@
 # Subsystem review fixes
 
-All **24 confirmed findings** from [the ten-subsystem review](2026-09-12-ten-subsystem-review.md) are fixed in `codex/subsystem-fixes`. The final headless checks passed: **4,803 desktop tests**, **20 file-isolated integration regressions**, the engine build, app typecheck, scoped sidecar typecheck, and renderer build. Electron hardening and visual acceptance remain unrun.
+All **24 confirmed findings** from [the ten-subsystem review](2026-09-12-ten-subsystem-review.md) are fixed in `codex/subsystem-fixes`. The final headless checks passed: **4,803 desktop tests**, **20 file-isolated integration regressions**, the engine build, app typecheck, scoped sidecar typecheck, and renderer build. The subsequently authorized Electron hardening check passed **19/19 checks**. Visual acceptance remains unverified.
 
 Worktree: `/Users/pt/cat-code/.worktrees/subsystem-fixes`. Starting commit: `a375ab57`. GPT-5.6-Sol workers implemented the fixes and regression coverage; the parent reviewed their evidence, requested stronger integration tests where needed, and ran the final verification. Changes remain on this worktree branch, unmerged and unpushed.
 
@@ -33,7 +33,7 @@ QU1 coverage crosses the real sidecar controller, app-session adapters, QueryEng
 
 ## Final verification
 
-All commands ran from the worktree. The local `tmp/subsystem-fixes-2026-09-12/run-isolated.ts` runner creates temporary configuration directories, supplies an inert fixture key, disables nonessential traffic, and removes the temporary configuration afterward. The full desktop suite required local socket/process access beyond the filesystem sandbox; no Electron app or live account was used.
+All commands ran from the worktree. The local `tmp/subsystem-fixes-2026-09-12/run-isolated.ts` runner creates temporary configuration directories, supplies an inert fixture key, disables nonessential traffic, and removes the temporary configuration afterward. The full desktop suite required local socket/process access beyond the filesystem sandbox and used no Electron app or live account. The separate Electron hardening run was explicitly authorized by the user and used temporary test configuration.
 
 | Check | Result | Local log |
 |---|---|---|
@@ -44,6 +44,7 @@ All commands ran from the worktree. The local `tmp/subsystem-fixes-2026-09-12/ru
 | `bun run --cwd app typecheck:sidecar` | Passed; wrapper reports 5,563 upstream diagnostics ignored | `tmp/subsystem-fixes-2026-09-12/final-sidecar-typecheck.log` |
 | Raw engine type diagnostic comparison | **Zero introduced diagnostics** across all 29 changed/new `src/` paths: 88 normalized baseline diagnostics and the same 88 current diagnostics | `tmp/subsystem-fixes-2026-09-12/all-changed-src-{base-confirmation,current-confirmation-after,introduced-confirmation-after}-normalized.log` |
 | `bun run --cwd app renderer:build` | Passed; existing large-chunk warning remains | `tmp/subsystem-fixes-2026-09-12/final-renderer-build.log` |
+| `bun run --cwd app test:hardening` | **19/19 passed**, exit 0; production renderer, preload bridge, CSP, navigation, window-open, and debug-export checks | `tmp/subsystem-fixes-2026-09-12/final-hardening-smoke.log` |
 
 The raw repository typecheck remains known-red; it is not reported as passing. The comparison used an exact archive of base `a375ab57`, the same installed dependencies, and normalized file/diagnostic messages without line-number drift. Introduced fixture type errors found during integration were corrected before the final comparison. The engine build retains 18 ignored-app-file lint warnings, with zero lint errors.
 
@@ -62,7 +63,7 @@ Current callers and tests were checked for the tool execution/delivery callbacks
 
 ## Remaining acceptance and scope
 
-`bun run --cwd app test:hardening` remains **unrun**: its runner launches Electron. [CLAUDE.md §3](../../CLAUDE.md#L143) says, “Launching is a GUI action requiring authorization for that run (§8).” Approval for that run is still needed. After approval, run the hardening command through the same temporary-config runner and require every smoke check to pass. It is a security smoke check, not a substitute for visual acceptance.
+`bun run --cwd app test:hardening` passed **19/19 checks** after the user explicitly authorized that Electron launch. It ran through the temporary-config runner and exited 0 after the renderer-document and main-process policy checks passed. The harness exercises the packaged main/renderer security path; the dev checkout has no packaged sidecar, so its catalog/accounts startup warnings do not establish session execution. No live provider session was started. This is security smoke evidence; visual acceptance remains separate.
 
 The changed renderer behaviors have headless coverage; their GUI acceptance remains unverified. In an authorized operator session, check the Accounts usage windows for consistent model colors and resumed activity; complete an own-session idle account switch after failover and verify the selected account label; refuse multiple queued submissions with images and verify that the composer restores their original order ahead of the current draft. Provider-backed exercises require their own live-account authorization.
 
