@@ -385,4 +385,24 @@ describe('attachment and live-delivery composition', () => {
     expect(gate.onRendererReady()).toEqual([])
     expect(h.deliveries).toEqual([])
   })
+
+  test('a new ready identity invalidates old delivery copies before replay', () => {
+    const gate = new AttachmentGate()
+    const h = harness()
+    const attached = createAttachedFrameDeliveryCoordinator(gate, h.coordinator)
+    const ready = createRendererReadyTracker(() => attached.onNavigationStart())
+
+    ready.ready('first-document')
+    gate.onRendererReady()
+    attached.onFrame('a', base('old-document'))
+    expect(h.coordinator.stats().queuedFrames).toBe(1)
+
+    expect(ready.ready('replacement-document')).toBe(true)
+    expect(h.coordinator.stats().queuedFrames).toBe(0)
+    expect(gate.onRendererReady()).toEqual([base('old-document')])
+
+    attached.onFrame('a', base('same-document'))
+    expect(ready.ready('replacement-document')).toBe(false)
+    expect(h.coordinator.stats().queuedFrames).toBe(1)
+  })
 })

@@ -1741,6 +1741,10 @@ function createWindow(): void {
   })
   disposeRendererRecovery = () => rendererLossTransition.dispose()
   const rendererReadyTracker = createRendererReadyTracker(() => {
+    // The ready document id is independent evidence of a new destination. If
+    // Electron missed/delayed did-start-navigation, discard old delivery copies
+    // and re-arm replay before spending the one-shot attachment latch below.
+    attachedFrameDelivery?.onNavigationStart()
     rendererLossTransition.documentReady()
     if (rendererRecovering) {
       rendererRecovering = false
