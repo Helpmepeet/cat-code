@@ -136,7 +136,7 @@ import {
   reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreSelectedPrompt,
-  restoreDraftWithRefusedSnapshot,
+  applyRefusedSubmitRestoration,
   restoreDraftWithPending,
   selectAgentMentionItems,
   selectFileAttachment,
@@ -2394,27 +2394,23 @@ export function App() {
     sessionId: SessionId,
     retained: readonly RetainedSubmit[],
   ) => {
-    const previous = refusedSubmitPrefixesRef.current.get(sessionId) ?? null
-    const preview = restoreDraftWithRefusedSnapshot(
-      selectPromptDraft(promptDraftsRef.current, sessionId),
-      previous,
+    const restored = applyRefusedSubmitRestoration(
+      promptDraftsRef.current,
+      refusedSubmitPrefixesRef.current,
+      sessionId,
       retained,
     )
-    setPromptDrafts(drafts => {
-      const restored = restoreDraftWithRefusedSnapshot(
-        selectPromptDraft(drafts, sessionId),
-        previous,
-        retained,
-      )
-      refusedSubmitPrefixesRef.current.set(sessionId, restored.state)
-      return reducePromptDrafts(drafts, sessionId, restored.draft)
-    })
-    for (const entry of preview.retained) {
+    refusedSubmitPrefixesRef.current = restored.recovery
+    promptDraftsRef.current = restored.drafts
+    setPromptDrafts(promptDraftsRef.current)
+    if (restored.images !== null) {
       setImageAttachmentState(state =>
-        reduceSessionImagesRestored(state, sessionId, entry.images),
+        reduceSessionImagesRestored(state, sessionId, restored.images ?? []),
       )
+    }
+    if (restored.file !== null) {
       setFileAttachmentState(state =>
-        reduceSessionFileAttachmentRestored(state, sessionId, entry.file),
+        reduceSessionFileAttachmentRestored(state, sessionId, restored.file),
       )
     }
   }, [])

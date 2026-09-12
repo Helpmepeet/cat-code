@@ -3209,10 +3209,10 @@ test('D5 wiring tripwire: a refused submit is retained at send and restored from
   // because only one is ever held. `reduceSessionImagesRestored` is the guarded
   // form: an empty `retained.images` must not erase an image attached to the
   // CURRENT draft (round8 finding 1).
-  expect(restoreBody).toContain('restoreDraftWithRefusedSnapshot(')
-  expect(restoreBody).toContain('refusedSubmitPrefixesRef.current.get(sessionId)')
-  expect(restoreBody).toContain('refusedSubmitPrefixesRef.current.set(sessionId, restored.state)')
-  expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, entry.images)')
+  expect(restoreBody).toContain('applyRefusedSubmitRestoration(')
+  expect(restoreBody).toContain('refusedSubmitPrefixesRef.current = restored.recovery')
+  expect(restoreBody).toContain('promptDraftsRef.current = restored.drafts')
+  expect(restoreBody).toContain('reduceSessionImagesRestored(state, sessionId, restored.images')
   // The ordered snapshot is handed in rather than looked up. The reducer marks
   // already-restored entries, so duplicate answers emit no second snapshot.
   expect(restoreBody).not.toContain('selectRetainedSubmit(')

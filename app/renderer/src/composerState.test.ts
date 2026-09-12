@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { AgentConfigSnapshot, ServerFrame } from '../../shared/protocol.js'
+import { selectPromptDraft } from './appModel.js'
 import {
+  applyRefusedSubmitRestoration,
   createRetainedSubmitState,
   foldRecalledPrompts,
   reduceRetainedSubmitCleared,
@@ -1672,6 +1674,44 @@ describe('D5 — a refused submit comes back, images included', () => {
     )
     expect(edited.draft).toBe('NEW\nuser rewrote OLD\nLIVE')
     expect(edited.retained).toEqual([next])
+  })
+
+  test('App restoration actions compose atomically against the latest draft state', () => {
+    const drafts = { [S1]: 'CURRENT' }
+    const a = { submitId: 'A', text: 'A', images: [image] }
+    const b = { submitId: 'B', text: 'B', images: [] }
+    const first = applyRefusedSubmitRestoration(
+      drafts, new Map(), S1, [a],
+    )
+    const second = applyRefusedSubmitRestoration(
+      first.drafts, first.recovery, S1, [a, b],
+    )
+    expect(selectPromptDraft(second.drafts, S1)).toBe('A\nB\nCURRENT')
+    expect(first.images).toEqual([image])
+    expect(second.images).toBeNull()
+    // Inputs stay immutable, so React StrictMode may evaluate the transition
+    // twice without duplicating a prefix or mutating shared recovery metadata.
+    expect(applyRefusedSubmitRestoration(
+      first.drafts, first.recovery, S1, [a, b],
+    )).toEqual(second)
+  })
+
+  test('an older refusal arriving later cannot replace the newer refused image', () => {
+    const older = {
+      submitId: 'A', text: 'A', images: [{ ...image, data: 'OLDER' }],
+    }
+    const newer = {
+      submitId: 'B', text: 'B', images: [{ ...image, data: 'NEWER' }],
+    }
+    const b = applyRefusedSubmitRestoration(
+      { [S1]: 'LIVE' }, new Map(), S1, [newer],
+    )
+    expect(b.images?.[0]?.data).toBe('NEWER')
+    const a = applyRefusedSubmitRestoration(
+      b.drafts, b.recovery, S1, [older, newer],
+    )
+    expect(a.images).toBeNull()
+    expect(selectPromptDraft(a.drafts, S1)).toBe('A\nB\nLIVE')
   })
 
   test('a park refusal carrying a recall’s id cannot refuse a submit', () => {

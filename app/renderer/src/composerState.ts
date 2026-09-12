@@ -37,6 +37,11 @@ import {
   ACCEPTED_IMAGE_TYPES,
   type AcceptedImageType,
 } from './imageAttachment.js'
+import {
+  reducePromptDrafts,
+  selectPromptDraft,
+  type PromptDraftState,
+} from './appModel.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
 
@@ -1227,6 +1232,7 @@ export function reduceSubmitAnswers(
 /** Replace App's exact prior refusal prefix while preserving later live edits. */
 export type RefusedDraftRestoreState = {
   prefix: string
+  representedIds: readonly string[]
   submitIds: readonly string[]
 }
 
@@ -1245,14 +1251,54 @@ export function restoreDraftWithRefusedSnapshot(
       : draft.slice(previous.prefix.length + 1)
   }
   const previousIds = new Set(previous?.submitIds ?? [])
-  const retained = previousIntact
-    ? refused
-    : refused.filter(entry => !previousIds.has(entry.submitId))
-  const prefix = retained.map(entry => entry.text).filter(Boolean).join('\n')
+  const newlyRefused = refused.filter(entry => !previousIds.has(entry.submitId))
+  const representedIds = new Set(
+    previousIntact ? previous?.representedIds : [],
+  )
+  for (const entry of newlyRefused) representedIds.add(entry.submitId)
+  const represented = refused.filter(entry => representedIds.has(entry.submitId))
+  const prefix = represented.map(entry => entry.text).filter(Boolean).join('\n')
   return {
     draft: restoreDraftWithPending(liveDraft, prefix),
-    state: { prefix, submitIds: retained.map(entry => entry.submitId) },
-    retained,
+    state: {
+      prefix,
+      representedIds: represented.map(entry => entry.submitId),
+      submitIds: [...previousIds, ...newlyRefused.map(entry => entry.submitId)],
+    },
+    retained: newlyRefused,
+  }
+}
+
+export function applyRefusedSubmitRestoration(
+  drafts: PromptDraftState,
+  recovery: ReadonlyMap<SessionId, RefusedDraftRestoreState>,
+  sessionId: SessionId,
+  refused: readonly RetainedSubmit[],
+): {
+  drafts: PromptDraftState
+  recovery: Map<SessionId, RefusedDraftRestoreState>
+  images: readonly ImageAttachment[] | null
+  file: FileAttachment | null
+} {
+  const restored = restoreDraftWithRefusedSnapshot(
+    selectPromptDraft(drafts, sessionId),
+    recovery.get(sessionId) ?? null,
+    refused,
+  )
+  const nextRecovery = new Map(recovery)
+  nextRecovery.set(sessionId, restored.state)
+  const newlyRefusedIds = new Set(restored.retained.map(entry => entry.submitId))
+  const imageWinner = [...refused].reverse().find(entry => entry.images.length > 0)
+  const fileWinner = [...refused].reverse().find(entry => entry.file != null)
+  return {
+    drafts: reducePromptDrafts(drafts, sessionId, restored.draft),
+    recovery: nextRecovery,
+    images: imageWinner && newlyRefusedIds.has(imageWinner.submitId)
+      ? imageWinner.images
+      : null,
+    file: fileWinner && newlyRefusedIds.has(fileWinner.submitId)
+      ? (fileWinner.file ?? null)
+      : null,
   }
 }
 
