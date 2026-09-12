@@ -377,8 +377,26 @@ type CodexResponseFailure = {
 
 export class CodexResponseFailedError extends Error {
   constructor(public readonly failure: CodexResponseFailure) {
-    super(`Codex response.failed (${failure.code}): ${failure.message}`)
+    const responseEventType =
+      failure.type === 'response.incomplete'
+        ? 'response.incomplete'
+        : 'response.failed'
+    super(`Codex ${responseEventType} (${failure.code}): ${failure.message}`)
     this.name = 'CodexResponseFailedError'
+  }
+}
+
+export class CodexResponseIncompleteError extends CodexResponseFailedError {
+  constructor(public readonly reason: string) {
+    super({
+      code: 'response_incomplete',
+      message:
+        reason === 'unknown'
+          ? 'Codex response did not complete'
+          : `Codex response did not complete: ${reason}`,
+      type: 'response.incomplete',
+    })
+    this.name = 'CodexResponseIncompleteError'
   }
 }
 
@@ -563,6 +581,18 @@ function createCodexResponseFailedError(
     return new CodexAccountAuthError(requestCacheMetadata.accountId, 401)
   }
   return new CodexResponseFailedError(failure)
+}
+
+function createCodexResponseIncompleteError(
+  event: Record<string, unknown>,
+): CodexResponseIncompleteError {
+  const response = isRecord(event.response) ? event.response : undefined
+  const details = isRecord(response?.incomplete_details)
+    ? response.incomplete_details
+    : undefined
+  return new CodexResponseIncompleteError(
+    readNonEmptyString(details?.reason) ?? 'unknown',
+  )
 }
 
 function createRetryableCodexHttpError(status: number, body: string): APIConnectionError {
@@ -1578,9 +1608,16 @@ function formatSSE(event: string, data: string): string {
  */
 const CODEX_HTTP_IDLE_TIMEOUT_PREFIX = 'Codex stream idle timeout after '
 
+class CodexHttpStreamEndedBeforeCompletedError extends APIConnectionError {
+  constructor() {
+    super({ message: 'Codex HTTP stream ended before response.completed' })
+    this.name = 'CodexHttpStreamEndedBeforeCompletedError'
+  }
+}
+
 /**
  * Parses an HTTP SSE Response body into an async iterable of event objects.
- * Each yielded object is the parsed JSON from a `data: ...` SSE line.
+ * Each yielded object is the parsed JSON from one complete SSE event.
  */
 async function* httpSseToEvents(
   codexResponse: Response,
@@ -1590,7 +1627,7 @@ async function* httpSseToEvents(
     parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
 
   const reader = codexResponse.body?.getReader()
-  if (!reader) return
+  if (!reader) throw new CodexHttpStreamEndedBeforeCompletedError()
 
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let streamError: Error | null = null
@@ -1622,6 +1659,8 @@ async function* httpSseToEvents(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let dataLines: string[] = []
+  let discardLeadingLf = false
 
   try {
     if (signal?.aborted) abortReader()
@@ -1630,28 +1669,76 @@ async function* httpSseToEvents(
     while (true) {
       const { done, value } = await reader.read()
       if (streamError) throw streamError
-      if (done) break
+      if (done) {
+        // A line-terminated final data field can still be parsed without a
+        // blank separator. Non-terminal EOF fails below.
+        if (buffer === '' && dataLines.length > 0) {
+          const dataStr = dataLines.join('\n')
+          if (dataStr !== '[DONE]') {
+            let event: Record<string, unknown> | undefined
+            try { event = JSON.parse(dataStr) } catch {}
+            if (event?.type === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
+            }
+            if (event) {
+              yield event
+              if (event.type === 'response.completed' || event.type === 'response.failed') return
+            }
+          }
+        }
+        throw new CodexHttpStreamEndedBeforeCompletedError()
+      }
       resetIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+      while (buffer.length > 0) {
+        if (discardLeadingLf) {
+          if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+          discardLeadingLf = false
+          if (buffer.length === 0) break
+        }
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('event: ')) continue
-        if (!trimmed.startsWith('data: ')) continue
-        const dataStr = trimmed.slice(6)
+        const lineEnd = buffer.search(/[\r\n]/)
+        if (lineEnd === -1) break
+
+        const delimiter = buffer[lineEnd]
+        const line = buffer.slice(0, lineEnd)
+        buffer = buffer.slice(lineEnd + 1)
+        discardLeadingLf = delimiter === '\r'
+
+        if (line !== '') {
+          if (line.startsWith(':')) continue
+          const colon = line.indexOf(':')
+          const field = colon === -1 ? line : line.slice(0, colon)
+          let fieldValue = colon === -1 ? '' : line.slice(colon + 1)
+          if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1)
+          if (field === 'data') dataLines.push(fieldValue)
+          continue
+        }
+
+        if (dataLines.length === 0) continue
+        const dataStr = dataLines.join('\n')
+        dataLines = []
         if (dataStr === '[DONE]') continue
 
         let event: Record<string, unknown>
         try { event = JSON.parse(dataStr) } catch { continue }
+        if (event.type === 'response.incomplete') {
+          throw createCodexResponseIncompleteError(event)
+        }
         yield event
+        // The protocol terminal event decides completion. Waiting for socket
+        // EOF can time out a response that has already completed successfully.
+        if (event.type === 'response.completed' || event.type === 'response.failed') return
       }
     }
   } finally {
     clearIdleTimer()
     signal?.removeEventListener('abort', abortReader)
+    // Closing a terminal or abandoned iterator must release its HTTP request,
+    // including a response.failed handled by the priming caller.
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }
 
@@ -2422,6 +2509,9 @@ async function processCodexEvents(
                 emittedVisibleOutput,
               )
             }
+            else if (eventType === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
+            }
             else if (
               eventType === 'response.web_search_call.in_progress' ||
               eventType === 'response.web_search_call.searching' ||
@@ -2804,13 +2894,21 @@ export async function translateCodexStreamToAnthropic(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   transportContext?: CodexStreamTransportContext,
 ): Promise<Response> {
+  const abortController = new AbortController()
   return buildAnthropicStreamResponse(
-    httpSseToEvents(codexResponse),
+    httpSseToEvents(codexResponse, abortController.signal),
     codexModel,
     requestCacheMetadata,
     undefined,
     transportContext,
+    reason => abortController.abort(codexStreamCancellationReason(reason)),
   )
+}
+
+function codexStreamCancellationReason(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new DOMException('The operation was aborted.', 'AbortError')
 }
 
 function parseAnthropicSseBlocks(
@@ -2972,14 +3070,17 @@ async function* observeCodexResponseId(
   }
 }
 
-function responseFailedErrorForInitialEvent(
+function responseTerminalErrorForInitialEvent(
   event: Record<string, unknown>,
   requestCacheMetadata?: CodexRequestCacheMetadata,
 ): Error | null {
-  if (event.type !== 'response.failed') {
-    return null
+  if (event.type === 'response.failed') {
+    return createCodexResponseFailedError(event, requestCacheMetadata, false)
   }
-  return createCodexResponseFailedError(event, requestCacheMetadata, false)
+  if (event.type === 'response.incomplete') {
+    return createCodexResponseIncompleteError(event)
+  }
+  return null
 }
 
 function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean {
@@ -3337,6 +3438,9 @@ function classifyPostVisibleCodexFailure(
   if (error instanceof CodexWebSocketClosedBeforeCompletedError) {
     return { transport: 'websocket', cause: 'closed', transient: true }
   }
+  if (error instanceof CodexHttpStreamEndedBeforeCompletedError) {
+    return { transport: 'http', cause: 'closed', transient: true }
+  }
   if (error instanceof CodexWebSocketServerError) {
     return {
       transport: 'websocket',
@@ -3448,17 +3552,17 @@ async function primeCodexEvents(
 
       lastEventType = typeof next.value.type === 'string' ? next.value.type : null
 
-      const responseFailedError = responseFailedErrorForInitialEvent(
+      const responseTerminalError = responseTerminalErrorForInitialEvent(
         next.value,
         requestCacheMetadata,
       )
-      if (responseFailedError) {
+      if (responseTerminalError) {
         try {
           await iterator.return?.()
         } catch {
-          // Preserve the response.failed error, matching the existing behavior.
+          // Preserve the terminal provider error.
         }
-        throw responseFailedError
+        throw responseTerminalError
       }
 
       bufferedEvents.push(next.value)
@@ -3485,15 +3589,19 @@ async function primeCodexEvents(
 
   return {
     async *[Symbol.asyncIterator]() {
-      for (const event of bufferedEvents) {
-        yield event
-      }
-      while (true) {
-        const next = await iterator.next()
-        if (next.done) {
-          return
+      try {
+        for (const event of bufferedEvents) {
+          yield event
         }
-        yield next.value
+        while (true) {
+          const next = await iterator.next()
+          if (next.done) {
+            return
+          }
+          yield next.value
+        }
+      } finally {
+        await iterator.return?.()
       }
     },
   }
@@ -3699,6 +3807,11 @@ export function createCodexFetch(
       'conversation-id': conversationId,
     }
 
+    const httpAbortController = new AbortController()
+    const httpRequestSignal = init?.signal
+      ? AbortSignal.any([init.signal, httpAbortController.signal])
+      : httpAbortController.signal
+
     const performHttpRequest = async (): Promise<{
       response: Response
       transportContext: CodexStreamTransportContext
@@ -3708,7 +3821,7 @@ export function createCodexFetch(
       try {
         codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
           method: 'POST',
-          signal: init?.signal,
+          signal: httpRequestSignal,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
@@ -3799,13 +3912,12 @@ export function createCodexFetch(
         }
         throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
-      const initialOutputAbortController = new AbortController()
       return {
         events: await primeCodexEvents(
-          httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+          httpSseToEvents(codexResponse, httpAbortController.signal),
           requestCacheMetadata,
           'http',
-          error => initialOutputAbortController.abort(error),
+          error => httpAbortController.abort(error),
         ),
         transportContext,
       }
@@ -3875,11 +3987,9 @@ export function createCodexFetch(
               requestStartedAtMs: wsRequestStartedAtMs,
             },
             reason => {
-              const abortReason =
-                reason instanceof Error
-                  ? reason
-                  : new DOMException('The operation was aborted.', 'AbortError')
+              const abortReason = codexStreamCancellationReason(reason)
               wsAbortController.abort(abortReason)
+              httpAbortController.abort(abortReason)
             },
           )
         } catch (wsError) {
@@ -3989,12 +4099,11 @@ export function createCodexFetch(
     }
 
     if (isStreamingAnthropicRequest) {
-      const initialOutputAbortController = new AbortController()
       const events = await primeCodexEvents(
-        httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+        httpSseToEvents(codexResponse, httpAbortController.signal),
         requestCacheMetadata,
         'http',
-        error => initialOutputAbortController.abort(error),
+        error => httpAbortController.abort(error),
       )
       return buildAnthropicStreamResponse(
         events,
@@ -4002,6 +4111,7 @@ export function createCodexFetch(
         requestCacheMetadata,
         undefined,
         transportContext,
+        reason => httpAbortController.abort(codexStreamCancellationReason(reason)),
       )
     }
 

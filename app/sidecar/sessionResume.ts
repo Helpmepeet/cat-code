@@ -24,12 +24,18 @@
  */
 
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/messages.mjs'
+import { existsSync } from 'node:fs'
 import { getSessionId } from '../../src/bootstrap/state.js'
 import { loadConversationForResume } from '../../src/utils/conversationRecovery.js'
 import { processResumedConversation } from '../../src/utils/sessionRestore.js'
-import { TranscriptInUseError } from '../../src/utils/transcriptLease.js'
+import {
+  activateTranscriptLease,
+  releaseActiveTranscriptLease,
+  TranscriptInUseError,
+} from '../../src/utils/transcriptLease.js'
 import {
   getSessionQueueOperations,
+  getTranscriptPathForSession,
   type SessionQueueOperation,
 } from '../../src/utils/sessionStorage.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
@@ -55,6 +61,31 @@ export class SidecarResumeBusyError extends SidecarResumeError {
   constructor(resumeEngineSessionId: string, detail: string) {
     super(resumeEngineSessionId, detail)
     this.name = 'SidecarResumeBusyError'
+  }
+}
+
+type ResumeConversationLoader = typeof loadConversationForResume
+
+/** Acquire transcript ownership before any mutable resume read or hook. */
+export async function loadOwnedConversationForResume(
+  resumeEngineSessionId: string,
+  loadConversation: ResumeConversationLoader = loadConversationForResume,
+): Promise<Awaited<ReturnType<ResumeConversationLoader>>> {
+  try {
+    await activateTranscriptLease(resumeEngineSessionId)
+  } catch (error) {
+    if (error instanceof TranscriptInUseError) {
+      throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
+    }
+    throw error
+  }
+  try {
+    const loaded = await loadConversation(resumeEngineSessionId, undefined)
+    if (!loaded) await releaseActiveTranscriptLease()
+    return loaded
+  } catch (error) {
+    await releaseActiveTranscriptLease().catch(() => {})
+    throw error
   }
 }
 
@@ -230,10 +261,18 @@ export async function resumeEngineSession(
   cwd: string,
   agentDefinitions: AgentDefinitionsResult,
 ): Promise<SidecarResumeResult> {
-  const loaded = await loadConversationForResume(
-    resumeEngineSessionId,
-    undefined,
-  )
+  // Preserve project-scoped lookup semantics before competing for the global
+  // per-session lease. This is a metadata-only existence check: mutable JSONL,
+  // queue state, interruption records, and SessionStart hooks remain unread
+  // until ownership is held. A removal after this check is handled by the
+  // owned loader's ordinary null path and releases the lease.
+  if (!existsSync(getTranscriptPathForSession(resumeEngineSessionId))) {
+    throw new SidecarResumeError(
+      resumeEngineSessionId,
+      'no conversation found (transcript missing or unreadable)',
+    )
+  }
+  const loaded = await loadOwnedConversationForResume(resumeEngineSessionId)
   if (!loaded) {
     // Missing/corrupt transcript — never fall through to a fresh session.
     throw new SidecarResumeError(
@@ -242,11 +281,11 @@ export async function resumeEngineSession(
     )
   }
 
-  const queueState = await getSessionQueueOperations(resumeEngineSessionId)
-  const undelivered = selectUndeliveredPrompts(queueState)
-
   let processed: Awaited<ReturnType<typeof processResumedConversation>>
+  let undelivered: ReturnType<typeof selectUndeliveredPrompts>
   try {
+    const queueState = await getSessionQueueOperations(resumeEngineSessionId)
+    undelivered = selectUndeliveredPrompts(queueState)
     processed = await processResumedConversation(
       loaded,
       {
@@ -268,6 +307,7 @@ export async function resumeEngineSession(
       },
     )
   } catch (error) {
+    await releaseActiveTranscriptLease().catch(() => {})
     if (error instanceof TranscriptInUseError) {
       throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
     }
@@ -276,6 +316,7 @@ export async function resumeEngineSession(
 
   const engineSessionId = getSessionId()
   if (engineSessionId !== resumeEngineSessionId) {
+    await releaseActiveTranscriptLease().catch(() => {})
     // switchSession should have adopted the id; if not, fail rather than
     // silently write to the wrong transcript.
     throw new SidecarResumeError(

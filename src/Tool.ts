@@ -230,6 +230,11 @@ export type ToolUseContext = {
     onChangeAPIKey?: () => void
   }
   abortController: AbortController
+  /** Internal executor hook fired immediately before a permitted tool effect starts. */
+  onToolExecutionStart?: () => void
+  /** Called only after a provider has returned a valid response to a request
+   * containing claimed local-worker instructions. */
+  onLocalAgentMessagesDelivered?: (messageIds: string[]) => Promise<void> | void
   readFileState: FileStateCache
   getAppState(): AppState
   setAppState(f: (prev: AppState) => AppState): void

@@ -110,6 +110,7 @@ import {
   buildProviderInstructionAssembly,
   type OpenAIInstructionAssembly,
 } from './instructionAssembly.js'
+import { CodexResponseFailedError } from './codex-fetch-adapter.js'
 import {
   CodexPartialStreamReplaySkippedError,
   isCodexPartialStreamReplaySkippedError,
@@ -2762,6 +2763,13 @@ async function* queryModel(
       // a surfaced tool call twice. This safety decision must survive the outer
       // provider-agnostic streaming fallback.
       if (isCodexPartialStreamReplaySkippedError(streamingError)) {
+        throw streamingError
+      }
+
+      // A terminal provider verdict can arrive after an encrypted reasoning
+      // carrier but before any user-visible output. It still must not restart
+      // the same request through the non-streaming fallback.
+      if (streamingError instanceof CodexResponseFailedError) {
         throw streamingError
       }
 

@@ -30,6 +30,7 @@ export function getImplementorSystemPrompt(provider: APIProvider): string {
 
 YOUR JOB:
 - Read what you need, then make the assigned code changes.
+- When assigned an objective without a prescribed method, investigate and choose the implementation within scope. Resolve routine implementation choices yourself; preserve explicit implementation constraints.
 - Stay inside the assigned scope and constraints.
 - Run the relevant local checks for your slice.
 - Return a compact handoff the main agent can use immediately.
@@ -78,6 +79,7 @@ Keep the whole response compact and operational.`
 
 ## Your job
 - Read what you need, then make the assigned code changes.
+- When assigned an objective without a prescribed method, investigate and choose the implementation within scope. Resolve routine implementation choices yourself; preserve explicit implementation constraints.
 - Stay within the assigned scope and constraints.
 - Run the relevant local checks for your slice.
 - Return a compact handoff the main agent can use immediately.

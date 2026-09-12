@@ -18,6 +18,15 @@ import {
   emitAccountDiagnostic,
   hasAccountDiagnosticSink,
 } from './accountDiagnostics.js'
+import {
+  getSharedUsageContext,
+  getUsageInventoryKey,
+  invalidateSharedUsageCache,
+  readOrFetchSharedUsage,
+  sameSharedUsageContext,
+  SHARED_USAGE_TTL_MS,
+  type SharedUsageContext,
+} from './codexUsageSharedCache.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -92,6 +101,11 @@ const ACCOUNT_USAGE_WARNING_THRESHOLD_PERCENT = 80
 
 let cachedSnapshot: PoolUsageSnapshot | null = null
 let inFlightPoolUsage: Promise<PoolUsageSnapshot> | null = null
+let cachedContext: SharedUsageContext | null = null
+let inFlightContext: SharedUsageContext | null = null
+let cachedInventoryKey = ''
+let inFlightInventoryKey = ''
+let cachedObservationStartedAt = 0
 // Bumped by every invalidation. A read carries the generation it was issued
 // under, which is what makes "is this observation still about the current
 // accounts?" answerable after the fact: clearing a cache cannot reach back into
@@ -99,7 +113,7 @@ let inFlightPoolUsage: Promise<PoolUsageSnapshot> | null = null
 let usageCacheGeneration = 0
 let scheduledPoolUsageRefresh: ReturnType<typeof setTimeout> | null = null
 let lastScheduledRefreshAt = 0
-const CACHE_TTL_MS = 60_000 // 1 minute
+const CACHE_TTL_MS = SHARED_USAGE_TTL_MS
 const POST_TURN_USAGE_REFRESH_DELAY_MS = 1_000
 // Floor on the post-turn poll. queryModel completes once per API request, not
 // once per user-visible turn, so tool loops and subagents reach it repeatedly;
@@ -280,12 +294,11 @@ async function fetchAccountUsageOnce(
  * Fetch usage for all pool accounts in parallel.
  * Returns a snapshot with results and any errors.
  *
- * Unforced reads are served from a 1-minute cache, or join a read already in
- * flight, to avoid hammering the endpoint. `forceRefresh` opts out of both, so
+ * Unforced reads share a private 1-minute observation across engine processes,
+ * as well as the local cache/in-flight read. `forceRefresh` opts out of these, so
  * a caller that needs to observe state it just changed is never handed an
- * observation issued before that change. Forced reads are user-initiated and
- * rare (a panel opening, /accounts, a redeemed reset), so the coalescing they
- * give up costs little next to returning a reading from before their own call.
+ * observation issued before that change. Explicit refreshes, redeemed resets,
+ * and request-triggered polls therefore retain their own fresh network read.
  */
 export async function fetchPoolUsage(
   forceRefreshOrOptions: boolean | FetchPoolUsageOptions = false,
@@ -295,8 +308,16 @@ export async function fetchPoolUsage(
       ? { forceRefresh: forceRefreshOrOptions }
       : forceRefreshOrOptions
   const forceRefresh = options.forceRefresh === true
+  const generation = usageCacheGeneration
+  const inventoryKey = getUsageInventoryKey(getPoolStatus().accounts)
+  const context = getSharedUsageContext(getPoolStatus().accounts, WHAM_USAGE_URL)
+  const isCurrent = (): boolean =>
+    generation === usageCacheGeneration &&
+    inventoryKey === getUsageInventoryKey(getPoolStatus().accounts) &&
+    sameSharedUsageContext(context, getSharedUsageContext(getPoolStatus().accounts, WHAM_USAGE_URL))
 
-  if (!forceRefresh && cachedSnapshot && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
+  if (!forceRefresh && cachedSnapshot && cachedInventoryKey === inventoryKey && sameSharedUsageContext(cachedContext, context) &&
+    cachedSnapshot.fetchedAt <= Date.now() && Date.now() - cachedSnapshot.fetchedAt < CACHE_TTL_MS) {
     if (options.updateRoutingHints === true) {
       updateRoutingHintsFromUsage(cachedSnapshot.accounts)
     }
@@ -309,10 +330,9 @@ export async function fetchPoolUsage(
   // "what is true now?" for a caller that asked precisely because it just
   // changed something. Sharing it there is how forceRefresh silently returns
   // the observation it was passed to avoid.
-  if (!forceRefresh && inFlightPoolUsage) {
-    const generation = usageCacheGeneration
+  if (!forceRefresh && inFlightPoolUsage && inFlightInventoryKey === inventoryKey && sameSharedUsageContext(inFlightContext, context)) {
     const snapshot = await inFlightPoolUsage
-    if (generation !== usageCacheGeneration) {
+    if (!isCurrent() || cachedSnapshot !== snapshot) {
       return snapshot
     }
     if (options.updateRoutingHints === true) {
@@ -322,13 +342,31 @@ export async function fetchPoolUsage(
     return snapshot
   }
 
-  const fetchPromise = fetchUncachedPoolUsage(options)
+  const fetchPromise = readOrFetchSharedUsage(
+    context, forceRefresh, fetchUncachedPoolUsage, isCurrent,
+  ).then(({ snapshot, startedAt }) => {
+    // Disk invalidation and inventory/credential changes fence local hints too.
+    // An older slow read may return to its original caller, but must not replace
+    // a newer completed forced observation in this process.
+    if (!isCurrent() || (cachedInventoryKey === inventoryKey && sameSharedUsageContext(cachedContext, context) && startedAt < cachedObservationStartedAt)) return snapshot
+    emitUsageWarnings(snapshot.accounts)
+    if (options.updateRoutingHints === true) updateRoutingHintsFromUsage(snapshot.accounts)
+    cachedSnapshot = snapshot
+    cachedContext = context
+    cachedInventoryKey = inventoryKey
+    cachedObservationStartedAt = startedAt
+    return snapshot
+  })
   inFlightPoolUsage = fetchPromise
+  inFlightContext = context
+  inFlightInventoryKey = inventoryKey
   try {
     return await fetchPromise
   } finally {
     if (inFlightPoolUsage === fetchPromise) {
       inFlightPoolUsage = null
+      inFlightContext = null
+      inFlightInventoryKey = ''
     }
   }
 }
@@ -380,10 +418,7 @@ export function schedulePoolUsageRefresh(): void {
   }
 }
 
-async function fetchUncachedPoolUsage(
-  options: FetchPoolUsageOptions,
-): Promise<PoolUsageSnapshot> {
-  const generation = usageCacheGeneration
+async function fetchUncachedPoolUsage(): Promise<PoolUsageSnapshot> {
   const { accounts } = getPoolStatus()
   const results: AccountUsage[] = []
   const errors: Array<{ accountId: string; error: string }> = []
@@ -412,29 +447,13 @@ async function fetchUncachedPoolUsage(
     errors,
   }
 
-  // Something invalidated while these requests were on the wire, so they
-  // describe accounts that may already be gone (logout, switch, delete) or a
-  // state that has since moved. Hand the reading back to whoever asked for it,
-  // but keep it out of the shared cache and the routing hints: installing it
-  // would undo the invalidation and hold pre-change data for a full TTL.
-  if (generation !== usageCacheGeneration) {
-    return snapshot
-  }
-
-  emitUsageWarnings(results)
-
-  // Display calls stay non-rerolling, but callers may record live availability
-  // so later routing can avoid accounts that usage has already shown as capped.
-  if (options.updateRoutingHints === true && results.length > 0) {
-    updateRoutingHintsFromUsage(results)
-  }
-
-  cachedSnapshot = snapshot
   return snapshot
 }
 
 export function emitCachedUsageWarningsForActiveSink(): void {
-  if (!cachedSnapshot || Date.now() - cachedSnapshot.fetchedAt >= CACHE_TTL_MS) {
+  if (!cachedSnapshot || cachedSnapshot.fetchedAt > Date.now() || Date.now() - cachedSnapshot.fetchedAt >= CACHE_TTL_MS ||
+    cachedInventoryKey !== getUsageInventoryKey(getPoolStatus().accounts) ||
+    !sameSharedUsageContext(cachedContext, getSharedUsageContext(getPoolStatus().accounts, WHAM_USAGE_URL))) {
     return
   }
   emitUsageWarnings(cachedSnapshot.accounts)
@@ -646,8 +665,14 @@ function usageUnavailableRow(error: string | null): string {
  */
 export function invalidateUsageCache(): void {
   cachedSnapshot = null
+  cachedContext = null
+  cachedInventoryKey = ''
+  cachedObservationStartedAt = 0
   usageCacheGeneration += 1
   inFlightPoolUsage = null
+  inFlightContext = null
+  inFlightInventoryKey = ''
+  invalidateSharedUsageCache()
   if (scheduledPoolUsageRefresh !== null) {
     clearTimeout(scheduledPoolUsageRefresh)
     scheduledPoolUsageRefresh = null

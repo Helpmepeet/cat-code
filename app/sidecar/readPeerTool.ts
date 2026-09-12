@@ -74,6 +74,7 @@ import {
   requestPeerHost,
   type PeerHostRequester,
 } from './peerHostRequester.js'
+import { projectResumedHistory } from './historyProjection.js'
 
 export const READ_PEER_TOOL_NAME = 'ReadPeer'
 
@@ -433,7 +434,6 @@ function toolCallTarget(name: string | undefined, input: unknown): string {
   const isPatch = name === FILE_PATCH_TOOL_NAME
   const values = isPatch ? patchPaths(input) : targetFieldValues(name, input)
   if (values.length === 0) return ''
-  const cap = isPatch ? MAX_PATCH_TARGET_CHARS : MAX_TOOL_TARGET_CHARS
   // Redaction runs BEFORE the cap, and the order is the whole point: a cut
   // inside a token leaves a prefix its pattern no longer matches, so capping
   // first would let truncation manufacture a surviving fragment out of a value
@@ -444,8 +444,23 @@ function toolCallTarget(name: string | undefined, input: unknown): string {
   const flattened = removeKnownSecrets(values.join(' '))
     .text.replace(/\s+/g, ' ')
     .trim()
-  if (flattened.length <= cap) return flattened
-  return `${flattened.slice(0, cap).trimEnd()}...`
+  return flattened
+}
+
+function capToolCallTarget(call: string): { text: string; cut: boolean } {
+  const separator = call.indexOf(' ')
+  if (separator < 0) return { text: call, cut: false }
+  const name = call.slice(0, separator)
+  const target = call.slice(separator + 1)
+  const cap =
+    name === FILE_PATCH_TOOL_NAME
+      ? MAX_PATCH_TARGET_CHARS
+      : MAX_TOOL_TARGET_CHARS
+  if (target.length <= cap) return { text: call, cut: false }
+  return {
+    text: `${name} ${target.slice(0, cap).trimEnd()}...`,
+    cut: true,
+  }
 }
 
 /**
@@ -610,7 +625,7 @@ function presentTurn(raw: RawTurn): {
 
   const asked = clean(raw.asked)
   const said = clean(raw.said)
-  const touched = raw.touched.map(clean)
+  const touched = raw.touched.map(entry => capToolCallTarget(clean(entry)))
 
   const cappedAsked = sliceToBytes(asked, MAX_ASKED_BYTES)
   const cappedSaid = sliceTailToBytes(said, MAX_SAID_BYTES)
@@ -618,16 +633,17 @@ function presentTurn(raw: RawTurn): {
   const cappedTouched =
     dropped > 0
       ? [
-          ...touched.slice(0, MAX_TOUCHED_ENTRIES),
+          ...touched.slice(0, MAX_TOUCHED_ENTRIES).map(entry => entry.text),
           moreTouchedMarker(dropped),
         ]
-      : touched
+      : touched.map(entry => entry.text)
 
   return {
     turn: { asked: cappedAsked, said: cappedSaid, touched: cappedTouched },
     cut:
       cappedAsked.length < asked.length ||
       cappedSaid.length < said.length ||
+      touched.some(entry => entry.cut) ||
       dropped > 0,
     redactions,
   }
@@ -903,9 +919,9 @@ export function createReadPeerTool(
       // routinely mid-turn.
       const drafts: TurnDraft[] = []
       let open: TurnDraft | undefined
-      for (const message of display.messages) {
+      for (const message of projectResumedHistory(display.messages)) {
         if (message.type !== 'user' && message.type !== 'assistant') continue
-        const content = message.message.content
+        const content = message.message?.content
         const texts = textBlocks(content)
         if (message.type === 'user' && texts.length > 0) {
           open = {

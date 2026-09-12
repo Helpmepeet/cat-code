@@ -1,8 +1,17 @@
 import { feature } from 'bun:bundle'
-import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mergeWith from 'lodash-es/mergeWith.js'
-import { basename, dirname, join, resolve } from 'path'
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'path'
 import { z } from 'zod/v4'
 import {
   getFlagSettingsInline,
@@ -486,6 +495,44 @@ export type SettingsUpdater = (
   current: SettingsJson | null,
 ) => SettingsJson | null
 
+function resolveSettingsWritePath(filePath: string): string {
+  try {
+    return realpathSync(filePath)
+  } catch (error) {
+    if (!isENOENT(error)) throw error
+  }
+
+  // realpath cannot resolve a dangling link. Follow it explicitly so a first
+  // save creates its target, while other resolution errors leave the link intact.
+  let linkTarget: string
+  try {
+    linkTarget = readlinkSync(filePath)
+  } catch (error) {
+    if (!isENOENT(error) && getErrnoCode(error) !== 'EINVAL') throw error
+    return join(realpathSync(dirname(filePath)), basename(filePath))
+  }
+  const root = isAbsolute(linkTarget) ? parse(linkTarget).root : ''
+  let directory = root || realpathSync(dirname(filePath))
+  const components = linkTarget.slice(root.length).split(sep === '\\' ? /[\\/]/ : /\//)
+  const name = components.pop()!
+  // Resolve directories before applying '..'. Bun's realpath normalizes '..'
+  // in its input before following symlinks, which can otherwise pick a different
+  // directory when resolving the parent of a missing target.
+  for (const component of components) {
+    if (component === '' || component === '.') continue
+    directory = component === '..'
+      ? dirname(directory)
+      : realpathSync(join(directory, component))
+  }
+  return resolveSettingsWritePath(join(directory, name))
+}
+
+function assertSettingsWriteTarget(filePath: string, targetPath: string): void {
+  if (resolveSettingsWritePath(filePath) !== targetPath) {
+    throw new Error('Settings file target changed while saving. Try again.')
+  }
+}
+
 /**
  * Replaces a settings file without exposing a truncate-then-write window.
  *
@@ -497,10 +544,20 @@ export function writeSettingsFileAtomically(
   filePath: string,
   content: string,
 ): void {
-  const directory = dirname(filePath)
+  const targetPath = resolveSettingsWritePath(filePath)
+  writeSettingsFileAtomicallyToTarget(filePath, targetPath, content)
+}
+
+function writeSettingsFileAtomicallyToTarget(
+  filePath: string,
+  targetPath: string,
+  content: string,
+): void {
+  assertSettingsWriteTarget(filePath, targetPath)
+  const directory = dirname(targetPath)
   const tempPath = join(
     directory,
-    `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+    `.${basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`,
   )
   let fileDescriptor: number | undefined
   try {
@@ -509,7 +566,10 @@ export function writeSettingsFileAtomically(
     fsyncSync(fileDescriptor)
     closeSync(fileDescriptor)
     fileDescriptor = undefined
-    renameSync(tempPath, filePath)
+    // Keep the locked/read destination through publication. This check narrows
+    // the final syscall race; Node exposes no compare-and-swap rename.
+    assertSettingsWriteTarget(filePath, targetPath)
+    renameSync(tempPath, targetPath)
   } catch (error) {
     if (fileDescriptor !== undefined) {
       try {
@@ -568,13 +628,16 @@ export function updateSettingsForSource(
   let release: (() => void) | undefined
   try {
     getFsImplementation().mkdirSync(dirname(filePath))
+    const targetPath = resolveSettingsWritePath(filePath)
 
     // Cross-process lock: without it, two processes (e.g. two engine
     // instances in the N-process desktop-app model, migration Phase-3)
     // can both read-merge-write the same file and one's update is silently
     // lost — the read below and the write further down are otherwise two
     // unsynchronized syscalls. Mirrors saveConfigWithLock (config.ts).
-    release = acquireSettingsLockSync(filePath)
+    // Aliases of one settings file must share both a lock and the write target.
+    release = acquireSettingsLockSync(targetPath)
+    assertSettingsWriteTarget(filePath, targetPath)
 
     // The lock alone does not make the read below see a write made since
     // this process's cache was last populated: getSettingsForSourceUncached
@@ -586,6 +649,7 @@ export function updateSettingsForSource(
     // this same process's own post-write snapshot re-read re-arming the
     // cache, e.g. app/sidecar/settingsDomain.ts's readSettingsSnapshotOnce()).
     deleteCachedParsedFile(filePath)
+    deleteCachedParsedFile(targetPath)
 
     // Try to get existing settings with validation. Bypass the per-source
     // cache — mergeWith below mutates its target (including nested refs),
@@ -596,14 +660,14 @@ export function updateSettingsForSource(
     // getSettingsForSourceUncached would read — taken directly so the
     // parse errors come with it.
     const { settings: parsedSettings, errors: parseErrors } =
-      parseSettingsFile(filePath)
+      parseSettingsFile(targetPath)
     let existingSettings = parsedSettings
 
     // If validation failed, check if file exists with a JSON syntax error
     if (!existingSettings) {
       let content: string | null = null
       try {
-        content = readFileSync(filePath)
+        content = readFileSync(targetPath)
       } catch (e) {
         if (!isENOENT(e)) {
           throw e
@@ -692,8 +756,9 @@ export function updateSettingsForSource(
     // Mark this as an internal write before writing the file
     markInternalWrite(filePath)
 
-    writeSettingsFileAtomically(
+    writeSettingsFileAtomicallyToTarget(
       filePath,
+      targetPath,
       jsonStringify(updatedSettings, null, 2) + '\n',
     )
 

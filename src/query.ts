@@ -610,15 +610,27 @@ async function* queryLoop(
       toolUseContext.options.mainLoopProvider,
     )
 
+    // Compaction budgets and summary requests must use the model selected for
+    // this iteration. Keep the user's configured base model on the durable
+    // context so leaving plan mode restores it naturally.
+    const compactionToolUseContext: ToolUseContext = {
+      ...toolUseContext,
+      options: {
+        ...toolUseContext.options,
+        mainLoopModel: currentModel,
+        mainLoopProvider: currentProvider,
+      },
+    }
+
     queryCheckpoint('query_autocompact_start')
     const { compactionResult, consecutiveFailures } = await deps.autocompact(
       messagesForQuery,
-      toolUseContext,
+      compactionToolUseContext,
       {
         systemPrompt,
         userContext,
         systemContext,
-        toolUseContext,
+        toolUseContext: compactionToolUseContext,
         forkContextMessages: messagesForQuery,
       },
       querySource,
@@ -1089,6 +1101,9 @@ async function* queryLoop(
               'The provider returned a valid response.',
               toolUseContext.setAppStateForTasks ??
                 toolUseContext.setAppState,
+            )
+            await toolUseContext.onLocalAgentMessagesDelivered?.(
+              submittedLocalAgentMessageIds,
             )
             confirmedLocalAgentMessageIds = true
           }
@@ -1839,6 +1854,43 @@ async function* queryLoop(
       }
 
       if (toolUseContext.agentId) {
+        const targetedNotifications = getCommandsByMaxPriority('later').filter(
+          cmd =>
+            cmd.mode === 'task-notification' &&
+            cmd.agentId === toolUseContext.agentId,
+        )
+        if (targetedNotifications.length > 0) {
+          const notificationAttachments: AttachmentMessage[] = []
+          for await (const attachment of getAttachmentMessages(
+            null,
+            toolUseContext,
+            null,
+            targetedNotifications,
+            [...messagesForQuery, ...assistantMessages],
+            querySource,
+          )) {
+            notificationAttachments.push(attachment)
+          }
+          removeFromQueue(targetedNotifications)
+          state = {
+            messages: [
+              ...messagesForQuery,
+              ...assistantMessages,
+              ...notificationAttachments,
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
+            hasAttemptedReactiveCompact: false,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount,
+            transition: { reason: 'next_turn' },
+          }
+          continue
+        }
         const localContinuation = claimPendingMessagesOrClose(
           toolUseContext.agentId,
           toolUseContext.agentRunId,
@@ -2127,7 +2179,7 @@ async function* queryLoop(
       querySource.startsWith('repl_main_thread') || querySource === 'sdk'
     const currentAgentId = toolUseContext.agentId
     const queuedCommandsSnapshot = getCommandsByMaxPriority(
-      sleepRan ? 'later' : 'next',
+      sleepRan || !isMainThread ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false
@@ -2137,6 +2189,7 @@ async function* queryLoop(
       return cmd.mode === 'task-notification' && cmd.agentId === currentAgentId
     })
 
+    const preparedQueuedAttachments: AttachmentMessage[] = []
     for await (const attachment of getAttachmentMessages(
       null,
       updatedToolUseContext,
@@ -2153,8 +2206,18 @@ async function* queryLoop(
       ) {
         continue
       }
-      yield attachment
-      toolResults.push(attachment)
+      preparedQueuedAttachments.push(attachment)
+    }
+
+    // Attachment preparation may resize images or perform other asynchronous
+    // work. A send-now interruption during that window still owns the queued
+    // prompt: leave it queued for the sidecar's between-turn submission, and
+    // do not publish a transcript attachment that was never sent to a model.
+    if (!toolUseContext.abortController.signal.aborted) {
+      for (const attachment of preparedQueuedAttachments) {
+        yield attachment
+        toolResults.push(attachment)
+      }
     }
 
     // Memory prefetch consume: only if settled and not already consumed on
@@ -2197,9 +2260,11 @@ async function* queryLoop(
 
     // Remove only commands that were actually consumed as attachments.
     // Prompt and task-notification commands are converted to attachments above.
-    const consumedCommands = queuedCommandsSnapshot.filter(
-      cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
-    )
+    const consumedCommands = toolUseContext.abortController.signal.aborted
+      ? []
+      : queuedCommandsSnapshot.filter(
+          cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
+        )
     if (consumedCommands.length > 0) {
       for (const cmd of consumedCommands) {
         if (cmd.uuid) {

@@ -363,11 +363,19 @@ export class FrameReplayBuffer {
     // re-fetchable from disk on demand, so dropping it costs one more click and
     // keeps every retained tail contiguous.
     //
-    // Deliberately NOT marking `entry.truncated`: nothing was evicted and the
-    // retained tail is exactly as complete as it was a moment ago. The boundary
-    // row the renderer draws from the sidecar's own signal still says what is
-    // true, that there is more above what this pane holds.
-    if (frame.kind === 'event' && frame.recovered === true) return
+    // Mark the retained view incomplete even without ring eviction. Main must
+    // stamp its oldest retained message as the next view anchor after reload;
+    // otherwise a sidecar that previously reached disk head would answer from
+    // its completeness latch forever while this renderer still lacks the
+    // intentionally unretained recovered prefix.
+    if (frame.kind === 'event' && frame.recovered === true) {
+      entry.truncated = true
+      return
+    }
+    // A completion verdict is meaningful only alongside the recovered prefix
+    // that produced it. Replaying it alone would clear the renderer boundary
+    // over the retained tail and hide the route back to disk.
+    if (frame.kind === 'history.loadEarlier.result') return
 
     // Stream compaction (2026-09-02 assessment §4, §5 item 2). The desktop runs
     // the engine with `includePartialMessages`, so every streamed token arrives

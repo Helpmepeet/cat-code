@@ -446,6 +446,75 @@ describe('session storage', () => {
     ])
   })
 
+  test('active tip follows a compact continuation through logicalParentUuid', async () => {
+    const retained = randomUUID()
+    const replacement = randomUUID()
+    const boundary = randomUUID()
+    const summary = randomUUID()
+    const later = randomUUID()
+    const common = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      userType: 'external',
+      version: 'test',
+    }
+    const entries = [
+      { ...common, type: 'user', uuid: retained, parentUuid: null, timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'retained' } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: retained },
+      { ...common, type: 'user', uuid: replacement, parentUuid: retained, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'user', content: 'replacement' } },
+      { ...common, type: 'system', subtype: 'compact_boundary', uuid: boundary, parentUuid: null, logicalParentUuid: replacement, timestamp: '2026-09-12T00:00:02.000Z', content: 'Conversation compacted', level: 'info', isMeta: false, compactMetadata: { trigger: 'manual', preTokens: 200000 } },
+      { ...common, type: 'user', uuid: summary, parentUuid: boundary, timestamp: '2026-09-12T00:00:03.000Z', isCompactSummary: true, message: { role: 'user', content: 'summary' } },
+      { ...common, type: 'user', uuid: later, parentUuid: summary, timestamp: '2026-09-12T00:00:04.000Z', message: { role: 'user', content: 'post-compaction' } },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadTranscriptFromFile(getTranscriptPathForSession(sessionId))
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      boundary,
+      summary,
+      later,
+    ])
+    const display = await loadDisplayTranscriptFromJsonlPath(
+      getTranscriptPathForSession(sessionId),
+      { maxMessages: 100, maxBytes: 1024 * 1024 },
+    )
+    expect(display.messages.map(message => message.uuid)).toContain(later)
+  })
+
+  test('null active tip follows an ordinary replacement root', async () => {
+    const discardedUser = randomUUID()
+    const discardedAssistant = randomUUID()
+    const replacementUser = randomUUID()
+    const replacementAssistant = randomUUID()
+    const common = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const entries = [
+      { ...common, type: 'user', uuid: discardedUser, parentUuid: null, userType: 'external', timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'discarded' } },
+      { ...common, type: 'assistant', uuid: discardedAssistant, parentUuid: discardedUser, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'discarded answer' }] } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: null },
+      { ...common, type: 'user', uuid: replacementUser, parentUuid: null, userType: 'external', timestamp: '2026-09-12T00:00:02.000Z', message: { role: 'user', content: 'replacement' } },
+      { ...common, type: 'assistant', uuid: replacementAssistant, parentUuid: replacementUser, timestamp: '2026-09-12T00:00:03.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'replacement answer' }] } },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadTranscriptFromFile(getTranscriptPathForSession(sessionId))
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      replacementUser,
+      replacementAssistant,
+    ])
+  })
+
   for (const [label, discardedAssistantText] of [
     ['small transcript', 'discarded answer'],
     ['large transcript', 'x'.repeat(6 * 1024 * 1024)],

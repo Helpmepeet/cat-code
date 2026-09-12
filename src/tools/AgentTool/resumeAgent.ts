@@ -1,4 +1,5 @@
 import { promises as fsp } from 'fs'
+import { isAbsolute } from 'path'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
 import { getSessionStatePathFromTranscriptPath } from '../../utils/workerState.js'
 import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js'
@@ -39,6 +40,7 @@ import type { SystemPrompt } from '../../utils/systemPromptType.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { getParentSessionId } from '../../utils/teammate.js'
 import { reconstructForSubagentResume } from '../../utils/toolResultStorage.js'
+import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
 import {
   acquireAgentLifecycleOwnership,
@@ -146,16 +148,54 @@ async function resumeAgentBackgroundLocked(
     resumedMessages,
     transcript.contentReplacements,
   )
-  // Best-effort: if the original worktree was removed externally, fall back
-  // to parent cwd rather than crashing on chdir later.
+  const resumedCwd = meta?.assignedCwd
+    ? await fsp.stat(meta.assignedCwd).then(
+        s => {
+          if (!s.isDirectory()) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is not a directory.`,
+            )
+          }
+          if (!isAbsolute(meta.assignedCwd)) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is not an absolute path.`,
+            )
+          }
+          if (!pathInAllowedWorkingPath(meta.assignedCwd, appState.toolPermissionContext)) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is outside allowed working directories.`,
+            )
+          }
+          return meta.assignedCwd
+        },
+        () => {
+          throw new Error(
+            `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} no longer exists.`,
+          )
+        },
+      )
+    : undefined
+  if (meta?.assignedCwd !== undefined && meta.worktreePath !== undefined) {
+    throw new Error(
+      `Cannot resume agent ${agentId}: recorded metadata includes both assignedCwd and worktreePath.`,
+    )
+  }
+  // Fail closed if the originally recorded worktree path disappeared. Falling
+  // back to the parent cwd could run the resumed worker in the wrong tree.
   const resumedWorktreePath = meta?.worktreePath
     ? await fsp.stat(meta.worktreePath).then(
-        s => (s.isDirectory() ? meta.worktreePath : undefined),
+        s => {
+          if (!s.isDirectory()) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded worktree ${meta.worktreePath} is not a directory.`,
+            )
+          }
+          return meta.worktreePath
+        },
         () => {
-          logForDebugging(
-            `Resumed worktree ${meta.worktreePath} no longer exists; falling back to parent cwd`,
+          throw new Error(
+            `Cannot resume agent ${agentId}: recorded worktree ${meta.worktreePath} no longer exists.`,
           )
-          return undefined
         },
       )
     : undefined
@@ -257,6 +297,9 @@ async function resumeAgentBackgroundLocked(
       ...resumedMessages,
       createUserMessage({ content: prompt }),
     ],
+    ...(resumedMessages.length > 0
+      ? { seededMessagesForPersistence: resumedMessages }
+      : {}),
     toolUseContext,
     canUseTool,
     isAsync: true,
@@ -286,6 +329,7 @@ async function resumeAgentBackgroundLocked(
     forkContextMessages: undefined,
     ...(isResumedFork && { useExactTools: true }),
     // Re-persist so metadata survives runAgent's writeAgentMetadata overwrite
+    ...(resumedCwd !== undefined ? { cwd: resumedCwd } : {}),
     worktreePath: resumedWorktreePath,
     description: meta?.description,
     agentName: meta?.agentName,
@@ -370,8 +414,11 @@ async function resumeAgentBackgroundLocked(
     invocationEmitted: false,
   }
 
+  const resumedWorkingDirectory = resumedCwd ?? resumedWorktreePath
   const wrapWithCwd = <T>(fn: () => T): T =>
-    resumedWorktreePath ? runWithCwdOverride(resumedWorktreePath, fn) : fn()
+    resumedWorkingDirectory
+      ? runWithCwdOverride(resumedWorkingDirectory, fn)
+      : fn()
 
   // Capture the detached lifecycle promise (rather than fire-and-forgetting
   // it with `void`) and hand it to the caller's ownership-transfer callback

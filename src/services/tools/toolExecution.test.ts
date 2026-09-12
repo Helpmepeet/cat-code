@@ -9,7 +9,11 @@ import type {
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import type { MessageUpdateLazy } from './toolExecution.js'
 import { classifyToolError } from './toolExecution.js'
+import { runTools } from './toolOrchestration.js'
+import { StreamingToolExecutor } from './StreamingToolExecutor.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import { FilePatchError } from '../../tools/FilePatchTool/types.js'
+import { asAgentId } from '../../types/ids.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
 // mock.module is installed during the import phase of every file in the
@@ -125,9 +129,14 @@ function createToolUseContext(
   } as unknown as ToolUseContext
 }
 
-function makeTool(name: string, call: () => Promise<{ data: unknown }>) {
+function makeTool(
+  name: string,
+  call: () => Promise<{ data: unknown }>,
+  aliases?: string[],
+) {
   return buildTool({
     name,
+    aliases,
     inputSchema: z.strictObject({ value: z.string() }),
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
@@ -345,5 +354,193 @@ describe('runToolUse PreToolUse additionalContext', () => {
       'FilePatchError:PATCH_ANCHOR_AMBIGUOUS',
     )
     expect(classifyToolError(error)).not.toContain(path)
+  })
+})
+
+describe('tool execution authority', () => {
+  for (const executorKind of ['batch', 'streaming'] as const) {
+    for (const agentId of [undefined, 'worker-fixture']) {
+      const scope = agentId ? 'worker' : 'foreground'
+
+      test(`${executorKind} ${scope} resolves canonical and alias names only inside its pool`, async () => {
+        let calls = 0
+        const tool = makeTool(
+          'CanonicalFixture',
+          async () => {
+            calls++
+            return { data: 'ok' }
+          },
+          ['LegacyFixture'],
+        )
+
+        for (const name of ['CanonicalFixture', 'LegacyFixture']) {
+          const block = {
+            type: 'tool_use' as const,
+            id: `${executorKind}-${scope}-${name}`,
+            name,
+            input: { value: 'x' },
+            caller: { type: 'direct' as const },
+          }
+          const assistant = createAssistantMessage()
+          assistant.message.content = [block]
+          const context = createToolUseContext([tool])
+          context.agentId = agentId ? asAgentId(agentId) : undefined
+          const canUseTool = async () => ({
+            behavior: 'allow' as const,
+            updatedInput: { value: 'x' },
+          })
+          if (executorKind === 'batch') {
+            for await (const _ of runTools(
+              [block],
+              [assistant],
+              canUseTool,
+              context,
+            )) {
+              // drain the real batch executor
+            }
+          } else {
+            const executor = new StreamingToolExecutor(
+              context.options.tools,
+              canUseTool,
+              context,
+            )
+            executor.addTool(block, assistant)
+            for await (const _ of executor.getRemainingResults()) {
+              // drain the real streaming executor
+            }
+          }
+        }
+        expect(calls).toBe(2)
+
+        const deniedContext = createToolUseContext([tool])
+        deniedContext.agentId = agentId ? asAgentId(agentId) : undefined
+        const deniedAssistant = createAssistantMessage()
+        const deniedBlock = {
+          type: 'tool_use' as const,
+          id: `${executorKind}-${scope}-denied-alias`,
+          name: 'LegacyFixture',
+          input: { value: 'x' },
+          caller: { type: 'direct' as const },
+        }
+        deniedAssistant.message.content = [deniedBlock]
+        const deny = async () => ({
+          behavior: 'deny' as const,
+          message: 'fixture deny',
+          decisionReason: { type: 'other' as const, reason: 'fixture' },
+        })
+        if (executorKind === 'batch') {
+          for await (const _ of runTools(
+            [deniedBlock],
+            [deniedAssistant],
+            deny,
+            deniedContext,
+          )) {
+            // drain
+          }
+        } else {
+          const executor = new StreamingToolExecutor(
+            deniedContext.options.tools,
+            deny,
+            deniedContext,
+          )
+          executor.addTool(deniedBlock, deniedAssistant)
+          for await (const _ of executor.getRemainingResults()) {
+            // drain
+          }
+        }
+        expect(calls).toBe(2)
+      })
+    }
+  }
+})
+
+describe('streaming terminal handoff', () => {
+  test('waits for a started sibling effect before publishing the handoff', async () => {
+    let releaseEffect!: () => void
+    const effectGate = new Promise<void>(resolve => {
+      releaseEffect = resolve
+    })
+    let effectStarted = false
+    let effectFinished = false
+    const ask = makeTool(ASK_PARENT_SESSION_TOOL_NAME, async () => ({ data: 'handed off' }))
+    const effect = makeTool('OwnedEffect', async () => {
+      effectStarted = true
+      await effectGate
+      effectFinished = true
+      return { data: 'settled' }
+    })
+    const context = createToolUseContext([ask, effect])
+    const assistant = createAssistantMessage()
+    const blocks = [
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+      { type: 'tool_use' as const, id: 'effect', name: effect.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+    ]
+    assistant.message.content = blocks
+    const executor = new StreamingToolExecutor(
+      context.options.tools,
+      async (_tool, input) => ({ behavior: 'allow' as const, updatedInput: input }),
+      context,
+    )
+    for (const block of blocks) executor.addTool(block, assistant)
+
+    const draining = (async () => {
+      const messages: Message[] = []
+      for await (const update of executor.getRemainingResults()) {
+        if (update.message) messages.push(update.message)
+      }
+      return messages
+    })()
+    for (let i = 0; i < 100 && !effectStarted; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    expect(effectStarted).toBe(true)
+    let published = false
+    void draining.then(() => {
+      published = true
+    })
+    await Promise.resolve()
+    expect(published).toBe(false)
+    releaseEffect()
+    const messages = await draining
+    expect(effectFinished).toBe(true)
+    expect(JSON.stringify(messages)).toContain('handed off')
+  })
+
+  test('does not wait forever for permission and prevents the effect from starting later', async () => {
+    let releasePermission!: () => void
+    const permissionGate = new Promise<void>(resolve => {
+      releasePermission = resolve
+    })
+    let effectCalls = 0
+    const ask = makeTool(ASK_PARENT_SESSION_TOOL_NAME, async () => ({ data: 'handed off' }))
+    const effect = makeTool('PermissionWait', async () => {
+      effectCalls++
+      return { data: 'ran' }
+    })
+    const context = createToolUseContext([ask, effect])
+    const assistant = createAssistantMessage()
+    const blocks = [
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+      { type: 'tool_use' as const, id: 'waiting', name: effect.name, input: { value: 'x' }, caller: { type: 'direct' as const } },
+    ]
+    assistant.message.content = blocks
+    const executor = new StreamingToolExecutor(
+      context.options.tools,
+      async (tool, input) => {
+        if (tool.name === effect.name) await permissionGate
+        return { behavior: 'allow' as const, updatedInput: input }
+      },
+      context,
+    )
+    for (const block of blocks) executor.addTool(block, assistant)
+    const iterator = executor.getRemainingResults()
+    const firstResult = await iterator.next()
+    expect(firstResult.done).toBe(false)
+    expect(effectCalls).toBe(0)
+    releasePermission()
+    for await (const _ of { [Symbol.asyncIterator]: () => iterator }) {
+      // drain the remaining results
+    }
+    expect(effectCalls).toBe(0)
   })
 })

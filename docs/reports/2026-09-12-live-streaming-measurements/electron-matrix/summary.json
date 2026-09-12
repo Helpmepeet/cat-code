@@ -1,0 +1,2796 @@
+{
+  "schemaVersion": 1,
+  "input": "/Users/pt/cat-code/docs/reports/2026-09-12-live-streaming-measurements/electron-matrix",
+  "status": "complete-frozen-matrix",
+  "expectedSamples": 72,
+  "observedSamples": 72,
+  "missing": [],
+  "unexpected": [],
+  "scope": "Instrumented focused Electron delivery pipeline; excludes engine/supervisor/host workers, production recovery/health timers, and operational logging outside delivery tracing.",
+  "cpuAccounting": "Combined Electron CPU sums Browser and Tab cumulative CPU deltas only; mainCpuMicros is validated but never added.",
+  "clockCaveat": "Arrival-to-commit percentiles depend on cross-process monotonic-clock calibration. The conservative per-sample bound adds half the endpoint offset drift to the larger endpoint uncertainty; paired bounds sum candidate and baseline bounds.",
+  "sourceHashes": {
+    "main/liveFrameBatcher.ts": "32d9226bc02959b14280f81d2b79a9c20184e16e1d37d8f85919dc4fe793fdc8",
+    "main/attachmentGate.ts": "7f72e84ef225426d6d725d5e3dfa43698cd0b4b1ef0368683aee43a2f3298386",
+    "main/deliveryTraceSink.ts": "ea2263d3b7ce877beb5509c7a1c2087d0dd54c8fcc7afd32df9a76604d41b62a",
+    "shared/deliveryTrace.ts": "d98eb8661d2766f2712c18d62fa74e9fd205b3a9c6f8050cc199d9f0aacadd3c",
+    "shared/ipcChannels.ts": "e0a57f66eefd5fdb2b8800de857b14306ff850b7df6cab327dd21b583a7ac2d5",
+    "renderer/src/App.tsx": "1c28714c8b12c52f3b556a0c472a2197e5e0afc026ab1cff882dc43746a19bdc",
+    "renderer/src/rawMessageLog.ts": "0bf94ba5751423449700e48ea472c2bd7e1a74eddb00582f3c3a5795d8dbe44d",
+    "preload/preload.ts": "44d69492d07aacf09bd08587f3dfa07146632507a77f547d0d1b27e8fb6d5860",
+    "scripts/streaming-benchmark.ts": "84e59cc8452e943d6cbcc72db67e0afa24f05f37ff784e8035e0c38f798863ca",
+    "scripts/streaming-benchmark-main.ts": "e035913e0fbb77fdb7082cb4d9b7b41ec5447019ae81219d83236fa3699ff7ca",
+    "scripts/streaming-benchmark-observer.ts": "48ebf531c62777fded6565cec783dbec68e4caefd36e3fb1f3992965627c13c6",
+    "scripts/streaming-benchmark-cleanup.ts": "c85dcd86146ffdd4478a833064e738506e4f2b5ca7f9e266c0024ff0dbefd166",
+    "scripts/streaming-benchmark.vite.config.ts": "6473de2b10397229951a835c155e713e7269a993345af38d4e50eadfac4e607d",
+    "package.json": "5142313cd2f0fb519ce6147c639ca7851055e0f83028eaab636f5c3c7db22d4f",
+    "scripts/streaming-benchmark-runtime.ts": "f7a611665e10261ce12315f8fed75509d2838d0150bf79c346a27acd271ce135",
+    "../docs/reports/2026-09-12-live-streaming-measurements/fixture.ts": "c87bff0372d815d81fa8412446b16184f69336cebe929a2523801d1053a067e5"
+  },
+  "samples": [
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1916710,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 802,
+      "latencyP95Ms": 4.456989988078931,
+      "latencyP99Ms": 5.312489988078596,
+      "rawClockAlignmentUncertaintyMs": 0.027395999999953347,
+      "conservativeClockAlignmentUncertaintyMs": 0.04355199999974957
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1690519.0000000002,
+      "sendCount": 444,
+      "dispatchCount": 444,
+      "commitCount": 276,
+      "latencyP95Ms": 20.21144749999985,
+      "latencyP99Ms": 21.237072505959986,
+      "rawClockAlignmentUncertaintyMs": 0.05351050596027562,
+      "conservativeClockAlignmentUncertaintyMs": 0.08009350596023523
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1754957.9999999998,
+      "sendCount": 611,
+      "dispatchCount": 611,
+      "commitCount": 443,
+      "latencyP95Ms": 12.306926985098471,
+      "latencyP99Ms": 13.287635002980096,
+      "rawClockAlignmentUncertaintyMs": 0.036781502980261394,
+      "conservativeClockAlignmentUncertaintyMs": 0.06709400298029777
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1973070,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 802,
+      "latencyP95Ms": 4.573645729137752,
+      "latencyP99Ms": 5.444187752979815,
+      "rawClockAlignmentUncertaintyMs": 0.044416747019795366,
+      "conservativeClockAlignmentUncertaintyMs": 0.0687707470199257
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1226922,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 382,
+      "latencyP95Ms": 11.4611982619208,
+      "latencyP99Ms": 13.85207324403973,
+      "rawClockAlignmentUncertaintyMs": 0.050271000000066124,
+      "conservativeClockAlignmentUncertaintyMs": 0.06238574403982966
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1066372.0000000002,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 27.866927000000032,
+      "latencyP99Ms": 30.655719005960236,
+      "rawClockAlignmentUncertaintyMs": 0.0598854999999503,
+      "conservativeClockAlignmentUncertaintyMs": 0.0862809999999854
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1088140,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 16.02300000894047,
+      "latencyP99Ms": 18.320416991058664,
+      "rawClockAlignmentUncertaintyMs": 0.024582999999893218,
+      "conservativeClockAlignmentUncertaintyMs": 0.045707991059316555
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1083639,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 369,
+      "latencyP95Ms": 11.515406749999784,
+      "latencyP99Ms": 17.33761476192103,
+      "rawClockAlignmentUncertaintyMs": 0.03828124403980837,
+      "conservativeClockAlignmentUncertaintyMs": 0.0677602440400733
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 4822578,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1341,
+      "latencyP95Ms": 14.01547900596097,
+      "latencyP99Ms": 21.117728988079307,
+      "rawClockAlignmentUncertaintyMs": 0.037458499999956985,
+      "conservativeClockAlignmentUncertaintyMs": 0.06527100000039354
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 3192702.9999999995,
+      "sendCount": 268,
+      "dispatchCount": 268,
+      "commitCount": 246,
+      "latencyP95Ms": 22.707041241059414,
+      "latencyP99Ms": 24.312833247019626,
+      "rawClockAlignmentUncertaintyMs": 0.041520758940805536,
+      "conservativeClockAlignmentUncertaintyMs": 0.07966675894112996
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 3762208.0000000005,
+      "sendCount": 520,
+      "dispatchCount": 520,
+      "commitCount": 498,
+      "latencyP95Ms": 14.808833491059886,
+      "latencyP99Ms": 16.764624497020122,
+      "rawClockAlignmentUncertaintyMs": 0.03662499999995816,
+      "conservativeClockAlignmentUncertaintyMs": 0.055541497019703456
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 4991294.000000001,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1282,
+      "latencyP95Ms": 14.843531238079322,
+      "latencyP99Ms": 21.483198250000896,
+      "rawClockAlignmentUncertaintyMs": 0.027291999999988548,
+      "conservativeClockAlignmentUncertaintyMs": 0.039448238079557996
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1809754.9999999998,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 804,
+      "latencyP95Ms": 4.364364497019778,
+      "latencyP99Ms": 5.095156508940818,
+      "rawClockAlignmentUncertaintyMs": 0.03255199701993661,
+      "conservativeClockAlignmentUncertaintyMs": 0.06211449701982019
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1487845,
+      "sendCount": 230,
+      "dispatchCount": 230,
+      "commitCount": 221,
+      "latencyP95Ms": 20.01228101490142,
+      "latencyP99Ms": 21.02711500894111,
+      "rawClockAlignmentUncertaintyMs": 0.040593497020154246,
+      "conservativeClockAlignmentUncertaintyMs": 0.07975999702034642
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1603380.0000000002,
+      "sendCount": 412,
+      "dispatchCount": 412,
+      "commitCount": 403,
+      "latencyP95Ms": 11.870844002981357,
+      "latencyP99Ms": 12.99567700894113,
+      "rawClockAlignmentUncertaintyMs": 0.029989502979788085,
+      "conservativeClockAlignmentUncertaintyMs": 0.05617700297989359
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1764218.0000000002,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.6342604910591945,
+      "latencyP99Ms": 5.3466774791381795,
+      "rawClockAlignmentUncertaintyMs": 0.024479499999984,
+      "conservativeClockAlignmentUncertaintyMs": 0.03330250298029114
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 2197794,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1602,
+      "latencyP95Ms": 3.6791772410592785,
+      "latencyP99Ms": 4.96884325298015,
+      "rawClockAlignmentUncertaintyMs": 0.026146000000153435,
+      "conservativeClockAlignmentUncertaintyMs": 0.05067724701984844
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1628992,
+      "sendCount": 270,
+      "dispatchCount": 270,
+      "commitCount": 247,
+      "latencyP95Ms": 19.271749994039055,
+      "latencyP99Ms": 20.765375005959868,
+      "rawClockAlignmentUncertaintyMs": 0.03422899999998208,
+      "conservativeClockAlignmentUncertaintyMs": 0.03887499403924721
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1819560,
+      "sendCount": 517,
+      "dispatchCount": 517,
+      "commitCount": 497,
+      "latencyP95Ms": 11.494239735098745,
+      "latencyP99Ms": 13.000322735098962,
+      "rawClockAlignmentUncertaintyMs": 0.03843749999998636,
+      "conservativeClockAlignmentUncertaintyMs": 0.05911474701986208
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 2254204,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1600,
+      "latencyP95Ms": 3.6135314970197214,
+      "latencyP99Ms": 4.99811450298057,
+      "rawClockAlignmentUncertaintyMs": 0.04842699701953279,
+      "conservativeClockAlignmentUncertaintyMs": 0.08163549701953343
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "0",
+      "combinedElectronCpuMicros": 622129,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 5.925187241058666,
+      "latencyP99Ms": 6.273229252979945,
+      "rawClockAlignmentUncertaintyMs": 0.06477099999983693,
+      "conservativeClockAlignmentUncertaintyMs": 0.11206274701930852
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "16",
+      "combinedElectronCpuMicros": 685788.9999999999,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 24.86845823509975,
+      "latencyP99Ms": 24.949875252980746,
+      "rawClockAlignmentUncertaintyMs": 0.04016699999999673,
+      "conservativeClockAlignmentUncertaintyMs": 0.05800024702000428
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "8",
+      "combinedElectronCpuMicros": 709592,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 15.94412498509837,
+      "latencyP99Ms": 16.756332997019854,
+      "rawClockAlignmentUncertaintyMs": 0.04279150000002119,
+      "conservativeClockAlignmentUncertaintyMs": 0.07987499701994238
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "original",
+      "combinedElectronCpuMicros": 674568.0000000001,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 5.97054099702018,
+      "latencyP99Ms": 6.206249991059849,
+      "rawClockAlignmentUncertaintyMs": 0.0543124999999236,
+      "conservativeClockAlignmentUncertaintyMs": 0.09200000894065852
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1886683,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 803,
+      "latencyP95Ms": 4.6251774910597305,
+      "latencyP99Ms": 5.7219275089410075,
+      "rawClockAlignmentUncertaintyMs": 0.041458499999976084,
+      "conservativeClockAlignmentUncertaintyMs": 0.08276049702010368
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1558533.9999999998,
+      "sendCount": 445,
+      "dispatchCount": 445,
+      "commitCount": 276,
+      "latencyP95Ms": 20.18845874999988,
+      "latencyP99Ms": 21.217666726158313,
+      "rawClockAlignmentUncertaintyMs": 0.034104500000012195,
+      "conservativeClockAlignmentUncertaintyMs": 0.056958749999921565
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1744165.9999999998,
+      "sendCount": 612,
+      "dispatchCount": 612,
+      "commitCount": 443,
+      "latencyP95Ms": 12.075802485099302,
+      "latencyP99Ms": 13.180593491058971,
+      "rawClockAlignmentUncertaintyMs": 0.02772899999990841,
+      "conservativeClockAlignmentUncertaintyMs": 0.03009350298020763
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1879522,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 804,
+      "latencyP95Ms": 4.569145505960478,
+      "latencyP99Ms": 5.242770505959925,
+      "rawClockAlignmentUncertaintyMs": 0.052562494039420926,
+      "conservativeClockAlignmentUncertaintyMs": 0.07735449403958228
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1124931,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 372,
+      "latencyP95Ms": 13.474041764900903,
+      "latencyP99Ms": 16.675458758940295,
+      "rawClockAlignmentUncertaintyMs": 0.04554199999984121,
+      "conservativeClockAlignmentUncertaintyMs": 0.07245874701970934
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1048538,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 26.932115008940855,
+      "latencyP99Ms": 28.943030997019832,
+      "rawClockAlignmentUncertaintyMs": 0.053541499999937514,
+      "conservativeClockAlignmentUncertaintyMs": 0.0978020029798472
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 994128,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 16.49164599999949,
+      "latencyP99Ms": 18.53264599403974,
+      "rawClockAlignmentUncertaintyMs": 0.029333500000007007,
+      "conservativeClockAlignmentUncertaintyMs": 0.03652098807913262
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1175024,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 352,
+      "latencyP95Ms": 11.83646850894047,
+      "latencyP99Ms": 14.414760491059496,
+      "rawClockAlignmentUncertaintyMs": 0.026082999999971435,
+      "conservativeClockAlignmentUncertaintyMs": 0.044822502979968704
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 4808257,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1399,
+      "latencyP95Ms": 12.397145752980578,
+      "latencyP99Ms": 17.30252073509928,
+      "rawClockAlignmentUncertaintyMs": 0.03237500000000182,
+      "conservativeClockAlignmentUncertaintyMs": 0.04527075298051386
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 3288499.0000000005,
+      "sendCount": 271,
+      "dispatchCount": 271,
+      "commitCount": 248,
+      "latencyP95Ms": 22.42995800298104,
+      "latencyP99Ms": 24.322500002980632,
+      "rawClockAlignmentUncertaintyMs": 0.028354499999977634,
+      "conservativeClockAlignmentUncertaintyMs": 0.05179199702001824
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 3737117,
+      "sendCount": 518,
+      "dispatchCount": 518,
+      "commitCount": 496,
+      "latencyP95Ms": 14.663885491059773,
+      "latencyP99Ms": 16.849677508941568,
+      "rawClockAlignmentUncertaintyMs": 0.031021000000009735,
+      "conservativeClockAlignmentUncertaintyMs": 0.04023950298028467
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 4631488.999999999,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1435,
+      "latencyP95Ms": 11.5888329761583,
+      "latencyP99Ms": 15.89158298807888,
+      "rawClockAlignmentUncertaintyMs": 0.03266650000000482,
+      "conservativeClockAlignmentUncertaintyMs": 0.03387499999985266
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1924559,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.439386020862003,
+      "latencyP99Ms": 5.455718997020085,
+      "rawClockAlignmentUncertaintyMs": 0.041125000000079126,
+      "conservativeClockAlignmentUncertaintyMs": 0.04967700298072941
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1476130.9999999998,
+      "sendCount": 227,
+      "dispatchCount": 227,
+      "commitCount": 217,
+      "latencyP95Ms": 20.079676758940423,
+      "latencyP99Ms": 20.903343758940537,
+      "rawClockAlignmentUncertaintyMs": 0.028332999999975073,
+      "conservativeClockAlignmentUncertaintyMs": 0.04098925298046652
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1770046,
+      "sendCount": 413,
+      "dispatchCount": 413,
+      "commitCount": 403,
+      "latencyP95Ms": 11.97858400000041,
+      "latencyP99Ms": 12.992792005960837,
+      "rawClockAlignmentUncertaintyMs": 0.040124999999989086,
+      "conservativeClockAlignmentUncertaintyMs": 0.04837499999996453
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1848408,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.472989255959874,
+      "latencyP99Ms": 5.145448255960218,
+      "rawClockAlignmentUncertaintyMs": 0.03170849999969505,
+      "conservativeClockAlignmentUncertaintyMs": 0.03532324999969205
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 2296558,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1604,
+      "latencyP95Ms": 3.561437755960469,
+      "latencyP99Ms": 4.97585374999926,
+      "rawClockAlignmentUncertaintyMs": 0.03077100000007249,
+      "conservativeClockAlignmentUncertaintyMs": 0.03731273807886737
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1578473,
+      "sendCount": 270,
+      "dispatchCount": 270,
+      "commitCount": 248,
+      "latencyP95Ms": 19.69236449105938,
+      "latencyP99Ms": 20.934406497020063,
+      "rawClockAlignmentUncertaintyMs": 0.03335400000014488,
+      "conservativeClockAlignmentUncertaintyMs": 0.040468497019901406
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1808669.9999999998,
+      "sendCount": 513,
+      "dispatchCount": 513,
+      "commitCount": 493,
+      "latencyP95Ms": 11.461593741059914,
+      "latencyP99Ms": 12.899926752980718,
+      "rawClockAlignmentUncertaintyMs": 0.03275000000007822,
+      "conservativeClockAlignmentUncertaintyMs": 0.04846874105930965
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 2087392,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1603,
+      "latencyP95Ms": 3.8073539999995774,
+      "latencyP99Ms": 5.074061994039766,
+      "rawClockAlignmentUncertaintyMs": 0.04193750000001728,
+      "conservativeClockAlignmentUncertaintyMs": 0.06277100596014407
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "0",
+      "combinedElectronCpuMicros": 613765,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 6.30868723509866,
+      "latencyP99Ms": 6.840354229138029,
+      "rawClockAlignmentUncertaintyMs": 0.05577050000010786,
+      "conservativeClockAlignmentUncertaintyMs": 0.08972874701976252
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "16",
+      "combinedElectronCpuMicros": 594483,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 24.525812255960773,
+      "latencyP99Ms": 25.420021238079244,
+      "rawClockAlignmentUncertaintyMs": 0.0489794999998594,
+      "conservativeClockAlignmentUncertaintyMs": 0.05356274403914085
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "8",
+      "combinedElectronCpuMicros": 602798,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 43,
+      "latencyP95Ms": 14.794051749999198,
+      "latencyP99Ms": 15.08067674403901,
+      "rawClockAlignmentUncertaintyMs": 0.04835400000001755,
+      "conservativeClockAlignmentUncertaintyMs": 0.07646876192109175
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "original",
+      "combinedElectronCpuMicros": 460748.9999999999,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 4.384947744039891,
+      "latencyP99Ms": 5.997572744040099,
+      "rawClockAlignmentUncertaintyMs": 0.0521045000000413,
+      "conservativeClockAlignmentUncertaintyMs": 0.09559426192117826
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1894445.0000000002,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 804,
+      "latencyP95Ms": 4.65928150596028,
+      "latencyP99Ms": 5.465906523842023,
+      "rawClockAlignmentUncertaintyMs": 0.03572950000000219,
+      "conservativeClockAlignmentUncertaintyMs": 0.04840649999971447
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1632124.9999999998,
+      "sendCount": 436,
+      "dispatchCount": 436,
+      "commitCount": 268,
+      "latencyP95Ms": 20.386489750000237,
+      "latencyP99Ms": 21.05078175000017,
+      "rawClockAlignmentUncertaintyMs": 0.03460450000000037,
+      "conservativeClockAlignmentUncertaintyMs": 0.04303174403946741
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1731089.9999999998,
+      "sendCount": 612,
+      "dispatchCount": 612,
+      "commitCount": 443,
+      "latencyP95Ms": 12.117311991059069,
+      "latencyP99Ms": 13.378229002979424,
+      "rawClockAlignmentUncertaintyMs": 0.038166499999988446,
+      "conservativeClockAlignmentUncertaintyMs": 0.06647899701965798
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1935573.0000000002,
+      "sendCount": 972,
+      "dispatchCount": 972,
+      "commitCount": 804,
+      "latencyP95Ms": 4.620614249999562,
+      "latencyP99Ms": 5.52694826788138,
+      "rawClockAlignmentUncertaintyMs": 0.04289599999992788,
+      "conservativeClockAlignmentUncertaintyMs": 0.0818437440393609
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1151482,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 348,
+      "latencyP95Ms": 12.57633350298056,
+      "latencyP99Ms": 14.8006664850991,
+      "rawClockAlignmentUncertaintyMs": 0.028125000000045475,
+      "conservativeClockAlignmentUncertaintyMs": 0.03979149702001905
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1040311,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 25.999208005960554,
+      "latencyP99Ms": 29.70100001192168,
+      "rawClockAlignmentUncertaintyMs": 0.06206249999979718,
+      "conservativeClockAlignmentUncertaintyMs": 0.09979199999986577
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1006273,
+      "sendCount": 172,
+      "dispatchCount": 172,
+      "commitCount": 163,
+      "latencyP95Ms": 15.34271824105872,
+      "latencyP99Ms": 17.13942724701883,
+      "rawClockAlignmentUncertaintyMs": 0.02756249999993088,
+      "conservativeClockAlignmentUncertaintyMs": 0.0360522410591102
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1180644,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 356,
+      "latencyP95Ms": 11.922145264901246,
+      "latencyP99Ms": 15.53781227086165,
+      "rawClockAlignmentUncertaintyMs": 0.03410399999995661,
+      "conservativeClockAlignmentUncertaintyMs": 0.042687247019671304
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 4526226,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1426,
+      "latencyP95Ms": 11.223791514901677,
+      "latencyP99Ms": 15.214958497020234,
+      "rawClockAlignmentUncertaintyMs": 0.05774999999994179,
+      "conservativeClockAlignmentUncertaintyMs": 0.08066650297996603
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 3213653,
+      "sendCount": 270,
+      "dispatchCount": 270,
+      "commitCount": 248,
+      "latencyP95Ms": 22.635396261921414,
+      "latencyP99Ms": 24.804437255960693,
+      "rawClockAlignmentUncertaintyMs": 0.03220850000002429,
+      "conservativeClockAlignmentUncertaintyMs": 0.05289575596066243
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 3831114.0000000005,
+      "sendCount": 524,
+      "dispatchCount": 524,
+      "commitCount": 502,
+      "latencyP95Ms": 15.494031250000262,
+      "latencyP99Ms": 19.674156244039295,
+      "rawClockAlignmentUncertaintyMs": 0.07284375000017462,
+      "conservativeClockAlignmentUncertaintyMs": 0.10696875000007822
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 4719615,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1274,
+      "latencyP95Ms": 14.72483375596039,
+      "latencyP99Ms": 19.48616674999994,
+      "rawClockAlignmentUncertaintyMs": 0.04139573807924535,
+      "conservativeClockAlignmentUncertaintyMs": 0.07112523807904836
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1716284,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 805,
+      "latencyP95Ms": 4.404239752980175,
+      "latencyP99Ms": 5.4099477529798605,
+      "rawClockAlignmentUncertaintyMs": 0.04669775894080885,
+      "conservativeClockAlignmentUncertaintyMs": 0.07388525894077702
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1507894,
+      "sendCount": 232,
+      "dispatchCount": 232,
+      "commitCount": 222,
+      "latencyP95Ms": 20.099489738079683,
+      "latencyP99Ms": 21.304739750000408,
+      "rawClockAlignmentUncertaintyMs": 0.03523975596044693,
+      "conservativeClockAlignmentUncertaintyMs": 0.06492725596046967
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1563667,
+      "sendCount": 412,
+      "dispatchCount": 412,
+      "commitCount": 403,
+      "latencyP95Ms": 12.093843758940238,
+      "latencyP99Ms": 13.192968741058394,
+      "rawClockAlignmentUncertaintyMs": 0.037708500000007916,
+      "conservativeClockAlignmentUncertaintyMs": 0.03803125894091863
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1692474.9999999998,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.361739494039284,
+      "latencyP99Ms": 5.535906488078581,
+      "rawClockAlignmentUncertaintyMs": 0.03490649999969264,
+      "conservativeClockAlignmentUncertaintyMs": 0.06838549999963561
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "0",
+      "combinedElectronCpuMicros": 2136386,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1605,
+      "latencyP95Ms": 3.9620624970193603,
+      "latencyP99Ms": 5.306937508939882,
+      "rawClockAlignmentUncertaintyMs": 0.029082999999900494,
+      "conservativeClockAlignmentUncertaintyMs": 0.03577049701948454
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1597555.9999999998,
+      "sendCount": 268,
+      "dispatchCount": 268,
+      "commitCount": 247,
+      "latencyP95Ms": 19.359927482118565,
+      "latencyP99Ms": 20.675677482118772,
+      "rawClockAlignmentUncertaintyMs": 0.024583000000006905,
+      "conservativeClockAlignmentUncertaintyMs": 0.04307249999976648
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1810745.9999999998,
+      "sendCount": 522,
+      "dispatchCount": 522,
+      "commitCount": 502,
+      "latencyP95Ms": 11.326551749999453,
+      "latencyP99Ms": 13.043176755960303,
+      "rawClockAlignmentUncertaintyMs": 0.028698244039674137,
+      "conservativeClockAlignmentUncertaintyMs": 0.05544824403966686
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "original",
+      "combinedElectronCpuMicros": 2135317,
+      "sendCount": 1624,
+      "dispatchCount": 1624,
+      "commitCount": 1602,
+      "latencyP95Ms": 3.84920876490105,
+      "latencyP99Ms": 5.179791747019408,
+      "rawClockAlignmentUncertaintyMs": 0.04116650000014488,
+      "conservativeClockAlignmentUncertaintyMs": 0.056999752980345875
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "0",
+      "combinedElectronCpuMicros": 562667,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 6.067104250000739,
+      "latencyP99Ms": 6.700312261921681,
+      "rawClockAlignmentUncertaintyMs": 0.04462499999999636,
+      "conservativeClockAlignmentUncertaintyMs": 0.06947926192128762
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "16",
+      "combinedElectronCpuMicros": 608052,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 24.493312005960433,
+      "latencyP99Ms": 25.644521000000168,
+      "rawClockAlignmentUncertaintyMs": 0.03218750000007731,
+      "conservativeClockAlignmentUncertaintyMs": 0.0509790059605848
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "8",
+      "combinedElectronCpuMicros": 593090.9999999999,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 14.664874747019894,
+      "latencyP99Ms": 15.737707747020067,
+      "rawClockAlignmentUncertaintyMs": 0.057396000000153435,
+      "conservativeClockAlignmentUncertaintyMs": 0.11141675894100445
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "original",
+      "combinedElectronCpuMicros": 520788,
+      "sendCount": 43,
+      "dispatchCount": 43,
+      "commitCount": 42,
+      "latencyP95Ms": 5.75358325894058,
+      "latencyP99Ms": 6.365125252979851,
+      "rawClockAlignmentUncertaintyMs": 0.024312499999723514,
+      "conservativeClockAlignmentUncertaintyMs": 0.03720824701952097
+    }
+  ],
+  "groups": [
+    {
+      "workload": "sparse-1",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 520788,
+        "min": 460748.9999999999,
+        "max": 674568.0000000001
+      },
+      "sendCount": {
+        "median": 43,
+        "min": 43,
+        "max": 43
+      },
+      "commitCount": {
+        "median": 42,
+        "min": 42,
+        "max": 42
+      },
+      "latencyP95Ms": {
+        "median": 5.75358325894058,
+        "min": 4.384947744039891,
+        "max": 5.97054099702018
+      },
+      "latencyP99Ms": {
+        "median": 6.206249991059849,
+        "min": 5.997572744040099,
+        "max": 6.365125252979851
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.0521045000000413,
+        "min": 0.024312499999723514,
+        "max": 0.0543124999999236
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.09200000894065852,
+        "min": 0.03720824701952097,
+        "max": 0.09559426192117826
+      }
+    },
+    {
+      "workload": "sparse-1",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 613765,
+        "min": 562667,
+        "max": 622129
+      },
+      "sendCount": {
+        "median": 43,
+        "min": 43,
+        "max": 43
+      },
+      "commitCount": {
+        "median": 42,
+        "min": 42,
+        "max": 42
+      },
+      "latencyP95Ms": {
+        "median": 6.067104250000739,
+        "min": 5.925187241058666,
+        "max": 6.30868723509866
+      },
+      "latencyP99Ms": {
+        "median": 6.700312261921681,
+        "min": 6.273229252979945,
+        "max": 6.840354229138029
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.05577050000010786,
+        "min": 0.04462499999999636,
+        "max": 0.06477099999983693
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.08972874701976252,
+        "min": 0.06947926192128762,
+        "max": 0.11206274701930852
+      }
+    },
+    {
+      "workload": "sparse-1",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 602798,
+        "min": 593090.9999999999,
+        "max": 709592
+      },
+      "sendCount": {
+        "median": 43,
+        "min": 43,
+        "max": 43
+      },
+      "commitCount": {
+        "median": 42,
+        "min": 42,
+        "max": 43
+      },
+      "latencyP95Ms": {
+        "median": 14.794051749999198,
+        "min": 14.664874747019894,
+        "max": 15.94412498509837
+      },
+      "latencyP99Ms": {
+        "median": 15.737707747020067,
+        "min": 15.08067674403901,
+        "max": 16.756332997019854
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.04835400000001755,
+        "min": 0.04279150000002119,
+        "max": 0.057396000000153435
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.07987499701994238,
+        "min": 0.07646876192109175,
+        "max": 0.11141675894100445
+      }
+    },
+    {
+      "workload": "sparse-1",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 608052,
+        "min": 594483,
+        "max": 685788.9999999999
+      },
+      "sendCount": {
+        "median": 43,
+        "min": 43,
+        "max": 43
+      },
+      "commitCount": {
+        "median": 42,
+        "min": 42,
+        "max": 42
+      },
+      "latencyP95Ms": {
+        "median": 24.525812255960773,
+        "min": 24.493312005960433,
+        "max": 24.86845823509975
+      },
+      "latencyP99Ms": {
+        "median": 25.420021238079244,
+        "min": 24.949875252980746,
+        "max": 25.644521000000168
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.04016699999999673,
+        "min": 0.03218750000007731,
+        "max": 0.0489794999998594
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.05356274403914085,
+        "min": 0.0509790059605848,
+        "max": 0.05800024702000428
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1764218.0000000002,
+        "min": 1692474.9999999998,
+        "max": 1848408
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 803,
+        "min": 803,
+        "max": 803
+      },
+      "latencyP95Ms": {
+        "median": 4.472989255959874,
+        "min": 4.361739494039284,
+        "max": 4.6342604910591945
+      },
+      "latencyP99Ms": {
+        "median": 5.3466774791381795,
+        "min": 5.145448255960218,
+        "max": 5.535906488078581
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03170849999969505,
+        "min": 0.024479499999984,
+        "max": 0.03490649999969264
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.03532324999969205,
+        "min": 0.03330250298029114,
+        "max": 0.06838549999963561
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1809754.9999999998,
+        "min": 1716284,
+        "max": 1924559
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 804,
+        "min": 803,
+        "max": 805
+      },
+      "latencyP95Ms": {
+        "median": 4.404239752980175,
+        "min": 4.364364497019778,
+        "max": 4.439386020862003
+      },
+      "latencyP99Ms": {
+        "median": 5.4099477529798605,
+        "min": 5.095156508940818,
+        "max": 5.455718997020085
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.041125000000079126,
+        "min": 0.03255199701993661,
+        "max": 0.04669775894080885
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06211449701982019,
+        "min": 0.04967700298072941,
+        "max": 0.07388525894077702
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1603380.0000000002,
+        "min": 1563667,
+        "max": 1770046
+      },
+      "sendCount": {
+        "median": 412,
+        "min": 412,
+        "max": 413
+      },
+      "commitCount": {
+        "median": 403,
+        "min": 403,
+        "max": 403
+      },
+      "latencyP95Ms": {
+        "median": 11.97858400000041,
+        "min": 11.870844002981357,
+        "max": 12.093843758940238
+      },
+      "latencyP99Ms": {
+        "median": 12.99567700894113,
+        "min": 12.992792005960837,
+        "max": 13.192968741058394
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.037708500000007916,
+        "min": 0.029989502979788085,
+        "max": 0.040124999999989086
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.04837499999996453,
+        "min": 0.03803125894091863,
+        "max": 0.05617700297989359
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1487845,
+        "min": 1476130.9999999998,
+        "max": 1507894
+      },
+      "sendCount": {
+        "median": 230,
+        "min": 227,
+        "max": 232
+      },
+      "commitCount": {
+        "median": 221,
+        "min": 217,
+        "max": 222
+      },
+      "latencyP95Ms": {
+        "median": 20.079676758940423,
+        "min": 20.01228101490142,
+        "max": 20.099489738079683
+      },
+      "latencyP99Ms": {
+        "median": 21.02711500894111,
+        "min": 20.903343758940537,
+        "max": 21.304739750000408
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03523975596044693,
+        "min": 0.028332999999975073,
+        "max": 0.040593497020154246
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06492725596046967,
+        "min": 0.04098925298046652,
+        "max": 0.07975999702034642
+      }
+    },
+    {
+      "workload": "paced-8",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 2135317,
+        "min": 2087392,
+        "max": 2254204
+      },
+      "sendCount": {
+        "median": 1624,
+        "min": 1624,
+        "max": 1624
+      },
+      "commitCount": {
+        "median": 1602,
+        "min": 1600,
+        "max": 1603
+      },
+      "latencyP95Ms": {
+        "median": 3.8073539999995774,
+        "min": 3.6135314970197214,
+        "max": 3.84920876490105
+      },
+      "latencyP99Ms": {
+        "median": 5.074061994039766,
+        "min": 4.99811450298057,
+        "max": 5.179791747019408
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.04193750000001728,
+        "min": 0.04116650000014488,
+        "max": 0.04842699701953279
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06277100596014407,
+        "min": 0.056999752980345875,
+        "max": 0.08163549701953343
+      }
+    },
+    {
+      "workload": "paced-8",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 2197794,
+        "min": 2136386,
+        "max": 2296558
+      },
+      "sendCount": {
+        "median": 1624,
+        "min": 1624,
+        "max": 1624
+      },
+      "commitCount": {
+        "median": 1604,
+        "min": 1602,
+        "max": 1605
+      },
+      "latencyP95Ms": {
+        "median": 3.6791772410592785,
+        "min": 3.561437755960469,
+        "max": 3.9620624970193603
+      },
+      "latencyP99Ms": {
+        "median": 4.97585374999926,
+        "min": 4.96884325298015,
+        "max": 5.306937508939882
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.029082999999900494,
+        "min": 0.026146000000153435,
+        "max": 0.03077100000007249
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.03731273807886737,
+        "min": 0.03577049701948454,
+        "max": 0.05067724701984844
+      }
+    },
+    {
+      "workload": "paced-8",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1810745.9999999998,
+        "min": 1808669.9999999998,
+        "max": 1819560
+      },
+      "sendCount": {
+        "median": 517,
+        "min": 513,
+        "max": 522
+      },
+      "commitCount": {
+        "median": 497,
+        "min": 493,
+        "max": 502
+      },
+      "latencyP95Ms": {
+        "median": 11.461593741059914,
+        "min": 11.326551749999453,
+        "max": 11.494239735098745
+      },
+      "latencyP99Ms": {
+        "median": 13.000322735098962,
+        "min": 12.899926752980718,
+        "max": 13.043176755960303
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03275000000007822,
+        "min": 0.028698244039674137,
+        "max": 0.03843749999998636
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.05544824403966686,
+        "min": 0.04846874105930965,
+        "max": 0.05911474701986208
+      }
+    },
+    {
+      "workload": "paced-8",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1597555.9999999998,
+        "min": 1578473,
+        "max": 1628992
+      },
+      "sendCount": {
+        "median": 270,
+        "min": 268,
+        "max": 270
+      },
+      "commitCount": {
+        "median": 247,
+        "min": 247,
+        "max": 248
+      },
+      "latencyP95Ms": {
+        "median": 19.359927482118565,
+        "min": 19.271749994039055,
+        "max": 19.69236449105938
+      },
+      "latencyP99Ms": {
+        "median": 20.765375005959868,
+        "min": 20.675677482118772,
+        "max": 20.934406497020063
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03335400000014488,
+        "min": 0.024583000000006905,
+        "max": 0.03422899999998208
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.040468497019901406,
+        "min": 0.03887499403924721,
+        "max": 0.04307249999976648
+      }
+    },
+    {
+      "workload": "long-history-8",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 4719615,
+        "min": 4631488.999999999,
+        "max": 4991294.000000001
+      },
+      "sendCount": {
+        "median": 1624,
+        "min": 1624,
+        "max": 1624
+      },
+      "commitCount": {
+        "median": 1282,
+        "min": 1274,
+        "max": 1435
+      },
+      "latencyP95Ms": {
+        "median": 14.72483375596039,
+        "min": 11.5888329761583,
+        "max": 14.843531238079322
+      },
+      "latencyP99Ms": {
+        "median": 19.48616674999994,
+        "min": 15.89158298807888,
+        "max": 21.483198250000896
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03266650000000482,
+        "min": 0.027291999999988548,
+        "max": 0.04139573807924535
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.039448238079557996,
+        "min": 0.03387499999985266,
+        "max": 0.07112523807904836
+      }
+    },
+    {
+      "workload": "long-history-8",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 4808257,
+        "min": 4526226,
+        "max": 4822578
+      },
+      "sendCount": {
+        "median": 1624,
+        "min": 1624,
+        "max": 1624
+      },
+      "commitCount": {
+        "median": 1399,
+        "min": 1341,
+        "max": 1426
+      },
+      "latencyP95Ms": {
+        "median": 12.397145752980578,
+        "min": 11.223791514901677,
+        "max": 14.01547900596097
+      },
+      "latencyP99Ms": {
+        "median": 17.30252073509928,
+        "min": 15.214958497020234,
+        "max": 21.117728988079307
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.037458499999956985,
+        "min": 0.03237500000000182,
+        "max": 0.05774999999994179
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06527100000039354,
+        "min": 0.04527075298051386,
+        "max": 0.08066650297996603
+      }
+    },
+    {
+      "workload": "long-history-8",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 3762208.0000000005,
+        "min": 3737117,
+        "max": 3831114.0000000005
+      },
+      "sendCount": {
+        "median": 520,
+        "min": 518,
+        "max": 524
+      },
+      "commitCount": {
+        "median": 498,
+        "min": 496,
+        "max": 502
+      },
+      "latencyP95Ms": {
+        "median": 14.808833491059886,
+        "min": 14.663885491059773,
+        "max": 15.494031250000262
+      },
+      "latencyP99Ms": {
+        "median": 16.849677508941568,
+        "min": 16.764624497020122,
+        "max": 19.674156244039295
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03662499999995816,
+        "min": 0.031021000000009735,
+        "max": 0.07284375000017462
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.055541497019703456,
+        "min": 0.04023950298028467,
+        "max": 0.10696875000007822
+      }
+    },
+    {
+      "workload": "long-history-8",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 3213653,
+        "min": 3192702.9999999995,
+        "max": 3288499.0000000005
+      },
+      "sendCount": {
+        "median": 270,
+        "min": 268,
+        "max": 271
+      },
+      "commitCount": {
+        "median": 248,
+        "min": 246,
+        "max": 248
+      },
+      "latencyP95Ms": {
+        "median": 22.635396261921414,
+        "min": 22.42995800298104,
+        "max": 22.707041241059414
+      },
+      "latencyP99Ms": {
+        "median": 24.322500002980632,
+        "min": 24.312833247019626,
+        "max": 24.804437255960693
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03220850000002429,
+        "min": 0.028354499999977634,
+        "max": 0.041520758940805536
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.05289575596066243,
+        "min": 0.05179199702001824,
+        "max": 0.07966675894112996
+      }
+    },
+    {
+      "workload": "burst-4",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1175024,
+        "min": 1083639,
+        "max": 1180644
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 356,
+        "min": 352,
+        "max": 369
+      },
+      "latencyP95Ms": {
+        "median": 11.83646850894047,
+        "min": 11.515406749999784,
+        "max": 11.922145264901246
+      },
+      "latencyP99Ms": {
+        "median": 15.53781227086165,
+        "min": 14.414760491059496,
+        "max": 17.33761476192103
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03410399999995661,
+        "min": 0.026082999999971435,
+        "max": 0.03828124403980837
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.044822502979968704,
+        "min": 0.042687247019671304,
+        "max": 0.0677602440400733
+      }
+    },
+    {
+      "workload": "burst-4",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1151482,
+        "min": 1124931,
+        "max": 1226922
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 372,
+        "min": 348,
+        "max": 382
+      },
+      "latencyP95Ms": {
+        "median": 12.57633350298056,
+        "min": 11.4611982619208,
+        "max": 13.474041764900903
+      },
+      "latencyP99Ms": {
+        "median": 14.8006664850991,
+        "min": 13.85207324403973,
+        "max": 16.675458758940295
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.04554199999984121,
+        "min": 0.028125000000045475,
+        "max": 0.050271000000066124
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06238574403982966,
+        "min": 0.03979149702001905,
+        "max": 0.07245874701970934
+      }
+    },
+    {
+      "workload": "burst-4",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1006273,
+        "min": 994128,
+        "max": 1088140
+      },
+      "sendCount": {
+        "median": 172,
+        "min": 172,
+        "max": 172
+      },
+      "commitCount": {
+        "median": 163,
+        "min": 163,
+        "max": 163
+      },
+      "latencyP95Ms": {
+        "median": 16.02300000894047,
+        "min": 15.34271824105872,
+        "max": 16.49164599999949
+      },
+      "latencyP99Ms": {
+        "median": 18.320416991058664,
+        "min": 17.13942724701883,
+        "max": 18.53264599403974
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.02756249999993088,
+        "min": 0.024582999999893218,
+        "max": 0.029333500000007007
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.03652098807913262,
+        "min": 0.0360522410591102,
+        "max": 0.045707991059316555
+      }
+    },
+    {
+      "workload": "burst-4",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1048538,
+        "min": 1040311,
+        "max": 1066372.0000000002
+      },
+      "sendCount": {
+        "median": 172,
+        "min": 172,
+        "max": 172
+      },
+      "commitCount": {
+        "median": 163,
+        "min": 163,
+        "max": 163
+      },
+      "latencyP95Ms": {
+        "median": 26.932115008940855,
+        "min": 25.999208005960554,
+        "max": 27.866927000000032
+      },
+      "latencyP99Ms": {
+        "median": 29.70100001192168,
+        "min": 28.943030997019832,
+        "max": 30.655719005960236
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.0598854999999503,
+        "min": 0.053541499999937514,
+        "max": 0.06206249999979718
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.0978020029798472,
+        "min": 0.0862809999999854,
+        "max": 0.09979199999986577
+      }
+    },
+    {
+      "workload": "barriers-4",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1935573.0000000002,
+        "min": 1879522,
+        "max": 1973070
+      },
+      "sendCount": {
+        "median": 972,
+        "min": 972,
+        "max": 972
+      },
+      "commitCount": {
+        "median": 804,
+        "min": 802,
+        "max": 804
+      },
+      "latencyP95Ms": {
+        "median": 4.573645729137752,
+        "min": 4.569145505960478,
+        "max": 4.620614249999562
+      },
+      "latencyP99Ms": {
+        "median": 5.444187752979815,
+        "min": 5.242770505959925,
+        "max": 5.52694826788138
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.044416747019795366,
+        "min": 0.04289599999992788,
+        "max": 0.052562494039420926
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.07735449403958228,
+        "min": 0.0687707470199257,
+        "max": 0.0818437440393609
+      }
+    },
+    {
+      "workload": "barriers-4",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1894445.0000000002,
+        "min": 1886683,
+        "max": 1916710
+      },
+      "sendCount": {
+        "median": 972,
+        "min": 972,
+        "max": 972
+      },
+      "commitCount": {
+        "median": 803,
+        "min": 802,
+        "max": 804
+      },
+      "latencyP95Ms": {
+        "median": 4.6251774910597305,
+        "min": 4.456989988078931,
+        "max": 4.65928150596028
+      },
+      "latencyP99Ms": {
+        "median": 5.465906523842023,
+        "min": 5.312489988078596,
+        "max": 5.7219275089410075
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03572950000000219,
+        "min": 0.027395999999953347,
+        "max": 0.041458499999976084
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.04840649999971447,
+        "min": 0.04355199999974957,
+        "max": 0.08276049702010368
+      }
+    },
+    {
+      "workload": "barriers-4",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1744165.9999999998,
+        "min": 1731089.9999999998,
+        "max": 1754957.9999999998
+      },
+      "sendCount": {
+        "median": 612,
+        "min": 611,
+        "max": 612
+      },
+      "commitCount": {
+        "median": 443,
+        "min": 443,
+        "max": 443
+      },
+      "latencyP95Ms": {
+        "median": 12.117311991059069,
+        "min": 12.075802485099302,
+        "max": 12.306926985098471
+      },
+      "latencyP99Ms": {
+        "median": 13.287635002980096,
+        "min": 13.180593491058971,
+        "max": 13.378229002979424
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.036781502980261394,
+        "min": 0.02772899999990841,
+        "max": 0.038166499999988446
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.06647899701965798,
+        "min": 0.03009350298020763,
+        "max": 0.06709400298029777
+      }
+    },
+    {
+      "workload": "barriers-4",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1632124.9999999998,
+        "min": 1558533.9999999998,
+        "max": 1690519.0000000002
+      },
+      "sendCount": {
+        "median": 444,
+        "min": 436,
+        "max": 445
+      },
+      "commitCount": {
+        "median": 276,
+        "min": 268,
+        "max": 276
+      },
+      "latencyP95Ms": {
+        "median": 20.21144749999985,
+        "min": 20.18845874999988,
+        "max": 20.386489750000237
+      },
+      "latencyP99Ms": {
+        "median": 21.217666726158313,
+        "min": 21.05078175000017,
+        "max": 21.237072505959986
+      },
+      "rawClockAlignmentUncertaintyMs": {
+        "median": 0.03460450000000037,
+        "min": 0.034104500000012195,
+        "max": 0.05351050596027562
+      },
+      "conservativeClockAlignmentUncertaintyMs": {
+        "median": 0.056958749999921565,
+        "min": 0.04303174403946741,
+        "max": 0.08009350596023523
+      }
+    }
+  ],
+  "paired": [
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 14.320373833670361,
+      "addedP95Ms": 15.637801770862097,
+      "addedP99Ms": 15.792884752980171,
+      "latencyUncertaintyMs": 0.14886425298016093,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 11.801002759937589,
+      "addedP95Ms": 15.754457511920918,
+      "addedP99Ms": 15.92458251788139,
+      "latencyUncertaintyMs": 0.1236455059599848,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 11.054448144262507,
+      "addedP95Ms": 7.733281255960719,
+      "addedP99Ms": 7.843447250000281,
+      "latencyUncertaintyMs": 0.13586475000022347,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 8.439043986831614,
+      "addedP95Ms": 7.84993699701954,
+      "addedP99Ms": 7.9751450149015,
+      "latencyUncertaintyMs": 0.11064600298004734,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 1.5934273314267728,
+      "addedP95Ms": 16.35152025000025,
+      "addedP99Ms": 13.318104244039205,
+      "latencyUncertaintyMs": 0.1540412440400587,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 13.085591423089632,
+      "addedP95Ms": 16.405728738079233,
+      "addedP99Ms": 16.803645761920507,
+      "latencyUncertaintyMs": 0.14866674403981506,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -0.41535972773220603,
+      "addedP95Ms": 4.5075932589406875,
+      "addedP99Ms": 0.9828022291376328,
+      "latencyUncertaintyMs": 0.11346823509938986,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 11.311395508434929,
+      "addedP95Ms": 4.561801747019672,
+      "addedP99Ms": 4.468343747018935,
+      "latencyUncertaintyMs": 0.10809373509914622,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 36.03456338176034,
+      "addedP95Ms": 7.863510002980092,
+      "addedP99Ms": 2.8296349970187293,
+      "latencyUncertaintyMs": 0.11911499702068795,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 33.79675766778683,
+      "addedP95Ms": 8.691562235098445,
+      "addedP99Ms": 3.1951042589403187,
+      "latencyUncertaintyMs": 0.1449377589415235,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 24.62459634715968,
+      "addedP95Ms": -0.034697747019436065,
+      "addedP99Ms": -4.718573752980774,
+      "latencyUncertaintyMs": 0.09498973509926145,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 21.987617411268403,
+      "addedP95Ms": 0.7933544850989165,
+      "addedP99Ms": -4.3531044910591845,
+      "latencyUncertaintyMs": 0.120812497020097,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 15.665467646288622,
+      "addedP95Ms": 15.378020523842224,
+      "addedP99Ms": 15.68043752980293,
+      "latencyUncertaintyMs": 0.11306250000063756,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 17.78749057192823,
+      "addedP95Ms": 15.64791651788164,
+      "addedP99Ms": 15.931958500000292,
+      "latencyUncertaintyMs": 0.1418744940401666,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 9.11667378974707,
+      "addedP95Ms": 7.236583511922163,
+      "addedP99Ms": 7.64899952980295,
+      "latencyUncertaintyMs": 0.08947950596018472,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 11.403477266259774,
+      "addedP95Ms": 7.506479505961579,
+      "addedP99Ms": 7.900520500000312,
+      "latencyUncertaintyMs": 0.11829149999971378,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 27.735377987085464,
+      "addedP95Ms": 15.658218497019334,
+      "addedP99Ms": 15.767260502979298,
+      "latencyUncertaintyMs": 0.12051049105878064,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 25.880587534591506,
+      "addedP95Ms": 15.592572752979777,
+      "addedP99Ms": 15.796531752979718,
+      "latencyUncertaintyMs": 0.08955224105909565,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 19.28148472809027,
+      "addedP95Ms": 7.880708238079023,
+      "addedP99Ms": 8.002208232118392,
+      "latencyUncertaintyMs": 0.1407502440393955,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 17.209711192222745,
+      "addedP95Ms": 7.815062494039466,
+      "addedP99Ms": 8.031479482118812,
+      "latencyUncertaintyMs": 0.10979199403971052,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -1.663434968750336,
+      "addedP95Ms": 18.89791723807957,
+      "addedP99Ms": 18.743625261920897,
+      "latencyUncertaintyMs": 0.1500002559606628,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": -10.232604491994406,
+      "addedP95Ms": 18.943270994041086,
+      "addedP99Ms": 18.6766460000008,
+      "latencyUncertaintyMs": 0.1700629940393128,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -5.192063661484073,
+      "addedP95Ms": 9.97358398807819,
+      "addedP99Ms": 10.550083005960005,
+      "latencyUncertaintyMs": 0.1718750059606009,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 0,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": -14.058659859932588,
+      "addedP95Ms": 10.018937744039704,
+      "addedP99Ms": 10.483103744039909,
+      "latencyUncertaintyMs": 0.1919377440392509,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 17.078172003307238,
+      "addedP95Ms": 15.619313244039404,
+      "addedP99Ms": 15.974896220198389,
+      "latencyUncertaintyMs": 0.13431324403950384,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 17.392905962474895,
+      "addedP95Ms": 15.563281258940151,
+      "addedP99Ms": 15.495739217217306,
+      "latencyUncertaintyMs": 0.13971924702002525,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 7.201618283797702,
+      "addedP95Ms": 7.506656979138825,
+      "addedP99Ms": 7.9378229850990465,
+      "latencyUncertaintyMs": 0.10744799701978991,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 7.553839198211901,
+      "addedP95Ms": 7.450624994039572,
+      "addedP99Ms": 7.458665982117964,
+      "latencyUncertaintyMs": 0.11285400000031132,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 10.764546085867183,
+      "addedP95Ms": 15.095646500000385,
+      "addedP99Ms": 14.528270505960336,
+      "latencyUncertaintyMs": 0.1426245059598159,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 6.790905397753284,
+      "addedP95Ms": 13.458073244039952,
+      "addedP99Ms": 12.267572238079538,
+      "latencyUncertaintyMs": 0.17026074999955654,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 15.395089802421058,
+      "addedP95Ms": 4.655177491059021,
+      "addedP99Ms": 4.1178855029802435,
+      "latencyUncertaintyMs": 0.08134349105910132,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 11.627646495651733,
+      "addedP95Ms": 3.017604235098588,
+      "addedP99Ms": 1.8571872350994454,
+      "latencyUncertaintyMs": 0.10897973509884196,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 28.99693813371896,
+      "addedP95Ms": 10.841125026822738,
+      "addedP99Ms": 8.430917014901752,
+      "latencyUncertaintyMs": 0.0856669970198709,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 31.6072539383814,
+      "addedP95Ms": 10.032812250000461,
+      "addedP99Ms": 7.019979267881354,
+      "latencyUncertaintyMs": 0.0970627500005321,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 19.310679567629315,
+      "addedP95Ms": 3.075052514901472,
+      "addedP99Ms": 0.9580945208626872,
+      "latencyUncertaintyMs": 0.07411450298013733,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 22.277095421480176,
+      "addedP95Ms": 2.2667397380791954,
+      "addedP99Ms": -0.4528432261577109,
+      "latencyUncertaintyMs": 0.08551025596079853,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 20.140412722732222,
+      "addedP95Ms": 15.606687502980549,
+      "addedP99Ms": 15.757895502980318,
+      "latencyUncertaintyMs": 0.07631250298015857,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 23.300298925624013,
+      "addedP95Ms": 15.64029073807842,
+      "addedP99Ms": 15.447624761920451,
+      "latencyUncertaintyMs": 0.09066625596119593,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 4.239431986877356,
+      "addedP95Ms": 7.505594744040536,
+      "addedP99Ms": 7.8473437500006185,
+      "latencyUncertaintyMs": 0.08369824999965658,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 8.028488604402359,
+      "addedP95Ms": 7.539197979138407,
+      "addedP99Ms": 7.537073008940752,
+      "latencyUncertaintyMs": 0.09805200298069394,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 24.380614661740584,
+      "addedP95Ms": 15.885010491059802,
+      "addedP99Ms": 15.860344502980297,
+      "latencyUncertaintyMs": 0.10323950298004547,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 31.267880018706258,
+      "addedP95Ms": 16.13092673509891,
+      "addedP99Ms": 15.958552747020804,
+      "latencyUncertaintyMs": 0.07778123509876878,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 13.352642915178379,
+      "addedP95Ms": 7.654239741060337,
+      "addedP99Ms": 7.825864758940952,
+      "latencyUncertaintyMs": 0.11123974701945372,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 21.244314317339263,
+      "addedP95Ms": 7.900155985099445,
+      "addedP99Ms": 7.924073002981459,
+      "latencyUncertaintyMs": 0.08578147913817702,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -29.025347857510305,
+      "addedP95Ms": 20.14086451192088,
+      "addedP99Ms": 19.422448494039145,
+      "latencyUncertaintyMs": 0.1491570059603191,
+      "p95Gate": "borderline",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 3.1415932808159477,
+      "addedP95Ms": 18.217125020862113,
+      "addedP99Ms": 18.579667008941215,
+      "latencyUncertaintyMs": 0.14329149105890338,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -30.830018079257936,
+      "addedP95Ms": 10.409104005959307,
+      "addedP99Ms": 9.083103999998912,
+      "latencyUncertaintyMs": 0.17206302384227,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 1,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 1.7868402401570633,
+      "addedP95Ms": 8.485364514900539,
+      "addedP99Ms": 8.240322514900981,
+      "latencyUncertaintyMs": 0.16619750894085428,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 15.677424721258276,
+      "addedP95Ms": 15.765875500000675,
+      "addedP99Ms": 15.523833482118789,
+      "latencyUncertaintyMs": 0.12487548807882831,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 13.846799458416603,
+      "addedP95Ms": 15.727208244039957,
+      "addedP99Ms": 15.584875226158147,
+      "latencyUncertaintyMs": 0.09143824403918188,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 10.56446850622531,
+      "addedP95Ms": 7.496697741059506,
+      "addedP99Ms": 7.851280735098044,
+      "latencyUncertaintyMs": 0.14832274105901888,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "barriers-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 8.622842046087401,
+      "addedP95Ms": 7.458030485098789,
+      "addedP99Ms": 7.912322479137401,
+      "latencyUncertaintyMs": 0.11488549701937245,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 11.886140106585898,
+      "addedP95Ms": 14.077062741059308,
+      "addedP99Ms": 14.163187741060028,
+      "latencyUncertaintyMs": 0.14247924701953707,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 9.65460163511023,
+      "addedP95Ms": 13.422874502979994,
+      "addedP99Ms": 14.900333526822578,
+      "latencyUncertaintyMs": 0.13958349701988482,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 14.769142942326392,
+      "addedP95Ms": 3.420572976157473,
+      "addedP99Ms": 1.6016149761571796,
+      "latencyUncertaintyMs": 0.0787394880787815,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "burst-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 12.610618316222052,
+      "addedP95Ms": 2.766384738078159,
+      "addedP99Ms": 2.3387607619197297,
+      "latencyUncertaintyMs": 0.07584373807912925,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 31.908577288613582,
+      "addedP95Ms": 7.910562505961025,
+      "addedP99Ms": 5.318270505960754,
+      "latencyUncertaintyMs": 0.12402099403971079,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 28.99928107876186,
+      "addedP95Ms": 11.411604747019737,
+      "addedP99Ms": 9.589478758940459,
+      "latencyUncertaintyMs": 0.13356225894062845,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 18.82570930044081,
+      "addedP95Ms": 0.7691974940398723,
+      "addedP99Ms": 0.18798949403935694,
+      "latencyUncertaintyMs": 0.17809398807912658,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "long-history-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 15.357430229953156,
+      "addedP95Ms": 4.270239735098585,
+      "addedP99Ms": 4.459197747019061,
+      "latencyUncertaintyMs": 0.18763525298004424,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 10.905980885980577,
+      "addedP95Ms": 15.737750244040399,
+      "addedP99Ms": 15.768833261921827,
+      "latencyUncertaintyMs": 0.13331275596010528,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 12.1419298903911,
+      "addedP95Ms": 15.695249985099508,
+      "addedP99Ms": 15.894791997020548,
+      "latencyUncertaintyMs": 0.1388125149012467,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 7.610629403683941,
+      "addedP95Ms": 7.732104264900954,
+      "addedP99Ms": 7.657062252979813,
+      "latencyUncertaintyMs": 0.10641675894055425,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 8.8922928839283,
+      "addedP95Ms": 7.689604005960064,
+      "addedP99Ms": 7.783020988078533,
+      "latencyUncertaintyMs": 0.11191651788169565,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 25.184129569520604,
+      "addedP95Ms": 15.510718717217514,
+      "addedP99Ms": 15.495885735099364,
+      "latencyUncertaintyMs": 0.10007225298011235,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 25.221565765737104,
+      "addedP95Ms": 15.397864985099204,
+      "addedP99Ms": 15.36873997317889,
+      "latencyUncertaintyMs": 0.07884299701925102,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 15.200131877374659,
+      "addedP95Ms": 7.477342985098403,
+      "addedP99Ms": 7.863385008940895,
+      "latencyUncertaintyMs": 0.11244799702001274,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-8",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 15.242563843799772,
+      "addedP95Ms": 7.364489252980093,
+      "addedP99Ms": 7.736239247020421,
+      "latencyUncertaintyMs": 0.0912187410591514,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -16.75614645498744,
+      "addedP95Ms": 18.739728747019853,
+      "addedP99Ms": 19.279395747020317,
+      "latencyUncertaintyMs": 0.08818725298010577,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": -8.066049723904193,
+      "addedP95Ms": 18.426207755959695,
+      "addedP99Ms": 18.944208738078487,
+      "latencyUncertaintyMs": 0.12045826788187242,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": -13.883384409779003,
+      "addedP95Ms": 8.911291488079314,
+      "addedP99Ms": 9.372582494040216,
+      "latencyUncertaintyMs": 0.1486250059605254,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    },
+    {
+      "repetition": 2,
+      "workload": "sparse-1",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": -5.407105801477585,
+      "addedP95Ms": 8.597770497019155,
+      "addedP99Ms": 9.037395485098386,
+      "latencyUncertaintyMs": 0.18089602086229206,
+      "p95Gate": "pass",
+      "p99Gate": "pass"
+    }
+  ]
+}

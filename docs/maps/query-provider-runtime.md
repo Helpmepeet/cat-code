@@ -1,6 +1,6 @@
 # Query Provider Runtime Map
 
-Last refreshed: 2026-09-06
+Last refreshed: 2026-09-11
 
 ## Purpose
 
@@ -64,7 +64,7 @@ src/services/api/client.ts
 
 | Goal | Inspect first | Then inspect | Notes |
 |---|---|---|---|
-| Change one-turn SDK/headless execution | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/query.ts` | `QueryEngine.submitMessage()` owns the outer turn lifecycle and is where prompt/context are initially built and refreshed after slash-command model changes. |
+| Change one-turn SDK/headless execution | `src/QueryEngine.ts` | `src/utils/queryContext.ts`, `src/query.ts`, `src/app-runtime/AppSessionController.ts` | `QueryEngine.submitMessage()` owns the outer turn lifecycle and is where prompt/context are initially built and refreshed after slash-command model changes. Runtime-backed app sessions pass engine-originated submit-interrupt intent through their controller; ordinary aborts must not spoof that adapter intent. |
 | Change the provider-neutral query loop | `src/query.ts` | `src/query/deps.ts`, `src/services/tools/toolOrchestration.ts`, `src/query/stopHooks.ts` | `queryLoop()` is the state machine. Tests can inject `QueryDeps` for `callModel`, `microcompact`, `autocompact`, and UUID generation. |
 | Change context assembly | `src/context.ts` | `src/utils/queryContext.ts`, `src/utils/claudemd.ts`, `src/services/api/instructionAssembly.ts` | `getUserContext()` and `getSystemContext()` are memoized. `fetchSystemPromptParts()` decides when to skip default prompt/system context for custom prompts. |
 | Change effective system prompt precedence | `src/utils/systemPrompt.ts` | `src/QueryEngine.ts`, `src/utils/queryContext.ts`, [`prompt-system.md`](prompt-system.md) | Branch order is override, coordinator, main-thread agent, custom, default; `appendSystemPrompt` appends except under override. |
@@ -173,7 +173,7 @@ Use focused checks first, then the documented build for broader confidence:
 | Query loop behavior | `bun test src/query.test.ts` |
 | Model catalog labels/options/agent downgrades | `bun test src/utils/model/gpt56LunaLabel.test.ts src/utils/model/agent.test.ts` |
 | Provider instruction placement | `bun test src/utils/providerPromptRegressions.test.ts` |
-| Prompt/context behavior | `bun test src/constants/prompts.test.ts src/services/compact/prompt.test.ts` |
+| Prompt/context behavior | `bun test src/constants/prompts.test.ts` |
 | Compaction behavior | `bun test src/services/compact/compact.test.ts src/services/compact/autoCompact.test.ts src/services/compact/reactiveCompact.test.ts` |
 | Codex/OpenAI adapter/account routing | See [`codex-core.md`](codex-core.md) § Tests And Validation. |
 | Docs-only map change | `git diff --check -- docs/maps/query-provider-runtime.md` |

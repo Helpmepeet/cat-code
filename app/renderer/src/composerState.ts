@@ -37,6 +37,11 @@ import {
   ACCEPTED_IMAGE_TYPES,
   type AcceptedImageType,
 } from './imageAttachment.js'
+import {
+  reducePromptDrafts,
+  selectPromptDraft,
+  type PromptDraftState,
+} from './appModel.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
 
@@ -1038,6 +1043,8 @@ export type RetainedSubmit = {
   text: string
   images: ImageAttachment[]
   file?: FileAttachment | null
+  settlement?: 'refused'
+  restored?: true
 }
 
 /**
@@ -1156,7 +1163,7 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
 
 /**
  * Resolve a whole arrival batch against the retained copies: the state after it,
- * plus the messages that must go back into a composer, in arrival order.
+ * plus messages that can go back into a composer in original submit order.
  *
  * Batch-shaped rather than frame-shaped so the pairing is testable against a
  * REALISTIC stream. The defects this replaces were invisible to a test that
@@ -1164,8 +1171,13 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
  * result, a staged snapshot, a turn bracket) flowed past the retained copies
  * ahead of the frame that actually answered one.
  *
- * An answer for an id this page is not holding is a no-op, which is what makes a
- * replayed `submit.result` inert after a reload.
+ * Every newly known refusal is released immediately. Refused entries stay in
+ * the ordered queue (marked `restored`) until the other outstanding answers
+ * arrive, allowing a later batch to emit the complete refused sequence in
+ * submission order. App replaces its previously inserted prefix with that
+ * sequence instead of prepending it again. An answer for an id this page is not
+ * holding is a no-op, which makes a replayed `submit.result` inert after a
+ * reload.
  */
 export function reduceSubmitAnswers(
   state: RetainedSubmitState,
@@ -1176,15 +1188,124 @@ export function reduceSubmitAnswers(
 } {
   let next = state
   const restored: { sessionId: SessionId; retained: RetainedSubmit }[] = []
+  const touchedSessions = new Set<SessionId>()
   for (const frame of frames) {
     const answer = selectSubmitAnswer(frame)
     if (answer === null) continue
     const retained = selectRetainedSubmit(next, frame.sessionId, answer.submitId)
     if (retained === null) continue
-    next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
-    if (!answer.accepted) restored.push({ sessionId: frame.sessionId, retained })
+    if (retained.settlement !== undefined) continue
+    touchedSessions.add(frame.sessionId)
+    if (answer.accepted) {
+      next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
+      continue
+    }
+    next = {
+      ...next,
+      [frame.sessionId]: (next[frame.sessionId] ?? []).map(entry =>
+        entry.submitId === answer.submitId
+          ? { ...entry, settlement: 'refused' as const }
+          : entry,
+      ),
+    }
+  }
+  for (const sessionId of touchedSessions) {
+    const entries = next[sessionId] ?? []
+    if (!entries.some(entry => entry.settlement === 'refused' && !entry.restored)) {
+      if (
+        entries.length > 0 &&
+        entries.every(entry => entry.settlement === 'refused')
+      ) {
+        next = reduceRetainedSubmitCleared(next, sessionId)
+      }
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.settlement !== 'refused') continue
+      const { settlement: _, restored: __, ...retained } = entry
+      restored.push({ sessionId, retained })
+    }
+    const marked = entries.map(entry =>
+      entry.settlement === 'refused' ? { ...entry, restored: true as const } : entry,
+    )
+    next = marked.every(entry => entry.settlement === 'refused')
+      ? reduceRetainedSubmitCleared(next, sessionId)
+      : { ...next, [sessionId]: marked }
   }
   return { state: next, restored }
+}
+
+/** Replace App's exact prior refusal prefix while preserving later live edits. */
+export type RefusedDraftRestoreState = {
+  prefix: string
+  representedIds: readonly string[]
+  submitIds: readonly string[]
+}
+
+export function restoreDraftWithRefusedSnapshot(
+  draft: string,
+  previous: RefusedDraftRestoreState | null,
+  refused: readonly RetainedSubmit[],
+): { draft: string; state: RefusedDraftRestoreState; retained: readonly RetainedSubmit[] } {
+  let liveDraft = draft
+  const previousIntact = previous !== null && (
+    draft === previous.prefix || draft.startsWith(`${previous.prefix}\n`)
+  )
+  if (previousIntact) {
+    liveDraft = draft === previous.prefix
+      ? ''
+      : draft.slice(previous.prefix.length + 1)
+  }
+  const previousIds = new Set(previous?.submitIds ?? [])
+  const newlyRefused = refused.filter(entry => !previousIds.has(entry.submitId))
+  const representedIds = new Set(
+    previousIntact ? previous?.representedIds : [],
+  )
+  for (const entry of newlyRefused) representedIds.add(entry.submitId)
+  const represented = refused.filter(entry => representedIds.has(entry.submitId))
+  const prefix = represented.map(entry => entry.text).filter(Boolean).join('\n')
+  return {
+    draft: restoreDraftWithPending(liveDraft, prefix),
+    state: {
+      prefix,
+      representedIds: represented.map(entry => entry.submitId),
+      submitIds: [...previousIds, ...newlyRefused.map(entry => entry.submitId)],
+    },
+    retained: newlyRefused,
+  }
+}
+
+export function applyRefusedSubmitRestoration(
+  drafts: PromptDraftState,
+  recovery: ReadonlyMap<SessionId, RefusedDraftRestoreState>,
+  sessionId: SessionId,
+  refused: readonly RetainedSubmit[],
+): {
+  drafts: PromptDraftState
+  recovery: Map<SessionId, RefusedDraftRestoreState>
+  images: readonly ImageAttachment[] | null
+  file: FileAttachment | null
+} {
+  const restored = restoreDraftWithRefusedSnapshot(
+    selectPromptDraft(drafts, sessionId),
+    recovery.get(sessionId) ?? null,
+    refused,
+  )
+  const nextRecovery = new Map(recovery)
+  nextRecovery.set(sessionId, restored.state)
+  const newlyRefusedIds = new Set(restored.retained.map(entry => entry.submitId))
+  const imageWinner = [...refused].reverse().find(entry => entry.images.length > 0)
+  const fileWinner = [...refused].reverse().find(entry => entry.file != null)
+  return {
+    drafts: reducePromptDrafts(drafts, sessionId, restored.draft),
+    recovery: nextRecovery,
+    images: imageWinner && newlyRefusedIds.has(imageWinner.submitId)
+      ? imageWinner.images
+      : null,
+    file: fileWinner && newlyRefusedIds.has(fileWinner.submitId)
+      ? (fileWinner.file ?? null)
+      : null,
+  }
 }
 
 // ── The messages a recall takes back (D1b) ───────────────────────────────────

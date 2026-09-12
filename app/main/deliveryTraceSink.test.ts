@@ -1,15 +1,76 @@
-import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { expect, spyOn, test } from 'bun:test'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { mintDeliveryTrace } from '../shared/deliveryTrace.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import { SDK_MESSAGE_FIXTURE } from '../renderer/src/sdkMessageFixtures.js'
+import * as retention from './jsonlRetention.js'
 import {
   createDeliveryTraceSink, deliveryMessageKindOfFrame,
   MAX_DELIVERY_TRACE_RECORD_BYTES,
   MAX_DELIVERY_TRACE_SEQUENCES_PER_STREAM, MAX_DELIVERY_TRACE_STREAMS,
 } from './deliveryTraceSink.js'
+
+test('trace appends prepare the private directory once per open file', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-trace-open-cost-'))
+  const directory = join(root, 'logs')
+  mkdirSync(directory)
+  chmodSync(directory, 0o755)
+  const prepareDirectory = spyOn(retention, 'ensurePrivateDirectory')
+  const sink = createDeliveryTraceSink({ configDir: root, launchId: 'launch', sweepIntervalMs: 0 })
+  try {
+    for (let sequence = 1; sequence <= 100; sequence++) {
+      sink.recordAcknowledgementRejected({
+        sessionId: 'session', streamEpoch: 'stream', sequence, reason: 'stale_document',
+      })
+    }
+    expect(prepareDirectory).toHaveBeenCalledTimes(1)
+    expect(recordsWritten(root)).toHaveLength(100)
+    expect(statSync(directory).mode & 0o777).toBe(0o700)
+    for (const file of readdirSync(directory).filter(name => name.startsWith('delivery-trace-'))) {
+      expect(statSync(join(directory, file)).mode & 0o777).toBe(0o600)
+    }
+  } finally {
+    sink.close()
+    prepareDirectory.mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('trace rotation prepares the directory again and retains private records', () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-code-trace-reopen-'))
+  const directory = join(root, 'logs')
+  const prepareDirectory = spyOn(retention, 'ensurePrivateDirectory')
+  let nowMs = Date.parse('2026-09-12T00:00:00Z')
+  const sink = createDeliveryTraceSink({
+    configDir: root, launchId: 'launch', sweepIntervalMs: 0,
+    maxFileBytes: 1, now: () => new Date(nowMs++),
+  })
+  try {
+    sink.recordAcknowledgementRejected({
+      sessionId: 'session', streamEpoch: 'stream', sequence: 1, reason: 'stale_document',
+    })
+    chmodSync(directory, 0o755)
+    sink.recordAcknowledgementRejected({
+      sessionId: 'session', streamEpoch: 'stream', sequence: 2, reason: 'stale_document',
+    })
+    expect(prepareDirectory).toHaveBeenCalledTimes(2)
+    expect(statSync(directory).mode & 0o777).toBe(0o700)
+    const files = readdirSync(directory).filter(name => name.startsWith('delivery-trace-'))
+    expect(files).toHaveLength(2)
+    const sequences = files.flatMap(file => {
+      expect(statSync(join(directory, file)).mode & 0o777).toBe(0o600)
+      return readFileSync(join(directory, file), 'utf8').trim().split('\n')
+        .map(line => JSON.parse(line).sequence)
+    })
+    expect(sequences.sort()).toEqual([1, 2])
+  } finally {
+    sink.close()
+    prepareDirectory.mockRestore()
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('delivery trace persists metadata-only stages under private permissions', () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-code-delivery-trace-'))

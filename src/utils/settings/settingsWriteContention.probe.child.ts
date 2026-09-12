@@ -55,6 +55,27 @@ async function main(): Promise<void> {
   await waitForGoFile(goFile)
 
   try {
+    const holdLockFile = process.env.PROBE_HOLD_LOCK_FILE
+    if (holdLockFile) {
+      const { updateSettingsForSource } = await import('./settings.js')
+      const { error } = updateSettingsForSource('localSettings', current => {
+        writeFileSync(holdLockFile, 'locked')
+        Bun.sleepSync(750)
+        return {
+          ...current,
+          permissions: {
+            ...current?.permissions,
+            allow: [...(current?.permissions?.allow ?? []), `Bash(${rule})`],
+          },
+        }
+      })
+      if (error) throw error
+      printResult({ ok: true })
+      return
+    }
+    if (process.env.PROBE_WAIT_FOR_LOCK_FILE) {
+      await waitForGoFile(process.env.PROBE_WAIT_FOR_LOCK_FILE)
+    }
     persistPermissionUpdate({
       type: 'addRules',
       rules: [{ toolName: 'Bash', ruleContent: rule }],

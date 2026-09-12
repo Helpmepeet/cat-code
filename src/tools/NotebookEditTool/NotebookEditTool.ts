@@ -7,9 +7,14 @@ import {
 import { z } from 'zod/v4'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import type { NotebookCell, NotebookContent } from '../../types/notebook.js'
+import { acquireFileMutationLock } from '../../utils/atomicFile.js'
 import { getCwd } from '../../utils/cwd.js'
 import { isENOENT } from '../../utils/errors.js'
-import { getFileModificationTime, writeTextContent } from '../../utils/file.js'
+import {
+  fileIdentitiesEqual,
+  getFileIdentity,
+  writeTextContentWithVerifiedIdentity,
+} from '../../utils/file.js'
 import { readFileSyncWithMetadata } from '../../utils/fileRead.js'
 import { safeParseJSON } from '../../utils/json.js'
 import { lazySchema } from '../../utils/lazySchema.js'
@@ -17,6 +22,7 @@ import { parseCellId } from '../../utils/notebook.js'
 import { checkWritePermissionForTool } from '../../utils/permissions/filesystem.js'
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { jsonParse, jsonStringify } from '../../utils/slowOperations.js'
+import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, PROMPT } from './prompt.js'
 import {
@@ -92,6 +98,33 @@ export const outputSchema = lazySchema(() =>
 type OutputSchema = ReturnType<typeof outputSchema>
 
 export type Output = z.infer<OutputSchema>
+
+const NOTEBOOK_NOT_READ_ERROR =
+  'File has not been read yet. Read it first before writing to it.'
+
+function readNotebookForEdit(
+  fullPath: string,
+  readFileState: ToolUseContext['readFileState'],
+) {
+  const lastRead = readFileState.get(fullPath)
+  if (!lastRead || lastRead.isPartialView) {
+    throw new Error(NOTEBOOK_NOT_READ_ERROR)
+  }
+
+  const identity = getFileIdentity(fullPath)
+  if (
+    lastRead.fileIdentity === undefined ||
+    !fileIdentitiesEqual(lastRead.fileIdentity, identity)
+  ) {
+    throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+  }
+
+  const metadata = readFileSyncWithMetadata(fullPath)
+  if (!fileIdentitiesEqual(identity, getFileIdentity(fullPath))) {
+    throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+  }
+  return { ...metadata, identity }
+}
 
 export const NotebookEditTool = buildTool({
   name: NOTEBOOK_EDIT_TOOL_NAME,
@@ -221,31 +254,21 @@ export const NotebookEditTool = buildTool({
       }
     }
 
-    // Require Read-before-Edit (matches FileEditTool/FileWriteTool). Without
-    // this, the model could edit a notebook it never saw, or edit against a
-    // stale view after an external change — silent data loss.
-    const readTimestamp = toolUseContext.readFileState.get(fullPath)
-    if (!readTimestamp) {
-      return {
-        result: false,
-        message:
-          'File has not been read yet. Read it first before writing to it.',
-        errorCode: 9,
-      }
-    }
-    if (getFileModificationTime(fullPath) > readTimestamp.timestamp) {
-      return {
-        result: false,
-        message:
-          'File has been modified since read, either by the user or by a linter. Read it again before attempting to write it.',
-        errorCode: 10,
-      }
-    }
-
     let content: string
     try {
-      content = readFileSyncWithMetadata(fullPath).content
+      content = readNotebookForEdit(fullPath, toolUseContext.readFileState).content
     } catch (e) {
+      if (
+        e instanceof Error &&
+        (e.message === NOTEBOOK_NOT_READ_ERROR ||
+          e.message === FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+      ) {
+        return {
+          result: false,
+          message: e.message,
+          errorCode: e.message === NOTEBOOK_NOT_READ_ERROR ? 9 : 10,
+        }
+      }
       if (isENOENT(e)) {
         return {
           result: false,
@@ -314,21 +337,21 @@ export const NotebookEditTool = buildTool({
       ? notebook_path
       : resolve(getCwd(), notebook_path)
 
-    if (fileHistoryEnabled()) {
-      await fileHistoryTrackEdit(
-        updateFileHistoryState,
-        fullPath,
-        parentMessage.uuid,
-      )
-    }
-
+    const release = await acquireFileMutationLock(fullPath)
     try {
-      // readFileSyncWithMetadata gives content + encoding + line endings in
-      // one safeResolvePath + readFileSync pass, replacing the previous
-      // detectFileEncoding + readFile + detectLineEndings chain (each of
-      // which redid safeResolvePath and/or a 4KB readSync).
-      const { content, encoding, lineEndings } =
-        readFileSyncWithMetadata(fullPath)
+      // Permissions and the mutation lock can wait while another writer edits
+      // the notebook. Recheck the Read identity after those waits.
+      const { content, encoding, lineEndings, identity } =
+        readNotebookForEdit(fullPath, readFileState)
+
+      if (fileHistoryEnabled()) {
+        await fileHistoryTrackEdit(
+          updateFileHistoryState,
+          fullPath,
+          parentMessage.uuid,
+        )
+      }
+
       // Must use non-memoized jsonParse here: safeParseJSON caches by content
       // string and returns a shared object reference, but we mutate the
       // notebook in place below (cells.splice, targetCell.source = ...).
@@ -439,16 +462,28 @@ export const NotebookEditTool = buildTool({
       // Write back to file
       const IPYNB_INDENT = 1
       const updatedContent = jsonStringify(notebook, null, IPYNB_INDENT)
-      writeTextContent(fullPath, updatedContent, encoding, lineEndings)
+      if (
+        !writeTextContentWithVerifiedIdentity(
+          fullPath,
+          updatedContent,
+          encoding,
+          lineEndings,
+          identity,
+        )
+      ) {
+        throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+      }
       // Update readFileState with post-write mtime (matches FileEditTool/
       // FileWriteTool). offset:undefined breaks FileReadTool's dedup match —
       // without this, Read→NotebookEdit→Read in the same millisecond would
       // return the file_unchanged stub against stale in-context content.
+      const publishedIdentity = getFileIdentity(fullPath)
       readFileState.set(fullPath, {
         content: updatedContent,
-        timestamp: getFileModificationTime(fullPath),
+        timestamp: Math.floor(publishedIdentity.modifiedAtMs),
         offset: undefined,
         limit: undefined,
+        fileIdentity: publishedIdentity,
       })
       const data = {
         new_source,
@@ -489,6 +524,8 @@ export const NotebookEditTool = buildTool({
       return {
         data,
       }
+    } finally {
+      await release()
     }
   },
 } satisfies ToolDef<InputSchema, Output>)

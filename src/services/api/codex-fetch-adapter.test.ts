@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { APIConnectionError } from '@anthropic-ai/sdk'
 import * as sessionStorage from '../../utils/sessionStorage.js'
 import {
   _setWebSocketFactoryForTest,
@@ -38,6 +39,12 @@ import {
   seedCodexAccountPoolForTest,
 } from './codexAccountPool.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js'
+
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: fetch.preconnect })
+}
 
 function createAccessToken(accountId: string): string {
   const header = btoa(JSON.stringify({ alg: 'none', typ: 'JWT' }))
@@ -1348,7 +1355,11 @@ describe('codex-fetch-adapter', () => {
         Authorization: `Bearer ${accessToken}`,
         'chatgpt-account-id': 'acct_test_streaming',
       })
-      expect(fetchCalls[0]?.init?.signal).toBe(abortController.signal)
+      const forwardedSignal = fetchCalls[0]?.init?.signal
+      expect(forwardedSignal?.aborted).toBe(false)
+      abortController.abort()
+      expect(forwardedSignal?.aborted).toBe(true)
+      expect(forwardedSignal?.reason).toBe(abortController.signal.reason)
       expect(body).toContain('event: message_stop')
       expect(body).toContain('"input_tokens":7')
       expect(body).toContain('"cache_read_input_tokens":3')
@@ -2578,6 +2589,278 @@ describe('codex-fetch-adapter', () => {
   function partialStreamFailureOf(error: unknown): CodexPartialStreamFailureV1 | null {
     return findCodexPartialStreamFailure(error)
   }
+
+  test('createCodexFetch rejects HTTP EOF before visible output as a connection failure', async () => {
+    const originalFetch = globalThis.fetch
+    const conversationId = 'conv_http_eof_before_output'
+    globalThis.fetch = withFetchPreconnect(async () => new Response(
+      `data: ${JSON.stringify({ type: 'response.created' })}\n\n`,
+      { headers: { 'Content-Type': 'text/event-stream' } },
+    ))
+
+    try {
+      _markStickyHttpFallbackForTest(conversationId, 'test')
+      const request = createCodexFetch(createAccessToken('acct_http_eof'), conversationId)(
+        'https://api.anthropic.com/v1/messages',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'gpt-5.6-luna',
+            _openaiInstructionAssembly: { instructions: 'Test.', inputMessages: [] },
+          }),
+        },
+      )
+      await expect(request).rejects.toBeInstanceOf(APIConnectionError)
+      await expect(request).rejects.toThrow('before response.completed')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
+
+  test('HTTP EOF after text seals partial output and never emits message_stop', async () => {
+    const response = await translateCodexStreamToAnthropic(
+      new Response(`data: ${JSON.stringify({
+        type: 'response.output_text.delta', delta: 'unfinished sentence',
+      })}\n\n`),
+      'gpt-5.6-luna',
+    )
+
+    const { sse, error } = await readSseUntilError(response)
+    expect(sse).toContain('unfinished sentence')
+    expect(sse).toContain('content_block_stop')
+    expect(sse).not.toContain('message_stop')
+    expect(partialStreamFailureOf(error)).toMatchObject({
+      transport: 'http',
+      cause: 'closed',
+      sealedPartialText: true,
+      hadClientToolCall: false,
+      automaticContinuationEligible: true,
+    })
+  })
+
+  test('HTTP EOF never seals a partially streamed client tool call', async () => {
+    const events = [
+      { type: 'response.output_text.delta', delta: 'about to call' },
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'function_call', call_id: 'call_http_eof', name: 'Read', arguments: '' },
+      },
+      { type: 'response.function_call_arguments.delta', output_index: 0, delta: '{"file_path":' },
+    ]
+    const response = await translateCodexStreamToAnthropic(
+      new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),
+      'gpt-5.6-luna',
+    )
+
+    const { sse, error } = await readSseUntilError(response)
+    expect(partialStreamFailureOf(error)).toMatchObject({
+      transport: 'http',
+      cause: 'closed',
+      hadClientToolCall: true,
+      openClientToolCalls: 1,
+      automaticContinuationEligible: false,
+    })
+    expect(sse).toContain('"content_block_stop","index":0')
+    expect(sse).not.toContain('"content_block_stop","index":1')
+    expect(sse).not.toContain('message_stop')
+  })
+
+  test.each(['response.failed', 'response.incomplete'])(
+    'HTTP %s stays a terminal provider failure after visible output',
+    async type => {
+      const events = [
+        { type: 'response.output_text.delta', delta: 'provider stopped here' },
+        { type, response: {} },
+      ]
+      const response = await translateCodexStreamToAnthropic(
+        new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),
+        'gpt-5.6-luna',
+      )
+
+      const { sse, error } = await readSseUntilError(response)
+      expect(sse).not.toContain('message_stop')
+      expect(partialStreamFailureOf(error)).toMatchObject({
+        transport: 'http',
+        cause: 'provider_failure',
+        automaticContinuationEligible: false,
+      })
+    },
+  )
+
+  test('HTTP source abort remains an abort and releases the reader', async () => {
+    const abortError = new DOMException('The operation was aborted.', 'AbortError')
+    const source = new Response(new ReadableStream({
+      start(controller) {
+        controller.error(abortError)
+      },
+    }))
+    const response = await translateCodexStreamToAnthropic(source, 'gpt-5.6-luna')
+    const { error } = await readSseUntilError(response)
+    expect(error).toBe(abortError)
+    expect(partialStreamFailureOf(error)).toBeNull()
+    expect(source.body!.locked).toBe(false)
+  })
+
+  test.each(['immediately', 'after visible output'])(
+    'canceling a createCodexFetch HTTP response %s releases its upstream reader',
+    async timing => {
+      const originalFetch = globalThis.fetch
+      const originalTimeout = process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+      process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '100'
+      const conversationId = `conv_http_body_cancel_${timing}`
+      let sourceController!: ReadableStreamDefaultController<Uint8Array>
+      let cancellationReason: unknown
+      let forwardedSignal: AbortSignal | null | undefined
+      const source = new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          sourceController = controller
+          controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+            type: 'response.output_text.delta', delta: 'started',
+          })}\n\n`))
+        },
+        cancel(reason) {
+          cancellationReason = reason
+        },
+      }))
+      globalThis.fetch = (async (_input, init) => {
+        forwardedSignal = init?.signal
+        return source
+      }) as typeof globalThis.fetch
+
+      try {
+        _markStickyHttpFallbackForTest(conversationId, 'test')
+        const response = await createCodexFetch(
+          createAccessToken('acct_http_body_cancel'),
+          conversationId,
+        )('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          body: JSON.stringify({
+            stream: true,
+            model: 'gpt-5.6-luna',
+            _openaiInstructionAssembly: { instructions: 'Test.', inputMessages: [] },
+          }),
+        })
+        const reader = response.body!.getReader()
+        if (timing === 'after visible output') {
+          const decoder = new TextDecoder()
+          while (true) {
+            const chunk = await reader.read()
+            expect(chunk.done).toBe(false)
+            if (decoder.decode(chunk.value).includes('text_delta')) break
+          }
+        }
+        await reader.cancel()
+        await new Promise(resolve => setTimeout(resolve, 0))
+
+        expect(cancellationReason).toMatchObject({ name: 'AbortError' })
+        expect(forwardedSignal?.aborted).toBe(true)
+        expect(source.body!.locked).toBe(false)
+      } finally {
+        sourceController.error(new DOMException('Test cleanup', 'AbortError'))
+        globalThis.fetch = originalFetch
+        resetCodexCacheContext()
+        if (originalTimeout === undefined) delete process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+        else process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = originalTimeout
+      }
+    },
+  )
+
+  test('canceling an HTTP translation releases a stalled source', async () => {
+    let cancellationReason: unknown
+    const source = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify({
+          type: 'response.output_text.delta', delta: 'started',
+        })}\n\n`))
+      },
+      cancel(reason) {
+        cancellationReason = reason
+      },
+    }))
+
+    const response = await translateCodexStreamToAnthropic(source, 'gpt-5.6-luna')
+    await response.body!.cancel()
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(cancellationReason).toMatchObject({ name: 'AbortError' })
+    expect(source.body!.locked).toBe(false)
+  })
+
+  test('HTTP response.completed finishes and releases the source without waiting for EOF', async () => {
+    const originalTimeout = process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+    process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = '20'
+    let cancellations = 0
+    const source = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(
+          `data: ${JSON.stringify(completedWsResponse('resp_http_completed'))}\n\n`,
+        ))
+      },
+      cancel() {
+        cancellations++
+      },
+    }))
+
+    try {
+      const response = await translateCodexStreamToAnthropic(source, 'gpt-5.6-luna')
+      expect(await response.text()).toContain('message_stop')
+      expect(cancellations).toBe(1)
+      expect(source.body!.locked).toBe(false)
+    } finally {
+      if (originalTimeout === undefined) delete process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS
+      else process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS = originalTimeout
+    }
+  })
+
+  test('createCodexFetch parses no-space and multiline HTTP SSE data across chunk boundaries', async () => {
+    const originalFetch = globalThis.fetch
+    const conversationId = 'conv_http_sse_framing'
+    const encoder = new TextEncoder()
+    const chunks = [
+      ': keepalive\r',
+      '\nevent: response.output_text.delta\r\nid: event-1\rdata',
+      ':{"type":"response.output_text.delta",\r\n',
+      'data: "delta":"split and joined"}\r\n\r',
+      '\nevent: response.completed\nretry: 1000\ndata:{"type":"response.completed","response":\n',
+      'data: {"id":"resp_sse_framing","usage":{"input_tokens":4,"output_tokens":3,"input_tokens_details":{"cached_tokens":1}}}}\n\n',
+    ]
+
+    globalThis.fetch = withFetchPreconnect(async () => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk))
+        controller.close()
+      },
+    }), {
+      headers: { 'Content-Type': 'text/event-stream' },
+    }))
+
+    try {
+      _markStickyHttpFallbackForTest(conversationId, 'test')
+      const response = await createCodexFetch(
+        createAccessToken('acct_http_sse_framing'),
+        conversationId,
+      )('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        body: JSON.stringify({
+          stream: true,
+          model: 'gpt-5.6-luna',
+          _openaiInstructionAssembly: { instructions: 'Test.', inputMessages: [] },
+        }),
+      })
+
+      const body = await response.text()
+      expect(body).toContain('split and joined')
+      expect(body).toContain('event: message_stop')
+      expect(body).toContain('"input_tokens":3')
+      expect(body).toContain('"cache_read_input_tokens":1')
+    } finally {
+      globalThis.fetch = originalFetch
+      resetCodexCacheContext()
+    }
+  })
 
   test('post-visible websocket close seals the open text block before the failure', async () => {
     const response = translateCodexWsStreamToAnthropic(

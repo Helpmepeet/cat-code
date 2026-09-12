@@ -8,8 +8,25 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs'
-import { link, mkdir, open, readFile, rename, unlink } from 'fs/promises'
-import { basename, dirname, join, normalize } from 'path'
+import {
+  link,
+  mkdir,
+  open,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  unlink,
+} from 'fs/promises'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  parse,
+  sep,
+} from 'path'
 import { lock } from './lockfile.js'
 
 export type AtomicWriteOptions = {
@@ -22,11 +39,59 @@ export type AtomicWriteOptions = {
   tempDirectory?: string
 }
 
-export async function acquireFileMutationLock(
-  targetPath: string,
-): Promise<() => Promise<void>> {
+async function canonicalFileMutationPath(targetPath: string): Promise<string> {
   await mkdir(dirname(targetPath), { recursive: true })
-  const unlock = await lock(targetPath, {
+
+  try {
+    return await realpath(targetPath)
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error
+    }
+  }
+
+  let linkTarget: string
+  try {
+    linkTarget = await readlink(targetPath)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error.code === 'ENOENT' || error.code === 'EINVAL')
+    ) {
+      return join(await realpath(dirname(targetPath)), basename(targetPath))
+    }
+    throw error
+  }
+
+  const root = isAbsolute(linkTarget) ? parse(linkTarget).root : ''
+  let directory = root || (await realpath(dirname(targetPath)))
+  const components = linkTarget
+    .slice(root.length)
+    .split(sep === '\\' ? /[\\/]/ : /\//)
+  const name = components.pop()!
+
+  // Resolve linked directories before applying '..' so traversal follows the
+  // filesystem path rather than normalizing the unresolved link text first.
+  for (const component of components) {
+    if (component === '' || component === '.') continue
+    directory =
+      component === '..'
+        ? dirname(directory)
+        : await realpath(join(directory, component))
+  }
+
+  return canonicalFileMutationPath(join(directory, name))
+}
+
+async function acquireCanonicalFileMutationLock(
+  canonicalPath: string,
+): Promise<() => Promise<void>> {
+  const unlock = await lock(canonicalPath, {
     realpath: false,
     retries: {
       // A real extraction can hold this lock for several model turns. Keep
@@ -59,22 +124,34 @@ export async function acquireFileMutationLock(
   }
 }
 
+export async function acquireFileMutationLock(
+  targetPath: string,
+): Promise<() => Promise<void>> {
+  return acquireCanonicalFileMutationLock(
+    await canonicalFileMutationPath(targetPath),
+  )
+}
+
 /**
  * Acquire the same per-path locks used by individual file mutation tools.
  *
- * Lexical ordering prevents two multi-file mutations from deadlocking while
- * they wait on the same set of cooperative locks. This protects cooperating
- * writers only; it does not make unrelated filesystem writers transactional.
+ * Canonical path ordering prevents two multi-file mutations from deadlocking
+ * while they wait on the same set of cooperative locks. This protects
+ * cooperating writers only; it does not make unrelated filesystem writers
+ * transactional.
  */
 export async function acquireFileMutationLocks(
   targetPaths: readonly string[],
 ): Promise<() => Promise<void>> {
-  const paths = [...new Set(targetPaths.map(path => normalize(path)))].sort()
+  const canonicalPaths = await Promise.all(
+    targetPaths.map(path => canonicalFileMutationPath(normalize(path))),
+  )
+  const paths = [...new Set(canonicalPaths)].sort()
   const releases: Array<() => Promise<void>> = []
 
   try {
     for (const path of paths) {
-      releases.push(await acquireFileMutationLock(path))
+      releases.push(await acquireCanonicalFileMutationLock(path))
     }
   } catch (error) {
     for (const release of releases.reverse()) {

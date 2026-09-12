@@ -310,6 +310,17 @@ export function canFailover(): boolean {
   return pool.initialized && pool.accounts.filter((account) => isCodexAccountSwitchable(account)).length >= 2
 }
 
+/** True when a failed request account has a different selectable replacement. */
+export function hasSelectableAccountOtherThan(accountId: string): boolean {
+  return (
+    pool.initialized &&
+    pool.accounts.some(
+      account =>
+        account.accountId !== accountId && isCodexAccountSwitchable(account),
+    )
+  )
+}
+
 /**
  * Legacy failover predicate. Prefer poolManagesCredentials() for credential
  * routing/classification and canFailover() for rotation decisions.
