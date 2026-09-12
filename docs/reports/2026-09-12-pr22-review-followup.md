@@ -72,8 +72,27 @@ avoid duplicate test discovery; their locations and recovery commit are in
 
 ## Fix and integration status
 
-Validation is complete. Fresh Sol implementation passes and final integration
-verification are pending; no follow-up fix is claimed complete in this snapshot.
+F1, F3, and F4 are fixed in `6c17a347` and independently re-executed by the
+orchestrator. Named MCP authorization reuses the exact inherited client;
+synchronous workers own a controller that follows parent cancellation in one
+direction and detaches on setup failure or completion; initial persistence is
+selected after startup outcome attachments have been assembled.
+
+The three file-isolated regression suites pass: 6 tests, 40 assertions. The
+same committed tests were copied into an external archive of reviewed
+production source `73c4dad3`: F1 failed because the substituted server started;
+both terminal-handoff tests failed because the parent was aborted; F4 failed
+because persisted history and the second resume lacked the startup outcome.
+Thus these tests discriminate the fixes from the reviewed implementation.
+The parent-cancellation control passed on both versions. The fixed tests also
+assert approved tool discovery and exactly one startup outcome in stored
+history and the second resumed request.
+
+F2, F5, F6, F7 and final integration verification remain in progress in this
+checkpoint. Parent integration inspection found that the first F5 fix reversed
+forward-arriving refusals across batches; that implementation is being
+corrected before closure. Analytics migration must also account for future
+activity in legacy sessions rather than permanently excluding those sessions.
 
 ## Additional type baseline validation
 
