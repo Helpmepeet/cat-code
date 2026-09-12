@@ -12,7 +12,7 @@ import type { ServerFrame } from '../shared/protocol.js'
 import { mintDeliveryTrace, type DeliveryAcknowledgement } from '../shared/deliveryTrace.js'
 import { createRawMessageLogState, reduceServerFrame } from '../renderer/src/rawMessageLog.js'
 import { benchmarkCoverageComplete, type BenchmarkObserverCounters } from './streaming-benchmark-observer.js'
-import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement } from './streaming-benchmark-runtime.js'
+import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement, markerTracedBootstrap } from './streaming-benchmark-runtime.js'
 import * as channels from '../shared/ipcChannels.js'
 
 const runDir = required('CATCODE_STREAMING_BENCHMARK_RUN_DIR')
@@ -47,6 +47,7 @@ let rendererReadyCount = 0
 const currentDocumentSentTraceIds = new Set<string>()
 const currentDocumentAppliedTraceIds = new Set<string>()
 let syntheticSequence = 1_000_000
+let mintMissingDeliveryTraces = true
 let deliveryTrace = createDeliveryTraceSink({ configDir: join(runDir, 'config'), launchId: `benchmark-warmup-${process.pid}`, sweepIntervalMs: 0 })
 const descriptors: SessionDescriptor[] = Array.from({ length: workload.sessions }, (_, index) => ({
   appSessionId: `benchmark-session-${index}`, engineSessionId: `benchmark-engine-${index}`, cwd: runDir,
@@ -63,14 +64,14 @@ const window = new BrowserWindow({
 
 const sendNow = (frames: ServerFrame[]) => {
   sendCount++
-  const traced = frames.map(frame => frame.deliveryTrace ? frame : { ...frame, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${frame.sessionId}`, `benchmark-${process.pid}`) })
-  for (const frame of traced) currentDocumentSentTraceIds.add(frame.deliveryTrace!.traceId)
-  for (const frame of traced) deliveryTrace.mark({
+  const traced = frames.map(frame => frame.deliveryTrace || !mintMissingDeliveryTraces ? frame : { ...frame, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `benchmark-${frame.sessionId}`, `benchmark-${process.pid}`) })
+  for (const frame of traced) if (frame.deliveryTrace) currentDocumentSentTraceIds.add(frame.deliveryTrace.traceId)
+  for (const frame of traced) if (frame.deliveryTrace) deliveryTrace.mark({
     sessionId: frame.sessionId, trace: frame.deliveryTrace!, stage: 'main.ipc.queued', frameKind: frame.kind,
     messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererSubscription.documentId, subscriptionEpoch: rendererSubscription.epoch,
   })
   window.webContents.send(channels.CH_SERVER_FRAME, traced)
-  for (const frame of traced) deliveryTrace.mark({
+  for (const frame of traced) if (frame.deliveryTrace) deliveryTrace.mark({
     sessionId: frame.sessionId, trace: frame.deliveryTrace!, stage: 'main.ipc.sent', frameKind: frame.kind,
     messageKind: deliveryMessageKindOfFrame(frame), documentId: rendererSubscription.documentId, subscriptionEpoch: rendererSubscription.epoch,
   })
@@ -126,10 +127,12 @@ ipcMain.on(channels.CH_HOST_VISIBLE_SESSIONS, () => {})
 ipcMain.on(channels.CH_SET_APPEARANCE, () => {})
 ipcMain.on(channels.CH_SET_GLASS_MODE, () => {})
 
+mintMissingDeliveryTraces = false
 for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.sessionId, frame)
 const initialReadyCount = rendererReadyCount
 await window.loadFile(join(rendererDir, 'index.html'))
 await waitForBootstrap(window, initialReadyCount)
+mintMissingDeliveryTraces = true
 const warmup = createFixture(workload, manifest.warmupMs)
 await deliverFixture(warmup, false)
 coordinator.flush()
@@ -144,11 +147,13 @@ gate.reset()
 gate = new AttachmentGate()
 coordinator = createCoordinator()
 arrivalByTraceId.clear()
+mintMissingDeliveryTraces = false
 for (const frame of bootstrapFrames(fixture.initial)) gate.onFrame(frame.sessionId, frame)
 const priorReadyCount = rendererReadyCount
 await window.reload()
 await waitForBootstrap(window, priorReadyCount)
 await waitForCurrentDocumentAcknowledgements()
+mintMissingDeliveryTraces = true
 await window.webContents.executeJavaScript('window.__CATCODE_STREAMING_BENCHMARK__.reset()')
 sendCount = 0
 scoredAppliedTraceIds.clear()
@@ -200,6 +205,7 @@ const result = {
   finalRawMessageCount: commits.at(-1)?.rawMessageCount ?? -1,
   ownedPids: [process.pid, ...app.getAppMetrics().map(item => item.pid)].filter((pid, index, all) => all.indexOf(pid) === index),
   omittedMainWork: ['engine/supervisor/host workers', 'production window recovery and health timers', 'operational-log writes outside delivery tracing'],
+  bootstrapTracing: 'terminal-marker-only; bulk history replay and its acknowledgement cost are excluded',
 }
 writeFileSync(join(runDir, 'result.json'), `${JSON.stringify(result)}\n`)
 coordinator.dispose()
@@ -262,11 +268,12 @@ function bootstrapFrames(initial: readonly ServerFrame[]): ServerFrame[] {
     } })
   }
   const first = descriptors[0]
-  if (first) extras.push({ kind: 'event', protocolVersion: 1, sessionId: first.appSessionId, event: {
+  if (!first) return [...initial, ...extras]
+  const marker: ServerFrame = { kind: 'event', protocolVersion: 1, sessionId: first.appSessionId, event: {
     type: 'message', message: { type: 'assistant', uuid: 'benchmark-bootstrap-marker', parent_tool_use_id: null,
       session_id: first.appSessionId, message: { id: 'benchmark-bootstrap-marker', role: 'assistant', content: [{ type: 'text', text: BOOTSTRAP_TRANSCRIPT_MARKER }] } } as never,
-  } })
-  return [...initial, ...extras]
+  }, deliveryTrace: mintDeliveryTrace(syntheticSequence++, `bootstrap-${first.appSessionId}`, `benchmark-${process.pid}`) }
+  return markerTracedBootstrap(initial, extras, marker)
 }
 
 async function deliverFixture(input: ReturnType<typeof createFixture>, scored: boolean, start = performance.now()) {
