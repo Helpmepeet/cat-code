@@ -70,7 +70,7 @@ expect-company note above and §4.
 - **Repository routing for implementation and diagnosis:** when ownership is not
   established and the task requires broad repository navigation, open
   `docs/maps/WORKSPACE_MAP.md` before the first broad search, choose only one of
-  the 17 focused maps it indexes, then verify the route in source. If exact
+  the focused maps it indexes, then verify the route in source. If exact
   owner files or a focused map were supplied, start there and skip the workspace
   router. Maps route; source is authoritative.
 - Prompt/instruction/output-style work → `docs/prompts/2026-04-30-prompt-surfaces.md` first.
@@ -87,9 +87,9 @@ expect-company note above and §4.
   `docs/migration/decisions/HOST-REQUEST-PLANE.md`. Owner files: the peer row of
   `docs/maps/web-app-runtime.md`.
 - The UX spec for desktop surfaces is the prototype at
-  `~/catcode_prototype/cat-app/` (30 `.jsx` surfaces, ~15.5k lines). It is a
-  design reference ONLY: port zero code from it, no inline `style={{}}`; its
-  `// SOURCE:` anchors are routing hints (~83% exact), re-verify each in `src/`.
+  `~/catcode_prototype/cat-app/`. It is a design reference ONLY: port zero code
+  from it, no inline `style={{}}`; its
+  `// SOURCE:` anchors are routing hints; re-verify each in `src/`.
 - Docs index: `docs/2026-04-30-docs-readme.md`. Canonical-vs-historical is
   stated per folder there.
 - `README.md`, `CLAUDE.md`, `AGENTS.md` stay the only root entrypoints (`DONE.md`
@@ -105,9 +105,8 @@ and their outcomes in your final report; "should pass" is not a result.
 A red result is not automatically yours. Before debugging a failure, check
 `git status` / `git diff` on the failing file: if it's dirty and you didn't
 edit it, another session is mid-change there — report the failure as
-not-yours-and-unfixed rather than "fixing" code you don't own. The same goes
-for baseline counts below; they shift under concurrent work, so re-measure
-instead of assuming.
+not-yours-and-unfixed rather than "fixing" code you don't own. Re-measure
+baselines rather than relying on historical counts.
 
 ### Engine (`src/`, `scripts/`)
 
@@ -122,22 +121,12 @@ bun test <specific paths>     # focused tests only — there is NO root test scr
 - Never bare `bun test` on the whole repo; some suites (Codex account suites)
   only pass file-isolated.
 - Test routing per subsystem: `docs/maps/build-release-testing.md` §Test Routing.
-- **Root `bun run typecheck` is KNOWN-RED** (1,879 pre-existing errors across
-  `src/` as of 2026-09-03; tsconfig is `strict:false` and test files dominate).
-  It is NOT a gate and not your job to fix. The engine gate is
-  `build:dev:full` + focused tests. If you must reason about types in `src/`,
-  compare error output before/after your change — zero NEW errors is the bar.
-- **One slice of that red IS a gate, held at zero: undefined names.**
-  `bun run lint:undefined-names` (in `build:dev:full`, ~9s) fails on any
-  TS2304/TS2503, i.e. a name used but never imported or declared. Nothing else
-  catches these: eslint's rules are all `createNoopRule()` stubs, and esbuild
-  compiles a free identifier into a bundle-clean global reference, so the build
-  passes and the line throws `X is not defined` only when it runs. Added
-  2026-09-03 after `toSDKRetryError` shipped unimported in `41849349` and broke
-  every retryable API error for four days; the sweep that followed found 93
-  more, 3 of them live (`resolveRequestProvider` on the auto-memory path, `z`
-  and `extractTextContent` in `/insights`). All 93 are fixed, so the bar is
-  zero, not a baseline — a new one is always a real bug.
+- Root `bun run typecheck` has pre-existing engine errors and is not a gate.
+  The engine gate is `build:dev:full` plus focused tests. If types matter,
+  compare before/after diagnostics: zero NEW errors is the bar.
+- Undefined names are a separate zero-error gate: `bun run lint:undefined-names`
+  (included in `build:dev:full`) checks TS2304/TS2503. A successful bundle does
+  not prove all referenced names exist at runtime.
 
 ### Desktop (`app/`) — root commands do NOT cover this package
 
@@ -149,78 +138,37 @@ bun run --cwd app test:hardening       # security-baseline smoke; ALL checks mus
 bun run --cwd app renderer:build       # when renderer build inputs changed
 ```
 
-**Running the app** — `cd /Users/pt/cat-code && bun run --cwd app dev` builds
-main+preload, starts Vite on `:5173`, then launches Electron against it; Ctrl-C
-tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
+**Running the app** — `bun run --cwd app dev` builds main/preload, starts
+Vite on port 5173, and launches Electron; Ctrl-C tears them down
+(`app/scripts/dev.ts`). Launching is a GUI action requiring authorization
+for that run (§8).
 
-- Dev loads the renderer from the **Vite server**, not `app/renderer/dist`
-  (`app/main/main.ts` `loadURL(CATCODE_RENDERER_URL ?? localhost:5173)`; `dist`
-  is only the packaged branch). So `renderer:build` is a build gate, NOT what
-  makes your renderer change visible — a running dev app already serves current
-  source. Conversely, a dev app left open across your edits is showing HMR
-  state, so send the operator to a fresh launch before they judge a layout or
-  effect change.
-- **The renderer hot-reloads; main and preload do NOT.** `dev.ts:88` builds both
-  once with a `spawnSync` before Vite starts, and nothing watches them
-  (`grep -cE 'watch|chokidar' app/scripts/dev.ts` is 0). So a dev app left
-  running across a change under `app/main/**` or `app/preload/**` serves a
-  CURRENT renderer against a STALE main, and the two disagree silently: no
-  error, no warning, no log line. Symptom shape: the page reflects your change
-  and the window does not. Cost a full round trip on 2026-08-27, when a
-  light-appearance renderer hot-reloaded while the main process that sets
-  `nativeTheme.themeSource` was still the one built at launch — so the page went
-  light, the macOS vibrancy material and the title bar stayed dark, and the
-  operator reported the feature as broken when it was not. Before asking the
-  operator to judge ANYTHING main owns — window chrome, vibrancy, title bar,
-  `nativeTheme`, menus, IPC handlers — send them to a full Ctrl-C and relaunch,
-  not a reload.
-- **That whole paragraph is conditional on `IS_DEV = !app.isPackaged`, and
-  `app.isPackaged` is derived from the EXECUTABLE'S NAME.** Electron reports
-  packaged for any executable not named `electron`, so renaming the dev binary
-  silently flips the app to the packaged branch: it loads a stale `dist`, HMR
-  never applies, `import.meta.env.DEV` is false (killing every dev-gated
-  surface), and Vite runs unused. `prepare-dev-electron.ts` rebrands via the
-  Info.plist display keys ONLY, and keeps the executable named `electron`, for
-  exactly this reason — do not "tidy" that. Symptom when it breaks: renderer
-  edits do not appear no matter how many times you relaunch. Checks: the app
-  name is `Cat Code Dev` (`app.setName` runs only under `IS_DEV`) in the menu bar
-  and in AX discovery — NOT on screen, since 2026-08-28 the window has no title
-  bar to print it in (`titleBarStyle: 'hiddenInset'`, CC-77) — and main logs a
-  loud warning when `CATCODE_RENDERER_URL` is set but the packaged branch wins. Cost the first time this happened, undiagnosed: hours (2026-07-28).
-- **The sidecar is a third plane, and it reads the tree at every spawn.** In dev
-  `resolveSidecarLaunch` (`app/main/mainDecisions.ts:135`) resolves to
-  `bun run app/sidecar/<entry>.ts` — repository TypeScript, read off disk when
-  the process starts — and `app/sidecar` + `app/shared` import from `src/` in 216
-  places (`grep -rn '\.\./\.\./src/' app/sidecar/*.ts app/shared/*.ts | grep -v
-  test | wc -l`). So a `src/**` or `app/sidecar/**` edit reaches every NEW session
-  an open app starts, plus the catalog, transcript-backfill, accounts-pool and
-  debug-cleanup workers; sessions already running keep the code they loaded.
-  Symptom shape: a session started mid-edit dies on a module graph nobody wrote,
-  and the stack trace reads like a real bug. So while editing `src/**` or
-  `app/sidecar/**`, do not start new sessions in an open dev app. That includes
-  peers: `CreatePeer`, and a `SendToPeer` to a parked or closed peer, each spawn
-  a sidecar off the tree as it is at that moment. A packaged build
-  has no such coupling: its sidecar is one compiled binary under
-  `Resources/sidecar/` (`resolveSidecarLaunch` packaged branch).
-- Launching it is a **GUI action on the operator's machine** (§8): give them the
-  command, don't run it yourself without authorization for that run. It steals
-  focus and it is often already open with their live work.
-- `lsof -ti:5173` and `pgrep -lf "Cat Code Dev"` tell you whether it is up. If
-  something you spawned hangs, report the PID you recorded — never sweep for it
-  with a `ps` pattern match; other sessions and the operator's own app share
-  this machine. **This is now ENFORCED, not just documented:** a `PreToolUse`
-  hook (`.claude/hooks/block-sweep-kill.sh`, registered in
-  `.claude/settings.local.json`) denies `pkill`/`killall`, `… | xargs kill`, and
-  `kill $(pgrep …)`-style discovery-paired kills. `kill <pid>` and
-  `kill $(cat x.pid)` still work, so nothing you legitimately own is out of
-  reach. Searching is untouched — `ps aux | grep …`, `lsof`, `pgrep` all still
-  run. The hook is machine-local (`.claude/` is git-excluded), so a fresh clone
-  has the rule but not the enforcement. Added 2026-07-30 after three agents
-  broke this rule in one day, one of them immediately after being corrected.
+- The dev renderer loads from Vite, not `app/renderer/dist`. Renderer HMR and
+  `renderer:build` do not update main/preload. Those build once at dev startup;
+  fully restart before asking the operator to judge main/preload changes.
+  Use a fresh launch for visual acceptance rather than an accumulated HMR state.
+- The dev branch depends on `!app.isPackaged`. Keep the executable named
+  `electron`; `prepare-dev-electron.ts` rebrands display metadata only.
+  Renaming the executable can select packaged assets and bypass Vite/dev flags.
+  `Cat Code Dev` is the app/menu/AX name, not a visible window title. Main warns
+  when `CATCODE_RENDERER_URL` is set but the packaged branch wins.
+- Dev sidecars load repository TypeScript on each spawn
+  (`resolveSidecarLaunch` in `app/main/mainDecisions.ts`), including their
+  imports from `src/`. Existing sessions retain loaded code; new sessions and
+  catalog/backfill/accounts/debug workers see the current tree. While editing
+  `src/**` or `app/sidecar/**`, do not start new sessions in an open dev app:
+  `CreatePeer` and sending to parked/closed peers also spawn sidecars.
+  Packaged sidecars use the compiled binary under `Resources/sidecar/`.
+- `lsof -ti:5173` and `pgrep -lf "Cat Code Dev"` can inspect running processes.
+  Track and stop only processes you own by recorded PID. No `pkill`, `killall`,
+  discovery-paired kills, or sweep kills. The local PreToolUse hook
+  `.claude/hooks/block-sweep-kill.sh` in `.claude/settings.local.json` enforces
+  this; read-only inspection and recorded-PID kills remain allowed. A fresh
+  clone does not include that machine-local enforcement.
 
-- Known-red baseline: raw `tsc -p app/sidecar/tsconfig.json` fails with ~5.5k
-  pre-existing upstream-engine diagnostics (the include-override drops root
-  `env.d.ts`). The wrapper (`app/scripts/sidecar-typecheck.ts`) ignores those
+- Raw `tsc -p app/sidecar/tsconfig.json` includes pre-existing upstream-engine
+  diagnostics (the include-override drops root `env.d.ts`). The wrapper
+  (`app/scripts/sidecar-typecheck.ts`) ignores those
   and fails only on diagnostics in owned `app/sidecar`/`app/shared` files.
   **Zero new errors in owned files** is the pass bar — do not fix upstream noise.
 - Fast Refresh boundary: production `app/renderer/src/**/*.tsx` modules export
@@ -228,13 +176,11 @@ tears down all three (`app/scripts/dev.ts`). Facts that follow from that:
   and hooks into adjacent `.ts` files; type-only exports are fine. The desktop
   dev, typecheck, and renderer-build scripts enforce this with
   `lint:fast-refresh`, backed by `fastRefreshBoundaries.test.ts`.
-- Live baseline as of 2026-08-19 (re-measure, don't assume): `bun test app/`
-  3,675 pass / 1 fail across 234 files · app tsc clean · sidecar wrapper green
-  (5,577 upstream ignored) · hardening 19/19. The counts grow; a DROP in pass
-  count or any new owned diagnostic is a regression. The 1 fail is
-  `app/sidecar/subagentRestore.probe.test.ts`: live-sidecar probes need
-  `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` and fail without one, so
-  read the `[sidecar] … env var is required` line before calling it yours.
+- Measure current test results; investigate unexplained pass-count drops or
+  new owned diagnostics. Live-sidecar probes such as
+  `app/sidecar/subagentRestore.probe.test.ts` may require `ANTHROPIC_API_KEY`
+  or `CLAUDE_CODE_OAUTH_TOKEN`. Distinguish missing credentials from a code
+  regression, and respect the live-account authorization rules (§10).
 - Root `bun run lint` does not cover `app/**` (Phase-5 CI item). Do not cite a
   clean root lint as evidence for an `app/` change.
 - **Private desktop diagnostics:** Electron main owns bounded, local operational
@@ -252,11 +198,9 @@ git diff --check
 bun run maps:lint             # validates map index, dates, links, and cited paths
 ```
 
-Lint caveat (all areas): `bun run lint` only lints files changed vs
-`main...HEAD`, and the config enables **zero rules** (all 19
-custom rules are `createNoopRule()` stubs; the only two entries turn rules
-off) — a lint pass is a parse check. Never cite "lint clean" as meaningful
-evidence; tests and typechecks are the evidence.
+Lint caveat: root `bun run lint` is a branch-diff ESLint check with no-op
+custom rules; a pass alone is not meaningful behavior evidence. This does
+not describe the separate map, undefined-name, or desktop Fast Refresh checks.
 
 ## 4. Git — one human, many concurrent sessions
 
@@ -277,8 +221,7 @@ because the tree is shared.
   immediately before the op, because the tip may have moved since you read it.
   Once anything may sit on top of your commit, don't reset/rebase/amend at all;
   splitting or reordering a commit here is never worth force-rebasing another
-  session's work. (2026-07-12: a `git reset HEAD~1` intended to undo my own
-  commit undid another session's instead, seconds after they committed.)
+  session's work.
 - **Don't push to publish just your work** — your commit sits atop theirs, so
   pushing publishes theirs too. Let the owning session push, or make an isolated
   branch off `origin/<branch>`.
@@ -298,8 +241,7 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
 | **You**, on request | `.worktrees/<slug>` | `worktree-<slug>` |
 | **The harness** (`isolation: "worktree"`) | `.claude/worktrees/agent-<hex>` | `worktree-agent-<hex>` |
 
-- Never invent a name or location: past sessions left `context-cost-fixes-20260706`
-  and `account-system-20260706` in ad-hoc spots because this table didn't exist.
+- Use the names and locations in the table.
 - `.claude/worktrees/` belongs to the harness. Don't hand-roll one there. Don't
   tidy what's in it **except a provably-spent one** (see the safe-sweep bullet
   below) — otherwise a live session may be in it.
@@ -307,8 +249,7 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
   source: the session that merges a worktree/agent branch into `migration`/`main`
   removes that worktree + branch as its LAST step** (`git worktree remove <path>`
   **and** `git branch -d <branch>`; a bare `rm -rf` leaves a stale admin entry
-  needing `git worktree prune`). They pile up otherwise (2026-07-22: 34 spent
-  worktrees, ~7 GB).
+  needing `git worktree prune`).
 - **Safe to remove a spent worktree + branch (incl. a `.claude/worktrees/agent-*`)
   iff ALL hold — verify per worktree, leave it if unsure:** `migration..HEAD`
   commit count = 0 (fully merged, nothing unmerged to lose), working tree clean
@@ -332,15 +273,8 @@ only correct answers. Both roots are gitignored (`.gitignore:7` and local
   promptly; otherwise let the worker commit its explicit owned paths. If a slice
   cannot yet be a normal commit, consider an explicit `wip(scope): ...`
   checkpoint rather than leaving it only in the working tree.
-- These rules are incident-backed. On 2026-09-07 the Agent Mode retirement parent
-  told two shared-tree implementors not to commit, made 40 patch operations of its
-  own, postponed every checkpoint until final integration, then exited while
-  waiting for a worker. Both workers were killed with
-  `parent-exited-without-result`, leaving 181 tracked paths, only 14 of them
-  staged, and no owning commit. On 2026-07-21 a bug sweep likewise nearly lost
-  four finished fixes by staying uncommitted. **Push** only when asked — it
-  publishes other sessions' commits stacked under yours. Never `--no-verify`.
-  Never `git stash` as a checkpoint — if work matters, commit it.
+- Push only when asked; it publishes other sessions' commits stacked under
+  yours. Never `--no-verify`. Never use `git stash` as a checkpoint.
 - Message format: `type(scope): subject` — types `feat|fix|perf|refactor|docs|wip|merge|migration`,
   scopes seen: `app`, `codex`, `migration`, `DONE`. Multi-part commits get a
   short one-line-per-change body.
@@ -432,7 +366,8 @@ Addendum T8/HC1–HC4). Concretely:
 - Renderer never authors permission rules, never sees raw credentials.
 
 Verification: `bun run --cwd app test:hardening` green + boundary tests for any
-new inbound frame.
+new inbound frame. New preload channels also require sidecar validation,
+boundary tests, and a decision reference.
 
 ## 6. Files needing extra care
 
@@ -462,17 +397,15 @@ Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
   `none`) and ` — ` as an aria-label separator (write `, `). Check with
   `rg -n '—' app/renderer/src --glob '!*.test.*'` and confirm every remaining
   hit is a code comment or a dev-only fixture name in `sdkMessageFixtures.ts`
-  (the one standing exclusion). That sweep returns well over a thousand lines,
-  nearly all of them comments, so read it as a diff against a clean run, not as
-  a hit list. Code comments and `docs/` are NOT a text surface and are
-  unaffected. Nothing enforces this half of §7 automatically: the sweep is the
-  only check.
+  (the one standing exclusion). Compare against a clean run to separate new
+  violations from existing matches. Code comments and `docs/` are NOT a text
+  surface and are unaffected. Nothing enforces this half of §7 automatically:
+  the sweep is the only check.
 - **Never render engineering notes.** No `file.ts:123` citations, no session
   ids (`P4-6b`, `CC-19`), no internal vocabulary (read seam, write allowlist,
   sidecar review, registry row, host-API gap, `MAX_*` constant names). A
   deviation belongs in your report and the STATUS row, which is what §9 asks
-  for; a component that exists to print your to-do list on the page is the bug
-  (`DeferredNote`, deleted 2026-07-27 after the operator rejected the page).
+  for, not in a component displaying engineering work notes.
   **This half IS enforced:** `app/renderer/src/userVisibleText.test.ts` sweeps
   every prose-shaped string across renderer, main, host, and sidecar. A genuine
   exception needs `§7-ok` in a comment on the same line, never a widened word
@@ -489,17 +422,14 @@ Anything a user can read on screen: JSX text, `desc`/`title`/`placeholder`,
 A comment may depend only on what changes in the SAME EDIT that changes it.
 
 - No line number in a cross-file citation. Name the file and the symbol.
-- Never restate a value that lives in code, name the constant. Proximity is no
-  protection: `ElicitationDialog.tsx` said "~9 lines" above `DIALOG_OVERHEAD = 14`.
+- Never restate a value that lives in code; name the constant.
 - No counting claims ("five of six kinds", "2 types in production").
 - No status notes ("deferred", "not yet wired", "currently X"). Nothing deletes them.
 - A derivation belongs in code, not prose. Compute it.
 - KEEP stable identifiers: decision-doc names, `~/catcode_prototype/` citations,
   past-tense incident records.
 
-**Do not take the surrounding comments as the style.** The 2026-09-06 audit found
-~1,779 cross-file line citations, ~30% already wrong; `protocol.ts` and
-`transcriptProjector.ts` are the worst offenders. Write to the rules above anyway.
+Existing comments may violate these rules; do not copy those violations.
 
 Check what you ADDED, not the tree (repo-wide is red against the backlog):
 
@@ -534,48 +464,31 @@ git diff main...HEAD -U0 | rg '^\+\s*(//|\*).*\.tsx?:[0-9]+'
 
 ## 8. Mistakes that have actually happened here — and their rules
 
-1. **Wiring a seam with stub context instead of the engine's real context.**
-   (Three so far — P1-3: sidecar session had `tools: []`; P2-4:
-   `getEmptyToolPermissionContext`; P3-7: `commands: []`.)
-   Rule: when the sidecar builds anything the engine also builds, construct it
-   from the SAME source the engine runtime uses, and cite that `src/…:line` in
-   your report. Verify: a live-path test proves real data flows, not shape-only.
-2. **Trusting a dated doc over source.** Rule: docs under `docs/` with dated
-   names are historical; before acting on one, verify its claims against
-   current source. Verify: report cites `file:line`, not doc sections.
-3. **Declaring done from a partial battery.** Rule: run §3's battery for every
-   touched area; paste outcomes. Also run an exhaustive stale-reference search
-   (imports, docs, configs, tests) before claiming completion.
-4. **"Fixing" known-red baselines.** (Sidecar tsc ~5.5k upstream diagnostics.)
-   Rule: only NEW diagnostics in owned files count; never refactor engine code
-   to silence the overlay.
-5. **Widening the desktop inbound surface.** Rule: no new preload channel or
-   inbound frame kind without sidecar validation + boundary test + decision
-   reference. Verify: hardening smoke green, boundary tests exist.
-6. **Reopening locked decisions** (§5). Rule: if your fix seems to require
-   changing transport/process-model/event fidelity, STOP and report instead.
-7. **Unwired migrations / features.** Rule: features need build-list + runtime
-   call sites; migrations need all four wiring steps (§6). Verify: grep for the
-   flag/import actually being consumed.
-8. **Driving the GUI without authorization.** (2026-07-07: repeated cursor
-   warps while the operator was live forced a machine restart.) Rule: a
-   dispatched 🖐 GUI prompt defaults to STOP — print exact operator steps per
-   `docs/migration/process/GUI-VERIFICATION.md`. Explicit operator
-   authorization for THAT run (the P3-8 precedent) overrides the default and
-   permits agent-driving (cua-driver against "Cat Code Dev"); authorization is
-   per-run, never standing, and every claim must cite a live AX label.
-   Hover/focus-only surfaces are operator-driven ALWAYS — never warp the
-   cursor; mark them UNVERIFIED, or close them by source inspection when the
-   logic is trivial (GUI-VERIFICATION.md).
-9. **Silent parity cuts** (desktop surfaces). Rule: default is prototype
-   parity; any deviation is a tagged flag (adapted/deferred/cut + reason) in
-   your report and STATUS row, never a silent drop.
-10. **Duplicating engine machinery in `app/`.** Rule: before writing new logic
-    in the sidecar/renderer, search `src/app-runtime/` and the relevant map for
-    the existing implementation; reuse via the real entry point (e.g. resume
-    goes through the engine's actual resume machinery).
+The build, baseline, feature/migration wiring, and security rules are defined
+in §§3, 5, and 6. The additional local failure cases are:
+
+- **Stub context at engine boundaries.** When sidecar code builds something
+  the engine also builds, use the same source of context rather than empty
+  tools, commands, or substitute permission context. Cite that source with a
+  `file:line` anchor and verify actual data flow through the production path.
+- **Duplicate engine machinery.** Before adding sidecar/renderer machinery,
+  inspect `src/app-runtime/` and the relevant map for an existing entry point;
+  resume must use the real engine resume path.
+- **GUI actions without authorization.** A dispatched GUI prompt defaults to
+  headless work and exact operator steps under
+  `docs/migration/process/GUI-VERIFICATION.md`. Authorization for that run
+  permits agent-driving against `Cat Code Dev`; it is not standing permission.
+  Each GUI claim needs a live AX label. Hover/focus-only checks remain
+  operator-driven: never warp the cursor. Mark them UNVERIFIED or settle
+  trivial logic by source inspection under the GUI process.
+- **Silent parity cuts.** Prototype parity is the default; report adapted,
+  deferred, or cut behavior with its reason and record it in the STATUS row.
 
 ## 9. Quality bars
+
+Run §3's checks for every touched area and report actual outcomes. Before
+claiming completion, perform the existing exhaustive stale-reference search
+across imports, docs, configs, and tests. Report all deviations.
 
 **Engine bug fix** — root cause stated with `file:line`; a test exists that
 fails before the fix and passes after; focused suites for the touched subsystem
@@ -607,9 +520,6 @@ set or setting stated in the report.
 
 ## 10. Uncertainty and escalation
 
-- If you don't know which files own a behavior → open the routing map (§2)
-  BEFORE broad grep.
-- If a doc and source disagree → follow source, note the drift.
 - If a needed shape/API exists somewhere in `src/` → find and cite it before
   writing a new one; if you can't find it within the mapped owner files, say so
   explicitly rather than inventing.
@@ -626,28 +536,20 @@ set or setting stated in the report.
 - Never guess: model/provider routing behavior, feature-gate state, permission
   semantics, or migration program state — all have named sources of truth (§2,
   §5, §6).
-- Unresolved uncertainty you are NOT blocked on goes in the final report as
-  its own section: what is unknown, what you checked, what would resolve it.
+- Report unresolved uncertainty: what is unknown, what you checked, and what
+  would resolve it.
 - A question you need answered is not an uncertainty note. It goes last in
-  the message, alone on its line, after the bookkeeping (§11.6) — never
+  the message, alone on its line, after the bookkeeping (§11) — never
   inside a report section, where it gets scrolled past.
 
-## 11. Required workflow
+<a id="11-required-workflow"></a>
 
-1. **Understand** — restate the task; classify which area(s) it touches (§1).
-2. **Inspect** — routing map → owner files → read the actual source; for
-   migration work, STATUS row + backlog prompt + relevant decision docs.
-3. **Plan** — for non-trivial changes list the files you will touch and the
-   battery you will run; surface parity/security/locked-decision implications
-   now, not after.
-4. **Implement** — smallest change that satisfies the task; match surrounding
-   style; extend colocated tests.
-5. **Verify** — run the §3 battery per touched area + the specific quality bar
-   (§9). Evidence = actual command + actual outcome.
-6. **Report** — outcome first; commands run with results; parity/§0 flags;
-   uncertainties; then bookkeeping (STATUS row for migration work).
-   Anything you need the user to answer comes after all of that, last and
-   alone (§10).
+## 11. Reporting
 
-Claiming completion requires: battery output pasted, quality-bar checklist
-satisfied, stale-reference sweep done, and zero unreported deviations.
+Report the outcome, verification commands and results, parity/deviation flags,
+and material uncertainty. Complete required migration bookkeeping and put any
+question the user needs to answer last, on its own line (§10).
+
+The task does not require a fixed investigation sequence, task restatement,
+or a separate file-by-file plan before implementation. The project constraints
+and verification requirements above still apply.
