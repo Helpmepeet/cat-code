@@ -87,7 +87,6 @@ export type PersistedStatsCache = {
   /** Records the unavoidable attribution limit when adopting an aggregate-only cache. */
   legacyMigration?: {
     sourceVersion: number
-    ignoreThroughDate: string
     notice: string
     legacySessionCheckpoints?: { [sessionId: string]: string }
   }
@@ -162,7 +161,6 @@ function migrateStatsCache(
       ? {
           legacyMigration: {
             sourceVersion: parsed.version,
-            ignoreThroughDate: getTodayDateString(),
             notice:
               'All-time totals include a preserved legacy cache whose pre-migration per-session attribution cannot be reconstructed exactly. Activity observed after migration is tracked separately.',
             legacySessionCheckpoints: {},
