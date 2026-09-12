@@ -32,6 +32,8 @@ function account(over: Partial<AccountStatus> = {}): AccountStatus {
     source: 'vault',
     usagePrimary: 42,
     usageWeekly: 17,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: 1_700_000_000,
     usageWeeklyResetAt: 1_700_200_000,
@@ -111,6 +113,23 @@ describe('parseAccountsPoolWorkerResult — accepts', () => {
         accounts: [account({ usageWeeklyResetAt: 'tomorrow' as never })],
       })),
     ).toBeNull()
+  })
+
+  test('preserves usage-window durations and accepts omitted or null metadata', () => {
+    expect(parseAccountsSnapshot(pool())?.accounts[0]).toMatchObject({
+      usagePrimaryWindowSeconds: 18_000,
+      usageSecondaryWindowSeconds: 604_800,
+    })
+    expect(parseAccountsSnapshot(pool({
+      accounts: [account({
+        usagePrimaryWindowSeconds: null,
+        usageSecondaryWindowSeconds: null,
+      })],
+    }))).not.toBeNull()
+    const omitted = { ...account() } as Record<string, unknown>
+    delete omitted.usagePrimaryWindowSeconds
+    delete omitted.usageSecondaryWindowSeconds
+    expect(parseAccountsSnapshot(pool({ accounts: [omitted as never] }))).not.toBeNull()
   })
 
   test('an empty pool is valid (no accounts is a real state, not a failure)', () => {
@@ -277,6 +296,21 @@ describe('parseAccountsPoolWorkerResult — fails closed', () => {
         pool({ anthropicSubscriptionActive: 'yes' as never }),
       ),
     ).toBeNull()
+  })
+
+  test('rejects malformed usage-window durations', () => {
+    for (const field of [
+      'usagePrimaryWindowSeconds',
+      'usageSecondaryWindowSeconds',
+    ] as const) {
+      for (const duration of ['18000', -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(
+          parseAccountsSnapshot(pool({
+            accounts: [account({ [field]: duration as never })],
+          })),
+        ).toBeNull()
+      }
+    }
   })
 
   test('a malformed Anthropic row fails the whole snapshot', () => {

@@ -2475,14 +2475,32 @@ export type AccountStatus = {
    */
   hasVaultProfile: boolean
   source: 'vault' | 'config'
-  /** 5-hour window used-percent (0–100), or null when no fresh usage hint. */
+  /**
+   * Legacy percentage field for the upstream primary position (0–100), or null
+   * when unavailable. Its duration metadata controls Welcome presentation.
+   */
   usagePrimary: number | null
-  /** Weekly window used-percent (0–100), or null. */
+  /**
+   * Legacy percentage field for the upstream secondary position (0–100), or
+   * null when unavailable. Its duration metadata controls Welcome presentation.
+   */
   usageWeekly: number | null
+  /**
+   * Duration metadata for the upstream primary position. The welcome table
+   * uses this duration to resolve the five-hour slot rather than assuming the
+   * position's meaning.
+   */
+  usagePrimaryWindowSeconds?: number | null
+  /**
+   * Duration metadata for the upstream secondary position. The welcome table
+   * uses this duration to resolve the weekly slot rather than assuming the
+   * position's meaning.
+   */
+  usageSecondaryWindowSeconds?: number | null
   usageLimitReached: boolean
-  /** wham/usage reset, Unix SECONDS (the pool's native unit), or null. */
+  /** Upstream primary-position reset, Unix SECONDS, or null. */
   usageResetAt: number | null
-  /** Weekly wham/usage reset, Unix SECONDS, or null when the upstream omits it. */
+  /** Upstream secondary-position reset, Unix SECONDS, or null when omitted. */
   usageWeeklyResetAt?: number | null
   lastRefreshIso: string | null
   /** Normalized block reason (no token content by construction), or null. */

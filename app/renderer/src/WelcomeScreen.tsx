@@ -35,8 +35,8 @@
  *  - Greeting username: DEFERRED — no engine-user seam in the renderer today.
  *  - Per-recent trust badge: best-effort (only live sessions expose trust); a
  *    global projects-trust feed is out of scope (no new feed rule).
- *  - Per-window reset: the pool seam carries the real five-hour and weekly reset
- *    timestamps, so each window shows its own countdown.
+ *  - Per-window reset: the pool seam carries the upstream position resets and
+ *    durations, so each recognized duration shows its own countdown.
  *
  * ➕ real-added (ruled), P4-48 — the first-run order line under the greeting. It
  * has no prototype counterpart: `Startup.jsx:461-489` gates trust and OAuth at
@@ -64,6 +64,7 @@ import catYawning from './assets/welcome-cat-yawning.png'
 import { basename } from './pathUtils.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
+import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 const welcomeCats = [
@@ -442,7 +443,9 @@ export function RecentItem({
 /* ── Codex account table (read-only, P4-5) ──────────────────────────────── */
 
 function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
-  const rows = accounts?.accounts ?? []
+  const rows = (accounts?.accounts ?? []).filter(
+    account => account.availability !== 'blocked',
+  )
   // Prototype header counts status-`healthy` accounts and labels them "healthy"
   // (`Welcome.jsx:434`), not the stricter ready = healthy-and-not-capped metric.
   const healthyCount = rows.filter(a => a.status === 'healthy').length
@@ -460,8 +463,8 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
         {accounts ? (
           <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
             <span>
-              <span className="text-text-primary">{accounts.poolCount}</span>{' '}
-              account{accounts.poolCount === 1 ? '' : 's'}
+              <span className="text-text-primary">{rows.length}</span>{' '}
+              account{rows.length === 1 ? '' : 's'}
             </span>
             <span className="text-text-subtle">·</span>
             <span>
@@ -479,7 +482,7 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
       {rows.length === 0 ? (
         <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
-          No Codex account data for this view yet.
+          {accounts ? 'No usable Codex accounts.' : 'No Codex account data for this view yet.'}
         </div>
       ) : (
         rows.map(account => <CodexRow key={account.id} account={account} />)
@@ -490,12 +493,7 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
 function CodexRow({ account }: { account: AccountStatus }) {
   const capped = account.status === 'capped' || account.usageLimitReached
-  const primaryReset =
-    account.usageResetAt != null ? formatResetCompact(account.usageResetAt) : ''
-  const weeklyReset =
-    account.usageWeeklyResetAt != null
-      ? formatResetCompact(account.usageWeeklyResetAt)
-      : ''
+  const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
   return (
     <div className="grid grid-cols-[1.4fr_1.6fr_0.5fr_0.6fr_1.6fr_0.5fr_0.6fr] items-center gap-x-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
@@ -509,14 +507,39 @@ function CodexRow({ account }: { account: AccountStatus }) {
           </span>
         ) : null}
       </div>
-      <UsageBar label="5-hour" pct={account.usagePrimary} />
-      <UsagePct pct={account.usagePrimary} />
-      <ResetCell label="5-hour reset" value={primaryReset} />
-      <UsageBar label="Weekly" pct={account.usageWeekly} />
-      <UsagePct pct={account.usageWeekly} />
-      <ResetCell label="Weekly reset" value={weeklyReset} />
+      <UsageCells label="5-hour" window={fiveHour} />
+      <UsageCells label="Weekly" window={weekly} />
     </div>
   )
+}
+
+function UsageCells({
+  label,
+  window,
+}: {
+  label: string
+  window: { percent: number | null; resetAt: number | null } | null
+}) {
+  if (!window) {
+    return [
+      <span key="bar" aria-hidden="true" />,
+      <span key="percent" aria-hidden="true" />,
+      <span key="reset" aria-hidden="true" />,
+    ]
+  }
+  return [
+    window.percent != null
+      ? <UsageBar key="bar" label={label} pct={window.percent} />
+      : <span key="bar" aria-hidden="true" />,
+    window.percent != null
+      ? <UsagePct key="percent" pct={window.percent} />
+      : <span key="percent" aria-hidden="true" />,
+    <ResetCell
+      key="reset"
+      label={`${label} reset`}
+      value={window.resetAt != null ? formatResetCompact(window.resetAt) : ''}
+    />,
+  ]
 }
 
 /**
@@ -524,8 +547,8 @@ function CodexRow({ account }: { account: AccountStatus }) {
  * for every account regardless of percentage — NOT the threshold red/green/amber
  * of the AccountsPage meter. Min 2% fill so a live account is always visible.
  */
-function UsageBar({ label, pct }: { label: string; pct: number | null }) {
-  const value = pct ?? 0
+function UsageBar({ label, pct }: { label: string; pct: number }) {
+  const value = pct
   const filled = Math.max(2, Math.min(100, value))
   return (
     <div
@@ -548,8 +571,8 @@ function UsageBar({ label, pct }: { label: string; pct: number | null }) {
 
 /** Percent label — accent-tinted like the prototype (`pctColor`, `Welcome.jsx:149`),
  * darker at ≥100%; never the tone-coded green/amber/red. */
-function UsagePct({ pct }: { pct: number | null }) {
-  const p = pct ?? 0
+function UsagePct({ pct }: { pct: number }) {
+  const p = pct
   return (
     <span
       aria-hidden="true"

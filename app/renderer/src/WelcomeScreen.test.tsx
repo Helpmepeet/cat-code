@@ -18,9 +18,10 @@ function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspa
   }
 }
 
-function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
+function account(over: Partial<AccountStatus>): AccountStatus {
   return {
-    alias: over.id,
+    id: over.id ?? 'fixture',
+    alias: over.alias ?? over.id ?? 'fixture',
     status: 'healthy',
     statusReason: null,
     availability: 'available',
@@ -30,6 +31,8 @@ function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
     source: 'vault',
     usagePrimary: 0,
     usageWeekly: 0,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,
@@ -263,7 +266,14 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
           usageResetAt: now + 3 * 3600,
           usageWeeklyResetAt: now + 4 * 3600,
         }),
-        account({ id: 'b', alias: 'backup', status: 'capped', usageLimitReached: true, usagePrimary: 100 }),
+        account({
+          id: 'b',
+          alias: 'backup',
+          status: 'capped',
+          availability: 'blocked',
+          usageLimitReached: true,
+          usagePrimary: 100,
+        }),
       ])}
 
       onOpenRecent={noop}
@@ -271,15 +281,14 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
     />,
   )
   expect(html).toContain('Codex')
-  expect(html).toContain('>2</span> accounts')
+  expect(html).toContain('>1</span> account')
   // Prototype header: status-`healthy` count labelled "healthy" (main is healthy,
   // backup is capped → 1).
   expect(html).toContain('>1</span> healthy')
   expect(html).toContain('main')
-  expect(html).toContain('backup')
-  expect(html).toContain('capped')
+  expect(html).not.toContain('backup')
+  expect(html).not.toContain('capped')
   expect(html).toContain('20%')
-  expect(html).toContain('100%')
   expect(html).toContain('aria-label="5-hour reset: 3h"')
   expect(html).toContain('aria-label="Weekly reset: 4h"')
   // Flat accent-gradient bars, not tone-coded green/amber/red.
@@ -290,6 +299,125 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   // No "5h"/"wk" text labels in the prototype rows.
   expect(html).not.toContain('>5h<')
   expect(html).not.toContain('>wk<')
+})
+
+test('the Welcome table filters blocked rows locally and counts visible rows', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([
+        account({ id: 'active', alias: 'active', isDefault: true }),
+        account({ id: 'warned', alias: 'warned', availability: 'warned' }),
+        account({ id: 'blocked', alias: 'blocked', availability: 'blocked' }),
+      ])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('>2</span> accounts')
+  expect(html).toContain('active')
+  expect(html).toContain('warned')
+  expect(html).not.toContain('blocked')
+})
+
+test('a loaded snapshot with no usable accounts has a distinct empty state', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({ id: 'blocked', availability: 'blocked' })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('>0</span> accounts')
+  expect(html).toContain('No usable Codex accounts.')
+  expect(html).not.toContain('No Codex account data for this view yet.')
+})
+
+test('weekly-only usage leaves the five-hour cells empty', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 37,
+        usagePrimaryWindowSeconds: 604_800,
+        usageResetAt: 1_700_000_000,
+        usageSecondaryWindowSeconds: null,
+        usageWeeklyResetAt: null,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).not.toContain('5-hour usage:')
+  expect(html).toContain('Weekly usage: 37%')
+})
+
+test('reversed dual windows render values and resets in duration slots', () => {
+  const now = Math.floor(Date.now() / 1000)
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 37,
+        usagePrimaryWindowSeconds: 604_800,
+        usageResetAt: now + 3 * 3600,
+        usageWeekly: 12,
+        usageSecondaryWindowSeconds: 18_000,
+        usageWeeklyResetAt: now + 4 * 3600,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="Weekly usage: 37%"')
+  expect(html).toContain('aria-label="5-hour usage: 12%"')
+  expect(html).toContain('aria-label="Weekly reset: 3h"')
+  expect(html).toContain('aria-label="5-hour reset: 4h"')
+})
+
+test('recognized duration with null percent keeps a known reset without fabricating usage', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: null,
+        usagePrimaryWindowSeconds: 18_000,
+        usageResetAt: Math.floor(Date.now() / 1000) + 3 * 3600,
+        usageWeekly: null,
+        usageSecondaryWindowSeconds: null,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="5-hour reset: 3h"')
+  expect(html).not.toContain('5-hour usage:')
+  expect(html).not.toContain('>0%<')
+  expect(html).not.toContain('aria-valuenow="0"')
+})
+
+test('a genuine zero percent renders as zero usage', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 0,
+        usagePrimaryWindowSeconds: 18_000,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="5-hour usage: 0%"')
+  expect(html).toContain('aria-valuenow="0"')
+  expect(html).toContain('>0%<')
 })
 
 test('the Codex table degrades honestly when no pool snapshot exists', () => {

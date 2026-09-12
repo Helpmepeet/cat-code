@@ -57,6 +57,9 @@ function buildPoolAccount(
     usageAllowed: overrides.usageAllowed,
     usageLimitReached: overrides.usageLimitReached,
     usageResetAt: overrides.usageResetAt,
+    usageWeeklyResetAt: overrides.usageWeeklyResetAt,
+    usagePrimaryWindowSeconds: overrides.usagePrimaryWindowSeconds,
+    usageSecondaryWindowSeconds: overrides.usageSecondaryWindowSeconds,
     cappedAt: overrides.cappedAt,
     lastErrorAt: overrides.lastErrorAt,
     statusReason: overrides.statusReason,
@@ -1592,6 +1595,8 @@ describe('quota belief reconciler directional semantics', () => {
         accountId: 'capped-acct',
         primaryPercent: 10,
         weeklyPercent: 5,
+        primaryWindowSeconds: 18_000,
+        secondaryWindowSeconds: 604_800,
         allowed: true,
         limitReached: false,
         fetchedAt: cappedAt + 1,
@@ -1602,6 +1607,8 @@ describe('quota belief reconciler directional semantics', () => {
     expect(acct.status).toBe('capped')
     expect(acct.cappedAt).toBe(cappedAt)
     expect(acct.usageResetAt).toBe(resetAt)
+    expect(acct.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(acct.usageSecondaryWindowSeconds).toBe(604_800)
     expect(getCodexAccountAvailability(acct).kind).toBe('blocked')
   })
 
@@ -1634,6 +1641,8 @@ describe('quota belief reconciler directional semantics', () => {
         allowed: false,
         limitReached: true,
         fetchedAt: redeemedAt + 1,
+        primaryWindowSeconds: 18_000,
+        secondaryWindowSeconds: 604_800,
       },
     ])
 
@@ -1642,6 +1651,8 @@ describe('quota belief reconciler directional semantics', () => {
     expect(acct.usageAllowed).toBe(true)
     expect(acct.usageLimitReached).toBe(false)
     expect(acct.usageFetchedAt).toBeUndefined()
+    expect(acct.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(acct.usageSecondaryWindowSeconds).toBe(604_800)
     expect(getCodexAccountAvailability(acct).kind).not.toBe('blocked')
   })
 

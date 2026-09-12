@@ -71,6 +71,8 @@ function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
     source: 'vault',
     usagePrimary: 0,
     usageWeekly: 0,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,

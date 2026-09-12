@@ -45,13 +45,16 @@ export interface PoolAccount {
   vaultFilePath?: string        // absolute path to the vault JSON file (vault accounts only)
   alias?: string                // human-readable name, e.g. "main", "backup1"
   // Soft usage hints from wham/usage (best-effort, may be stale)
-  usagePrimary?: number         // 5h window used_percent (0-100)
-  usageWeekly?: number          // weekly window used_percent (0-100)
+  usagePrimary?: number         // upstream primary-position used_percent (0-100)
+  usageWeekly?: number          // upstream secondary-position used_percent (0-100)
+  // Upstream positions carry these durations when reported; neither is guaranteed.
+  usagePrimaryWindowSeconds?: number
+  usageSecondaryWindowSeconds?: number
   usageAllowed?: boolean
   usageLimitReached?: boolean
   usageFetchedAt?: number       // when usage was last fetched
-  usageResetAt?: number
-  usageWeeklyResetAt?: number
+  usageResetAt?: number         // upstream primary-position reset (Unix seconds)
+  usageWeeklyResetAt?: number   // upstream secondary-position reset (Unix seconds)
   cappedAt?: number             // when a hard 429 capped this account; uncap only from usage data fetched after this
   redeemedAt?: number           // when applyRedeemedUsageReset last healed this account; lag guard in updateAccountUsageHints
   // Saved id_token plan metadata. May be stale — warning only, never a blocker.
@@ -1355,6 +1358,8 @@ export function updateAccountUsageHints(
     accountId: string
     primaryPercent: number
     weeklyPercent: number
+    primaryWindowSeconds?: number
+    secondaryWindowSeconds?: number
     allowed?: boolean
     limitReached?: boolean
     resetAt?: number
@@ -1374,6 +1379,8 @@ export function updateAccountUsageHints(
         // Still update the non-blocking fields so scoring stays current.
         acct.usagePrimary = hint.primaryPercent
         acct.usageWeekly = hint.weeklyPercent
+        acct.usagePrimaryWindowSeconds = hint.primaryWindowSeconds
+        acct.usageSecondaryWindowSeconds = hint.secondaryWindowSeconds
         acct.usageWeeklyResetAt = hint.weeklyResetAt
         // Don't update usageFetchedAt/usageAllowed/usageLimitReached/usageResetAt:
         // applying them would re-block the account via getCodexAccountAvailability.
@@ -1389,6 +1396,8 @@ export function updateAccountUsageHints(
 
       acct.usagePrimary = hint.primaryPercent
       acct.usageWeekly = hint.weeklyPercent
+      acct.usagePrimaryWindowSeconds = hint.primaryWindowSeconds
+      acct.usageSecondaryWindowSeconds = hint.secondaryWindowSeconds
       acct.usageFetchedAt = now
       acct.usageAllowed = hint.allowed
       acct.usageLimitReached = hint.limitReached
@@ -1762,7 +1771,7 @@ export function isCodexAccountSwitchable(
 /**
  * Find the best healthy account, excluding `skipIndex`.
  * When fresh usage data is available, prefers the account with the lowest
- * 5h usage percent. Falls back to LRU when usage data is stale or absent.
+ * Primary-position usage percent. Falls back to LRU when usage data is stale or absent.
  */
 function findLRUHealthy(skipIndex: number): number {
   const now = Date.now()
@@ -1789,7 +1798,7 @@ function findLRUHealthy(skipIndex: number): number {
   )
 
   if (hasFreshUsage) {
-    // Sort by usage score: 5h window * 3 + weekly (lower = better)
+    // Sort by usage score: primary position * 3 + secondary position (lower = better)
     // Accounts without fresh usage data get a neutral score of 150
     rankable.sort((a, b) => {
       const scoreA = getPoolAccountUsageScore(a.acct, now)
@@ -1797,7 +1806,7 @@ function findLRUHealthy(skipIndex: number): number {
       return scoreA - scoreB
     })
     logForDebugging(
-      `[codex-pool] Usage-aware selection: ${truncId(rankable[0]!.acct.accountId)} (5h: ${rankable[0]!.acct.usagePrimary}%, wk: ${rankable[0]!.acct.usageWeekly}%)`,
+      `[codex-pool] Usage-aware selection: ${truncId(rankable[0]!.acct.accountId)} (primary: ${rankable[0]!.acct.usagePrimary}%, secondary: ${rankable[0]!.acct.usageWeekly}%)`,
     )
     return rankable[0]!.idx
   }

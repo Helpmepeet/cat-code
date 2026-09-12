@@ -134,7 +134,7 @@ export type AccountsCommandExecutor = {
   /** Refresh OAuth tokens for every unlocked vault account. */
   touchAll(): Promise<AccountVerbResult>
   /**
-   * Fetch soft usage hints (5h/weekly used-percent + reset) for every pool
+   * Fetch soft usage hints (primary/secondary used-percent + reset) for every pool
    * account from the ChatGPT wham/usage endpoint and apply them to the live
    * pool — the same call the engine makes at startup (`initAccountPool` →
    * `fetchPoolUsage`). Read-only (GET, often live in this long-lived process:
@@ -423,6 +423,8 @@ export function buildAccountStatus(
     source: account.source,
     usagePrimary: account.usagePrimary ?? null,
     usageWeekly: account.usageWeekly ?? null,
+    usagePrimaryWindowSeconds: account.usagePrimaryWindowSeconds ?? null,
+    usageSecondaryWindowSeconds: account.usageSecondaryWindowSeconds ?? null,
     usageLimitReached: account.usageLimitReached === true,
     usageResetAt: account.usageResetAt ?? null,
     usageWeeklyResetAt: account.usageWeeklyResetAt ?? null,
@@ -613,7 +615,7 @@ export function createRealAccountsExecutor(
       return { ok: true, message: 'Refresh complete.', touchAllResults }
     },
     async refreshUsage() {
-      // updateRoutingHints applies the fetched 5h/weekly percents onto the live
+      // updateRoutingHints applies the fetched primary/secondary percents onto the live
       // pool accounts, which `buildAccountStatus` then reads. A total failure
       // (offline / stale tokens) returns 0 results and leaves the fields as-is.
       const snapshot = await fetchPoolUsage({ updateRoutingHints: true })

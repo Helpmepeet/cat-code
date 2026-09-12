@@ -52,6 +52,8 @@ function poolAccount(overrides: Partial<PoolAccount> = {}): PoolAccount {
     alias: 'work-laptop',
     usagePrimary: 40,
     usageWeekly: 55,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: 1_700_000_000,
     usageWeeklyResetAt: 1_700_200_000,
@@ -137,6 +139,8 @@ describe('P4-5 read-seam — projection semantics', () => {
 
     expect(status.usageResetAt).toBe(1_700_000_000)
     expect(status.usageWeeklyResetAt).toBe(1_700_200_000)
+    expect(status.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(status.usageSecondaryWindowSeconds).toBe(604_800)
   })
 
   test('snapshot includes a redacted Anthropic account pool', () => {

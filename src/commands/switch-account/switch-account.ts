@@ -449,9 +449,17 @@ async function liveUsageIsBlocked(account: CodexPoolAccount): Promise<boolean> {
       accountId: usage.accountId,
       primaryPercent: usage.primaryWindow.usedPercent,
       weeklyPercent: usage.secondaryWindow.usedPercent,
+      primaryWindowSeconds: usage.primaryWindow.limitWindowSeconds,
+      ...(usage.hasSecondaryWindow === false
+        ? {}
+        : { secondaryWindowSeconds: usage.secondaryWindow.limitWindowSeconds }),
       allowed: usage.allowed,
       limitReached: usage.limitReached,
       resetAt: usage.primaryWindow.resetAt,
+      weeklyResetAt:
+        usage.hasSecondaryWindow === false
+          ? undefined
+          : usage.secondaryWindow.resetAt,
       fetchedAt: usage.fetchedAt,
     },
   ])

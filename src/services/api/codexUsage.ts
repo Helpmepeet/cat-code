@@ -44,8 +44,8 @@ export interface AccountUsage {
   planType: string
   allowed: boolean
   limitReached: boolean
-  primaryWindow: UsageWindow    // 5-hour window
-  secondaryWindow: UsageWindow  // weekly window
+  primaryWindow: UsageWindow    // upstream primary-position window
+  secondaryWindow: UsageWindow  // upstream secondary-position window
   hasSecondaryWindow?: boolean  // false when the upstream omitted it (e.g. free plan); undefined treated as present
   credits: {
     hasCredits: boolean
@@ -118,7 +118,7 @@ const POST_TURN_USAGE_REFRESH_DELAY_MS = 1_000
 // Floor on the post-turn poll. queryModel completes once per API request, not
 // once per user-visible turn, so tool loops and subagents reach it repeatedly;
 // without a floor the cost is (requests x pool accounts) GETs. Usage is coarse
-// (percent buckets on a 5h window) and cannot meaningfully move inside this.
+// (percent buckets on the primary position) and cannot meaningfully move inside this.
 const POST_TURN_USAGE_REFRESH_MIN_INTERVAL_MS = 30_000
 const warnedNearCapAccountIds = new Set<string>()
 
@@ -385,7 +385,7 @@ export async function fetchPoolUsage(
  *
  * The trade is up to one interval of lag: a request completing just after a
  * poll fires is not observed until the next one. Acceptable because the hints
- * are advisory scoring inputs on a 5-hour window, and because one poll costs a
+ * are advisory scoring inputs on the primary position, and because one poll costs a
  * GET per pool account.
  */
 export function schedulePoolUsageRefresh(): void {
@@ -468,11 +468,15 @@ function updateRoutingHintsFromUsage(usages: readonly AccountUsage[]): void {
       accountId: r.accountId,
       primaryPercent: r.primaryWindow.usedPercent,
       weeklyPercent: r.secondaryWindow.usedPercent,
+      primaryWindowSeconds: r.primaryWindow.limitWindowSeconds,
+      ...(r.hasSecondaryWindow === false
+        ? {}
+        : { secondaryWindowSeconds: r.secondaryWindow.limitWindowSeconds }),
       allowed: r.allowed,
       limitReached: r.limitReached,
-      // The 5h (primary) window is what trips the block, so gate the
-      // already-reset escape on its reset, not max() across windows (the weekly
-      // reset is days out and would keep a reset 5h account blocked).
+      // The primary position is what trips the block, so gate the
+      // already-reset escape on its reset, not max() across windows (the secondary
+      // reset may be days out and would keep a reset primary account blocked).
       resetAt: r.primaryWindow.resetAt,
       weeklyResetAt: r.secondaryWindow.resetAt,
       fetchedAt: r.fetchedAt,
@@ -482,11 +486,11 @@ function updateRoutingHintsFromUsage(usages: readonly AccountUsage[]): void {
 
 /**
  * Score an account for pool selection — lower score = better candidate.
- * Weights the 5h window heavily (it's the one that causes 429s).
+ * Weights the primary position heavily (it is the one that causes 429s).
  */
 export function scoreAccountUsage(usage: AccountUsage): number {
   if (!usage.allowed || usage.limitReached) return Infinity
-  // Primary (5h) window is 3x more important than weekly
+  // The primary position is 3x more important than the secondary position.
   return usage.primaryWindow.usedPercent * 3 + usage.secondaryWindow.usedPercent
 }
 
@@ -560,8 +564,8 @@ export function sortPoolUsageDisplayAccounts(
  *
  *             used                           resets
  * ● main
- *   5h          12%   ████░░░░░░░░░░░░░░░░    38m
- *   7d           5%   ░░░░░░░░░░░░░░░░░░░░    4d 3h
+ *   primary    12%   ████░░░░░░░░░░░░░░░░    38m
+ *   secondary   5%   ░░░░░░░░░░░░░░░░░░░░    4d 3h
  */
 export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
   const { accounts: poolAccounts, activeIndex } = getPoolStatus()
@@ -597,11 +601,11 @@ export function formatPoolUsage(snapshot: PoolUsageSnapshot): string {
       // the action.
       lines.push('  upgrade to a paid plan to use Codex')
     } else if (account.usage) {
-      lines.push(usageRow('5h', account.usage.primaryWindow))
-      // Free/odd-shaped plans omit the weekly window; don't render a fake
-      // "7d 0% resets now" placeholder for it.
+      lines.push(usageRow('primary', account.usage.primaryWindow))
+      // Free/odd-shaped plans omit the secondary window; don't render a fake
+      // "secondary 0% resets now" placeholder for it.
       if (account.usage.hasSecondaryWindow !== false) {
-        lines.push(usageRow('7d', account.usage.secondaryWindow))
+        lines.push(usageRow('secondary', account.usage.secondaryWindow))
       }
     } else {
       lines.push(usageUnavailableRow(account.error))

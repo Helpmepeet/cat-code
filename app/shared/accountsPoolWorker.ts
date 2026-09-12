@@ -380,6 +380,8 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
     source: oneOf(['vault', 'config'] as const),
     usagePrimary: isNumberOrNull,
     usageWeekly: isNumberOrNull,
+    usagePrimaryWindowSeconds: optional(isNonNegativeFiniteNumberOrNull),
+    usageSecondaryWindowSeconds: optional(isNonNegativeFiniteNumberOrNull),
     usageLimitReached: isBoolean,
     usageResetAt: isNumberOrNull,
     usageWeeklyResetAt: optional(isNumberOrNull),
@@ -409,5 +411,15 @@ function isBoundedText(value: unknown): value is string {
     typeof value === 'string' &&
     value.length > 0 &&
     value.length <= MAX_TEXT_FIELD_CHARS
+  )
+}
+
+function isNonNegativeFiniteNumberOrNull(
+  value: unknown,
+): value is number | null {
+  return value === null || (
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0
   )
 }

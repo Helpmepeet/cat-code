@@ -239,10 +239,11 @@ describe('/switch-account', () => {
       },
       secondaryWindow: {
         usedPercent: 0,
-        limitWindowSeconds: 0,
+        limitWindowSeconds: 604800,
         resetAfterSeconds: 0,
-        resetAt: 0,
+        resetAt: 1_700_200_000,
       },
+      hasSecondaryWindow: true,
       credits: { hasCredits: false, unlimited: false, balance: '0' },
       fetchedAt: Date.now(),
     })
@@ -264,6 +265,12 @@ describe('/switch-account', () => {
     expect(codexPoolModule.getPoolStatus().accounts[
       codexPoolModule.getPoolStatus().activeIndex
     ]?.accountId).toBe('codex-current')
+    const target = codexPoolModule.getPoolStatus().accounts.find(
+      account => account.accountId === 'codex-free',
+    )
+    expect(target?.usagePrimaryWindowSeconds).toBe(2_592_000)
+    expect(target?.usageSecondaryWindowSeconds).toBe(604_800)
+    expect(target?.usageWeeklyResetAt).toBe(1_700_200_000)
   })
 
   test('explicit Codex switch refuses with the unified message when a fresh capped hint already blocks the target', async () => {
