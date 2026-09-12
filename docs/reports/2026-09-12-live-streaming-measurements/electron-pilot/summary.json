@@ -1,0 +1,489 @@
+{
+  "schemaVersion": 1,
+  "input": "/tmp/catcode-streaming-electron-pilot-20260912-04",
+  "status": "incomplete-pilot-matrix",
+  "expectedSamples": 72,
+  "observedSamples": 12,
+  "missing": [
+    "0/sparse-1/original",
+    "0/sparse-1/0",
+    "0/sparse-1/8",
+    "0/sparse-1/16",
+    "0/paced-8/original",
+    "0/paced-8/0",
+    "0/paced-8/8",
+    "0/paced-8/16",
+    "0/long-history-8/original",
+    "0/long-history-8/0",
+    "0/long-history-8/8",
+    "0/long-history-8/16",
+    "0/burst-4/original",
+    "0/burst-4/0",
+    "0/burst-4/8",
+    "0/burst-4/16",
+    "0/barriers-4/original",
+    "0/barriers-4/0",
+    "0/barriers-4/8",
+    "0/barriers-4/16",
+    "1/sparse-1/original",
+    "1/sparse-1/0",
+    "1/sparse-1/8",
+    "1/sparse-1/16",
+    "1/paced-8/original",
+    "1/paced-8/0",
+    "1/paced-8/8",
+    "1/paced-8/16",
+    "1/long-history-8/original",
+    "1/long-history-8/0",
+    "1/long-history-8/8",
+    "1/long-history-8/16",
+    "1/burst-4/original",
+    "1/burst-4/0",
+    "1/burst-4/8",
+    "1/burst-4/16",
+    "1/barriers-4/original",
+    "1/barriers-4/0",
+    "1/barriers-4/8",
+    "1/barriers-4/16",
+    "2/sparse-1/original",
+    "2/sparse-1/0",
+    "2/sparse-1/8",
+    "2/sparse-1/16",
+    "2/paced-8/original",
+    "2/paced-8/0",
+    "2/paced-8/8",
+    "2/paced-8/16",
+    "2/long-history-8/original",
+    "2/long-history-8/0",
+    "2/long-history-8/8",
+    "2/long-history-8/16",
+    "2/burst-4/original",
+    "2/burst-4/0",
+    "2/burst-4/8",
+    "2/burst-4/16",
+    "2/barriers-4/original",
+    "2/barriers-4/0",
+    "2/barriers-4/8",
+    "2/barriers-4/16"
+  ],
+  "unexpected": [],
+  "scope": "Instrumented focused Electron delivery pipeline; excludes engine/supervisor/host workers, production recovery/health timers, and operational logging outside delivery tracing.",
+  "cpuAccounting": "Combined Electron CPU sums Browser and Tab cumulative CPU deltas only; mainCpuMicros is validated but never added.",
+  "clockCaveat": "Arrival-to-commit percentiles depend on cross-process monotonic-clock calibration; uncertainty is reported per sample and is not subtracted.",
+  "sourceHashes": {
+    "main/liveFrameBatcher.ts": "32d9226bc02959b14280f81d2b79a9c20184e16e1d37d8f85919dc4fe793fdc8",
+    "main/attachmentGate.ts": "7f72e84ef225426d6d725d5e3dfa43698cd0b4b1ef0368683aee43a2f3298386",
+    "main/deliveryTraceSink.ts": "ea2263d3b7ce877beb5509c7a1c2087d0dd54c8fcc7afd32df9a76604d41b62a",
+    "shared/deliveryTrace.ts": "d98eb8661d2766f2712c18d62fa74e9fd205b3a9c6f8050cc199d9f0aacadd3c",
+    "shared/ipcChannels.ts": "e0a57f66eefd5fdb2b8800de857b14306ff850b7df6cab327dd21b583a7ac2d5",
+    "renderer/src/App.tsx": "1c28714c8b12c52f3b556a0c472a2197e5e0afc026ab1cff882dc43746a19bdc",
+    "renderer/src/rawMessageLog.ts": "0bf94ba5751423449700e48ea472c2bd7e1a74eddb00582f3c3a5795d8dbe44d",
+    "preload/preload.ts": "44d69492d07aacf09bd08587f3dfa07146632507a77f547d0d1b27e8fb6d5860",
+    "scripts/streaming-benchmark.ts": "84e59cc8452e943d6cbcc72db67e0afa24f05f37ff784e8035e0c38f798863ca",
+    "scripts/streaming-benchmark-main.ts": "e035913e0fbb77fdb7082cb4d9b7b41ec5447019ae81219d83236fa3699ff7ca",
+    "scripts/streaming-benchmark-observer.ts": "48ebf531c62777fded6565cec783dbec68e4caefd36e3fb1f3992965627c13c6",
+    "scripts/streaming-benchmark-cleanup.ts": "c85dcd86146ffdd4478a833064e738506e4f2b5ca7f9e266c0024ff0dbefd166",
+    "scripts/streaming-benchmark.vite.config.ts": "6473de2b10397229951a835c155e713e7269a993345af38d4e50eadfac4e607d",
+    "package.json": "5142313cd2f0fb519ce6147c639ca7851055e0f83028eaab636f5c3c7db22d4f",
+    "scripts/streaming-benchmark-runtime.ts": "f7a611665e10261ce12315f8fed75509d2838d0150bf79c346a27acd271ce135",
+    "../docs/reports/2026-09-12-live-streaming-measurements/fixture.ts": "c87bff0372d815d81fa8412446b16184f69336cebe929a2523801d1053a067e5"
+  },
+  "samples": [
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 2081816,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 805,
+      "latencyP95Ms": 4.510968735098686,
+      "latencyP99Ms": 5.194926741059135,
+      "clockAlignmentUncertaintyMs": 0.027395500000011452
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1483397,
+      "sendCount": 234,
+      "dispatchCount": 234,
+      "commitCount": 224,
+      "latencyP95Ms": 20.119312255960722,
+      "latencyP99Ms": 21.148271261920854,
+      "clockAlignmentUncertaintyMs": 0.03339575596055511
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1595219,
+      "sendCount": 413,
+      "dispatchCount": 413,
+      "commitCount": 403,
+      "latencyP95Ms": 11.98858374702013,
+      "latencyP99Ms": 12.88558376490164,
+      "clockAlignmentUncertaintyMs": 0.031207999999992353
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 2018035,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 802,
+      "latencyP95Ms": 4.288593744038735,
+      "latencyP99Ms": 5.23188575596032,
+      "clockAlignmentUncertaintyMs": 0.03066650000005211
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1794259,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.436052252980517,
+      "latencyP99Ms": 5.08859323509887,
+      "clockAlignmentUncertaintyMs": 0.03133349999995971
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1494599,
+      "sendCount": 232,
+      "dispatchCount": 232,
+      "commitCount": 222,
+      "latencyP95Ms": 20.199458258940467,
+      "latencyP99Ms": 21.11645825894084,
+      "clockAlignmentUncertaintyMs": 0.027791499999921143
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1561200,
+      "sendCount": 412,
+      "dispatchCount": 412,
+      "commitCount": 404,
+      "latencyP95Ms": 11.887781479138539,
+      "latencyP99Ms": 13.341656479138692,
+      "clockAlignmentUncertaintyMs": 0.038457999999991443
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1852747,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 804,
+      "latencyP95Ms": 4.472405994039491,
+      "latencyP99Ms": 5.247656000000461,
+      "clockAlignmentUncertaintyMs": 0.025042000000212283
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "0",
+      "combinedElectronCpuMicros": 1782766,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 804,
+      "latencyP95Ms": 4.450094238079146,
+      "latencyP99Ms": 5.176552255959905,
+      "clockAlignmentUncertaintyMs": 0.035770999999954256
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "combinedElectronCpuMicros": 1558024.9999999998,
+      "sendCount": 231,
+      "dispatchCount": 231,
+      "commitCount": 221,
+      "latencyP95Ms": 20.25253126192092,
+      "latencyP99Ms": 21.215989255960267,
+      "clockAlignmentUncertaintyMs": 0.02470800000003237
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "combinedElectronCpuMicros": 1610477.9999999998,
+      "sendCount": 412,
+      "dispatchCount": 412,
+      "commitCount": 404,
+      "latencyP95Ms": 12.178968505960256,
+      "latencyP99Ms": 13.288176488079444,
+      "clockAlignmentUncertaintyMs": 0.030000000000086402
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "original",
+      "combinedElectronCpuMicros": 1865410.0000000002,
+      "sendCount": 812,
+      "dispatchCount": 812,
+      "commitCount": 803,
+      "latencyP95Ms": 4.5599794850986655,
+      "latencyP99Ms": 5.355020485098976,
+      "clockAlignmentUncertaintyMs": 0.036291500000061205
+    }
+  ],
+  "groups": [
+    {
+      "workload": "paced-4",
+      "policy": "original",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1865410.0000000002,
+        "min": 1852747,
+        "max": 2018035
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 803,
+        "min": 802,
+        "max": 804
+      },
+      "latencyP95Ms": {
+        "median": 4.472405994039491,
+        "min": 4.288593744038735,
+        "max": 4.5599794850986655
+      },
+      "latencyP99Ms": {
+        "median": 5.247656000000461,
+        "min": 5.23188575596032,
+        "max": 5.355020485098976
+      },
+      "clockAlignmentUncertaintyMs": {
+        "median": 0.03066650000005211,
+        "min": 0.025042000000212283,
+        "max": 0.036291500000061205
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "0",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1794259,
+        "min": 1782766,
+        "max": 2081816
+      },
+      "sendCount": {
+        "median": 812,
+        "min": 812,
+        "max": 812
+      },
+      "commitCount": {
+        "median": 804,
+        "min": 803,
+        "max": 805
+      },
+      "latencyP95Ms": {
+        "median": 4.450094238079146,
+        "min": 4.436052252980517,
+        "max": 4.510968735098686
+      },
+      "latencyP99Ms": {
+        "median": 5.176552255959905,
+        "min": 5.08859323509887,
+        "max": 5.194926741059135
+      },
+      "clockAlignmentUncertaintyMs": {
+        "median": 0.03133349999995971,
+        "min": 0.027395500000011452,
+        "max": 0.035770999999954256
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "8",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1595219,
+        "min": 1561200,
+        "max": 1610477.9999999998
+      },
+      "sendCount": {
+        "median": 412,
+        "min": 412,
+        "max": 413
+      },
+      "commitCount": {
+        "median": 404,
+        "min": 403,
+        "max": 404
+      },
+      "latencyP95Ms": {
+        "median": 11.98858374702013,
+        "min": 11.887781479138539,
+        "max": 12.178968505960256
+      },
+      "latencyP99Ms": {
+        "median": 13.288176488079444,
+        "min": 12.88558376490164,
+        "max": 13.341656479138692
+      },
+      "clockAlignmentUncertaintyMs": {
+        "median": 0.031207999999992353,
+        "min": 0.030000000000086402,
+        "max": 0.038457999999991443
+      }
+    },
+    {
+      "workload": "paced-4",
+      "policy": "16",
+      "samples": 3,
+      "combinedElectronCpuMicros": {
+        "median": 1494599,
+        "min": 1483397,
+        "max": 1558024.9999999998
+      },
+      "sendCount": {
+        "median": 232,
+        "min": 231,
+        "max": 234
+      },
+      "commitCount": {
+        "median": 222,
+        "min": 221,
+        "max": 224
+      },
+      "latencyP95Ms": {
+        "median": 20.199458258940467,
+        "min": 20.119312255960722,
+        "max": 20.25253126192092
+      },
+      "latencyP99Ms": {
+        "median": 21.148271261920854,
+        "min": 21.11645825894084,
+        "max": 21.215989255960267
+      },
+      "clockAlignmentUncertaintyMs": {
+        "median": 0.027791499999921143,
+        "min": 0.02470800000003237,
+        "max": 0.03339575596055511
+      }
+    }
+  ],
+  "paired": [
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 26.49299937810791,
+      "addedP95Ms": 15.830718511921987,
+      "addedP99Ms": 15.916385505960534
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 28.745047593062978,
+      "addedP95Ms": 15.608343520862036,
+      "addedP99Ms": 15.95334452086172
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 20.95186654344449,
+      "addedP95Ms": 7.699990002981394,
+      "addedP99Ms": 7.653698008941319
+    },
+    {
+      "repetition": 0,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 23.373679518266744,
+      "addedP95Ms": 7.4776150119214435,
+      "addedP99Ms": 7.690657023842505
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 19.330647951393257,
+      "addedP95Ms": 15.727052264900976,
+      "addedP99Ms": 15.868802258940377
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 16.701044832435006,
+      "addedP95Ms": 15.76340600595995,
+      "addedP99Ms": 16.02786502384197
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 15.735931565399916,
+      "addedP95Ms": 7.415375485099048,
+      "addedP99Ms": 8.09400047913823
+    },
+    {
+      "repetition": 1,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 12.989150395790128,
+      "addedP95Ms": 7.451729226158022,
+      "addedP99Ms": 8.253063244039822
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 16.478146895320624,
+      "addedP95Ms": 15.692551776822256,
+      "addedP99Ms": 15.860968770861291
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "16",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 12.606309521272014,
+      "addedP95Ms": 15.802437023841776,
+      "addedP99Ms": 16.039437000000362
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "original",
+      "cpuReductionPercent": 13.666271757951359,
+      "addedP95Ms": 7.618989020861591,
+      "addedP99Ms": 7.933156002980468
+    },
+    {
+      "repetition": 2,
+      "workload": "paced-4",
+      "policy": "8",
+      "baselinePolicy": "0",
+      "cpuReductionPercent": 9.664083788898836,
+      "addedP95Ms": 7.72887426788111,
+      "addedP99Ms": 8.111624232119539
+    }
+  ]
+}
