@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { cleanupInterruptedRun, reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
+import { cleanupInterruptedRun, OwnedProcessGroupLifecycle, reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
 
 function harness(states: boolean[]) {
   const signals: Array<{ id: number; signal: NodeJS.Signals }> = []
@@ -39,4 +39,36 @@ test('interruption awaits owned-group cleanup before scratch deletion and exit',
     exitCode: 130,
   })
   expect(order).toEqual(['reap:44', 'scratch', 'exit:130'])
+})
+
+test('interrupt and successful completion share cleanup and forbid the next spawn', async () => {
+  let finish!: () => void
+  let reapCalls = 0
+  const lifecycle = new OwnedProcessGroupLifecycle(async () => {
+    reapCalls++
+    await new Promise<void>(resolve => { finish = resolve })
+  })
+  lifecycle.begin(55)
+  const interrupted = lifecycle.interrupt()
+  const completed = lifecycle.reapActive()
+  expect(completed).toBe(interrupted)
+  expect(reapCalls).toBe(1)
+  expect(lifecycle.canStartSample).toBe(false)
+  expect(() => lifecycle.begin(56)).toThrow('refusing to start another sample')
+  finish()
+  await Promise.all([interrupted, completed])
+  expect(lifecycle.activeProcessGroupId).toBeNull()
+  expect(lifecycle.canStartSample).toBe(false)
+})
+
+test('failed reap retains ownership and returns the same rejected cleanup', async () => {
+  const failure = new Error('still alive')
+  const lifecycle = new OwnedProcessGroupLifecycle(async () => { throw failure })
+  lifecycle.begin(66)
+  const first = lifecycle.reapActive(0)
+  const second = lifecycle.reapActive(0)
+  expect(second).toBe(first)
+  await expect(first).rejects.toBe(failure)
+  expect(lifecycle.activeProcessGroupId).toBe(66)
+  expect(lifecycle.canStartSample).toBe(false)
 })

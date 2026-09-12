@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
-import { cleanupInterruptedRun, reapOwnedProcessGroup } from './streaming-benchmark-cleanup.js'
+import { OwnedProcessGroupLifecycle } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
 const requestedWorkload = valueAfter('--workload')
@@ -30,17 +30,21 @@ const scratch = mkdtempSync(join(tmpdir(), 'catcode-streaming-benchmark-'))
 const rendererOut = join(scratch, 'renderer')
 const bundleOut = join(scratch, 'bundle')
 mkdirSync(bundleOut)
-let activeProcessGroupId: number | null = null
+const processGroups = new OwnedProcessGroupLifecycle()
 let interrupting = false
+let interruptCleanup: Promise<void> | null = null
+let preserveScratch = false
 for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
   process.on(signal, () => {
     if (interrupting) return
     interrupting = true
-    void cleanupInterruptedRun({
-      processGroupId: activeProcessGroupId,
-      removeScratch: () => rmSync(scratch, { recursive: true, force: true }),
-      exit: code => process.exit(code),
-      exitCode,
+    interruptCleanup = processGroups.interrupt().then(() => {
+      rmSync(scratch, { recursive: true, force: true })
+      process.exit(exitCode)
+    }).catch(error => {
+      preserveScratch = true
+      process.stderr.write(`benchmark interruption cleanup failed; retained ${scratch}: ${error instanceof Error ? error.message : String(error)}\n`)
+      process.exitCode = exitCode
     })
   })
 }
@@ -64,6 +68,10 @@ try {
     for (let repetition = 0; repetition < manifest.repetitions; repetition++) {
       const rotated = [...policies.slice(repetition % policies.length), ...policies.slice(0, repetition % policies.length)]
       for (const workload of workloads) for (const policy of rotated) {
+        if (!processGroups.canStartSample || interrupting) {
+          if (interruptCleanup) await interruptCleanup
+          throw new Error('benchmark interrupted before next sample')
+        }
         const sampleName = `sample-${repetition}-${workload.id}-${policy}`
         const sample = join(scratch, sampleName)
         mkdirSync(sample)
@@ -82,7 +90,8 @@ try {
     }
   }
 } finally {
-  rmSync(scratch, { recursive: true, force: true })
+  if (!preserveScratch && processGroups.activeProcessGroupId === null) rmSync(scratch, { recursive: true, force: true })
+  else process.stderr.write(`benchmark scratch retained because process cleanup is unconfirmed: ${scratch}\n`)
 }
 
 async function bundle(entry: string, outdir: string, name: string, format: 'esm' | 'cjs', define?: Record<string, string>) {
@@ -102,7 +111,7 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   const child = spawn(executable, [main], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
   const ownedRootPid = child.pid
   if (!ownedRootPid) return { ok: false, error: 'Electron did not return a pid' }
-  activeProcessGroupId = ownedRootPid
+  processGroups.begin(ownedRootPid)
   let stderr = ''
   child.stderr.on('data', chunk => { stderr = (stderr + String(chunk)).slice(-8_192) })
   const outcome = await new Promise<{ ok: boolean; timedOut?: boolean; error?: string }>(resolvePromise => {
@@ -117,9 +126,14 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   // This runs before callers read result.json. Missing/malformed output and all
   // later exceptions therefore occur only after the exact owned group is gone.
   try {
-    await reapOwnedProcessGroup(ownedRootPid, { initialWaitMs: outcome.timedOut ? 0 : 5_000 })
-  } finally {
-    if (activeProcessGroupId === ownedRootPid) activeProcessGroupId = null
+    await processGroups.reapActive(outcome.timedOut ? 0 : 5_000)
+  } catch (error) {
+    preserveScratch = true
+    throw error
+  }
+  if (interrupting) {
+    if (interruptCleanup) await interruptCleanup
+    return { ok: false, error: 'benchmark interrupted' }
   }
   return outcome
 }
