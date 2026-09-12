@@ -38,6 +38,7 @@ import {
   _resetAccountDiagnosticStreamJsonHookForTesting,
   installStreamJsonAccountDiagnosticHook,
 } from './accountDiagnostics.js'
+import { createCodexCredentialLifecycle } from './codexCredentialLifecycle.js'
 
 function buildCodexToken(accountId: string): string {
   const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString(
@@ -998,9 +999,37 @@ describe('codexAccountLeaseManager', () => {
 
     try {
       process.env.CLAUDE_CONFIG_DIR = scratchConfigDir
+      const lifecycle = createCodexCredentialLifecycle({
+        directory: join(scratchConfigDir, 'codex-credential-lifecycle'),
+      })
+      await lifecycle.withTransaction(
+        'solo-auth',
+        { operationKind: 'login', operationId: 'solo-auth-login' },
+        permit => {
+          const prepared = lifecycle.prepareLogin(permit)
+          if (prepared.status !== 'applied') throw new Error('prepare failed')
+          const committed = lifecycle.commitLogin(permit, {
+            expectedGeneration: prepared.record.credentialGeneration,
+          })
+          if (committed.status !== 'applied') throw new Error('commit failed')
+        },
+      )
+      saveCodexOAuthTokens({
+        accessToken: buildCodexToken('solo-auth'),
+        refreshToken: 'refresh-solo-auth',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'solo-auth',
+        credentialGeneration: 1,
+      })
       seedCodexAccountPoolForTest({
         activeAccountId: 'solo-auth',
-        accounts: [buildPoolAccount({ accountId: 'solo-auth' })],
+        accounts: [
+          buildPoolAccount({
+            accountId: 'solo-auth',
+            credentialGeneration: 1,
+            refreshToken: 'refresh-solo-auth',
+          }),
+        ],
       })
       globalThis.fetch = (async input => {
         const url = String(input)

@@ -20,7 +20,6 @@ import {
   runWithCodexLeaseOwner,
 } from './codexAccountLeaseManager.js'
 import {
-  appendAccount,
   getActiveAccount,
   getPoolStatus,
   canFailover,
@@ -751,32 +750,10 @@ export async function* withRetry<T, Client = Anthropic>(
               { force: true },
             )
             if (refreshed.accountId === currentAccount.accountId) {
-              // Publish the rotation to the in-memory pool so the client rebuild
-              // below reads the live token. The vault path already does this via
-              // appendAccount; the raw/config path only persists to disk, so
-              // without this the resolver would re-serve the stale pool token.
-              appendAccount(
-                {
-                  accessToken: refreshed.accessToken,
-                  refreshToken: refreshed.refreshToken,
-                  expiresAt: refreshed.expiresAt,
-                  accountId: refreshed.accountId,
-                  credentialGeneration: currentAccount.credentialGeneration,
-                  alias: refreshed.alias ?? currentAccount.alias,
-                },
-                {
-                  preserveCapped: true,
-                  writer: 'withRetry.codexAuthRecovery',
-                  source:
-                    refreshed.source === 'config' ? 'config' : currentAccount.source,
-                  vaultFilePath: refreshed.vaultFilePath ?? currentAccount.vaultFilePath,
-                },
-              )
               refreshRecovered = true
             }
-            // An identity change is already reconciled inside
-            // maybeRefreshAccount (old marked dead, new appended); fall through
-            // to the dead-mark + failover path below for the stale lease.
+            // Identity changes and pool installation are handled by
+            // maybeRefreshAccount while its raw-refresh lifecycle permit is held.
           } catch (err) {
             refreshFailure = err
             // maybeRefreshAccount already records the underlying failure state

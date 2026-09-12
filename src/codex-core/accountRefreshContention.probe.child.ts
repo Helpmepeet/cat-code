@@ -18,6 +18,7 @@
  *   PROBE_REFRESH_TOKEN seed refresh token (seed-config / contend-vault)
  *   PROBE_ACCESS_TOKEN  seed access token (seed-config)
  *   PROBE_EXPIRES_AT    seed expiry ms (seed-config)
+ *   PROBE_CREDENTIAL_GENERATION seed generation (seed-config)
  *   PROBE_VAULT_FILE    vault account file path (contend-vault)
  *
  * Prints exactly one `RESULT:{json}` line on stdout.
@@ -106,7 +107,9 @@ async function main(): Promise<void> {
       refreshToken: requireEnv('PROBE_REFRESH_TOKEN'),
       expiresAt: Number(requireEnv('PROBE_EXPIRES_AT')),
       accountId: requireEnv('PROBE_ACCOUNT_ID'),
-      credentialGeneration: 0,
+      credentialGeneration: process.env.PROBE_CREDENTIAL_GENERATION
+        ? Number(process.env.PROBE_CREDENTIAL_GENERATION)
+        : 0,
     })
     printResult({ ok: true })
     return

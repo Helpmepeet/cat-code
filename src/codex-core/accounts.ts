@@ -5,6 +5,7 @@ import {
   loadConfigAccount,
   describeCodexAccountAvailability,
   getVaultPath,
+  markAccountDead,
   saveCodexTokenToVault,
   type PoolAccount,
 } from '../services/api/codexAccountPool.js'
@@ -28,7 +29,14 @@ import { getCodexOAuthTokens, saveCodexOAuthTokens } from '../utils/auth.js'
 import { logForDebugging } from '../utils/debug.js'
 import { CodexCoreError } from './errors.js'
 import { isWithinCodexRefreshSkew } from '../constants/codex-oauth.js'
-import { reconcileCodexIdentityMismatch } from '../services/api/codexIdentityReconciliation.js'
+import { emitAccountDiagnostic } from '../services/api/accountDiagnostics.js'
+import {
+  CODEX_CREDENTIAL_LIFECYCLE_DIRECTORY,
+  createCodexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+  type CodexCredentialLifecyclePermit,
+  type CodexCredentialLifecycleReadResult,
+} from '../services/api/codexCredentialLifecycle.js'
 
 export type CodexCoreAccount = {
   accountId: string
@@ -161,35 +169,6 @@ export async function refreshPoolAccountForRedeem(
   }
   try {
     const refreshed = await maybeRefreshAccount(coreAccount)
-    // The stateful vault refresh updates the in-memory pool itself (via
-    // appendAccount inside refreshAccountTokens), but the raw-under-lock branch
-    // only persists to config/vault on disk. Write the rotation back so the
-    // pool re-reads the dialog does next — the availability fetch and the §7.4
-    // re-resolve before consume — see the fresh token instead of replaying the
-    // stale one. Identity-mismatch rotations are already reconciled inside
-    // maybeRefreshAccount.
-    if (refreshed.accountId === account.accountId) {
-      const poolAccount = getPoolStatus().accounts.find(
-        (a) => a.accountId === refreshed.accountId,
-      )
-      if (poolAccount && poolAccount.accessToken !== refreshed.accessToken) {
-        appendAccount(
-          {
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken,
-            expiresAt: refreshed.expiresAt,
-            accountId: refreshed.accountId,
-            credentialGeneration: poolAccount.credentialGeneration,
-          },
-          {
-            preserveCapped: true,
-            writer: 'codex-core.refreshPoolAccountForRedeem',
-            source: refreshed.source,
-            vaultFilePath: refreshed.vaultFilePath,
-          },
-        )
-      }
-    }
     return {
       kind: 'ok',
       accountId: refreshed.accountId,
@@ -230,9 +209,8 @@ function matchesProfile(
 }
 
 /**
- * In-process single-flight per accountId. Two concurrent resolutions of the
- * same account share ONE refresh instead of both entering the critical
- * section (mirrors pendingRefreshesByAccountId in codexTokenRefresh.ts:162).
+ * In-process single-flight per account credential generation. A refresh from an
+ * old credential generation must not join work for a newly logged-in account.
  */
 const pendingAccountRefreshes = new Map<string, Promise<CodexCoreAccount>>()
 
@@ -241,9 +219,16 @@ function isWithinRefreshSkew(expiresAt: number): boolean {
   return isWithinCodexRefreshSkew(expiresAt)
 }
 
+function refreshPendingKey(accountId: string, credentialGeneration: number): string {
+  return `${accountId}\u0000${credentialGeneration}`
+}
+
 export async function maybeRefreshAccount(
   account: CodexCoreAccount,
-  options: { force?: boolean } = {},
+  options: {
+    force?: boolean
+    lifecycle?: CodexCredentialLifecycle
+  } = {},
 ): Promise<CodexCoreAccount> {
   if (!account.refreshToken) {
     return account
@@ -258,19 +243,26 @@ export async function maybeRefreshAccount(
     return account
   }
 
-  const pending = pendingAccountRefreshes.get(account.accountId)
+  const pendingKey = refreshPendingKey(
+    account.accountId,
+    account.credentialGeneration,
+  )
+  const pending = pendingAccountRefreshes.get(pendingKey)
   if (pending) {
     return { ...(await pending), profile: account.profile }
   }
-  const refresh = refreshAccountNow(account).finally(() => {
-    pendingAccountRefreshes.delete(account.accountId)
+  const refresh = refreshAccountNow(account, options.lifecycle).finally(() => {
+    if (pendingAccountRefreshes.get(pendingKey) === refresh) {
+      pendingAccountRefreshes.delete(pendingKey)
+    }
   })
-  pendingAccountRefreshes.set(account.accountId, refresh)
+  pendingAccountRefreshes.set(pendingKey, refresh)
   return refresh
 }
 
 async function refreshAccountNow(
   account: CodexCoreAccount,
+  lifecycle?: CodexCredentialLifecycle,
 ): Promise<CodexCoreAccount> {
   try {
     logForDebugging(
@@ -308,15 +300,23 @@ async function refreshAccountNow(
     } else {
       // Raw refresh rotates the refresh token with no protection of its own;
       // serialize refresh-and-persist across processes (DR-2).
-      const outcome = await refreshRawUnderCrossProcessLock(account)
+      const outcome = await refreshRawUnderCrossProcessLock(account, lifecycle)
       if (outcome.kind === 'adopted') {
         logForDebugging(
           `[codex-profile] core-refresh-adopted writer=codex-core.maybeRefreshAccount profile=${account.profile} account=${account.accountId} source=${account.source} reason=another-process-rotated`,
         )
         return outcome.account
       }
+      if (outcome.kind === 'identity_mismatch') {
+        throw new CodexCoreError(
+          'auth',
+          `Failed to refresh Codex account "${account.profile}". Please re-login.`,
+          { status: 401 },
+        )
+      }
       refreshed = outcome.refreshed
       savedVaultPath = outcome.savedVaultPath ?? savedVaultPath
+      refreshedCredentialGeneration = outcome.credentialGeneration
     }
     const sameAccount = refreshed.accountId === account.accountId
     const next = {
@@ -331,30 +331,6 @@ async function refreshAccountNow(
       source: account.source,
       alias: sameAccount ? account.alias : undefined,
       vaultFilePath: sameAccount ? savedVaultPath : undefined,
-    }
-    if (!sameAccount && !usedStatefulRefresh) {
-      logForDebugging(
-        `[codex-profile] identity-mismatch writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} action=do-not-transfer-alias`,
-        { level: 'warn' },
-      )
-      // Live pool reconciliation: mark the old account dead and append the
-      // refreshed identity so subsequent selection does not keep returning
-      // the stale account record. The vault was already written above; do not
-      // write it a second time here.
-      reconcileCodexIdentityMismatch({
-        oldAccountId: account.accountId,
-        newAccountId: refreshed.accountId,
-        tokens: {
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-          idToken: refreshed.idToken || undefined,
-          expiresAt: refreshed.expiresAt,
-          credentialGeneration: 0,
-        },
-        writer: 'codex-core.maybeRefreshAccount.identity-mismatch',
-        source: account.source === 'config' ? 'config' : 'vault',
-        vaultFilePath: savedVaultPath,
-      })
     }
     logForDebugging(
       `[codex-profile] core-refresh-done writer=codex-core.maybeRefreshAccount profile=${account.profile} before_account=${account.accountId} after_account=${refreshed.accountId} result=${sameAccount ? 'same-account' : 'changed-account'}`,
@@ -428,12 +404,303 @@ type RawRefreshOutcome =
         expiresAt: number
         idToken?: string
       }
+      credentialGeneration: number
       savedVaultPath?: string
     }
+  | {
+      kind: 'identity_mismatch'
+      accountId: string
+      refreshedAccountId: string
+    }
+
+function rawRefreshLifecycle(
+  lifecycle?: CodexCredentialLifecycle,
+): CodexCredentialLifecycle {
+  return (
+    lifecycle ??
+    createCodexCredentialLifecycle({
+      directory: join(
+        getClaudeConfigHomeDir(),
+        CODEX_CREDENTIAL_LIFECYCLE_DIRECTORY,
+      ),
+    })
+  )
+}
+
+function lifecycleReadFailureCode(
+  result: CodexCredentialLifecycleReadResult,
+): 'missing' | 'malformed' | 'unreadable' {
+  if (result.status === 'absent') return 'missing'
+  if (result.status === 'malformed') return 'malformed'
+  return 'unreadable'
+}
+
+function requireRawCredentialedLifecycle(
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+  accountId: string,
+  credentialGeneration: number,
+): void {
+  let result: CodexCredentialLifecycleReadResult
+  try {
+    result = lifecycle.read(accountId)
+  } catch {
+    throw new CodexRefreshLifecycleError(
+      'unreadable',
+      accountId,
+      credentialGeneration,
+    )
+  }
+  if (result.status !== 'valid') {
+    throw new CodexRefreshLifecycleError(
+      lifecycleReadFailureCode(result),
+      accountId,
+      credentialGeneration,
+    )
+  }
+  if (result.record.state !== 'credentialed') {
+    throw new CodexRefreshLifecycleError(
+      'state_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+  if (result.record.credentialGeneration !== credentialGeneration) {
+    throw new CodexRefreshLifecycleError(
+      'generation_mismatch',
+      accountId,
+      credentialGeneration,
+    )
+  }
+}
+
+function requireRawLegacyLifecycleBootstrap(
+  lifecycle: Pick<CodexCredentialLifecycle, 'read'>,
+  accountId: string,
+): void {
+  let result: CodexCredentialLifecycleReadResult
+  try {
+    result = lifecycle.read(accountId)
+  } catch {
+    throw new CodexRefreshLifecycleError('unreadable', accountId, 0)
+  }
+  if (result.status === 'absent') return
+  if (result.status !== 'valid') {
+    throw new CodexRefreshLifecycleError(
+      lifecycleReadFailureCode(result),
+      accountId,
+      0,
+    )
+  }
+  throw new CodexRefreshLifecycleError(
+    result.record.state === 'credentialed'
+      ? 'generation_mismatch'
+      : 'state_mismatch',
+    accountId,
+    0,
+  )
+}
+
+function storedTokensMatch(
+  stored: StoredCodexTokens | null,
+  expected: {
+    accessToken: string
+    refreshToken: string
+    expiresAt: number
+    accountId: string
+    credentialGeneration: number
+  },
+): boolean {
+  return (
+    stored?.accessToken === expected.accessToken &&
+    stored.refreshToken === expected.refreshToken &&
+    stored.expiresAt === expected.expiresAt &&
+    stored.accountId === expected.accountId &&
+    stored.credentialGeneration === expected.credentialGeneration
+  )
+}
+
+function readConfigTokensForRawRefresh(): StoredCodexTokens | null {
+  if (process.env.NODE_ENV === 'test') {
+    const tokens = getCodexOAuthTokens()
+    if (!tokens) return null
+    return {
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      accountId: tokens.accountId,
+      credentialGeneration: tokens.credentialGeneration ?? 0,
+    }
+  }
+  return readPersistedConfigTokens()
+}
+
+function readActiveRawTokens(account: CodexCoreAccount): StoredCodexTokens | null {
+  return account.source === 'config'
+    ? readConfigTokensForRawRefresh()
+    : readPersistedVaultTokens(candidateVaultFilePath(account))
+}
+
+function bootstrapLegacyRawCredentialStore(
+  account: CodexCoreAccount,
+): { account: CodexCoreAccount; savedVaultPath?: string } {
+  const stored = readActiveRawTokens(account)
+  if (
+    !stored ||
+    stored.accountId !== account.accountId ||
+    stored.credentialGeneration !== 0
+  ) {
+    throw new CodexRefreshLifecycleError(
+      'profile_mismatch',
+      account.accountId,
+      account.credentialGeneration,
+    )
+  }
+
+  const tagged = {
+    accessToken: stored.accessToken,
+    refreshToken: stored.refreshToken,
+    expiresAt: stored.expiresAt,
+    accountId: stored.accountId,
+    credentialGeneration: 1,
+  }
+  if (account.source === 'config') {
+    let saved = false
+    try {
+      saved = saveCodexOAuthTokens(tagged)
+    } catch {
+      saved = false
+    }
+    if (!saved || !storedTokensMatch(readConfigTokensForRawRefresh(), tagged)) {
+      throw new CodexCoreError(
+        'backend',
+        `Could not safely bind the legacy Codex credentials for account "${account.profile}". Retrying may recover automatically.`,
+        { status: 503 },
+      )
+    }
+    return {
+      account: {
+        ...account,
+        accessToken: tagged.accessToken,
+        refreshToken: tagged.refreshToken,
+        expiresAt: tagged.expiresAt,
+        credentialGeneration: 1,
+      },
+    }
+  }
+
+  const filePath = candidateVaultFilePath(account)
+  if (!filePath) {
+    throw new CodexCoreError(
+      'backend',
+      `Could not safely bind the legacy Codex credentials for account "${account.profile}". Retrying may recover automatically.`,
+      { status: 503 },
+    )
+  }
+  const saved = saveCodexTokenToVault(tagged, {
+    writer: 'codex-core.maybeRefreshAccount.legacy-bootstrap',
+    expectedPreviousAccountId: account.accountId,
+    filePath,
+  })
+  if (!saved || !storedTokensMatch(readPersistedVaultTokens(saved.filePath), tagged)) {
+    throw new CodexCoreError(
+      'backend',
+      `Could not safely bind the legacy Codex credentials for account "${account.profile}". Retrying may recover automatically.`,
+      { status: 503 },
+    )
+  }
+  return {
+    account: {
+      ...account,
+      accessToken: tagged.accessToken,
+      refreshToken: tagged.refreshToken,
+      expiresAt: tagged.expiresAt,
+      credentialGeneration: 1,
+      vaultFilePath: saved.filePath,
+    },
+    savedVaultPath: saved.filePath,
+  }
+}
+
+function installRawPoolAccount(
+  account: CodexCoreAccount,
+  tokens: {
+    accountId: string
+    accessToken: string
+    refreshToken: string
+    expiresAt: number
+    credentialGeneration: number
+    idToken?: string
+  },
+  vaultFilePath?: string,
+): void {
+  appendAccount(
+    {
+      accountId: tokens.accountId,
+      accessToken: tokens.accessToken,
+      refreshToken: tokens.refreshToken,
+      expiresAt: tokens.expiresAt,
+      credentialGeneration: tokens.credentialGeneration,
+      idToken: tokens.idToken,
+    },
+    {
+      preserveCapped: true,
+      writer: 'codex-core.maybeRefreshAccount.raw',
+      source: account.source,
+      vaultFilePath: vaultFilePath ?? account.vaultFilePath,
+    },
+  )
+}
+
+function emitRawIdentityMismatchDiagnostic(
+  oldAccountId: string,
+  newAccountId: string,
+): void {
+  const accounts = getPoolStatus().accounts
+  const counts: Record<string, number> = { total: accounts.length }
+  for (const account of accounts) {
+    counts[account.status] = (counts[account.status] ?? 0) + 1
+  }
+  emitAccountDiagnostic({
+    code: 'account.identity_mismatch',
+    severity: 'warning',
+    provider: 'openai',
+    pool: 'codex',
+    recoverable: true,
+    from_account_ref: oldAccountId,
+    account_ref: newAccountId,
+    reason: `refresh returned different account ${newAccountId}`,
+    counts,
+  })
+}
 
 async function refreshRawUnderCrossProcessLock(
   account: CodexCoreAccount,
+  lifecycleOverride?: CodexCredentialLifecycle,
 ): Promise<RawRefreshOutcome> {
+  const lifecycle = rawRefreshLifecycle(lifecycleOverride)
+  return lifecycle.withTransaction(
+    account.accountId,
+    { operationKind: 'refresh', operationId: randomUUID() },
+    permit =>
+      refreshRawWithCrossProcessLock(account, lifecycle, permit),
+  )
+}
+
+async function refreshRawWithCrossProcessLock(
+  account: CodexCoreAccount,
+  lifecycle: CodexCredentialLifecycle,
+  permit: CodexCredentialLifecyclePermit,
+): Promise<RawRefreshOutcome> {
+  if (account.credentialGeneration === 0) {
+    requireRawLegacyLifecycleBootstrap(lifecycle, account.accountId)
+  } else {
+    requireRawCredentialedLifecycle(
+      lifecycle,
+      account.accountId,
+      account.credentialGeneration,
+    )
+  }
+
   const configHome = getClaudeConfigHomeDir()
   mkdirSync(configHome, { recursive: true })
   const lockTarget = join(configHome, 'codex-raw-refresh')
@@ -474,8 +741,21 @@ async function refreshRawUnderCrossProcessLock(
     // Lock not acquired (a live holder outlasted the retries). Adopt a rotation
     // another process already persisted if one is visible; otherwise surface a
     // retryable error rather than racing the rotation unserialized.
+    if (account.credentialGeneration === 0) {
+      throw new CodexCoreError(
+        'backend',
+        `Codex account "${account.profile}" is being refreshed by another process. Retrying may recover automatically.`,
+        { status: 503, cause: error },
+      )
+    }
+    requireRawCredentialedLifecycle(
+      lifecycle,
+      account.accountId,
+      account.credentialGeneration,
+    )
     const adopted = readAdoptableTokens(account)
     if (adopted && !isWithinRefreshSkew(adopted.expiresAt)) {
+      installRawPoolAccount(account, adopted, adopted.vaultFilePath)
       return { kind: 'adopted', account: adopted }
     }
     throw new CodexCoreError(
@@ -486,21 +766,56 @@ async function refreshRawUnderCrossProcessLock(
   }
 
   try {
+    let effectiveAccount = account
+    let effectiveGeneration = account.credentialGeneration
+    let savedVaultPath = account.vaultFilePath
+    if (account.credentialGeneration === 0) {
+      assertLockIntact()
+      const bootstrap = bootstrapLegacyRawCredentialStore(account)
+      assertLockIntact()
+      effectiveAccount = bootstrap.account
+      effectiveGeneration = bootstrap.account.credentialGeneration
+      savedVaultPath = bootstrap.savedVaultPath ?? savedVaultPath
+      const bootstrapped = lifecycle.legacyBootstrap(permit, {
+        validatedUntaggedLegacyCredentials: true,
+      })
+      if (
+        bootstrapped.status !== 'applied' ||
+        bootstrapped.record.credentialGeneration !== effectiveGeneration
+      ) {
+        throw new CodexRefreshLifecycleError(
+          'state_mismatch',
+          account.accountId,
+          account.credentialGeneration,
+        )
+      }
+    }
+    requireRawCredentialedLifecycle(
+      lifecycle,
+      account.accountId,
+      effectiveGeneration,
+    )
+
     // Another process may have refreshed while we waited on the lock: re-read
     // the persisted store and adopt instead of spending a second rotation.
-    const adopted = readAdoptableTokens(account)
+    const adopted = readAdoptableTokens(effectiveAccount)
     if (adopted && !isWithinRefreshSkew(adopted.expiresAt)) {
+      installRawPoolAccount(effectiveAccount, adopted, adopted.vaultFilePath)
       return { kind: 'adopted', account: adopted }
     }
     // Adopted-but-already-expiring: refresh with the LIVE rotated token, not
     // the caller's stale snapshot.
-    const refreshSource = adopted ?? account
+    const refreshSource = adopted ?? effectiveAccount
     const tokenHash = hashRefreshToken(refreshSource.refreshToken)
 
     // Consult the durable ledger for this exact token. A terminal verdict for
     // it means the chain is finished — fail fast, spend nothing.
     const priorAttempt = readRawRefreshLedger()[account.accountId]
-    if (priorAttempt && priorAttempt.refreshTokenHash === tokenHash) {
+    if (
+      priorAttempt &&
+      (priorAttempt.credentialGeneration ?? 0) === effectiveGeneration &&
+      priorAttempt.refreshTokenHash === tokenHash
+    ) {
       if (priorAttempt.state === 'reauth_required') {
         const identityNote = priorAttempt.rotatedToAccountId
           ? ` (a previous refresh rotated it to account ${priorAttempt.rotatedToAccountId})`
@@ -527,6 +842,7 @@ async function refreshRawUnderCrossProcessLock(
     try {
       writeRawRefreshLedgerEntry(account.accountId, {
         state: 'in_flight',
+        credentialGeneration: effectiveGeneration,
         refreshTokenHash: tokenHash,
         attemptId: randomUUID(),
         updatedAt: new Date().toISOString(),
@@ -549,6 +865,7 @@ async function refreshRawUnderCrossProcessLock(
         // Definitive server verdict: this token is burned/revoked. Terminal.
         writeRawRefreshLedgerEntry(account.accountId, {
           state: 'reauth_required',
+          credentialGeneration: effectiveGeneration,
           refreshTokenHash: tokenHash,
           attemptId: randomUUID(),
           updatedAt: new Date().toISOString(),
@@ -572,6 +889,7 @@ async function refreshRawUnderCrossProcessLock(
         // Ambiguous transport / server error: the server may have rotated.
         writeRawRefreshLedgerEntry(account.accountId, {
           state: 'unknown',
+          credentialGeneration: effectiveGeneration,
           refreshTokenHash: tokenHash,
           attemptId: randomUUID(),
           updatedAt: new Date().toISOString(),
@@ -583,26 +901,84 @@ async function refreshRawUnderCrossProcessLock(
 
     const sameAccount = refreshed.accountId === account.accountId
 
+    if (!sameAccount) {
+      assertLockIntact()
+      requireRawCredentialedLifecycle(
+        lifecycle,
+        account.accountId,
+        effectiveGeneration,
+      )
+      const marked = lifecycle.markReauthRequired(permit, {
+        expectedGeneration: effectiveGeneration,
+      })
+      if (marked.status !== 'applied') {
+        throw new CodexRefreshLifecycleError(
+          marked.status === 'superseded' && marked.reason === 'generation_mismatch'
+            ? 'generation_mismatch'
+            : marked.status === 'superseded' && marked.reason === 'missing'
+              ? 'missing'
+              : 'state_mismatch',
+          account.accountId,
+          effectiveGeneration,
+        )
+      }
+      writeRawRefreshLedgerEntry(account.accountId, {
+        state: 'reauth_required',
+        credentialGeneration: effectiveGeneration,
+        refreshTokenHash: tokenHash,
+        attemptId: randomUUID(),
+        updatedAt: new Date().toISOString(),
+        reason: 'identity_mismatch',
+        rotatedToAccountId: refreshed.accountId,
+      })
+      markAccountDead(
+        account.accountId,
+        `Refresh returned different account ${refreshed.accountId}`,
+        { rerollActive: false },
+      )
+      emitRawIdentityMismatchDiagnostic(
+        account.accountId,
+        refreshed.accountId,
+      )
+      logForDebugging(
+        `[codex-profile] identity-mismatch writer=codex-core.maybeRefreshAccount account=${account.accountId} after_account=${refreshed.accountId} action=reauth-required`,
+        { level: 'warn' },
+      )
+      return {
+        kind: 'identity_mismatch',
+        accountId: account.accountId,
+        refreshedAccountId: refreshed.accountId,
+      }
+    }
+
     // Persist the rotated tokens. A persistence failure after a successful
     // rotation means disk still holds the burned token — record 'unknown' so
     // the next process probes instead of trusting the stale store.
     assertLockIntact()
-    let savedVaultPath: string | undefined
+    requireRawCredentialedLifecycle(
+      lifecycle,
+      account.accountId,
+      effectiveGeneration,
+    )
     let persistFailed = false
     if (account.source === 'config') {
       try {
-        saveCodexOAuthTokens({
+        const configSaved = saveCodexOAuthTokens({
           ...refreshed,
-          credentialGeneration: sameAccount ? account.credentialGeneration : 0,
+          credentialGeneration: effectiveGeneration,
         })
+        if (!configSaved) {
+          persistFailed = true
+        }
         // saveGlobalConfig can swallow write failures (auth-loss guard /
         // fallback paths) — verify the rotation actually reached disk. Skipped
         // under NODE_ENV=test, where config writes are in-memory by design.
-        if (process.env.NODE_ENV !== 'test') {
-          const persisted = readPersistedConfigTokens()
+        if (!persistFailed) {
+          const persisted = readConfigTokensForRawRefresh()
           persistFailed =
             persisted?.accountId !== refreshed.accountId ||
-            persisted.refreshToken !== refreshed.refreshToken
+            persisted.refreshToken !== refreshed.refreshToken ||
+            persisted.credentialGeneration !== effectiveGeneration
         }
       } catch {
         persistFailed = true
@@ -613,11 +989,12 @@ async function refreshRawUnderCrossProcessLock(
         refreshToken: refreshed.refreshToken,
         accountId: refreshed.accountId,
         alias: sameAccount ? account.alias : undefined,
-        credentialGeneration: sameAccount ? account.credentialGeneration : 0,
+        credentialGeneration: effectiveGeneration,
         expiresAt: refreshed.expiresAt,
       }, {
         writer: 'codex-core.maybeRefreshAccount',
         expectedPreviousAccountId: account.accountId,
+        filePath: candidateVaultFilePath(effectiveAccount) ?? undefined,
       })
       // saveCodexTokenToVault returns null ONLY on write failure
       // (codexAccountPool.ts catch) — the vault path itself always resolves.
@@ -629,6 +1006,7 @@ async function refreshRawUnderCrossProcessLock(
     if (persistFailed) {
       writeRawRefreshLedgerEntry(account.accountId, {
         state: 'unknown',
+        credentialGeneration: effectiveGeneration,
         refreshTokenHash: tokenHash,
         attemptId: randomUUID(),
         updatedAt: new Date().toISOString(),
@@ -638,22 +1016,28 @@ async function refreshRawUnderCrossProcessLock(
         `[codex-profile] raw-refresh-persist-failed writer=codex-core.maybeRefreshAccount account=${account.accountId} — returning in-memory tokens; disk still holds the previous rotation, next process will probe`,
         { level: 'error' },
       )
-    } else if (!sameAccount) {
-      // Tombstone the OLD identity's chain (mirrors codexTokenRefresh Fix 7):
-      // a contending process still holding the old token must fail fast with
-      // re-login instead of burning it against reuse detection.
-      writeRawRefreshLedgerEntry(account.accountId, {
-        state: 'reauth_required',
-        refreshTokenHash: tokenHash,
-        attemptId: randomUUID(),
-        updatedAt: new Date().toISOString(),
-        reason: 'identity_mismatch',
-        rotatedToAccountId: refreshed.accountId,
-      })
     } else {
       clearRawRefreshLedgerEntry(account.accountId)
+      requireRawCredentialedLifecycle(
+        lifecycle,
+        account.accountId,
+        effectiveGeneration,
+      )
+      installRawPoolAccount(
+        effectiveAccount,
+        {
+          ...refreshed,
+          credentialGeneration: effectiveGeneration,
+        },
+        savedVaultPath,
+      )
     }
-    return { kind: 'refreshed', refreshed, savedVaultPath }
+    return {
+      kind: 'refreshed',
+      refreshed,
+      credentialGeneration: effectiveGeneration,
+      savedVaultPath,
+    }
   } finally {
     await release().catch(() => {})
   }
@@ -667,7 +1051,7 @@ async function refreshRawUnderCrossProcessLock(
 function readAdoptableTokens(account: CodexCoreAccount): CodexCoreAccount | null {
   const stored =
     account.source === 'config'
-      ? readPersistedConfigTokens()
+      ? readConfigTokensForRawRefresh()
       : readPersistedVaultTokens(candidateVaultFilePath(account))
   if (!stored) return null
   if (stored.accountId !== account.accountId) return null
@@ -792,6 +1176,7 @@ function candidateVaultFilePath(account: CodexCoreAccount): string | null {
 
 type RawRefreshLedgerEntry = {
   state: 'in_flight' | 'unknown' | 'reauth_required'
+  credentialGeneration: number
   refreshTokenHash: string
   attemptId: string
   updatedAt: string

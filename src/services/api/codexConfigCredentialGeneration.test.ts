@@ -4,6 +4,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 
 import {
+  clearCodexOAuthTokens,
   getCodexOAuthTokens,
   saveCodexOAuthTokens,
 } from '../../utils/auth.js'
@@ -55,6 +56,52 @@ describe('Codex config credential generation', () => {
       } finally {
         rmSync(lifecycleDir, { recursive: true, force: true })
       }
+    } finally {
+      if (previousNodeEnv === undefined) {
+        delete process.env.NODE_ENV
+      } else {
+        process.env.NODE_ENV = previousNodeEnv
+      }
+      if (previousConfigDir === undefined) {
+        delete process.env.CLAUDE_CONFIG_DIR
+      } else {
+        process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      }
+      getGlobalClaudeFile.cache.clear()
+      _setGlobalConfigCacheForTesting(null)
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('clears the Codex config block durably outside test mode', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'codex-config-clear-'))
+    const previousNodeEnv = process.env.NODE_ENV
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    getGlobalClaudeFile.cache.clear()
+
+    try {
+      process.env.NODE_ENV = 'production'
+      process.env.CLAUDE_CONFIG_DIR = dir
+      getGlobalClaudeFile.cache.clear()
+      enableConfigs()
+      saveCodexOAuthTokens({
+        accessToken: 'config-access',
+        refreshToken: 'config-refresh',
+        expiresAt: Date.now() + 60_000,
+        accountId: 'config-clear-account',
+        credentialGeneration: 4,
+      })
+      expect(getCodexOAuthTokens()?.accountId).toBe('config-clear-account')
+
+      clearCodexOAuthTokens()
+
+      const written = JSON.parse(readFileSync(getGlobalClaudeFile(), 'utf-8')) as {
+        codexOAuth?: unknown
+      }
+      expect(written.codexOAuth).toBeUndefined()
+      _setGlobalConfigCacheForTesting(null)
+      getGlobalClaudeFile.cache.clear()
+      expect(getCodexOAuthTokens()).toBeNull()
     } finally {
       if (previousNodeEnv === undefined) {
         delete process.env.NODE_ENV

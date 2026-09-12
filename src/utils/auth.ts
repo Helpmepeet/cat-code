@@ -1418,6 +1418,10 @@ function isValidCodexCredentialGeneration(
  * Removes Codex OAuth tokens from GlobalConfig (e.g., on logout).
  */
 export function clearCodexOAuthTokens(): void {
+  if (process.env.NODE_ENV === 'test') {
+    delete getGlobalConfig().codexOAuth
+    return
+  }
   saveGlobalConfig((cfg) => {
     const { codexOAuth: _removed, ...rest } = cfg
     return rest as typeof cfg

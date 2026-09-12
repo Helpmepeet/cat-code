@@ -1,7 +1,6 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import {
-  appendAccount,
   getActiveAccount,
   getPoolStatus,
   isCodexAccountSwitchable,
@@ -252,39 +251,6 @@ function toCoreAccount(
   }
 }
 
-function rememberRefreshedPoolAccount(
-  original: PoolAccount,
-  refreshed: CodexCoreAccount,
-): void {
-  if (refreshed.accountId !== original.accountId) {
-    return
-  }
-  if (
-    refreshed.accessToken === original.accessToken &&
-    refreshed.refreshToken === original.refreshToken &&
-    refreshed.expiresAt === original.expiresAt
-  ) {
-    return
-  }
-
-  appendAccount(
-    {
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      accountId: refreshed.accountId,
-      credentialGeneration: original.credentialGeneration,
-      alias: refreshed.alias ?? original.alias,
-    },
-    {
-      preserveCapped: true,
-      writer: 'client.resolveCodexOAuthTokensForLeaseOwner',
-      source: refreshed.source === 'config' ? 'config' : original.source,
-      vaultFilePath: refreshed.vaultFilePath ?? original.vaultFilePath,
-    },
-  )
-}
-
 /**
  * Eager refresh-on-use is an optimization, not a gate. `maybeRefreshAccount`
  * throws on any refresh failure — a revoked/rotated-away token
@@ -317,7 +283,6 @@ async function resolvePoolManagedAccount(
   account: PoolAccount,
 ): Promise<ResolvedCodexOAuthTokens> {
   const refreshed = await refreshCoreAccountBestEffort(toCoreAccount(account))
-  rememberRefreshedPoolAccount(account, refreshed)
   return {
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken,
