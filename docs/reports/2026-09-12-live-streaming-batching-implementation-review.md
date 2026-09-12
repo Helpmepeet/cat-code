@@ -18,7 +18,13 @@ The initial benchmark required corrections before an app run would produce credi
 
 The measurement implementation now uses a benchmark-only wrapper around the actual raw-log reducer and a layout-phase observer of the exact committed state. This associates frame identities with a real React state commit. It does not claim to measure paint or all reducer commits. The production renderer source is not instrumented by this work; a temporary build applies checked transform anchors.
 
-Final preparation review and its remaining runtime limitations are recorded below when the corrected harness is stable.
+The reviewer accepted the corrected small synthetic pilot through `f773ff7a`. Directories are created before Electron path configuration; current-document/subscription identity is checked before accepting ACKs; expected coverage is computed before timing; completion polls return bounded counters; missing CPU baselines invalidate a sample safely. Interruption and normal completion share process-group cleanup, prevent another sample from starting, and retain ownership and scratch if termination cannot be confirmed.
+
+A subsequent headless check found a separate long-history preparation issue: the 9,632-frame initial replay can exceed the real preload's bounded diagnostics queue, so requiring an applied ACK for every historical frame is not a valid completion condition. This is an intentional production diagnostics limit, not evidence of lost application state. Commit `8d769d4c` makes bulk bootstrap history untraced and uses one traced transcript marker for committed/bootstrap acknowledgement readiness. All warmup/scored arrivals retain full tracing and production diagnostics limits are unchanged. Bulk replay/ACK performance is explicitly outside this streaming measurement.
+
+Final headless harness checks: **14 pass, 0 fail** across observer, runtime and cleanup tests; app typecheck passed; isolated transformed build passed, including long-history preparation. The real acknowledgement queue/guard test covers all six bootstrap workloads. See the [measurement README](2026-09-12-live-streaming-measurements/README.md) for exact preparation and run commands.
+
+**Final independent preparation verdict through `8d769d4c`: no unresolved preparation blocker; approved for a separately authorized synthetic pilot and the declared workload matrix.** This is source/build approval only. No Electron launch, runtime result or performance acceptance is claimed. Documentation validation passed with seven existing recommendation warnings; owned-file whitespace validation passed.
 
 ## Acceptance still required
 
