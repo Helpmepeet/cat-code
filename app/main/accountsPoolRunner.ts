@@ -29,8 +29,8 @@ import {
 import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 
 /**
- * Usage headroom changes in coarse percent buckets on a 5-hour window, so a
- * minute is sufficient for ordinary observation. Each run still boots a
+ * Usage headroom changes in coarse percent buckets on upstream usage positions,
+ * so a minute is sufficient for ordinary observation. Each run still boots a
  * disposable engine worker. Its unforced `fetchPoolUsage` read can reuse the
  * engine-owned private 60-second observation shared across processes; misses
  * perform authenticated usage GETs. Sharing observations saves requests when
