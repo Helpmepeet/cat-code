@@ -31,12 +31,12 @@ function harness(options: { delayMs?: number; maxFrames?: number; maxBytes?: num
   let available = true
   let fail: unknown = null
   const deliveries: ServerFrame[][] = []
-  const timers: Array<{ callback: () => void; cancelled: boolean }> = []
+  const timers: Array<{ callback: () => void; cancelled: boolean; dueAt: number }> = []
   const coordinator = createLiveFrameDeliveryCoordinator({
     ...options,
     now: () => time,
-    setTimer: callback => {
-      const timer = { callback, cancelled: false }
+    setTimer: (callback, delayMs) => {
+      const timer = { callback, cancelled: false, dueAt: time + delayMs }
       timers.push(timer)
       return timer as unknown as ReturnType<typeof setTimeout>
     },
@@ -48,7 +48,11 @@ function harness(options: { delayMs?: number; maxFrames?: number; maxBytes?: num
   return {
     coordinator, deliveries, timers,
     tick(ms: number) { time += ms },
-    fire(index = timers.length - 1) { timers[index]?.callback() },
+    fire(index = timers.length - 1) {
+      const timer = timers[index]
+      if (timer && !timer.cancelled && time >= timer.dueAt) timer.callback()
+    },
+    forceFire(index = timers.length - 1) { timers[index]?.callback() },
     unavailable() { available = false },
     failure: () => fail,
   }
@@ -84,6 +88,7 @@ describe('live frame delivery coordinator', () => {
     const h = harness({ delayMs: 8 })
     expect(h.timers).toHaveLength(0)
     h.coordinator.deliver([base('a')], 'ordinary-live')
+    expect(h.timers[0]?.dueAt).toBe(8)
     h.tick(7)
     h.coordinator.deliver([base('b')], 'ordinary-live')
     expect(h.timers).toHaveLength(1)
@@ -98,6 +103,7 @@ describe('live frame delivery coordinator', () => {
     h.tick(9)
     h.coordinator.deliver([base('b')], 'ordinary-live')
     expect(h.deliveries).toEqual([[base('a')]])
+    h.tick(8)
     h.fire()
     expect(h.deliveries).toEqual([[base('a')], [base('b')]])
     expect(h.coordinator.stats().flushes.overdue).toBe(1)
@@ -148,8 +154,9 @@ describe('live frame delivery coordinator', () => {
     h.coordinator.deliver([base('old')], 'ordinary-live')
     h.coordinator.invalidateDocument()
     h.coordinator.deliver([base('new')], 'ordinary-live')
-    h.fire(0)
+    h.forceFire(0)
     expect(h.deliveries).toEqual([])
+    h.tick(8)
     h.fire(1)
     expect(h.deliveries).toEqual([[base('new')]])
   })
@@ -159,8 +166,9 @@ describe('live frame delivery coordinator', () => {
     h.coordinator.deliver([base('old')], 'ordinary-live')
     h.coordinator.flush()
     h.coordinator.deliver([base('new')], 'ordinary-live')
-    h.fire(0)
+    h.forceFire(0)
     expect(h.deliveries).toEqual([[base('old')]])
+    h.tick(8)
     h.fire(1)
     expect(h.deliveries).toEqual([[base('old')], [base('new')]])
   })
@@ -168,7 +176,7 @@ describe('live frame delivery coordinator', () => {
   test('destination loss abandons the batch and reports recovery once', () => {
     const h = harness()
     h.coordinator.deliver([base('a')], 'ordinary-live')
-    h.unavailable(); h.fire()
+    h.unavailable(); h.tick(8); h.fire()
     expect(h.deliveries).toEqual([])
     expect(h.failure()).toBeInstanceOf(Error)
     expect(h.coordinator.stats().queuedFrames).toBe(0)
@@ -356,5 +364,25 @@ describe('attachment and live-delivery composition', () => {
     attached.evictSession('a', () => { detachedAtPublication = !gate.isAttached })
     expect(detachedAtPublication).toBe(true)
     expect(gate.onRendererReady()).toEqual([])
+  })
+
+  test('window close disposes delivery but preserves replay until shutdown persistence', () => {
+    const gate = new AttachmentGate()
+    gate.onRendererReady()
+    const h = harness()
+    const attached = createAttachedFrameDeliveryCoordinator(gate, h.coordinator)
+    attached.onFrame('a', base('a'))
+
+    // BrowserWindow `closed`: timers and pending delivery copies are discarded,
+    // while the replay buffer must survive for Host.shutdownAll.
+    h.coordinator.dispose()
+    let persisted: ServerFrame[] = []
+    // `window-all-closed`: shutdown invokes evictReplay before the final reset.
+    attached.evictSession('a', () => { persisted = gate.snapshotSession('a') })
+    attached.reset()
+
+    expect(persisted).toEqual([base('a')])
+    expect(gate.onRendererReady()).toEqual([])
+    expect(h.deliveries).toEqual([])
   })
 })

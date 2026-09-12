@@ -1590,8 +1590,9 @@ function createWindow(): void {
   // still in flight during teardown.
   window.on('closed', () => {
     cancelWindowBoundsSave()
-    attachedFrameDelivery?.reset()
-    attachedFrameDelivery = null
+    // Preserve AttachmentGate until window-all-closed runs shutdownRuntime:
+    // Host.shutdownAll snapshots each session before its evictReplay callback
+    // clears it. Only delivery/recovery timers die at the earlier close event.
     liveFrameDelivery?.dispose()
     liveFrameDelivery = null
     handleRendererDeliveryFailure = null
