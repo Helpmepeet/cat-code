@@ -1,6 +1,6 @@
 ---
 name: verifying-cat-code-changes
-description: Use when you have finished (or are about to claim progress on) any code, docs, or config change in the cat-code repository and need to verify it — picks the exact build/test/typecheck battery for the areas touched and defines the evidence report. Do not use for repositories other than cat-code, or for deciding which docs/registries/surfaces need updating (that is checking-cat-code-change-impact).
+description: "Use before claiming progress or completion on Cat Code code, docs, or config changes to select checks and report evidence. Not for other repositories or choosing affected docs/registries; use checking-cat-code-change-impact."
 ---
 
 # Verifying Cat Code Changes

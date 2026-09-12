@@ -1,6 +1,6 @@
 ---
 name: cat-code-migration-session
-description: Use when executing a dispatched Cat Code desktop-migration backlog session (P4-x, P5-x, …) or making any non-trivial change under app/ in the cat-code repo — routes to the authoritative rulebooks and enforces the always-true invariants (locked decisions, security baseline, GUI protocol, STATUS bookkeeping). Do not use for the orchestrator loop that generates backlogs and hands out prompts (that is .claude/rules/migration.md), or for engine-only (src/) work.
+description: "Use for a dispatched Cat Code desktop-migration backlog session or non-trivial changes under app/. Consult migration rulebooks and invariants. Not for the backlog-dispatch orchestrator or engine-only src/ work."
 ---
 
 # Cat Code Migration Session (worker side)

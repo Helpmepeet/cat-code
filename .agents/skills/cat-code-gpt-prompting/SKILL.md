@@ -1,6 +1,6 @@
 ---
 name: cat-code-gpt-prompting
-description: Use when authoring, editing, tuning, reviewing, or debugging prompts inside cat-code for its GPT backend: system prompts, harness prompts, AGENTS/CLAUDE-style instruction files, agent instructions, tool/function descriptions, and prompt blocks. Do not use for prompt-writing outside cat-code internals, prompts for other apps/products, or general-purpose prompt engineering unrelated to Cat Code.
+description: "Use to author, edit, review, or debug Cat Code GPT backend prompts: system/harness instructions, AGENTS/CLAUDE files, agent instructions, and tool descriptions. Not for other apps, non-GPT backends, or general prompting outside Cat Code."
 ---
 
 # Cat Code GPT Prompting

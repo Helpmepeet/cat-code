@@ -1,6 +1,6 @@
 ---
 name: cat-code-cold-review
-description: Use when asked to review completed work or test confidence in the cat-code repository — a session's implementation, a recent-test audit, a plan's execution, a phase/tranche/by-layer integration review, or an audit of claims in STATUS/DONE/report docs. Do not use for reviewing external codebases, for pre-implementation plan review, or for writing new plans.
+description: "Use when asked to review completed Cat Code work, audit test confidence, or verify STATUS/DONE/report claims. Not for other repositories, pre-implementation plan review, or writing new plans."
 ---
 
 # Cat Code Cold Review

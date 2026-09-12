@@ -1,6 +1,6 @@
 ---
 name: checking-cat-code-change-impact
-description: Use when finishing Cat Code code changes — adding features, changing behavior, adding skills, commands, tools, prompts, settings, providers, agents, plugins, MCP behavior, or user-facing functionality — to decide which surrounding surfaces (DONE.md, telemetry, docs, registries, settings/schemas, permissions, tests, feature gates) need updating before claiming completion. Not for choosing the build/test/typecheck command battery (that is verifying-cat-code-changes).
+description: "Use when finishing Cat Code code, behavior, skill, prompt, or configuration changes to check affected docs, registries, settings, permissions, telemetry, and related surfaces. Not for choosing test commands; use verifying-cat-code-changes."
 ---
 
 # Checking Cat Code Change Impact
