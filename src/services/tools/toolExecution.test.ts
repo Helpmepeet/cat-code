@@ -9,6 +9,8 @@ import type {
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import type { MessageUpdateLazy } from './toolExecution.js'
 import { classifyToolError } from './toolExecution.js'
+import { runTools } from './toolOrchestration.js'
+import { StreamingToolExecutor } from './StreamingToolExecutor.js'
 import { FilePatchError } from '../../tools/FilePatchTool/types.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
@@ -125,9 +127,14 @@ function createToolUseContext(
   } as unknown as ToolUseContext
 }
 
-function makeTool(name: string, call: () => Promise<{ data: unknown }>) {
+function makeTool(
+  name: string,
+  call: () => Promise<{ data: unknown }>,
+  aliases?: string[],
+) {
   return buildTool({
     name,
+    aliases,
     inputSchema: z.strictObject({ value: z.string() }),
     isReadOnly: () => true,
     isConcurrencySafe: () => true,
@@ -346,4 +353,99 @@ describe('runToolUse PreToolUse additionalContext', () => {
     )
     expect(classifyToolError(error)).not.toContain(path)
   })
+})
+
+describe('tool execution authority', () => {
+  for (const executorKind of ['batch', 'streaming'] as const) {
+    for (const agentId of [undefined, 'worker-fixture']) {
+      const scope = agentId ? 'worker' : 'foreground'
+
+      test(`${executorKind} ${scope} resolves canonical and alias names only inside its pool`, async () => {
+        let calls = 0
+        const tool = makeTool(
+          'CanonicalFixture',
+          async () => {
+            calls++
+            return { data: 'ok' }
+          },
+          ['LegacyFixture'],
+        )
+
+        for (const name of ['CanonicalFixture', 'LegacyFixture']) {
+          const block = {
+            type: 'tool_use' as const,
+            id: `${executorKind}-${scope}-${name}`,
+            name,
+            input: { value: 'x' },
+          }
+          const assistant = createAssistantMessage()
+          assistant.message.content = [block]
+          const context = createToolUseContext([tool])
+          context.agentId = agentId
+          const canUseTool = async () => ({
+            behavior: 'allow' as const,
+            updatedInput: { value: 'x' },
+          })
+          if (executorKind === 'batch') {
+            for await (const _ of runTools(
+              [block],
+              [assistant],
+              canUseTool,
+              context,
+            )) {
+              // drain the real batch executor
+            }
+          } else {
+            const executor = new StreamingToolExecutor(
+              context.options.tools,
+              canUseTool,
+              context,
+            )
+            executor.addTool(block, assistant)
+            for await (const _ of executor.getRemainingResults()) {
+              // drain the real streaming executor
+            }
+          }
+        }
+        expect(calls).toBe(2)
+
+        const deniedContext = createToolUseContext([tool])
+        deniedContext.agentId = agentId
+        const deniedAssistant = createAssistantMessage()
+        const deniedBlock = {
+          type: 'tool_use' as const,
+          id: `${executorKind}-${scope}-denied-alias`,
+          name: 'LegacyFixture',
+          input: { value: 'x' },
+        }
+        deniedAssistant.message.content = [deniedBlock]
+        const deny = async () => ({
+          behavior: 'deny' as const,
+          message: 'fixture deny',
+          decisionReason: { type: 'other' as const, reason: 'fixture' },
+        })
+        if (executorKind === 'batch') {
+          for await (const _ of runTools(
+            [deniedBlock],
+            [deniedAssistant],
+            deny,
+            deniedContext,
+          )) {
+            // drain
+          }
+        } else {
+          const executor = new StreamingToolExecutor(
+            deniedContext.options.tools,
+            deny,
+            deniedContext,
+          )
+          executor.addTool(deniedBlock, deniedAssistant)
+          for await (const _ of executor.getRemainingResults()) {
+            // drain
+          }
+        }
+        expect(calls).toBe(2)
+      })
+    }
+  }
 })
