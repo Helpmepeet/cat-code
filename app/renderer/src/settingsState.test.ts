@@ -33,11 +33,11 @@ function snapshotFrame(
   sessionId: string,
   settings: SettingsSnapshot,
 ): ServerFrame {
-  return { kind: 'settings.snapshot', protocolVersion: 1, sessionId, settings }
+  return { kind: 'settings.snapshot', protocolVersion: 2, sessionId, settings }
 }
 
 function lifecycleFrame(sessionId: string): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 1, sessionId, status: 'exited' }
+  return { kind: 'lifecycle', protocolVersion: 2, sessionId, status: 'exited' }
 }
 
 test('settings.snapshot frame stores the snapshot per session', () => {
@@ -80,7 +80,7 @@ test('unrelated frame kinds are ignored', () => {
   const state = createSettingsState()
   const next = reduceSettingsState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 1, sessionId: 'a', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: 2, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
 })

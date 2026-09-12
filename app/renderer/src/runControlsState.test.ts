@@ -35,7 +35,7 @@ const SNAPSHOT: RunControlsSnapshot = {
 }
 
 function snapshotFrame(sessionId: string, runControls: RunControlsSnapshot): ServerFrame {
-  return { kind: 'run-controls.snapshot', protocolVersion: 1, sessionId, runControls }
+  return { kind: 'run-controls.snapshot', protocolVersion: 2, sessionId, runControls }
 }
 
 test('stores the latest run-controls snapshot per session and selects it', () => {
@@ -65,12 +65,12 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   const before = state
   state = reduceRunControlsState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's2', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's2', status: 'disconnected' },
   })
   expect(state).toBe(before) // untracked session → no change
   state = reduceRunControlsState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
   expect(selectRunControlsSnapshot(state, 's1')).toBeNull()
 })
@@ -86,7 +86,7 @@ test('a disconnected session still reports what it ran on', () => {
   state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
   state = reduceRunControlsState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
   // Capability: gone, so no picker can be armed.
   expect(selectRunControlsSnapshot(state, 's1')).toBeNull()
@@ -101,7 +101,7 @@ test('the display selector answers for every terminal status, and only for known
     state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
     state = reduceRunControlsState(state, {
       type: 'frame',
-      frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status },
+      frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status },
     })
     expect(selectLastRunControlsSnapshot(state, 's1')?.effort.current).toBe('high')
   }
@@ -115,7 +115,7 @@ test('a re-attached session reports the FRESH snapshot, not the retained one', (
   state = reduceRunControlsState(state, { type: 'frame', frame: snapshotFrame('s1', SNAPSHOT) })
   state = reduceRunControlsState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
   const restored: RunControlsSnapshot = {
     ...SNAPSHOT,

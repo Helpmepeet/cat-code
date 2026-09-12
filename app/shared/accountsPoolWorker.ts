@@ -31,6 +31,7 @@ import type {
   AccountStatus,
   AccountsSnapshot,
   AnthropicAccountStatus,
+  SignedOutCodexProfileStatus,
   UsageStatsByRange,
   UsageStatsDailyActivityItem,
   UsageStatsDailyModelTokens,
@@ -75,7 +76,7 @@ export type AccountsPoolWorkerPoolResult = {
    * ~5 KB) against a worker that already pays the engine import and a network
    * usage fetch every run.
    *
-   * OPTIONAL on purpose, and the reason this stayed boundary-version 1: a stats
+   * OPTIONAL on purpose, and the reason this stays boundary-version 1: a stats
    * read that fails must not cost the pool its delivery, so the worker omits the
    * field and main still emits the accounts event. Absent means "this run had
    * none", never "the user has no history" — the renderer keeps its last good
@@ -334,6 +335,7 @@ function parseNumberMap(value: unknown): Record<string, number> | null {
 export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
   const snapshot = narrowExact(value, {
     accounts: isUnknownArray,
+    signedOutProfiles: isUnknownArray,
     activeAccountId: isStringOrNull,
     readyCount: isNumber,
     poolCount: isNumber,
@@ -357,6 +359,12 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
     if (!account) return null
     accounts.push(account)
   }
+  const signedOutProfiles: SignedOutCodexProfileStatus[] = []
+  for (const candidate of snapshot.signedOutProfiles) {
+    const profile = parseSignedOutCodexProfileStatus(candidate)
+    if (!profile) return null
+    signedOutProfiles.push(profile)
+  }
   const anthropicAccounts: AnthropicAccountStatus[] = []
   for (const candidate of snapshot.anthropicAccounts) {
     const account = parseAnthropicAccountStatus(candidate)
@@ -364,12 +372,13 @@ export function parseAccountsSnapshot(value: unknown): AccountsSnapshot | null {
     anthropicAccounts.push(account)
   }
 
-  return { ...snapshot, accounts, anthropicAccounts }
+  return { ...snapshot, accounts, signedOutProfiles, anthropicAccounts }
 }
 
 function parseAccountStatus(value: unknown): AccountStatus | null {
   return narrowExact(value, {
-    id: isString,
+    id: isBoundedText,
+    credentialGeneration: isSafeNonnegativeInteger,
     alias: isStringOrNull,
     status: oneOf(['healthy', 'dead', 'capped', 'quarantined'] as const),
     statusReason: isStringOrNull,
@@ -387,6 +396,33 @@ function parseAccountStatus(value: unknown): AccountStatus | null {
     lastError: isStringOrNull,
     planType: isStringOrNull,
     switchable: isBoolean,
+  })
+}
+
+function parseSignedOutCodexProfileStatus(
+  value: unknown,
+): SignedOutCodexProfileStatus | null {
+  return narrowExact(value, {
+    id: isBoundedText,
+    alias: isStringOrNull,
+    state: oneOf(['signed_out', 'recovery_required'] as const),
+    credentialGeneration: isSafeNonnegativeIntegerOrNull,
+    lifecycleGeneration: isSafeNonnegativeIntegerOrNull,
+    credentialGenerationState: oneOf(
+      ['lifecycle_bound', 'legacy_unbound', null] as const,
+    ),
+    lifecycleState: oneOf(
+      [
+        'login_prepared',
+        'credentialed',
+        'signed_out',
+        'reauth_required',
+        null,
+      ] as const,
+    ),
+    lifecycleReadStatus: oneOf(
+      ['absent', 'valid', 'malformed', 'unreadable'] as const,
+    ),
   })
 }
 
@@ -410,4 +446,14 @@ function isBoundedText(value: unknown): value is string {
     value.length > 0 &&
     value.length <= MAX_TEXT_FIELD_CHARS
   )
+}
+
+function isSafeNonnegativeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isSafeNonnegativeIntegerOrNull(
+  value: unknown,
+): value is number | null {
+  return value === null || isSafeNonnegativeInteger(value)
 }

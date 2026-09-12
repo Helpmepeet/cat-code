@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import type {
   AccountStatus,
   AccountsSnapshot,
+  SignedOutCodexProfileStatus,
   UsageStatsByRange,
   UsageStatsSnapshot,
 } from './protocol.js'
@@ -22,6 +23,7 @@ import {
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'work',
     status: 'healthy',
     statusReason: null,
@@ -43,9 +45,26 @@ function account(over: Partial<AccountStatus> = {}): AccountStatus {
   }
 }
 
+function signedOutProfile(
+  over: Partial<SignedOutCodexProfileStatus> = {},
+): SignedOutCodexProfileStatus {
+  return {
+    id: 'acct-signed-out',
+    alias: 'former-work',
+    state: 'signed_out',
+    credentialGeneration: 4,
+    lifecycleGeneration: 4,
+    credentialGenerationState: 'lifecycle_bound',
+    lifecycleState: 'signed_out',
+    lifecycleReadStatus: 'valid',
+    ...over,
+  }
+}
+
 function pool(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
     accounts: [account()],
+    signedOutProfiles: [],
     activeAccountId: 'acct-1',
     readyCount: 1,
     poolCount: 1,
@@ -127,6 +146,21 @@ describe('parseAccountsPoolWorkerResult — accepts', () => {
       }),
     )
     expect(parsed?.accounts).toEqual([])
+  })
+
+  test('accepts signed-out profiles outside credentialed rows and counts', () => {
+    const snapshot = pool({
+      accounts: [account({ credentialGeneration: 7 })],
+      signedOutProfiles: [signedOutProfile()],
+      readyCount: 1,
+      poolCount: 1,
+    })
+    const parsed = parseAccountsSnapshot(JSON.parse(JSON.stringify(snapshot)))
+    expect(parsed).toEqual(snapshot)
+    expect(parsed?.accounts).toHaveLength(1)
+    expect(parsed?.signedOutProfiles).toHaveLength(1)
+    expect(parsed?.readyCount).toBe(1)
+    expect(parsed?.poolCount).toBe(1)
   })
 
   test('a worker-reported failure parses as a failure', () => {
@@ -245,6 +279,55 @@ describe('parseAccountsPoolWorkerResult — fails closed', () => {
     const partial = { ...account() } as Record<string, unknown>
     delete partial.switchable
     expect(parseAccountsSnapshot(pool({ accounts: [partial as never] }))).toBeNull()
+  })
+
+  test('rejects malformed credential and signed-out profile generations', () => {
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          accounts: [account({ credentialGeneration: -1 as never })],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            signedOutProfile({ lifecycleGeneration: 1.5 as never }),
+          ],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            signedOutProfile({ credentialGeneration: '4' as never }),
+          ],
+        }),
+      ),
+    ).toBeNull()
+  })
+
+  test('rejects an extra signed-out profile path or secret key', () => {
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            { ...signedOutProfile(), vaultFilePath: '/secret/profile.json' } as never,
+          ],
+        }),
+      ),
+    ).toBeNull()
+    expect(
+      parseAccountsSnapshot(
+        pool({
+          signedOutProfiles: [
+            { ...signedOutProfile(), accessToken: 'must-not-cross' } as never,
+          ],
+        }),
+      ),
+    ).toBeNull()
   })
 
   test('an out-of-vocabulary status is rejected', () => {

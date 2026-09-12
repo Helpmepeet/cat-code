@@ -27,7 +27,8 @@
  *     is not possible without the account-diagnostic sink
  *     (`accountDiagnostics.ts`, already secret-scrubbed). That sink is the named
  *     reactive hook for P4-15 (reauth banner) + P4-17 (welcome table); wiring it
- *     is deferred to P4-15. v1 re-broadcasts after any pool-mutating verb this
+ *     is deferred to P4-15. The current behavior re-broadcasts after any
+ *     pool-mutating verb this
  *     session drives, matching the settings seam's spawn-time posture.
  *
  * MUTATION verbs (`runVerb`) dispatch to the engine's OWN account machinery
@@ -53,7 +54,9 @@ import {
   loadPoolForObservation,
   setAccountAlias,
   validateCodexAccountAlias,
+  type CodexProfileInventory,
   type PoolAccount,
+  type SignedOutCodexProfile,
 } from '../../src/services/api/codexAccountPool.js'
 import { commitCodexAccountSwitch } from '../../src/services/api/codexAccountSwitch.js'
 import {
@@ -71,9 +74,13 @@ import { touchAll } from '../../src/services/api/codexTokenRefresh.js'
 import { fetchPoolUsage } from '../../src/services/api/codexUsage.js'
 import {
   createCodexAccountDeletionOperationId,
+  createCodexAccountSignOutOperationId,
   deleteCodexAccount,
+  signOutCodexAccount,
   type CodexAccountDeletionInput,
   type CodexAccountDeletionResult,
+  type CodexAccountSignOutInput,
+  type CodexAccountSignOutResult,
 } from '../../src/services/api/codexAccountSignOut.js'
 import {
   installOAuthTokens,
@@ -82,7 +89,6 @@ import {
 import { OAuthService } from '../../src/services/oauth/index.js'
 import { runCodexOAuthFlow, type CodexTokens } from '../../src/services/oauth/codex-client.js'
 import {
-  clearCodexOAuthTokens,
   clearOAuthTokenCache,
   hasAnthropicCredentials,
   isClaudeAISubscriber,
@@ -99,6 +105,7 @@ import type {
   AccountVerbMessage,
   AccountVerbType,
   OAuthLoginProgress,
+  SignedOutCodexProfileStatus,
 } from '../shared/protocol.js'
 
 /** Pure — the redacted outcome payload a verb produces (no transport, no secret). */
@@ -130,8 +137,14 @@ export type AccountsCommandExecutor = {
   rename(accountId: string, alias: string): AccountVerbResult
   /** Delete a vault account profile. `accountId` already re-resolved + vault-checked. */
   delete(accountId: string): AccountVerbResult | Promise<AccountVerbResult>
-  /** Sign out the active account (clears its token; profile stays). */
-  logout(): AccountVerbResult
+  /**
+   * Sign out one targeted account through the engine's lifecycle transaction.
+   * The account id and expected generation come from the sidecar-validated verb.
+   */
+  logout(
+    accountId: string,
+    expectedCredentialGeneration: number,
+  ): AccountVerbResult | Promise<AccountVerbResult>
   /** Refresh OAuth tokens for every unlocked vault account. */
   touchAll(): Promise<AccountVerbResult>
   /**
@@ -421,6 +434,7 @@ export function buildAccountStatus(
   const availability = getCodexAccountAvailability(account, now).kind
   return {
     id: account.accountId,
+    credentialGeneration: account.credentialGeneration,
     alias: account.alias ?? null,
     status: account.status,
     statusReason: account.statusReason ?? null,
@@ -440,6 +454,22 @@ export function buildAccountStatus(
     planType: account.planType ?? null,
     // Authoritative rule + not-already-default (the renderer never re-derives it).
     switchable: !isDefault && isCodexAccountSwitchable(account, now),
+  }
+}
+
+/** Project one non-routable Codex profile through an explicit redaction whitelist. */
+export function buildSignedOutCodexProfileStatus(
+  profile: SignedOutCodexProfile,
+): SignedOutCodexProfileStatus {
+  return {
+    id: profile.accountId,
+    alias: profile.alias ?? null,
+    state: profile.profileState,
+    credentialGeneration: profile.credentialGeneration ?? null,
+    lifecycleGeneration: profile.lifecycleGeneration ?? null,
+    credentialGenerationState: profile.credentialGenerationState ?? null,
+    lifecycleState: profile.lifecycleState ?? null,
+    lifecycleReadStatus: profile.lifecycleReadStatus,
   }
 }
 
@@ -480,7 +510,12 @@ export function resolveAnthropicRouteAvailable(
   }
 }
 
-/** Project the whole pool status to the redacted snapshot. Pure. */
+/**
+ * Project the engine's complete Codex profile inventory to the redacted
+ * snapshot. The optional inventory is supplied by production callers after the
+ * engine's observation read; direct pool-only calls retain the credentialed
+ * projection used by focused tests.
+ */
 export function buildAccountsSnapshot(
   poolStatus: {
     accounts: readonly PoolAccount[]
@@ -491,13 +526,15 @@ export function buildAccountsSnapshot(
   anthropicPoolStatus = getClaudePoolStatus(),
   anthropicRouteAvailable = resolveAnthropicRouteAvailable(),
   anthropicSubscriptionActive = resolveAnthropicSubscriptionActive(),
+  profileInventory?: CodexProfileInventory,
 ): AccountsSnapshot {
   const activeAccount = poolStatus.accounts[poolStatus.activeIndex]
   const activeAccountId = activeAccount?.accountId ?? null
-  const accounts = poolStatus.accounts.map((account, index) =>
-    buildAccountStatus(account, index === poolStatus.activeIndex, now),
+  const credentialedAccounts = profileInventory?.accounts ?? poolStatus.accounts
+  const accounts = credentialedAccounts.map(account =>
+    buildAccountStatus(account, account.accountId === activeAccountId, now),
   )
-  const readyCount = poolStatus.accounts.filter(
+  const readyCount = credentialedAccounts.filter(
     a => a.status === 'healthy' && a.usageLimitReached !== true,
   ).length
   const anthropicActive =
@@ -510,9 +547,13 @@ export function buildAccountsSnapshot(
   )
   return {
     accounts,
+    signedOutProfiles:
+      profileInventory?.signedOutProfiles.map(
+        buildSignedOutCodexProfileStatus,
+      ) ?? [],
     activeAccountId,
     readyCount,
-    poolCount: poolStatus.accounts.length,
+    poolCount: credentialedAccounts.length,
     initialized: poolStatus.initialized,
     anthropicAccounts,
     anthropicActiveAccountId: anthropicActive?.accountUuid ?? null,
@@ -541,10 +582,14 @@ export function createRealAccountsExecutor(
     deleteTransaction?: (
       input: CodexAccountDeletionInput,
     ) => Promise<CodexAccountDeletionResult>
+    signOutTransaction?: (
+      input: CodexAccountSignOutInput,
+    ) => Promise<CodexAccountSignOutResult>
   } = {},
 ): AccountsCommandExecutor {
   const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
   const deleteTransaction = options.deleteTransaction ?? deleteCodexAccount
+  const signOutTransaction = options.signOutTransaction ?? signOutCodexAccount
   return {
     // The desktop switch must run the SAME transaction the terminal
     // `/switch-account` runs, not just the pool write. `switchToAccount` alone
@@ -602,9 +647,16 @@ export function createRealAccountsExecutor(
 
       return { ok: true, message: 'Account deleted.' }
     },
-    logout() {
-      clearCodexOAuthTokens()
-      return { ok: true, message: 'Signed out.' }
+    async logout(accountId, expectedCredentialGeneration) {
+      const result = await signOutTransaction({
+        accountId,
+        expectedCredentialGeneration,
+        operationId: createCodexAccountSignOutOperationId(),
+      })
+      return result.status === 'committed' ||
+        result.status === 'already_committed'
+        ? { ok: true, message: 'Signed out.' }
+        : { ok: false, message: 'Could not sign out that account.' }
     },
     async touchAll() {
       const results = await touchAll()
@@ -658,6 +710,8 @@ export function createSidecarAccountsDomain(
     reloadPool?: () => Promise<void>
     /** The Anthropic twin of `reloadPool`; same disk-only observation load. */
     reloadAnthropicPool?: () => Promise<void>
+    /** Read the engine's complete Codex profile inventory; injectable for tests. */
+    readProfileInventory?: () => CodexProfileInventory
   } = {},
 ): SidecarAccountsDomain {
   const executor = options.executor ?? createRealAccountsExecutor()
@@ -669,6 +723,8 @@ export function createSidecarAccountsDomain(
   const reloadPool = options.reloadPool ?? loadPoolForObservation
   const reloadAnthropicPool =
     options.reloadAnthropicPool ?? (async () => loadClaudePoolForObservation())
+  const readProfileInventory =
+    options.readProfileInventory ?? getCodexProfileInventory
 
   function resolveAccount(accountId: string): PoolAccount | undefined {
     return getPoolStatus().accounts.find(a => a.accountId === accountId)
@@ -898,6 +954,9 @@ export function createSidecarAccountsDomain(
           getPoolStatus(),
           Date.now(),
           getClaudePoolStatus(),
+          undefined,
+          undefined,
+          readProfileInventory(),
         )
       } catch {
         return null
@@ -1001,7 +1060,10 @@ export function createSidecarAccountsDomain(
           return { verb: 'account.delete', result, poolChanged: result.ok }
         }
         case 'account.logout': {
-          const result = executor.logout()
+          const result = await executor.logout(
+            verb.accountId,
+            verb.expectedCredentialGeneration,
+          )
           return { verb: 'account.logout', result, poolChanged: result.ok }
         }
         case 'account.touchAll': {

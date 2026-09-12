@@ -62,7 +62,7 @@ function snapshot(over: Partial<LeaseSnapshot> = {}): LeaseSnapshot {
 }
 
 function frame(sessionId: string, leases: LeaseSnapshot): LeaseSnapshotFrame {
-  return { kind: 'lease.snapshot', protocolVersion: 1, sessionId, leases }
+  return { kind: 'lease.snapshot', protocolVersion: 2, sessionId, leases }
 }
 
 test('a lease snapshot lands under its own session and never leaks across sessions', () => {
@@ -95,7 +95,7 @@ test('a lifecycle frame drops the session slice (the lease map dies with the pro
   state = reduceLeaseState(state, { type: 'frame', frame: frame('s1', snapshot()) })
   const lifecycle: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     state: 'exited',
   } as unknown as LifecycleFrame
@@ -535,6 +535,7 @@ test('the note branches on selectionKind, never on the reason prose', () => {
 function poolRow(over: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-a',
+    credentialGeneration: 0,
     alias: 'aurora',
     status: 'healthy',
     statusReason: null,
@@ -557,6 +558,7 @@ function poolRow(over: Partial<AccountStatus> = {}): AccountStatus {
 
 function accountsSnapshot(rows: AccountStatus[]): AccountsSnapshot {
   return {
+    signedOutProfiles: [],
     anthropicRouteAvailable: false,
     accounts: rows,
     activeAccountId: rows.find(row => row.isDefault)?.id ?? null,
@@ -583,7 +585,7 @@ function accountsStateWithSession(
 ): AccountsState {
   return reduceAccountsState(createAccountsState(), {
     type: 'frame',
-    frame: { kind: 'accounts.snapshot', protocolVersion: 1, sessionId, accounts: snap },
+    frame: { kind: 'accounts.snapshot', protocolVersion: 2, sessionId, accounts: snap },
   })
 }
 
@@ -675,7 +677,7 @@ test('a parked session keeps naming what it ran on, not the persisted account', 
     type: 'frame',
     frame: {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       status: 'exited',
     } satisfies LifecycleFrame,

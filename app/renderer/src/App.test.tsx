@@ -90,7 +90,7 @@ function truncatedTranscriptForTest(): TranscriptState {
       engineSessionId: 'engine-truncated-pane-session',
       payload: {
         type: 'app.ready',
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: 1,
         inputEnabled: true,
         activeTurn: false,
         abort: { status: 'idle' },
@@ -141,6 +141,7 @@ function composerField(html: string): string {
 function emptyAccountsSnapshotForTest(): AccountsSnapshot {
   return {
     accounts: [],
+    signedOutProfiles: [],
     activeAccountId: null,
     readyCount: 0,
     poolCount: 0,
@@ -1547,6 +1548,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
   // and a real per-session model override reach the ChipStrip bar (not shape-only).
   const account: AccountStatus = {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'hiby',
     status: 'healthy',
     statusReason: null,

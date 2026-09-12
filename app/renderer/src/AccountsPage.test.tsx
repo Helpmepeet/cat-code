@@ -42,6 +42,7 @@ import {
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acc-1',
+    credentialGeneration: 0,
     alias: 'work-laptop',
     status: 'healthy',
     statusReason: null,
@@ -68,6 +69,7 @@ function snapshot(accounts: AccountStatus[]): AccountsSnapshot {
   ).length
   return {
     accounts,
+    signedOutProfiles: [],
     activeAccountId: accounts.find(a => a.isDefault)?.id ?? null,
     readyCount,
     poolCount: accounts.length,
@@ -280,7 +282,7 @@ test('resultToastTone maps ok/err to success/danger', () => {
 test('renders with a lastResult prop present without throwing', () => {
   const result: AccountResultFrame = {
     kind: 'account.result',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     requestId: 'req-1',
     verb: 'account.switch',

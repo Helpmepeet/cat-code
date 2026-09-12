@@ -313,7 +313,7 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
       engineSessionId: ENGINE_SESSION,
     payload: {
       type: 'app.ready',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 1,
       inputEnabled: true,
       activeTurn: false,
       abort: { status: 'idle' },
@@ -717,7 +717,15 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
   })
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo1' } as never))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'lo1',
+      accountId: 'acct-1',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   await flush()
 
   const err = received.find(f => f.kind === 'error')
@@ -739,7 +747,15 @@ test('F6 — an over-long error message is truncated before it leaves', async ()
   })
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo2' } as never))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'lo2',
+      accountId: 'acct-1',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   await flush()
 
   const err = received.find(f => f.kind === 'error')
@@ -6141,6 +6157,92 @@ test('P4-5 — rejects account.switch with a missing accountId (schema)', () => 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
+test('targeted account.logout accepts the exact account and generation shape', async () => {
+  const calls: Array<{ accountId: string; expectedCredentialGeneration: number }> = []
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      logout: async (accountId, expectedCredentialGeneration) => {
+        calls.push({ accountId, expectedCredentialGeneration })
+        return { ok: true, message: 'signed out' }
+      },
+    }),
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts },
+  )
+
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'logout-1',
+      accountId: 'target-account',
+      expectedCredentialGeneration: 7,
+    }),
+  )
+  await flush()
+
+  expect(calls).toEqual([
+    { accountId: 'target-account', expectedCredentialGeneration: 7 },
+  ])
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'account.result' &&
+        frame.requestId === 'logout-1' &&
+        frame.ok,
+    ),
+  ).toBe(true)
+})
+
+test('targeted account.logout rejects missing, unsafe, and extra fields at the boundary', () => {
+  let calls = 0
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      logout: () => {
+        calls += 1
+        return { ok: true, message: 'signed out' }
+      },
+    }),
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts },
+  )
+  const valid = {
+    type: 'account.logout',
+    requestId: 'logout-invalid',
+    accountId: 'target-account',
+    expectedCredentialGeneration: 7,
+  }
+  const invalidMessages: unknown[] = [
+    {
+      type: valid.type,
+      requestId: valid.requestId,
+      expectedCredentialGeneration: valid.expectedCredentialGeneration,
+    },
+    {
+      type: valid.type,
+      requestId: valid.requestId,
+      accountId: valid.accountId,
+    },
+    { ...valid, expectedCredentialGeneration: -1 },
+    { ...valid, expectedCredentialGeneration: 1.5 },
+    { ...valid, accessToken: 'secret' },
+    { ...valid, vaultFilePath: '/secret/profile.json' },
+  ]
+
+  for (const message of invalidMessages) {
+    server.handleData(conn, rawFrame(message))
+  }
+
+  expect(calls).toBe(0)
+  expect(
+    received.filter(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toHaveLength(invalidMessages.length)
+})
+
 test('P4-5 — a valid account.rename passes the boundary and dispatches with its correlated result', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
   const renames: { accountId: string; alias: string }[] = []
@@ -6265,7 +6367,15 @@ test('host deletion notice rejects extra keys before changing local state', () =
 
 test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
 

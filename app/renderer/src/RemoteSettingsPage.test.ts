@@ -4,7 +4,7 @@ import { directConnectResultForRequest } from './remoteSettingsPageModel.js'
 
 const SUCCESS: RemoteSettingsResultFrame = {
   kind: 'remoteSettings.result',
-  protocolVersion: 1,
+  protocolVersion: 2,
   sessionId: 'session-1',
   requestId: 'connect-1',
   verb: 'remoteSettings.directConnect',

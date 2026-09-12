@@ -1519,7 +1519,7 @@ describe('F5/F7/F9/F11 — smaller fixes', () => {
     const h = harness()
     await h.plane.handleRequest(ALEX, {
       ...request('peers.list'),
-      protocolVersion: 2,
+      protocolVersion: 1,
     })
     expect(h.lastResult()?.error?.code).toBe('bad_request')
   })

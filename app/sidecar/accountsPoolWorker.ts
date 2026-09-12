@@ -100,7 +100,7 @@ async function main(): Promise<void> {
   // imports above are engine-free (shared boundary + secretGuard), so the
   // ~189 MB engine import is paid only here, per run.
   const [
-    { getPoolStatus, loadPoolForObservation },
+    { getCodexProfileInventory, getPoolStatus, loadPoolForObservation },
     { loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
   ] = await Promise.all([
@@ -155,6 +155,7 @@ async function main(): Promise<void> {
       undefined,
       anthropic.routeAvailable,
       anthropic.subscriptionActive,
+      getCodexProfileInventory(),
     )
   } catch (error) {
     // A read failure degrades to "no pool" — main keeps its last good snapshot

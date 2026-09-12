@@ -24,6 +24,8 @@ import type {
 import {
   type CodexAccountDeletionInput,
   type CodexAccountDeletionResult,
+  type CodexAccountSignOutInput,
+  type CodexAccountSignOutResult,
 } from '../../src/services/api/codexAccountSignOut.js'
 import {
   buildAccountsSnapshot,
@@ -116,12 +118,77 @@ describe('P4-5 read-seam — redaction (the security-critical core)', () => {
     })
     const frame: AccountsSnapshotFrame = {
       kind: 'accounts.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       accounts: snapshot,
     }
     const scan = scanForSecrets(frame)
     expect(scan.ok).toBe(true)
+  })
+
+  test('snapshot separates credentialed accounts from signed-out profiles', () => {
+    const credentialed = poolAccount({
+      accountId: 'credentialed-account',
+      credentialGeneration: 8,
+    })
+    seedCodexAccountPoolForTest({
+      accounts: [credentialed],
+      activeAccountId: credentialed.accountId,
+    })
+    const inventory: CodexProfileInventory = {
+      accounts: [credentialed],
+      signedOutProfiles: [
+        {
+          accountId: 'signed-out-account',
+          alias: 'former-work',
+          source: 'vault',
+          vaultFilePath: '/Users/secret/.cat-code/vault/signed-out.json',
+          vaultFilePaths: [
+            '/Users/secret/.cat-code/vault/signed-out.json',
+          ],
+          profileState: 'signed_out',
+          credentialGeneration: 9,
+          lifecycleGeneration: 9,
+          credentialGenerationState: 'lifecycle_bound',
+          lifecycleState: 'signed_out',
+          lifecycleReadStatus: 'valid',
+        },
+      ],
+      duplicateVaultIdentities: [],
+    }
+
+    const snapshot = makeAccountsDomain({
+      executor: fakeExecutor(),
+      readProfileInventory: () => inventory,
+    }).getSnapshot()
+
+    expect(snapshot?.accounts).toHaveLength(1)
+    expect(snapshot?.accounts[0]?.credentialGeneration).toBe(8)
+    expect(snapshot?.signedOutProfiles).toEqual([
+      {
+        id: 'signed-out-account',
+        alias: 'former-work',
+        state: 'signed_out',
+        credentialGeneration: 9,
+        lifecycleGeneration: 9,
+        credentialGenerationState: 'lifecycle_bound',
+        lifecycleState: 'signed_out',
+        lifecycleReadStatus: 'valid',
+      },
+    ])
+    expect(snapshot?.readyCount).toBe(1)
+    expect(snapshot?.poolCount).toBe(1)
+    expect(scanForSecrets(snapshot).ok).toBe(true)
+
+    const signedOut = snapshot?.signedOutProfiles[0]
+    expect(JSON.stringify(signedOut)).not.toContain('SECRET')
+    expect(JSON.stringify(signedOut)).not.toContain('/Users/secret')
+    expect(JSON.stringify(signedOut)).not.toContain('usage')
+    expect(JSON.stringify(signedOut)).not.toContain('plan')
+    expect(signedOut).not.toHaveProperty('accessToken')
+    expect(signedOut).not.toHaveProperty('refreshToken')
+    expect(signedOut).not.toHaveProperty('vaultFilePath')
+    expect(signedOut).not.toHaveProperty('vaultFilePaths')
   })
 
   test('config-only accounts report hasVaultProfile:false', () => {
@@ -344,6 +411,35 @@ describe('real Codex delete executor cleanup', () => {
       expectedCredentialGeneration: deleted.credentialGeneration,
     })
     expect(getPoolStatus().accounts).toHaveLength(1)
+  })
+})
+
+describe('real Codex sign-out executor target binding', () => {
+  test('passes the requested account and credential generation to the engine transaction', async () => {
+    let signOutInput: CodexAccountSignOutInput | undefined
+    const result = await createRealAccountsExecutor({
+      signOutTransaction: async input => {
+        signOutInput = input
+        return {
+          status: 'committed',
+          accountId: input.accountId,
+          lifecycleGeneration: 8,
+          lifecycleState: 'signed_out',
+          credentialGeneration: 8,
+          state: 'signed_out',
+          operationId: input.operationId,
+          targetWasActive: false,
+          replacementActiveAccountId: null,
+        } satisfies CodexAccountSignOutResult
+      },
+    }).logout('target-account', 7)
+
+    expect(result).toEqual({ ok: true, message: 'Signed out.' })
+    expect(signOutInput).toMatchObject({
+      accountId: 'target-account',
+      expectedCredentialGeneration: 7,
+    })
+    expect(signOutInput?.operationId).toEqual(expect.any(String))
   })
 })
 
@@ -1460,7 +1556,7 @@ describe('P4-15 OAuth login controller — the live sign-in back-channel', () =>
     for (const progress of captured) {
       const frame: OAuthLoginProgressFrame = {
         kind: 'oauth.login.progress',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         progress,
       }

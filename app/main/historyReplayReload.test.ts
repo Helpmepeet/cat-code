@@ -27,7 +27,7 @@ const SESSION = 'restored-session'
 function readyFrame(): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SESSION,
     engineSessionId: 'engine-restored',
     payload: { type: 'app.ready' } as never,
@@ -37,7 +37,7 @@ function readyFrame(): ServerFrame {
 function replayEventFrame(i: number): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SESSION,
     replay: true,
     event: {

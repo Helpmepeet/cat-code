@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 import {
   formatAccountsNeedingSignIn,
+  logoutVerb,
   selectAccountMenuItems,
   selectAccountsNeedingSignIn,
 } from './accountsPageModel.js'
@@ -9,6 +10,7 @@ import {
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'one',
     status: 'healthy',
     statusReason: null,
@@ -32,6 +34,7 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
 function snapshot(accounts: AccountStatus[]): AccountsSnapshot {
   return {
     accounts,
+    signedOutProfiles: [],
     activeAccountId: accounts[0]?.id ?? null,
     readyCount: accounts.filter(a => a.status === 'healthy').length,
     poolCount: accounts.length,
@@ -101,6 +104,14 @@ describe('selectAccountMenuItems — sign in again', () => {
     expect(keys).toContain('relink')
     expect(keys).not.toContain('rename')
     expect(keys).not.toContain('delete')
+  })
+})
+
+test('logoutVerb carries the targeted account generation', () => {
+  expect(logoutVerb('account-to-sign-out', 12)).toMatchObject({
+    type: 'account.logout',
+    accountId: 'account-to-sign-out',
+    expectedCredentialGeneration: 12,
   })
 })
 

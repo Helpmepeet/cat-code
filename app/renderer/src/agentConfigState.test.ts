@@ -61,7 +61,7 @@ const SNAPSHOT: AgentConfigSnapshot = {
 function snapshotFrame(sessionId: SessionId, agents: AgentConfigSnapshot): ServerFrame {
   return {
     kind: 'agent-config.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     agents,
   }
@@ -85,7 +85,7 @@ const AGENT_CONFIG_SLICE_CONSUMER: Record<
 function lifecycleFrame(sessionId: SessionId): ServerFrame {
   return {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     status: 'disconnected',
   }

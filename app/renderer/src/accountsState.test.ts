@@ -26,9 +26,11 @@ import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
     anthropicRouteAvailable: false,
+    signedOutProfiles: [],
     accounts: [
       {
         id: 'a',
+        credentialGeneration: 0,
         alias: 'main',
         status: 'healthy',
         statusReason: null,
@@ -48,6 +50,7 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
       },
       {
         id: 'b',
+        credentialGeneration: 1,
         alias: 'backup',
         status: 'capped',
         statusReason: 'usage_cap',
@@ -80,7 +83,7 @@ function snapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
 }
 
 function snapFrame(sessionId: string, accounts: AccountsSnapshot): AccountsSnapshotFrame {
-  return { kind: 'accounts.snapshot', protocolVersion: 1, sessionId, accounts }
+  return { kind: 'accounts.snapshot', protocolVersion: 2, sessionId, accounts }
 }
 
 describe('accountsState reducer', () => {
@@ -94,7 +97,7 @@ describe('accountsState reducer', () => {
     let state = createAccountsState()
     const result: AccountResultFrame = {
       kind: 'account.result',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       requestId: 'r1',
       verb: 'account.switch',
@@ -118,7 +121,7 @@ describe('accountsState reducer', () => {
     state = reduceAccountsState(state, { type: 'frame', frame: snapFrame('s1', snapshot()) })
     const death: LifecycleFrame = {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       status: 'exited',
     } as LifecycleFrame
@@ -132,7 +135,7 @@ describe('P4-15 OAuth login progress projection', () => {
     progress: OAuthLoginProgressFrame['progress'],
     sessionId = 's1',
   ): OAuthLoginProgressFrame {
-    return { kind: 'oauth.login.progress', protocolVersion: 1, sessionId, progress }
+    return { kind: 'oauth.login.progress', protocolVersion: 2, sessionId, progress }
   }
 
   test('reduces oauth.login.progress into the per-session view; selector reads it', () => {
@@ -181,7 +184,7 @@ describe('P4-15 OAuth login progress projection', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         status: 'exited',
       } as never,
@@ -225,7 +228,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -253,7 +256,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'account.result',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         requestId: 'mutation',
         verb: 'account.rename',
@@ -273,7 +276,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: sessionSnap,
       } as AccountsSnapshotFrame,
@@ -288,7 +291,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'accounts.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         accounts: snapshot(),
       } as AccountsSnapshotFrame,
@@ -298,7 +301,7 @@ describe('global accounts pool (session-independent feed)', () => {
       type: 'frame',
       frame: {
         kind: 'lifecycle',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         status: 'exited',
       } as LifecycleFrame,
@@ -372,7 +375,7 @@ describe('accountsState selectors', () => {
       type: 'frame',
       frame: {
         kind: 'stats.usage.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: 's1',
         stats: snap7d,
       },

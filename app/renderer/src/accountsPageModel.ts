@@ -57,8 +57,16 @@ export function deleteVerb(accountId: string): AccountDeleteMessage {
   }
 }
 
-export function logoutVerb(): AccountLogoutMessage {
-  return { type: 'account.logout', requestId: newRequestId() }
+export function logoutVerb(
+  accountId: string,
+  expectedCredentialGeneration: number,
+): AccountLogoutMessage {
+  return {
+    type: 'account.logout',
+    requestId: newRequestId(),
+    accountId,
+    expectedCredentialGeneration,
+  }
 }
 
 export function touchAllVerb(): AccountTouchAllMessage {

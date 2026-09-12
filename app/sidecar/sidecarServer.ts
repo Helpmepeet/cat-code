@@ -1041,7 +1041,7 @@ export class SidecarServer {
     // Keep the `app.ready` handshake at the IPC attachment boundary.
     const readyPayload = {
       type: 'app.ready' as const,
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 1 as const,
       inputEnabled: !this.activeTurn,
       activeTurn: this.activeTurn,
       abort: this.controller.getAbortState(),
@@ -5734,13 +5734,21 @@ function checkStrictKeys(message: unknown): string | null {
     // inner `{optionIndices, other}` shape is closed by the sidecar-local Zod
     // schema below (checkStrictKeys guards only top-level keys).
     ['askUserQuestion.answer', new Set(['type', 'requestId', 'answers'])],
-    // P4-5 account verbs (app-owned; see ACCOUNT_VERB_TYPES). Each key set is the
-    // exact renderer-facing contract; anything else is rejected before the Zod
-    // parse. `account.delete` requires `confirm` (destructive → fail-closed).
+    // Account lifecycle verbs are app-owned; see
+    // `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` and
+    // `docs/migration/decisions/SECURITY-MINIMUM.md`. Each key set is the exact
+    // renderer-facing contract; anything else is rejected before the Zod parse.
+    // `account.delete` requires `confirm` and `account.logout` requires its
+    // targeted generation (destructive/stale-sensitive operations fail closed).
     ['account.switch', new Set(['type', 'requestId', 'accountId', 'provider'])],
     ['account.rename', new Set(['type', 'requestId', 'accountId', 'alias'])],
     ['account.delete', new Set(['type', 'requestId', 'accountId', 'confirm'])],
-    ['account.logout', new Set(['type', 'requestId'])],
+    ['account.logout', new Set([
+      'type',
+      'requestId',
+      'accountId',
+      'expectedCredentialGeneration',
+    ])],
     ['account.touchAll', new Set(['type', 'requestId'])],
     ['account.login', new Set(['type', 'requestId', 'provider'])],
     // P4-15 OAuth login sub-protocol. The renderer authors ONLY the user-typed
@@ -6086,17 +6094,23 @@ const askUserQuestionAnswerMessageSchema = z.object({
 })
 
 /**
- * P4-5 — sidecar-LOCAL schemas for the account lifecycle verbs (protocol.ts:
- * ACCOUNT_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
- * Structural only: shape + bounds. The business rules (target exists, alias
- * unique, vault-backed) are re-checked against the LIVE pool in the domain (T6),
- * never trusted from the frame. `requestId`/`accountId` are length-bounded like
- * every other renderer-controlled string; `confirm` MUST be literal `true`
- * (a missing/false confirm on a destructive verb is rejected here, fail-closed).
+ * Sidecar-local account schemas are app-owned and follow
+ * `docs/migration/decisions/ACCOUNTS-OWNERSHIP.md` plus the
+ * `docs/migration/decisions/SECURITY-MINIMUM.md` account redaction/stale-target
+ * rules. Structural validation is shape + bounds; business rules are
+ * re-checked against the live engine pool in the domain (T6), never trusted
+ * from the frame. `requestId`/`accountId` are length-bounded strings.
+ * `account.logout` carries a safe nonnegative expected credential generation.
+ * `confirm` MUST be literal `true`.
  */
 const accountRequestIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const accountIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
 const accountAliasSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const accountCredentialGenerationSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .max(Number.MAX_SAFE_INTEGER)
 
 const accountVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
@@ -6120,6 +6134,8 @@ const accountVerbMessageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('account.logout'),
     requestId: accountRequestIdSchema,
+    accountId: accountIdSchema,
+    expectedCredentialGeneration: accountCredentialGenerationSchema,
   }),
   z.object({
     type: z.literal('account.touchAll'),

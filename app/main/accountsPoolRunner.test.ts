@@ -21,6 +21,7 @@ import {
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'work',
     status: 'healthy',
     statusReason: null,
@@ -46,6 +47,7 @@ function pool(aliases: string[]): AccountsSnapshot {
     accounts: aliases.map((alias, i) =>
       account({ id: `acct-${i}`, alias, isDefault: i === 0 }),
     ),
+    signedOutProfiles: [],
     activeAccountId: aliases.length > 0 ? 'acct-0' : null,
     readyCount: aliases.length,
     poolCount: aliases.length,

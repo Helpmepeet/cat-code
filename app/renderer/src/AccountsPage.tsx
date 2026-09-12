@@ -1074,7 +1074,14 @@ export function AccountsPage({
       {dialog?.kind === 'logout' ? (
         <LogoutAccountDialog
           account={dialog.account}
-          onConfirm={() => submit(logoutVerb())}
+          onConfirm={() =>
+            submit(
+              logoutVerb(
+                dialog.account.id,
+                dialog.account.credentialGeneration,
+              ),
+            )
+          }
           onClose={() => setDialog(null)}
         />
       ) : null}
