@@ -130,3 +130,23 @@ Reason: documentation-only audit; no application implementation or measured-ener
 ```
 
 An independent subagent review was requested after this completed draft. Its findings and their disposition will be recorded with the final report.
+
+**Reproduce the narrow transcript experiment**
+
+Run from `/Users/pt/cat-code`. This uses generated messages only and makes no provider request. It reproduces the workload, not guaranteed timings; inspect full state equality and real frame lifecycle cases separately before implementing batching.
+
+```sh
+bun --eval '
+import { createTranscriptState, projectServerFrames } from "./app/renderer/src/transcriptProjector.ts";
+const sid="synthetic-audit";
+const ready={kind:"ready",protocolVersion:1,sessionId:sid,engineSessionId:"engine-synthetic",payload:{type:"app.ready",protocolVersion:1,inputEnabled:true,activeTurn:false,abort:{status:"idle"},goalSnapshot:null,pendingPermissionRequests:[]}};
+const mf=(message)=>({kind:"event",protocolVersion:1,sessionId:sid,event:{type:"message",message}});
+const hist=Array.from({length:2000},(_,i)=>mf({type:"user",uuid:"u"+i,session_id:"engine-synthetic",parent_tool_use_id:null,message:{role:"user",content:"synthetic "+i}}));
+const stream=(event)=>mf({type:"stream_event",uuid:"stream",session_id:"engine-synthetic",parent_tool_use_id:null,event});
+const base=projectServerFrames(createTranscriptState(),[ready,...hist,stream({type:"message_start",message:{id:"m-stream"}}),stream({type:"content_block_start",index:0,content_block:{type:"text",text:""}})]);
+const deltas=Array.from({length:1000},()=>stream({type:"content_block_delta",index:0,delta:{type:"text_delta",text:"x"}}));
+function run(batchSize){let state=base;const t=performance.now();for(let i=0;i<deltas.length;i+=batchSize)state=projectServerFrames(state,deltas.slice(i,i+batchSize));return {ms:performance.now()-t,rows:state.sessions[sid].rows.length,text:state.sessions[sid].rows.at(-1).content.length};}
+run(1); run(10);
+for(let i=0;i<3;i++)console.log(JSON.stringify({repeat:i+1,single:run(1),batch10:run(10)}));
+'
+```
