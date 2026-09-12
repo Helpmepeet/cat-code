@@ -296,9 +296,9 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   expect(html).toContain('aria-label="5-hour usage: 20%"')
   expect(html).toContain('aria-label="Weekly usage: 40%"')
   expect(html).toContain('role="progressbar"')
-  // No "5h"/"wk" text labels in the prototype rows.
-  expect(html).not.toContain('>5h<')
-  expect(html).not.toContain('>wk<')
+  expect(html).toContain('>5h<')
+  expect(html).toContain('>7d<')
+  expect(html).toContain('grid-cols-2')
 })
 
 test('the Welcome table filters blocked rows locally and counts visible rows', () => {
@@ -336,7 +336,7 @@ test('a loaded snapshot with no usable accounts has a distinct empty state', () 
   expect(html).not.toContain('No Codex account data for this view yet.')
 })
 
-test('weekly-only usage leaves the five-hour cells empty', () => {
+test('weekly-only usage expands across the full usage track', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
@@ -354,6 +354,10 @@ test('weekly-only usage leaves the five-hour cells empty', () => {
 
   expect(html).not.toContain('5-hour usage:')
   expect(html).toContain('Weekly usage: 37%')
+  expect(html).not.toContain('>5h<')
+  expect(html).toContain('>7d<')
+  expect(html).toContain('grid-cols-1')
+  expect(html).not.toContain('max-w-[220px]')
 })
 
 test('reversed dual windows render values and resets in duration slots', () => {
@@ -378,6 +382,7 @@ test('reversed dual windows render values and resets in duration slots', () => {
   expect(html).toContain('aria-label="5-hour usage: 12%"')
   expect(html).toContain('aria-label="Weekly reset: 3h"')
   expect(html).toContain('aria-label="5-hour reset: 4h"')
+  expect(html).toContain('grid-cols-2')
 })
 
 test('recognized duration with null percent keeps a known reset without fabricating usage', () => {

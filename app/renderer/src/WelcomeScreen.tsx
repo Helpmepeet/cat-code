@@ -494,8 +494,9 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 function CodexRow({ account }: { account: AccountStatus }) {
   const capped = account.status === 'capped' || account.usageLimitReached
   const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  const hasBothWindows = fiveHour !== null && weekly !== null
   return (
-    <div className="grid grid-cols-[1.4fr_1.6fr_0.5fr_0.6fr_1.6fr_0.5fr_0.6fr] items-center gap-x-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
+    <div className="grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
         <Radio on={account.isDefault} />
         <span className="truncate font-medium text-text-primary">
@@ -507,39 +508,56 @@ function CodexRow({ account }: { account: AccountStatus }) {
           </span>
         ) : null}
       </div>
-      <UsageCells label="5-hour" window={fiveHour} />
-      <UsageCells label="Weekly" window={weekly} />
+      <div
+        className={
+          'grid min-w-0 ' +
+          (hasBothWindows ? 'grid-cols-2 gap-x-7' : 'grid-cols-1')
+        }
+      >
+        {fiveHour ? (
+          <UsageTrack label="5-hour" shortLabel="5h" window={fiveHour} />
+        ) : null}
+        {weekly ? (
+          <UsageTrack label="Weekly" shortLabel="7d" window={weekly} />
+        ) : null}
+      </div>
     </div>
   )
 }
 
-function UsageCells({
+function UsageTrack({
   label,
+  shortLabel,
   window,
 }: {
   label: string
-  window: { percent: number | null; resetAt: number | null } | null
+  shortLabel: string
+  window: { percent: number | null; resetAt: number | null }
 }) {
-  if (!window) {
-    return [
-      <span key="bar" aria-hidden="true" />,
-      <span key="percent" aria-hidden="true" />,
-      <span key="reset" aria-hidden="true" />,
-    ]
-  }
-  return [
-    window.percent != null
-      ? <UsageBar key="bar" label={label} pct={window.percent} />
-      : <span key="bar" aria-hidden="true" />,
-    window.percent != null
-      ? <UsagePct key="percent" pct={window.percent} />
-      : <span key="percent" aria-hidden="true" />,
-    <ResetCell
-      key="reset"
-      label={`${label} reset`}
-      value={window.resetAt != null ? formatResetCompact(window.resetAt) : ''}
-    />,
-  ]
+  return (
+    <div className="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_2.75rem_3.75rem] items-center gap-x-2.5">
+      <span
+        aria-hidden="true"
+        className="font-mono text-[10px] font-medium uppercase tracking-[0.06em] text-text-faint"
+      >
+        {shortLabel}
+      </span>
+      {window.percent != null ? (
+        <UsageBar label={label} pct={window.percent} />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      {window.percent != null ? (
+        <UsagePct pct={window.percent} />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      <ResetCell
+        label={`${label} reset`}
+        value={window.resetAt != null ? formatResetCompact(window.resetAt) : ''}
+      />
+    </div>
+  )
 }
 
 /**
@@ -556,7 +574,7 @@ function UsageBar({ label, pct }: { label: string; pct: number }) {
       aria-valuemax={100}
       aria-valuemin={0}
       aria-valuenow={value}
-      className="h-[5px] min-w-0 max-w-[220px] overflow-hidden rounded-[3px] bg-white/[0.06]"
+      className="h-[5px] min-w-0 overflow-hidden rounded-[3px] bg-white/[0.06]"
       role="progressbar"
     >
       {/* §0 EXCEPTION: data-driven width Tailwind can't express — the single
@@ -592,7 +610,7 @@ function ResetCell({ label, value }: { label: string; value: string }) {
     <span
       aria-hidden={value ? undefined : 'true'}
       aria-label={value ? `${label}: ${value}` : undefined}
-      className="truncate font-mono text-[12px] tabular-nums text-text-subtle"
+      className="truncate text-right font-mono text-[12px] tabular-nums text-text-subtle"
     >
       {value}
     </span>
