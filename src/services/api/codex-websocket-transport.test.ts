@@ -103,6 +103,7 @@ const CONV_ID = 'test-conv-id-1111-2222-3333-444444444444'
 const AUTH = { Authorization: 'Bearer tok' }
 
 let fakeWs: FakeWebSocket
+let fakeWsFactoryReady: Promise<void> = Promise.resolve()
 
 function createCredentialContext(
   accountId: string,
@@ -149,11 +150,18 @@ function createCredentialContext(
 
 function installFakeWs(autoOpen = true): FakeWebSocket {
   fakeWs = new FakeWebSocket()
-  _setWebSocketFactoryForTest(() => fakeWs as never)
-  if (autoOpen) {
-    // Trigger open on next tick so ensureWebSocketSession resolves.
-    Promise.resolve().then(() => fakeWs.triggerOpen())
-  }
+  let markFactoryReady!: () => void
+  fakeWsFactoryReady = new Promise(resolve => {
+    markFactoryReady = resolve
+  })
+  _setWebSocketFactoryForTest(() => {
+    markFactoryReady()
+    if (autoOpen) {
+      // Trigger open after the production path has attached its listeners.
+      Promise.resolve().then(() => fakeWs.triggerOpen())
+    }
+    return fakeWs as never
+  })
   return fakeWs
 }
 
@@ -277,21 +285,25 @@ describe('streamTurnViaWebSocket', () => {
     expect(fakeWs.getSent()).toHaveLength(0)
   })
 
-  test('credential mismatch at authenticated socket open fails before a session is established', async () => {
+  test('credential mismatch fails before an authenticated socket handshake starts', async () => {
     const generationOne = createCredentialContext('acct-generation', 1, () => 2)
-    installFakeWs()
+    let socketFactoryCalls = 0
+    _setWebSocketFactoryForTest(() => {
+      socketFactoryCalls += 1
+      return new FakeWebSocket() as never
+    })
 
     await expect(
       ensureWebSocketSession(CONV_ID, AUTH, generationOne),
     ).rejects.toThrow()
-    expect(fakeWs.getSent()).toHaveLength(0)
-    expect(fakeWs.readyState).toBe(FakeWebSocket.CLOSED)
+    expect(socketFactoryCalls).toBe(0)
   })
 
   test('retirement invalidates and closes a pending socket open', async () => {
     const generationOne = createCredentialContext('acct-generation', 1)
     installFakeWs(false)
     const opening = ensureWebSocketSession(CONV_ID, AUTH, generationOne)
+    await fakeWsFactoryReady
 
     retireCodexWebSocketSessions({
       accountId: 'acct-generation',
@@ -484,6 +496,7 @@ describe('streamTurnViaWebSocket', () => {
   test('captures upgrade turn-state but does not echo it in the request body', async () => {
     installFakeWs(false)
     const opened = ensureWebSocketSession(CONV_ID, AUTH)
+    await fakeWsFactoryReady
     fakeWs.triggerUpgrade({ 'x-codex-turn-state': 'turn-state-123' })
     fakeWs.triggerOpen()
     await opened
@@ -1283,9 +1296,11 @@ describe('streamTurnViaWebSocket', () => {
 
   test('ensureWebSocketSession throws on connect failure', async () => {
     fakeWs = new FakeWebSocket()
-    _setWebSocketFactoryForTest(() => fakeWs as never)
-    // Trigger error instead of open
-    Promise.resolve().then(() => fakeWs.triggerError())
+    _setWebSocketFactoryForTest(() => {
+      // Trigger error after the production path has attached its listeners.
+      Promise.resolve().then(() => fakeWs.triggerError())
+      return fakeWs as never
+    })
 
     await expect(ensureWebSocketSession(CONV_ID, AUTH)).rejects.toThrow('WebSocket connect error')
   })

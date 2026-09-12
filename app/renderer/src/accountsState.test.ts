@@ -529,6 +529,50 @@ describe('targeted sign-out renderer overlay', () => {
     expect(state.signOutOverlays.b).toBeUndefined()
     expect(selectGlobalAccountsSnapshot(state)?.signedOutProfiles[0]?.id).toBe('b')
   })
+
+  test('a signed-out profile clears the overlay only at the receipt generation', () => {
+    let state = reduceAccountsState(createAccountsState(), {
+      type: 'pool',
+      pool: snapshot(),
+    })
+    state = reduceAccountsState(state, {
+      type: 'frame',
+      frame: signOutResult(
+        signOutReceipt({ observedCredentialGeneration: 4 }),
+      ),
+    })
+
+    const signedOutAt = (lifecycleGeneration: number): AccountsSnapshot =>
+      snapshot({
+        accounts: [snapshot().accounts[0]!],
+        poolCount: 1,
+        signedOutProfiles: [
+          {
+            id: 'b',
+            alias: 'backup',
+            state: 'signed_out',
+            credentialGeneration: lifecycleGeneration,
+            lifecycleGeneration,
+            credentialGenerationState: 'lifecycle_bound',
+            lifecycleState: 'signed_out',
+            lifecycleReadStatus: 'valid',
+          },
+        ],
+      })
+
+    state = reduceAccountsState(state, {
+      type: 'pool',
+      pool: signedOutAt(2),
+    })
+    expect(state.signOutOverlays.b?.phase).toBe('signed_out')
+    expect(selectGlobalAccountsSnapshot(state)?.accounts.map(row => row.id)).toEqual(['a'])
+
+    state = reduceAccountsState(state, {
+      type: 'pool',
+      pool: signedOutAt(4),
+    })
+    expect(state.signOutOverlays.b).toBeUndefined()
+  })
 })
 
 describe('accountsState selectors', () => {

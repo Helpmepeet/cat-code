@@ -634,33 +634,9 @@ async function openSession(
       onAbort()
     }
 
-    ws = webSocketFactory(CODEX_WS_URL, {
-      headers: {
-        ...authHeaders,
-        'OpenAI-Beta': WS_BETA_HEADER,
-        session_id: conversationId,
-        'x-client-request-id': conversationId,
-      },
-    })
-
-    // Bun's ws compatibility layer currently warns on `upgrade` listeners.
-    // Keep capture active for Node-style ws runtimes and injected tests; Bun
-    // production still connects with headers but cannot observe this response
-    // header until the runtime exposes the upgrade event.
-    if (typeof Bun === 'undefined' || webSocketFactoryIsTest) {
-      ws.on('upgrade', (res: IncomingMessage) => {
-        const header = res.headers['x-codex-turn-state']
-        if (typeof header === 'string') {
-          capturedTurnState = header
-        } else if (Array.isArray(header) && typeof header[0] === 'string') {
-          capturedTurnState = header[0]
-        }
-      })
-    }
-
-    ws.on('open', () => {
+    const onOpen = () => {
       if (settled) {
-        try { ws.close() } catch { /* ignore */ }
+        try { ws?.close() } catch { /* ignore */ }
         return
       }
       if (
@@ -690,7 +666,7 @@ async function openSession(
           settled = true
           cleanup()
           const session: WsSession = {
-            ws,
+            ws: ws!,
             accountId: context.credential.accountId,
             credentialGeneration: context.credential.credentialGeneration,
             credential: context.credential,
@@ -719,10 +695,65 @@ async function openSession(
           true,
         )
       })
-    })
+    }
 
-    ws.on('error', () => {
+    const onError = () => {
       rejectOpen(new Error('WebSocket connect error'))
+    }
+
+    // Creating the socket starts an authenticated HTTP upgrade. Keep that
+    // initiation under the same lifecycle lock as ordinary Codex HTTP sends,
+    // so a stale or signed-out generation cannot begin a new handshake.
+    void startCredentialSend(
+      context.credential,
+      authorizedCredential => {
+        if (
+          settled ||
+          pending.invalidated ||
+          isCredentialRetired(
+            authorizedCredential.accountId,
+            authorizedCredential.credentialGeneration,
+          ) ||
+          (sessionOpenVersions.get(conversationId) ?? 0) !== openVersion
+        ) {
+          throw new Error('WebSocket credential retired before connect')
+        }
+        ws = webSocketFactory(CODEX_WS_URL, {
+          headers: {
+            ...authHeaders,
+            Authorization: `Bearer ${authorizedCredential.accessToken}`,
+            'chatgpt-account-id': authorizedCredential.accountId,
+            'OpenAI-Beta': WS_BETA_HEADER,
+            session_id: conversationId,
+            'x-client-request-id': conversationId,
+          },
+        })
+
+        // Bun's ws compatibility layer currently warns on `upgrade` listeners.
+        // Keep capture active for Node-style ws runtimes and injected tests; Bun
+        // production still connects with headers but cannot observe this response
+        // header until the runtime exposes the upgrade event.
+        if (typeof Bun === 'undefined' || webSocketFactoryIsTest) {
+          ws.on('upgrade', (res: IncomingMessage) => {
+            const header = res.headers['x-codex-turn-state']
+            if (typeof header === 'string') {
+              capturedTurnState = header
+            } else if (Array.isArray(header) && typeof header[0] === 'string') {
+              capturedTurnState = header[0]
+            }
+          })
+        }
+        ws.on('open', onOpen)
+        ws.on('error', onError)
+      },
+      context.credentialUse,
+    ).catch(error => {
+      rejectOpen(
+        error instanceof Error
+          ? error
+          : new Error('WebSocket credential use failed'),
+        true,
+      )
     })
   })
 }

@@ -240,9 +240,12 @@ function reconcileSignOutOverlays(
       row => row.id === overlay.accountId,
     )
     const profileGeneration = observedProfileGeneration(profile)
+    const requiredSignedOutGeneration =
+      overlay.observedCredentialGeneration ??
+      overlay.expectedCredentialGeneration + 1
     const signedOutObserved =
       profileGeneration !== null &&
-      profileGeneration > overlay.expectedCredentialGeneration
+      profileGeneration >= requiredSignedOutGeneration
     const credentialedObserved =
       account !== undefined &&
       (overlay.phase === 'refreshing'
