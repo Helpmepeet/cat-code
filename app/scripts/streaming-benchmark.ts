@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { manifest } from '../../docs/reports/2026-09-12-live-streaming-measurements/fixture.js'
-import { OwnedProcessGroupLifecycle } from './streaming-benchmark-cleanup.js'
+import { boundedFailureDetail, OwnedProcessGroupLifecycle } from './streaming-benchmark-cleanup.js'
 
 const run = process.argv.includes('--run')
 const requestedWorkload = valueAfter('--workload')
@@ -51,7 +51,9 @@ for (const [signal, exitCode] of [['SIGINT', 130], ['SIGTERM', 143]] as const) {
 
 try {
   await bundle(resolve(appRoot, 'preload/preload.ts'), bundleOut, 'preload.cjs', 'cjs', { __CATCODE_DEV_HARNESS__: 'false' })
-  await bundle(resolve(appRoot, 'scripts/streaming-benchmark-main.ts'), bundleOut, 'main.js', 'esm')
+  // The temp bundle has no package.json/type boundary. `.mjs` is therefore the
+  // explicit ESM contract Electron's loader needs for top-level await/imports.
+  await bundle(resolve(appRoot, 'scripts/streaming-benchmark-main.ts'), bundleOut, 'main.mjs', 'esm')
   const build = spawnSync('bunx', ['vite', 'build', '--config', resolve(appRoot, 'scripts/streaming-benchmark.vite.config.ts')], {
     cwd: appRoot, stdio: 'inherit', env: allowlistedEnv({ CATCODE_STREAMING_BENCHMARK_RENDERER_OUT: rendererOut }),
   })
@@ -75,7 +77,7 @@ try {
         const sampleName = `sample-${repetition}-${workload.id}-${policy}`
         const sample = join(scratch, sampleName)
         mkdirSync(sample)
-        const outcome = await runOwnedElectron(electron, join(bundleOut, 'main.js'), sample, allowlistedEnv({
+        const outcome = await runOwnedElectron(electron, join(bundleOut, 'main.mjs'), sample, allowlistedEnv({
           CLAUDE_CONFIG_DIR: join(sample, 'config'), CATCODE_STREAMING_BENCHMARK_RUN_DIR: sample,
           CATCODE_STREAMING_BENCHMARK_RENDERER_OUT: rendererOut, CATCODE_STREAMING_BENCHMARK_PRELOAD: join(bundleOut, 'preload.cjs'),
           CATCODE_STREAMING_BENCHMARK_WORKLOAD: workload.id, CATCODE_STREAMING_BENCHMARK_POLICY: policy,
@@ -134,6 +136,9 @@ async function runOwnedElectron(executable: string, main: string, cwd: string, e
   if (interrupting) {
     if (interruptCleanup) await interruptCleanup
     return { ok: false, error: 'benchmark interrupted' }
+  }
+  if (outcome.timedOut) {
+    outcome.error = boundedFailureDetail(outcome.error ?? 'Electron timed out', stderr)
   }
   return outcome
 }

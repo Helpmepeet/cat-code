@@ -81,6 +81,11 @@ export class OwnedProcessGroupLifecycle {
   get activeProcessGroupId(): number | null { return this.activeId }
 }
 
+export function boundedFailureDetail(message: string, stderr: string, maxChars = 8_192): string {
+  const tail = stderr.slice(-Math.max(0, maxChars)).trim() || '(empty)'
+  return `${message}; stderr tail: ${tail}`
+}
+
 async function waitGone(processGroupId: number, waitMs: number, pollMs: number, ops: ProcessGroupOps): Promise<boolean> {
   const attempts = Math.max(1, Math.ceil(waitMs / Math.max(1, pollMs)))
   for (let index = 0; index < attempts; index++) {

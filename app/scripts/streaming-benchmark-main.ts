@@ -15,6 +15,17 @@ import { benchmarkCoverageComplete, type BenchmarkObserverCounters } from './str
 import { advanceDocumentSubscription, isCurrentDocumentAcknowledgement, markerTracedBootstrap } from './streaming-benchmark-runtime.js'
 import * as channels from '../shared/ipcChannels.js'
 
+let fatalExitStarted = false
+const fatalExit = (reason: unknown) => {
+  if (fatalExitStarted) return
+  fatalExitStarted = true
+  const message = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
+  process.stderr.write(`[streaming-benchmark] fatal: ${message.slice(0, 2_048)}\n`)
+  try { app.exit(1) } catch { process.exit(1) }
+}
+process.once('uncaughtException', fatalExit)
+process.once('unhandledRejection', fatalExit)
+
 const runDir = required('CATCODE_STREAMING_BENCHMARK_RUN_DIR')
 const rendererDir = required('CATCODE_STREAMING_BENCHMARK_RENDERER_OUT')
 const preloadPath = required('CATCODE_STREAMING_BENCHMARK_PRELOAD')

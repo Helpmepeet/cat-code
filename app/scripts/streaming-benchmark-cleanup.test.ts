@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { cleanupInterruptedRun, OwnedProcessGroupLifecycle, reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
+import { boundedFailureDetail, cleanupInterruptedRun, OwnedProcessGroupLifecycle, reapOwnedProcessGroup, type ProcessGroupOps } from './streaming-benchmark-cleanup.js'
 
 function harness(states: boolean[]) {
   const signals: Array<{ id: number; signal: NodeJS.Signals }> = []
@@ -71,4 +71,10 @@ test('failed reap retains ownership and returns the same rejected cleanup', asyn
   await expect(first).rejects.toBe(failure)
   expect(lifecycle.activeProcessGroupId).toBe(66)
   expect(lifecycle.canStartSample).toBe(false)
+})
+
+test('timeout diagnostics retain only a bounded stderr tail', () => {
+  const detail = boundedFailureDetail('timed out', 'prefix-123456', 6)
+  expect(detail).toBe('timed out; stderr tail: 123456')
+  expect(boundedFailureDetail('timed out', '', 6)).toBe('timed out; stderr tail: (empty)')
 })
