@@ -1117,6 +1117,7 @@ async function* runAgentInCleanupScope({
   // token total off the LAST assistant message, so a synthetic terminal
   // carrying the zeroed default would report the whole run as 0 tokens.
   let lastAssistantUsage: AssistantMessage['message']['usage'] | undefined
+  let completedTerminalEscalation = false
 
   try {
     for await (const message of query({
@@ -1222,6 +1223,13 @@ async function* runAgentInCleanupScope({
             ? findCompletedAskParentSessionCall(message, pendingEscalations)
             : undefined
         if (escalation) {
+          // A terminal handoff owns the worker from this point onward. Cancel
+          // the query before publishing it so queued tools are rejected and a
+          // tool waiting on permission cannot cross into execution afterward.
+          // The blocked result remains authoritative below rather than being
+          // rewritten as a generic aborted worker outcome.
+          completedTerminalEscalation = true
+          agentAbortController.abort('terminal_handoff')
           // The run's result is written here rather than left to the model,
           // because the model has already stopped being asked for one: the
           // loop ends on this message. finalizeAgentTool takes the last
@@ -1246,7 +1254,10 @@ async function* runAgentInCleanupScope({
       }
     }
 
-    if (agentAbortController.signal.aborted) {
+    if (
+      agentAbortController.signal.aborted &&
+      !completedTerminalEscalation
+    ) {
       throw new AbortError()
     }
 

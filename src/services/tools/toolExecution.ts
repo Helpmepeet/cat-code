@@ -1327,6 +1327,7 @@ async function checkPermissionsAndCallTool(
   const startTime = Date.now()
 
   startSessionActivity('tool_exec')
+  toolUseContext.onToolExecutionStart?.()
   // If processedInput still points at the backfill clone, no hook/permission
   // replaced it — pass the pre-backfill callInput so call() sees the model's
   // original field values. Otherwise converge on the hook-supplied input.

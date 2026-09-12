@@ -2149,6 +2149,7 @@ async function* queryLoop(
       return cmd.mode === 'task-notification' && cmd.agentId === currentAgentId
     })
 
+    const preparedQueuedAttachments: AttachmentMessage[] = []
     for await (const attachment of getAttachmentMessages(
       null,
       updatedToolUseContext,
@@ -2165,8 +2166,18 @@ async function* queryLoop(
       ) {
         continue
       }
-      yield attachment
-      toolResults.push(attachment)
+      preparedQueuedAttachments.push(attachment)
+    }
+
+    // Attachment preparation may resize images or perform other asynchronous
+    // work. A send-now interruption during that window still owns the queued
+    // prompt: leave it queued for the sidecar's between-turn submission, and
+    // do not publish a transcript attachment that was never sent to a model.
+    if (!toolUseContext.abortController.signal.aborted) {
+      for (const attachment of preparedQueuedAttachments) {
+        yield attachment
+        toolResults.push(attachment)
+      }
     }
 
     // Memory prefetch consume: only if settled and not already consumed on
@@ -2209,9 +2220,11 @@ async function* queryLoop(
 
     // Remove only commands that were actually consumed as attachments.
     // Prompt and task-notification commands are converted to attachments above.
-    const consumedCommands = queuedCommandsSnapshot.filter(
-      cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
-    )
+    const consumedCommands = toolUseContext.abortController.signal.aborted
+      ? []
+      : queuedCommandsSnapshot.filter(
+          cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
+        )
     if (consumedCommands.length > 0) {
       for (const cmd of consumedCommands) {
         if (cmd.uuid) {

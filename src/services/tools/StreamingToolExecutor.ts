@@ -7,6 +7,7 @@ import {
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import { findToolByName, type Tools, type ToolUseContext } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import { createChildAbortController } from '../../utils/abortController.js'
 import {
@@ -33,6 +34,7 @@ type TrackedTool = {
   // Progress messages are stored separately and yielded immediately
   pendingProgress: Message[]
   contextModifiers?: Array<(context: ToolUseContext) => ToolUseContext>
+  effectStarted?: boolean
 }
 
 /**
@@ -51,6 +53,8 @@ export class StreamingToolExecutor {
   // Aborting this does NOT abort the parent — query.ts won't end the turn.
   private siblingAbortController: AbortController
   private discarded = false
+  private terminalHandoffSettled = false
+  private terminalHandoffSettlement?: Promise<void>
   // Signal to wake up getRemainingResults when progress is available
   private progressAvailableResolve?: () => void
   private ptcloveToolStatus: PtcloveToolStatusTracker
@@ -331,7 +335,13 @@ export class StreamingToolExecutor {
           tool.block,
           tool.assistantMessage,
           this.canUseTool,
-          { ...this.toolUseContext, abortController: toolAbortController },
+          {
+            ...this.toolUseContext,
+            abortController: toolAbortController,
+            onToolExecutionStart: () => {
+              tool.effectStarted = true
+            },
+          } as ToolUseContext,
         )
 
         // Track if this specific tool has produced an error result.
@@ -427,6 +437,12 @@ export class StreamingToolExecutor {
       return
     }
 
+    this.startTerminalHandoffSettlement()
+    // The model stream polls this synchronous method. Withhold all ordered
+    // results while a terminal handoff is settling so it cannot publish the
+    // handoff before already-started sibling effects finish.
+    if (this.terminalHandoffSettlement && !this.terminalHandoffSettled) return
+
     for (const tool of this.tools) {
       // Always yield pending progress messages immediately, regardless of tool status
       while (tool.pendingProgress.length > 0) {
@@ -470,6 +486,7 @@ export class StreamingToolExecutor {
 
     while (this.hasUnfinishedTools()) {
       await this.processQueue()
+      await this.settleTerminalHandoff()
 
       for (const result of this.getCompletedResults()) {
         yield result
@@ -497,9 +514,46 @@ export class StreamingToolExecutor {
       }
     }
 
+    await this.settleTerminalHandoff()
     for (const result of this.getCompletedResults()) {
       yield result
     }
+  }
+
+  private async settleTerminalHandoff(): Promise<void> {
+    this.startTerminalHandoffSettlement()
+    await this.terminalHandoffSettlement
+  }
+
+  private startTerminalHandoffSettlement(): void {
+    if (this.terminalHandoffSettlement) return
+    const handoff = this.tools.find(
+      tool =>
+        tool.block.name === ASK_PARENT_SESSION_TOOL_NAME &&
+        tool.status === 'completed' &&
+        tool.results?.some(message => {
+          if (message.type !== 'user' || !Array.isArray(message.message.content)) {
+            return false
+          }
+          return message.message.content.some(
+            block =>
+              block.type === 'tool_result' &&
+              block.tool_use_id === tool.id &&
+              block.is_error !== true,
+          )
+        }),
+    )
+    if (!handoff) return
+
+    this.siblingAbortController.abort('terminal_handoff')
+    const startedSiblings = this.tools
+      .filter(tool => tool !== handoff && tool.effectStarted && tool.promise)
+      .map(tool => tool.promise!)
+    this.terminalHandoffSettlement = Promise.allSettled(startedSiblings).then(
+      () => {
+        this.terminalHandoffSettled = true
+      },
+    )
   }
 
   /**

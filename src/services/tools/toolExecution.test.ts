@@ -11,6 +11,7 @@ import type { MessageUpdateLazy } from './toolExecution.js'
 import { classifyToolError } from './toolExecution.js'
 import { runTools } from './toolOrchestration.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
 import { FilePatchError } from '../../tools/FilePatchTool/types.js'
 
 // Only runPreToolUseHooks is stubbed, and only while this file's tests run:
@@ -448,4 +449,95 @@ describe('tool execution authority', () => {
       })
     }
   }
+})
+
+describe('streaming terminal handoff', () => {
+  test('waits for a started sibling effect before publishing the handoff', async () => {
+    let releaseEffect!: () => void
+    const effectGate = new Promise<void>(resolve => {
+      releaseEffect = resolve
+    })
+    let effectStarted = false
+    let effectFinished = false
+    const ask = makeTool(ASK_PARENT_SESSION_TOOL_NAME, async () => ({ data: 'handed off' }))
+    const effect = makeTool('OwnedEffect', async () => {
+      effectStarted = true
+      await effectGate
+      effectFinished = true
+      return { data: 'settled' }
+    })
+    const context = createToolUseContext([ask, effect])
+    const assistant = createAssistantMessage()
+    const blocks = [
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' } },
+      { type: 'tool_use' as const, id: 'effect', name: effect.name, input: { value: 'x' } },
+    ]
+    assistant.message.content = blocks
+    const executor = new StreamingToolExecutor(
+      context.options.tools,
+      async (_tool, input) => ({ behavior: 'allow' as const, updatedInput: input }),
+      context,
+    )
+    for (const block of blocks) executor.addTool(block, assistant)
+
+    const draining = (async () => {
+      const messages: Message[] = []
+      for await (const update of executor.getRemainingResults()) {
+        if (update.message) messages.push(update.message)
+      }
+      return messages
+    })()
+    for (let i = 0; i < 100 && !effectStarted; i++) {
+      await new Promise(resolve => setTimeout(resolve, 1))
+    }
+    expect(effectStarted).toBe(true)
+    let published = false
+    void draining.then(() => {
+      published = true
+    })
+    await Promise.resolve()
+    expect(published).toBe(false)
+    releaseEffect()
+    const messages = await draining
+    expect(effectFinished).toBe(true)
+    expect(JSON.stringify(messages)).toContain('handed off')
+  })
+
+  test('does not wait forever for permission and prevents the effect from starting later', async () => {
+    let releasePermission!: () => void
+    const permissionGate = new Promise<void>(resolve => {
+      releasePermission = resolve
+    })
+    let effectCalls = 0
+    const ask = makeTool(ASK_PARENT_SESSION_TOOL_NAME, async () => ({ data: 'handed off' }))
+    const effect = makeTool('PermissionWait', async () => {
+      effectCalls++
+      return { data: 'ran' }
+    })
+    const context = createToolUseContext([ask, effect])
+    const assistant = createAssistantMessage()
+    const blocks = [
+      { type: 'tool_use' as const, id: 'ask', name: ask.name, input: { value: 'x' } },
+      { type: 'tool_use' as const, id: 'waiting', name: effect.name, input: { value: 'x' } },
+    ]
+    assistant.message.content = blocks
+    const executor = new StreamingToolExecutor(
+      context.options.tools,
+      async (tool, input) => {
+        if (tool.name === effect.name) await permissionGate
+        return { behavior: 'allow' as const, updatedInput: input }
+      },
+      context,
+    )
+    for (const block of blocks) executor.addTool(block, assistant)
+    const iterator = executor.getRemainingResults()
+    const firstResult = await iterator.next()
+    expect(firstResult.done).toBe(false)
+    expect(effectCalls).toBe(0)
+    releasePermission()
+    for await (const _ of { [Symbol.asyncIterator]: () => iterator }) {
+      // drain the remaining results
+    }
+    expect(effectCalls).toBe(0)
+  })
 })
