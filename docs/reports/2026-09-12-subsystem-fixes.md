@@ -2,7 +2,7 @@
 
 All **24 confirmed findings** from [the ten-subsystem review](2026-09-12-ten-subsystem-review.md) are fixed in `codex/subsystem-fixes`. The final headless checks passed: **4,803 desktop tests**, **20 file-isolated integration regressions**, the engine build, app typecheck, scoped sidecar typecheck, and renderer build. The subsequently authorized Electron hardening check passed **19/19 checks**. Visual acceptance remains unverified.
 
-Worktree: `/Users/pt/cat-code/.worktrees/subsystem-fixes`. Starting commit: `a375ab57`. GPT-5.6-Sol workers implemented the fixes and regression coverage; the parent reviewed their evidence, requested stronger integration tests where needed, and ran the final verification. Changes remain on this worktree branch, unmerged and unpushed.
+Worktree: `/Users/pt/cat-code/.worktrees/subsystem-fixes`. Starting commit: `a375ab57`. GPT-5.6-Sol workers implemented the fixes and regression coverage; the parent reviewed their evidence, requested stronger integration tests where needed, and ran the final verification. Changes are published in [PR #22](https://github.com/Helpmepeet/cat-code/pull/22) and remain unmerged. The user approved including the 34 earlier local commits between GitHub main and the worktree baseline; the PR description records that scope.
 
 The account UI amendment reviewed as AC3 was still uncommitted in the original working tree. Its three relevant files were imported as a baseline before the account worker began: `App.tsx`, `leaseState.ts`, and `leaseState.test.ts`. The exact import is preserved locally at `tmp/subsystem-fixes-2026-09-12/account-ui-baseline.patch`. The original working tree was not edited, and its other uncommitted changes were not imported.
 
