@@ -22,7 +22,9 @@ import { readPeerIdentity, type PeerIdentity } from './peerHostRequester.js'
  * §7 sweep flags it. This string is never rendered: it is appended to the
  * model's system prompt, so the exemption is on the audience, not the words.
  */
-export const DESKTOP_SYSTEM_PROMPT_ADDENDUM = `Write file references as markdown links, not as bare file_path:line_number, so the desktop app can open them: the href is the path relative to the working directory, with an optional :line suffix. Examples: [foo.ts](src/utils/foo.ts), [Bar.tsx:42](app/components/Bar.tsx:42).` // §7-ok
+export const DESKTOP_SYSTEM_PROMPT_ADDENDUM = `Interface: Cat Code desktop app, in a session tab.
+
+Write file references as markdown links, not as bare file_path:line_number, so the desktop app can open them: the href is the path relative to the working directory, with an optional :line suffix. Examples: [foo.ts](src/utils/foo.ts), [Bar.tsx:42](app/components/Bar.tsx:42).` // §7-ok
 
 /**
  * The peer doctrine block, PEER-SESSIONS §5, quoted verbatim from that section

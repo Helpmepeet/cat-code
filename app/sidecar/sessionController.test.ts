@@ -258,7 +258,7 @@ test('normal startup prepares the live MCP snapshot source and cancels URL elici
   ).toEqual({ action: 'cancel' })
 })
 
-test('normal startup appends the desktop file-reference instruction', async () => {
+test('normal startup appends the desktop interface and file-reference instructions', async () => {
   // The engine's tone section teaches the TERMINAL convention
   // (`src/constants/prompts.ts:502` — bare `file_path:line_number`, an OSC 8
   // hyperlink in the TUI). A renderer has no OSC 8, so a desktop session must
@@ -272,6 +272,7 @@ test('normal startup appends the desktop file-reference instruction', async () =
   expect(queryEngineConfig.appendSystemPrompt).toStartWith(
     DESKTOP_SYSTEM_PROMPT_ADDENDUM,
   )
+  expect(queryEngineConfig.appendSystemPrompt).toContain('Interface: Cat Code desktop app, in a session tab.')
   expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
 })
 
