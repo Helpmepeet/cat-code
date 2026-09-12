@@ -62,6 +62,31 @@ export class SidecarResumeBusyError extends SidecarResumeError {
   }
 }
 
+type ResumeConversationLoader = typeof loadConversationForResume
+
+/** Acquire transcript ownership before any mutable resume read or hook. */
+export async function loadOwnedConversationForResume(
+  resumeEngineSessionId: string,
+  loadConversation: ResumeConversationLoader = loadConversationForResume,
+): Promise<Awaited<ReturnType<ResumeConversationLoader>>> {
+  try {
+    await activateTranscriptLease(resumeEngineSessionId)
+  } catch (error) {
+    if (error instanceof TranscriptInUseError) {
+      throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
+    }
+    throw error
+  }
+  try {
+    const loaded = await loadConversation(resumeEngineSessionId, undefined)
+    if (!loaded) await releaseActiveTranscriptLease()
+    return loaded
+  } catch (error) {
+    await releaseActiveTranscriptLease().catch(() => {})
+    throw error
+  }
+}
+
 /**
  * A message that was still on the mid-turn queue when the process died: the
  * user watched it leave the composer, and nothing ever delivered it.
@@ -234,24 +259,8 @@ export async function resumeEngineSession(
   cwd: string,
   agentDefinitions: AgentDefinitionsResult,
 ): Promise<SidecarResumeResult> {
-  try {
-    await activateTranscriptLease(resumeEngineSessionId)
-  } catch (error) {
-    if (error instanceof TranscriptInUseError) {
-      throw new SidecarResumeBusyError(resumeEngineSessionId, error.message)
-    }
-    throw error
-  }
-
-  let loaded: Awaited<ReturnType<typeof loadConversationForResume>>
-  try {
-    loaded = await loadConversationForResume(resumeEngineSessionId, undefined)
-  } catch (error) {
-    await releaseActiveTranscriptLease().catch(() => {})
-    throw error
-  }
+  const loaded = await loadOwnedConversationForResume(resumeEngineSessionId)
   if (!loaded) {
-    await releaseActiveTranscriptLease()
     // Missing/corrupt transcript — never fall through to a fresh session.
     throw new SidecarResumeError(
       resumeEngineSessionId,

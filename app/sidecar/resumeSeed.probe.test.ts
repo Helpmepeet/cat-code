@@ -33,6 +33,9 @@ const here = dirname(fileURLToPath(import.meta.url))
 const minter = join(here, 'mintTranscript.fixture.ts')
 const seedProbe = join(here, 'resumeSeedProbe.fixture.ts')
 const leaseRaceWriter = join(here, 'resumeLeaseRace.fixture.ts')
+const leaseHook = join(here, 'resumeLeaseHook.fixture.ts')
+const loadReject = join(here, 'resumeLoadReject.fixture.ts')
+const shellQuote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
 
 // Each child boots the full engine graph + init(); well past Bun's 5s default
 // on a cold module cache (same headroom as the P3-1 probes).
@@ -235,6 +238,16 @@ test('PR1: retry after a writer release loads the completed durable turn', async
   const marker = `late-${randomUUID()}`
   const readyFile = join(configHome, 'writer.ready')
   const appendFile = join(configHome, 'writer.append')
+  const hookEntered = join(configHome, 'hook.entered')
+  const hookRelease = join(configHome, 'hook.release')
+  writeFileSync(join(configHome, 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [{ matcher: 'resume', hooks: [{
+      type: 'command',
+      command: [process.execPath, 'run', leaseHook, hookEntered, hookRelease]
+        .map(shellQuote)
+        .join(' '),
+    }] }] },
+  }))
   const writer = startChild({
     entry: leaseRaceWriter,
     args: [engineSessionId, readyFile, appendFile, marker],
@@ -244,11 +257,35 @@ test('PR1: retry after a writer release loads the completed durable turn', async
   })
   while (!existsSync(readyFile)) await Bun.sleep(20)
 
-  const blocked = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  const firstReader = startChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
+  let raceSettled = false
+  const firstOutcome = await Promise.race([
+    firstReader.result.then(result => ({ kind: 'result' as const, result })),
+    (async () => {
+      while (!raceSettled && !existsSync(hookEntered)) await Bun.sleep(20)
+      return existsSync(hookEntered)
+        ? { kind: 'hook' as const }
+        : new Promise<never>(() => {})
+    })(),
+  ])
+  raceSettled = true
+  if (firstOutcome.kind === 'hook') {
+    // Pre-fix path: the reader loaded stale state and entered its hook without
+    // ownership. Let the writer append/release, then let stale adoption finish.
+    writeFileSync(appendFile, 'append and release')
+    expect((await writer.result).code).toBe(0)
+    writeFileSync(hookRelease, 'finish hook')
+    const stale = await firstReader.result
+    const line = stale.stdout.split('\n').find(value => value.startsWith('SEED_RESULT='))
+    expect(line && JSON.parse(line.slice('SEED_RESULT='.length)).engineHasMarker).toBe(true)
+    return
+  }
+  const blocked = firstOutcome.result
   expect(blocked.code).not.toBe(0)
   expect(blocked.stderr).toContain('already open in another Cat Code process')
   writeFileSync(appendFile, 'append and release')
   expect((await writer.result).code).toBe(0)
+  writeFileSync(hookRelease, 'allow retry hook')
 
   const resumed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
   expect(resumed.code).toBe(0)
@@ -257,15 +294,11 @@ test('PR1: retry after a writer release loads the completed durable turn', async
   expect(JSON.parse(line!.slice('SEED_RESULT='.length)).engineHasMarker).toBe(true)
 }, TEST_TIMEOUT_MS)
 
-test('PR1: an unloadable resume releases ownership for a later valid resume', async () => {
+test('PR1: a loader rejection releases ownership while the failed reader stays alive', async () => {
   const configHome = tmp('catcode-resume-hook-cfg-')
   const cwd = tmp('catcode-resume-hook-wd-')
   const engineSessionId = randomUUID()
   const marker = `hook-${randomUUID()}`
-  const failed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
-  expect(failed.code).not.toBe(0)
-  expect(failed.stderr).toContain('transcript missing or unreadable')
-
   const mint = await runChild({
     entry: minter,
     args: [engineSessionId, marker],
@@ -274,9 +307,20 @@ test('PR1: an unloadable resume releases ownership for a later valid resume', as
     extraEnv: { TEST_ENABLE_SESSION_PERSISTENCE: '1' },
   })
   expect(mint.code).toBe(0)
+  const rejectingReady = join(configHome, 'rejecting.ready')
+  const rejectingRelease = join(configHome, 'rejecting.release')
+  const rejecting = startChild({
+    entry: loadReject,
+    args: [engineSessionId, rejectingReady, rejectingRelease],
+    cwd,
+    configHome,
+  })
+  await waitForPidMarker(rejectingReady, rejecting.pid)
   const resumed = await runChild({ entry: seedProbe, args: [engineSessionId, marker], cwd, configHome })
   expect(resumed.code).toBe(0)
   expect(resumed.stdout).toContain('"engineHasMarker":true')
+  writeFileSync(rejectingRelease, 'exit')
+  expect((await rejecting.result).code).toBe(0)
 }, TEST_TIMEOUT_MS)
 
 test('F1/F2 projection wiring: archival display replay preserves the exact visible engine-seed tail', () => {
