@@ -6,8 +6,10 @@ import {
   readFileSync,
   readlinkSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -85,6 +87,44 @@ test('an unresolved symlink target returns an error and leaves the link intact',
   expect(readlinkSync(settingsPath)).toBe('missing-directory/settings.json')
   expect(readdirSync(directory)).toEqual(['settings.json'])
 })
+
+test.each(['file', 'symlink'] as const)(
+  'a settings save rejects a %s destination retargeted after the locked read',
+  originalKind => {
+    const directory = mkdtempSync(join(tmpdir(), 'settings-symlink-retarget-'))
+    scratchDirectories.push(directory)
+    process.env.CLAUDE_CONFIG_DIR = directory
+    resetSettingsCache()
+    const settingsPath = join(directory, 'settings.json')
+    const originalPath = join(directory, 'original-settings.json')
+    const otherPath = join(directory, 'other-settings.json')
+    const original = '{"env":{"ORIGINAL":"keep"}}\n'
+    const other = '{"env":{"OTHER":"keep"}}\n'
+    writeFileSync(otherPath, other)
+    if (originalKind === 'file') {
+      writeFileSync(settingsPath, original)
+    } else {
+      writeFileSync(originalPath, original)
+      symlinkSync(originalPath, settingsPath)
+    }
+
+    const { error } = updateSettingsForSource('userSettings', current => {
+      if (originalKind === 'file') renameSync(settingsPath, originalPath)
+      else unlinkSync(settingsPath)
+      symlinkSync(otherPath, settingsPath)
+      return { ...current, model: 'opus' }
+    })
+
+    expect(error).toBeInstanceOf(Error)
+    expect(error?.message).toContain('target changed')
+    expect(readFileSync(originalPath, 'utf8')).toBe(original)
+    expect(readFileSync(otherPath, 'utf8')).toBe(other)
+    expect(readlinkSync(settingsPath)).toBe(otherPath)
+    expect(readdirSync(directory).sort()).toEqual([
+      'original-settings.json', 'other-settings.json', 'settings.json',
+    ])
+  },
+)
 
 test('a missing target resolves parent traversal after directory symlinks', () => {
   const directory = mkdtempSync(join(tmpdir(), 'settings-symlink-parent-'))

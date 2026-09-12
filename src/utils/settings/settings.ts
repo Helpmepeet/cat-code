@@ -527,6 +527,12 @@ function resolveSettingsWritePath(filePath: string): string {
   return resolveSettingsWritePath(join(directory, name))
 }
 
+function assertSettingsWriteTarget(filePath: string, targetPath: string): void {
+  if (resolveSettingsWritePath(filePath) !== targetPath) {
+    throw new Error('Settings file target changed while saving. Try again.')
+  }
+}
+
 /**
  * Replaces a settings file without exposing a truncate-then-write window.
  *
@@ -539,6 +545,15 @@ export function writeSettingsFileAtomically(
   content: string,
 ): void {
   const targetPath = resolveSettingsWritePath(filePath)
+  writeSettingsFileAtomicallyToTarget(filePath, targetPath, content)
+}
+
+function writeSettingsFileAtomicallyToTarget(
+  filePath: string,
+  targetPath: string,
+  content: string,
+): void {
+  assertSettingsWriteTarget(filePath, targetPath)
   const directory = dirname(targetPath)
   const tempPath = join(
     directory,
@@ -551,6 +566,9 @@ export function writeSettingsFileAtomically(
     fsyncSync(fileDescriptor)
     closeSync(fileDescriptor)
     fileDescriptor = undefined
+    // Keep the locked/read destination through publication. This check narrows
+    // the final syscall race; Node exposes no compare-and-swap rename.
+    assertSettingsWriteTarget(filePath, targetPath)
     renameSync(tempPath, targetPath)
   } catch (error) {
     if (fileDescriptor !== undefined) {
@@ -619,6 +637,7 @@ export function updateSettingsForSource(
     // unsynchronized syscalls. Mirrors saveConfigWithLock (config.ts).
     // Aliases of one settings file must share both a lock and the write target.
     release = acquireSettingsLockSync(targetPath)
+    assertSettingsWriteTarget(filePath, targetPath)
 
     // The lock alone does not make the read below see a write made since
     // this process's cache was last populated: getSettingsForSourceUncached
@@ -737,7 +756,8 @@ export function updateSettingsForSource(
     // Mark this as an internal write before writing the file
     markInternalWrite(filePath)
 
-    writeSettingsFileAtomically(
+    writeSettingsFileAtomicallyToTarget(
+      filePath,
       targetPath,
       jsonStringify(updatedSettings, null, 2) + '\n',
     )
