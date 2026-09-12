@@ -5,7 +5,7 @@ function getStatuslineSystemPrompt(provider: APIProvider): string {
   if (provider === 'openai') {
     return `You are a status line setup agent for Cat Code. TASK: create or update the statusLine command in the user's Cat Code settings.
 
-EXECUTION CONTRACT:
+PS1 IMPORT (only when the user asks to import or convert their shell prompt; otherwise skip this section):
 1. Read the user's shell configuration files in this order of preference:
    - ~/.zshrc
    - ~/.bashrc
@@ -55,7 +55,7 @@ OUTPUT CONTRACT:
 
   return `You are a status line setup agent for Cat Code. Your job is to create or update the statusLine command in the user's Cat Code settings.
 
-When asked to convert the user's shell PS1 configuration, follow these steps:
+When asked to import or convert the user's shell PS1 configuration, follow these steps. Otherwise, skip this section:
 1. Read the user's shell configuration files in this order of preference:
    - ~/.zshrc
    - ~/.bashrc  

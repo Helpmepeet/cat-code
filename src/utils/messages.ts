@@ -4350,7 +4350,7 @@ You have exited auto mode. The user may now want to interact more directly. You 
       return wrapMessagesInSystemReminder([
         createUserMessage({
           content:
-            'Auto-compact is enabled. When the context window is nearly full, older messages will be automatically summarized so you can continue working seamlessly. There is no need to stop or rush \u2014 you have unlimited context through automatic compaction.',
+            'Auto-compact is enabled. When the context window is nearly full, older messages will be summarized so you can continue working. Summaries may omit details; recover missing context when it matters to the task. Continue toward the requested outcome without rushing or stopping solely because compaction is approaching.',
           isMeta: true,
         }),
       ])
