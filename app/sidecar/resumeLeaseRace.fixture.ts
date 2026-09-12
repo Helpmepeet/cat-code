@@ -39,6 +39,7 @@ async function main(): Promise<void> {
   ])
   await flushSessionStorage()
   await releaseActiveTranscriptLease()
+  process.exit(0)
 }
 
 void main().catch(error => {

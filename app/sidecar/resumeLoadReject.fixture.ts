@@ -18,3 +18,4 @@ try {
 writeFileSync(readyFile, String(process.pid))
 while (!existsSync(releaseFile)) await Bun.sleep(20)
 await releaseActiveTranscriptLease()
+process.exit(0)
