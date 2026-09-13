@@ -131,7 +131,18 @@ before that policy is released.
 ### Textual hints
 
 - Bare `@@` is normal and contributes no hint.
-- Nonempty `@@` text is a mandatory literal preceding-text constraint.
+- `@@` text containing a non-whitespace character is a mandatory
+  preceding-line constraint. Its authoritative comparison is case-sensitive,
+  trimmed whole-line equality:
+  `sourceLine.trim() === hint.trim()`.
+- Trimming ignores leading indentation and trailing whitespace only. It does
+  not normalize internal whitespace, punctuation, Unicode, or case.
+- A whitespace-only hint is equivalent to bare `@@` and contributes no stacked
+  constraint.
+- This deliberately narrows the current
+  `sourceLine.trim().includes(hint.trim())` behavior. For example,
+  `@@ function foo` no longer matches `function foobar()` or
+  `function foo() {`; the model must copy the complete logical source line.
 - It is not a class, function, indentation, or AST containment promise.
 - Stacked hints must appear on distinct source lines in their supplied order.
 - Hints are evaluated against the immutable source snapshot.
@@ -162,9 +173,40 @@ before that policy is released.
   is valid. Any later hunk that leaves or adds output after that line makes the
   plan invalid. Evaluate this before deciding whether there are zero, one, or
   many complete plans.
+- A no-newline marker attaches only to the immediately preceding hunk line. A
+  marker after a deletion constrains the old side, after an addition constrains
+  the new side, and after context constrains both sides. Preserve that line
+  attachment in the parsed representation.
+- Marker absence is intentionally asymmetric. On the old side it is
+  unspecified, so a patch need not know whether the source snapshot has a final
+  newline. On the new side, an unmarked patch line that becomes the nonempty
+  final output line requires a final newline. If no hunk affects output EOF,
+  preserve the source's existing final-newline state. Empty output is exactly
+  zero bytes and has no newline state.
 - Unaffected source bytes, BOM state, encoding, and line-ending style remain
   preserved to the extent already supported by `readFileForEdit` and the
   publication helpers.
+
+Expected logical bytes (`\n` below means LF before line-ending serialization):
+
+| Source bytes | EOF-affecting hunk | Marker placement | Expected outcome |
+| --- | --- | --- | --- |
+| `old` | replace `-old` with `+new` | none | `new\n` |
+| `old` | replace `-old` with `+new` | after `-old` only | `new\n` |
+| `old\n` | replace `-old` with `+new` | after `-old` only | reject: old-side newline conflict |
+| `old` | replace `-old` with `+new` | after `+new` only | `new` |
+| `old` | replace `-old` with `+new` | after both lines | `new` |
+| `old` | add `+prefix` before final context ` old` | none | `prefix\nold\n` |
+| `old` | add `+prefix` before final context ` old` | after context | `prefix\nold` |
+| `old` | context-free EOF append `+new` | none | `old\nnew\n` |
+| `old` | context-free EOF append `+new` | after `+new` | `old\nnew` |
+| `old` | delete the only line | none or valid old-side marker | empty bytes |
+| absent file | add file containing `+new` | none | `new\n` |
+| absent file | add file containing `+new` | after `+new` | `new` |
+
+The same table applies to CRLF files after logical planning, with serialization
+restoring CRLF separators. A marker is a constraint, not a request to rewrite
+an unrelated source line's bytes.
 
 ### Operations and atomicity
 
@@ -200,18 +242,40 @@ type FilePatchHunk = {
   hints: string[]
   lines: FilePatchLine[]
   isEndOfFile: boolean
-  noNewline: {
-    oldSide: boolean
-    newSide: boolean
-  }
-  sourceSpan: PatchSourceSpan
+  newline:
+    | {
+        kind: 'canonical'
+        markers: Array<{
+          afterHunkLine: number
+          appliesTo: 'old' | 'new' | 'both'
+          sourceSpan: PatchSourceSpan
+        }>
+      }
+    | {
+        kind: 'legacy-output'
+        outputAtEof: 'present' | 'absent'
+      }
+  sourceSpan?: PatchSourceSpan
 }
 ```
 
 Names may vary during implementation, but the representation must preserve
-patch-source locations and distinguish old-side from new-side newline state.
-Legacy structured `{ ops }` input without the new fields must normalize to the
-same internal representation with safe defaults.
+patch-source locations, the exact preceding patch line, and old-side versus
+new-side newline meaning for canonical raw input. `sourceSpan` is absent only
+for structured legacy input that never contained raw patch coordinates;
+diagnostics must not invent a line number for it.
+
+For compatibility, prefer preserved raw patch input and reparse it whenever it
+is available. A legacy structured `{ ops }` update containing only
+`noNewlineAtEndOfFile` cannot recover marker side or attachment. Normalize it
+using its historical execution meaning: `true` is an output-level instruction
+that the hunk produce no final newline when it determines output EOF; `false`
+uses the default final-newline behavior. Neither value supplies old-side
+newline evidence. Add-file legacy metadata remains an unambiguous output-level
+instruction. If a future operation requires old-side evidence that exists only
+in discarded legacy metadata, reject with a stable
+`PATCH_LEGACY_NEWLINE_AMBIGUOUS` error and instruct the caller to resend the raw
+canonical envelope; never infer that evidence from the legacy boolean.
 
 ### Placement evidence
 
@@ -407,21 +471,32 @@ persist raw candidate source text solely for telemetry.
 - Preserve patch-source spans.
 - Rename `scopeHints` to an honest internal name such as `hints`, with a legacy
   normalization adapter for structured inputs.
-- Validate EOF position and no-newline marker attachment.
+- Parse every no-newline marker with its immediately preceding hunk-line index
+  and derived side (`old`, `new`, or `both`); validate attachment and duplicate
+  side claims without collapsing markers to one boolean. The planner validates
+  whether the attached line actually reaches the corresponding EOF.
+- Reparse preserved raw legacy input when available. Keep the historical
+  structured-only output directive separate from canonical marker evidence and
+  reject with `PATCH_LEGACY_NEWLINE_AMBIGUOUS` if unavailable old-side evidence
+  ever becomes required.
 - Keep full-envelope fail-closed behavior.
 - Keep canonical parsing and historical wrapper normalization visibly separate.
 
 ### `src/tools/FilePatchTool/planner.ts` (new)
 
 - Enumerate exact candidates against immutable source lines.
-- Evaluate literal hints, ordering, non-overlap, BOF, EOF, and newline
+- Evaluate textual hints, ordering, non-overlap, BOF, EOF, and newline
   constraints.
+- Match effective hints using case-sensitive trimmed whole-line equality; never
+  use substring, fuzzy, or internal-whitespace matching for authorization.
 - Preserve inclusive hint semantics: a hint may match at the candidate's first
   fingerprint line.
 - Deduplicate source-range/edit candidates before counting; keep deterministic
   hint witness lines only as diagnostic evidence.
 - Evaluate output-side no-newline constraints on the completed plan, including
   later deletion-only hunks that make an earlier marked line the final line.
+- Require every canonical marker's attached line to reach source EOF on its old
+  side and final output EOF on its new side.
 - Preserve patch order for zero-width insertions at the same source coordinate.
 - Count complete plans as zero, one, or many.
 - Charge explicit scan, retained-candidate, hint, DP-transition, and predecessor
@@ -463,9 +538,11 @@ persist raw candidate source text solely for telemetry.
 
 - Generate the name from `FILE_PATCH_TOOL_NAME`.
 - Explain whole-update uniqueness rather than per-hunk uniqueness.
-- Describe `@@` text as literal preceding text, never containing scope.
+- Describe `@@` text as a complete source line matched after outer-whitespace
+  trimming, never a substring or containing scope.
 - State exact-match mutation authority and diagnostic-only approximate matches.
-- State hard EOF and all-or-nothing call behavior.
+- State hard EOF, explicit no-newline marker attachment/defaults, and
+  all-or-nothing call behavior.
 - Restore concrete examples with sufficient consecutive context, ordered hunks,
   repeated blocks resolved by later context, and an ambiguity that must reject.
 - Keep the description concise enough not to erase the benefit of constrained
@@ -533,7 +610,11 @@ Compare at least:
 - historical first-forward cursor behavior;
 - unique complete-plan behavior with exact mutation matching;
 - unique complete-plan behavior under the current tolerant ladder, for
-  measurement only.
+  measurement only;
+- current trimmed-substring hint filtering versus the proposed trimmed
+  whole-line rule;
+- canonical raw newline-marker semantics versus structured-only legacy output
+  directives.
 
 Replay complete envelopes, not isolated operations. Include all later hunks,
 adds, deletes, moves, and independent operations. Count unreconstructable cases
@@ -546,10 +627,13 @@ The corpus includes:
 - successful calls, especially those accepted only by tolerant matching;
 - adversarial repeated and nested blocks;
 - misleading preceding hints;
+- substring-colliding, indentation-varied, and whitespace-only hints;
 - an ambiguous early hunk resolved by a later fence;
 - generated text that duplicates a later anchor;
 - exact and approximate candidates competing at different locations;
-- BOF, hard EOF, CRLF, BOM, and no-final-newline cases.
+- BOF, hard EOF, CRLF, BOM, and no-final-newline cases;
+- each row of the expected-byte newline table, plus legacy structured forms
+  whose original marker side is unrecoverable.
 
 ### Evidence accounting and minimum floor
 
@@ -633,7 +717,10 @@ Do not ship the new planner when any of these remains:
 - old patch calls replay as ordinary JSON function calls instead of custom calls;
 - grammar and parser disagree on canonical examples;
 - a hard EOF hunk can fall back to the interior;
+- a canonical newline marker loses its preceding-line or side attachment;
+- a legacy structured newline boolean is treated as old-side evidence;
 - generated text can anchor a later hunk;
+- a partial-line hint match authorizes placement;
 - prompt and runtime semantics describe different hint behavior;
 - model evaluation shows repeated unrecoverable exact-match failures without
   useful diagnostics.
@@ -651,9 +738,13 @@ Extend `parser.test.ts` and add grammar contract tests for:
 - literal marker-like text when correctly prefixed as hunk content;
 - empty and blank lines;
 - hard EOF placement;
-- valid and invalid no-newline marker attachment;
+- no-newline markers after deletion, addition, and context lines, preserving
+  their old/new/both-side attachment and patch-source line;
+- invalid unattached, duplicate, and misplaced no-newline markers;
 - CRLF tool input;
 - recognized historical wrapper input;
+- raw legacy input reparsing and structured-only legacy newline normalization
+  without invented old-side evidence;
 - grammar/parser acceptance agreement for canonical fixtures.
 
 The serialized OpenAI schema test must assert the canonical name and real Lark
@@ -670,6 +761,9 @@ Add focused `planner.test.ts` coverage for:
 - candidates that exist only before the previous consumed range;
 - overlapping consumed ranges;
 - repeated hints and stacked hint ordering;
+- trimmed whole-line hint equality, including substring collisions,
+  indentation-only differences, trailing whitespace, internal whitespace, case,
+  and whitespace-only hints;
 - candidates on lines 1 and 5 where a same-line hint at line 1 must remain
   eligible under the inclusive at-or-before boundary;
 - multiple valid hint-witness chains for one source range count as one candidate
@@ -697,6 +791,10 @@ search or per-hunk early rejection. Preserve tests for operation independence,
 buffer metadata, bounded results, and no mutation on preflight failure.
 
 Add assertions that tolerant diagnostic candidates never authorize a write.
+Turn the expected-byte newline table above into parameterized tests covering
+marker absence, old-only, new-only, both-side, and context markers; context-free
+append to an unterminated file; deletion to an empty file; CRLF serialization;
+and preservation when no planned hunk affects output EOF.
 
 ### Tool and filesystem boundary
 
@@ -855,6 +953,9 @@ models.
 - Unresolved ambiguity never falls back to the first candidate.
 - Placement never searches replacement text introduced by the same update.
 - EOF and no-newline constraints are enforced on the correct source side.
+- Canonical newline markers retain their attached patch line and legacy
+  structured booleans retain only their historical output-level meaning.
+- Effective hints authorize candidates only by trimmed whole-line equality.
 - Tolerant matches never authorize production mutation unless an evidence-based
   amendment changes this plan.
 - Any preflight failure publishes no files.
