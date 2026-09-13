@@ -164,6 +164,7 @@ import {
   ActionBranchIcon,
   ActionCloseIcon,
   ActionCopyIcon,
+  ActionExpandIcon,
   ActionFileIcon,
   ActionRewindIcon,
 } from './SessionActionIcons.js'
@@ -5169,21 +5170,7 @@ function UserImageRowView({ source }: { source: UserImageSource }) {
                 aria-hidden="true"
                 className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white shadow-sm transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
               >
-                <svg
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.8"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <polyline points="15 3 21 3 21 9" />
-                  <polyline points="9 21 3 21 3 15" />
-                  <line x1="21" y1="3" x2="14" y2="10" />
-                  <line x1="3" y1="21" x2="10" y2="14" />
-                </svg>
+                <ActionExpandIcon />
               </span>
             </button>
           ) : (
@@ -5192,17 +5179,23 @@ function UserImageRowView({ source }: { source: UserImageSource }) {
         </div>
       </div>
       {previewOpen ? (
-        <UserImagePreview src={src} onClose={closePreview} />
+        <ImagePreview
+          src={src}
+          label="Sent image preview"
+          onClose={closePreview}
+        />
       ) : null}
     </>
   )
 }
 
-function UserImagePreview({
+export function ImagePreview({
   src,
+  label,
   onClose,
 }: {
   src: string
+  label: string
   onClose: () => void
 }) {
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -5223,7 +5216,7 @@ function UserImagePreview({
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
-        aria-label="Sent image preview"
+        aria-label={label}
         tabIndex={-1}
         onClick={event => event.stopPropagation()}
         className="relative flex max-h-full max-w-full items-center justify-center rounded-xl border border-white/10 bg-surface-panel p-2 shadow-[var(--elev-modal)]"
@@ -5238,7 +5231,7 @@ function UserImagePreview({
         </button>
         <img
           src={src}
-          alt="Sent image preview"
+          alt={label}
           className="max-h-[calc(100vh-80px)] max-w-[calc(100vw-80px)] rounded-lg object-contain"
         />
       </div>

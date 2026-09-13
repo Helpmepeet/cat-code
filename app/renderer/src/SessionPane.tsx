@@ -60,11 +60,13 @@ import {
   type PreviewRunFacts,
 } from './previewTranscriptState.js'
 import {
+  ImagePreview,
   TranscriptView,
   type AgentBackgroundControl,
   type MessageActionHandler,
   type RestorePhase,
 } from './TranscriptView.js'
+import { ActionExpandIcon } from './SessionActionIcons.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
@@ -262,6 +264,11 @@ export function SessionPane({
   transportError,
 }: SessionPaneProps) {
   const toast = useToast()
+  const [previewImageId, setPreviewImageId] = useState<number | null>(null)
+  const previewImage =
+    previewImageId === null
+      ? null
+      : images.find(image => image.id === previewImageId) ?? null
   // THIS pane's face registry, keyed on the pane's own session and never the
   // globally-active one. Split view renders up to MAX_WORKSPACE_PANELS panes
   // side by side on different sessions, and a single shell registry made them
@@ -1475,14 +1482,27 @@ export function SessionPane({
                 className="group relative overflow-hidden rounded-lg border border-accent/20 bg-accent/[0.06] p-1.5"
                 key={image.id}
               >
-                <img
-                  alt={image.name}
-                  className="max-h-24 max-w-36 rounded-md object-contain"
-                  src={`data:${image.mediaType};base64,${image.data}`}
-                />
+                <button
+                  aria-label={`Expand ${image.name}`}
+                  className="relative block cursor-zoom-in rounded-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+                  onClick={() => setPreviewImageId(image.id)}
+                  type="button"
+                >
+                  <img
+                    alt={image.name}
+                    className="max-h-24 max-w-36 rounded-md object-contain"
+                    src={`data:${image.mediaType};base64,${image.data}`}
+                  />
+                  <span
+                    aria-hidden="true"
+                    className="absolute bottom-1 right-1 flex h-6 w-6 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white shadow-sm transition-colors group-hover:bg-black/80 group-focus-within:bg-black/80"
+                  >
+                    <ActionExpandIcon />
+                  </span>
+                </button>
                 <button
                   aria-label={`Remove ${image.name}`}
-                  className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-full bg-shell-chrome/85 text-xs text-text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  className="absolute right-1 top-1 z-10 flex h-5 w-5 items-center justify-center rounded-full bg-shell-chrome/85 text-xs text-text-primary opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
                   onClick={() => onRemoveImage?.(image.id)}
                   type="button"
                 >
@@ -1517,6 +1537,13 @@ export function SessionPane({
               </div>
             ) : null}
           </div>
+        ) : null}
+        {previewImage ? (
+          <ImagePreview
+            src={`data:${previewImage.mediaType};base64,${previewImage.data}`}
+            label={`Preview ${previewImage.name}`}
+            onClose={() => setPreviewImageId(null)}
+          />
         ) : null}
         {/* No bottom padding, deliberately. The prototype has 11px here
          * (Chat.jsx:1395 `padding: '0 4px 11px'`); the operator chose 0 on

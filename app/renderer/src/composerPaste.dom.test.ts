@@ -364,6 +364,63 @@ test('an image paste is prevented from entering the text draft', async () => {
   ])
 })
 
+test('an attached composer image opens in the shared preview without removing it', async () => {
+  let removedId: number | null = null
+  const image: ImageAttachment = {
+    id: 1,
+    mediaType: 'image/png',
+    data: 'AAAA',
+    name: 'draft-cat.png',
+  }
+  const tree = await harness.mount(
+    createElement(SessionPane, {
+      ...idleSessionPaneProps(),
+      images: [image],
+      onRemoveImage: id => {
+        removedId = id
+      },
+    }),
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand draft-cat.png"]',
+  )
+  expect(trigger).not.toBeNull()
+  expect(
+    tree.container.querySelector('button[aria-label="Remove draft-cat.png"]'),
+  ).not.toBeNull()
+  trigger?.focus()
+
+  await act(async () => {
+    trigger?.click()
+  })
+  await harness.nextFrame()
+
+  const dialog = document.body.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Preview draft-cat.png"]',
+  )
+  expect(dialog).not.toBeNull()
+  expect(
+    dialog?.querySelector<HTMLImageElement>('img')?.getAttribute('src'),
+  ).toBe('data:image/png;base64,AAAA')
+  expect(removedId).toBeNull()
+
+  await act(async () => {
+    dialog
+      ?.querySelector<HTMLButtonElement>(
+        'button[aria-label="Close image preview"]',
+      )
+      ?.click()
+  })
+
+  expect(
+    document.body.querySelector(
+      '[role="dialog"][aria-label="Preview draft-cat.png"]',
+    ),
+  ).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+  expect(removedId).toBeNull()
+})
+
 test('a picker image uses the same byte-attachment path as paste', async () => {
   const observed = observation()
   const originalBridge = Object.getOwnPropertyDescriptor(window, 'catcode')
