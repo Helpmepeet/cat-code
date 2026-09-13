@@ -2680,7 +2680,9 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
           failed
             ? 'text-tone-danger'
             : state === null
-              ? PEER_TONE_CLASS
+              ? to
+                ? PEER_TONE_CLASS
+                : 'text-text-ghost'
               : 'text-text-ghost'
         }`}
         aria-hidden
@@ -2688,8 +2690,15 @@ function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
         &ldquo;
       </span>
       <div className="min-w-0 flex-1">
-        <div className={`text-[11px] ${PEER_TONE_CLASS}`}>
-          {to ?? 'Peer'}
+        <div className="text-[11px] text-text-subtle">
+          {to ? (
+            <>
+              <span className="font-normal">To </span>
+              <span className={PEER_TONE_CLASS}>{to}</span>
+            </>
+          ) : (
+            'To peer'
+          )}
           {state === null ? null : (
             <span
               className={failed ? 'text-tone-danger' : 'text-text-subtle/70'}
@@ -5730,10 +5739,17 @@ function PeerMessageBubble({
     <div className="flex flex-col items-end">
       <span
         className={`mb-1 pr-1 text-[11px] ${
-          label === null ? 'text-text-subtle/70' : PEER_TONE_CLASS
+          label === null ? 'text-text-subtle/70' : ''
         }`}
       >
-        {label ?? 'Peer message'}
+        {label === null ? (
+          'Peer message'
+        ) : (
+          <>
+            <span className="text-text-subtle font-normal">From </span>
+            <span className={PEER_TONE_CLASS}>{label}</span>
+          </>
+        )}
       </span>
       <div
         className={`max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br px-4 py-2.5 text-sm leading-relaxed text-text-primary ${

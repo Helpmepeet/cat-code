@@ -1594,7 +1594,8 @@ test('a send is drawn as speech, not as a tool card', () => {
   )
   // The recipient and the whole message, as prose rather than truncated into a
   // one-line slot: this row is the message, so nothing about it is a summary.
-  expect(html).toContain('Bear')
+  expect(html).toContain('To ')
+  expect(html).toContain('<span class="text-peer">Bear</span>')
   expect(html).toContain('The sidecar rejects the frame.')
   expect(html).toContain('Can you check the schema?')
   expect(html).toContain('\u201c')
@@ -1605,6 +1606,22 @@ test('a send is drawn as speech, not as a tool card', () => {
   // No arrow: `←` is CHANNEL_ARROW and channel still owns it.
   expect(html).not.toContain('→')
   expect(html).not.toContain('←')
+})
+
+test('an unnamed send is drawn as neutral speech without peer tone', () => {
+  const html = render(
+    toolRow({
+      toolName: 'SendToPeer',
+      toolFamily: 'other',
+      input: {
+        text: 'Hello peer',
+      },
+      status: 'success',
+    }),
+  )
+  expect(html).toContain('To peer')
+  expect(html).toContain('text-text-subtle')
+  expect(html).not.toContain('text-peer')
 })
 
 /**
@@ -2889,7 +2906,8 @@ test('a peer message is a right-aligned bubble in the peer colour, not a notice 
   })
 
   expect(html).toContain('ran the migration, all green')
-  expect(html).toContain('Bear')
+  expect(html).toContain('From ')
+  expect(html).toContain('<span class="text-peer">Bear</span>')
   // The user bubble's own geometry, on the same side, at the same edge.
   expect(html).toContain('items-end')
   expect(html).toContain('rounded-2xl rounded-br')
@@ -2915,6 +2933,8 @@ test('a peer message is a right-aligned bubble in the peer colour, not a notice 
     isReplay: false,
   })
   expect(unnamed).toContain('Peer message')
+  expect(unnamed).not.toContain('From ')
+  expect(unnamed).not.toContain('text-peer')
   expect(unnamed).not.toContain('>peer<')
   expect(unnamed).not.toContain('border-peer/20')
   expect(unnamed).toContain('border-shell-seam')
