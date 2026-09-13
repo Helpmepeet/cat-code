@@ -91,6 +91,8 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     source: 'vault',
     usagePrimary: 10,
     usageWeekly: 20,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,
@@ -552,6 +554,88 @@ test('AccountSwitcherPanel: a capped account shows its real availability label, 
   // Healthy rows show real used-percent (10% / 20% for the active account).
   expect(html).toContain('10%')
   expect(html).toContain('20%')
+})
+
+test('AccountSwitcherPanel: weekly-only account (like main) expands the weekly bar across the full slot', () => {
+  const rows = [
+    account({
+      id: 'a-main',
+      alias: 'main',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 73,
+      usagePrimaryWindowSeconds: 604_800,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('73%')
+  expect(html).not.toContain('0%')
+  // Expanded weekly bar spans full slot width (156px) in the button row
+  expect(html).toContain('class="flex items-center gap-1.5 w-[156px]"')
+})
+
+test('AccountSwitcherPanel: five-hour-only account expands across the full slot', () => {
+  const rows = [
+    account({
+      id: 'a-five',
+      alias: 'five-only',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 45,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('45%')
+  expect(html).toContain('class="flex items-center gap-1.5 w-[156px]"')
+})
+
+test('AccountSwitcherPanel: dual-window account renders both 72px bars', () => {
+  const rows = [
+    account({
+      id: 'a-dual',
+      alias: 'bluesky',
+      isDefault: false,
+      switchable: true,
+      usagePrimary: 100,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: 55,
+      usageSecondaryWindowSeconds: 604_800,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('100%')
+  expect(html).toContain('55%')
+  expect(html).toContain('w-[72px]')
+})
+
+test('AccountSwitcherPanel: genuine 0% usage renders as 0%', () => {
+  const rows = [
+    account({
+      id: 'a-zero',
+      alias: 'fresh',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 0,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('0%')
 })
 
 test('AccountSwitcherPanel: dead and quarantined rows show their real label, never "Capped" (ACCT-1)', () => {

@@ -11,6 +11,7 @@ import {
   statusDotTone,
   usageTone,
 } from './accountsPageModel.js'
+import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
@@ -783,25 +784,33 @@ function FastChip({
 
 /** One account's compact used-percent bar (5h or weekly) — the prototype's
  * `UsedMetric` (Surfaces.jsx:572), token-toned via the SAME `usageTone`/`toneClasses`
- * the Accounts page uses so the composer reads identically. Null usage → 0%. */
-function AccountUsageBar({ pct }: { pct: number | null }) {
-  const p = pct ?? 0
+ * the Accounts page uses so the composer reads identically. Null usage → empty slot. */
+function AccountUsageBar({
+  pct,
+  className = 'w-[72px]',
+}: {
+  pct: number | null
+  className?: string
+}) {
+  if (pct == null) {
+    return <span className={className} aria-hidden="true" />
+  }
   const t = toneClasses(usageTone(pct))
   return (
-    <span className="flex w-[72px] items-center gap-1.5">
+    <span className={`flex items-center gap-1.5 ${className}`}>
       <span className="h-1 flex-1 overflow-hidden rounded-full bg-shell-hover">
         {/* §0 EXCEPTION: data-driven percent width Tailwind can't express — the
             single allowed inline style (width only), mirroring AccountsPage's
             HeadroomBar (AccountsPage.tsx:213). */}
         <span
           className={`block h-full rounded-full ${t.dot}`}
-          style={{ width: `${Math.max(2, Math.min(100, p))}%` }}
+          style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
         />
       </span>
       <span
         className={`w-7 shrink-0 text-right text-[11px] font-semibold tabular-nums ${t.text}`}
       >
-        {p}%
+        {pct}%
       </span>
     </span>
   )
@@ -851,6 +860,9 @@ export function AccountSwitcherPanel({
           const unavailable = acct.status !== 'healthy'
           const clickable = !isActive && acct.switchable
           const rowAlias = acct.alias ?? '(unnamed)'
+          const { fiveHour, weekly } = selectWelcomeUsageWindows(acct)
+          const hasBoth = fiveHour !== null && weekly !== null
+          const singleWindow = hasBoth ? null : (weekly ?? fiveHour)
           return (
             <button
               key={acct.id}
@@ -889,7 +901,7 @@ export function AccountSwitcherPanel({
                 // read as "Capped") — only a genuinely capped row implies
                 // reset timing.
                 <span
-                  className={`w-[152px] text-[11px] ${toneClasses(statusDotTone(acct)).text}`}
+                  className={`w-[156px] text-[11px] ${toneClasses(statusDotTone(acct)).text}`}
                 >
                   {acct.availabilityLabel}
                   {acct.status === 'capped' ? (
@@ -899,11 +911,18 @@ export function AccountSwitcherPanel({
                     </span>
                   ) : null}
                 </span>
-              ) : (
+              ) : hasBoth ? (
                 <>
-                  <AccountUsageBar pct={acct.usagePrimary} />
-                  <AccountUsageBar pct={acct.usageWeekly} />
+                  <AccountUsageBar pct={fiveHour.percent} />
+                  <AccountUsageBar pct={weekly.percent} />
                 </>
+              ) : singleWindow ? (
+                <AccountUsageBar
+                  pct={singleWindow.percent}
+                  className="w-[156px]"
+                />
+              ) : (
+                <span className="w-[156px]" aria-hidden="true" />
               )}
             </button>
           )
