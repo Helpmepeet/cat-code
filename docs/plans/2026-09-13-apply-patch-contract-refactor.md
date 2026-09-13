@@ -73,8 +73,13 @@ before that policy is released.
   classifiable, and resumable.
 - Historical items retain their recorded name. Do not rewrite transcript JSONL.
 - New execution never advertises both names to the model.
-- A shared predicate recognizes the canonical and legacy names wherever old
-  persisted messages are consumed.
+- Register `Apply_patch` as an alias on the canonical `FilePatchTool` so shared
+  `findToolByName` consumers, including terminal transcript rendering, resolve
+  historical calls to the current tool definition.
+- A shared predicate recognizes the canonical and legacy names at raw persisted
+  history boundaries that do not have a `Tool` registry available.
+- Permission-rule parsing normalizes the legacy name to the canonical name at
+  read and match time. Existing stored rules are not rewritten.
 - Restarting the engine is the contract boundary. Already running engines keep
   their loaded schema until restarted.
 
@@ -130,9 +135,16 @@ before that policy is released.
 - It is not a class, function, indentation, or AST containment promise.
 - Stacked hints must appear on distinct source lines in their supplied order.
 - Hints are evaluated against the immutable source snapshot.
+- A hint witness may be on the candidate's first fingerprint line. In source
+  coordinates, the final hint line must be at or before `sourceStart`; preserve
+  the current inclusive boundary rather than changing it to strictly before.
 - A hint supplies no implicit lower boundary. When a lower boundary matters,
   the patch must provide later literal context.
 - Missing hints never fall back to an unhinted match.
+- Hint-witness choices are diagnostic evidence, not placement identity. If
+  several matching hint lines justify the same hunk source range, deduplicate
+  that range before complete-plan counting and select one witness chain
+  deterministically for diagnostics.
 
 ### Boundaries and insertions
 
@@ -143,7 +155,13 @@ before that policy is released.
   through source EOF, and an EOF hunk must be last in its update.
 - There is no interior fallback for an EOF-marked hunk.
 - No-newline markers carry explicit old-side and new-side meaning based on the
-  preceding patch line. They are validated at the corresponding EOF.
+  preceding patch line. Old-side state is validated against source EOF.
+- New-side no-newline state is a constraint on the final output of the complete
+  plan, not merely the local hunk. A later deletion-only hunk may remove the
+  remaining source tail and make the marked new-side line the output EOF; this
+  is valid. Any later hunk that leaves or adds output after that line makes the
+  plan invalid. Evaluate this before deciding whether there are zero, one, or
+  many complete plans.
 - Unaffected source bytes, BOM state, encoding, and line-ending style remain
   preserved to the extent already supported by `readFileForEdit` and the
   publication helpers.
@@ -206,9 +224,9 @@ type HunkCandidate = {
   hunkIndex: number
   sourceStart: number
   sourceEnd: number
-  hintLines: number[]
   boundary: 'none' | 'bof' | 'eof'
   matchTier: 'exact'
+  diagnosticHintLines?: number[]
 }
 
 type PlannedHunk = HunkCandidate
@@ -223,6 +241,12 @@ type UpdatePlacementPlan = {
 The planner should return structured success or failure evidence rather than
 throwing preformatted sentences. The caller may still convert failures into
 `FilePatchError` for the existing tool boundary.
+
+Candidate and plan identity is the ordered set of hunk source ranges, boundary
+semantics, and edits. The particular hint lines used to prove a mandatory hint
+constraint do not create distinct candidates or plans. Candidate discovery must
+deduplicate this identity before the dynamic program runs; diagnostic witness
+lines are selected separately and deterministically.
 
 ### Unique-plan algorithm
 
@@ -245,8 +269,32 @@ to resolve earlier local ambiguity.
 
 The algorithm must define zero-width insertions explicitly. Only the documented
 BOF and EOF context-free cases create zero-width candidates; ordinary in-file
-insertions consume their supplied context. Two hunks must not use overlapping
-consumed source ranges.
+insertions consume their supplied context. Source-consuming ranges must not
+overlap. Zero-width candidates may share a source boundary with one another or
+with a consuming range when patch order is consistent. At a shared coordinate,
+inserted output appears in patch hunk order. This includes BOF followed by EOF
+on an empty file. A reverse-application implementation therefore breaks equal
+`sourceStart` ties by descending hunk index; a streaming implementation must
+produce the same bytes.
+
+### Planner and diagnostic resource budgets
+
+Make resource limits explicit inputs to the pure planner rather than a single
+late DP guard. At minimum, account separately for:
+
+- source positions scanned during candidate discovery;
+- candidate identities retained per hunk and in total;
+- hint-line comparisons and witness searches;
+- dynamic-program transitions and predecessor storage;
+- approximate comparisons used only to construct diagnostics.
+
+Every potentially superlinear loop must charge one of these counters. Exhausting
+a planning counter before the result is proven returns a stable
+`PATCH_PLANNER_LIMIT` failure and authorizes no mutation; partial search is never
+reported as unique. Exhausting the separate diagnostic budget preserves the
+original parser or planner failure, sets bounded `diagnosticsTruncated` metadata,
+and omits further near-match detail. It must not replace a useful primary error
+with a planner-limit error.
 
 ### Pure application
 
@@ -259,7 +307,8 @@ Replace mutated-buffer searching in `applyUpdateHunks` with two operations:
 Application must copy unchanged/context source bytes from the source snapshot,
 not from the patch text. Added text comes from the patch. It must assert that the
 plan is ordered and non-overlapping even though the planner already guarantees
-those properties.
+those properties. New-side EOF and final-newline validation uses the fully
+planned output, before it is returned for publication.
 
 ### Structured diagnostics
 
@@ -323,6 +372,20 @@ persist raw candidate source text solely for telemetry.
 - Keep syntax marker constants here or move the grammar-specific set into a
   dedicated syntax module without duplicating string literals.
 
+### `src/tools/FilePatchTool/FilePatchTool.tsx`
+
+- Register `aliases: [LEGACY_FILE_PATCH_TOOL_NAME]` on the canonical tool
+  definition. This is consumption compatibility only; aliases must not cause a
+  second schema or prompt-visible tool to be emitted.
+- Keep current permission checks, mutation locks, execution snapshot capture,
+  settings and secret validation, publication ordering, and rollback machinery.
+- Feed immutable `currentFiles` snapshots into the planner/applier.
+- If any operation fails planning or validation, publish none.
+- Preserve bounded independent-operation failure aggregation.
+- Project optional placement metadata into the persisted result and model-facing
+  success message.
+- Change user-visible tool wording to `apply_patch`.
+
 ### `src/tools/FilePatchTool/grammar.ts` (new)
 
 - Own the canonical Lark grammar string.
@@ -353,8 +416,16 @@ persist raw candidate source text solely for telemetry.
 - Enumerate exact candidates against immutable source lines.
 - Evaluate literal hints, ordering, non-overlap, BOF, EOF, and newline
   constraints.
+- Preserve inclusive hint semantics: a hint may match at the candidate's first
+  fingerprint line.
+- Deduplicate source-range/edit candidates before counting; keep deterministic
+  hint witness lines only as diagnostic evidence.
+- Evaluate output-side no-newline constraints on the completed plan, including
+  later deletion-only hunks that make an earlier marked line the final line.
+- Preserve patch order for zero-width insertions at the same source coordinate.
 - Count complete plans as zero, one, or many.
-- Return structured evidence and bounded planner-limit failures.
+- Charge explicit scan, retained-candidate, hint, DP-transition, and predecessor
+  budgets; return structured and bounded planner-limit failures.
 - Expose test-only comparison policies needed by replay without exposing a
   runtime force option to the model.
 
@@ -364,6 +435,8 @@ persist raw candidate source text solely for telemetry.
 - Replace `findHunkPosition`, mutated-buffer cursor matching, and mutation-time
   hint searches with planner consumption.
 - Apply a completed plan without re-searching.
+- Preserve patch order when reverse-applying multiple edits at one source
+  coordinate, and validate new-side EOF state against the complete output.
 - Preserve buffer encoding and line-ending metadata.
 - Move prose diagnostics to the diagnostic owner.
 
@@ -374,6 +447,8 @@ persist raw candidate source text solely for telemetry.
 - Implement divergence-centered long-line diagnostics.
 - Keep approximate matching here unless replay infrastructure needs the same
   diagnostic helpers.
+- Use a budget independent from authoritative planning. On exhaustion, retain
+  the primary failure and mark diagnostic detail as truncated.
 
 ### `src/tools/FilePatchTool/types.ts`
 
@@ -383,17 +458,6 @@ persist raw candidate source text solely for telemetry.
   rendering.
 - Normalize legacy structured input instead of requiring old stored calls to
   contain new fields.
-
-### `src/tools/FilePatchTool/FilePatchTool.tsx`
-
-- Keep current permission checks, mutation locks, execution snapshot capture,
-  settings and secret validation, publication ordering, and rollback machinery.
-- Feed immutable `currentFiles` snapshots into the planner/applier.
-- If any operation fails planning or validation, publish none.
-- Preserve bounded independent-operation failure aggregation.
-- Project optional placement metadata into the persisted result and model-facing
-  success message.
-- Change user-visible tool wording to `apply_patch`.
 
 ### `src/tools/FilePatchTool/prompt.ts`
 
@@ -409,9 +473,12 @@ persist raw candidate source text solely for telemetry.
 
 ### Historical-name consumers
 
-Audit every exact comparison and use `isFilePatchToolName` only where persisted
-history may contain the legacy name. Important owners include:
+Audit every exact comparison. Where a current tool registry is available, rely
+on the registered alias through `findToolByName`; where code inspects raw
+persisted records without a registry, use `isFilePatchToolName`. Important
+owners include:
 
+- `src/components/messages/AssistantToolUseMessage.tsx`
 - `src/services/api/codex-fetch-adapter.ts`
 - `src/utils/messages.ts`
 - `src/services/autoDream/autoDream.ts`
@@ -422,6 +489,14 @@ history may contain the legacy name. Important owners include:
 New tool selection, prompt assembly, and tool schema emission use only the
 canonical constant. Comments, test names, snapshots, and model-facing prose are
 updated to lowercase unless they explicitly describe legacy data.
+
+### `src/utils/permissions/permissionRuleParser.ts`
+
+- Add `Apply_patch` to the shared legacy-to-canonical permission-name map using
+  the exported file-patch constants.
+- Cover bare rules and content-bearing rules so an existing
+  `Apply_patch(...)` permission continues to match `apply_patch` without
+  rewriting the stored rule.
 
 ### Codex continuation compatibility
 
@@ -475,6 +550,50 @@ The corpus includes:
 - generated text that duplicates a later anchor;
 - exact and approximate candidates competing at different locations;
 - BOF, hard EOF, CRLF, BOM, and no-final-newline cases.
+
+### Evidence accounting and minimum floor
+
+Freeze an evaluation manifest before interpreting candidate results. It records
+the corpus window, call identifiers, reconstruction method, comparison policies,
+adjudication labels, fixed model tasks, supported model/provider configurations,
+repeat count, and acceptance thresholds. Current and candidate implementations
+must run against the same manifest; failures must not be removed after results
+are known.
+
+Report both the full cohort denominator and the adjudicable denominator. Every
+one of the 68 supplied-session calls and 48 historical ambiguity failures must
+be classified as replayed or unknown, with an enumerated reason such as missing
+working-tree state or an out-of-repository target. Unknown is never counted as
+success, failure, or evidence for uniqueness.
+
+The matching-policy gate is unresolved unless all of these minimums are met:
+
+- every reconstructable call in the frozen cohorts is replayed as a complete
+  envelope, not as a selected operation;
+- at least 20 complete-envelope ambiguity cases are adjudicable, including both
+  known dangerous first-hunk cases and at least 15 non-first-hunk cases; extend
+  the corpus window or add newly captured, provenance-preserving cases if
+  complete-envelope reconstruction reduces the current 25-case corpus below
+  this floor;
+- at least 30 complete-envelope successful updates that require a non-exact
+  tier under the current matcher are adjudicable, with at least five examples
+  for every non-exact tier whose removal is being evaluated; extend the fixed
+  historical window if necessary rather than substituting ordinary exact
+  successes;
+- each fixed model task is run at least three times under both contracts for
+  every supported model/provider configuration in the release set, with at
+  least 30 update attempts per contract and configuration.
+
+Before execution, the manifest must define what counts as task success, safe
+rejection, recoverable retry, replacement corruption, and consequential
+wrong-region placement. The candidate must produce zero consequential
+wrong-region placements, no lower final task-correctness rate than the current
+contract on the paired model suite, and no increase in unrecoverable failures in
+the tolerant-success cohort. Retry count and first-attempt rejection are
+reported as usability costs, not silently folded into correctness. If the
+minimum coverage or any predeclared threshold is not met, keep the production
+matching policy unchanged and record the gate as unresolved rather than
+declaring the refactor safe.
 
 ### Adjudication
 
@@ -551,11 +670,23 @@ Add focused `planner.test.ts` coverage for:
 - candidates that exist only before the previous consumed range;
 - overlapping consumed ranges;
 - repeated hints and stacked hint ordering;
+- candidates on lines 1 and 5 where a same-line hint at line 1 must remain
+  eligible under the inclusive at-or-before boundary;
+- multiple valid hint-witness chains for one source range count as one candidate
+  and one plan, with deterministic diagnostic witnesses;
 - hint text preceding a sibling rather than containing the hunk;
 - no matching against text added by an earlier hunk;
 - hard BOF and EOF behavior;
+- output-side no-newline validity that becomes true only after a later
+  deletion-only hunk removes the source tail, plus the rejecting case where a
+  later hunk leaves or adds output after the marked line;
+- BOF then EOF insertion on an empty file, same-coordinate insertions, and
+  insertion/consuming-hunk boundary ties, all preserving patch order;
 - planner count saturation at `many`;
-- resource-limit failure without guessed placement;
+- resource-limit failure during candidate scanning, candidate retention, hint
+  evaluation, and DP transitions without guessed placement;
+- diagnostic-budget exhaustion that preserves the primary failure and reports
+  truncated detail;
 - deterministic plan and diagnostic coordinates.
 
 ### Pure application
@@ -585,6 +716,8 @@ Extend `FilePatchTool.test.ts` and `FilePatchTool.permissions.test.ts` for:
 
 Cover both canonical generation and legacy consumption in:
 
+- `src/Tool.test.ts`
+- `src/utils/permissions/permissions.test.ts`
 - `src/utils/providerPromptRegressions.test.ts`
 - `src/constants/promptAssembly.snapshot.test.ts`
 - `src/constants/prompts.test.ts`
@@ -601,6 +734,10 @@ Required cases include:
 - new schema advertises only `apply_patch`;
 - new raw input records and replays as `custom_tool_call`;
 - old `Apply_patch` raw and `{ ops }` inputs retain custom-call replay;
+- old `Apply_patch` calls resolve through the shared tool registry and render in
+  `AssistantToolUseMessage` after only `apply_patch` is advertised;
+- stored bare and content-bearing `Apply_patch` permission rules normalize to
+  and match the canonical tool;
 - old results still project as the patch tool family;
 - new prompts contain `apply_patch` and not accidental `Apply_patch`;
 - legacy literals remain only in compatibility tests, constants, and explicit
@@ -616,6 +753,8 @@ bun test src/tools/FilePatchTool/planner.test.ts
 bun test src/tools/FilePatchTool/applier.test.ts
 bun test src/tools/FilePatchTool/FilePatchTool.test.ts
 bun test src/tools/FilePatchTool/FilePatchTool.permissions.test.ts
+bun test src/Tool.test.ts
+bun test src/utils/permissions/permissions.test.ts
 bun test src/utils/providerPromptRegressions.test.ts
 bun test src/services/api/codex-fetch-adapter.test.ts
 bun test src/services/api/codex-item-canonicalization.test.ts
