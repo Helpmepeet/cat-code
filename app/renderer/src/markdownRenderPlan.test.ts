@@ -19,6 +19,7 @@ import {
   MAX_MOUNTED_MARKDOWN_LEAVES,
   markdownMeasurementKey,
   mergeMountedMarkdownLeaves,
+  normalizeLatexMathDelimiters,
   planMarkdownLeaves,
   renderMarkdownTree,
   resolveMarkdownMeasurements,
@@ -69,6 +70,46 @@ function headerCellCount(source: string): number {
   const leafWindow = selectMarkdownLeafWindow(leaves, 0, 800)
   return count(mount(leaves, leafWindow.start, leafWindow.end), /<th[ >]/g)
 }
+
+describe('LaTeX delimiter normalization', () => {
+  test('normalizes complete Codex-style pairs without moving source offsets', () => {
+    const source = [
+      'Inline \\(x^2\\).',
+      '',
+      '\\[',
+      '\\int xe^x\\,dx',
+      '\\]',
+    ].join('\n')
+    const normalized = normalizeLatexMathDelimiters(source)
+
+    expect(normalized).toBe(
+      [
+        'Inline $$x^2$$.',
+        '',
+        '$$',
+        '\\int xe^x\\,dx',
+        '$$',
+      ].join('\n'),
+    )
+    expect(normalized.length).toBe(source.length)
+  })
+
+  test('leaves code, escaped delimiters, and unmatched delimiters untouched', () => {
+    const source = [
+      'Code: `\\(inline\\)` and escaped \\\\(plain\\\\).',
+      '',
+      'Unmatched \\(math.',
+      '',
+      '```text',
+      '\\[',
+      'literal',
+      '\\]',
+      '```',
+    ].join('\n')
+
+    expect(normalizeLatexMathDelimiters(source)).toBe(source)
+  })
+})
 
 describe('semantic leaves keep their document context', () => {
   const table = [

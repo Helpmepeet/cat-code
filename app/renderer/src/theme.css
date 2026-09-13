@@ -1409,6 +1409,14 @@ html[data-glass='on'] [data-window-overlay] {
     overflow-wrap: anywhere;
   }
 
+  /* KaTeX remains part of the ordinary prose flow. Wide display equations scroll
+   * within the message instead of widening the transcript or gaining a card. */
+  .md-prose .katex-display {
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
   .md-prose a {
     color: var(--color-accent);
   }

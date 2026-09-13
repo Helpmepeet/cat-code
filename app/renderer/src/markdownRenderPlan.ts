@@ -19,6 +19,7 @@ import { toJsxRuntime, type Components } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math'
 import remarkParse from 'remark-parse'
 import remarkRehype from 'remark-rehype'
 import { unified, type PluggableList } from 'unified'
@@ -156,6 +157,7 @@ export type MarkdownPlanCache = {
     body: string
     tree: Root
     recognizeCallouts: boolean
+    math: boolean
   } | null
 }
 
@@ -165,23 +167,30 @@ export function createMarkdownPlanCache(): MarkdownPlanCache {
 
 const NO_PLUGINS: PluggableList = []
 const processors = new WeakMap<PluggableList, ReturnType<typeof buildProcessor>>()
+const mathProcessors = new WeakMap<PluggableList, ReturnType<typeof buildProcessor>>()
 
-function buildProcessor(rehypePlugins: PluggableList) {
+function buildProcessor(rehypePlugins: PluggableList, math: boolean) {
   // Same shape react-markdown builds: raw HTML is admitted as `raw` nodes here
   // and demoted to literal text below, which is what keeps HTML disabled while
   // still showing the author what they wrote.
-  return unified()
+  const processor = unified()
     .use(remarkParse)
     .use(remarkGfm)
+  // Single dollars collide with ordinary currency (`$5 and $10` becomes math).
+  // Codex-style backslash delimiters are normalized to paired dollars below,
+  // and explicit `$$...$$` remains available for Markdown-authored math.
+  if (math) processor.use(remarkMath, { singleDollarTextMath: false })
+  return processor
     .use(remarkRehype, { allowDangerousHtml: true })
     .use(rehypePlugins)
 }
 
-function markdownProcessor(rehypePlugins: PluggableList) {
-  const cached = processors.get(rehypePlugins)
+function markdownProcessor(rehypePlugins: PluggableList, math: boolean) {
+  const cache = math ? mathProcessors : processors
+  const cached = cache.get(rehypePlugins)
   if (cached !== undefined) return cached
-  const created = buildProcessor(rehypePlugins)
-  processors.set(rehypePlugins, created)
+  const created = buildProcessor(rehypePlugins, math)
+  cache.set(rehypePlugins, created)
   return created
 }
 
@@ -196,9 +205,14 @@ export function planMarkdownLeaves(
     rehypePlugins?: PluggableList
     cache?: MarkdownPlanCache
     recognizeCallouts?: boolean
+    math?: boolean
   },
 ): MarkdownRenderLeaf[] {
-  const processor = markdownProcessor(options?.rehypePlugins ?? NO_PLUGINS)
+  const math = options?.math ?? false
+  const markdownSource = math
+    ? normalizeLatexMathDelimiters(source)
+    : source
+  const processor = markdownProcessor(options?.rehypePlugins ?? NO_PLUGINS, math)
   const recognizeCallouts = options?.recognizeCallouts ?? false
   const cached = options?.cache?.current
 
@@ -213,33 +227,49 @@ export function planMarkdownLeaves(
     cached !== null &&
     cached !== undefined &&
     cached.recognizeCallouts === recognizeCallouts &&
-    source.length > cached.body.length &&
-    source.startsWith(cached.body) &&
-    isWholeUnterminatedFence(processor, source.slice(cached.body.length))
+    cached.math === math &&
+    markdownSource.length > cached.body.length &&
+    markdownSource.startsWith(cached.body) &&
+    isWholeUnterminatedFence(
+      processor,
+      markdownSource.slice(cached.body.length),
+    )
 
   if (appendedToOpenFence) {
     tree = cached.tree
     tailOffset = cached.body.length
   } else {
-    const mdast = processor.parse(source)
-    tailOffset = findUnterminatedFence(mdast, source)
-    const body = tailOffset === null ? source : source.slice(0, tailOffset)
+    const mdast = processor.parse(markdownSource)
+    if (math) markBracketDisplayMath(mdast, source)
+    tailOffset = findUnterminatedFence(mdast, markdownSource)
+    const body =
+      tailOffset === null
+        ? markdownSource
+        : markdownSource.slice(0, tailOffset)
     if (
       cached !== null &&
       cached !== undefined &&
       cached.body === body &&
-      cached.recognizeCallouts === recognizeCallouts
+      cached.recognizeCallouts === recognizeCallouts &&
+      cached.math === math
     ) {
       tree = cached.tree
     } else {
-      tree = processor.runSync(body === source ? mdast : processor.parse(body))
+      const bodyTree =
+        body === markdownSource ? mdast : processor.parse(body)
+      if (math && body !== markdownSource) {
+        markBracketDisplayMath(bodyTree, source.slice(0, body.length))
+      }
+      tree = processor.runSync(bodyTree)
       normalizeTree(tree, recognizeCallouts)
     }
     // Only a settled prefix is worth holding: while a fence is open the body is
     // constant across tokens, and the entry is replaced outright on settlement.
     if (options?.cache !== undefined) {
       options.cache.current =
-        tailOffset === null ? null : { body, tree, recognizeCallouts }
+        tailOffset === null
+          ? null
+          : { body, tree, recognizeCallouts, math }
     }
   }
 
@@ -251,10 +281,191 @@ export function planMarkdownLeaves(
   planChildren(roots, [], '', state)
 
   if (tailOffset !== null) {
-    planOpenFence(source.slice(tailOffset), 'tail', state)
+    planOpenFence(markdownSource.slice(tailOffset), 'tail', state)
   }
 
   return state.leaves
+}
+
+type PendingLatexDelimiter = {
+  close: ')' | ']'
+  opener: '(' | '['
+  outputIndex: number
+}
+
+/**
+ * `remark-math` follows dollar-delimited Markdown, while model output commonly
+ * uses LaTeX's `\(...\)` and `\[...\]`. Convert complete pairs to the
+ * equivalent two-dollar form without changing source length, and never rewrite
+ * code spans or fenced code where delimiters are literal examples.
+ */
+export function normalizeLatexMathDelimiters(source: string): string {
+  const output: string[] = []
+  let index = 0
+  let lineStart = true
+  let inlineTicks = 0
+  let fence: { marker: '`' | '~'; length: number } | null = null
+  let pending: PendingLatexDelimiter | null = null
+
+  const revertPending = () => {
+    if (pending === null) return
+    output[pending.outputIndex] = '\\'
+    output[pending.outputIndex + 1] = pending.opener
+    pending = null
+  }
+
+  while (index < source.length) {
+    if (lineStart && inlineTicks === 0) {
+      const newline = source.indexOf('\n', index)
+      const lineEnd = newline === -1 ? source.length : newline
+      const line = source.slice(index, lineEnd)
+      const fenceMatch = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line)
+
+      if (fence !== null) {
+        if (fenceMatch !== null) {
+          const run = fenceMatch[2]
+          const marker = run[0] as '`' | '~'
+          if (
+            marker === fence.marker &&
+            run.length >= fence.length &&
+            fenceMatch[3].trim().length === 0
+          ) {
+            fence = null
+          }
+        }
+        revertPending()
+        const throughNewline = newline === -1 ? lineEnd : lineEnd + 1
+        output.push(source.slice(index, throughNewline))
+        index = throughNewline
+        lineStart = true
+        continue
+      }
+
+      if (fenceMatch !== null) {
+        const run = fenceMatch[2]
+        fence = {
+          marker: run[0] as '`' | '~',
+          length: run.length,
+        }
+        revertPending()
+        const throughNewline = newline === -1 ? lineEnd : lineEnd + 1
+        output.push(source.slice(index, throughNewline))
+        index = throughNewline
+        lineStart = true
+        continue
+      }
+
+      lineStart = false
+    }
+
+    const char = source[index]
+    if (char === '\n') {
+      if (pending?.close === ')') revertPending()
+      output.push(char)
+      index += 1
+      lineStart = true
+      continue
+    }
+
+    if (char === '`') {
+      let runEnd = index + 1
+      while (source[runEnd] === '`') runEnd += 1
+      const runLength = runEnd - index
+      if (inlineTicks === 0) {
+        revertPending()
+        inlineTicks = runLength
+      } else if (runLength === inlineTicks) {
+        inlineTicks = 0
+      }
+      output.push(source.slice(index, runEnd))
+      index = runEnd
+      continue
+    }
+
+    const next = source[index + 1]
+    if (
+      inlineTicks === 0 &&
+      char === '\\' &&
+      (next === '(' || next === ')' || next === '[' || next === ']') &&
+      isUnescapedBackslash(source, index)
+    ) {
+      if (pending === null && (next === '(' || next === '[')) {
+        const outputIndex = output.length
+        output.push('$', '$')
+        pending = {
+          close: next === '(' ? ')' : ']',
+          opener: next,
+          outputIndex,
+        }
+        index += 2
+        continue
+      }
+      if (pending !== null && next === pending.close) {
+        output.push('$', '$')
+        pending = null
+        index += 2
+        continue
+      }
+    }
+
+    output.push(char)
+    index += 1
+  }
+
+  revertPending()
+  return output.join('')
+}
+
+function isUnescapedBackslash(source: string, index: number): boolean {
+  let preceding = 0
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === '\\'; cursor -= 1) {
+    preceding += 1
+  }
+  return preceding % 2 === 0
+}
+
+/**
+ * Paired dollars on one line are inline math to `remark-math`. When those same
+ * source offsets came from LaTeX's `\[...\]`, retain the author's display
+ * intent by changing only the generated math class before HAST conversion.
+ */
+function markBracketDisplayMath(tree: MdastRoot, source: string): void {
+  type Node = {
+    type: string
+    data?: {
+      hProperties?: Record<string, unknown>
+      [key: string]: unknown
+    }
+    position?: {
+      start: { offset?: number }
+      end: { offset?: number }
+    }
+    children?: Node[]
+  }
+
+  const visit = (node: Node) => {
+    if (node.type === 'inlineMath') {
+      const start = node.position?.start.offset
+      const end = node.position?.end.offset
+      if (
+        start !== undefined &&
+        end !== undefined &&
+        source.startsWith('\\[', start) &&
+        source.slice(start, end).endsWith('\\]')
+      ) {
+        node.data = {
+          ...node.data,
+          hProperties: {
+            ...node.data?.hProperties,
+            className: ['language-math', 'math-display'],
+          },
+        }
+      }
+    }
+    for (const child of node.children ?? []) visit(child)
+  }
+
+  visit(tree as unknown as Node)
 }
 
 /**

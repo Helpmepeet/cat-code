@@ -73,7 +73,10 @@ import {
   type CompositeChildMeasurement,
   type CompositeChildWindow,
 } from './compositeChildWindow.js'
-import { REHYPE_PLUGINS } from './markdownPlugins.js'
+import {
+  REHYPE_PLUGINS,
+  TRANSCRIPT_REHYPE_PLUGINS,
+} from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import {
@@ -1341,7 +1344,8 @@ function AssistantProse({
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+        math
         recognizeCallouts
         renderLeaf={leaf =>
           // A fence too long to mount whole arrives as one merged code leaf:
@@ -4992,7 +4996,8 @@ function UserBubble({
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+        math
         recognizeCallouts
         renderLeaf={leaf =>
           leaf.kind === 'code' ? (

@@ -4646,6 +4646,81 @@ function assistantRow(
   }
 }
 
+test('ordinary assistant and user messages render inline and display LaTeX as prose', () => {
+  const assistant = render(
+    assistantRow(
+      [
+        'Using $$u=x$$ and $$dv=e^x\\,dx$$,',
+        '',
+        '$$',
+        '\\int xe^x\\,dx = e^x(x-1)+C',
+        '$$',
+      ].join('\n'),
+    ),
+  )
+  const user = render(
+    userRow(
+      [
+        'Inline: \\(e^{i\\pi}+1=0\\)',
+        '',
+        '\\[\\int xe^x\\,dx\\]',
+      ].join('\n'),
+    ),
+  )
+
+  for (const html of [assistant, user]) {
+    expect(html).toContain('class="katex"')
+    expect(html).toContain('class="katex-display"')
+    expect(html).not.toContain('language-math')
+  }
+})
+
+test('LaTeX-looking delimiters stay literal inside inline and fenced code', () => {
+  const html = render(
+    assistantRow(
+      [
+        'Keep `\\(inline\\)` literal.',
+        '',
+        '```text',
+        '\\[',
+        'not rendered',
+        '\\]',
+        '```',
+      ].join('\n'),
+    ),
+  )
+
+  expect(html).not.toContain('class="katex"')
+  expect(html).toContain('\\(inline\\)')
+  expect(html).toContain('not rendered')
+})
+
+test('ordinary currency is not mistaken for inline LaTeX', () => {
+  const html = render(
+    assistantRow('The plans cost $5 and $10 respectively.'),
+  )
+
+  expect(html).not.toContain('class="katex"')
+  expect(html).toContain('$5 and $10')
+})
+
+test('malformed or untrusted LaTeX stays inert and readable', () => {
+  const html = render(
+    assistantRow(
+      [
+        'Broken: \\(\\frac{\\)',
+        '',
+        'Blocked: \\(\\href{javascript:alert(1)}{click}\\)',
+      ].join('\n'),
+    ),
+  )
+
+  expect(html).toContain('katex-error')
+  expect(html).not.toContain('href="javascript:')
+  expect(html).toContain('frac')
+  expect(html).toContain('href')
+})
+
 test('P4-38 — a settled assistant reply carries a copy control, worded for a response', () => {
   const html = render(assistantRow('Here is the answer.'))
   expect(html).toContain('aria-label="Copy response"')
