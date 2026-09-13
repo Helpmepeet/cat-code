@@ -597,5 +597,8 @@ describe('provider and prompt regressions', () => {
     expect(restrictedSection).toContain('through the Bash tool')
     expect(restrictedSection).toContain('RULE — Show the diff:')
     expect(restrictedSection).toContain('PARALLELISM:')
+    expect(restrictedSection).toContain(
+      'Never run file mutations concurrently when their paths overlap or may alias',
+    )
   })
 })

@@ -414,7 +414,7 @@ export function applyUpdatePlan(
   const outputLines: string[] = []
   let sourceCursor = 0
 
-  if (plan.hunks.length !== hunks.length) {
+  if (plan.path !== path || plan.hunks.length !== hunks.length) {
     throw new FilePatchError(
       `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
       {
@@ -428,11 +428,19 @@ export function applyUpdatePlan(
 
   for (let planIndex = 0; planIndex < plan.hunks.length; planIndex += 1) {
     const candidate = plan.hunks[planIndex]!
+    const hunk = hunks[planIndex]!
+    const expectedSourceLines = hunk.lines
+      .filter(line => line.kind !== 'add')
+      .map(line => line.text)
     if (
       candidate.hunkIndex !== planIndex ||
       candidate.sourceStart < sourceCursor ||
       candidate.sourceEnd < candidate.sourceStart ||
-      candidate.sourceEnd > sourceLines.length
+      candidate.sourceEnd > sourceLines.length ||
+      candidate.sourceEnd - candidate.sourceStart !== expectedSourceLines.length ||
+      expectedSourceLines.some(
+        (line, offset) => sourceLines[candidate.sourceStart + offset] !== line,
+      )
     ) {
       throw new FilePatchError(
         `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
@@ -447,7 +455,6 @@ export function applyUpdatePlan(
     }
     outputLines.push(...sourceLines.slice(sourceCursor, candidate.sourceStart))
     let hunkSourceCursor = candidate.sourceStart
-    const hunk = hunks[candidate.hunkIndex]!
     for (const line of hunk.lines) {
       if (line.kind === 'add') {
         outputLines.push(line.text)
@@ -458,9 +465,33 @@ export function applyUpdatePlan(
       }
       hunkSourceCursor += 1
     }
+    if (hunkSourceCursor !== candidate.sourceEnd) {
+      throw new FilePatchError(
+        `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+        {
+          code: 'PATCH_PLAN_INVALID',
+          path,
+          operation: 'update',
+          hunkIndex: candidate.hunkIndex + 1,
+          hunkCount: hunks.length,
+        },
+      )
+    }
     sourceCursor = candidate.sourceEnd
   }
   outputLines.push(...sourceLines.slice(sourceCursor))
+
+  if (outputLines.length !== plan.output.lineCount) {
+    throw new FilePatchError(
+      `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+      {
+        code: 'PATCH_PLAN_INVALID',
+        path,
+        operation: 'update',
+        hunkCount: hunks.length,
+      },
+    )
+  }
 
   const noNewlineAtEndOfFile =
     outputLines.length > 0 && !plan.output.hasFinalNewline

@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
   aggregateReplay,
   extractReplayEnvelopes,
+  loadReplayInputs,
+  MAX_REPLAY_INPUT_FILE_BYTES,
   parseReplayArguments,
   parseReplayJsonl,
   replayEnvelope,
@@ -143,6 +145,43 @@ describe('offline apply_patch replay helpers', () => {
     expect(result.decisions.find(row => row.policy === 'hint-whole-line')?.status).toBe('rejected')
   })
 
+  test('complete-tolerant keeps the first non-empty production matching tier per hunk', () => {
+    const result = replayEnvelope(fixtureEnvelope(update(context('target')), {
+      'src/example.ts': 'target  \ntarget\n',
+    }), { policies: ['complete-tolerant'] })
+    expect(result.decisions[0]?.status).toBe('accepted')
+    expect(result.decisions[0]?.placements?.[0]?.start).toBe(1)
+  })
+
+  test('EOF hints do not inspect a line at lines.length', () => {
+    const result = replayEnvelope(fixtureEnvelope({
+      ops: [{ type: 'update', path: 'src/example.ts', hunks: [{ hints: ['missing'], lines: [], isEndOfFile: true }] }],
+    }, { 'src/example.ts': 'old\n' }), { policies: ['complete-tolerant'] })
+    expect(result.decisions[0]?.status).toBe('rejected')
+    expect(result.decisions[0]?.reasons[0]?.code).toBe('anchor-not-found')
+  })
+
+  test('bounds malformed structured input and source evidence', () => {
+    const malformed = replayEnvelope(fixtureEnvelope({
+      ops: [{ type: 'add', path: 'src/example.ts', content: 'missing lines' }],
+    }), { policies: ['complete-exact'] })
+    expect(malformed.envelope).toBe('malformed')
+    expect(malformed.unknownReasons[0]?.code).toBe('invalid-envelope')
+    expect(JSON.stringify(malformed).length).toBeLessThan(10_000)
+
+    const oversizedPatch = replayEnvelope(fixtureEnvelope({
+      ops: [{ type: 'delete', path: 'x'.repeat(1_000_000) }],
+    }), { policies: ['complete-exact'] })
+    expect(oversizedPatch.unknownReasons[0]?.code).toBe('replay-input-limit')
+    expect(JSON.stringify(oversizedPatch).length).toBeLessThan(10_000)
+
+    const oversizedSource = replayEnvelope(fixtureEnvelope(update(context('target')), {
+      'src/example.ts': 'x'.repeat(1_000_001),
+    }), { policies: ['complete-exact'] })
+    expect(oversizedSource.unknownReasons[0]?.code).toBe('replay-input-limit')
+    expect(JSON.stringify(oversizedSource).length).toBeLessThan(10_000)
+  })
+
   test('labels structured newline directives as output-only evidence', () => {
     const input = {
       ops: [{
@@ -170,7 +209,12 @@ describe('offline apply_patch replay helpers', () => {
     const input = {
       ops: [
         { type: 'delete', path: 'src/example.ts' },
-        { type: 'add', path: 'src/nested/../example.ts', content: 'replacement\n' },
+        {
+          type: 'add',
+          path: 'src/nested/../example.ts',
+          lines: ['replacement'],
+          noNewlineAtEndOfFile: false,
+        },
       ],
     }
     const result = replayEnvelope(fixtureEnvelope(input, { 'src/example.ts': 'old\n' }), {
@@ -179,7 +223,9 @@ describe('offline apply_patch replay helpers', () => {
     expect(result.decisions.map(decision => decision.status)).toEqual(['rejected', 'rejected'])
     expect(result.reconstructable).toBe(true)
     expect(result.unknownReasons).toEqual([])
-    expect(result.decisions[0]!.reasons).toEqual([expect.objectContaining({ code: 'operation-path-conflict' })])
+    expect(result.decisions[0]!.reasons).toEqual([
+      expect.objectContaining({ code: 'operation-path-conflict' }),
+    ])
   })
 
   test('fails closed before comparison work when an explicit replay input limit is exceeded', () => {
@@ -200,14 +246,31 @@ describe('replay CLI input boundaries', () => {
     expect(() => parseReplayArguments([])).toThrow('explicit')
   })
 
-  test('parses malformed JSONL as an unknown envelope without reading any other path', () => {
+  test('skips malformed JSONL without fabricating an apply_patch call', () => {
     const root = mkdtempSync(join('/tmp', 'replay-apply-patch-'))
     roots.push(root)
     const path = join(root, 'session.jsonl')
     writeFileSync(path, '{not json}\n')
     const rows = parseReplayJsonl('{not json}\n')
-    expect(rows).toHaveLength(1)
-    expect(rows[0]?.input).toBeUndefined()
-    expect(rows[0]?.id).toBe('transcript-0-malformed')
+    expect(rows).toHaveLength(0)
+  })
+
+  test('rejects oversized explicit transcript files before reading them', () => {
+    const root = mkdtempSync(join('/tmp', 'replay-apply-patch-'))
+    roots.push(root)
+    const path = join(root, 'oversized.jsonl')
+    writeFileSync(path, '')
+    truncateSync(path, MAX_REPLAY_INPUT_FILE_BYTES + 1)
+    expect(() => loadReplayInputs({ transcripts: [path], manifests: [] })).toThrow('exceeds')
+  })
+
+  test('marks aggregate output truncation when the size limit removes case details', () => {
+    const cases = Array.from({ length: 20 }, (_, i) => ({
+      ...fixtureEnvelope(update(context('target')), { 'src/example.ts': 'target\n' }),
+      id: `case-${i}`,
+    }))
+    const report = aggregateReplay(cases, { policies: ['complete-exact'], maxCases: 20, maxOutputBytes: 4_096 })
+    expect(report.outputTruncated).toBe(true)
+    expect(report.outputBytes).toBeLessThanOrEqual(4_096)
   })
 })

@@ -288,7 +288,7 @@ export function getGPTUsingToolsSection(enabledTools: Set<string>): string {
     taskToolName
       ? `TASK TRACKING: When task tracking helps, use ${taskToolName}.`
       : null,
-    `PARALLELISM: Issue independent tool calls together in one turn. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
+    `PARALLELISM: Issue independent tool calls together in one turn. Never run file mutations concurrently when their paths overlap or may alias; sequence them and reread before the next mutation. When a call depends on an earlier result, wait for that result; do not guess the dependent value.`,
   ].filter(item => item !== null)
 
   return [`# Using Your Tools`, ...prependBullets(items)].join('\n')

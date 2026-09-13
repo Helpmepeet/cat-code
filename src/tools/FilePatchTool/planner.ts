@@ -79,6 +79,7 @@ export type UpdatePlacementPlan = {
 
 export type PlannerFailureCode =
   | 'PATCH_ANCHOR_NOT_FOUND'
+  | 'PATCH_ANCHOR_NONCONSECUTIVE'
   | 'PATCH_HINT_NOT_FOUND'
   | 'PATCH_INVALID_INSERTION'
   | 'PATCH_HARD_EOF_CONFLICT'
@@ -89,6 +90,7 @@ export type PlannerFailureCode =
 
 export type PlannerFailureKind =
   | 'missing-fingerprint'
+  | 'nonconsecutive-fingerprint'
   | 'missing-hint'
   | 'invalid-insertion'
   | 'hard-eof'
@@ -183,6 +185,7 @@ type CandidateSet = {
   candidates: HunkCandidate[]
   exactCoordinates: Array<{ start: number; end: number }>
   effectiveHintCount: number
+  fingerprint: readonly string[]
   fingerprintLength: number
   /** For hard EOF hunks, distinguishes an interior-only exact match. */
   boundaryExactMatch?: boolean
@@ -211,7 +214,19 @@ class PlannerLimitError extends Error {
 }
 
 function mergedLimits(limits: Partial<PlannerLimits> | undefined): PlannerLimits {
-  return { ...DEFAULT_PLANNER_LIMITS, ...limits }
+  return Object.fromEntries(
+    Object.entries(DEFAULT_PLANNER_LIMITS).map(([name, fallback]) => {
+      const supplied = limits?.[name as keyof PlannerLimits]
+      return [
+        name,
+        supplied === undefined
+          ? fallback
+          : Number.isSafeInteger(supplied) && supplied >= 0
+            ? supplied
+            : 0,
+      ]
+    }),
+  ) as PlannerLimits
 }
 
 function newCounters(limits: PlannerLimits): PlannerCounters {
@@ -315,9 +330,10 @@ function fingerprint(hunk: EffectiveHunk): string[] {
 function candidateBoundary(
   hunk: EffectiveHunk,
   start: number,
+  end: number,
   sourceLength: number,
 ): PlannerCandidateBoundary {
-  if (start === sourceLength && hunk.isEndOfFile) return 'eof'
+  if (hunk.isEndOfFile && end === sourceLength) return 'eof'
   if (start === 0 && hunk.lines.every(line => line.kind === 'add')) return 'bof'
   return 'none'
 }
@@ -332,9 +348,10 @@ function findHintWitnesses(
 
   const witnesses: number[] = []
   let searchFrom = 0
+  const searchThrough = Math.min(sourceStart, sourceLines.length - 1)
   for (const hint of hints) {
     let found = -1
-    for (let sourceLine = searchFrom; sourceLine <= sourceStart; sourceLine += 1) {
+    for (let sourceLine = searchFrom; sourceLine <= searchThrough; sourceLine += 1) {
       charge(counters, 'hintComparisons')
       if (sourceLines[sourceLine]!.trim() === hint) {
         found = sourceLine
@@ -367,7 +384,7 @@ function makeCandidate(
     hunkIndex,
     sourceStart: start,
     sourceEnd: end,
-    boundary: candidateBoundary(hunk, start, sourceLines.length),
+    boundary: candidateBoundary(hunk, start, end, sourceLines.length),
     matchTier: 'exact',
   }
   if (witnesses.length > 0) candidate.diagnosticHintLines = witnesses
@@ -392,6 +409,7 @@ function discoverCandidates(
           candidates: [],
           exactCoordinates: [],
           effectiveHintCount: hints.length,
+          fingerprint: fp,
           fingerprintLength: 0,
           invalidInsertion: failureBase(
             'PATCH_HARD_EOF_CONFLICT',
@@ -419,6 +437,7 @@ function discoverCandidates(
         candidates: candidate ? [candidate] : [],
         exactCoordinates: [{ start: sourceLines.length, end: sourceLines.length }],
         effectiveHintCount: hints.length,
+        fingerprint: fp,
         fingerprintLength: 0,
       }
     }
@@ -428,6 +447,7 @@ function discoverCandidates(
         candidates: [],
         exactCoordinates: [],
         effectiveHintCount: hints.length,
+        fingerprint: fp,
         fingerprintLength: 0,
         invalidInsertion: failureBase(
           'PATCH_INVALID_INSERTION',
@@ -456,6 +476,7 @@ function discoverCandidates(
       candidates: candidate ? [candidate] : [],
       exactCoordinates: [{ start: 0, end: 0 }],
       effectiveHintCount: hints.length,
+      fingerprint: fp,
       fingerprintLength: 0,
     }
   }
@@ -465,6 +486,7 @@ function discoverCandidates(
       candidates: [],
       exactCoordinates: [],
       effectiveHintCount: hints.length,
+      fingerprint: fp,
       fingerprintLength: fp.length,
       invalidInsertion: failureBase(
         'PATCH_HARD_EOF_CONFLICT',
@@ -527,6 +549,7 @@ function discoverCandidates(
     candidates,
     exactCoordinates,
     effectiveHintCount: hints.length,
+    fingerprint: fp,
     fingerprintLength: fp.length,
     ...(hunk.isEndOfFile ? { boundaryExactMatch } : {}),
   }
@@ -559,6 +582,7 @@ function withPath(failure: PlannerFailure, path: string): PlannerFailure {
 
 function failureFromCandidateSet(
   set: CandidateSet,
+  sourceLines: readonly string[],
   isEndOfFile: boolean,
   hunkIndex: number,
   hunkCount: number,
@@ -599,6 +623,22 @@ function failureFromCandidateSet(
       path,
     )
   }
+  if (
+    set.fingerprintLength > 1 &&
+    hasAllFingerprintLines(sourceLines, set.fingerprint, counters)
+  ) {
+    return withPath(
+      failureBase(
+        'PATCH_ANCHOR_NONCONSECUTIVE',
+        'nonconsecutive-fingerprint',
+        `The old-side lines for hunk ${hunkIndex + 1} all exist in the source, but not as one consecutive ordered block. Include unchanged lines that connect them or refresh the patch from the current file.`,
+        hunkIndex,
+        hunkCount,
+        counters,
+      ),
+      path,
+    )
+  }
   return withPath(
     failureBase(
       'PATCH_ANCHOR_NOT_FOUND',
@@ -612,50 +652,314 @@ function failureFromCandidateSet(
   )
 }
 
+function hasAllFingerprintLines(
+  sourceLines: readonly string[],
+  expectedLines: readonly string[],
+  counters: PlannerCounters,
+): boolean {
+  const used = new Set<number>()
+  for (const expected of expectedLines) {
+    let found = false
+    for (let sourceIndex = 0; sourceIndex < sourceLines.length; sourceIndex += 1) {
+      charge(counters, 'sourcePositionsScanned')
+      if (!used.has(sourceIndex) && sourceLines[sourceIndex] === expected) {
+        used.add(sourceIndex)
+        found = true
+        break
+      }
+    }
+    if (!found) return false
+  }
+  return true
+}
+
 type Continuation = { count: 0 | 1 | 2; path?: HunkCandidate[] }
+
+type PlanNode = {
+  candidate: HunkCandidate
+  previous?: PlanNode
+}
+
+type NewlineFrontier = {
+  previousEnd: number
+  markerState: 'none' | 'active' | 'invalid'
+  activeMarkerHunk?: number
+  failure?: PlannerFailure
+  count: 1 | 2
+  node?: PlanNode
+}
+
+function newlineFailure(
+  message: string,
+  hunkIndex: number,
+  hunkCount: number,
+  counters: PlannerCounters,
+): PlannerFailure {
+  return failureBase(
+    'PATCH_NEWLINE_CONFLICT',
+    'newline',
+    message,
+    hunkIndex,
+    hunkCount,
+    counters,
+  )
+}
+
+function advanceNewlineFrontier(
+  source: PlannerSource,
+  hunks: readonly EffectiveHunk[],
+  frontier: NewlineFrontier,
+  candidate: HunkCandidate,
+  counters: PlannerCounters,
+): Pick<NewlineFrontier, 'markerState' | 'activeMarkerHunk' | 'failure'> {
+  if (frontier.markerState === 'invalid') {
+    return {
+      markerState: 'invalid',
+      ...(frontier.activeMarkerHunk === undefined
+        ? {}
+        : { activeMarkerHunk: frontier.activeMarkerHunk }),
+      ...(frontier.failure === undefined ? {} : { failure: frontier.failure }),
+    }
+  }
+
+  const hunk = hunks[candidate.hunkIndex]!
+  const markers = markerForHunk(hunk)
+  const oldLinePositions: number[] = []
+  const emittedLineIndexes: number[] = []
+  let oldOffset = candidate.sourceStart
+  for (let lineIndex = 0; lineIndex < hunk.lines.length; lineIndex += 1) {
+    charge(counters, 'dpTransitions')
+    const line = hunk.lines[lineIndex]!
+    if (line.kind !== 'add') {
+      oldLinePositions[lineIndex] = oldOffset
+      oldOffset += 1
+    }
+    if (line.kind !== 'delete') emittedLineIndexes.push(lineIndex)
+  }
+
+  const newMarkers: PlannerNewlineMarker[] = []
+  for (const marker of markers) {
+    charge(counters, 'dpTransitions')
+    const line = hunk.lines[marker.afterHunkLine]
+    if (!line) {
+      return {
+        markerState: 'invalid',
+        failure: newlineFailure(
+          `No-newline marker for hunk ${candidate.hunkIndex + 1} is not attached to a hunk line.`,
+          candidate.hunkIndex,
+          hunks.length,
+          counters,
+        ),
+      }
+    }
+    const oldCompatible = line.kind === 'context' || line.kind === 'delete'
+    const newCompatible = line.kind === 'context' || line.kind === 'add'
+    if ((marker.appliesTo === 'old' || marker.appliesTo === 'both') && !oldCompatible) {
+      return {
+        markerState: 'invalid',
+        failure: newlineFailure(
+          `Old-side no-newline marker for hunk ${candidate.hunkIndex + 1} is attached to an added line.`,
+          candidate.hunkIndex,
+          hunks.length,
+          counters,
+        ),
+      }
+    }
+    if ((marker.appliesTo === 'new' || marker.appliesTo === 'both') && !newCompatible) {
+      return {
+        markerState: 'invalid',
+        failure: newlineFailure(
+          `New-side no-newline marker for hunk ${candidate.hunkIndex + 1} is attached to a deleted line.`,
+          candidate.hunkIndex,
+          hunks.length,
+          counters,
+        ),
+      }
+    }
+    if (marker.appliesTo === 'old' || marker.appliesTo === 'both') {
+      const oldPosition = oldLinePositions[marker.afterHunkLine]
+      if (
+        oldPosition === undefined ||
+        oldPosition !== source.lines.length - 1 ||
+        candidate.sourceEnd !== source.lines.length ||
+        source.hasFinalNewline
+      ) {
+        return {
+          markerState: 'invalid',
+          failure: newlineFailure(
+            `Old-side no-newline marker for hunk ${candidate.hunkIndex + 1} conflicts with the source EOF state.`,
+            candidate.hunkIndex,
+            hunks.length,
+            counters,
+          ),
+        }
+      }
+    }
+    if (marker.appliesTo === 'new' || marker.appliesTo === 'both') {
+      newMarkers.push(marker)
+    }
+  }
+
+  const copiedGap = candidate.sourceStart > Math.max(0, frontier.previousEnd)
+  if (
+    frontier.markerState === 'active' &&
+    (copiedGap || emittedLineIndexes.length > 0)
+  ) {
+    const owner = frontier.activeMarkerHunk ?? candidate.hunkIndex
+    return {
+      markerState: 'invalid',
+      activeMarkerHunk: owner,
+      failure: newlineFailure(
+        `New-side no-newline marker for hunk ${owner + 1} does not reach the final output line.`,
+        owner,
+        hunks.length,
+        counters,
+      ),
+    }
+  }
+
+  if (newMarkers.length > 1 || (newMarkers.length > 0 && frontier.markerState === 'active')) {
+    return {
+      markerState: 'invalid',
+      failure: newlineFailure(
+        'More than one new-side no-newline marker would claim the final output line.',
+        candidate.hunkIndex,
+        hunks.length,
+        counters,
+      ),
+    }
+  }
+  if (newMarkers.length === 1) {
+    const marker = newMarkers[0]!
+    if (marker.afterHunkLine !== emittedLineIndexes.at(-1)) {
+      return {
+        markerState: 'invalid',
+        failure: newlineFailure(
+          `New-side no-newline marker for hunk ${candidate.hunkIndex + 1} does not reach the final output line.`,
+          candidate.hunkIndex,
+          hunks.length,
+          counters,
+        ),
+      }
+    }
+    return {
+      markerState: 'active',
+      activeMarkerHunk: candidate.hunkIndex,
+    }
+  }
+
+  return {
+    markerState: frontier.markerState,
+    ...(frontier.activeMarkerHunk === undefined
+      ? {}
+      : { activeMarkerHunk: frontier.activeMarkerHunk }),
+  }
+}
+
+function reconstructPlan(node: PlanNode | undefined): HunkCandidate[] {
+  const path: HunkCandidate[] = []
+  let cursor = node
+  while (cursor !== undefined) {
+    path.push(cursor.candidate)
+    cursor = cursor.previous
+  }
+  return path.reverse()
+}
 
 function countPlans(
   candidateSets: readonly CandidateSet[],
+  source: PlannerSource,
+  hunks: readonly EffectiveHunk[],
   counters: PlannerCounters,
-  isValidCompletePlan: (path: readonly HunkCandidate[]) => boolean,
-): Continuation {
-  // Newline constraints are properties of the complete output, not of a
-  // single candidate or `(hunkIndex, previousEnd)` frontier.  Consequently
-  // the validator is part of the bounded search and structural memoization
-  // cannot be reused here without losing that state.  The transition budget
-  // still makes this fail closed before an unbounded search can run.
-  const visit = (
-    hunkIndex: number,
-    previousEnd: number,
-    prefix: readonly HunkCandidate[],
-  ): Continuation => {
-    if (hunkIndex === candidateSets.length) {
-      return isValidCompletePlan(prefix) ? { count: 1, path: [] } : { count: 0 }
-    }
+): { continuation: Continuation; firstNewlineFailure?: PlannerFailure } {
+  let frontier = new Map<string, NewlineFrontier>([
+    ['-1:none', { previousEnd: -1, markerState: 'none', count: 1 }],
+  ])
 
-    let count: 0 | 1 | 2 = 0
-    let uniquePath: HunkCandidate[] | undefined
-    for (const candidate of candidateSets[hunkIndex]!.candidates) {
-      charge(counters, 'dpTransitions')
-      if (candidate.sourceStart < previousEnd) continue
-      charge(counters, 'predecessorsStored')
-      const continuation = visit(hunkIndex + 1, candidate.sourceEnd, [...prefix, candidate])
-      if (continuation.count === 0) continue
-      if (continuation.count === 2 || count === 1) {
-        count = 2
-        uniquePath = undefined
-        break
-      }
-      if (count === 0 && continuation.count === 1) {
-        count = 1
-        uniquePath = [candidate, ...(continuation.path ?? [])]
+  for (let hunkIndex = 0; hunkIndex < candidateSets.length; hunkIndex += 1) {
+    const next = new Map<string, NewlineFrontier>()
+    for (const state of frontier.values()) {
+      for (const candidate of candidateSets[hunkIndex]!.candidates) {
+        charge(counters, 'dpTransitions')
+        if (candidate.sourceStart < state.previousEnd) continue
+        const newline = advanceNewlineFrontier(
+          source,
+          hunks,
+          state,
+          candidate,
+          counters,
+        )
+        const key = `${candidate.sourceEnd}:${newline.markerState}`
+        const existing = next.get(key)
+        const incomingCount = state.count
+        if (existing === undefined) {
+          let node: PlanNode | undefined
+          if (incomingCount === 1) {
+            charge(counters, 'predecessorsStored')
+            node = { candidate, ...(state.node === undefined ? {} : { previous: state.node }) }
+          }
+          next.set(key, {
+            previousEnd: candidate.sourceEnd,
+            markerState: newline.markerState,
+            ...(newline.activeMarkerHunk === undefined
+              ? {}
+              : { activeMarkerHunk: newline.activeMarkerHunk }),
+            ...(newline.failure === undefined ? {} : { failure: newline.failure }),
+            count: incomingCount,
+            ...(node === undefined ? {} : { node }),
+          })
+          continue
+        }
+        existing.count = 2
+        existing.node = undefined
+        existing.failure ??= newline.failure
       }
     }
-
-    return { count, ...(uniquePath ? { path: uniquePath } : {}) }
+    frontier = next
+    if (frontier.size === 0) break
   }
 
-  return visit(0, -1, [])
+  let count: 0 | 1 | 2 = 0
+  let uniqueNode: PlanNode | undefined
+  let firstNewlineFailure: PlannerFailure | undefined
+  for (const state of frontier.values()) {
+    let failure = state.failure
+    if (
+      failure === undefined &&
+      state.markerState === 'active' &&
+      state.previousEnd < source.lines.length
+    ) {
+      const owner = state.activeMarkerHunk ?? hunks.length - 1
+      failure = newlineFailure(
+        `New-side no-newline marker for hunk ${owner + 1} does not reach the final output line.`,
+        owner,
+        hunks.length,
+        counters,
+      )
+    }
+    if (state.markerState === 'invalid' || failure !== undefined) {
+      firstNewlineFailure ??= failure
+      continue
+    }
+    if (state.count === 2 || count === 1) {
+      count = 2
+      uniqueNode = undefined
+      continue
+    }
+    if (count === 0) {
+      count = state.count
+      uniqueNode = state.node
+      if (state.count === 2) uniqueNode = undefined
+    }
+  }
+
+  return {
+    continuation: {
+      count,
+      ...(count === 1 ? { path: reconstructPlan(uniqueNode) } : {}),
+    },
+    ...(firstNewlineFailure === undefined ? {} : { firstNewlineFailure }),
+  }
 }
 
 function buildOutput(
@@ -973,6 +1277,7 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
       )
       const candidateFailure = failureFromCandidateSet(
         set,
+        source.lines,
         hunks[hunkIndex]!.isEndOfFile,
         hunkIndex,
         hunks.length,
@@ -990,24 +1295,11 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
       candidateSets.push(set)
     }
 
-    let firstNewlineFailure: PlannerFailure | undefined
-    let validatedUniqueOutput: PlannerOutputEvidence | undefined
-    let validatedUniquePathKey: string | undefined
-    const continuation = countPlans(candidateSets, counters, completePlan => {
-      const newlineResult = validateNewlines(source, hunks, completePlan, counters)
-      if ('code' in newlineResult) {
-        firstNewlineFailure ??= newlineResult
-        return false
-      }
-      validatedUniqueOutput = newlineResult.output
-      validatedUniquePathKey = completePlan
-        .map(candidate => `${candidate.hunkIndex}:${candidate.sourceStart}:${candidate.sourceEnd}:${candidate.boundary}`)
-        .join('|')
-      return true
-    })
+    const counted = countPlans(candidateSets, source, hunks, counters)
+    const continuation = counted.continuation
     if (continuation.count === 0) {
-      if (firstNewlineFailure !== undefined) {
-        const failure = withPath(firstNewlineFailure, input.path)
+      if (counted.firstNewlineFailure !== undefined) {
+        const failure = withPath(counted.firstNewlineFailure, input.path)
         return {
           ok: false,
           failure: input.diagnostics
@@ -1060,27 +1352,18 @@ export function planUpdateHunks(input: PlanUpdateInput): PlannerResult {
     }
 
     const planHunks = continuation.path
-    const planKey = planHunks
-      .map(candidate => `${candidate.hunkIndex}:${candidate.sourceStart}:${candidate.sourceEnd}:${candidate.boundary}`)
-      .join('|')
-    // The complete-plan validator already produced this output evidence while
-    // determining 0/1/many. Re-running it would charge and scan the whole
-    // source a second time for the unique path.
-    if (validatedUniquePathKey !== planKey || validatedUniqueOutput === undefined) {
-      const newlineResult = validateNewlines(source, hunks, planHunks, counters)
-      if ('code' in newlineResult) {
-        const failure = withPath(newlineResult, input.path)
-        return {
-          ok: false,
-          failure: input.diagnostics ? addDiagnostics(failure, source.lines, hunks, counters) : failure,
-        }
+    const newlineResult = validateNewlines(source, hunks, planHunks, counters)
+    if ('code' in newlineResult) {
+      const failure = withPath(newlineResult, input.path)
+      return {
+        ok: false,
+        failure: input.diagnostics ? addDiagnostics(failure, source.lines, hunks, counters) : failure,
       }
-      validatedUniqueOutput = newlineResult.output
     }
 
     return {
       ok: true,
-      plan: { path: input.path, hunks: planHunks, output: validatedUniqueOutput },
+      plan: { path: input.path, hunks: planHunks, output: newlineResult.output },
       usage: snapshotUsage(counters),
     }
   } catch (error) {

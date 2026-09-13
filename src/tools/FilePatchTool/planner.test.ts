@@ -212,6 +212,30 @@ describe('BOF, EOF, and insertion ordering', () => {
     expect(result.plan.hunks[1]!.boundary).toBe('eof')
   })
 
+  test('returns a structured missing-hint failure for context-free EOF insertion', () => {
+    const nonempty = failure(
+      plan('old\n', [
+        hunk([added('tail')], { isEndOfFile: true, hints: ['missing'] }),
+      ]),
+    )
+    const empty = failure(
+      plan('', [
+        hunk([added('tail')], { isEndOfFile: true, hints: ['missing'] }),
+      ]),
+    )
+    expect(nonempty.code).toBe('PATCH_HINT_NOT_FOUND')
+    expect(empty.code).toBe('PATCH_HINT_NOT_FOUND')
+  })
+
+  test('labels a fingerprinted hard-EOF placement as eof', () => {
+    const result = success(
+      plan('head\ntail', [
+        hunk([context('tail')], { isEndOfFile: true }),
+      ]),
+    )
+    expect(result.plan.hunks[0]!.boundary).toBe('eof')
+  })
+
   test('preserves patch order for BOF then EOF insertion on an empty file', () => {
     const result = success(
       plan('', [
@@ -338,6 +362,45 @@ describe('newline constraints', () => {
 })
 
 describe('bounded planning and diagnostics', () => {
+  test('distinguishes present but nonconsecutive old-side lines', () => {
+    const error = failure(
+      plan('last\ngap\nfirst\n', [
+        hunk([context('first'), context('last')]),
+      ]),
+    )
+    expect(error.code).toBe('PATCH_ANCHOR_NONCONSECUTIVE')
+    expect(error.kind).toBe('nonconsecutive-fingerprint')
+  })
+
+  test('fails closed for invalid numeric limits', () => {
+    const error = failure(
+      plan('target\n', [hunk([context('target')])], {
+        limits: { maxSourcePositionsScanned: Number.POSITIVE_INFINITY },
+      }),
+    )
+    expect(error.code).toBe('PATCH_PLANNER_LIMIT')
+  })
+
+  test('uses an iterative compact frontier for many ordered hunks', () => {
+    const lineCount = 2_000
+    const source = Array.from({ length: lineCount }, (_, index) => `line-${index}`)
+    const result = success(
+      plan(
+        `${source.join('\n')}\n`,
+        source.map(line => hunk([context(line)])),
+        {
+          limits: {
+            maxSourcePositionsScanned: 4_100_000,
+            maxCandidatesTotal: 4_000,
+            maxDpTransitions: 10_000,
+            maxPredecessors: 4_000,
+          },
+        },
+      ),
+    )
+    expect(result.plan.hunks).toHaveLength(lineCount)
+  })
+
   test('fails closed on source scanning budget', () => {
     const error = failure(
       plan('a\nb\nc\n', [hunk([context('c')])], { limits: { maxSourcePositionsScanned: 1 } }),

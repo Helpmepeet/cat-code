@@ -263,31 +263,35 @@ describe('canonicalizeCodexItem: function_call tool-input normalization', () => 
   })
 })
 
-describe('canonicalizeCodexItem: Apply_patch custom_tool_call round-trip', () => {
-  test('server custom_tool_call replays as custom_tool_call from {input: raw} wrap', () => {
+describe('canonicalizeCodexItem: apply_patch custom_tool_call round-trip', () => {
+  test.each(['apply_patch', 'Apply_patch'])(
+    '%s raw envelope replays as custom_tool_call from {input: raw} wrap',
+    toolName => {
     const callId = 'call_patch_1'
     const rawEnvelope =
       '*** Begin Patch\n*** Update File: src/x.ts\n@@\n-a\n+b\n*** End Patch'
 
-    // Server records Apply_patch as custom_tool_call with the raw input string.
     const rawServerItem = {
       type: 'custom_tool_call',
       call_id: callId,
-      name: 'Apply_patch',
+      name: toolName,
       input: rawEnvelope,
     }
     const canonical = canonicalizeCodexItem(rawServerItem)
 
     // Replay: transcript stores the unparseable envelope as { input: raw }.
-    const replayed = replayToolCallItem(callId, 'Apply_patch', {
+    const replayed = replayToolCallItem(callId, toolName, {
       input: rawEnvelope,
     })
 
     expect(replayed.type).toBe('custom_tool_call')
     expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))
-  })
+    },
+  )
 
-  test('Apply_patch {ops} arm replays as custom_tool_call with serialized input', () => {
+  test.each(['apply_patch', 'Apply_patch'])(
+    '%s {ops} arm replays as custom_tool_call with serialized input',
+    toolName => {
     const callId = 'call_patch_2'
     const ops = [{ type: 'delete', path: 'src/gone.ts' }]
 
@@ -295,14 +299,15 @@ describe('canonicalizeCodexItem: Apply_patch custom_tool_call round-trip', () =>
     const rawServerItem = {
       type: 'custom_tool_call',
       call_id: callId,
-      name: 'Apply_patch',
+      name: toolName,
       input: JSON.stringify({ ops }, null, 2),
     }
     const canonical = canonicalizeCodexItem(rawServerItem)
 
-    const replayed = replayToolCallItem(callId, 'Apply_patch', { ops })
+    const replayed = replayToolCallItem(callId, toolName, { ops })
     expect(replayed.type).toBe('custom_tool_call')
     expect(canonical.input).toBe(JSON.stringify({ ops }))
     expect(JSON.stringify(canonical)).toBe(JSON.stringify(replayed))
-  })
+    },
+  )
 })

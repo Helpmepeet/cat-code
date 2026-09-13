@@ -5,7 +5,7 @@ import {
   parseFilePatch,
   parseFilePatchInput,
 } from './parser.js'
-import { FilePatchError } from './types.js'
+import { FilePatchError, serializeFilePatchError } from './types.js'
 
 describe('parseFilePatch', () => {
   test('parses update, add, and delete operations in one envelope', () => {
@@ -349,6 +349,78 @@ EOF
 *** End Patch
 `),
     ).toThrow('Unsupported patch header')
+  })
+
+  test('attaches precise source spans to syntax failures', () => {
+    const cases = [
+      {
+        input: 'narrative\n*** End Patch\n',
+        span: { startLine: 1, endLine: 1 },
+      },
+      {
+        input: '*** Begin Patch\n*** Add File: src/a.ts\n+line\n',
+        span: { startLine: 3, endLine: 3 },
+      },
+      {
+        input: '*** Begin Patch\nnot a header\n*** End Patch\n',
+        span: { startLine: 2, endLine: 2 },
+      },
+      {
+        input: '*** Begin Patch\n*** Add File:   \n*** End Patch\n',
+        span: { startLine: 2, endLine: 2 },
+      },
+      {
+        input: '*** Begin Patch\n*** Add File: src/a.ts\nnot-added\n*** End Patch\n',
+        span: { startLine: 3, endLine: 3 },
+      },
+      {
+        input: '*** Begin Patch\n*** Update File: src/a.ts\nnot a hunk\n*** End Patch\n',
+        span: { startLine: 3, endLine: 3 },
+      },
+      {
+        input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n\\ No newline at end of file\n*** End Patch\n',
+        span: { startLine: 4, endLine: 4 },
+      },
+      {
+        input: '*** Begin Patch\n*** Update File: src/a.ts\n@@\n*** End Patch\n',
+        span: { startLine: 3, endLine: 3 },
+      },
+      {
+        input: '*** Begin Patch\n*** End Patch\n',
+        span: { startLine: 1, endLine: 2 },
+      },
+    ]
+
+    for (const { input, span } of cases) {
+      let caught: unknown
+      try {
+        parseFilePatch(input)
+      } catch (error) {
+        caught = error
+      }
+      expect(caught).toBeInstanceOf(FilePatchError)
+      expect((caught as FilePatchError).patchSourceSpan).toEqual(span)
+    }
+  })
+
+  test('does not invent source spans for structured legacy input', () => {
+    const error = new FilePatchError('legacy failure', { code: 'INVALID_PATCH_FORMAT' })
+    expect(error.patchSourceSpan).toBeUndefined()
+    expect(serializeFilePatchError(error).patchSourceSpan).toBeUndefined()
+  })
+
+  test('includes parser source spans in the serialized model error', () => {
+    let caught: unknown
+    try {
+      parseFilePatch('*** Begin Patch\nnot a header\n*** End Patch\n')
+    } catch (error) {
+      caught = error
+    }
+    expect(caught).toBeInstanceOf(FilePatchError)
+    expect(serializeFilePatchError(caught as FilePatchError).patchSourceSpan).toEqual({
+      startLine: 2,
+      endLine: 2,
+    })
   })
 
   test('tolerates blank lines between file blocks', () => {

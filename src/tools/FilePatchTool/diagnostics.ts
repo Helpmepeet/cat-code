@@ -1,5 +1,6 @@
 import type { PlannerFailure } from './planner.js'
 import {
+  boundFilePatchDiagnosticMetadata,
   FilePatchError,
   type FilePatchDiagnosticMetadata,
   type FilePatchMutationOutcome,
@@ -76,7 +77,7 @@ export function renderPlannerFailure(
   const candidateCoordinates = (failure.candidateCoordinates ?? [])
     .slice(0, limits.maxCandidateCoordinates)
     .map(coordinate => ({ start: coordinate.start, end: coordinate.end }))
-  const metadata: FilePatchDiagnosticMetadata = {
+  let metadata: FilePatchDiagnosticMetadata = {
     code: failure.code,
     kind: failure.kind,
     path: failure.path,
@@ -108,6 +109,7 @@ export function renderPlannerFailure(
 
   const message = renderMessage(failure, metadata, limits, state)
   metadata.diagnosticsTruncated ||= state.truncated
+  metadata = boundFilePatchDiagnosticMetadata(metadata)
 
   const error = new FilePatchError(message, {
     code: failure.code,
@@ -137,6 +139,7 @@ function shouldSearchNearMatches(failure: PlannerFailure): boolean {
   // make an exact ambiguity look like a repairable mismatch.
   return (
     failure.kind === 'missing-fingerprint' ||
+    failure.kind === 'nonconsecutive-fingerprint' ||
     failure.kind === 'missing-hint' ||
     failure.kind === 'hard-eof' ||
     failure.kind === 'ordering'
@@ -181,11 +184,7 @@ function findNearMatches(
         comparison.divergence.column,
         limits.maxLineLength,
       ),
-      actual: centeredSnippet(
-        comparison.divergence.actual,
-        comparison.divergence.column,
-        limits.maxLineLength,
-      ),
+      actualLength: comparison.divergence.actual.length,
     })
   }
 
@@ -340,9 +339,9 @@ function renderMessage(
     }
     for (const match of metadata.nearMatches) {
       parts.push(
-        `Near match at source lines ${match.sourceStart + 1}-${match.sourceEnd}: ` +
+          `Near match at source lines ${match.sourceStart + 1}-${match.sourceEnd}: ` +
           `first divergence at line ${match.divergence.sourceLine + 1}, column ${match.divergence.column + 1}. ` +
-          `expected ${JSON.stringify(match.expected)}; found ${JSON.stringify(match.actual)}.`,
+          `expected ${JSON.stringify(match.expected)}; source line length ${match.actualLength}.`,
       )
     }
   }

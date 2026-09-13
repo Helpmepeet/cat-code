@@ -8,7 +8,7 @@
  * state.  That makes a replay useful for historical sessions without making a
  * historical session an accidental write or quota boundary.
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { normalize, resolve } from 'node:path'
 
 import {
@@ -23,6 +23,7 @@ import {
   type PlannerResult,
   type PlannerSource,
 } from '../src/tools/FilePatchTool/planner.js'
+import { inputSchema } from '../src/tools/FilePatchTool/types.js'
 import type { FilePatchOperation, ParsedFilePatch } from '../src/tools/FilePatchTool/types.js'
 
 export const REPLAY_TOOL_NAMES = ['apply_patch', 'Apply_patch'] as const
@@ -115,6 +116,8 @@ export type ReplayAggregate = {
   byPolicy: Record<ReplayPolicy, { accepted: number; rejected: number; unknown: number }>
   cases: ReplayCaseResult[]
   omittedCases: number
+  outputTruncated: boolean
+  outputBytes: number
   integration: {
     planner: { connected: boolean; entrypoint: string; hook: string }
   }
@@ -136,6 +139,9 @@ export type ReplayOptions = {
   maxOperationsPerEnvelope?: number
   maxHunksPerOperation?: number
   maxSourceLinesPerFile?: number
+  maxPatchBytes?: number
+  maxSourceBytesPerFile?: number
+  maxOutputBytes?: number
   planner?: ReplayPlannerAdapter
 }
 
@@ -144,6 +150,21 @@ const DEFAULT_MAX_REASONS = 50
 const DEFAULT_MAX_OPERATIONS_PER_ENVELOPE = 128
 const DEFAULT_MAX_HUNKS_PER_OPERATION = 512
 const DEFAULT_MAX_SOURCE_LINES_PER_FILE = 100_000
+const DEFAULT_MAX_PATCH_BYTES = 1_000_000
+const DEFAULT_MAX_SOURCE_BYTES_PER_FILE = 1_000_000
+const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000
+const MAX_REPLAY_CASES = 10_000
+const MAX_REPLAY_REASONS = 1_000
+const MAX_REPLAY_OPERATIONS = 1_024
+const MAX_REPLAY_HUNKS = 4_096
+const MAX_REPLAY_SOURCE_LINES = 1_000_000
+const MAX_REPLAY_PATCH_BYTES = 4_000_000
+const MAX_REPLAY_SOURCE_BYTES = 4_000_000
+const MAX_REPLAY_OUTPUT_BYTES = 4_000_000
+const MAX_REPLAY_COHORT_CASES = 100_000
+const MAX_REPLAY_TEXT_BYTES = 800
+const MAX_REPLAY_PATH_BYTES = 512
+export const MAX_REPLAY_INPUT_FILE_BYTES = 64 * 1024 * 1024
 const PLANNER_ENTRYPOINT = 'src/tools/FilePatchTool/planner.ts:planUpdateHunks'
 
 export function isReplayToolName(value: unknown): value is ReplayToolName {
@@ -152,6 +173,72 @@ export function isReplayToolName(value: unknown): value is ReplayToolName {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function safeLimit(value: number | undefined, fallback: number, maximum: number): number {
+  if (!Number.isFinite(value)) return fallback
+  return Math.max(0, Math.min(maximum, Math.floor(value!)))
+}
+
+function boundedText(value: unknown, maxBytes = MAX_REPLAY_TEXT_BYTES): string {
+  const text = typeof value === 'string' ? value : String(value)
+  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text
+  const suffix = '… [truncated]'
+  const budget = Math.max(0, maxBytes - Buffer.byteLength(suffix, 'utf8'))
+  let end = Math.min(text.length, budget)
+  while (end > 0 && Buffer.byteLength(text.slice(0, end), 'utf8') > budget) end -= 1
+  return `${text.slice(0, end)}${suffix}`
+}
+
+function boundedPath(value: unknown): string {
+  return boundedText(value, MAX_REPLAY_PATH_BYTES)
+}
+
+function boundedReason(reason: ReplayReason): ReplayReason {
+  return {
+    code: boundedText(reason.code),
+    ...(reason.detail === undefined ? {} : { detail: boundedText(reason.detail) }),
+  }
+}
+
+function byteLength(value: string): number {
+  return Buffer.byteLength(value, 'utf8')
+}
+
+function inputStringBytes(value: unknown, seen = new Set<unknown>()): number {
+  if (typeof value === 'string') return byteLength(value)
+  if (!isRecord(value) && !Array.isArray(value)) return 0
+  if (seen.has(value)) return 0
+  seen.add(value)
+  let total = 0
+  const values = Array.isArray(value) ? value : Object.values(value)
+  for (const child of values) {
+    total += inputStringBytes(child, seen)
+    if (total > MAX_REPLAY_PATCH_BYTES) return total
+  }
+  return total
+}
+
+function normalizedOptions(options: ReplayOptions): Required<Pick<ReplayOptions,
+  'maxCases' | 'maxReasons' | 'maxOperationsPerEnvelope' | 'maxHunksPerOperation' |
+  'maxSourceLinesPerFile' | 'maxPatchBytes' | 'maxSourceBytesPerFile' | 'maxOutputBytes'>> {
+  return {
+    maxCases: safeLimit(options.maxCases, DEFAULT_MAX_CASES, MAX_REPLAY_CASES),
+    maxReasons: safeLimit(options.maxReasons, DEFAULT_MAX_REASONS, MAX_REPLAY_REASONS),
+    maxOperationsPerEnvelope: safeLimit(options.maxOperationsPerEnvelope, DEFAULT_MAX_OPERATIONS_PER_ENVELOPE, MAX_REPLAY_OPERATIONS),
+    maxHunksPerOperation: safeLimit(options.maxHunksPerOperation, DEFAULT_MAX_HUNKS_PER_OPERATION, MAX_REPLAY_HUNKS),
+    maxSourceLinesPerFile: safeLimit(options.maxSourceLinesPerFile, DEFAULT_MAX_SOURCE_LINES_PER_FILE, MAX_REPLAY_SOURCE_LINES),
+    maxPatchBytes: safeLimit(options.maxPatchBytes, DEFAULT_MAX_PATCH_BYTES, MAX_REPLAY_PATCH_BYTES),
+    maxSourceBytesPerFile: safeLimit(options.maxSourceBytesPerFile, DEFAULT_MAX_SOURCE_BYTES_PER_FILE, MAX_REPLAY_SOURCE_BYTES),
+    maxOutputBytes: Math.max(4_096, safeLimit(options.maxOutputBytes, DEFAULT_MAX_OUTPUT_BYTES, MAX_REPLAY_OUTPUT_BYTES)),
+  }
+}
+
+function normalizedPolicies(options: ReplayOptions): ReplayPolicy[] {
+  const requested = options.policies ?? DEFAULT_REPLAY_POLICIES
+  const known = new Set<ReplayPolicy>(DEFAULT_REPLAY_POLICIES)
+  const policies = [...new Set(requested)].filter(policy => known.has(policy))
+  return policies.length > 0 ? policies : [...DEFAULT_REPLAY_POLICIES]
 }
 
 function asSource(value: unknown): ReplaySource | undefined {
@@ -237,6 +324,9 @@ export function extractReplayEnvelopes(records: readonly unknown[]): ExtractedRe
 
 export function parseReplayJsonl(text: string): ExtractedReplayEnvelope[] {
   const result: ExtractedReplayEnvelope[] = []
+  if (byteLength(text) > MAX_REPLAY_INPUT_FILE_BYTES) {
+    throw new Error(`transcript exceeds ${MAX_REPLAY_INPUT_FILE_BYTES} bytes`)
+  }
   for (const [index, line] of text.split(/\r?\n/).entries()) {
     if (line.trim() === '') continue
     try {
@@ -246,13 +336,8 @@ export function parseReplayJsonl(text: string): ExtractedReplayEnvelope[] {
         recordIndex: index,
       })))
     } catch {
-      result.push({
-        id: `transcript-${index}-malformed`,
-        toolName: 'apply_patch',
-        input: undefined,
-        sourceByPath: new Map(),
-        recordIndex: index,
-      })
+      // A malformed JSONL record is not evidence of an apply_patch call.
+      continue
     }
   }
   return result
@@ -289,14 +374,20 @@ function fixtureEnvelope(caseDef: ReplayFixtureCase, index: number): ExtractedRe
   }
 }
 
-function normalizeInput(input: unknown): { parsed?: ParsedFilePatch; reason?: ReplayReason } {
+function normalizeInput(input: unknown, options: ReplayOptions = {}): { parsed?: ParsedFilePatch; reason?: ReplayReason } {
+  const limits = normalizedOptions(options)
   try {
-    if (typeof input === 'string') return { parsed: parseFilePatchInput({ input }) }
-    if (isRecord(input) && typeof input.input === 'string') return { parsed: parseFilePatchInput({ input: input.input }) }
-    if (isRecord(input) && Array.isArray(input.ops)) return { parsed: parseFilePatchInput({ ops: input.ops as FilePatchOperation[] }) }
-    return { reason: { code: 'invalid-input', detail: 'tool input is neither a raw patch string nor a structured ops envelope' } }
+    const candidate = typeof input === 'string' ? { input } : input
+    if (inputStringBytes(candidate) > limits.maxPatchBytes) {
+      return { reason: { code: 'replay-input-limit', detail: `patch exceeds ${limits.maxPatchBytes} bytes` } }
+    }
+    const validated = inputSchema().safeParse(candidate)
+    if (!validated.success) {
+      return { reason: { code: 'invalid-envelope', detail: boundedText(validated.error.message) } }
+    }
+    return { parsed: parseFilePatchInput(validated.data) }
   } catch (error) {
-    return { reason: { code: 'invalid-envelope', detail: error instanceof Error ? error.message : String(error) } }
+    return { reason: { code: 'invalid-envelope', detail: boundedText(error instanceof Error ? error.message : String(error)) } }
   }
 }
 
@@ -337,20 +428,32 @@ function envelopeLimitFailure(
   sources: ReadonlyMap<string, ReplaySource>,
   options: ReplayOptions,
 ): ReplayReason | undefined {
-  const maxOperations = options.maxOperationsPerEnvelope ?? DEFAULT_MAX_OPERATIONS_PER_ENVELOPE
-  const maxHunks = options.maxHunksPerOperation ?? DEFAULT_MAX_HUNKS_PER_OPERATION
-  const maxSourceLines = options.maxSourceLinesPerFile ?? DEFAULT_MAX_SOURCE_LINES_PER_FILE
+  const limits = normalizedOptions(options)
+  const maxOperations = limits.maxOperationsPerEnvelope
+  const maxHunks = limits.maxHunksPerOperation
+  const maxSourceLines = limits.maxSourceLinesPerFile
   if (operations.length > maxOperations) {
     return { code: 'replay-input-limit', detail: `operation count exceeds ${maxOperations}` }
   }
   for (const operation of operations) {
+    for (const path of operationPaths(operation)) {
+      if (byteLength(path) > MAX_REPLAY_PATH_BYTES) {
+        return { code: 'replay-input-limit', detail: `path exceeds ${MAX_REPLAY_PATH_BYTES} bytes` }
+      }
+    }
     if (operation.type === 'update' && operation.hunks.length > maxHunks) {
-      return { code: 'replay-input-limit', detail: `${operation.path} exceeds ${maxHunks} hunks` }
+      return { code: 'replay-input-limit', detail: `${boundedPath(operation.path)} exceeds ${maxHunks} hunks` }
     }
   }
+  if (sources.size > maxOperations) {
+    return { code: 'replay-input-limit', detail: `source snapshot count exceeds ${maxOperations}` }
+  }
   for (const [path, source] of sources) {
+    if (source !== null && byteLength(source) > limits.maxSourceBytesPerFile) {
+      return { code: 'replay-input-limit', detail: `${boundedPath(path)} exceeds ${limits.maxSourceBytesPerFile} source bytes` }
+    }
     if (source !== null && source.split(/\r?\n/, maxSourceLines + 2).length > maxSourceLines + 1) {
-      return { code: 'replay-input-limit', detail: `${path} exceeds ${maxSourceLines} source lines` }
+      return { code: 'replay-input-limit', detail: `${boundedPath(path)} exceeds ${maxSourceLines} source lines` }
     }
   }
   return undefined
@@ -396,8 +499,8 @@ function hintPasses(lines: readonly string[], hunk: PlannerHunk, start: number, 
   let from = 0
   for (const hint of hints(hunk)) {
     let found = -1
-    for (let i = from; i <= start; i += 1) {
-      const candidate = lines[i]!.trim()
+    for (let i = from; i <= start && i < lines.length; i += 1) {
+      const candidate = lines[i]?.trim() ?? ''
       if (mode === 'whole-line' ? candidate === hint : candidate.includes(hint)) {
         found = i
         break
@@ -409,20 +512,10 @@ function hintPasses(lines: readonly string[], hunk: PlannerHunk, start: number, 
   return true
 }
 
-function tolerantMatch(actual: string, expected: string): boolean {
-  return actual === expected || actual.trimEnd() === expected.trimEnd() || actual.trim() === expected.trim() || unicodeNormalize(actual) === unicodeNormalize(expected)
-}
-
 function currentMatcherCandidates(lines: readonly string[], hunk: PlannerHunk, start: number): number[] {
   // This is the historical ladder used by the production applier.  Replay
   // records it as evidence only; complete-exact remains the mutation policy.
-  const tiers: Array<(actual: string, expected: string) => boolean> = [
-    (actual, expected) => actual === expected,
-    (actual, expected) => actual.trimEnd() === expected.trimEnd(),
-    (actual, expected) => actual.trim() === expected.trim(),
-    (actual, expected) => unicodeNormalize(actual) === unicodeNormalize(expected),
-  ]
-  for (const match of tiers) {
+  for (const match of CURRENT_MATCHER_TIERS) {
     const candidates = exactMatches(lines, fingerprint(hunk), start, match)
       .filter(position => hintPasses(lines, hunk, position, 'substring'))
     if (candidates.length > 0) return candidates
@@ -430,12 +523,19 @@ function currentMatcherCandidates(lines: readonly string[], hunk: PlannerHunk, s
   return []
 }
 
+const CURRENT_MATCHER_TIERS: readonly ((actual: string, expected: string) => boolean)[] = [
+  (actual, expected) => actual === expected,
+  (actual, expected) => actual.trimEnd() === expected.trimEnd(),
+  (actual, expected) => actual.trim() === expected.trim(),
+  (actual, expected) => unicodeNormalize(actual) === unicodeNormalize(expected),
+]
+
 type OrderedPlacement = { start: number; end: number }
 
 function completeCandidateSets(
   lines: readonly string[],
   hunks: readonly PlannerHunk[],
-  match: (actual: string, expected: string) => boolean,
+  match: ((actual: string, expected: string) => boolean) | readonly ((actual: string, expected: string) => boolean)[],
   hintMode: 'substring' | 'whole-line',
 ): { sets?: OrderedPlacement[][]; reason?: ReplayReason } {
   const sets: OrderedPlacement[][] = []
@@ -455,12 +555,21 @@ function completeCandidateSets(
         return { reason: { code: 'invalid-insertion', detail: `hunk ${index + 1}` } }
       }
     } else {
-      starts = exactMatches(lines, fp, 0, match)
-      if (hunk.isEndOfFile) {
-        if (index !== hunks.length - 1) {
-          return { reason: { code: 'hard-eof-conflict', detail: `hunk ${index + 1}` } }
+      const tiers = Array.isArray(match) ? match : [match]
+      starts = []
+      for (const tier of tiers) {
+        let tierStarts = exactMatches(lines, fp, 0, tier)
+          .filter(start => hintPasses(lines, hunk, start, hintMode))
+        if (hunk.isEndOfFile) {
+          if (index !== hunks.length - 1) {
+            return { reason: { code: 'hard-eof-conflict', detail: `hunk ${index + 1}` } }
+          }
+          tierStarts = tierStarts.filter(start => start + fp.length === lines.length)
         }
-        starts = starts.filter(start => start + fp.length === lines.length)
+        if (tierStarts.length > 0) {
+          starts = tierStarts
+          break
+        }
       }
     }
     const candidates = starts
@@ -650,7 +759,7 @@ function operationDecision(
     const discovered = completeCandidateSets(
       src.lines,
       operation.hunks,
-      tolerantMatch,
+      CURRENT_MATCHER_TIERS,
       'substring',
     )
     if (!discovered.sets) return decision('rejected', [discovered.reason!])
@@ -693,19 +802,36 @@ function operationDecision(
   ])
 }
 
+function boundedDecision(decision: ReplayDecision): ReplayDecision {
+  return {
+    policy: decision.policy,
+    status: decision.status,
+    reasons: decision.reasons.slice(0, 8).map(boundedReason),
+    operationCount: decision.operationCount,
+    ...(decision.placements === undefined
+      ? {}
+      : {
+          placements: decision.placements.slice(0, 40).map(placement => ({
+            ...placement,
+            path: boundedPath(placement.path),
+          })),
+        }),
+  }
+}
+
 export function replayEnvelope(envelope: ExtractedReplayEnvelope, options: ReplayOptions = {}): ReplayCaseResult {
-  const policies = options.policies ?? DEFAULT_REPLAY_POLICIES
-  const normalized = normalizeInput(envelope.input)
+  const policies = normalizedPolicies(options)
+  const normalized = normalizeInput(envelope.input, options)
   if (!normalized.parsed) {
-    const reason = normalized.reason ?? { code: 'invalid-envelope' }
-    return { id: envelope.id, toolName: envelope.toolName, envelope: 'malformed', reconstructable: false, unknownReasons: [reason], decisions: policies.map(policy => ({ policy, status: 'unknown', reasons: [reason], operationCount: 0 })) }
+    const reason = boundedReason(normalized.reason ?? { code: 'invalid-envelope' })
+    return { id: boundedText(envelope.id), toolName: envelope.toolName, envelope: 'malformed', reconstructable: false, unknownReasons: [reason], decisions: policies.map(policy => ({ policy, status: 'unknown', reasons: [reason], operationCount: 0 })) }
   }
   const parsed = normalized.parsed
   const envelopeFailure = envelopeIndependenceFailure(parsed.ops)
   const limitFailure = envelopeLimitFailure(parsed.ops, envelope.sourceByPath, options)
   if (envelopeFailure) {
     return {
-      id: envelope.id,
+      id: boundedText(envelope.id),
       toolName: envelope.toolName,
       envelope: 'complete',
       reconstructable: true,
@@ -713,22 +839,22 @@ export function replayEnvelope(envelope: ExtractedReplayEnvelope, options: Repla
       decisions: policies.map(policy => ({
         policy,
         status: 'rejected',
-        reasons: [envelopeFailure],
+        reasons: [boundedReason(envelopeFailure)],
         operationCount: parsed.ops.length,
       })),
     }
   }
   if (limitFailure) {
     return {
-      id: envelope.id,
+      id: boundedText(envelope.id),
       toolName: envelope.toolName,
       envelope: 'complete',
       reconstructable: false,
-      unknownReasons: [limitFailure],
+      unknownReasons: [boundedReason(limitFailure)],
       decisions: policies.map(policy => ({
         policy,
         status: 'unknown',
-        reasons: [limitFailure],
+        reasons: [boundedReason(limitFailure)],
         operationCount: parsed.ops.length,
       })),
     }
@@ -750,36 +876,64 @@ export function replayEnvelope(envelope: ExtractedReplayEnvelope, options: Repla
     const status: ReplayDecision['status'] = unknown.length > 0 ? 'unknown' : rejected.length > 0 ? 'rejected' : 'accepted'
     decisions.push({ policy, status, reasons: operationDecisions.flatMap(item => item.reasons).slice(0, 8), operationCount: parsed.ops.length, placements: operationDecisions.flatMap(item => item.placements ?? []).slice(0, 40) })
   }
-  return { id: envelope.id, toolName: envelope.toolName, envelope: 'complete', reconstructable: missing.length === 0, unknownReasons, decisions }
+  return {
+    id: boundedText(envelope.id),
+    toolName: envelope.toolName,
+    envelope: 'complete',
+    reconstructable: missing.length === 0,
+    unknownReasons: unknownReasons.map(boundedReason),
+    decisions: decisions.map(boundedDecision),
+  }
 }
 
-function incrementReason(map: Map<string, { code: string; detail?: string; count: number }>, reason: ReplayReason): void {
+function incrementReason(
+  map: Map<string, { code: string; detail?: string; count: number }>,
+  reason: ReplayReason,
+): boolean {
   const key = `${reason.code}\u0000${reason.detail ?? ''}`
   const prior = map.get(key)
-  if (prior) prior.count += 1
-  else map.set(key, { ...reason, count: 1 })
+  if (prior) {
+    prior.count += 1
+    return true
+  }
+  if (map.size >= MAX_REPLAY_REASONS) return false
+  map.set(key, { ...reason, count: 1 })
+  return true
 }
 
 export function aggregateReplay(cases: readonly ExtractedReplayEnvelope[], options: ReplayOptions = {}): ReplayAggregate {
-  const policies = [...(options.policies ?? DEFAULT_REPLAY_POLICIES)]
-  const maxCases = options.maxCases ?? DEFAULT_MAX_CASES
-  const maxReasons = options.maxReasons ?? DEFAULT_MAX_REASONS
+  if (cases.length > MAX_REPLAY_COHORT_CASES) {
+    throw new Error(`replay cohort exceeds ${MAX_REPLAY_COHORT_CASES} cases`)
+  }
+  const policies = normalizedPolicies(options)
+  const limits = normalizedOptions(options)
+  const maxCases = limits.maxCases
+  const maxReasons = limits.maxReasons
   const byPolicy = Object.fromEntries(policies.map(policy => [policy, { accepted: 0, rejected: 0, unknown: 0 }])) as ReplayAggregate['byPolicy']
   const reasonCounts = new Map<string, { code: string; detail?: string; count: number }>()
   const results: ReplayCaseResult[] = []
   let complete = 0
   let reconstructable = 0
+  let reasonOutputTruncated = false
   for (let index = 0; index < cases.length; index += 1) {
     const result = replayEnvelope(cases[index]!, options)
     if (result.envelope === 'complete') complete += 1
     if (result.reconstructable) reconstructable += 1
-    else for (const reason of result.unknownReasons) incrementReason(reasonCounts, reason)
+    else {
+      for (const reason of result.unknownReasons) {
+        const retained = incrementReason(
+          reasonCounts,
+          boundedReason(reason),
+        )
+        if (!retained) reasonOutputTruncated = true
+      }
+    }
     for (const decision of result.decisions) byPolicy[decision.policy][decision.status] += 1
     if (results.length < maxCases) results.push(result)
   }
   const unknown = cases.length - reconstructable
   const reasons = [...reasonCounts.values()].sort((a, b) => b.count - a.count || a.code.localeCompare(b.code)).slice(0, maxReasons)
-  return {
+  const report: ReplayAggregate = {
     schema: 1,
     readOnly: true,
     policies,
@@ -788,8 +942,34 @@ export function aggregateReplay(cases: readonly ExtractedReplayEnvelope[], optio
     byPolicy,
     cases: results,
     omittedCases: Math.max(0, cases.length - results.length),
+    outputTruncated:
+      reasonOutputTruncated ||
+      reasonCounts.size > reasons.length ||
+      Math.max(0, cases.length - results.length) > 0,
+    outputBytes: 0,
     integration: { planner: { connected: true, entrypoint: PLANNER_ENTRYPOINT, hook: 'Pass options.planner to aggregateReplay/replayEnvelope to connect a future planner entrypoint.' } },
   }
+  const outputLimit = limits.maxOutputBytes
+  const measure = (): number => byteLength(JSON.stringify(report))
+  while (measure() > outputLimit && report.cases.length > 0) {
+    report.cases.pop()
+    report.omittedCases += 1
+    report.outputTruncated = true
+  }
+  if (measure() > outputLimit && report.unknownReasons.length > 0) {
+    report.unknownReasons = []
+    report.outputTruncated = true
+  }
+  for (;;) {
+    report.outputBytes = measure()
+    const finalSize = measure()
+    if (finalSize <= outputLimit || report.cases.length === 0) break
+    report.cases.pop()
+    report.omittedCases += 1
+    report.outputTruncated = true
+  }
+  report.outputBytes = measure()
+  return report
 }
 
 type CliArguments = { transcripts: string[]; manifests: string[]; json: boolean; maxCases: number; maxReasons: number; policies: ReplayPolicy[] }
@@ -803,7 +983,13 @@ export function parseReplayArguments(argv: readonly string[]): CliArguments {
     if (arg === '--json') { result.json = true; continue }
     if (arg === '--transcript' || arg === '--session') { const path = argv[++i]; if (!path) throw new Error(`${arg} requires a JSONL path`); result.transcripts.push(path); continue }
     if (arg === '--manifest') { const path = argv[++i]; if (!path) throw new Error('--manifest requires a JSON path'); result.manifests.push(path); continue }
-    if (arg === '--max-cases' || arg === '--max-reasons') { const value = Number(argv[++i]); if (!Number.isInteger(value) || value < 0) throw new Error(`${arg} requires a non-negative integer`); if (arg === '--max-cases') result.maxCases = value; else result.maxReasons = value; continue }
+    if (arg === '--max-cases' || arg === '--max-reasons') {
+      const value = Number(argv[++i])
+      if (!Number.isInteger(value) || value < 0) throw new Error(`${arg} requires a non-negative integer`)
+      if (arg === '--max-cases') result.maxCases = safeLimit(value, DEFAULT_MAX_CASES, MAX_REPLAY_CASES)
+      else result.maxReasons = safeLimit(value, DEFAULT_MAX_REASONS, MAX_REPLAY_REASONS)
+      continue
+    }
     if (arg === '--policy') { const value = argv[++i] as ReplayPolicy | undefined; if (!value || !POLICY_SET.has(value)) throw new Error(`unknown replay policy: ${value ?? '(missing)'}`); result.policies = [value]; continue }
     if (arg === '--help' || arg === '-h') throw new Error('usage: bun run scripts/replay-apply-patch.ts --manifest FIXTURES.json [--transcript SESSION.jsonl] [--policy POLICY] [--json]')
     throw new Error(`unknown argument: ${arg}`)
@@ -814,9 +1000,17 @@ export function parseReplayArguments(argv: readonly string[]): CliArguments {
 
 export function loadReplayInputs(args: Pick<CliArguments, 'transcripts' | 'manifests'>): ExtractedReplayEnvelope[] {
   const envelopes: ExtractedReplayEnvelope[] = []
-  for (const path of args.transcripts) envelopes.push(...parseReplayJsonl(readFileSync(resolve(path), 'utf8')))
+  const readExplicitInput = (path: string, kind: string): string => {
+    const resolved = resolve(path)
+    const size = statSync(resolved).size
+    if (size > MAX_REPLAY_INPUT_FILE_BYTES) {
+      throw new Error(`${kind} exceeds ${MAX_REPLAY_INPUT_FILE_BYTES} bytes`)
+    }
+    return readFileSync(resolved, 'utf8')
+  }
+  for (const path of args.transcripts) envelopes.push(...parseReplayJsonl(readExplicitInput(path, 'transcript')))
   for (const path of args.manifests) {
-    const manifest = parseReplayManifest(JSON.parse(readFileSync(resolve(path), 'utf8')))
+    const manifest = parseReplayManifest(JSON.parse(readExplicitInput(path, 'manifest')))
     manifest.cases.forEach((caseDef, index) => envelopes.push(fixtureEnvelope(caseDef, index)))
   }
   return envelopes

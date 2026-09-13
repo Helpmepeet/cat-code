@@ -38,6 +38,16 @@ is exposed separately for evaluation.
 - Explicit ESLint over the changed root sources reported no errors.
 - Prompt snapshots were regenerated and pass their ordinary comparison test.
 - `git diff --check` passed.
+- A post-implementation review found and repaired an EOF-hint crash, tolerant
+  replay tier drift, malformed structured replay handling, stale-plan trust,
+  missing parser spans and nonconsecutive-anchor diagnostics, unbounded replay
+  and error fields, and a source-disclosing near-match diagnostic.
+- The planner now counts plans with an iterative compact frontier rather than
+  recursive path enumeration. A 2,000-hunk regression completes without using
+  the JavaScript call stack.
+- Local Lark 1.3.1 compiled the exact production grammar, accepted a canonical
+  update, and rejected a whitespace-only update path. Hosted constrained-decoder
+  behavior remains a separate release check.
 
 The broad `bun test app/` suite was also attempted. It did not complete because
 environment-dependent registry identity, runtime initialization, MCP readiness,
@@ -64,6 +74,14 @@ this change.
 - Confirm zero consequential wrong-region placements and no regression against
   the predeclared task-correctness and unrecoverable-failure thresholds.
 - Verify old-session resume against the live backend with explicit authorization.
+
+## Compatibility boundary
+
+The rebuilt runtime consumes both canonical `apply_patch` and historical
+`Apply_patch` records. A pre-refactor binary knows only the historical spelling,
+so downgrading that binary after a new runtime has persisted lowercase calls is
+unsupported. Current launchers must be upgraded together; this is distinct from
+the required old-session-to-new-runtime compatibility path.
 
 Until those gates are satisfied, the correct release decision is to keep the
 current production placement policy while retaining the candidate planner,

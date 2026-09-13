@@ -123,7 +123,8 @@ export type FilePatchNearMatch = {
     column: number
   }
   expected: string
-  actual: string
+  /** Source text is never persisted or returned across the Read boundary. */
+  actualLength: number
 }
 
 /** Bounded evidence attached to a planner failure; never placement authority. */
@@ -154,6 +155,11 @@ export type FilePatchFailureDetail = {
 export const MAX_FILE_PATCH_FAILURE_DETAILS = 8
 export const MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH = 800
 export const MAX_FILE_PATCH_ERROR_REPAIR_LENGTH = 1_200
+export const MAX_FILE_PATCH_PATH_LENGTH = 512
+export const MAX_FILE_PATCH_CODE_LENGTH = 120
+export const MAX_FILE_PATCH_DIAGNOSTIC_TEXT_LENGTH = 200
+export const MAX_FILE_PATCH_DIAGNOSTIC_COORDINATES = 40
+export const MAX_FILE_PATCH_NEAR_MATCHES = 4
 
 export type ApplyPatchResult = {
   contractVersion?: 2
@@ -169,6 +175,7 @@ export class FilePatchError extends Error {
   readonly hunkCount?: number
   readonly details?: FilePatchFailureDetail[]
   readonly diagnostics?: FilePatchDiagnosticMetadata
+  readonly patchSourceSpan?: PatchSourceSpan
   readonly mutationOutcome: FilePatchMutationOutcome
 
   constructor(
@@ -182,15 +189,25 @@ export class FilePatchError extends Error {
       hunkCount?: number
       details?: readonly FilePatchFailureDetail[]
       diagnostics?: FilePatchDiagnosticMetadata
+      patchSourceSpan?: PatchSourceSpan
       mutationOutcome?: FilePatchMutationOutcome
     },
   ) {
-    super(message)
+    super(boundFilePatchErrorText(message, MAX_FILE_PATCH_ERROR_REPAIR_LENGTH))
     this.name = 'FilePatchError'
-    this.code = options?.code ?? 'FILE_PATCH_ERROR'
-    this.path = options?.path
+    this.code = boundFilePatchErrorText(
+      options?.code ?? 'FILE_PATCH_ERROR',
+      MAX_FILE_PATCH_CODE_LENGTH,
+    )
+    this.path = boundOptionalFilePatchText(
+      options?.path,
+      MAX_FILE_PATCH_PATH_LENGTH,
+    )
     this.operation = options?.operation
-    this.moveTo = options?.moveTo
+    this.moveTo = boundOptionalFilePatchText(
+      options?.moveTo,
+      MAX_FILE_PATCH_PATH_LENGTH,
+    )
     this.hunkIndex = options?.hunkIndex
     this.hunkCount = options?.hunkCount
     this.details =
@@ -200,12 +217,35 @@ export class FilePatchError extends Error {
             .slice(0, MAX_FILE_PATCH_FAILURE_DETAILS)
             .map(detail => ({
               ...detail,
+              code: boundFilePatchErrorText(
+                detail.code,
+                MAX_FILE_PATCH_CODE_LENGTH,
+              ),
+              path: boundFilePatchErrorText(
+                detail.path,
+                MAX_FILE_PATCH_PATH_LENGTH,
+              ),
+              ...(detail.moveTo === undefined
+                ? {}
+                : {
+                    moveTo: boundFilePatchErrorText(
+                      detail.moveTo,
+                      MAX_FILE_PATCH_PATH_LENGTH,
+                    ),
+                  }),
               message: boundFilePatchErrorText(
                 detail.message,
                 MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
               ),
+              ...(detail.diagnostics === undefined
+                ? {}
+                : { diagnostics: boundFilePatchDiagnosticMetadata(detail.diagnostics) }),
             }))
-    this.diagnostics = options?.diagnostics
+    this.diagnostics =
+      options?.diagnostics === undefined
+        ? undefined
+        : boundFilePatchDiagnosticMetadata(options.diagnostics)
+    this.patchSourceSpan = options?.patchSourceSpan
     this.mutationOutcome = options?.mutationOutcome ?? 'no-mutation'
   }
 }
@@ -223,6 +263,7 @@ export type FilePatchModelError = {
   moveTo?: string
   hunkIndex?: number
   hunkCount?: number
+  patchSourceSpan?: PatchSourceSpan
   details: FilePatchFailureDetail[]
   diagnostics?: FilePatchDiagnosticMetadata
   mutationOutcome: FilePatchMutationOutcome
@@ -240,6 +281,9 @@ export function serializeFilePatchError(
     ...(error.moveTo !== undefined ? { moveTo: error.moveTo } : {}),
     ...(error.hunkIndex !== undefined ? { hunkIndex: error.hunkIndex } : {}),
     ...(error.hunkCount !== undefined ? { hunkCount: error.hunkCount } : {}),
+    ...(error.patchSourceSpan !== undefined
+      ? { patchSourceSpan: error.patchSourceSpan }
+      : {}),
     details: error.details ?? [],
     ...(error.diagnostics !== undefined
       ? { diagnostics: error.diagnostics }
@@ -252,9 +296,72 @@ export function serializeFilePatchError(
   }
 }
 
-function boundFilePatchErrorText(text: string, maxLength: number): string {
+export function boundFilePatchErrorText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text
   return `${text.slice(0, maxLength - 20)}… [truncated]`
+}
+
+function boundOptionalFilePatchText(
+  text: string | undefined,
+  maxLength: number,
+): string | undefined {
+  return text === undefined ? undefined : boundFilePatchErrorText(text, maxLength)
+}
+
+export function boundFilePatchDiagnosticMetadata(
+  metadata: FilePatchDiagnosticMetadata,
+): FilePatchDiagnosticMetadata {
+  const boundedCode = boundFilePatchErrorText(
+    metadata.code,
+    MAX_FILE_PATCH_CODE_LENGTH,
+  )
+  const boundedKind = boundFilePatchErrorText(
+    metadata.kind,
+    MAX_FILE_PATCH_CODE_LENGTH,
+  )
+  const boundedPath = boundFilePatchErrorText(
+    metadata.path,
+    MAX_FILE_PATCH_PATH_LENGTH,
+  )
+  let truncated =
+    metadata.diagnosticsTruncated ||
+    boundedCode !== metadata.code ||
+    boundedKind !== metadata.kind ||
+    boundedPath !== metadata.path
+  const candidateCoordinates = metadata.candidateCoordinates.slice(
+    0,
+    MAX_FILE_PATCH_DIAGNOSTIC_COORDINATES,
+  )
+  const nearMatches = metadata.nearMatches
+    .slice(0, MAX_FILE_PATCH_NEAR_MATCHES)
+    .map(match => {
+      const expected = boundFilePatchErrorText(
+        match.expected,
+        MAX_FILE_PATCH_DIAGNOSTIC_TEXT_LENGTH,
+      )
+      const actualLength =
+        Number.isSafeInteger(match.actualLength) && match.actualLength >= 0
+          ? match.actualLength
+          : 0
+      truncated ||= expected !== match.expected || actualLength !== match.actualLength
+      return {
+        ...match,
+        expected,
+        actualLength,
+      }
+    })
+  truncated ||=
+    candidateCoordinates.length !== metadata.candidateCoordinates.length ||
+    nearMatches.length !== metadata.nearMatches.length
+  return {
+    ...metadata,
+    code: boundedCode,
+    kind: boundedKind,
+    path: boundedPath,
+    candidateCoordinates,
+    nearMatches,
+    diagnosticsTruncated: truncated,
+  }
 }
 
 const hunkLineSchema = lazySchema(() =>
@@ -370,6 +477,7 @@ const outputFileSchema = lazySchema(() =>
           reason: z.enum(['exact', 'exact+hint', 'bof', 'eof']),
         }),
       )
+      .max(MAX_FILE_PATCH_PLACEMENTS)
       .optional(),
     placementOmittedCount: z.number().int().nonnegative().optional(),
   }),

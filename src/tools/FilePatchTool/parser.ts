@@ -24,15 +24,18 @@ export function parseFilePatch(input: string): ParsedFilePatch {
 
   if (lines[0] !== PATCH_BEGIN_MARKER) {
     throw new FilePatchError(
-      `Patch must start with "${PATCH_BEGIN_MARKER}" — wrap the entire patch in "${PATCH_BEGIN_MARKER}" ... "${PATCH_END_MARKER}".`,
-      { code: 'INVALID_PATCH_ENVELOPE' },
+      `Patch must start with "${PATCH_BEGIN_MARKER}": wrap the entire patch in "${PATCH_BEGIN_MARKER}" ... "${PATCH_END_MARKER}".`,
+      { code: 'INVALID_PATCH_ENVELOPE', patchSourceSpan: lineSpan(0) },
     )
   }
 
   if (lines.at(-1) !== PATCH_END_MARKER) {
     throw new FilePatchError(
-      `Patch must end with "${PATCH_END_MARKER}" — wrap the entire patch in "${PATCH_BEGIN_MARKER}" ... "${PATCH_END_MARKER}".`,
-      { code: 'INVALID_PATCH_ENVELOPE' },
+      `Patch must end with "${PATCH_END_MARKER}": wrap the entire patch in "${PATCH_BEGIN_MARKER}" ... "${PATCH_END_MARKER}".`,
+      {
+        code: 'INVALID_PATCH_ENVELOPE',
+        patchSourceSpan: lineSpan(Math.max(0, lines.length - 1)),
+      },
     )
   }
 
@@ -48,17 +51,23 @@ export function parseFilePatch(input: string): ParsedFilePatch {
       continue
     }
 
-    const header = parseOperationHeader(line)
+    const operationHeaderIndex = index
+    const header = parseOperationHeader(line, operationHeaderIndex)
     if (!header) {
       throw new FilePatchError(`Unsupported patch header: ${line}`, {
         code: 'INVALID_PATCH_FORMAT',
+        patchSourceSpan: lineSpan(index),
       })
     }
 
     if (seenPaths.has(header.path)) {
       throw new FilePatchError(
-        `Patch contains multiple operations for ${header.path} — combine them into a single "*** Update File:" block with multiple @@ hunks.`,
-        { code: 'DUPLICATE_PATCH_PATH', path: header.path },
+        `Patch contains multiple operations for ${header.path}; combine them into a single "*** Update File:" block with multiple @@ hunks.`,
+        {
+          code: 'DUPLICATE_PATCH_PATH',
+          path: header.path,
+          patchSourceSpan: lineSpan(index),
+        },
       )
     }
     seenPaths.add(header.path)
@@ -84,11 +93,11 @@ export function parseFilePatch(input: string): ParsedFilePatch {
     // update: optionally consume "*** Move to:" line
     let moveTo: string | undefined
     if (index < lines.length - 1 && lines[index].startsWith(MOVE_TO_PREFIX)) {
-      moveTo = parsePath(lines[index], MOVE_TO_PREFIX)
+      moveTo = parsePath(lines[index], MOVE_TO_PREFIX, index)
       index += 1
     }
 
-    const result = parseUpdateBody(lines, index, header.path)
+    const result = parseUpdateBody(lines, index, header.path, operationHeaderIndex)
     ops.push({
       type: 'update',
       path: header.path,
@@ -101,6 +110,7 @@ export function parseFilePatch(input: string): ParsedFilePatch {
   if (ops.length === 0) {
     throw new FilePatchError('Patch does not contain any file operations.', {
       code: 'EMPTY_PATCH',
+      patchSourceSpan: lineSpan(0, lines.length),
     })
   }
 
@@ -129,13 +139,16 @@ function normalizePatchText(input: string): string[] {
     ) {
       return trimmed
     }
-    if (
-      line.startsWith(UPDATE_FILE_PREFIX) ||
-      line.startsWith(ADD_FILE_PREFIX) ||
-      line.startsWith(DELETE_FILE_PREFIX) ||
-      line.startsWith(MOVE_TO_PREFIX)
-    ) {
-      return line.trimEnd()
+    const operationPrefix = [
+      UPDATE_FILE_PREFIX,
+      ADD_FILE_PREFIX,
+      DELETE_FILE_PREFIX,
+      MOVE_TO_PREFIX,
+    ].find(prefix => line.startsWith(prefix))
+    if (operationPrefix) {
+      // Keep the required separator in place so whitespace-only paths reach
+      // parsePath and receive the same missing-path error as other empties.
+      return operationPrefix + line.slice(operationPrefix.length).trimEnd()
     }
     if (line.startsWith(END_OF_FILE_MARKER) && line.trimEnd() === END_OF_FILE_MARKER) {
       return END_OF_FILE_MARKER
@@ -152,11 +165,11 @@ function lineSpan(startIndex: number, endIndexExclusive = startIndex + 1): Patch
   }
 }
 
-function parseOperationHeader(line: string): FilePatchOperation | null {
+function parseOperationHeader(line: string, sourceLineIndex?: number): FilePatchOperation | null {
   if (line.startsWith(UPDATE_FILE_PREFIX)) {
     return {
       type: 'update',
-      path: parsePath(line, UPDATE_FILE_PREFIX),
+      path: parsePath(line, UPDATE_FILE_PREFIX, sourceLineIndex),
       hunks: [],
     }
   }
@@ -164,7 +177,7 @@ function parseOperationHeader(line: string): FilePatchOperation | null {
   if (line.startsWith(ADD_FILE_PREFIX)) {
     return {
       type: 'add',
-      path: parsePath(line, ADD_FILE_PREFIX),
+      path: parsePath(line, ADD_FILE_PREFIX, sourceLineIndex),
       lines: [],
       noNewlineAtEndOfFile: false,
     }
@@ -173,18 +186,21 @@ function parseOperationHeader(line: string): FilePatchOperation | null {
   if (line.startsWith(DELETE_FILE_PREFIX)) {
     return {
       type: 'delete',
-      path: parsePath(line, DELETE_FILE_PREFIX),
+      path: parsePath(line, DELETE_FILE_PREFIX, sourceLineIndex),
     }
   }
 
   return null
 }
 
-function parsePath(line: string, prefix: string): string {
+function parsePath(line: string, prefix: string, sourceLineIndex?: number): string {
   const path = line.slice(prefix.length).trim()
   if (!path) {
     throw new FilePatchError(`Missing path in patch header: ${line}`, {
       code: 'INVALID_PATCH_FORMAT',
+      ...(sourceLineIndex === undefined
+        ? {}
+        : { patchSourceSpan: lineSpan(sourceLineIndex) }),
     })
   }
   return path
@@ -213,7 +229,11 @@ function parseAddBody(
       if (addedLines.length === 0) {
         throw new FilePatchError(
           `No-newline marker in add for ${path} must follow an added line.`,
-          { code: 'INVALID_PATCH_FORMAT', path },
+          {
+            code: 'INVALID_PATCH_FORMAT',
+            path,
+            patchSourceSpan: lineSpan(index),
+          },
         )
       }
       noNewlineAtEndOfFile = true
@@ -225,7 +245,11 @@ function parseAddBody(
       ) {
         throw new FilePatchError(
           `No-newline marker in add for ${path} must follow the final added line.`,
-          { code: 'INVALID_PATCH_FORMAT', path },
+          {
+            code: 'INVALID_PATCH_FORMAT',
+            path,
+            patchSourceSpan: lineSpan(index),
+          },
         )
       }
       continue
@@ -233,8 +257,12 @@ function parseAddBody(
 
     if (!line.startsWith('+')) {
       throw new FilePatchError(
-        `Add File body for ${path} may only contain + lines — prefix every line with "+".`,
-        { code: 'INVALID_PATCH_FORMAT', path },
+        `Add File body for ${path} may only contain + lines: prefix every line with "+".`,
+        {
+          code: 'INVALID_PATCH_FORMAT',
+          path,
+          patchSourceSpan: lineSpan(index),
+        },
       )
     }
 
@@ -249,6 +277,7 @@ function parseUpdateBody(
   lines: string[],
   startIndex: number,
   path: string,
+  operationHeaderIndex: number,
 ): { hunks: FilePatchHunk[]; nextIndex: number } {
   const hunks: FilePatchHunk[] = []
   let index = startIndex
@@ -260,7 +289,11 @@ function parseUpdateBody(
     if (!isHunkHeader(headerLine)) {
       throw new FilePatchError(
         `Expected hunk header (@@ ...) in update for ${path}, got: ${headerLine}`,
-        { code: 'INVALID_PATCH_FORMAT', path },
+        {
+          code: 'INVALID_PATCH_FORMAT',
+          path,
+          patchSourceSpan: lineSpan(index),
+        },
       )
     }
 
@@ -299,7 +332,11 @@ function parseUpdateBody(
         if (hunkLines.length === 0) {
           throw new FilePatchError(
             `No-newline marker in update for ${path} must follow a hunk line.`,
-            { code: 'INVALID_PATCH_FORMAT', path },
+            {
+              code: 'INVALID_PATCH_FORMAT',
+              path,
+              patchSourceSpan: lineSpan(index),
+            },
           )
         }
         const previous = hunkLines.at(-1)!
@@ -318,7 +355,11 @@ function parseUpdateBody(
         if (sides.some(side => claimedSides.has(side))) {
           throw new FilePatchError(
             `Duplicate no-newline marker side in update for ${path}.`,
-            { code: 'INVALID_PATCH_FORMAT', path },
+            {
+              code: 'INVALID_PATCH_FORMAT',
+              path,
+              patchSourceSpan: lineSpan(index),
+            },
           )
         }
         newlineMarkers.push({
@@ -331,7 +372,7 @@ function parseUpdateBody(
         continue
       }
 
-      const parsedLine = parseHunkLine(line, path)
+      const parsedLine = parseHunkLine(line, path, index)
       hunkLines.push(parsedLine)
       index += 1
       hunkEndLine = index
@@ -341,6 +382,7 @@ function parseUpdateBody(
       throw new FilePatchError(`Update hunk for ${path} is empty.`, {
         code: 'INVALID_PATCH_FORMAT',
         path,
+        patchSourceSpan: lineSpan(hunkStartLine - 1),
       })
     }
 
@@ -362,13 +404,14 @@ function parseUpdateBody(
     throw new FilePatchError(`Update File block for ${path} has no hunks.`, {
       code: 'INVALID_PATCH_FORMAT',
       path,
+      patchSourceSpan: lineSpan(operationHeaderIndex),
     })
   }
 
   return { hunks, nextIndex: index }
 }
 
-function parseHunkLine(line: string, path: string): FilePatchLine {
+function parseHunkLine(line: string, path: string, sourceLineIndex: number): FilePatchLine {
   const prefix = line[0]
   const text = line.slice(1)
 
@@ -381,8 +424,12 @@ function parseHunkLine(line: string, path: string): FilePatchLine {
       return { kind: 'add', text }
     default:
       throw new FilePatchError(
-        `Invalid hunk line in ${path}: ${line} — each line must start with " " (context), "+" (add), or "-" (delete).`,
-        { code: 'INVALID_PATCH_FORMAT', path },
+        `Invalid hunk line in ${path}: ${line}: each line must start with " " (context), "+" (add), or "-" (delete).`,
+        {
+          code: 'INVALID_PATCH_FORMAT',
+          path,
+          patchSourceSpan: lineSpan(sourceLineIndex),
+        },
       )
   }
 }

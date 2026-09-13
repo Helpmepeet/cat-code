@@ -61,4 +61,35 @@ describe('canonical apply_patch generation grammar', () => {
 narrative`),
     ).toThrow('must end')
   })
+
+  test.each([
+    ['UPDATE', '*** Update File:   ', `*** Begin Patch\n*** Update File:   \n*** End Patch\n`],
+    ['ADD', '*** Add File: \t', `*** Begin Patch\n*** Add File: \t\n*** End Patch\n`],
+    ['DELETE', '*** Delete File: \t  ', `*** Begin Patch\n*** Delete File: \t  \n*** End Patch\n`],
+    [
+      'MOVE',
+      '*** Move to:   ',
+      `*** Begin Patch\n*** Update File: src/a.ts\n*** Move to:   \n@@\n+new\n*** End Patch\n`,
+    ],
+  ])('rejects whitespace-only %s paths in the runtime parser', (_token, _header, fixture) => {
+    expect(() => parseFilePatch(fixture)).toThrow('Missing path')
+  })
+
+  test('keeps path token constraints aligned without requiring a hosted Lark engine', () => {
+    for (const [token, validHeader, blankHeader] of [
+      ['UPDATE', '*** Update File: src/a.ts', '*** Update File:   '],
+      ['ADD', '*** Add File: src/a.ts', '*** Add File:   '],
+      ['DELETE', '*** Delete File: src/a.ts', '*** Delete File:   '],
+      ['MOVE', '*** Move to: src/a.ts', '*** Move to:   '],
+    ] as const) {
+      const line = FILE_PATCH_LARK_GRAMMAR
+        .split('\n')
+        .find(candidate => candidate.startsWith(`${token}: `))
+      expect(line).toBeDefined()
+      const source = line!.slice(line!.indexOf('/') + 1, line!.lastIndexOf('/'))
+      const tokenPattern = new RegExp(`^${source}$`)
+      expect(tokenPattern.test(validHeader)).toBe(true)
+      expect(tokenPattern.test(blankHeader)).toBe(false)
+    }
+  })
 })

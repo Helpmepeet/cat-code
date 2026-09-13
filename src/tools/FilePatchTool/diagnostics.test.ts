@@ -76,10 +76,10 @@ describe('bounded planner failure diagnostics', () => {
     const near = rendered.metadata.nearMatches[0]!
     expect(near.sourceStart).toBe(0)
     expect(near.divergence.column).toBe('common-prefix-'.repeat(40).length)
-    expect(near.actual).toContain('actual-tail')
-    expect(near.actual.startsWith('common-prefix-')).toBe(false)
+    expect(near.actualLength).toBe(actual.length)
     expect(rendered.error.message).toContain('first divergence at line 1')
     expect(rendered.error.message).not.toContain(actual)
+    expect(rendered.error.message).not.toContain('actual-tail')
   })
 
   test('does not retain full source lines in serialized diagnostic metadata', () => {
@@ -171,5 +171,26 @@ describe('bounded planner failure diagnostics', () => {
     expect(rendered.error.diagnostics).toEqual(rendered.metadata)
     const metadata: FilePatchDiagnosticMetadata = rendered.metadata
     expect(metadata.code).toBe('PATCH_ANCHOR_NOT_FOUND')
+  })
+
+  test('never serializes source text and bounds externally supplied paths', () => {
+    const actual = 'private-source-value'
+    const expected = 'private-source-other'
+    const rendered = renderPlannerFailure({
+      failure: {
+        ...failureFor(`${actual}\n`, expected),
+        path: `/${'p'.repeat(1_000_000)}`,
+      },
+      sourceLines: [actual],
+      fingerprint: [expected],
+      moveTo: `/${'m'.repeat(1_000_000)}`,
+    })
+
+    const serialized = JSON.stringify(serializeFilePatchError(rendered.error))
+    expect(serialized.length).toBeLessThan(5_000)
+    expect(serialized).not.toContain(actual)
+    expect(serialized).not.toContain('private-source-value')
+    expect(rendered.metadata.path.length).toBeLessThanOrEqual(512)
+    expect(rendered.metadata.diagnosticsTruncated).toBe(true)
   })
 })

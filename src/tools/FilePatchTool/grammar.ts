@@ -5,6 +5,8 @@
  * runtime parser. The latter remains responsible for source spans, marker
  * attachment, historical wrappers, and useful validation errors.
  */
+// Path terminals require at least one non-whitespace character after their
+// required separator, matching parsePath in parser.ts.
 export const FILE_PATCH_LARK_GRAMMAR = String.raw`
 start: BEGIN _NL operation+ END _NL?
 
@@ -24,10 +26,10 @@ no_newline: NO_NEWLINE _NL
 
 BEGIN: "*** Begin Patch"
 END: "*** End Patch"
-UPDATE: /\*\*\* Update File: [^\r\n]+/
-ADD: /\*\*\* Add File: [^\r\n]+/
-DELETE: /\*\*\* Delete File: [^\r\n]+/
-MOVE: /\*\*\* Move to: [^\r\n]+/
+UPDATE: /\*\*\* Update File: [^\r\n]*\S[^\r\n]*/
+ADD: /\*\*\* Add File: [^\r\n]*\S[^\r\n]*/
+DELETE: /\*\*\* Delete File: [^\r\n]*\S[^\r\n]*/
+MOVE: /\*\*\* Move to: [^\r\n]*\S[^\r\n]*/
 HUNK_HEADER: /@@(?: [^\r\n]*)?/
 EOF_MARKER: "*** End of File"
 NO_NEWLINE: "\\ No newline at end of file"

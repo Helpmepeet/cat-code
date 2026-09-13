@@ -179,6 +179,19 @@ export const FilePatchTool = buildTool({
         }
 
         if (operation.type === 'add') {
+          if (fullFilePath.endsWith('.ipynb')) {
+            return {
+              result: false,
+              behavior: 'ask',
+              message: `Cannot create a Jupyter Notebook with ${FILE_PATCH_TOOL_NAME}. Use the Write tool to create a new .ipynb file, then use ${NOTEBOOK_EDIT_TOOL_NAME} for cell edits.`,
+              errorCode: 5,
+              meta: {
+                code: 'PATCH_NOTEBOOK_REQUIRES_NOTEBOOK_TOOL',
+                operation: 'add',
+                path: fullFilePath,
+              },
+            }
+          }
           const fileContent = await readFileContentForValidation(fullFilePath)
           if (fileContent !== null) {
             return {
@@ -690,7 +703,7 @@ export const FilePatchTool = buildTool({
             : 'Updated'
       const placements = file.placements
         ?.map(placement =>
-          `hunk ${placement.hunk} at old lines ${placement.oldStart}-${placement.oldEnd}`,
+          `hunk ${placement.hunk} at old source coordinates [${placement.oldStart}, ${placement.oldEnd})`,
         )
         .join(', ')
       const omitted = file.placementOmittedCount

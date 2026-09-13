@@ -14,6 +14,7 @@ import { FilePatchTool } from './FilePatchTool.js'
 import {
   applyPatchToBuffers,
   applyPatchToBuffersPlanned,
+  applyUpdatePlan,
   applyUpdateHunks,
   applyUpdateHunksPlanned,
   serializeBuffer,
@@ -21,6 +22,7 @@ import {
 import { renderToolResultMessage } from './UI.js'
 import {
   FilePatchError,
+  MAX_FILE_PATCH_PLACEMENTS,
   type ApplyPatchFileState,
   type FilePatchHunk,
   type FilePatchOperation,
@@ -141,6 +143,56 @@ describe('applyUpdateHunks', () => {
 })
 
 describe('applyUpdateHunksPlanned candidate contract', () => {
+  test('rejects a stale or malformed plan before applying it', () => {
+    const updateHunks = [
+      hunk({ lines: [{ kind: 'delete', text: 'b' }] }),
+    ]
+    const basePlan = {
+      path: '/tmp/example.txt',
+      output: {
+        lineCount: 2,
+        hasFinalNewline: true,
+        outputEofAffected: false,
+      },
+    } as const
+
+    expect(() =>
+      applyUpdatePlan(
+        { content: 'a\nb\nc\n', lineEndings: 'LF' },
+        updateHunks,
+        '/tmp/example.txt',
+        {
+          ...basePlan,
+          hunks: [{
+            hunkIndex: 0,
+            sourceStart: 1,
+            sourceEnd: 3,
+            boundary: 'none',
+            matchTier: 'exact',
+          }],
+        },
+      ),
+    ).toThrow('plan invariant failed')
+
+    expect(() =>
+      applyUpdatePlan(
+        { content: 'a\nchanged\nc\n', lineEndings: 'LF' },
+        updateHunks,
+        '/tmp/example.txt',
+        {
+          ...basePlan,
+          hunks: [{
+            hunkIndex: 0,
+            sourceStart: 1,
+            sourceEnd: 2,
+            boundary: 'none',
+            matchTier: 'exact',
+          }],
+        },
+      ),
+    ).toThrow('plan invariant failed')
+  })
+
   test('applies one complete source-coordinate plan resolved by a later hunk', () => {
     const result = applyUpdateHunksPlanned(
       { content: 'x\nkeep\nx\nfence\n', lineEndings: 'LF' },
@@ -1351,6 +1403,29 @@ describe('FilePatchTool.validateInput move destination', () => {
     expect((result as { message?: string }).message).toContain('Jupyter Notebook')
   })
 
+  test('routes creation of a new .ipynb file through Write', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-'))
+    tempDirs.push(tempDir)
+    const notebookPath = join(tempDir, 'new.ipynb')
+
+    const result = await FilePatchTool.validateInput(
+      {
+        ops: [{
+          type: 'add',
+          path: notebookPath,
+          lines: ['{}'],
+          noNewlineAtEndOfFile: false,
+        }],
+      },
+      validateContext(),
+    )
+
+    expect(result.result).toBe(false)
+    expect((result as { message?: string }).message).toContain(
+      'Use the Write tool to create a new .ipynb file',
+    )
+  })
+
   test('names the session working directory when a relative update path is missing', async () => {
     const baseDir = mkdtempSync(join(tmpdir(), 'file-patch-tool-base-'))
     tempDirs.push(baseDir)
@@ -1489,7 +1564,7 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     )
 
     expect(result.content).toContain(
-      'Updated /x/a.ts (hunk 1 at old lines 4-7; 2 more omitted)',
+      'Updated /x/a.ts (hunk 1 at old source coordinates [4, 7); 2 more omitted)',
     )
   })
 })
@@ -1847,6 +1922,26 @@ describe('FilePatchTool.outputSchema back-compat', () => {
         ],
       }).success,
     ).toBe(true)
+  })
+
+  test('rejects persisted placement metadata above the public bound', () => {
+    expect(
+      outputSchema().safeParse({
+        contractVersion: 2,
+        files: [{
+          ...base,
+          placements: Array.from(
+            { length: MAX_FILE_PATCH_PLACEMENTS + 1 },
+            (_, index) => ({
+              hunk: index + 1,
+              oldStart: index,
+              oldEnd: index + 1,
+              reason: 'exact' as const,
+            }),
+          ),
+        }],
+      }).success,
+    ).toBe(false)
   })
 
   test('rejects unknown placement metadata', () => {
