@@ -52,7 +52,7 @@ import { buildTool, type ToolDef } from '../../src/Tool.js'
 import {
   ADD_FILE_PREFIX,
   DELETE_FILE_PREFIX,
-  FILE_PATCH_TOOL_NAME,
+  isFilePatchToolName,
   MOVE_TO_PREFIX,
   UPDATE_FILE_PREFIX,
 } from '../../src/tools/FilePatchTool/constants.js'
@@ -346,7 +346,7 @@ const MAX_PATCH_TARGET_CHARS = 480
 const toolInputSchema = lazySchema(() => z.record(z.string(), z.unknown()))
 
 /**
- * `Apply_patch` (`FILE_PATCH_TOOL_NAME`) is the file-edit tool on every session
+ * `apply_patch` is the file-edit tool on every session
  * whose provider is OpenAI (`src/tools.ts:214`), which here is most of them, so
  * a map row that misses it makes "did that session touch this file" answer zero
  * on the first ask.
@@ -431,7 +431,7 @@ function targetFieldValues(name: string, input: unknown): string[] {
 
 function toolCallTarget(name: string | undefined, input: unknown): string {
   if (name === undefined) return ''
-  const isPatch = name === FILE_PATCH_TOOL_NAME
+  const isPatch = isFilePatchToolName(name)
   const values = isPatch ? patchPaths(input) : targetFieldValues(name, input)
   if (values.length === 0) return ''
   // Redaction runs BEFORE the cap, and the order is the whole point: a cut
@@ -453,7 +453,7 @@ function capToolCallTarget(call: string): { text: string; cut: boolean } {
   const name = call.slice(0, separator)
   const target = call.slice(separator + 1)
   const cap =
-    name === FILE_PATCH_TOOL_NAME
+    isFilePatchToolName(name)
       ? MAX_PATCH_TARGET_CHARS
       : MAX_TOOL_TARGET_CHARS
   if (target.length <= cap) return { text: call, cut: false }

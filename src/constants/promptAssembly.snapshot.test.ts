@@ -38,7 +38,7 @@ const toolList = (...names: string[]) =>
 // focused fixtures; this list does not exercise every conditional insertion.
 const FULL_TOOLS = toolList(
   'Agent',
-  'Apply_patch',
+  'apply_patch',
   'AskUserQuestion',
   'Bash',
   'Edit',
@@ -242,8 +242,8 @@ describe('assembled system prompt', () => {
   })
 
   test('patch evidence does not relax other mutation tools\' Read prerequisites', async () => {
-    const patch = await assemble(toolList('Apply_patch', 'Bash'), 'gpt-6-astra')
-    expect(patch).toContain('Shell reads can supply the evidence for Apply_patch updates')
+    const patch = await assemble(toolList('apply_patch', 'Bash'), 'gpt-6-astra')
+    expect(patch).toContain('Shell reads can supply the evidence for apply_patch updates')
     expect(patch).toContain('they do not satisfy recorded-read requirements for deletion or other mutation tools')
     for (const mutationTool of ['Edit', 'Write']) {
       const prompt = await assemble(toolList(mutationTool, 'Read', 'Bash'), 'gpt-6-astra')

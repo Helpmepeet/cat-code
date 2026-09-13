@@ -106,7 +106,7 @@ describe('GPT section boundaries', () => {
     { name: 'Bash' },
     { name: 'Read' },
     { name: 'Grep' },
-    { name: 'Apply_patch' },
+    { name: 'apply_patch' },
   ] as unknown as Parameters<typeof getSystemPrompt>[0]
 
   afterEach(() => {

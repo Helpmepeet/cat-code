@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { buildTool } from './Tool.js'
+import { buildTool, findToolByName } from './Tool.js'
+import { FilePatchTool } from './tools/FilePatchTool/FilePatchTool.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  LEGACY_FILE_PATCH_TOOL_NAME,
+} from './tools/FilePatchTool/constants.js'
 
 describe('buildTool', () => {
   test('does not evaluate accessor properties at build time', () => {
@@ -41,5 +46,18 @@ describe('buildTool', () => {
     expect(tool.isReadOnly()).toBe(true)
     expect(tool.isEnabled()).toBe(true)
     expect(tool.userFacingName()).toBe('PrecedenceProbe')
+  })
+})
+
+describe('findToolByName', () => {
+  test('resolves the historical patch name through the canonical tool alias', () => {
+    expect(FilePatchTool.name).toBe(FILE_PATCH_TOOL_NAME)
+    expect(FilePatchTool.aliases).toEqual([LEGACY_FILE_PATCH_TOOL_NAME])
+    expect(findToolByName([FilePatchTool], LEGACY_FILE_PATCH_TOOL_NAME)).toBe(
+      FilePatchTool,
+    )
+    expect(findToolByName([FilePatchTool], FILE_PATCH_TOOL_NAME)).toBe(
+      FilePatchTool,
+    )
   })
 })

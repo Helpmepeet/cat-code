@@ -149,7 +149,7 @@ async function main(): Promise<void> {
     // Pass the real built-in tool pool: several system-prompt rules are gated
     // on the enabled tool set (the Agent tool rule, task tracking, the
     // file-mutation and tool-routing rules, and whether routing names
-    // Apply_patch or Edit), so an empty list dumps a prompt no session runs.
+    // apply_patch or Edit), so an empty list dumps a prompt no session runs.
     // MCP tools and any --allowedTools/--disallowedTools narrowing are not
     // applied here; this is the default preset pool.
     const {

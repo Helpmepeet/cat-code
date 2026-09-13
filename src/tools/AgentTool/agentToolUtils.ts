@@ -61,7 +61,7 @@ import {
 } from '../../utils/permissions/yoloClassifier.js'
 import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkProgress.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
+import { isFilePatchToolName } from '../FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
@@ -248,7 +248,7 @@ export function resolveAgentTools(
 
   // The two file-edit aliases are one capability, so denying either denies
   // both. Without this, a role that disallows Edit (Explore, Plan, the
-  // verifiers) receives Apply_patch on the OpenAI path, where the pool swaps
+  // verifiers) receives apply_patch on the OpenAI path, where the pool swaps
   // the alias — a provider swap must not grant a read-only role write access
   // (owner decision 2026-07-30, C11).
   if (
@@ -479,7 +479,6 @@ const MAX_CHANGED_FILE_ENTRIES = 200
 const EDITING_TOOL_NAMES = new Set([
   FILE_EDIT_TOOL_NAME,
   FILE_WRITE_TOOL_NAME,
-  FILE_PATCH_TOOL_NAME,
 ])
 
 type ChangedFileEntry = {
@@ -554,7 +553,7 @@ function pathsForEditingTool(toolName: string, input: unknown): string[] {
     return typeof filePath === 'string' ? [filePath] : []
   }
 
-  if (toolName !== FILE_PATCH_TOOL_NAME) return []
+  if (!isFilePatchToolName(toolName)) return []
 
   const patchInput = input as {
     ops?: Array<{ path?: unknown; moveTo?: unknown }>
@@ -595,7 +594,10 @@ function collectChangedFiles(messages: MessageType[]): {
   for (const message of messages) {
     if (message.type !== 'assistant') continue
     for (const block of message.message.content) {
-      if (block.type !== 'tool_use' || !EDITING_TOOL_NAMES.has(block.name)) {
+      if (
+        block.type !== 'tool_use' ||
+        (!EDITING_TOOL_NAMES.has(block.name) && !isFilePatchToolName(block.name))
+      ) {
         continue
       }
 

@@ -122,6 +122,7 @@ import {
   MAX_LINES_TO_READ,
 } from 'src/tools/FileReadTool/prompt.js'
 import { FileWriteTool } from 'src/tools/FileWriteTool/FileWriteTool.js'
+import { isFilePatchToolName } from 'src/tools/FilePatchTool/constants.js'
 import { GLOB_TOOL_NAME } from 'src/tools/GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from 'src/tools/GrepTool/prompt.js'
 import type { DeepImmutable } from 'src/types/utils.js'
@@ -2795,7 +2796,7 @@ export function normalizeContentFromAPI(
           const tool = findToolByName(tools, contentBlock.name)
           const parsed = safeParseJSON(contentBlock.input)
           if (parsed === null && contentBlock.input.length > 0) {
-            if (tool?.name === 'Apply_patch') {
+            if (isFilePatchToolName(contentBlock.name)) {
               normalizedInput = { input: contentBlock.input }
             } else {
               logEvent('tengu_tool_input_json_parse_fail', {

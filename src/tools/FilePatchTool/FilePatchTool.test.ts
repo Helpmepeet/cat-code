@@ -20,7 +20,10 @@ import {
 } from '../../utils/fsOperations.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import { FilePatchTool } from './FilePatchTool.js'
-import { getFilePatchToolDescription } from './prompt.js'
+import {
+  getFilePatchToolDescription,
+  getPlannedFilePatchToolDescription,
+} from './prompt.js'
 import { FilePatchError, type FilePatchOperation } from './types.js'
 
 const tempDirs: string[] = []
@@ -762,7 +765,9 @@ describe('FilePatchTool concurrent write safety', () => {
 })
 
 describe('FilePatchTool operation independence', () => {
-  function updateOperation(path: string): FilePatchOperation {
+  function updateOperation(
+    path: string,
+  ): Extract<FilePatchOperation, { type: 'update' }> {
     return {
       type: 'update',
       path,
@@ -967,17 +972,27 @@ describe('FilePatchTool operation independence', () => {
 })
 
 describe('FilePatchTool model contract', () => {
-  test('states current placement and preflight rules', () => {
-    const description = getFilePatchToolDescription()
+  test('states the gated planner placement and preflight rules', () => {
+    const description = getPlannedFilePatchToolDescription()
     expect(description).toContain('exactly one operation for each affected source path')
     expect(description).toContain('move destinations disjoint')
     expect(description).toContain('Put update hunks in file order')
-    expect(description).toContain('mandatory textual scope constraint')
-    expect(description).toContain('exactly one eligible consecutive ordered run')
+    expect(description).toContain('complete source line')
+    expect(description).toContain('not a substring or containment rule')
+    expect(description).toContain('complete ordered hunk set')
+    expect(description).toContain('later hunk may disambiguate')
+    expect(description).toContain('immediately after the affected line')
     expect(description).toContain('preflights every independent operation in memory')
     expect(description).toContain('writes nothing')
     expect(description).toContain('current file snapshot at execution time')
     expect(description).toContain('complete, unbounded model-visible Read')
     expect(description).toContain('does not make multi-file writes crash-atomic')
+  })
+
+  test('does not advertise the gated planner through the production prompt', () => {
+    const description = getFilePatchToolDescription()
+    expect(description).toContain('Each hunk is located after the preceding hunk')
+    expect(description).not.toContain('complete ordered hunk set')
+    expect(description).not.toContain('later hunk may disambiguate')
   })
 })

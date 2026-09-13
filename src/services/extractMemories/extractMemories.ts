@@ -30,7 +30,10 @@ import {
 import type { Tool } from '../../Tool.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  isFilePatchToolName,
+} from '../../tools/FilePatchTool/constants.js'
 import { getPatchMutationPaths } from '../../tools/FilePatchTool/parser.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
@@ -231,7 +234,7 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
       }
     }
 
-    if (tool.name === FILE_PATCH_TOOL_NAME) {
+    if (isFilePatchToolName(tool.name)) {
       const mutationPaths = getPatchMutationPaths(input)
       if (mutationPaths.length > 0) {
         try {
@@ -265,7 +268,7 @@ export function createAutoMemCanUseTool(memoryDir: string): CanUseToolFn {
 
 /**
  * Extract all target file paths written or modified by a tool_use block.
- * Handles Edit, Write, and Apply_patch.
+ * Handles Edit, Write, and apply_patch.
  * Returns an empty array for unrelated tools or invalid inputs.
  */
 export function getWrittenFilePaths(block: {
@@ -287,7 +290,7 @@ export function getWrittenFilePaths(block: {
     }
     return []
   }
-  if (block.name === FILE_PATCH_TOOL_NAME) {
+  if (isFilePatchToolName(block.name)) {
     return getPatchMutationPaths(block.input)
   }
   return []

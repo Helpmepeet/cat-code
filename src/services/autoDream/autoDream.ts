@@ -294,7 +294,7 @@ ${sessionIds.map(id => `- ${id}`).join('\n')}`
 /**
  * Watch the forked agent's messages. For each assistant turn, extracts any
  * text blocks (the agent's reasoning/summary — what the user wants to see)
- * and collapses tool_use blocks to a count. Edit/Write/Apply_patch file_paths are
+ * and collapses tool_use blocks to a count. Edit/Write/apply_patch file_paths are
  * collected for phase-flip + the inline completion message.
  */
 export function makeDreamProgressWatcher(

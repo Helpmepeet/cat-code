@@ -2,6 +2,10 @@ import { feature } from 'bun:bundle'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../../tools/TaskOutputTool/constants.js'
 import { TASK_STOP_TOOL_NAME } from '../../tools/TaskStopTool/prompt.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  LEGACY_FILE_PATCH_TOOL_NAME,
+} from '../../tools/FilePatchTool/constants.js'
 import type { PermissionRuleValue } from './PermissionRule.js'
 
 // Dead code elimination: ant-only tool names are conditionally required so
@@ -23,6 +27,7 @@ const LEGACY_TOOL_NAME_ALIASES: Record<string, string> = {
   KillShell: TASK_STOP_TOOL_NAME,
   AgentOutputTool: TASK_OUTPUT_TOOL_NAME,
   BashOutputTool: TASK_OUTPUT_TOOL_NAME,
+  [LEGACY_FILE_PATCH_TOOL_NAME]: FILE_PATCH_TOOL_NAME,
   ...((feature('KAIROS') || feature('KAIROS_BRIEF')) && BRIEF_TOOL_NAME
     ? { Brief: BRIEF_TOOL_NAME }
     : {}),

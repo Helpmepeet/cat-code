@@ -82,41 +82,41 @@ describe('Bash prompt commit authority', () => {
 })
 
 describe('Bash prompt edit-tool naming', () => {
-  // The registry swaps Edit for Apply_patch on the OpenAI path
+  // The registry swaps Edit for apply_patch on the OpenAI path
   // (getProviderFileEditTool, src/tools.ts), so naming Edit there points GPT at
   // a tool it was never given.
   test('names the edit tool the provider actually ships', () => {
     const gpt = getBashPrompt('openai')
-    expect(gpt).toContain('Edit files: Use Apply_patch')
+    expect(gpt).toContain('Edit files: Use apply_patch')
     expect(gpt).not.toContain('Edit files: Use Edit')
 
     const claude = getBashPrompt('firstParty')
     expect(claude).toContain('Edit files: Use Edit (NOT sed/awk)')
-    expect(claude).not.toContain('Apply_patch')
+    expect(claude).not.toContain('apply_patch')
   })
 
   test('the shipped tool pool outranks the request provider', () => {
     // getProviderFileEditTool picks by SESSION provider while this prompt
     // renders per REQUEST provider, so a gpt-* worker inside an Anthropic
-    // session used to be told to use Apply_patch while Edit shipped.
+    // session used to be told to use apply_patch while Edit shipped.
     const gptRequestWithEditShipped = getBashPrompt(
       'openai',
       new Set(['Bash', 'Edit']),
     )
     expect(gptRequestWithEditShipped).toContain('Edit files: Use Edit')
-    expect(gptRequestWithEditShipped).not.toContain('Edit files: Use Apply_patch')
+    expect(gptRequestWithEditShipped).not.toContain('Edit files: Use apply_patch')
 
     const claudeRequestWithPatchShipped = getBashPrompt(
       'firstParty',
-      new Set(['Bash', 'Apply_patch']),
+      new Set(['Bash', 'apply_patch']),
     )
     expect(claudeRequestWithPatchShipped).toContain(
-      'Edit files: Use Apply_patch',
+      'Edit files: Use apply_patch',
     )
 
     // No edit tool in the pool at all: fall back to the provider.
     expect(getBashPrompt('openai', new Set(['Bash']))).toContain(
-      'Edit files: Use Apply_patch',
+      'Edit files: Use apply_patch',
     )
   })
 
@@ -136,15 +136,15 @@ describe('Bash prompt file-mutation policy', () => {
   test('the GPT branch carries the hybrid rule and the diff check', () => {
     const prompt = getBashPrompt('openai')
 
-    expect(prompt).toContain('Use Apply_patch for local file edits.')
+    expect(prompt).toContain('Use apply_patch for local file edits.')
     expect(prompt).toContain(
       'Do not create or edit files with cat, heredocs, or other shell write tricks.',
     )
     expect(prompt).toContain(
-      'Formatting commands and bulk mechanical rewrites do not need Apply_patch.',
+      'Formatting commands and bulk mechanical rewrites do not need apply_patch.',
     )
     expect(prompt).toContain(
-      'After any file mutation performed by a command rather than by Apply_patch, Write, or NotebookEdit',
+      'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
     )
     expect(prompt).toContain('show the resulting git diff before moving on')
     expect(prompt).toContain(
@@ -179,7 +179,7 @@ describe('Bash prompt file-mutation policy', () => {
     expect(prompt).toContain('Content search: Use Grep (NOT grep or rg)')
     expect(prompt).toContain('Write files: Use Write (NOT echo >/cat <<EOF)')
 
-    expect(prompt).not.toContain('Use Apply_patch for local file edits')
+    expect(prompt).not.toContain('Use apply_patch for local file edits')
     expect(prompt).not.toContain('Never skip the check.')
   })
 })

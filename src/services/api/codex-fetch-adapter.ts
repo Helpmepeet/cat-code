@@ -59,10 +59,9 @@ import {
   withSuppressedNormalizeSideEffects,
 } from '../../utils/api.js'
 import { getAllBaseTools } from '../../tools.js'
+import { isFilePatchToolName } from '../../tools/FilePatchTool/constants.js'
 import { findToolByName } from '../../Tool.js'
 import { safeParseJSON } from '../../utils/json.js'
-
-const APPLY_PATCH_TOOL_NAME = 'Apply_patch'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -883,7 +882,7 @@ function canonicalizeToolArgumentsForRecord(
 }
 
 /**
- * Canonicalizes the structured JSON arm of Apply_patch custom-tool input.
+ * Canonicalizes the structured JSON arm of apply_patch custom-tool input.
  * Decode stores valid JSON objects structurally and replay compacts them with
  * JSON.stringify; doing the same at record time removes whitespace drift. Raw
  * non-JSON patch envelopes must remain byte-identical for executable handoff.
@@ -892,7 +891,7 @@ function canonicalizeCustomToolInputForRecord(
   toolName: unknown,
   rawInput: unknown,
 ): unknown {
-  if (toolName !== APPLY_PATCH_TOOL_NAME || typeof rawInput !== 'string') {
+  if (!isFilePatchToolName(toolName) || typeof rawInput !== 'string') {
     return rawInput
   }
 
@@ -972,7 +971,7 @@ export function canonicalizeCodexItem(
 registerOutputItemCanonicalizer(canonicalizeCodexItem)
 
 /**
- * Recovers the raw custom_tool_call `input` string for an Apply_patch tool_use
+ * Recovers the raw custom_tool_call `input` string for an apply_patch tool_use
  * so replay matches the server-recorded custom_tool_call baseline.
  *
  * The transcript stores Apply_patch input as a union (see FilePatchTool/types.ts
@@ -1295,8 +1294,8 @@ function translateMessages(
           if (typeof block.name === 'string' && block.name.length > 0) {
             toolNameByCallId.set(callId, block.name)
           }
-          if (block.name === APPLY_PATCH_TOOL_NAME) {
-            // The server ALWAYS records Apply_patch as a custom_tool_call (it is
+          if (typeof block.name === 'string' && isFilePatchToolName(block.name)) {
+            // The server ALWAYS records apply_patch as a custom_tool_call (it is
             // a custom lark-grammar tool). Emit custom_tool_call unconditionally
             // so replay matches the recorded baseline (previously this only fired
             // when block.input was still a string, causing type_mismatch since

@@ -1,5 +1,10 @@
 import type { LineEndingType } from '../../utils/fileRead.js'
-import { END_OF_FILE_MARKER } from './constants.js'
+import { END_OF_FILE_MARKER, FILE_PATCH_TOOL_NAME } from './constants.js'
+import { plannerFailureAsFilePatchError } from './diagnostics.js'
+import {
+  planUpdateHunks,
+  type UpdatePlacementPlan,
+} from './planner.js'
 import {
   FilePatchError,
   type ApplyPatchFileState,
@@ -9,16 +14,45 @@ import {
   type FilePatchHunk,
   type FilePatchLine,
   type FilePatchOperation,
+  type FilePatchPlacement,
   MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
   MAX_FILE_PATCH_FAILURE_DETAILS,
+  MAX_FILE_PATCH_PLACEMENTS,
 } from './types.js'
 
 export function applyPatchToBuffers(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
 ): ApplyPatchResult {
+  return applyPatchToBuffersWith(operations, currentFiles, applyUpdateHunks)
+}
+
+/** Complete-envelope candidate used by offline replay before activation. */
+export function applyPatchToBuffersPlanned(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+): ApplyPatchResult {
+  const result = applyPatchToBuffersWith(
+    operations,
+    currentFiles,
+    applyUpdateHunksPlanned,
+  )
+  return { contractVersion: 2, files: result.files }
+}
+
+type UpdateApplier = (
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+) => { buffer: FilePatchBuffer; plan?: UpdatePlacementPlan }
+
+function applyPatchToBuffersWith(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+  updateApplier: UpdateApplier,
+): ApplyPatchResult {
   try {
-    return applyOperations(operations, currentFiles)
+    return applyOperations(operations, currentFiles, updateApplier)
   } catch (error) {
     if (error instanceof FilePatchError) {
       throw new FilePatchError(
@@ -31,6 +65,7 @@ export function applyPatchToBuffers(
           hunkIndex: error.hunkIndex,
           hunkCount: error.hunkCount,
           details: error.details,
+          diagnostics: error.diagnostics,
           mutationOutcome: 'no-mutation',
         },
       )
@@ -42,6 +77,7 @@ export function applyPatchToBuffers(
 function applyOperations(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
+  updateApplier: UpdateApplier,
 ): ApplyPatchResult {
   const results: ApplyPatchResult['files'] = []
   const failures: FilePatchFailureDetail[] = []
@@ -52,6 +88,7 @@ function applyOperations(
         ...applyOperation(
           operation,
           currentFiles,
+          updateApplier,
         ),
       )
     } catch (error) {
@@ -72,7 +109,7 @@ function applyOperations(
       .join('\n')
     const first = displayedFailures[0]!
     throw new FilePatchError(
-      `Apply_patch preflight failed for ${failures.length} independent ${operationWord}.${omitted}\n${detailText}`,
+      `${FILE_PATCH_TOOL_NAME} preflight failed for ${failures.length} independent ${operationWord}.${omitted}\n${detailText}`,
       {
         code: failures.length === 1 ? first.code : 'PATCH_PREFLIGHT_FAILED',
         path: first.path,
@@ -81,6 +118,7 @@ function applyOperations(
         hunkIndex: first.hunkIndex,
         hunkCount: first.hunkCount,
         details: displayedFailures,
+        diagnostics: first.diagnostics,
       },
     )
   }
@@ -91,6 +129,7 @@ function applyOperations(
 function applyOperation(
   operation: FilePatchOperation,
   currentFiles: Map<string, ApplyPatchFileState>,
+  updateApplier: UpdateApplier,
 ): ApplyPatchResult['files'] {
   const current = getExistingOrDefaultState(currentFiles, operation.path)
 
@@ -124,11 +163,15 @@ function applyOperation(
         }
       }
 
-      const nextBuffer = applyUpdateHunks(
+      const update = updateApplier(
         current.buffer,
         operation.hunks,
         operation.path,
-      ).buffer
+      )
+      const nextBuffer = update.buffer
+      const placementEvidence = update.plan
+        ? boundedPlacementEvidence(update.plan)
+        : undefined
 
       if (operation.moveTo) {
         return [
@@ -143,6 +186,7 @@ function applyOperation(
             type: 'add',
             before: null,
             after: nextBuffer.content,
+            ...placementEvidence,
           },
         ]
       }
@@ -153,6 +197,7 @@ function applyOperation(
           type: 'update',
           before: current.buffer.content,
           after: nextBuffer.content,
+          ...placementEvidence,
         },
       ]
     }
@@ -196,6 +241,31 @@ function applyOperation(
   }
 }
 
+function boundedPlacementEvidence(
+  plan: UpdatePlacementPlan,
+): { placements: FilePatchPlacement[]; placementOmittedCount?: number } {
+  const placements = plan.hunks
+    .slice(0, MAX_FILE_PATCH_PLACEMENTS)
+    .map(candidate => ({
+      hunk: candidate.hunkIndex + 1,
+      oldStart: candidate.sourceStart,
+      oldEnd: candidate.sourceEnd,
+      reason:
+        candidate.boundary === 'bof'
+          ? 'bof'
+          : candidate.boundary === 'eof'
+            ? 'eof'
+            : candidate.diagnosticHintLines?.length
+              ? 'exact+hint'
+              : 'exact',
+    }) satisfies FilePatchPlacement)
+  const omitted = plan.hunks.length - placements.length
+  return {
+    placements,
+    ...(omitted > 0 ? { placementOmittedCount: omitted } : {}),
+  }
+}
+
 function toFailureDetail(
   error: unknown,
   operation: FilePatchOperation,
@@ -218,6 +288,9 @@ function toFailureDetail(
       ? { hunkCount: patchError.hunkCount }
       : {}),
     message: boundFailureMessage(patchError.message),
+    ...(patchError.diagnostics !== undefined
+      ? { diagnostics: patchError.diagnostics }
+      : {}),
   }
 }
 
@@ -235,6 +308,22 @@ function formatFailureDetail(detail: FilePatchFailureDetail): string {
       : ''
   const move = detail.moveTo === undefined ? '' : ` to ${detail.moveTo}`
   return `[${detail.code}] ${detail.operation} ${detail.path}${move}${hunk}: ${detail.message}`
+}
+
+function hunkHints(hunk: FilePatchHunk): string[] {
+  return hunk.hints ?? hunk.scopeHints ?? []
+}
+
+function hunkRequestsNoFinalNewline(hunk: FilePatchHunk): boolean {
+  if (hunk.newline?.kind === 'legacy-output') {
+    return hunk.newline.outputAtEof === 'absent'
+  }
+  if (hunk.newline?.kind === 'canonical') {
+    return hunk.newline.markers.some(
+      marker => marker.appliesTo === 'new' || marker.appliesTo === 'both',
+    )
+  }
+  return hunk.noNewlineAtEndOfFile === true
 }
 
 export function applyUpdateHunks(
@@ -264,7 +353,7 @@ export function applyUpdateHunks(
     lines = next.lines
     cursor = next.cursor
     if (next.touchesEndOfFile) {
-      noNewlineAtEndOfFile = hunks[i].noNewlineAtEndOfFile
+      noNewlineAtEndOfFile = hunkRequestsNoFinalNewline(hunks[i])
     }
   }
 
@@ -275,6 +364,114 @@ export function applyUpdateHunks(
       lineEndings: buffer.lineEndings,
       noNewlineAtEndOfFile,
     },
+  }
+}
+
+/**
+ * Candidate contract implementation used by replay until the release gates
+ * authorize replacing the production matcher above.
+ */
+export function applyUpdateHunksPlanned(
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+): { buffer: FilePatchBuffer; plan: UpdatePlacementPlan } {
+  const planned = planUpdateHunks({
+    path,
+    source: buffer.content,
+    hunks,
+    diagnostics: true,
+  })
+  if ('failure' in planned) {
+    const failedHunk =
+      planned.failure.hunkIndex === undefined
+        ? undefined
+        : hunks[planned.failure.hunkIndex]
+    throw plannerFailureAsFilePatchError({
+      failure: planned.failure,
+      operation: 'update',
+      source: {
+        sourceLines: splitPreservingTerminalNewline(buffer.content),
+        fingerprint: failedHunk?.lines
+          .filter(line => line.kind !== 'add')
+          .map(line => line.text),
+      },
+    })
+  }
+
+  return applyUpdatePlan(buffer, hunks, path, planned.plan)
+}
+
+/** Apply an already-authorized immutable-source plan without searching again. */
+export function applyUpdatePlan(
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+  plan: UpdatePlacementPlan,
+): { buffer: FilePatchBuffer; plan: UpdatePlacementPlan } {
+
+  const sourceLines = splitPreservingTerminalNewline(buffer.content)
+  const outputLines: string[] = []
+  let sourceCursor = 0
+
+  if (plan.hunks.length !== hunks.length) {
+    throw new FilePatchError(
+      `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+      {
+        code: 'PATCH_PLAN_INVALID',
+        path,
+        operation: 'update',
+        hunkCount: hunks.length,
+      },
+    )
+  }
+
+  for (let planIndex = 0; planIndex < plan.hunks.length; planIndex += 1) {
+    const candidate = plan.hunks[planIndex]!
+    if (
+      candidate.hunkIndex !== planIndex ||
+      candidate.sourceStart < sourceCursor ||
+      candidate.sourceEnd < candidate.sourceStart ||
+      candidate.sourceEnd > sourceLines.length
+    ) {
+      throw new FilePatchError(
+        `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+        {
+          code: 'PATCH_PLAN_INVALID',
+          path,
+          operation: 'update',
+          hunkIndex: candidate.hunkIndex + 1,
+          hunkCount: hunks.length,
+        },
+      )
+    }
+    outputLines.push(...sourceLines.slice(sourceCursor, candidate.sourceStart))
+    let hunkSourceCursor = candidate.sourceStart
+    const hunk = hunks[candidate.hunkIndex]!
+    for (const line of hunk.lines) {
+      if (line.kind === 'add') {
+        outputLines.push(line.text)
+        continue
+      }
+      if (line.kind === 'context') {
+        outputLines.push(sourceLines[hunkSourceCursor]!)
+      }
+      hunkSourceCursor += 1
+    }
+    sourceCursor = candidate.sourceEnd
+  }
+  outputLines.push(...sourceLines.slice(sourceCursor))
+
+  const noNewlineAtEndOfFile =
+    outputLines.length > 0 && !plan.output.hasFinalNewline
+  return {
+    buffer: {
+      content: joinLines(outputLines, noNewlineAtEndOfFile),
+      encoding: buffer.encoding,
+      lineEndings: buffer.lineEndings,
+      noNewlineAtEndOfFile,
+    },
+    plan,
   }
 }
 
@@ -433,7 +630,7 @@ function findHunkPosition(
 
   // Pure-insert hunk (no context, no delete lines)
   if (fingerprint.length === 0) {
-    const effectiveHints = hunk.scopeHints.filter(h => h.trim().length > 0)
+    const effectiveHints = hunkHints(hunk).filter(h => h.trim().length > 0)
     if (
       effectiveHints.length > 0 &&
       !scopeHintsAppearInOrder(fileLines, effectiveHints)
@@ -472,7 +669,7 @@ function findHunkPosition(
     ? [Math.max(0, fileLines.length - fingerprint.length), 0]
     : [0]
 
-  const effectiveHints = hunk.scopeHints.filter(h => h.trim().length > 0)
+  const effectiveHints = hunkHints(hunk).filter(h => h.trim().length > 0)
   let sawFingerprintMatch = false
   let sawScopedMatch = false
 

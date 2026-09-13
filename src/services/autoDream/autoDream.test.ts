@@ -8,7 +8,7 @@ import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import type { AssistantMessage } from '../../types/message.js'
 
 describe('makeDreamProgressWatcher', () => {
-  test('tracks all files touched by Apply_patch including multi-file patches and moves', () => {
+  test('tracks all files touched by apply_patch including multi-file patches and moves', () => {
     let state: AppState = {
       tasks: {},
     } as unknown as AppState
@@ -63,7 +63,7 @@ describe('makeDreamProgressWatcher', () => {
     ])
   })
 
-  test('tracks files touched by Edit and Write alongside Apply_patch', () => {
+  test('tracks files touched by Edit and Write alongside apply_patch', () => {
     let state: AppState = {
       tasks: {},
     } as unknown as AppState

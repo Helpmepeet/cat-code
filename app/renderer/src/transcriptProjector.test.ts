@@ -3100,7 +3100,7 @@ test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shap
   })
 })
 
-test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
+test('apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
   // Current FilePatchTool output shape: `{ files: [{ path, type, firstLine,
   // structuredPatch }] }` (src/tools/FilePatchTool/types.ts, emitted
   // FilePatchTool.tsx) — a MULTI-file envelope, unlike FileEditTool's
@@ -3122,7 +3122,7 @@ test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
           {
             type: 'tool_use',
             id: 'toolu_patch_1',
-            name: 'Apply_patch',
+            name: 'apply_patch',
             // FilePatchToolInput `{ input: string }` envelope
             // (src/tools/FilePatchTool/types.ts:125-136), NOT Edit's
             // old_string/new_string.
@@ -5619,4 +5619,3 @@ test('assistant frame with error produces a provider_error system notice', () =>
     projectServerFrames(createTranscriptState(), [ready('session-1'), frame]),
   ).toEqual(state)
 })
-

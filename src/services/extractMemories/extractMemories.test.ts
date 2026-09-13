@@ -3,7 +3,10 @@ import { join } from 'path'
 import type { Tool } from '../../Tool.js'
 import { getAutoMemPath } from '../../memdir/paths.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  LEGACY_FILE_PATCH_TOOL_NAME,
+} from '../../tools/FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import type { AssistantMessage, Message } from '../../types/message.js'
 import {
@@ -13,14 +16,14 @@ import {
 } from './extractMemories.js'
 import { buildExtractAutoOnlyPrompt } from './prompts.js'
 
-describe('createAutoMemCanUseTool with Apply_patch', () => {
+describe('createAutoMemCanUseTool with apply_patch', () => {
   const memoryDir = getAutoMemPath()
   const canUseTool = createAutoMemCanUseTool(memoryDir)
   const patchTool = { name: FILE_PATCH_TOOL_NAME } as Tool
   const editTool = { name: FILE_EDIT_TOOL_NAME } as Tool
   const writeTool = { name: FILE_WRITE_TOOL_NAME } as Tool
 
-  test('allows an Apply_patch where all targets are inside the auto-memory directory', async () => {
+  test('allows an apply_patch where all targets are inside the auto-memory directory', async () => {
     const memoryFile1 = join(memoryDir, 'notes.md')
     const memoryFile2 = join(memoryDir, 'user_prefs.md')
 
@@ -39,7 +42,7 @@ describe('createAutoMemCanUseTool with Apply_patch', () => {
     expect(result.behavior).toBe('allow')
   })
 
-  test('denies a multi-file Apply_patch when one target is outside auto-memory', async () => {
+  test('denies a multi-file apply_patch when one target is outside auto-memory', async () => {
     const memoryFile = join(memoryDir, 'notes.md')
     const outsideFile = '/tmp/unsafe-escape.ts'
 
@@ -59,7 +62,7 @@ describe('createAutoMemCanUseTool with Apply_patch', () => {
     expect(result.message).toContain('all patch mutation targets must be within')
   })
 
-  test('denies an Apply_patch whose source is inside memory but moveTo is outside', async () => {
+  test('denies an apply_patch whose source is inside memory but moveTo is outside', async () => {
     const memoryFile = join(memoryDir, 'notes.md')
     const outsideMoveDest = '/tmp/escaped.md'
 
@@ -78,7 +81,7 @@ describe('createAutoMemCanUseTool with Apply_patch', () => {
     expect(result.message).toContain('all patch mutation targets must be within')
   })
 
-  test('allows an Apply_patch with moveTo when both source and destination are inside memory', async () => {
+  test('allows an apply_patch with moveTo when both source and destination are inside memory', async () => {
     const memoryFileOld = join(memoryDir, 'old-notes.md')
     const memoryFileNew = join(memoryDir, 'new-notes.md')
 
@@ -166,7 +169,7 @@ describe('getWrittenFilePaths and hasMemoryWritesSince', () => {
     ).toEqual([])
   })
 
-  test('extracts all mutation paths from Apply_patch blocks including moves', () => {
+  test('extracts all mutation paths from apply_patch blocks including moves', () => {
     const patchInput = `*** Begin Patch
 *** Update File: file1.md
 *** Move to: file2.md
@@ -186,7 +189,24 @@ describe('getWrittenFilePaths and hasMemoryWritesSince', () => {
     ).toEqual(['file1.md', 'file2.md', 'file3.md'])
   })
 
-  test('hasMemoryWritesSince recognizes Apply_patch targeting auto-memory', () => {
+  test('extracts paths from historical Apply_patch blocks', () => {
+    expect(
+      getWrittenFilePaths({
+        type: 'tool_use',
+        name: LEGACY_FILE_PATCH_TOOL_NAME,
+        input: {
+          input: `*** Begin Patch
+*** Update File: legacy.md
+@@
+-old
++new
+*** End Patch`,
+        },
+      }),
+    ).toEqual(['legacy.md'])
+  })
+
+  test('hasMemoryWritesSince recognizes apply_patch targeting auto-memory', () => {
     const memoryFile = join(memoryDir, 'notes.md')
     const messages: Message[] = [
       {
@@ -215,7 +235,7 @@ describe('getWrittenFilePaths and hasMemoryWritesSince', () => {
     expect(hasMemoryWritesSince(messages)).toBe(true)
   })
 
-  test('hasMemoryWritesSince returns false if Apply_patch only touches files outside auto-memory', () => {
+  test('hasMemoryWritesSince returns false if apply_patch only touches files outside auto-memory', () => {
     const outsideFile = '/tmp/unrelated.ts'
     const messages: Message[] = [
       {
@@ -287,24 +307,24 @@ describe('getWrittenFilePaths and hasMemoryWritesSince', () => {
 })
 
 describe('Memory extraction prompts provider awareness', () => {
-  test('GPT memory prompt specifies Apply_patch and not Edit', () => {
+  test('GPT memory prompt specifies apply_patch and not Edit', () => {
     const prompt = buildExtractAutoOnlyPrompt(5, '', false, 'openai')
 
-    expect(prompt).toContain('Apply_patch/Write')
-    expect(prompt).toContain('issue every required Write and Apply_patch call in parallel')
-    expect(prompt).toContain('Apply_patch requires a prior Read of the same file')
+    expect(prompt).toContain('apply_patch/Write')
+    expect(prompt).toContain('issue every required Write and apply_patch call in parallel')
+    expect(prompt).toContain('apply_patch requires a prior Read of the same file')
     expect(prompt).toContain('successful write/patch tool results')
     expect(prompt).not.toContain('Edit/Write')
     expect(prompt).not.toContain('write/edit')
     expect(prompt).not.toContain('Edit requires a prior Read')
   })
 
-  test('Claude memory prompt specifies Edit and not Apply_patch', () => {
+  test('Claude memory prompt specifies Edit and not apply_patch', () => {
     const prompt = buildExtractAutoOnlyPrompt(5, '', false, 'firstParty')
 
     expect(prompt).toContain('Edit/Write')
     expect(prompt).toContain('issue all Write/Edit calls in parallel')
     expect(prompt).toContain('Edit requires a prior Read of the same file')
-    expect(prompt).not.toContain('Apply_patch')
+    expect(prompt).not.toContain('apply_patch')
   })
 })

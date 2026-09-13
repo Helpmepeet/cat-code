@@ -2,6 +2,8 @@ import { join } from 'path'
 import { beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import { BashTool } from '../../tools/BashTool/BashTool.js'
+import { FilePatchTool } from '../../tools/FilePatchTool/FilePatchTool.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { FileWriteTool } from '../../tools/FileWriteTool/FileWriteTool.js'
 import { getCwd } from '../cwd.js'
 import { SandboxManager } from '../sandbox/sandbox-adapter.js'
@@ -10,6 +12,7 @@ import {
   checkRuleBasedPermissions,
   hasPermissionsToUseTool,
 } from './permissions.js'
+import { permissionRuleValueFromString } from './permissionRuleParser.js'
 
 // Auto mode is process-global state. Left active by another suite it routes
 // plan mode into the classifier's acceptEdits fast path, which allows in-cwd
@@ -41,6 +44,31 @@ function toolUseContext(tpc: ToolPermissionContext): ToolUseContext {
     messages: [],
   } as unknown as ToolUseContext
 }
+
+describe('apply_patch permission-name compatibility', () => {
+  test('normalizes historical bare and content rules without rewriting them', () => {
+    expect(permissionRuleValueFromString('Apply_patch')).toEqual({
+      toolName: FILE_PATCH_TOOL_NAME,
+    })
+    expect(permissionRuleValueFromString('Apply_patch(src/file.ts)')).toEqual({
+      toolName: FILE_PATCH_TOOL_NAME,
+      ruleContent: 'src/file.ts',
+    })
+  })
+
+  test('matches a historical bare rule against the canonical tool', () => {
+    const context = permissionContext({
+      alwaysAskRules: { session: ['Apply_patch'] },
+    })
+    expect(
+      checkRuleBasedPermissions(
+        FilePatchTool,
+        { input: '*** Begin Patch\n*** End Patch' },
+        toolUseContext(context),
+      ),
+    ).resolves.toMatchObject({ behavior: 'ask' })
+  })
+})
 
 async function decide(
   tool: unknown,

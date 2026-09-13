@@ -17,6 +17,7 @@ import {
   getGPTUsingToolsSection,
 } from '../constants/promptStyles/gpt.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
+import { FILE_PATCH_LARK_GRAMMAR } from '../tools/FilePatchTool/grammar.js'
 
 // Command availability is filtered by auth, so an assembly built with no
 // credential anywhere throws before it reaches the prompt under test. The
@@ -172,7 +173,7 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('OpenAI exports Apply_patch as a custom tool schema', async () => {
+  test('OpenAI exports apply_patch with the canonical custom grammar', async () => {
     setSessionProvider('openai')
 
     const schema = await toolToAPISchema(FilePatchTool, {
@@ -183,14 +184,17 @@ describe('provider and prompt regressions', () => {
     })
 
     expect(schema).toMatchObject({
-      name: 'Apply_patch',
+      name: 'apply_patch',
       openai_tool_type: 'custom',
       openai_tool_format: {
         type: 'grammar',
         syntax: 'lark',
-        definition: 'start: /(.|\\n)*/',
+        definition: FILE_PATCH_LARK_GRAMMAR,
       },
     })
+    expect(FILE_PATCH_LARK_GRAMMAR).toContain('*** Begin Patch')
+    expect(FILE_PATCH_LARK_GRAMMAR).toContain('*** End Patch')
+    expect(FILE_PATCH_LARK_GRAMMAR).not.toBe('start: /(.|\\n)*/')
   })
 
   test('FileWrite prompt names the provider-specific edit tool', () => {
@@ -198,7 +202,7 @@ describe('provider and prompt regressions', () => {
       'check whether Edit is the better tool. Prefer Edit',
     )
     expect(getWriteToolDescription('openai')).toContain(
-      'check whether Apply_patch is the better tool. Prefer Apply_patch',
+      'check whether apply_patch is the better tool. Prefer apply_patch',
     )
   })
 
@@ -210,7 +214,7 @@ describe('provider and prompt regressions', () => {
     expect(prompt).toContain('targeted edit tool instead of Write')
   })
 
-  test('OpenAI uses Apply_patch prompt instead of FileEdit prompt', () => {
+  test('OpenAI uses apply_patch prompt instead of FileEdit prompt', () => {
     expect(getFilePatchToolDescription()).toContain('*** Begin Patch')
     expect(getFilePatchToolDescription()).toContain('*** Update File')
     expect(getFilePatchToolDescription()).toContain('*** End of File')
@@ -222,7 +226,7 @@ describe('provider and prompt regressions', () => {
   test('GPT doing-tasks carries read-before-modify only when an edit tool is present', () => {
     // The rule names no tool any more, so what is testable is the gate: it
     // needs both an edit tool and a way to read the file first.
-    for (const editTool of ['Apply_patch', 'Edit']) {
+    for (const editTool of ['apply_patch', 'Edit']) {
       expect(getGPTDoingTasksSection(new Set(['Read', editTool]), 'gpt-5.6')).toContain(
         'Read before modifying:',
       )
@@ -368,34 +372,34 @@ describe('provider and prompt regressions', () => {
     ])
   })
 
-  test('tool registry switches Edit vs Apply_patch by provider, including simple mode', () => {
+  test('tool registry switches Edit vs apply_patch by provider, including simple mode', () => {
     const originalSimple = process.env.CLAUDE_CODE_SIMPLE
 
     try {
       setSessionProvider('openai')
       const openaiTools = getTools(getEmptyToolPermissionContext()).map(tool => tool.name)
-      expect(openaiTools).toContain('Apply_patch')
+      expect(openaiTools).toContain('apply_patch')
       expect(openaiTools).not.toContain('Edit')
 
       process.env.CLAUDE_CODE_SIMPLE = '1'
       const openaiSimpleTools = getTools(getEmptyToolPermissionContext()).map(
         tool => tool.name,
       )
-      expect(openaiSimpleTools).toContain('Apply_patch')
+      expect(openaiSimpleTools).toContain('apply_patch')
       expect(openaiSimpleTools).not.toContain('Edit')
 
       setSessionProvider('firstParty')
       delete process.env.CLAUDE_CODE_SIMPLE
       const claudeTools = getTools(getEmptyToolPermissionContext()).map(tool => tool.name)
       expect(claudeTools).toContain('Edit')
-      expect(claudeTools).not.toContain('Apply_patch')
+      expect(claudeTools).not.toContain('apply_patch')
 
       process.env.CLAUDE_CODE_SIMPLE = '1'
       const claudeSimpleTools = getTools(getEmptyToolPermissionContext()).map(
         tool => tool.name,
       )
       expect(claudeSimpleTools).toContain('Edit')
-      expect(claudeSimpleTools).not.toContain('Apply_patch')
+      expect(claudeSimpleTools).not.toContain('apply_patch')
     } finally {
       if (originalSimple === undefined) {
         delete process.env.CLAUDE_CODE_SIMPLE
@@ -406,28 +410,28 @@ describe('provider and prompt regressions', () => {
   })
   // The exposed tool description owns the path base. Keep that contract while
   // removing its duplicate from the main prompt.
-  test('Apply_patch description owns path resolution without a duplicate system rule', async () => {
+  test('apply_patch description owns path resolution without a duplicate system rule', async () => {
     const withPatchTool = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
     const description = (await FilePatchTool.prompt()).replace(/\s+/g, ' ')
     expect(description).toContain('current session working directory')
     expect(withPatchTool).not.toContain('PATHS:')
   })
 
-  test('GPT tool rules carry the Apply_patch mutation rule and the diff check', () => {
+  test('GPT tool rules carry the apply_patch mutation rule and the diff check', () => {
     const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
 
-    expect(section).toContain('Use Apply_patch for local file edits.')
+    expect(section).toContain('Use apply_patch for local file edits.')
     expect(section).toContain(
       'Do not create or edit files with cat, heredocs, or other shell write tricks.',
     )
     expect(section).toContain(
-      'Formatting commands and bulk mechanical rewrites do not need Apply_patch.',
+      'Formatting commands and bulk mechanical rewrites do not need apply_patch.',
     )
     expect(section).toContain(
-      'Do not use Python to read or write files when a simple shell command or Apply_patch is enough.',
+      'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
     )
     expect(section).toContain(
-      'After any file mutation performed by a command rather than by Apply_patch, Write, or NotebookEdit',
+      'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
     )
     expect(section).toContain('show the resulting git diff before moving on')
     expect(section).toContain(
@@ -456,7 +460,7 @@ describe('provider and prompt regressions', () => {
     expect(prompt).toContain(
       'To read files use Read instead of cat, head, tail, or sed',
     )
-    expect(prompt).not.toContain('Use Apply_patch for local file edits')
+    expect(prompt).not.toContain('Use apply_patch for local file edits')
     expect(prompt).not.toContain('show the resulting git diff before moving on')
   })
 
@@ -469,40 +473,40 @@ describe('provider and prompt regressions', () => {
     expect(claudePrompt).toContain('NEVER invoke `grep` or `rg` as a Bash command')
   })
 
-  test('FilePatchTool prompt refers to Apply_patch as a tool, not a shell command', () => {
+  test('FilePatchTool prompt refers to apply_patch as a tool, not a shell command', () => {
     const desc = getFilePatchToolDescription()
-    expect(desc).toContain('Use the `Apply_patch` tool to edit files')
+    expect(desc).toContain('Use the `apply_patch` tool to edit files')
     expect(desc).not.toContain('shell command')
     expect(desc).toContain(
       'Patch paths resolve relative to the current session working directory.',
     )
     expect(desc).toContain(
-      'Later tools, including `Apply_patch`, use the updated directory',
+      'Later tools, including `apply_patch`, use the updated directory',
     )
   })
 
   test('PowerShellTool prompt distinguishes GPT hybrid policy from Claude strict policy', async () => {
     const gptPsPrompt = await getPowerShellPrompt('openai')
-    expect(gptPsPrompt).toContain('FILE MUTATIONS: Use Apply_patch for local file edits')
+    expect(gptPsPrompt).toContain('FILE MUTATIONS: Use apply_patch for local file edits')
     expect(gptPsPrompt).toContain('READS AND SEARCH: `rg`, `rg --files`')
-    expect(gptPsPrompt).toContain('Edit files: Use Apply_patch')
+    expect(gptPsPrompt).toContain('Edit files: Use apply_patch')
 
     const claudePsPrompt = await getPowerShellPrompt('firstParty')
     expect(claudePsPrompt).toContain('DO NOT use it for file operations')
     expect(claudePsPrompt).toContain('Edit files: Use Edit')
-    expect(claudePsPrompt).not.toContain('Apply_patch')
+    expect(claudePsPrompt).not.toContain('apply_patch')
   })
 
   test('Implementor prompt names the session edit tool rather than both aliases simultaneously', () => {
     setSessionProvider('openai')
     const openaiPrompt = getImplementorSystemPrompt('openai')
-    expect(openaiPrompt).toContain('Use Apply_patch and Write for code changes')
-    expect(openaiPrompt).not.toContain('Use Edit, Apply_patch, and Write')
+    expect(openaiPrompt).toContain('Use apply_patch and Write for code changes')
+    expect(openaiPrompt).not.toContain('Use Edit, apply_patch, and Write')
 
     setSessionProvider('firstParty')
     const claudePrompt = getImplementorSystemPrompt('firstParty')
     expect(claudePrompt).toContain('Use Edit and Write for code changes')
-    expect(claudePrompt).not.toContain('Apply_patch')
+    expect(claudePrompt).not.toContain('apply_patch')
   })
 
   test('the user-context wrapper does not deny authority to claudeMd', () => {

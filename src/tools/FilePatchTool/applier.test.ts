@@ -13,7 +13,9 @@ import { getFileIdentity } from '../../utils/file.js'
 import { FilePatchTool } from './FilePatchTool.js'
 import {
   applyPatchToBuffers,
+  applyPatchToBuffersPlanned,
   applyUpdateHunks,
+  applyUpdateHunksPlanned,
   serializeBuffer,
 } from './applier.js'
 import { renderToolResultMessage } from './UI.js'
@@ -135,6 +137,100 @@ describe('applyUpdateHunks', () => {
 
     expect(result.buffer.content).toBe('alpha\nbeta updated')
     expect(serializeBuffer(result.buffer)).toBe('alpha\r\nbeta updated')
+  })
+})
+
+describe('applyUpdateHunksPlanned candidate contract', () => {
+  test('applies one complete source-coordinate plan resolved by a later hunk', () => {
+    const result = applyUpdateHunksPlanned(
+      { content: 'x\nkeep\nx\nfence\n', lineEndings: 'LF' },
+      [
+        hunk({
+          lines: [
+            { kind: 'context', text: 'x' },
+            { kind: 'add', text: 'changed' },
+          ],
+        }),
+        hunk({
+          lines: [
+            { kind: 'context', text: 'x' },
+            { kind: 'context', text: 'fence' },
+            { kind: 'add', text: 'later' },
+          ],
+        }),
+      ],
+      '/tmp/example.txt',
+    )
+
+    expect(result.plan.hunks.map(candidate => candidate.sourceStart)).toEqual([0, 2])
+    expect(result.buffer.content).toBe('x\nchanged\nkeep\nx\nfence\nlater\n')
+  })
+
+  test('preserves patch order for same-coordinate insertions', () => {
+    const result = applyUpdateHunksPlanned(
+      { content: '', lineEndings: 'LF', noNewlineAtEndOfFile: false },
+      [
+        hunk({ lines: [{ kind: 'add', text: 'first' }] }),
+        hunk({
+          isEndOfFile: true,
+          lines: [{ kind: 'add', text: 'second' }],
+        }),
+      ],
+      '/tmp/empty.txt',
+    )
+
+    expect(result.buffer.content).toBe('first\nsecond\n')
+  })
+
+  test('uses canonical new-side newline markers for expected output bytes', () => {
+    const withoutMarker = applyUpdateHunksPlanned(
+      { content: 'old', lineEndings: 'LF', noNewlineAtEndOfFile: true },
+      [
+        hunk({
+          lines: [
+            { kind: 'delete', text: 'old' },
+            { kind: 'add', text: 'new' },
+          ],
+          newline: { kind: 'canonical', markers: [] },
+        }),
+      ],
+      '/tmp/no-newline.txt',
+    )
+    const withMarker = applyUpdateHunksPlanned(
+      { content: 'old', lineEndings: 'LF', noNewlineAtEndOfFile: true },
+      [
+        hunk({
+          lines: [
+            { kind: 'delete', text: 'old' },
+            { kind: 'add', text: 'new' },
+          ],
+          newline: {
+            kind: 'canonical',
+            markers: [
+              {
+                afterHunkLine: 1,
+                appliesTo: 'new',
+                sourceSpan: { startLine: 6, endLine: 6 },
+              },
+            ],
+          },
+        }),
+      ],
+      '/tmp/no-newline.txt',
+    )
+
+    expect(withoutMarker.buffer.content).toBe('new\n')
+    expect(withMarker.buffer.content).toBe('new')
+  })
+
+  test('returns structured planner failures without applying a first candidate', () => {
+    expect(() =>
+      applyUpdateHunksPlanned(
+        { content: 'same\nsame\n', lineEndings: 'LF' },
+        [hunk({ lines: [{ kind: 'context', text: 'same' }] })],
+        '/tmp/ambiguous.txt',
+      ),
+    ).toThrow('more than one exact placement plan')
   })
 })
 
@@ -673,6 +769,103 @@ describe('sequential hunk cursor', () => {
 })
 
 describe('applyPatchToBuffers', () => {
+  test('candidate planner evaluates a complete multi-operation envelope', () => {
+    const result = applyPatchToBuffersPlanned(
+      [
+        {
+          type: 'update',
+          path: '/tmp/update.txt',
+          hunks: [
+            hunk({
+              lines: [
+                { kind: 'delete', text: 'old' },
+                { kind: 'add', text: 'new' },
+              ],
+            }),
+          ],
+        },
+        {
+          type: 'add',
+          path: '/tmp/add.txt',
+          lines: ['added'],
+          noNewlineAtEndOfFile: false,
+        },
+        { type: 'delete', path: '/tmp/delete.txt' },
+      ],
+      new Map([
+        ['/tmp/update.txt', fileState('/tmp/update.txt', 'old\n')],
+        ['/tmp/delete.txt', fileState('/tmp/delete.txt', 'remove\n')],
+      ]),
+    )
+
+    expect(result.contractVersion).toBe(2)
+    expect(result.files).toEqual([
+      {
+        path: '/tmp/update.txt',
+        type: 'update',
+        before: 'old\n',
+        after: 'new\n',
+        placements: [
+          {
+            hunk: 1,
+            oldStart: 0,
+            oldEnd: 1,
+            reason: 'exact',
+          },
+        ],
+      },
+      {
+        path: '/tmp/add.txt',
+        type: 'add',
+        before: null,
+        after: 'added\n',
+      },
+      {
+        path: '/tmp/delete.txt',
+        type: 'delete',
+        before: 'remove\n',
+        after: null,
+      },
+    ])
+  })
+
+  test('candidate planner returns no partial envelope result on ambiguity', () => {
+    let caught: unknown
+    try {
+      applyPatchToBuffersPlanned(
+        [
+          {
+            type: 'add',
+            path: '/tmp/add.txt',
+            lines: ['added'],
+            noNewlineAtEndOfFile: false,
+          },
+          {
+            type: 'update',
+            path: '/tmp/ambiguous.txt',
+            hunks: [hunk({ lines: [{ kind: 'context', text: 'same' }] })],
+          },
+        ],
+        new Map([
+          ['/tmp/ambiguous.txt', fileState('/tmp/ambiguous.txt', 'same\nsame\n')],
+        ]),
+      )
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(FilePatchError)
+    const error = caught as FilePatchError
+    expect(error.message).toContain('No files were changed by this patch')
+    expect(error.diagnostics).toMatchObject({
+      code: 'PATCH_ANCHOR_AMBIGUOUS',
+      kind: 'ambiguity',
+      path: '/tmp/ambiguous.txt',
+      hunkCount: 1,
+    })
+    expect(error.details?.[0]?.diagnostics).toEqual(error.diagnostics)
+  })
+
   test('applies add, update, and delete atomically in memory', () => {
     const currentFiles = new Map<string, ApplyPatchFileState>([
       ['/tmp/existing.txt', fileState('/tmp/existing.txt', 'one\ntwo\n')],
@@ -1256,7 +1449,7 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     expect(content).toContain('Deleted /x/gone.ts')
   })
 
-  test('does not add placement metadata to result lines', () => {
+  test('does not invent placement metadata when it is absent', () => {
     const result = FilePatchTool.mapToolResultToToolResultBlockParam(
       {
         files: [
@@ -1274,6 +1467,30 @@ describe('FilePatchTool.mapToolResultToToolResultBlockParam', () => {
     const lines = (result.content as string).split('\n')
     expect(lines).toContain('Updated /x/a.ts')
     expect(lines).toContain('Updated /x/b.ts')
+  })
+
+  test('renders bounded candidate placement metadata when present', () => {
+    const result = FilePatchTool.mapToolResultToToolResultBlockParam(
+      {
+        contractVersion: 2,
+        files: [
+          {
+            path: '/x/a.ts',
+            type: 'update',
+            structuredPatch: [],
+            placements: [
+              { hunk: 1, oldStart: 4, oldEnd: 7, reason: 'exact' },
+            ],
+            placementOmittedCount: 2,
+          },
+        ],
+      },
+      'tool-1',
+    )
+
+    expect(result.content).toContain(
+      'Updated /x/a.ts (hunk 1 at old lines 4-7; 2 more omitted)',
+    )
   })
 })
 
@@ -1610,7 +1827,29 @@ describe('FilePatchTool.outputSchema back-compat', () => {
     ).toBe(true)
   })
 
-  test('rejects a result that carries placement metadata', () => {
+  test('accepts bounded candidate contract placement metadata', () => {
+    expect(
+      outputSchema().safeParse({
+        contractVersion: 2,
+        files: [
+          {
+            ...base,
+            placements: [
+              {
+                hunk: 1,
+                oldStart: 0,
+                oldEnd: 1,
+                reason: 'exact+hint',
+              },
+            ],
+            placementOmittedCount: 0,
+          },
+        ],
+      }).success,
+    ).toBe(true)
+  })
+
+  test('rejects unknown placement metadata', () => {
     expect(
       outputSchema().safeParse({
         files: [

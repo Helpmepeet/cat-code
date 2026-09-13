@@ -23,7 +23,7 @@ import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
-import { createAssistantMessage } from '../../utils/messages.js'
+import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import {
   filterToolsForAgent,
   finalizeAgentTool,
@@ -117,7 +117,7 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).toContain('Bash')
     expect(toolNames).toContain('Read')
     expect(toolNames).toContain('Write')
-    expect(toolNames.some(name => name === 'Edit' || name === 'Apply_patch')).toBe(
+    expect(toolNames.some(name => name === 'Edit' || name === FILE_PATCH_TOOL_NAME)).toBe(
       true,
     )
     expect(toolNames).not.toContain('Agent')
@@ -136,7 +136,7 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).toContain('Read')
     expect(toolNames).not.toContain('Agent')
     expect(toolNames).not.toContain('Edit')
-    expect(toolNames).not.toContain('Apply_patch')
+    expect(toolNames).not.toContain(FILE_PATCH_TOOL_NAME)
     expect(toolNames).not.toContain('Write')
     expect(toolNames).not.toContain('NotebookEdit')
     expect(toolNames).not.toContain('ask_parent_session')
@@ -155,7 +155,7 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
   // The pool carries exactly one file-edit tool per provider
   // (getProviderFileEditTool, tools.ts). The async allowlist used to name only
   // Edit, so an async worker on the OpenAI path got NO edit tool at all.
-  test('gets Apply_patch and only Apply_patch on the OpenAI path', () => {
+  test('gets apply_patch and only apply_patch on the OpenAI path', () => {
     setSessionProvider('openai')
 
     expect(fileEditToolsIn(getAsyncWorkerToolNames())).toEqual([
@@ -565,5 +565,45 @@ describe('finalizeAgentTool max-turn exhaustion', () => {
     )
 
     expect(result.content).toEqual([{ type: 'text', text: 'partial work' }])
+  })
+
+  test('includes files changed by a historical Apply_patch call', () => {
+    const result = finalizeAgentTool(
+      [
+        createAssistantMessage({
+          content: [
+            {
+              type: 'tool_use',
+              id: 'legacy-patch',
+              name: 'Apply_patch',
+              input: {
+                input:
+                  '*** Begin Patch\n*** Update File: src/legacy.ts\n@@\n-old\n+new\n*** End Patch',
+              },
+            },
+          ],
+        }),
+        createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'legacy-patch',
+              content: 'Applied patch',
+            },
+          ],
+        }),
+        createAssistantMessage({ content: 'done' }),
+      ],
+      'agent-legacy-patch',
+      metadata,
+    )
+
+    expect(result.changedFiles).toEqual([
+      {
+        path: 'src/legacy.ts',
+        op: 'Apply_patch',
+        ok: true,
+      },
+    ])
   })
 })

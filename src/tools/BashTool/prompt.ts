@@ -205,10 +205,10 @@ export function getBashPrompt(
   // so we don't steer away from them (and Glob/Grep tools are removed).
   const embedded = hasEmbeddedSearchTools()
 
-  // The registry swaps Edit for Apply_patch by SESSION provider
+  // The registry swaps Edit for apply_patch by SESSION provider
   // (getProviderFileEditTool in ../../tools.ts) while this prompt renders per
   // REQUEST provider, so a gpt-* worker inside an Anthropic session was told
-  // to use Apply_patch while Edit shipped. The tool pool is the truth when the
+  // to use apply_patch while Edit shipped. The tool pool is the truth when the
   // caller passes it; the provider is only the fallback.
   const editToolName = enabledToolNames?.has(FILE_PATCH_TOOL_NAME)
     ? FILE_PATCH_TOOL_NAME

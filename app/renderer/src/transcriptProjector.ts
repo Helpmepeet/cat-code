@@ -38,6 +38,7 @@
  */
 
 import type { SDKMessage } from '@cat-code/engine/session-events'
+import { isFilePatchToolName } from '../../../src/tools/FilePatchTool/constants.js'
 import {
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   REPLAY_BUFFER_TRUNCATION_REQUEST_ID,
@@ -174,7 +175,7 @@ export type ToolCardStatus = 'pending' | 'success' | 'error' | 'cancelled'
  * `tool_use_result` carries a recognized `structuredPatch: StructuredPatchHunk[]`
  * (`diff` npm package hunk shape) — either FileEditTool's top-level
  * `filePath`+`structuredPatch` (`FileEditTool/types.ts:71-73`) or FilePatchTool /
- * `Apply_patch`'s `files[]` envelope (`FilePatchTool/types.ts:138-172`). Narrowed
+ * `apply_patch`'s `files[]` envelope (`FilePatchTool/types.ts:138-172`). Narrowed
  * at runtime, never cast; anything else (Bash stdout, Read contents, …) surfaces
  * as plain `content` text with `diff: null`. Malformed/foreign shapes degrade to
  * `diff: null`, never crash.
@@ -279,7 +280,7 @@ export type ToolResultProjection = {
  * (`FileEditTool/types.ts` output schema has no per-file array). "Multiple
  * files changed in one turn" is normally multiple separate
  * `tool_use`/`tool_result` pairs, each its own single-file `ToolDiffProjection`.
- * The one result that CAN span many files is `Apply_patch`
+ * The one result that CAN span many files is `apply_patch`
  * (`FilePatchTool/types.ts` output `files[]`); this single-file projection names
  * ONE path, so `extractDiffProjection` projects that patch's PRIMARY file (the
  * rest still appear in the result `content`). `hunks.length > 1` models multiple
@@ -2557,7 +2558,7 @@ function flattenToolResultContent(content: unknown): string {
  * zero casts. Two owned diff-producing output shapes are recognized:
  *  - FileEditTool (`src/tools/FileEditTool/types.ts:63-80`): top-level
  *    `filePath: string` + `structuredPatch: StructuredPatchHunk[]`.
- *  - FilePatchTool / `Apply_patch` (`src/tools/FilePatchTool/types.ts:138-172`,
+ *  - FilePatchTool / `apply_patch` (`src/tools/FilePatchTool/types.ts:138-172`,
  *    emitted `FilePatchTool.tsx:453-464`): a multi-file envelope
  *    `files: Array<{ path: string; structuredPatch: StructuredPatchHunk[] }>`.
  *    The single-file `ToolDiffProjection` names ONE path, so the PRIMARY (first
@@ -2623,7 +2624,7 @@ function narrowStructuredPatch(structuredPatch: unknown): ToolDiffHunk[] {
  *    `src/tools/*Tool/` (`FileEditTool/constants.ts:2` `'Edit'`,
  *    `BashTool/toolName.ts:2` `'Bash'`, `AgentTool/constants.ts:1,3`
  *    `'Agent'`/legacy `'Task'`, `FilePatchTool/constants.ts:1`
- *    `'Apply_patch'`, …).
+ *    `'apply_patch'` plus the historical `'Apply_patch'` alias, …).
  *  - SERVER-EXECUTED server_tool_use.name: the Anthropic SDK's closed
  *    literal union (`node_modules/@anthropic-ai/sdk` `ServerToolUseBlock`:
  *    `'web_search' | 'web_fetch' | 'code_execution' |
@@ -2635,6 +2636,8 @@ function narrowStructuredPatch(structuredPatch: unknown): ToolDiffHunk[] {
  * `'other'` — a real family, not a crash.
  */
 function deriveToolFamily(toolName: string): ToolFamily {
+  if (isFilePatchToolName(toolName)) return 'edit'
+
   switch (toolName) {
     case 'Bash':
     case 'PowerShell':
@@ -2645,7 +2648,6 @@ function deriveToolFamily(toolName: string): ToolFamily {
     case 'Write':
       return 'write'
     case 'Edit':
-    case 'Apply_patch':
     case 'text_editor_code_execution':
       return 'edit'
     case 'Grep':

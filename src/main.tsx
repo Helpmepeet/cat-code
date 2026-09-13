@@ -2114,9 +2114,9 @@ async function run(): Promise<CommanderCommand> {
     resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
 
     // Provider-sensitive tools must be selected only after the startup model has
-    // resolved the session provider. In particular, OpenAI uses Apply_patch's
+    // resolved the session provider. In particular, OpenAI uses apply_patch's
     // custom grammar while Anthropic uses the normal Edit object schema.
-    // Selecting tools earlier can send Apply_patch to Anthropic and make the
+    // Selecting tools earlier can send apply_patch to Anthropic and make the
     // entire request fail schema validation before inference begins.
     maybeActivateProactive(options);
     let tools = getTools(toolPermissionContext);

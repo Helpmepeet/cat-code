@@ -41,8 +41,11 @@ import {
   writeFileWithSideEffects,
 } from '../FileEditTool/shared.js'
 import { applyPatchToBuffers } from './applier.js'
-import { FILE_PATCH_TOOL_NAME } from './constants.js'
-import { parseFilePatch } from './parser.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  LEGACY_FILE_PATCH_TOOL_NAME,
+} from './constants.js'
+import { parseFilePatch, parseFilePatchInput } from './parser.js'
 import { getFilePatchToolDescription } from './prompt.js'
 import {
   type ApplyPatchFileState,
@@ -65,6 +68,7 @@ import {
 
 export const FilePatchTool = buildTool({
   name: FILE_PATCH_TOOL_NAME,
+  aliases: [LEGACY_FILE_PATCH_TOOL_NAME],
   searchHint: 'apply unified diff patches',
   maxResultSizeChars: 100_000,
   strict: false,
@@ -197,7 +201,7 @@ export const FilePatchTool = buildTool({
           return {
             result: false,
             behavior: 'ask',
-            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist. Apply_patch resolved it relative to the current session working directory ${getCwd()}. Check the path, or use "*** Add File:" to create a new file.`,
+            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist. ${FILE_PATCH_TOOL_NAME} resolved it relative to the current session working directory ${getCwd()}. Check the path, or use "*** Add File:" to create a new file.`,
             errorCode: 4,
             meta: {
               code: 'PATCH_TARGET_MISSING',
@@ -335,6 +339,9 @@ export const FilePatchTool = buildTool({
               ? { hunkCount: error.hunkCount }
               : {}),
             ...(error.details !== undefined ? { details: error.details } : {}),
+            ...(error.diagnostics !== undefined
+              ? { diagnostics: error.diagnostics }
+              : {}),
           },
         }
       }
@@ -618,6 +625,7 @@ export const FilePatchTool = buildTool({
       // onto the transcript. structuredPatch plus a bounded firstLine is
       // everything any reader uses.
       const output: FilePatchToolOutput = {
+        ...(applied.contractVersion === 2 ? { contractVersion: 2 as const } : {}),
         files: applied.files.map(file => {
           const entry: FilePatchToolOutput['files'][number] = {
             path: file.path,
@@ -630,6 +638,12 @@ export const FilePatchTool = buildTool({
                 newContent: file.after ?? '',
               }),
             ),
+            ...(file.placements === undefined
+              ? {}
+              : { placements: file.placements }),
+            ...(file.placementOmittedCount === undefined
+              ? {}
+              : { placementOmittedCount: file.placementOmittedCount }),
           }
           return entry
         }),
@@ -674,7 +688,15 @@ export const FilePatchTool = buildTool({
           : file.type === 'delete'
             ? 'Deleted'
             : 'Updated'
-      return `${verb} ${file.path}`
+      const placements = file.placements
+        ?.map(placement =>
+          `hunk ${placement.hunk} at old lines ${placement.oldStart}-${placement.oldEnd}`,
+        )
+        .join(', ')
+      const omitted = file.placementOmittedCount
+        ? `; ${file.placementOmittedCount} more omitted`
+        : ''
+      return `${verb} ${file.path}${placements ? ` (${placements}${omitted})` : ''}`
     })
     const detail = lines.length > 0 ? `:\n${lines.join('\n')}` : '.'
     return {
@@ -714,7 +736,7 @@ function firstOperationPath(input: unknown): string | undefined {
 }
 
 function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
-  const parsed = 'input' in input ? parseFilePatch(input.input).ops : input.ops
+  const parsed = parseFilePatchInput(input).ops
 
   const operations = parsed.map(operation => {
     const path = expandPath(operation.path)
@@ -1050,6 +1072,9 @@ function addMutationContext(
     ...(error instanceof FilePatchError && error.details !== undefined
       ? { details: error.details }
       : {}),
+    ...(error instanceof FilePatchError && error.diagnostics !== undefined
+      ? { diagnostics: error.diagnostics }
+      : {}),
   })
 }
 
@@ -1132,6 +1157,7 @@ function errorWithMutationOutcome(
       hunkIndex: error.hunkIndex,
       hunkCount: error.hunkCount,
       details: error.details,
+      diagnostics: error.diagnostics,
       mutationOutcome,
     })
   }
