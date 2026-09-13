@@ -47,6 +47,10 @@ That makes workflows like these possible:
 Each peer keeps its own conversation. Messages between sessions appear in the
 transcript, so I can follow the exchange and move between the sessions involved.
 
+![A peer conversation between Elixir and Azoth, with incoming and outgoing messages debating AI use in homework](assets/readme/peer-messaging.png)
+
+*Two agents exchanging arguments, with incoming and outgoing peer messages labeled in the transcript.*
+
 ## Auto mode
 
 Auto mode reduces the need to approve individual tool actions. Actions that
