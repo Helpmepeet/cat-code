@@ -648,14 +648,16 @@ export function userMessageToMessageParam(
   enablePromptCaching: boolean,
   querySource?: QuerySource,
 ): MessageParam {
+  const content = providerFacingUserContent(message)
+
   if (addCache) {
-    if (typeof message.message.content === 'string') {
+    if (typeof content === 'string') {
       return {
         role: 'user',
         content: [
           {
             type: 'text',
-            text: message.message.content,
+            text: content,
             ...(enablePromptCaching && {
               cache_control: getCacheControl({ querySource }),
             }),
@@ -665,9 +667,9 @@ export function userMessageToMessageParam(
     } else {
       return {
         role: 'user',
-        content: message.message.content.map((_, i) => ({
+        content: content.map((_, i) => ({
           ..._,
-          ...(i === message.message.content.length - 1
+          ...(i === content.length - 1
             ? enablePromptCaching
               ? { cache_control: getCacheControl({ querySource }) }
               : {}
@@ -681,10 +683,73 @@ export function userMessageToMessageParam(
   // to addCacheBreakpoints share the same array and each splices in duplicate cache_edits.
   return {
     role: 'user',
-    content: Array.isArray(message.message.content)
-      ? [...message.message.content]
-      : message.message.content,
+    content: Array.isArray(content) ? [...content] : content,
   }
+}
+
+/**
+ * Put the creator and response channel beside the first instruction the model
+ * reads, without changing the stored message or its classifier input.
+ *
+ * Creation prompts deliberately do not use the ordinary cross-session wrapper:
+ * that wrapper marks relayed text as unable to establish user authorization in
+ * auto mode. The trusted `origin.creationPrompt` bit preserves the different
+ * authorization contract while this API-only preamble makes its peer audience
+ * explicit. Transcript and SDK projection continue to expose the original
+ * content plus structured origin.
+ */
+function prependPeerCreationHandoff(
+  content: UserMessage['message']['content'],
+  creatorName: string,
+): UserMessage['message']['content'] {
+  const preamble =
+    `${creatorName} created this session and sent the instruction below. ` +
+    `This is a peer handoff, and ${creatorName} is the audience for this task. ` +
+    `If you respond to this instruction, use SendToPeer to reply to ` +
+    `${creatorName}; ordinary assistant text stays only in this tab and does ` +
+    `not reach ${creatorName}.`
+
+  if (typeof content === 'string') {
+    return `${preamble}\n\n${content}`
+  }
+  return [{ type: 'text', text: preamble }, ...content]
+}
+
+function providerFacingUserContent(
+  message: UserMessage,
+): UserMessage['message']['content'] {
+  return message.origin?.kind === 'peer' &&
+    message.origin.creationPrompt === true
+    ? prependPeerCreationHandoff(message.message.content, message.origin.name)
+    : message.message.content
+}
+
+/**
+ * The OpenAI/Codex adapter consumes its provider-native instruction assembly
+ * instead of the Anthropic-shaped `messages` request field. Apply the same
+ * creation-handoff projection there so provider choice cannot change peer
+ * reply routing. Clone only changed user messages; stored engine history stays
+ * untouched.
+ */
+export function projectProviderFacingMessages(
+  messages: (UserMessage | AssistantMessage)[],
+): (UserMessage | AssistantMessage)[] {
+  return messages.map(message => {
+    if (
+      message.type !== 'user' ||
+      message.origin?.kind !== 'peer' ||
+      message.origin.creationPrompt !== true
+    ) {
+      return message
+    }
+    return {
+      ...message,
+      message: {
+        ...message.message,
+        content: providerFacingUserContent(message),
+      },
+    }
+  })
 }
 
 export function assistantMessageToMessageParam(
@@ -1711,9 +1776,11 @@ async function* queryModel(
         ? {
             _openaiInstructionAssembly: {
               instructions: openAIInstructionAssembly.instructions,
-              inputMessages: normalizeMessagesForAPI(
-                openAIInstructionAssembly.inputMessages,
-                filteredTools,
+              inputMessages: projectProviderFacingMessages(
+                normalizeMessagesForAPI(
+                  openAIInstructionAssembly.inputMessages,
+                  filteredTools,
+                ),
               ),
               developerContext: openAIInstructionAssembly.developerContext,
             },
