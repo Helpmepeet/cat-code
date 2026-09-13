@@ -147,6 +147,28 @@ describe('FilePatchTool concurrent write safety', () => {
     expect(readFileSync(filePath, 'utf8')).toBe(FIRST_PATCHED)
   })
 
+  test('uses the complete-envelope planner in the production call', async () => {
+    const dir = makeTempDir()
+    const filePath = join(dir, 'later-hunk-fence.txt')
+    writeFileSync(filePath, 'x\nkeep\nx\nfence\n')
+
+    await callPatch(`*** Begin Patch
+*** Update File: ${filePath}
+@@
+ x
++changed
+@@
+ x
+ fence
++later
+*** End Patch
+`)
+
+    expect(readFileSync(filePath, 'utf8')).toBe(
+      'x\nchanged\nkeep\nx\nfence\nlater\n',
+    )
+  })
+
   test('uses the current snapshot when the read cache is stale', async () => {
     const dir = makeTempDir()
     const filePath = join(dir, 'stale-cache.txt')
@@ -253,7 +275,7 @@ describe('FilePatchTool concurrent write safety', () => {
     expect(error).toBeInstanceOf(FilePatchError)
     expect((error as FilePatchError).code).toBe('PATCH_ANCHOR_NOT_FOUND')
     expect((error as FilePatchError).message).toContain(
-      'does not appear anywhere',
+      'does not occur in the immutable source snapshot',
     )
     expect((error as FilePatchError).message).not.toContain('read cache')
     expect(readFileSync(filePath, 'utf8')).toBe('alpha\nreplacement\ngamma\n')
@@ -972,8 +994,8 @@ describe('FilePatchTool operation independence', () => {
 })
 
 describe('FilePatchTool model contract', () => {
-  test('states the gated planner placement and preflight rules', () => {
-    const description = getPlannedFilePatchToolDescription()
+  test('states the active planner placement and preflight rules', () => {
+    const description = getFilePatchToolDescription()
     expect(description).toContain('exactly one operation for each affected source path')
     expect(description).toContain('move destinations disjoint')
     expect(description).toContain('Put update hunks in file order')
@@ -993,11 +1015,9 @@ describe('FilePatchTool model contract', () => {
     expect(description).toContain('does not make multi-file writes crash-atomic')
   })
 
-  test('does not advertise the gated planner through the production prompt', () => {
-    const description = getFilePatchToolDescription()
-    expect(description).toContain('Each hunk is located after the preceding hunk')
-    expect(description).not.toContain('complete ordered hunk set')
-    expect(description).not.toContain('later hunk may disambiguate')
-    expect(description).toContain('Never force or fuzzy-apply a rejected patch')
+  test('keeps the frozen evaluation prompt aligned with production', () => {
+    expect(getPlannedFilePatchToolDescription()).toBe(
+      getFilePatchToolDescription(),
+    )
   })
 })

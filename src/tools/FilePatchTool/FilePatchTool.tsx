@@ -40,7 +40,7 @@ import {
   restoreFileMutation,
   writeFileWithSideEffects,
 } from '../FileEditTool/shared.js'
-import { applyPatchToBuffers } from './applier.js'
+import { applyPatchToBuffersPlanned } from './applier.js'
 import {
   FILE_PATCH_TOOL_NAME,
   LEGACY_FILE_PATCH_TOOL_NAME,
@@ -464,7 +464,7 @@ export const FilePatchTool = buildTool({
       }
     }
 
-    const applied = applyPatchToBuffers(operations, currentFiles)
+    const applied = applyPatchToBuffersPlanned(operations, currentFiles)
 
     for (const file of applied.files) {
       if (file.after === null) continue
@@ -970,7 +970,7 @@ function applyPatchToSingleFile(
   operation: Extract<FilePatchOperation, { type: 'update' }>,
   fileState: ApplyPatchFileState,
 ): string {
-  const result = applyPatchToBuffers(
+  const result = applyPatchToBuffersPlanned(
     [operation],
     new Map([[fileState.path, fileState]]),
   )

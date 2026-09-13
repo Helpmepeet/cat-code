@@ -1656,14 +1656,25 @@ describe('FilePatchTool.call transcript payload', () => {
     ])
 
     for (const file of files) {
-      expect(Object.keys(file).sort()).toEqual([
+      const expectedKeys = [
         'firstLine',
         'path',
         'structuredPatch',
         'type',
-      ])
+        ...(file.path === updatePath || file.path === moveDest
+          ? ['placements']
+          : []),
+      ].sort()
+      expect(Object.keys(file).sort()).toEqual(expectedKeys)
       expect(file.structuredPatch.length).toBeGreaterThan(0)
     }
+
+    expect(files.find(file => file.path === updatePath)?.placements).toEqual([
+      { hunk: 1, oldStart: 0, oldEnd: 2, reason: 'exact' },
+    ])
+    expect(files.find(file => file.path === moveDest)?.placements).toEqual([
+      { hunk: 1, oldStart: 0, oldEnd: 1, reason: 'exact' },
+    ])
 
     expect(files.map(file => file.firstLine)).toEqual([
       'header one',

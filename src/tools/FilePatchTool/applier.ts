@@ -20,6 +20,7 @@ import {
   MAX_FILE_PATCH_PLACEMENTS,
 } from './types.js'
 
+/** Legacy sequential matcher retained for replay and regression comparison. */
 export function applyPatchToBuffers(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
@@ -27,7 +28,7 @@ export function applyPatchToBuffers(
   return applyPatchToBuffersWith(operations, currentFiles, applyUpdateHunks)
 }
 
-/** Complete-envelope candidate used by offline replay before activation. */
+/** Exact complete-envelope planner used by the production tool. */
 export function applyPatchToBuffersPlanned(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,

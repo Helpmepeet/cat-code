@@ -1,88 +1,7 @@
 import { FILE_PATCH_TOOL_NAME } from './constants.js'
 
-/**
- * Description for the matcher that is currently active in production.
- *
- * Keep this separate from the gated contract below: advertising whole-update
- * planning before the replay/model gates pass would make the prompt promise
- * behavior the tool does not yet execute.
- */
+/** Description for the complete-envelope planner active in production. */
 export function getFilePatchToolDescription(): string {
-  return [
-    `## \`${FILE_PATCH_TOOL_NAME}\``,
-    '',
-    `Use the \`${FILE_PATCH_TOOL_NAME}\` tool to edit files.`,
-    '',
-    'Apply file edits with this envelope:',
-    '',
-    '*** Begin Patch',
-    '[ one or more file sections ]',
-    '*** End Patch',
-    '',
-    'Use exactly one operation for each affected source path. Keep all source paths',
-    'and move destinations disjoint. Do not make operations depend on earlier',
-    'operations, chain moves, swap paths, or repeat a path.',
-    'When partial success is preferable, put independent edits in separate calls.',
-    'Never run mutations concurrently on overlapping or aliased paths. Sequence',
-    'those mutations and reread before constructing the next patch.',
-    '',
-    '*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).',
-    '*** Delete File: <path> - remove an existing file. Nothing follows.',
-    '*** Update File: <path> - patch an existing file in place (optionally with a rename).',
-    '',
-    'An update may be followed immediately by "*** Move to: <new path>".',
-    'Put update hunks in file order. Each hunk starts with "@@" and contains:',
-    '',
-    '- Context lines start with a space.',
-    '- Deleted lines start with "-".',
-    '- Added lines start with "+".',
-    '- Each hunk is located after the preceding hunk and must have exactly one',
-    '  eligible placement when it is reached.',
-    '- If a hunk is rejected as ambiguous, add distinctive consecutive context',
-    '  and retry. Never force or fuzzy-apply a rejected patch.',
-    '- Context and deleted lines should exactly match consecutive source lines.',
-    '  Compatibility matching may tolerate limited whitespace or punctuation',
-    '  differences, but do not rely on it.',
-    '- Non-empty text after "@@" is a mandatory preceding-text constraint.',
-    '  Copy enough distinctive text and consecutive context to make the hunk unique.',
-    '- Use "*** End of File" after a hunk that appends at the file end.',
-    '- Put "\\ No newline at end of file" immediately after the affected line.',
-    '',
-    'For example:',
-    '',
-    '*** Begin Patch',
-    '*** Update File: src/app.ts',
-    '@@ function greet() {',
-    "-  return 'hello'",
-    "+  return 'hi'",
-    ' }',
-    '*** End Patch',
-    '',
-    'Rules for execution:',
-    '',
-    '- Patch paths resolve relative to the current session working directory.',
-    '  Use relative paths, never absolute.',
-    '- In the main session, a foreground Bash command updates that directory.',
-    `  Later tools, including \`${FILE_PATCH_TOOL_NAME}\`, use the updated directory even though`,
-    '  shell state does not persist.',
-    '- In agent threads, `cd` affects only the current Bash call and does not',
-    '  change the thread assigned patch base.',
-    '- Updates use the current file snapshot at execution time. A unique valid',
-    '  current match is authoritative even if an earlier Read is stale or absent.',
-    '- A bare Delete File requires a complete, unbounded model-visible Read first.',
-    '- Prefer Write for a standalone new file. Use Add File when creation belongs',
-    '  in the same atomic preflight as related patch operations.',
-    '- Use Write to create a new .ipynb file. Use NotebookEdit for later cell edits.',
-    `- ${FILE_PATCH_TOOL_NAME} preflights every independent operation in memory. If any`,
-    '  operation fails, it writes nothing. Independent failures are reported',
-    '  together, with a bounded list of repair details.',
-    '- Preflight does not make multi-file writes crash-atomic or prevent',
-    '  concurrent external changes.',
-  ].join('\n')
-}
-
-/** Candidate prompt used by evaluation only until the planner is released. */
-export function getPlannedFilePatchToolDescription(): string {
   return [
     `## \`${FILE_PATCH_TOOL_NAME}\``,
     '',
@@ -158,6 +77,11 @@ export function getPlannedFilePatchToolDescription(): string {
     '- Preflight does not make multi-file writes crash-atomic or prevent',
     '  concurrent external changes.',
   ].join('\n')
+}
+
+/** Compatibility export retained for frozen evaluation artifacts. */
+export function getPlannedFilePatchToolDescription(): string {
+  return getFilePatchToolDescription()
 }
 
 export { FILE_PATCH_TOOL_NAME }
