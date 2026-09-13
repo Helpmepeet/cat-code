@@ -8,7 +8,7 @@ Auto mode to keep work moving with fewer approval interruptions. It started as
 a Claude Code fork and has grown into an Electron desktop application with its
 own interface and workflows.
 
-![Cat Code desktop welcome screen with its neon cat, project selector, and account usage overview](assets/readme/desktop.jpg)
+![Cat Code welcome screen with its neon cat, project and branch details, account usage, and session controls](assets/readme/welcome.png)
 
 ## A home for my coding sessions
 
@@ -20,6 +20,17 @@ Saved history makes it possible to return to earlier work.
 Model and reasoning controls sit beside the composer. The welcome screen brings
 project selection and account usage into the same workspace, and the interface
 has a little personality of its own. There are cats.
+
+## Working with an agent
+
+I can describe a task and follow the work in the conversation: the agent explains
+what it’s checking, searches the project, reads files, and runs Bash commands.
+Tool calls and their output stay alongside the replies, so I can see what
+happened without leaving the chat.
+
+![An agent exploring the Cat Code repository, with Bash output, file reads, progress updates, and Auto mode visible in the conversation](assets/readme/agent-working.png)
+
+*A project tour in progress, showing Bash commands and file reads in the transcript.*
 
 ## Sessions that talk to each other
 
@@ -47,15 +58,6 @@ be blocked or require my attention.
 The app also exposes other permission modes, including asking for approval,
 automatically accepting edits, and planning before making changes. Auto mode’s
 availability depends on the selected model and configuration.
-
-## Making it my own
-
-Appearance controls, syntax highlighting, skills, custom agents, hooks, plugins,
-and MCP integrations let me shape both the interface and the agent’s workflow.
-
-![Cat Code appearance settings with a syntax-highlighted Python preview and dark appearance selected](assets/readme/appearance.jpg)
-
-*Screenshots captured from the running desktop app. The interface is still evolving.*
 
 ## Run from source
 
