@@ -188,7 +188,7 @@ export function reduceImageAttachmentAdded(
 ): ImageAttachmentState {
   const current = selectImageAttachments(state, sessionId)
   const id = (current.at(-1)?.id ?? 0) + 1
-  return { ...state, [sessionId]: [{ ...attachment, id }] }
+  return { ...state, [sessionId]: [...current, { ...attachment, id }] }
 }
 
 export function reduceImageAttachmentRemoved(
@@ -1319,20 +1319,16 @@ export function applyRefusedSubmitRestoration(
  * is a pure function so the outcome is testable without driving the composer,
  * which the SSR-only renderer harness cannot do.
  *
- * Text joins across every recalled message; images do NOT. The composer holds
- * exactly one image at a time (`reduceImageAttachmentAdded` replaces the whole
- * array with a single element) and the submit schema caps base64 as a TOTAL
- * across the prompt, so restoring one image per recalled message would build a
- * draft the sidecar then refuses, which the refusal path restores again: the
- * user cannot send and cannot easily clear. The most recent image wins, which
- * is what attaching them one after another would have produced anyway.
+ * Text joins across every recalled message. Every image is restored in
+ * prompt/message order with a fresh composer-local id, matching sequential
+ * attachments in the current composer.
  */
 export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
   text: string
   images: ImageAttachment[]
 } {
   const texts: string[] = []
-  let lastImage: ImageAttachment | null = null
+  const images: ImageAttachment[] = []
   for (const { prompt } of prompts) {
     if (typeof prompt === 'string') {
       if (prompt.length > 0) texts.push(prompt)
@@ -1344,13 +1340,13 @@ export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
         continue
       }
       if (block.type === 'image') {
-        lastImage = {
-          id: 1,
+        images.push({
+          id: images.length + 1,
           mediaType: block.source.media_type,
           data: block.source.data,
           // The sent message carries no filename; only the picker ever had one.
           name: 'image',
-        }
+        })
         continue
       }
       // Closed union tripwire: a third block kind must be handled here rather
@@ -1360,7 +1356,7 @@ export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
       void exhaustive
     }
   }
-  return { text: texts.join('\n'), images: lastImage ? [lastImage] : [] }
+  return { text: texts.join('\n'), images }
 }
 
 // ── Per-session transport error ──────────────────────────────────────────────

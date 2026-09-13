@@ -1051,6 +1051,46 @@ describe('image attachment submit state', () => {
     ])
   })
 
+  test('appends sequential images with stable ids and submits both blocks', () => {
+    let state = createImageAttachmentState()
+    state = reduceImageAttachmentAdded(state, S1, image)
+    const firstAttachment = selectImageAttachments(state, S1)[0]!
+    const secondImage = {
+      mediaType: 'image/webp' as const,
+      data: 'BBBB',
+      name: 'second.webp',
+    }
+
+    state = reduceImageAttachmentAdded(state, S1, secondImage)
+    const attachments = selectImageAttachments(state, S1)
+
+    expect(attachments).toEqual([
+      { ...image, id: 1 },
+      { ...secondImage, id: 2 },
+    ])
+    expect(attachments[0]).toEqual(firstAttachment)
+    expect(new Set(attachments.map(attachment => attachment.id)).size).toBe(2)
+    expect(buildSubmitPrompt('inspect both', attachments)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'AAAA',
+        },
+      },
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/webp',
+          data: 'BBBB',
+        },
+      },
+      { type: 'text', text: 'inspect both' },
+    ])
+  })
+
   test('an image-only prompt is sendable and removal clears its session state', () => {
     let state = reduceImageAttachmentAdded(createImageAttachmentState(), S1, image)
     const attachments = selectImageAttachments(state, S1)
@@ -1847,11 +1887,7 @@ describe('D1b — folding recalled messages back into the composer', () => {
     ])
   })
 
-  test('two image-bearing messages fold to ONE image, the most recent', () => {
-    // The composer holds exactly one image and the submit schema caps base64 as
-    // a total across the prompt, so restoring one per message would build a
-    // draft the sidecar refuses, which the refusal path restores again: the
-    // user can neither send nor easily clear it.
+  test('two image-bearing messages preserve both images in message order', () => {
     const folded = foldRecalledPrompts([
       {
         id: 'a',
@@ -1877,7 +1913,8 @@ describe('D1b — folding recalled messages back into the composer', () => {
 
     expect(folded.text).toBe('first\nsecond')
     expect(folded.images).toEqual([
-      { id: 1, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
+      { id: 1, mediaType: 'image/png', data: 'AAAA', name: 'image' },
+      { id: 2, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
     ])
   })
 
