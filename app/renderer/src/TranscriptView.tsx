@@ -40,6 +40,7 @@ import {
   type ReactNode,
 } from 'react'
 import Markdown from 'react-markdown'
+import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
@@ -161,6 +162,7 @@ import {
 } from './filePathActions.js'
 import {
   ActionBranchIcon,
+  ActionCloseIcon,
   ActionCopyIcon,
   ActionFileIcon,
   ActionRewindIcon,
@@ -5136,28 +5138,112 @@ function CommandEchoBubble({
 
 /**
  * UserImageRow: a pasted image content block. Right-aligned, user-side tinted
- * tile. Caption-less by design (the source shows only `[Image]`). Malformed or
- * empty sources degrade to a placeholder label rather than a broken `<img>`.
+ * tile that opens a viewport-bounded preview. Caption-less by design (the source
+ * shows only `[Image]`). Malformed or empty sources degrade to a placeholder
+ * label rather than a broken `<img>`.
  */
 function UserImageRowView({ source }: { source: UserImageSource }) {
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const closePreview = useCallback(() => setPreviewOpen(false), [])
   const src =
     source.type === 'base64'
       ? `data:${source.mediaType};base64,${source.data}`
       : source.url
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[82%] rounded-2xl rounded-br border border-accent/20 bg-accent/[0.08] p-2">
-        {src.length > 0 ? (
-          <img
-            src={src}
-            alt="Pasted image"
-            className="max-w-[220px] rounded-lg border border-shell-seam"
-          />
-        ) : (
-          <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
-        )}
+    <>
+      <div className="flex justify-end">
+        <div className="max-w-[82%] rounded-2xl rounded-br border border-accent/20 bg-accent/[0.08] p-2">
+          {src.length > 0 ? (
+            <button
+              type="button"
+              aria-label="Expand sent image"
+              onClick={() => setPreviewOpen(true)}
+              className="group relative block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <img
+                src={src}
+                alt="Sent image"
+                className="max-w-[220px] rounded-lg border border-shell-seam"
+              />
+              <span
+                aria-hidden="true"
+                className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white shadow-sm transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
+              >
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <polyline points="15 3 21 3 21 9" />
+                  <polyline points="9 21 3 21 3 15" />
+                  <line x1="21" y1="3" x2="14" y2="10" />
+                  <line x1="3" y1="21" x2="10" y2="14" />
+                </svg>
+              </span>
+            </button>
+          ) : (
+            <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
+          )}
+        </div>
       </div>
-    </div>
+      {previewOpen ? (
+        <UserImagePreview src={src} onClose={closePreview} />
+      ) : null}
+    </>
+  )
+}
+
+function UserImagePreview({
+  src,
+  onClose,
+}: {
+  src: string
+  onClose: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
+
+  return createPortal(
+    <div
+      role="presentation"
+      data-window-overlay
+      onClick={onClose}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-scrim p-8 backdrop-blur-sm"
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Sent image preview"
+        tabIndex={-1}
+        onClick={event => event.stopPropagation()}
+        className="relative flex max-h-full max-w-full items-center justify-center rounded-xl border border-white/10 bg-surface-panel p-2 shadow-[var(--elev-modal)]"
+      >
+        <button
+          type="button"
+          aria-label="Close image preview"
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white shadow-md transition-colors hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <ActionCloseIcon />
+        </button>
+        <img
+          src={src}
+          alt="Sent image preview"
+          className="max-h-[calc(100vh-80px)] max-w-[calc(100vw-80px)] rounded-lg object-contain"
+        />
+      </div>
+    </div>,
+    document.body,
   )
 }
 

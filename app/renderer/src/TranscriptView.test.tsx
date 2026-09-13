@@ -3100,6 +3100,7 @@ test('P4-18a: a pasted user image renders an img with the data URI', () => {
 
   expect(html).toContain('<img')
   expect(html).toContain('data:image/png;base64,AAAA')
+  expect(html).toContain('aria-label="Expand sent image"')
 })
 
 test('P4-18a/#7: the blocks mode renders a thinking row as an expanded markdown block', () => {
