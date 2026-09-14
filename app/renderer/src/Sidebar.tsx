@@ -1933,10 +1933,10 @@ function NavItemExpanded({
         if (view) onSelectView(view)
       }}
       className={
-        'flex w-full items-center gap-1 rounded-md py-1.5 ' +
+        'flex w-full items-center gap-1 rounded-md border py-1.5 transition-colors ' +
         (active
-          ? ' bg-accent/[0.09] text-accent-soft'
-          : ' text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
+          ? ' border-accent/[0.18] bg-accent/[0.09] text-accent-soft'
+          : ' border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07] hover:text-[light-dark(#3f3f46,#d4d4d8)]')
       }
     >
       <span className="flex h-5 w-8 shrink-0 items-center justify-center">

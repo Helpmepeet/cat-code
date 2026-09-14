@@ -878,6 +878,16 @@ test('expanded destinations are directly available without an intermediary toggl
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
+test('expanded destinations use the session-row hover treatment', () => {
+  const html = renderSidebar({ menuActive: true })
+  expect(html).toContain(
+    'border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07]',
+  )
+  expect(html).toContain(
+    'border-accent/[0.18] bg-accent/[0.09] text-accent-soft',
+  )
+})
+
 test('the collapsed rail keeps the account glyph above the destination icons', () => {
   const html = renderSidebar({ accountAlias: 'pubmtaki' })
   expect(html).toContain('title="Active account: pubmtaki"')
