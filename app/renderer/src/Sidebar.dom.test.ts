@@ -152,4 +152,34 @@ test('selecting a destination preserves an explicitly pinned sidebar', async () 
   expect(selections).toEqual(['goals'])
   expect(aside!.className).toContain('sidebar-expanded')
   expect(tree.container.querySelector('[aria-label="Unpin sidebar"]')).not.toBeNull()
+
+  await act(async () => {
+    tree.container.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside!.className).toContain('sidebar-expanded')
+})
+
+test('an outside click collapses a pinned sidebar on a non-Chat page', async () => {
+  const tree = await harness.mount(sidebar({ activeView: 'settings' }))
+  const aside = tree.container.querySelector('aside')
+  const collapsedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+
+  await act(async () => {
+    collapsedPin!.focus()
+  })
+  const expandedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+  await act(async () => {
+    expandedPin!.click()
+  })
+  expect(aside!.className).toContain('sidebar-expanded')
+
+  await act(async () => {
+    tree.container.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside!.className).toContain('w-12')
+  expect(tree.container.querySelector('[aria-label="Pin sidebar open"]')).not.toBeNull()
 })

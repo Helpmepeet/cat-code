@@ -99,6 +99,7 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -426,13 +427,13 @@ export function Sidebar({
     if (menuActive) return
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }
-  const collapseSidebar = () => {
+  const collapseSidebar = useCallback(() => {
     if (showTimer.current) clearTimeout(showTimer.current)
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setPinned(false)
     setHovering(false)
     setDismissed(true)
-  }
+  }, [])
   const selectView = (view: SidebarView) => {
     onSelectView(view)
     // A hover/focus-open overlay otherwise obscures the destination it just
@@ -471,6 +472,24 @@ export function Sidebar({
     window.addEventListener('resize', onResize)
     return () => window.removeEventListener('resize', onResize)
   }, [])
+
+  useEffect(() => {
+    if (
+      !open ||
+      activeView === 'chat' ||
+      menuActive ||
+      typeof document === 'undefined'
+    ) {
+      return
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || asideRef.current?.contains(target)) return
+      collapseSidebar()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [activeView, collapseSidebar, menuActive, open])
 
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and

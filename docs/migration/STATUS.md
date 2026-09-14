@@ -530,6 +530,7 @@ acceptance criterion; P4-4 is the P3 shell-fidelity true-up carry-forward.
 
 | **P4-61 follow-up · Remove redundant Chat destination** | ANY | 2 | ✅ 2026-09-14 | Operator-directed after live inspection. Chat no longer occupies a destination row in either rail state; opening a session from the sidebar roster or selecting an open tab remains the direct route and still sets `activeView='chat'`. The `chat` view type and router are unchanged. Focused Sidebar tests pin Chat absent in collapsed and expanded navigation while session selection behavior remains covered. |
 | **P4-61 follow-up · Stabilize account footer position** | ANY | 2 | ✅ 2026-09-14 | Operator-directed after live inspection. The collapsed rail now renders destination icons above the account identity, matching the expanded footer's order, so the account remains bottom-anchored instead of jumping across the destination group on hover expansion. |
+| **P4-61 follow-up · Non-Chat click-away dismissal** | ANY | 2 | ✅ 2026-09-14 | Operator-directed after live inspection. An open sidebar on any non-Chat page now collapses on an outside pointer press, including when pinned, so page content remains an easy dismissal target. Chat retains pinned click-away behavior. DOM coverage proves both branches. |
 
 ### GUI acceptance addendum — 2026-07-10
 
