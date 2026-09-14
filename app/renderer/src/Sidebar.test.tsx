@@ -862,39 +862,33 @@ test('the footer names the active account, and links it to the Accounts page', (
   expect(html).toContain('>P<')
 })
 
-test('no account resolved yet leaves the footer with just the destinations toggle', () => {
+test('no account resolved yet leaves the expanded footer with direct destinations', () => {
   const html = renderSidebar({ menuActive: true, accountAlias: null })
   expect(html).not.toContain('Active account')
-  expect(html).toContain('aria-label="Show destinations"')
-})
-
-test('the destinations start folded, inert, and out of the tab order', () => {
-  const html = renderSidebar({ menuActive: true })
-  expect(html).toContain('aria-expanded="false"')
-  // Folded it is visually gone but still in flow; without `inert` Tab would walk
-  // five invisible destinations.
-  expect(html).toContain('inert=""')
-  expect(html).toContain('grid-rows-[0fr] opacity-0')
-  // Every destination is still MOUNTED (the focus-handoff ref map depends on it).
+  expect(html).toContain('data-sidebar-nav-id="chat"')
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
-test('the unfold stagger uses static delay classes, never an interpolated one', () => {
-  // An arbitrary-value class built at runtime silently no-ops in this Tailwind
-  // v4 setup and a headless test cannot see the difference — so the folded state
-  // must carry no delay class at all, and the source must hold literals.
-  const folded = renderSidebar({ menuActive: true })
-  expect(folded).not.toContain('delay-[')
-  expect(folded).toContain('translate-y-1.5 scale-95 opacity-0')
+test('expanded destinations are directly available without an intermediary toggle', () => {
+  const html = renderSidebar({ menuActive: true })
+  expect(html).not.toContain('Show destinations')
+  expect(html).not.toContain('Hide destinations')
+  expect(html).not.toContain('inert=""')
+  expect(html).toContain('data-sidebar-nav-id="chat"')
+  expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
 test('the collapsed rail keeps the account glyph above the destination icons', () => {
   const html = renderSidebar({ accountAlias: 'pubmtaki' })
   expect(html).toContain('title="Active account: pubmtaki"')
   expect(html).toContain('>P<')
-  // The rail is the reason the expanded footer may keep its list folded: every
-  // destination stays one click away here.
-  for (const id of ['chat', 'sessions', 'goals', 'accounts', 'settings']) {
+  for (const id of [
+    'chat',
+    'sessions',
+    'goals',
+    'accounts',
+    'settings',
+  ]) {
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)
   }
 })
@@ -916,11 +910,9 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // A dead account among healthy ones must not raise a bar over the transcript
   // (STARTUP-GATES, the P4-24 revision and #12). This passive count is what
   // replaces that, so it must not grow into a second alert surface.
-  // Two marks while the list is folded: the Accounts row inside the fold, and the
-  // toggle that opens it. Never more, and never a mark on another destination.
   const marked = renderSidebar({ accountsNeedingSignIn: 3, menuActive: true })
   expect(marked.match(/data-sidebar-nav-badge="accounts"/g)).toHaveLength(1)
-  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(2)
+  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(1)
 
   const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
   expect(healthy).not.toContain('data-sidebar-nav-badge')
@@ -928,21 +920,6 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // Unmarked, the expanded row keeps its visible label as its accessible name
   // rather than carrying an aria-label that would have to be kept in sync.
   expect(healthy).toContain('>Accounts</span>')
-})
-
-test('the folded destination list carries its mark out to the toggle that opens it', () => {
-  // The expanded fold is `inert` + `opacity-0` and starts shut, so a mark only
-  // inside it is unreadable in the sidebar's default state: the signal has to
-  // reach a control that is actually on screen.
-  const folded = renderSidebar({ accountsNeedingSignIn: 1, menuActive: true })
-  expect(folded).toContain('data-sidebar-nav-badge="destinations"')
-  expect(folded).toContain(
-    'aria-label="Show destinations, 1 Codex account needs sign-in"',
-  )
-
-  const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
-  expect(healthy).not.toContain('data-sidebar-nav-badge="destinations"')
-  expect(healthy).toContain('aria-label="Show destinations"')
 })
 
 test('the rail starts below the tab bar so the traffic lights are never covered', () => {

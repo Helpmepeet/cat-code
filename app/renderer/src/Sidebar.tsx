@@ -58,11 +58,9 @@
  *    that EVERY row reserves, centred on the title's line box, so its presence
  *    never reflows the title or the subtitle line. Richer per-state status
  *    still surfaces on the TabBar.
- *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
- *    Accounts (P4-5), and Settings. None are mocked. They now live behind the
- *    footer's unfold toggle (the design source's placement) rather than as a
- *    permanently-open list; the COLLAPSED rail still shows all five as icons, so
- *    no destination is ever more than one click away.
+ *  - Every nav destination is wired; none is mocked. The same destination set is
+ *    directly visible in both rail states so hover expansion cannot replace the
+ *    button a pointer is approaching with an intermediary toggle.
  *  - Per-row actions (#11): each session row raises the SAME P4-6b
  *    `SessionActionsMenu` as the TabBar — a hover-revealed ⋮ kebab and a
  *    right-click both call `onOpenRowActions(sessionId, anchor)`, which App routes
@@ -263,23 +261,6 @@ const NAV: NavItem[] = [
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-/**
- * Per-item entrance delay for the footer's unfold, by NAV index. The list
- * unfolds UPWARD out of the toggle, so the item nearest the toggle (last) leads
- * and the topmost trails — the design source's reverse `nth-child` delays.
- *
- * A static map, never an interpolated `delay-[${n}ms]`: an arbitrary-value class
- * built at runtime silently no-ops in this Tailwind v4 setup (CLAUDE.md), and a
- * headless test cannot see the difference.
- */
-const NAV_UNFOLD_DELAY = [
-  'delay-[150ms]',
-  'delay-[120ms]',
-  'delay-[90ms]',
-  'delay-[60ms]',
-  'delay-[30ms]',
-]
-
 type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
 
 export function Sidebar({
@@ -374,12 +355,6 @@ export function Sidebar({
   const [pinned, setPinned] = useState(false)
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
-  const [navOpen, setNavOpen] = useState(false)
-  /** The sign-in mark while the destination list is shut, and only then: open, the
-   * Accounts row carries it and two marks for one fact would read as two. */
-  const foldedSignInLabel = navOpen
-    ? null
-    : formatAccountsNeedingSignIn(accountsNeedingSignIn)
   const [dismissed, setDismissed] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
@@ -460,6 +435,12 @@ export function Sidebar({
     setHovering(false)
     setDismissed(true)
   }
+  const selectView = (view: SidebarView) => {
+    onSelectView(view)
+    // A hover/focus-open overlay otherwise obscures the destination it just
+    // revealed. An explicit pin is the user's request to keep the rail open.
+    if (!pinned) collapseSidebar()
+  }
   const resizeSidebar = (clientX: number) => {
     setSidebarWidth(clampSidebarWidth(clientX, currentWindowWidth()))
   }
@@ -506,12 +487,6 @@ export function Sidebar({
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }, [menuActive, pinned])
-
-  // The unfolded destination list is a rail-width overlay of the footer; leaving
-  // the rail collapses it, so it is never re-found mid-air on the next hover.
-  useEffect(() => {
-    if (!open) setNavOpen(false)
-  }, [open])
 
   const query = search.trim().toLowerCase()
   // Sort (CC-2 warp-free activity order) → partition pins → filter → group.
@@ -771,12 +746,6 @@ export function Sidebar({
             focusedNavId,
           )
           refocusNavId.current = handoffNavId
-          // The expanded nav list is `inert` while folded (`navOpen === false`),
-          // and `HTMLElement.focus()` on an inert element is a no-op — so a
-          // pending handoff must unfold it in this SAME update, before the
-          // re-focus layout effect below runs, or focus silently falls to
-          // <body> instead of landing on the button reverse-Tab targeted.
-          if (handoffNavId != null) setNavOpen(true)
           setFocusWithin(true)
         }}
         onBlurCapture={event => {
@@ -1044,109 +1013,56 @@ export function Sidebar({
               </section>
             </div>
 
-            {/* Footer: the active account, and the destinations unfolding
-             * upward out of the toggle (column-reverse puts the list above the
-             * row that owns it). */}
+            {/* Footer: direct destinations above the active account. Keeping
+             * them visible prevents hover expansion from moving a destination
+             * behind another click target. */}
             <nav
               aria-label="Views"
-              className="flex shrink-0 flex-col-reverse items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
+              className="flex shrink-0 flex-col items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
             >
-              <div className="flex shrink-0 items-center gap-2">
-                {accountAlias ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectView('accounts')}
-                    title={`Active account: ${accountAlias}`}
-                    aria-label={`Active account: ${accountAlias}`}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
-                    >
-                      {accountAlias.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 truncate text-[11px] font-medium">
-                      {accountAlias}
-                    </span>
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setNavOpen(value => !value)}
-                  aria-expanded={navOpen}
-                  aria-label={
-                    navOpen
-                      ? 'Hide destinations'
-                      : foldedSignInLabel
-                        ? `Show destinations, ${foldedSignInLabel}`
-                        : 'Show destinations'
-                  }
-                  title={
-                    navOpen
-                      ? 'Hide destinations'
-                      : foldedSignInLabel
-                        ? `Show destinations, ${foldedSignInLabel}`
-                        : 'Show destinations'
-                  }
-                  className={
-                    'relative ml-auto flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md transition-[background-color,color,transform] duration-200 ' +
-                    (navOpen
-                      ? 'rotate-90 text-accent-soft'
-                      : 'text-text-faint hover:bg-shell-hover hover:text-text-muted')
-                  }
-                >
-                  <GridIcon />
-                  {/* The destination list this toggle opens is folded by default,
-                   * and folded it is `opacity-0` and `inert` — so the mark on the
-                   * Accounts row inside it is unreadable in the state the sidebar
-                   * spends most of its time in. Carry the signal out to the one
-                   * control that is always visible while the list is shut. */}
-                  {foldedSignInLabel ? (
-                    <span
-                      aria-hidden="true"
-                      data-sidebar-nav-badge="destinations"
-                      className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-tone-warn"
-                    />
-                  ) : null}
-                </button>
+              <div className="flex flex-col pb-1.5">
+                {NAV.map(item => (
+                  <NavItemExpanded
+                    activeView={activeView}
+                    buttonRef={element => {
+                      if (element) navRefs.current.set(item.id, element)
+                      else navRefs.current.delete(item.id)
+                    }}
+                    item={item}
+                    key={item.id}
+                    needsSignIn={
+                      item.id === 'accounts' ? accountsNeedingSignIn : 0
+                    }
+                    onSelectView={selectView}
+                  />
+                ))}
               </div>
 
-              <div
-                className={
-                  'grid w-full origin-bottom transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,0.9,0.32,1)] ' +
-                  (navOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')
-                }
-                // Folded away it is visually gone but still in flow, so without
-                // this Tab would walk five invisible destinations.
-                inert={!navOpen}
-              >
-                <div className="flex flex-col overflow-hidden pb-1.5">
-                  {NAV.map((item, index) => (
-                    <NavItemExpanded
-                      activeView={activeView}
-                      buttonRef={element => {
-                        if (element) navRefs.current.set(item.id, element)
-                        else navRefs.current.delete(item.id)
-                      }}
-                      item={item}
-                      key={item.id}
-                      navOpen={navOpen}
-                      needsSignIn={
-                        item.id === 'accounts' ? accountsNeedingSignIn : 0
-                      }
-                      unfoldDelay={NAV_UNFOLD_DELAY[index] ?? ''}
-                      onSelectView={onSelectView}
-                    />
-                  ))}
-                </div>
-              </div>
+              {accountAlias ? (
+                <button
+                  type="button"
+                  onClick={() => selectView('accounts')}
+                  title={`Active account: ${accountAlias}`}
+                  aria-label={`Active account: ${accountAlias}`}
+                  className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+                  >
+                    {accountAlias.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 truncate text-[11px] font-medium">
+                    {accountAlias}
+                  </span>
+                </button>
+              ) : null}
             </nav>
           </>
         ) : (
           /* Collapsed rail: the account glyph over the nav icons, anchored to
-           * the bottom. Every destination stays one click away here, which is
-           * what lets the expanded footer keep them folded. */
+           * the bottom. Every destination stays one click away here and in the
+           * expanded footer. */
           <nav
             aria-label="Views"
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
@@ -1165,7 +1081,7 @@ export function Sidebar({
                 item={item}
                 key={item.id}
                 needsSignIn={item.id === 'accounts' ? accountsNeedingSignIn : 0}
-                onSelectView={onSelectView}
+                onSelectView={selectView}
               />
             ))}
           </nav>
@@ -1975,27 +1891,18 @@ function NavItemExpanded({
   item,
   activeView,
   buttonRef,
-  navOpen,
   needsSignIn = 0,
-  unfoldDelay,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
   buttonRef: (element: HTMLButtonElement | null) => void
-  /** The footer is unfolded — items rise into place; folded, they drop back
-   * with no stagger (the delays are an entrance effect only). */
-  navOpen: boolean
   /** Accounts needing a fresh sign-in; 0 renders no mark. */
   needsSignIn?: number
-  unfoldDelay: string
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
   const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
-  const motion = navOpen
-    ? `translate-y-0 scale-100 opacity-100 ${unfoldDelay}`
-    : 'translate-y-1.5 scale-95 opacity-0'
   if (!item.enabled) {
     return (
       <button
@@ -2005,10 +1912,7 @@ function NavItemExpanded({
         aria-disabled="true"
         data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
-        className={
-          'flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55 transition-[opacity,transform] duration-200 ' +
-          motion
-        }
+        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
           {item.icon}
@@ -2029,8 +1933,7 @@ function NavItemExpanded({
         if (view) onSelectView(view)
       }}
       className={
-        'flex w-full items-center gap-1 rounded-md py-1.5 transition-[opacity,transform] duration-200 ' +
-        motion +
+        'flex w-full items-center gap-1 rounded-md py-1.5 ' +
         (active
           ? ' bg-accent/[0.09] text-accent-soft'
           : ' text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
@@ -2224,27 +2127,6 @@ function SettingsIcon() {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
-/** The footer's destination toggle — a 2×2 grid of apps. */
-function GridIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3.5" y="3.5" width="7" height="7" rx="2" />
-      <rect x="13.5" y="3.5" width="7" height="7" rx="2" />
-      <rect x="3.5" y="13.5" width="7" height="7" rx="2" />
-      <rect x="13.5" y="13.5" width="7" height="7" rx="2" />
     </svg>
   )
 }

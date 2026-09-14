@@ -219,6 +219,16 @@ whether even that blocks or just disables submit is §5-Q2.
 > vocabulary. The `app/main` wiring that drives the count's refresh is not yet committed; see the
 > CC-74 row in STATUS.md.
 >
+> **Revision (2026-09-14 — operator ruling, in-session). The expanded destination list is now
+> permanently visible, so the intermediary destinations toggle and its duplicate sign-in mark are
+> removed.** Hover expansion had replaced the destination button the pointer was approaching with
+> that toggle, turning a direct page change into two clicks; after selection, the overlay also
+> obscured the page until the pointer left. Every expanded destination is now directly actionable.
+> Selecting one dismisses an unpinned hover/focus overlay, while an explicitly pinned sidebar stays
+> open. The Accounts destination still carries the same passive count and accessible label in both
+> rail states, so #12 and the bounds above are unchanged. No account, protocol, or security-boundary
+> behavior changes.
+>
 > **Revision (2026-08-22 — recon, no code change). The Anthropic pool stays uncounted, and the
 > reason is now stronger than "no repair affordance yet": a dead Anthropic row is not reachable on
 > this surface at all.** The revision above deferred the Anthropic half on the assumption that it
