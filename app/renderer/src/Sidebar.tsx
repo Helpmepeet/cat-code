@@ -243,18 +243,16 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+  id: 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
   icon: ReactNode
 }
 
-// The design source's destination list (Chat/Sessions/Goals/Accounts/Settings).
-// Worker surfaces are per-session chat affordances, not nav destinations, so
-// they have no rail entry.
+// Chat is reached by opening a session from this roster, so repeating it as a
+// destination only spends vertical space and competes with the primary path.
 const NAV: NavItem[] = [
-  { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
@@ -2034,23 +2032,6 @@ function formatRecency(ms: number): string {
 }
 
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
-
-function ChatIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  )
-}
 
 function SessionsIcon() {
   return (
