@@ -385,6 +385,7 @@ test('an attached composer image opens in the shared preview without removing it
     'button[aria-label="Expand draft-cat.png"]',
   )
   expect(trigger).not.toBeNull()
+  expect(trigger?.querySelector('svg')).toBeNull()
   expect(
     tree.container.querySelector('button[aria-label="Remove draft-cat.png"]'),
   ).not.toBeNull()

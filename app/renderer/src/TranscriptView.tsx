@@ -164,7 +164,6 @@ import {
   ActionBranchIcon,
   ActionCloseIcon,
   ActionCopyIcon,
-  ActionExpandIcon,
   ActionFileIcon,
   ActionRewindIcon,
 } from './SessionActionIcons.js'
@@ -5159,19 +5158,13 @@ function UserImageRowView({ source }: { source: UserImageSource }) {
               type="button"
               aria-label="Expand sent image"
               onClick={() => setPreviewOpen(true)}
-              className="group relative block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+              className="block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
             >
               <img
                 src={src}
                 alt="Sent image"
                 className="max-w-[220px] rounded-lg border border-shell-seam"
               />
-              <span
-                aria-hidden="true"
-                className="absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-full border border-white/15 bg-black/60 text-white shadow-sm transition-colors group-hover:bg-black/80 group-focus-visible:bg-black/80"
-              >
-                <ActionExpandIcon />
-              </span>
             </button>
           ) : (
             <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
