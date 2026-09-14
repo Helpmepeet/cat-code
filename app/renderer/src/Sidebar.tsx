@@ -1058,21 +1058,12 @@ export function Sidebar({
             </nav>
           </>
         ) : (
-          /* Collapsed rail: the account glyph over the nav icons, anchored to
-           * the bottom. Every destination stays one click away here and in the
-           * expanded footer. */
+          /* Collapsed rail: destinations above the bottom-anchored account,
+           * matching the expanded footer so neither changes sides on hover. */
           <nav
             aria-label="Views"
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
-            {accountAlias ? (
-              <span
-                title={`Active account: ${accountAlias}`}
-                className="mb-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
-              >
-                {accountAlias.slice(0, 1).toUpperCase()}
-              </span>
-            ) : null}
             {NAV.map(item => (
               <NavItemRail
                 activeView={activeView}
@@ -1082,6 +1073,14 @@ export function Sidebar({
                 onSelectView={selectView}
               />
             ))}
+            {accountAlias ? (
+              <span
+                title={`Active account: ${accountAlias}`}
+                className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+              >
+                {accountAlias.slice(0, 1).toUpperCase()}
+              </span>
+            ) : null}
           </nav>
         )}
 

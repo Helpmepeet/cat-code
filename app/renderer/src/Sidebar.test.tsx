@@ -891,7 +891,7 @@ test('expanded destinations use the session-row hover treatment', () => {
   )
 })
 
-test('the collapsed rail keeps the account glyph above the destination icons', () => {
+test('the collapsed rail keeps the account glyph below the destinations like the expanded footer', () => {
   const html = renderSidebar({ accountAlias: 'pubmtaki' })
   expect(html).toContain('title="Active account: pubmtaki"')
   expect(html).toContain('>P<')
@@ -903,6 +903,9 @@ test('the collapsed rail keeps the account glyph above the destination icons', (
   ]) {
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)
   }
+  expect(html.indexOf('title="Active account: pubmtaki"')).toBeGreaterThan(
+    html.indexOf('data-sidebar-nav-id="settings"'),
+  )
 })
 
 test('an account needing sign-in is marked on the Accounts destination, in both nav variants', () => {
