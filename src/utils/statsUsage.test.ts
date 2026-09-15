@@ -1,8 +1,9 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, rm, utimes, copyFile } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, utimes, copyFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
+import { usageProjectId } from '../../app/shared/usageDashboard.js';
 const roots: string[] = [];
 afterEach(async () => { for (const path of roots.splice(0))
     await rm(path, { recursive: true, force: true }); });
@@ -104,4 +105,31 @@ test('hourly requests and matched errors deduplicate and respect request windows
     expect(summary.days.at(-1)!.hourlyRequests[10]).toBe(5);
     expect(summary.days.flatMap(d => d.hourlyRequests).reduce((a,b) => a+b,0)).toBe(5);
     expect(summary.tools[0]).toMatchObject({ requests: 5, results: 2, errors: 1 });
+});
+
+test('day contributors merge subagent work into its owning session and expose only reliable navigation metadata', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'usage-project-'));
+    roots.push(project);
+    const engineSessionId = '123e4567-e89b-42d3-a456-426614174000';
+    const cwd = join(project, 'workspace');
+    const main = join(project, `${engineSessionId}.jsonl`);
+    const subagentDir = join(project, engineSessionId, 'subagents');
+    await mkdir(subagentDir, { recursive: true });
+    const mainRequest = { ...msg(asOf, 'main-api', 10, 'main-tool', engineSessionId), cwd };
+    const mainResult = { type: 'user', sessionId: engineSessionId, cwd, uuid: 'main-result', timestamp: asOf, message: { content: [{ type: 'tool_result', tool_use_id: 'main-tool', is_error: true }] } };
+    const subagent = { ...msg(asOf, 'sub-api', 20, 'sub-tool', engineSessionId), cwd };
+    await writeFile(main, [mainRequest, mainRequest, mainResult].map(row => JSON.stringify(row)).join('\n'));
+    await writeFile(join(subagentDir, 'agent-a.jsonl'), JSON.stringify(subagent));
+    const day = (await collectRetainedUsage([main, join(subagentDir, 'agent-a.jsonl')], asOf)).ranges['7d'].days.at(-1)!;
+    expect(day.contributors.state).toBe('full');
+    expect(day.contributors.items).toHaveLength(1);
+    expect(day.contributors.items[0]).toMatchObject({
+        engineSessionId,
+        project: { id: usageProjectId(cwd), label: 'workspace' },
+        tokens: { fresh: 30, read: 6, write: 8, output: 4 },
+        requests: 2,
+        results: 1,
+        errors: 1,
+    });
+    expect(day.sessions).toBe(1);
 });

@@ -1,5 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
-import { MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, } from './usageDashboard.js';
+import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -63,12 +63,25 @@ function model(v: unknown): v is UsageModel {
 function tool(v: unknown): v is UsageTool {
     return obj(v) && category(v) && ownKeys(v, ['id', 'kind', 'label', 'requests', 'results', 'errors']) && safe((v as Record<string, unknown>).requests) && safe((v as Record<string, unknown>).results) && safe((v as Record<string, unknown>).errors) && ((v as Record<string, unknown>).errors as number) <= ((v as Record<string, unknown>).results as number) && ((v as Record<string, unknown>).results as number) <= ((v as Record<string, unknown>).requests as number);
 }
+function contributor(v: unknown): boolean {
+    if (!obj(v) || !ownKeys(v, ['id', 'engineSessionId', 'project', 'tokens', 'requests', 'results', 'errors', 'models', 'modelDetail']) || !id(v.id) || (v.engineSessionId !== null && (typeof v.engineSessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.engineSessionId))) || !tokens(v.tokens) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || (v.errors as number) > (v.results as number) || (v.results as number) > (v.requests as number) || !Array.isArray(v.models) || !uniqueCategories(v.models, MAX_USAGE_CONTRIBUTOR_MODELS) || !v.models.every(model) || !obj(v.modelDetail) || !ownKeys(v.modelDetail, ['state', 'omitted']) || !['full', 'grouped'].includes(v.modelDetail.state as string) || !safe(v.modelDetail.omitted)) return false;
+    if (v.project !== null && (!obj(v.project) || !ownKeys(v.project, ['id', 'label']) || !id(v.project.id) || !label(v.project.label))) return false;
+    if ((v.modelDetail.state === 'full') !== (v.modelDetail.omitted === 0) || ((v.modelDetail.omitted as number) > 0) !== v.models.some(m => obj(m) && m.kind === 'other')) return false;
+    const items = v.models as UsageModel[];
+    return items.every((m) => tokenSum(m.tokens) <= tokenSum(v.tokens as UsageTokens)) && (['fresh', 'read', 'write', 'output'] as const).every(key => items.reduce((n, m) => n + m.tokens[key], 0) === (v.tokens as UsageTokens)[key]);
+}
 function day(v: unknown): v is UsageDay {
-    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2)
+    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
         return false;
     if ((v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && (v.tokens as UsageTokens).write !== 0)
         return false;
     if (!Array.isArray(v.hourlyRequests) || v.hourlyRequests.length !== 24 || !v.hourlyRequests.every(safe) || !sumsSafe(...v.hourlyRequests) || v.hourlyRequests.reduce((n, x) => n + x, 0) !== v.requests) return false;
+    const contributorIds = new Set<string>();
+    const contributors = v.contributors.items as Record<string, unknown>[];
+    const contributorTokenBuckets = (['fresh', 'read', 'write', 'output'] as const).map(key => contributors.reduce((n, c) => n + (c.tokens as UsageTokens)[key], 0));
+    const dayTokenBuckets = (['fresh', 'read', 'write', 'output'] as const).map(key => (v.tokens as UsageTokens)[key]);
+    const contributorRequests = contributors.reduce((n, c) => n + (c.requests as number), 0);
+    if (contributors.some(c => contributorIds.has(c.id as string) || !contributorIds.add(c.id as string)) || v.contributors.state === 'full' && v.contributors.omitted !== 0 || v.contributors.state === 'truncated' && v.contributors.omitted === 0 || v.contributors.state === 'unavailable' && (v.contributors.items.length !== 0 || v.contributors.omitted !== 0) || contributorTokenBuckets.some((value, index) => value > dayTokenBuckets[index]!) || contributorRequests > (v.requests as number) || v.contributors.state === 'full' && (contributorTokenBuckets.some((value, index) => value !== dayTokenBuckets[index]) || contributorRequests !== v.requests)) return false;
     const ids = new Set<string>();
     const models = v.models;
     return models.every(m => obj(m) && ownKeys(m, ['id', 'total']) && id(m.id) && !ids.has(m.id) && ids.add(m.id) && safe(m.total)) && sumsSafe(...models.map(m => (m as {
@@ -128,7 +141,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 3 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 4 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'identityConflicts'];

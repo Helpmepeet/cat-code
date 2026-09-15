@@ -89,7 +89,7 @@ const SHOTS: Shot[] = process.env.CATCODE_CAPTURE_SCENE === 'usage' ? [
     window.setContentSize(1200, 900)
     await window.webContents.executeJavaScript(`document.querySelector('[data-sidebar-nav-id="usage"]')?.click()`)
     for (let i = 0; i < 100; i++) {
-      if (await window.webContents.executeJavaScript(`Boolean(document.querySelector('.usage-day-readout'))`)) return
+      if (await window.webContents.executeJavaScript(`Boolean(document.querySelector('.usage-panels .usage-chart'))`)) return
       await settle(100)
     }
     throw new Error('Usage fixture did not arrive')
@@ -99,19 +99,22 @@ const SHOTS: Shot[] = process.env.CATCODE_CAPTURE_SCENE === 'usage' ? [
     window.setContentSize(1920, 1056)
     await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '30 days')?.click()`)
   } },
+  { name: 'usage-selected-day', prepare: async window => {
+    await window.webContents.executeJavaScript(`document.querySelectorAll('.usage-panels .usage-chart g[role="button"]')[25]?.dispatchEvent(new MouseEvent('click', { bubbles: true }))`)
+  } },
   { name: 'usage-activity', prepare: async window => {
     window.setContentSize(1440, 1056)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'start' }); document.querySelectorAll('.usage-heatmap g[role="button"]')[315]?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'start' }); document.querySelectorAll('.usage-heatmap g[role="button"]')[315]?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`)
   } },
   { name: 'usage-week-activity', prepare: async window => {
     window.setContentSize(1440, 1056)
     await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '7 days')?.click()`)
     await settle(100)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'center' })`)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'center' })`)
   } },
   { name: 'usage-activity-narrow', prepare: async window => {
     window.setContentSize(520, 1100)
-    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'start' })`)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-activity-details').open = true; document.querySelector('.usage-heatmap')?.scrollIntoView({ block: 'start' })`)
   } },
 ] : [{ name: 'shell-default', settleMs: 400 }]
 

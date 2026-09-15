@@ -160,6 +160,11 @@ active desktop app stack, not older dedicated-app design docs.
 ## Retained-history Usage overview
 
 `UsagePage.tsx` consumes the independently versioned `usage-dashboard` host result.
+`UsageSessionContributors.tsx` renders bounded UTC-day contributors, and
+`usageSessionNavigation.ts` joins them to the existing catalog before using
+`App.tsx`'s Open/Restore route. App owns period/date selection across navigation.
+`UsageOverviewDetails.tsx` owns compact model, cache, and tool summaries.
+See [day-to-session implementation](../reports/2026-09-16-usage-session-drilldown.md).
 `main/usageStatsRunner.ts` owns bounded delivery; `sidecar/usageStatsWorker.ts` calls
 `statsDomain.collectUsageDashboard`, which reuses the stats discovery owner and the
 streaming retained-history accumulator. The account worker no longer collects

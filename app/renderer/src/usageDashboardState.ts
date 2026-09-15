@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import type { UsageCollectionResult, UsageDashboardSnapshot, UsageRangeSummary, UsageTokens } from '../../shared/usageDashboard.js';
+import type { UsageCollectionResult, UsageDashboardSnapshot, UsageRangeSummary, UsageTokens, UsageWindow } from '../../shared/usageDashboard.js';
+export type UsageSelection = { range: UsageWindow; date: string };
+export const initialUsageSelection: UsageSelection = { range: '7d', date: '' };
+export const usageCompact = (n: number): string => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: n >= 1e9 ? 2 : 1 }).format(n);
 export type UsageDashboardState = {
     snapshot: UsageDashboardSnapshot | null;
     status: 'loading' | 'ready' | 'error' | 'unavailable';

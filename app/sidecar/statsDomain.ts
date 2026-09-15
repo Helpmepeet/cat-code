@@ -235,8 +235,8 @@ export async function collectUsageDashboard(): Promise<import('../shared/usageDa
       const raw = snapshot.ranges
       for (const limit of [8, 4, 0]) {
         snapshot.ranges = {
-          '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit),
-          '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit),
+          '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit, limit === 8 ? 20 : limit === 4 ? 10 : 5),
+          '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit, limit === 8 ? 20 : limit === 4 ? 10 : 5),
         }
         const result = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })
         if (result?.type === 'usage') return result.snapshot

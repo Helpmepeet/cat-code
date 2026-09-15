@@ -2632,3 +2632,18 @@ adaptation, not a claim that those old data seams now exist. Headless UI/layout
 checks passed; full-suite and operator gates remain open. See
 [implementation evidence](../reports/2026-09-13-usage-dashboard-implementation.md)
 and [contract and rollout](decisions/USAGE-DASHBOARD.md).
+
+
+## Usage investigation amendment · 2026-09-16
+
+The user-requested dashboard mockup supersedes the previous donut, metric
+sparklines, and always-expanded hourly/cache layout for this pass. Adapted:
+compact overview and model bars; period-scoped supporting details; explicit
+click/keyboard day selection. Real-added: bounded daily session contributors,
+model/error details and existing catalog Open/Restore navigation, with App-owned
+period/date state retained through navigation. Daily/hourly charts and exact
+values remain available through disclosures. No fabricated titles, unrecorded
+costs, or task-success metrics were added. The mockup's View all action is adapted
+to explicit bounded top contributors and omitted counts. Visual acceptance remains
+open because browser policy blocked the isolated local preview; headless checks
+passed. [Evidence](../reports/2026-09-16-usage-session-drilldown.md).

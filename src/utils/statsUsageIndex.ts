@@ -9,14 +9,14 @@ import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js'
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v3.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v4.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
 function projectRecord(v: unknown): unknown {
     if (!object(v) || !['assistant', 'user', 'system', 'attachment'].includes(String(v.type))) return null;
     const row: Record<string, unknown> = {};
-    for (const key of ['type', 'sessionId', 'uuid', 'timestamp']) row[key] = typeof v[key] === 'string' ? v[key] : undefined;
+    for (const key of ['type', 'sessionId', 'uuid', 'timestamp', 'cwd']) row[key] = typeof v[key] === 'string' ? v[key] : undefined;
     row.isSidechain = v.isSidechain === true;
     if (v.type === 'assistant' && object(v.message)) {
         const m = v.message, message: Record<string, unknown> = { id: typeof m.id === 'string' ? m.id : undefined, model: typeof m.model === 'string' ? m.model : undefined };

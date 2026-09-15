@@ -1,5 +1,5 @@
 import { UsagePage } from './UsagePage.js'
-import { initialUsageDashboardState, reduceUsageDashboard } from './usageDashboardState.js'
+import { initialUsageDashboardState, initialUsageSelection, reduceUsageDashboard } from './usageDashboardState.js'
 import {
   useCallback,
   useEffect,
@@ -475,6 +475,7 @@ function defaultPromptDraftStorage(): Pick<Storage, 'getItem' | 'setItem'> | nul
 
 export function App() {
   const [usageDashboard, dispatchUsageDashboard] = useReducer(reduceUsageDashboard, initialUsageDashboardState)
+  const [usageSelection, setUsageSelection] = useState(initialUsageSelection)
   const pendingDeliveryStateAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const pendingDeliveryCommitAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const [state, dispatch] = useReducer(
@@ -4394,7 +4395,7 @@ export function App() {
           ) : activeView === 'goals' ? (
             <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />
           ) : activeView === 'usage' ? (
-            <UsagePage state={usageDashboard} />
+            <UsagePage state={usageDashboard} selection={usageSelection} onSelectionChange={setUsageSelection} sessionRows={sessionCatalogRows} onOpenSession={openCatalogRow} />
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}

@@ -100,3 +100,27 @@ or orphan results do not imply success. Error rate uses matched results as its
 denominator; grouping preserves both counts. Error means recorded is_error, not
 an inferred error from a result body or subprocess exit code. See the
 [implementation report](../../reports/2026-09-14-usage-activity-and-errors.md).
+
+
+## Session attribution and overview amendment, 2026-09-16
+
+The operator-requested redesign adds a day-to-session table to Usage. Counting
+version 4 and `index-v4.sqlite` add contributor tokens, requests, matched results,
+recorded errors, and model attribution. Subagent accounting remains owned by its
+main session. The index additionally projects recorded cwd; the outbound record
+contains only a project hash and basename, stable contributor ID, and a UUID
+session ID when reliable. No prompt, response, or tool-input text is projected.
+
+Each day exposes up to 20 contributors ranked by tokens, with an explicit omitted
+count. Envelope fallback reduces that bound to 10 or 5. Contributor model detail
+retains up to four named models plus Unknown/Other. Grouping never changes total
+accounting. Validators check per-bucket reconciliation and result/error bounds.
+The previous derived index remains untouched and v4 rebuilds independently.
+
+Renderer navigation requires a unique match in the existing session catalog,
+using project hash when present, then uses the existing Open/Restore action.
+Missing matches display unavailable navigation. Range/date selection is owned by
+App and survives navigation; all surrounding aggregates remain explicitly labeled
+as period totals. Hourly selection opens the whole day's contributors.
+
+See [implementation and verification](../../reports/2026-09-16-usage-session-drilldown.md).

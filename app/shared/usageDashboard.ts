@@ -4,6 +4,21 @@ export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
 export const MAX_USAGE_TOOLS = 10;
+export const MAX_USAGE_DAY_CONTRIBUTORS = 20;
+export const MAX_USAGE_CONTRIBUTOR_MODELS = 4;
+/** Stable join key for a canonical cwd already present in the session catalog. */
+export function usageProjectId(cwd: string): string {
+    const value = cwd.replace(/[\\/]+$/, '');
+    let a = 0x9e3779b9, b = 0x85ebca6b, c = 0xc2b2ae35, d = 0x27d4eb2f;
+    for (let i = 0; i < value.length; i++) {
+        const n = value.charCodeAt(i);
+        a = Math.imul(a ^ n, 0x85ebca6b);
+        b = Math.imul(b ^ n, 0xc2b2ae35);
+        c = Math.imul(c ^ n, 0x27d4eb2f);
+        d = Math.imul(d ^ n, 0x165667b1);
+    }
+    return [a, b, c, d].map(n => (n >>> 0).toString(16).padStart(8, '0')).join('');
+}
 export type UsageWindow = '7d' | '30d';
 export type UsageTokens = {
     fresh: number;
@@ -24,6 +39,22 @@ export type UsageTool = UsageCategory & {
     results: number;
     errors: number;
 };
+export type UsageSessionContributor = {
+    id: string;
+    engineSessionId: string | null;
+    project: { id: string; label: string } | null;
+    tokens: UsageTokens;
+    requests: number;
+    results: number;
+    errors: number;
+    models: UsageModel[];
+    modelDetail: { state: 'full' | 'grouped'; omitted: number };
+};
+export type UsageDayContributors = {
+    state: 'full' | 'truncated' | 'unavailable';
+    omitted: number;
+    items: UsageSessionContributor[];
+};
 export type UsageDay = {
     hourlyRequests: number[];
     date: string;
@@ -36,6 +67,7 @@ export type UsageDay = {
     sessions: number;
     records: number;
     requests: number;
+    contributors: UsageDayContributors;
 };
 export type UsageRangeSummary = {
     range: UsageWindow;
@@ -76,7 +108,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 3;
+    countingVersion: 4;
     snapshotId: string;
     scope: 'retained-transcripts';
     timezone: 'UTC';

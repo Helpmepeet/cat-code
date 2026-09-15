@@ -1,9 +1,10 @@
 import { afterEach, expect, test } from 'bun:test';
-import { mkdtemp, writeFile, appendFile, rm, copyFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { collectIndexedUsage, readSavedUsage } from './statsUsageIndex.js';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
+import { usageProjectId } from '../../app/shared/usageDashboard.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 const cutoff = '2026-09-13T12:00:00.000Z';
@@ -78,6 +79,47 @@ test('index excludes text and tool input, retaining missing-ID block positions',
     const { Database } = await import('bun:sqlite'); const db = new Database(path, { readonly: true });
     try { expect(JSON.stringify(db.query('SELECT value FROM records').all())).not.toContain('DO NOT INDEX'); }
     finally { db.close(); }
+});
+test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
+    const { path, file } = await fixture();
+    const engineSessionId = '123e4567-e89b-42d3-a456-426614174000';
+    const cwd = join(dirname(file), 'workspace');
+    const subagentDir = join(dirname(file), engineSessionId, 'subagents');
+    const subagentFile = join(subagentDir, 'agent-worker.jsonl');
+    await mkdir(subagentDir, { recursive: true });
+    const main = { ...row('main', cutoff, 10), sessionId: engineSessionId, cwd };
+    const prompt = { type: 'user', sessionId: engineSessionId, cwd, uuid: 'prompt', timestamp: cutoff, message: { content: 'PRIVATE PROMPT BODY' } };
+    const subagent = { ...row('subagent', cutoff, 20), sessionId: engineSessionId, cwd };
+    await writeFile(file, [prompt, main].map(value => JSON.stringify(value)).join('\n'));
+    await writeFile(subagentFile, JSON.stringify(subagent));
+    const files = [file, subagentFile];
+    const cold = await collectIndexedUsage(files, cutoff, opts(path));
+    const day = cold.ranges['7d'].days.at(-1)!;
+    expect(day.contributors.items).toHaveLength(1);
+    expect(day.contributors.items[0]).toMatchObject({
+        engineSessionId,
+        project: { id: usageProjectId(cwd), label: 'workspace' },
+        tokens: { fresh: 30, read: 0, write: 0, output: 0 },
+        requests: 2,
+        results: 0,
+        errors: 0,
+    });
+    expect(day.tokens).toEqual({ fresh: 30, read: 0, write: 0, output: 0 });
+    expect(day.requests).toBe(2);
+    expect(day.sessions).toBe(1);
+    let reads = 0;
+    const warm = await collectIndexedUsage(files, '2026-09-13T12:01:00.000Z', { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(warm.ranges['7d'].days.at(-1)!.contributors).toEqual(day.contributors);
+    expect(readSavedUsage(path)).toEqual(warm);
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path, { readonly: true });
+    try {
+        const projected = JSON.stringify(db.query('SELECT value FROM records').all());
+        expect(projected).not.toContain('PRIVATE PROMPT BODY');
+        expect(projected).not.toContain('DO NOT INDEX PROMPT TEXT');
+        expect(projected).not.toContain('DO NOT INDEX TOOL INPUT');
+    } finally { db.close(); }
 });
 test('replacement and incomplete tails invalidate cached file accounting', async () => {
     const { path, file } = await fixture();
