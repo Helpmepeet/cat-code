@@ -20,6 +20,7 @@ import {
   selectReadyLabel,
   selectTakenAliases,
   selectUsageStatsForRange,
+  selectWelcomeAccountsSnapshot,
 } from './accountsState.js'
 import type { OAuthLoginProgressFrame } from '../../shared/protocol.js'
 
@@ -305,6 +306,61 @@ describe('global accounts pool (session-independent feed)', () => {
     })
     expect(state.sessions.s1).toBeNull()
     expect(selectGlobalAccountsSnapshot(state)).not.toBeNull()
+  })
+})
+
+describe('Welcome accounts snapshot selection', () => {
+  test('the global pool wins over a blank active-session snapshot', () => {
+    const globalPool = snapshot({ readyCount: 2 })
+    const state = {
+      ...createAccountsState(),
+      pool: globalPool,
+      sessions: { active: null },
+    }
+
+    expect(selectWelcomeAccountsSnapshot(state, 'active')).toBe(globalPool)
+  })
+
+  test('the global pool wins over a populated active-session snapshot', () => {
+    const activeSession = snapshot({ readyCount: 1 })
+    const globalPool = snapshot({ readyCount: 2 })
+    const state = {
+      ...createAccountsState(),
+      pool: globalPool,
+      sessions: { active: activeSession },
+    }
+
+    expect(selectWelcomeAccountsSnapshot(state, 'active')).toBe(globalPool)
+  })
+
+  test('before global publication, the active session wins over another session', () => {
+    const arbitrarySession = snapshot({ readyCount: 1 })
+    const activeSession = snapshot({ readyCount: 2 })
+    const state = {
+      ...createAccountsState(),
+      sessions: { arbitrary: arbitrarySession, active: activeSession },
+    }
+
+    expect(selectWelcomeAccountsSnapshot(state, 'active')).toBe(activeSession)
+  })
+
+  test('without an active snapshot, another session remains the final fallback', () => {
+    const arbitrarySession = snapshot()
+    const state = {
+      ...createAccountsState(),
+      sessions: { active: null, arbitrary: arbitrarySession },
+    }
+
+    expect(selectWelcomeAccountsSnapshot(state, 'active')).toBe(arbitrarySession)
+  })
+
+  test('returns null only when no global, active, or session snapshot exists', () => {
+    const state = {
+      ...createAccountsState(),
+      sessions: { active: null, arbitrary: null },
+    }
+
+    expect(selectWelcomeAccountsSnapshot(state, 'active')).toBeNull()
   })
 })
 

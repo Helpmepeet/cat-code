@@ -99,6 +99,8 @@ type WelcomeScreenProps =
       variant?: 'launcher'
       recents: readonly RecentWorkspace[]
       accounts: AccountsSnapshot | null
+      /** True only while this renderer document awaits its first global pool snapshot. */
+      accountsUsagePending?: boolean
       /** Open/restore a recent project's most-recent openable session (HC1: id-only). */
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
@@ -121,6 +123,8 @@ type WelcomeScreenProps =
        * worktree option is cut. */
       sandboxed?: boolean
       accounts: AccountsSnapshot | null
+      /** True only while this renderer document awaits its first global pool snapshot. */
+      accountsUsagePending?: boolean
     }
 
 export function WelcomeScreen(props: WelcomeScreenProps) {
@@ -212,7 +216,10 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
         </div>
 
         {/* Codex account table — read-only pool status (P4-5) */}
-        <CodexTable accounts={accounts} />
+        <CodexTable
+          accounts={accounts}
+          accountsUsagePending={props.accountsUsagePending ?? false}
+        />
       </div>
     </div>
   )
@@ -442,9 +449,28 @@ export function RecentItem({
 
 /* ── Codex account table (read-only, P4-5) ──────────────────────────────── */
 
-function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
+/**
+ * Re-login accounts (dead authentication / Needs re-login) are hidden from the
+ * Welcome screen table. Usable accounts (including accounts with no usage data
+ * and capped accounts) remain visible.
+ */
+function isReLoginAccount(account: AccountStatus): boolean {
+  return (
+    account.status === 'dead' ||
+    account.statusReason === 'auth_dead' ||
+    account.availabilityLabel === 'Needs re-login'
+  )
+}
+
+function CodexTable({
+  accounts,
+  accountsUsagePending,
+}: {
+  accounts: AccountsSnapshot | null
+  accountsUsagePending: boolean
+}) {
   const rows = (accounts?.accounts ?? []).filter(
-    account => account.availability !== 'blocked',
+    account => !isReLoginAccount(account),
   )
   // Prototype header counts status-`healthy` accounts and labels them "healthy"
   // (`Welcome.jsx:434`), not the stricter ready = healthy-and-not-capped metric.
@@ -485,15 +511,28 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
           {accounts ? 'No usable Codex accounts.' : 'No Codex account data for this view yet.'}
         </div>
       ) : (
-        rows.map(account => <CodexRow key={account.id} account={account} />)
+        rows.map(account => (
+          <CodexRow
+            key={account.id}
+            account={account}
+            accountsUsagePending={accountsUsagePending}
+          />
+        ))
       )}
     </div>
   )
 }
 
-function CodexRow({ account }: { account: AccountStatus }) {
+function CodexRow({
+  account,
+  accountsUsagePending,
+}: {
+  account: AccountStatus
+  accountsUsagePending: boolean
+}) {
   const capped = account.status === 'capped' || account.usageLimitReached
   const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  const hasSupportedWindow = fiveHour !== null || weekly !== null
   const hasBothWindows = fiveHour !== null && weekly !== null
   return (
     <div className="grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
@@ -509,18 +548,41 @@ function CodexRow({ account }: { account: AccountStatus }) {
         ) : null}
       </div>
       <div
-        className={
-          'grid min-w-0 ' +
-          (hasBothWindows ? 'grid-cols-2 gap-x-7' : 'grid-cols-1')
-        }
+        data-welcome-usage-region="true"
+        className="grid min-w-0"
       >
-        {fiveHour ? (
-          <UsageTrack label="5-hour" shortLabel="5h" window={fiveHour} />
-        ) : null}
-        {weekly ? (
-          <UsageTrack label="Weekly" shortLabel="7d" window={weekly} />
+        {hasSupportedWindow ? (
+          <div
+            data-welcome-usage-state="real"
+            className={
+              'animate-toast-in grid min-w-0 ' +
+              (hasBothWindows ? 'grid-cols-2 gap-x-7' : 'grid-cols-1')
+            }
+          >
+            {fiveHour ? (
+              <UsageTrack label="5-hour" shortLabel="5h" window={fiveHour} />
+            ) : null}
+            {weekly ? (
+              <UsageTrack label="Weekly" shortLabel="7d" window={weekly} />
+            ) : null}
+          </div>
+        ) : accountsUsagePending ? (
+          <UsageLoadingRail />
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/** Decorative placeholder while this renderer document awaits global usage. */
+function UsageLoadingRail() {
+  return (
+    <div
+      data-welcome-usage-state="pending"
+      aria-hidden="true"
+      className="flex min-w-0 items-center"
+    >
+      <span className="h-[5px] w-full rounded-[3px] bg-white/[0.06]" />
     </div>
   )
 }

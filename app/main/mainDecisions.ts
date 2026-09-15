@@ -87,6 +87,7 @@ export const SIDECAR_MODE_ENTRIES = {
   'transcript-backfill': { file: 'transcriptBackfillWorker.ts', runtimeFlags: false },
   'catalog': { file: 'sessionsCatalogWorker.ts', runtimeFlags: false },
   'accounts-pool': { file: 'accountsPoolWorker.ts', runtimeFlags: false },
+  'usage-stats': { file: 'usageStatsWorker.ts', runtimeFlags: false },
   'debug-cleanup': { file: 'debugCleanupWorker.ts', runtimeFlags: true },
 } as const
 

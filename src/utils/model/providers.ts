@@ -8,6 +8,8 @@ import { getGlobalConfig, saveGlobalConfig } from '../config.js'
 import { isEnvTruthy } from '../envUtils.js'
 import { SYNTHETIC_MODEL } from '../messages.js'
 import { isModelAlias } from './aliases.js'
+import { getProviderForModel } from './providerForModel.js'
+export { getProviderForModel } from './providerForModel.js'
 
 export type APIProvider = 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
 
@@ -78,16 +80,6 @@ export function persistStartupProviderPreference(provider: APIProvider | null): 
           lastUsedProvider: preference,
         },
   )
-}
-
-/**
- * Derive the provider from a model name.
- * Returns null when the model doesn't imply a specific provider on its own.
- */
-export function getProviderForModel(model: string | null | undefined): APIProvider | null {
-  if (!model) return null
-  if (model.startsWith('gpt-')) return 'openai'
-  return null
 }
 
 /**

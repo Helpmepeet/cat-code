@@ -182,6 +182,7 @@ const newRequestId = (): string => crypto.randomUUID()
 export function SessionPane({
   leases = null,
   accountsSnapshot,
+  accountsUsagePending,
   activeAccount,
   activeAnthropicAccount,
   onSwitchAccount,
@@ -1143,6 +1144,7 @@ export function SessionPane({
         >
           <TranscriptView
             accounts={accountsSnapshot}
+            accountsUsagePending={accountsUsagePending}
             activeSessionId={activeSessionId}
             cwd={activeDescriptor?.cwd ?? null}
             branch={branch}
@@ -1947,6 +1949,9 @@ type SessionPaneProps = {
   /** In-session empty-state Welcome context: this session's real Codex pool
    * snapshot (P4-5), read-only (HC1). Null before any pool frame lands. */
   accountsSnapshot: AccountsSnapshot | null
+  /** Whether this renderer document is still waiting for its first global pool
+   * event; affects only the empty-session Welcome usage presentation. */
+  accountsUsagePending: boolean
   /** This session's active pool account (real alias), or null before its snapshot. */
   activeAccount: AccountStatus | null
   /** Active Anthropic subscription account when this session routes Anthropic. */
@@ -2149,4 +2154,3 @@ type SessionPaneProps = {
   transcript: TranscriptState
   transportError: string | null
 }
-

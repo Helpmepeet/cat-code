@@ -323,6 +323,7 @@ export const TranscriptView = memo(function TranscriptView({
   compacting,
   activeSessionId,
   accounts,
+  accountsUsagePending = false,
   cwd,
   branch,
   sandboxed,
@@ -342,6 +343,8 @@ export const TranscriptView = memo(function TranscriptView({
   activeSessionId: SessionId | null
   /** In-session empty-state Welcome context (Chat.jsx:1272). */
   accounts?: AccountsSnapshot | null
+  /** Presentation-only account usage loading state from the app shell. */
+  accountsUsagePending?: boolean
   cwd?: string | null
   branch?: string | null
   /** Whether this session's tools run sandboxed, read by the empty state's
@@ -384,6 +387,7 @@ export const TranscriptView = memo(function TranscriptView({
       )}
       compacting={compacting ?? false}
       accounts={accounts ?? null}
+      accountsUsagePending={accountsUsagePending}
       cwd={cwd ?? null}
       branch={branch ?? null}
       sandboxed={sandboxed ?? false}
@@ -404,6 +408,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   compacting = false,
   leases = null,
   accounts = null,
+  accountsUsagePending = false,
   cwd = null,
   branch = null,
   sandboxed = false,
@@ -424,6 +429,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
   agentBackground?: AgentBackgroundControl | null
   accounts?: AccountsSnapshot | null
+  accountsUsagePending?: boolean
   cwd?: string | null
   branch?: string | null
   sandboxed?: boolean
@@ -518,6 +524,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           branch={branch}
           sandboxed={sandboxed}
           accounts={accounts}
+          accountsUsagePending={accountsUsagePending}
         />
       )
   } else {

@@ -207,6 +207,32 @@ test('renders the shell frame (TabBar + empty state) before any session exists',
   expect(html).not.toContain('Transcript (projected)')
 })
 
+test('CC-91 wiring tripwire: App owns one presentation state and passes its pending boolean to both Welcome paths', () => {
+  // LAYER HONESTY: App needs the preload bridge to mount, so this SSR suite
+  // cannot execute its timer hook. The accounts-state DOM suite covers that
+  // behavior; this source assertion only protects the production joins.
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+  const normalized = source.replace(/\s+/g, ' ')
+
+  expect(normalized).toContain(
+    'useAccountsPoolPresentationState( accounts.pool !== null, )',
+  )
+  expect(normalized).toContain(
+    "const accountsUsagePending = accountsPoolPresentationState === 'pending'",
+  )
+  expect(normalized).toContain(
+    'const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)',
+  )
+
+  const pane = source.slice(source.indexOf('<SessionPane'), source.indexOf('<SessionPane') + 2_000)
+  expect(pane).toContain('accountsSnapshot={panelAccounts}')
+  expect(pane).toContain('accountsUsagePending={accountsUsagePending}')
+
+  const launcher = source.slice(source.indexOf('<WelcomeScreen'), source.indexOf('<WelcomeScreen') + 1_000)
+  expect(launcher).toContain('accounts={welcomeAccounts}')
+  expect(launcher).toContain('accountsUsagePending={accountsUsagePending}')
+})
+
 test('PL-A wiring tripwire: the startup preload and restore call the parts they claim to', () => {
   // LAYER HONESTY: this is a WIRING tripwire, not behaviour. App owns hooks and
   // effects, and this file never registers a DOM (see the header), so App
@@ -691,6 +717,7 @@ test('P4-24: the active session pane renders the multi-line composer + transcrip
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
 
       activeConnection={{ status: 'ready', inputEnabled: true }}
@@ -817,6 +844,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
 
       activeConnection={{ status: 'ready', inputEnabled: true }}
@@ -906,6 +934,7 @@ test('CC-16: a preview pane paints cached rows and its composer accepts typing',
 test('CC-16: a connecting session accepts typing and can arm the send arrow', () => {
   const props = {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'connecting', inputEnabled: false },
     activeDescriptor: undefined,
@@ -980,6 +1009,7 @@ test('a mid-turn composer stays typeable: the turn gates the SEND, not the input
   // the submit instead of refusing the keystroke.
   const props = {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'ready', inputEnabled: false },
     activeDescriptor: undefined,
@@ -1318,6 +1348,7 @@ test('the waiting-message row is written once and used at both call sites', () =
 test('CC-16: a dead session stays read-only and does not pretend to be typeable', () => {
   const props = {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'failed', inputEnabled: false },
     activeDescriptor: undefined,
@@ -1577,6 +1608,7 @@ test('P4-24: the composer bar forwards the REAL active account + model override'
         messageBytes: [],
       }}
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
       activeAccount={account}
       activeSessionId="session-1"
@@ -1621,6 +1653,7 @@ test('P4-18c: a generating session (ready + input disabled) shows the activity i
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
 
       activeConnection={{ status: 'ready', inputEnabled: false }}
@@ -1879,6 +1912,7 @@ test('composer form owns the ↑/↓ history key scope', () => {
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
 
       activeConnection={{ status: 'ready', inputEnabled: true }}
@@ -1949,6 +1983,7 @@ test('collapsed pastes are rendered by the field, not parked in a strip above it
   const html = renderToStaticMarkup(
     <SessionPane
       accountsSnapshot={null}
+      accountsUsagePending={false}
       accountsLastResult={null}
 
       activeConnection={{ status: 'ready', inputEnabled: true }}
@@ -2159,6 +2194,7 @@ test('prompt drafts are isolated by active session id', () => {
 test('a previewed pane shows what the cached session really ran on', () => {
   const props = {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'dead', inputEnabled: false },
     activeDescriptor: undefined,
@@ -2229,6 +2265,7 @@ test('a previewed pane shows what the cached session really ran on', () => {
 test('a previewed pane with an empty cache claims nothing', () => {
   const props = {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'dead', inputEnabled: false },
     activeDescriptor: undefined,

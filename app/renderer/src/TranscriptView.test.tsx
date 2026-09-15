@@ -681,6 +681,46 @@ test('IS-C: an ordinary empty pane (no restore) still shows the WelcomeScreen', 
   expect(html).not.toContain('Restored session')
 })
 
+test('CC-91: an empty pane keeps its roster separate from pending usage presentation', () => {
+  // A recognized pane snapshot remains available immediately while the shell
+  // waits for its first global pool event. WelcomeScreen owns the rail's visual
+  // branch; this verifies the actual empty-pane boundary keeps both facts.
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[]}
+      accountsUsagePending
+      accounts={pool([
+        account({ id: 'main', alias: 'nightowl', isDefault: true, usagePrimary: 20 }),
+      ])}
+    />,
+  )
+
+  expect(html).toContain('nightowl')
+  expect(html).toContain('20%')
+})
+
+test('CC-91: pending usage presentation does not affect a non-empty transcript', () => {
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView rows={[cachedRow]} accountsUsagePending />,
+  )
+
+  expect(html).toContain('cached line')
+  expect(html).not.toContain('Welcome back')
+})
+
+test('CC-91 wiring tripwire: the pane forwards pending usage presentation into its empty Welcome', () => {
+  // The Welcome-specific DOM behavior belongs to WelcomeScreen tests. This
+  // assertion covers the otherwise unobservable prop hand-off here.
+  const source = readFileSync(new URL('./TranscriptView.tsx', import.meta.url), 'utf8')
+  const rowsView = source.slice(
+    source.indexOf('export const TranscriptRowsView'),
+    source.indexOf('export function ToolInspectorOverlay'),
+  )
+
+  expect(rowsView).toContain('accountsUsagePending = false')
+  expect(rowsView).toContain('accountsUsagePending={accountsUsagePending}')
+})
+
 test('IS-C: an ordinary live pane renders no restore divider', () => {
   const html = renderToStaticMarkup(<TranscriptRowsView rows={[cachedRow]} />)
   expect(html).not.toContain('Restored session')

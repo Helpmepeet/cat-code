@@ -1,3 +1,4 @@
+import { UsageBarsIcon } from './AccountsUsageCharts.js'
 /**
  * Sidebar — the shell's left rail: a hover-expanding rail (48px → 240px, pin,
  * shadow, easing), a paw logo, session search, a New chat action, a Pinned
@@ -244,7 +245,7 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'sessions' | 'goals' | 'accounts' | 'settings'
+  id: 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
@@ -257,10 +258,11 @@ const NAV: NavItem[] = [
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
+  { id: 'usage', label: 'Usage', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
-type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
 
 export function Sidebar({
   rows,

@@ -444,67 +444,60 @@ export const _forTest = {
  * Get all session files from all project directories.
  * Includes both main session files and subagent transcript files.
  */
-async function getAllSessionFiles(): Promise<string[]> {
+async function getAllSessionFiles(limits?: { deadline: number; maxSources: number }): Promise<string[]> {
   const projectsDir = getProjectsDir()
   const fs = getFsImplementation()
-
-  // Get all project directories
-  let allEntries
-  try {
-    allEntries = await fs.readdir(projectsDir)
-  } catch (e) {
-    if (isENOENT(e)) return []
-    throw e
+  const files: string[] = []
+  let sourcePathBytes = 0
+  const addFile = (path: string) => {
+    sourcePathBytes += path.length * 2
+    if (limits && sourcePathBytes > 16 * 1024 * 1024) throw new Error('Usage discovery resource limit')
+    files.push(path)
   }
-  const projectDirs = allEntries
-    .filter(dirent => dirent.isDirectory())
-    .map(dirent => join(projectsDir, dirent.name))
-
-  // Collect all session files from all projects in parallel
-  const projectResults = await Promise.all(
-    projectDirs.map(async projectDir => {
-      try {
-        const entries = await fs.readdir(projectDir)
-
-        // Collect main session files (*.jsonl directly in project dir)
-        const mainFiles = entries
-          .filter(dirent => dirent.isFile() && dirent.name.endsWith('.jsonl'))
-          .map(dirent => join(projectDir, dirent.name))
-
-        // Collect subagent files from session subdirectories in parallel
-        // Structure: {projectDir}/{sessionId}/subagents/agent-{agentId}.jsonl
-        const sessionDirs = entries.filter(dirent => dirent.isDirectory())
-        const subagentResults = await Promise.all(
-          sessionDirs.map(async sessionDir => {
-            const subagentsDir = join(projectDir, sessionDir.name, 'subagents')
-            try {
-              const subagentEntries = await fs.readdir(subagentsDir)
-              return subagentEntries
-                .filter(
-                  dirent =>
-                    dirent.isFile() &&
-                    dirent.name.endsWith('.jsonl') &&
-                    dirent.name.startsWith('agent-'),
-                )
-                .map(dirent => join(subagentsDir, dirent.name))
-            } catch (error) {
-              if (isENOENT(error)) return []
-              throw error
-            }
-          }),
-        )
-
-        return [...mainFiles, ...subagentResults.flat()]
-      } catch (error) {
-        logForDebugging(
-          `Failed to read project directory ${projectDir}: ${errorMessage(error)}`,
-        )
-        throw error
+  const check = (entries = 0) => {
+    if (limits && (Date.now() > limits.deadline || entries > limits.maxSources || files.length > limits.maxSources)) {
+      throw new Error('Usage discovery resource limit or timeout')
+    }
+  }
+  const readDirectory = async (path: string) => {
+    if (!limits) return fs.readdir(path)
+    const { opendir } = await import('node:fs/promises')
+    const directory = await opendir(path)
+    const entries = []
+    for await (const entry of directory) {
+      entries.push(entry)
+      check(entries.length)
+    }
+    return entries
+  }
+  let projects
+  try { projects = await readDirectory(projectsDir) }
+  catch (error) { if (isENOENT(error)) return []; throw error }
+  check(projects.length)
+  // Sequential directory traversal bounds concurrent discovery work too.
+  for (const project of projects) {
+    check()
+    if (!project.isDirectory()) continue
+    const projectDir = join(projectsDir, project.name)
+    const entries = await readDirectory(projectDir)
+    check(entries.length)
+    for (const entry of entries) {
+      check()
+      if (entry.isFile() && entry.name.endsWith('.jsonl')) addFile(join(projectDir, entry.name))
+      if (!entry.isDirectory()) continue
+      const subagentsDir = join(projectDir, entry.name, 'subagents')
+      let subagents
+      try { subagents = await readDirectory(subagentsDir) }
+      catch (error) { if (isENOENT(error)) continue; throw error }
+      check(subagents.length)
+      for (const agent of subagents) {
+        if (agent.isFile() && agent.name.startsWith('agent-') && agent.name.endsWith('.jsonl')) addFile(join(subagentsDir, agent.name))
+        check()
       }
-    }),
-  )
-
-  return projectResults.flat()
+    }
+  }
+  check()
+  return files
 }
 
 /**
@@ -1210,4 +1203,16 @@ function getEmptyStats(): ClaudeCodeStats {
     peakActivityHour: null,
     totalSpeculationTimeSavedMs: 0,
   }
+}
+
+/** The desktop metric version uses its own incremental index, separate from legacy caches. */
+export async function aggregateUsageDashboard(asOf = new Date().toISOString(), options: {
+  finalize?: (snapshot: import('../../app/shared/usageDashboard.js').UsageDashboardSnapshot) => import('../../app/shared/usageDashboard.js').UsageDashboardSnapshot;
+  indexPath?: string;
+} = {}) {
+  const { USAGE_COLLECTION_TIMEOUT_MS } = await import('./statsUsage.js')
+  const { collectIndexedUsage } = await import('./statsUsageIndex.js')
+  const deadline = Date.now() + USAGE_COLLECTION_TIMEOUT_MS
+  const files = await getAllSessionFiles({ deadline, maxSources: 25_000 })
+  return collectIndexedUsage(files, asOf, { deadline, finalize: options.finalize, path: options.indexPath })
 }

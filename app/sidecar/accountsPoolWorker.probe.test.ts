@@ -197,57 +197,12 @@ test('the worker skips the transcript aggregation unless main asks for it', asyn
   expect(pool.usageStats).toBeUndefined()
 }, 180_000)
 
-test('--usage-stats makes the worker carry both ranges', async () => {
+test('legacy usage flag cannot create a competing usage publisher', async () => {
   const { code, records } = await runWorker({}, ['--usage-stats'])
   expect(code).toBe(0)
   const pool = records.find(record => record?.type === 'pool')
   expect(pool?.type).toBe('pool')
-  if (pool?.type !== 'pool') return
-  expect(pool.usageStats).toBeDefined()
-  expect(pool.usageStats?.['7d'].range).toBe('7d')
-  expect(pool.usageStats?.['30d'].range).toBe('30d')
-}, 180_000)
-
-test('the worker computes both usage ranges with one read of each eligible transcript', async () => {
-  const { code, records, stderr } = await runWorker({}, ['--usage-stats'], configDir => {
-    const project = join(configDir, 'projects', 'synthetic-project')
-    mkdirSync(project, { recursive: true })
-    for (const [name, daysAgo, input] of [['recent', 1, 100], ['month', 15, 200]] as const) {
-      const timestamp = new Date()
-      timestamp.setDate(timestamp.getDate() - daysAgo)
-      writeFileSync(join(project, `${name}.jsonl`), JSON.stringify({
-        type: 'assistant', uuid: name, parentUuid: null, isSidechain: false,
-        sessionId: name, cwd: '/synthetic', userType: 'external', version: '1.0.0',
-        timestamp: timestamp.toISOString(),
-        message: {
-          id: name, type: 'message', role: 'assistant', model: 'synthetic-fixture-model',
-          content: [{ type: 'text', text: 'generated fixture' }],
-          usage: { input_tokens: input, output_tokens: 10 },
-        },
-      }) + '\n')
-    }
-    const preload = join(configDir, 'observe-reads.ts')
-    // The observer delegates to the real JSONL reader; fixture bodies and
-    // account data never leave the child, only an operation marker does.
-    writeFileSync(preload, `
-      import { spyOn } from 'bun:test'
-      import * as json from ${JSON.stringify(join(here, '../../src/utils/json.ts'))}
-      const original = json.readJSONLFile
-      spyOn(json, 'readJSONLFile').mockImplementation(async file => {
-        const entries = await original(file)
-        process.stderr.write('usage-fixture-jsonl-read\\n')
-        return entries
-      })
-    `)
-    return preload
-  })
-  expect(code).toBe(0)
-  const pool = records.find(record => record?.type === 'pool')
-  expect(pool?.type).toBe('pool')
-  if (pool?.type !== 'pool') return
-  expect(pool.usageStats?.['7d'].totalTokens).toBe(110)
-  expect(pool.usageStats?.['30d'].totalTokens).toBe(320)
-  expect(stderr.match(/usage-fixture-jsonl-read/g)).toHaveLength(2)
+  if (pool?.type === 'pool') expect(pool.usageStats).toBeUndefined()
 }, 180_000)
 
 test('the one-shot worker deletes a vault profile without any session process', async () => {

@@ -44,7 +44,6 @@ import type {
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
-import { AccountsUsageSection } from './AccountsUsageSection.js'
 import {
   selectAccountRows,
   selectActiveAccount,
@@ -756,9 +755,6 @@ type Pending = {
 export function AccountsPage({
   snapshot,
   lastResult,
-  usageStats = null,
-  activeStatsRange = '7d',
-  onRangeChange,
   onVerb,
 }: {
   snapshot: AccountsSnapshot | null
@@ -771,13 +767,6 @@ export function AccountsPage({
   const toast = useToast()
   const [dialog, setDialog] = useState<DialogState>(null)
   const [dismissedCapKey, setDismissedCapKey] = useState<string | null>(null)
-  const [localRange, setLocalRange] = useState<UsageStatsRange>(activeStatsRange)
-  const currentRange = onRangeChange ? activeStatsRange : localRange
-
-  function handleRangeChange(newRange: UsageStatsRange): void {
-    setLocalRange(newRange)
-    onRangeChange?.(newRange)
-  }
   const pendingRef = useRef<Pending | null>(null)
 
   // Correlate a dispatched verb with its `account.result` by requestId: NO
@@ -1025,12 +1014,6 @@ export function AccountsPage({
             )}
           </section>
 
-          {/* Real engine-backed usage analytics (7d / 30d global range filter) */}
-          <AccountsUsageSection
-            stats={usageStats}
-            activeRange={currentRange}
-            onRangeChange={handleRangeChange}
-          />
           </>
         )}
       </div>

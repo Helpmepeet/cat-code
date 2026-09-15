@@ -1,0 +1,297 @@
+import { usageCategory as category } from './usageCategory.js';
+import { basename, dirname, sep } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { readStatsRecords, type StatsRecord } from './statsReader.js';
+import { usageWindow, usageTimestampEligible } from './usageWindow.js';
+import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary } from '../../app/shared/usageDashboard.js';
+import { getProviderForModel } from './model/providerForModel.js';
+export const MAX_USAGE_IDENTITIES = 250000;
+export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
+export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
+export class UsageResourceError extends Error {
+}
+export interface UsageIdentityStore {
+    map<T>(name: string): { get(key: string): T | undefined; set(key: string, value: T): unknown };
+    set(name: string): { has(key: string): boolean; add(key: string): unknown };
+}
+const zero = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
+const total = (t: UsageTokens) => t.fresh + t.read + t.write + t.output;
+const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
+const nonempty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+function plus(a: number, b: number): number { const n = a + b; if (!safe(n))
+    throw new UsageResourceError('Usage count overflow'); return n; }
+function addTokens(a: UsageTokens, b: UsageTokens) { for (const key of Object.keys(a) as (keyof UsageTokens)[])
+    a[key] = plus(a[key], b[key]); if (!safe(total(a)))
+    throw new UsageResourceError('Usage total overflow'); }
+export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, identityConflicts: 0 });
+/** Desktop retained-history accounting; never reads or rewrites legacy aggregate caches. */
+export async function collectRetainedUsage(files: readonly string[], asOf: string, options: {
+    deadline?: number;
+    maxIdentities?: number;
+    maxStateBytes?: number;
+    signal?: AbortSignal;
+    identities?: UsageIdentityStore;
+    readRecords?: typeof readStatsRecords;
+} = {}): Promise<UsageDashboardSnapshot> {
+    const cutoff = Date.parse(asOf), deadline = options.deadline ?? Date.now() + USAGE_COLLECTION_TIMEOUT_MS;
+    if (!Number.isFinite(cutoff))
+        throw new Error('Invalid cutoff');
+    const coverage = emptyUsageCoverage();
+    coverage.sourcesDiscovered = files.length;
+    let identities = 0, stateBytes = 0;
+    const reserve = (key: string, payloadBytes = 512) => {
+        identities++;
+        stateBytes += key.length * 2 + payloadBytes;
+        if (identities > (options.maxIdentities ?? MAX_USAGE_IDENTITIES) || stateBytes > (options.maxStateBytes ?? MAX_USAGE_STATE_BYTES))
+            throw new UsageResourceError('Usage state budget exceeded');
+    };
+    if (files.length > MAX_USAGE_IDENTITIES)
+        throw new UsageResourceError('Usage source budget exceeded');
+    const states = (['7d', '30d'] as const).map(range => {
+        const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
+        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0 })), models: [], tools: [], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        return { summary, start: Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyModels: new Map<string, {
+                id: string;
+                total: number;
+            }>() };
+    });
+    type UsageValue = {
+        tokens: UsageTokens;
+        model: string;
+    };
+    type ToolValue = {
+        name: string | null;
+        timestamp: number;
+    };
+    const usage = options.identities?.map<UsageValue>('usage') ?? new Map<string, UsageValue>();
+    const toolLedger = options.identities?.map<ToolValue>('tools') ?? new Map<string, ToolValue>();
+    const results = options.identities?.map<{ timestamp: number; error: boolean; counted: boolean }>('results') ?? new Map<string, { timestamp: number; error: boolean; counted: boolean }>();
+    const recordIds = options.identities?.set('records') ?? new Set<string>();
+    // Disk-backed identities have a separate storage cap; category/session maps
+    // still use the original bounded heap budget.
+    const reserveIdentity = (key: string, bytes?: number) => { if (!options.identities) reserve(key, bytes); };
+    // Match results to the canonical request in the same session/subagent scope.
+    // Either can appear first in retained file order; one result per request wins.
+    const countResult = (key: string) => {
+        const request = toolLedger.get(key), result = results.get(key);
+        if (!request || !result || result.counted || result.timestamp < request.timestamp) return;
+        result.counted = true;
+        results.set(key, result);
+        for (const s of states.filter(s => usageTimestampEligible(request.timestamp, s.start, s.end, cutoff))) {
+            const tool = s.tools.get(category(request.name).id)!;
+            tool.results = plus(tool.results, 1);
+            if (result.error) tool.errors = plus(tool.errors, 1);
+        }
+    };
+    const readOne = async (file: string, item: StatsRecord) => {
+        if (Date.now() > deadline)
+            throw new Error('Usage collection timeout');
+        const row = item.value;
+        if (!record(row) || !['assistant', 'user', 'attachment', 'system'].includes(String(row.type)))
+            return;
+        const isSubagent = file.includes(`${sep}subagents${sep}`);
+        if (!isSubagent && row.isSidechain === true)
+            return;
+        const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+        if (!Number.isFinite(timestamp)) {
+            coverage.invalidTimestamps++;
+            return;
+        }
+        if (timestamp > cutoff)
+            return;
+        const project = isSubagent ? dirname(dirname(dirname(file))) : dirname(file);
+        const mainId = nonempty(row.sessionId) ? row.sessionId : isSubagent ? basename(dirname(dirname(file))) : basename(file, '.jsonl');
+        const session = JSON.stringify([project, mainId]);
+        const scope = JSON.stringify([project, mainId, isSubagent ? basename(file, '.jsonl') : null]);
+        const recordId = JSON.stringify([scope, nonempty(row.uuid) ? row.uuid : [item.generation, item.offset]]);
+        const alreadyRecorded = recordIds.has(recordId);
+        if (!alreadyRecorded) {
+            reserveIdentity(recordId);
+            recordIds.add(recordId);
+        }
+        const eligibleStates = states.filter(s => usageTimestampEligible(timestamp, s.start, s.end, cutoff));
+        const date = new Date(timestamp).toISOString().slice(0, 10);
+        for (const s of eligibleStates) {
+            const day = s.summary.days.find(d => d.date === date)!;
+            if (!isSubagent && !alreadyRecorded) {
+                s.summary.records = plus(s.summary.records, 1);
+                day.records = plus(day.records, 1);
+                if (!s.sessions.has(session)) {
+                    reserve(session);
+                    s.sessions.add(session);
+                    s.summary.sessions++;
+                }
+                const sd = JSON.stringify([session, date]);
+                if (!s.sessionDays.has(sd)) {
+                    reserve(sd);
+                    s.sessionDays.add(sd);
+                    day.sessions++;
+                }
+            }
+        }
+        if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
+            for (const block of row.message.content) {
+                if (!record(block) || block.type !== 'tool_result' || !nonempty(block.tool_use_id)) continue;
+                // Anthropic tool_result omits is_error on success. Invalid flags
+                // are not a known outcome and cannot enter the rate denominator.
+                if (block.is_error !== undefined && typeof block.is_error !== 'boolean') continue;
+                const key = JSON.stringify([scope, ['id', block.tool_use_id]]);
+                const old = results.get(key);
+                if (old) {
+                    if (old.error !== (block.is_error === true)) coverage.identityConflicts++;
+                    continue;
+                }
+                reserveIdentity(key);
+                results.set(key, { timestamp, error: block.is_error === true, counted: false });
+                countResult(key);
+            }
+        }
+        if (row.type !== 'assistant' || !record(row.message))
+            return;
+        const message = row.message;
+        if (Array.isArray(message.content))
+            for (const [index, block] of message.content.entries()) {
+                if (!record(block) || block.type !== 'tool_use')
+                    continue;
+                const identified = nonempty(block.id);
+                const key = JSON.stringify([scope, identified ? ['id', block.id] : ['record', recordId, index]]);
+                const name = nonempty(block.name) ? block.name : null;
+                const old = toolLedger.get(key);
+                if (old) {
+                    if (old.name !== name || old.timestamp !== timestamp)
+                        coverage.identityConflicts++;
+                    continue;
+                }
+                reserveIdentity(key, 512 + (name?.length ?? 0) * 2);
+                toolLedger.set(key, { name, timestamp });
+                const cat = category(name);
+                for (const s of eligibleStates) {
+                    const day = s.summary.days.find(d => d.date === date)!;
+                    s.summary.requests = plus(s.summary.requests, 1);
+                    day.requests = plus(day.requests, 1);
+                    const hour = new Date(timestamp).getUTCHours();
+                    day.hourlyRequests[hour] = plus(day.hourlyRequests[hour]!, 1);
+                    if (identified)
+                        s.summary.identifiedRequests++;
+                    else
+                        s.summary.fallbackRequests++;
+                    let tool = s.tools.get(cat.id);
+                    if (!tool) {
+                        reserve(cat.id);
+                        tool = { ...cat, requests: 0, results: 0, errors: 0 };
+                        s.tools.set(cat.id, tool);
+                    }
+                    tool.requests = plus(tool.requests, 1);
+                }
+                countResult(key);
+            }
+        if (!record(message.usage) || message.model === '<synthetic>')
+            return;
+        const u = message.usage;
+        // Persisted adapter records already use exclusive Anthropic-style categories.
+        // OpenAI-native imported records explicitly carrying input_tokens_details are inclusive.
+        const raw: Record<keyof UsageTokens, unknown> = { fresh: u.input_tokens ?? 0, read: u.cache_read_input_tokens ?? 0, write: u.cache_creation_input_tokens ?? 0, output: u.output_tokens ?? 0 };
+        if (record(u.input_tokens_details) && u.input_tokens_details.cached_tokens !== undefined && u.cache_read_input_tokens === undefined) {
+            raw.read = u.input_tokens_details.cached_tokens;
+            if (safe(raw.fresh) && safe(raw.read))
+                raw.fresh -= raw.read;
+        }
+        if (!Object.values(raw).every(safe) || !safe(total(raw as UsageTokens))) {
+            coverage.invalidUsage++;
+            return;
+        }
+        const current = raw as UsageTokens;
+        const model = nonempty(message.model) ? message.model : null;
+        // GPT requests route through the OpenAI adapter, whose upstream usage
+        // exposes cached reads but no cache-creation count. Its persisted zero
+        // is a normalization placeholder, not a provider measurement.
+        const hasCacheWrite = Object.prototype.hasOwnProperty.call(u, 'cache_creation_input_tokens');
+        const writeReporting = current.write > 0
+            ? 'reported'
+            : getProviderForModel(model) === 'openai'
+                ? 'unreported'
+                : hasCacheWrite && model?.toLowerCase().startsWith('claude-')
+                    ? 'reported'
+                    : 'unknown';
+        for (const s of eligibleStates) {
+            if (writeReporting === 'reported') s.cacheWriteReported = true;
+            else if (writeReporting === 'unreported') s.cacheWriteUnreported = true;
+            else s.cacheWriteUnknown = true;
+            const daily = s.dailyCacheWriteReporting.get(date) ?? { reported: false, unreported: false, unknown: false };
+            daily[writeReporting] = true;
+            s.dailyCacheWriteReporting.set(date, daily);
+        }
+        const cat = category(model);
+        const key = JSON.stringify([scope, nonempty(message.id) ? ['api', message.id] : ['record', recordId]]);
+        const prior = usage.get(key);
+        if (prior && prior.model !== cat.id) {
+            coverage.identityConflicts++;
+            return;
+        }
+        const delta = zero(), maximum = zero();
+        for (const k of Object.keys(delta) as (keyof UsageTokens)[]) {
+            delta[k] = Math.max(0, current[k] - (prior?.tokens[k] ?? 0));
+            maximum[k] = Math.max(current[k], prior?.tokens[k] ?? 0);
+        }
+        if (!prior)
+            reserveIdentity(key);
+        usage.set(key, { tokens: maximum, model: cat.id });
+        if (total(delta) === 0)
+            return;
+        for (const s of eligibleStates) {
+            const day = s.summary.days.find(d => d.date === date)!;
+            addTokens(s.summary.tokens, delta);
+            addTokens(day.tokens, delta);
+            let model = s.models.get(cat.id);
+            if (!model) {
+                reserve(cat.id);
+                model = { ...cat, tokens: zero() };
+                s.models.set(cat.id, model);
+            }
+            addTokens(model.tokens, delta);
+            const dk = `${date}:${cat.id}`;
+            let daily = s.dailyModels.get(dk);
+            if (!daily) {
+                reserve(dk);
+                daily = { id: cat.id, total: 0 };
+                s.dailyModels.set(dk, daily);
+                day.models.push(daily);
+            }
+            daily.total = plus(daily.total, total(delta));
+        }
+    };
+    for (const file of [...files].sort()) {
+        options.signal?.throwIfAborted();
+        try {
+            const q = await (options.readRecords ?? readStatsRecords)(file, item => readOne(file, item), { signal: options.signal, deadline });
+            coverage.sourcesRead++;
+            for (const key of ['parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources'] as const)
+                coverage[key] = plus(coverage[key], q[key]);
+        }
+        catch (error) {
+            if (error instanceof UsageResourceError || options.signal?.aborted || Date.now() > deadline)
+                throw error;
+            coverage.readErrors++;
+        }
+    }
+    coverage.state = coverage.sourcesRead !== coverage.sourcesDiscovered || [coverage.parseErrors, coverage.oversizedRecords, coverage.pendingTailBytes, coverage.shortReads, coverage.changedSources, coverage.readErrors, coverage.invalidTimestamps, coverage.invalidUsage].some(Boolean) ? 'partial' : 'complete';
+    for (const s of states) {
+        s.summary.models = [...s.models.values()];
+        s.summary.tools = [...s.tools.values()];
+        s.summary.activeDays = s.summary.days.filter(d => total(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length;
+        const prompt = s.summary.tokens.fresh + s.summary.tokens.read + s.summary.tokens.write;
+        s.summary.cachedInputShare = prompt > 0 ? s.summary.tokens.read / prompt * 100 : null;
+        s.summary.cacheWriteReporting = s.cacheWriteUnknown || (s.cacheWriteReported && s.cacheWriteUnreported)
+            ? 'partial'
+            : s.cacheWriteReported ? 'reported'
+                : s.cacheWriteUnreported ? 'unreported' : 'unavailable';
+        for (const day of s.summary.days) {
+            const reporting = s.dailyCacheWriteReporting.get(day.date);
+            day.cacheWriteReporting = !reporting ? 'unavailable'
+                : reporting.unknown || (reporting.reported && reporting.unreported) ? 'partial'
+                    : reporting.reported ? 'reported' : 'unreported';
+        }
+    }
+    return { version: 1, metricVersion: 1, countingVersion: 3, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary } };
+}

@@ -1,3 +1,4 @@
+import { createUsagePublication, runUsageStatsWorker, USAGE_REFRESH_INTERVAL_MS } from './usageStatsRunner.js'
 /**
  * Electron main process — the supervisor's client #1 (D6 pin 2).
  *
@@ -208,7 +209,6 @@ import {
   ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
   createAccountsPoolPublicationGate,
   runAccountsPoolWorker,
-  runCarriesUsageStats,
 } from './accountsPoolRunner.js'
 import {
   createIdleParkDriver,
@@ -676,6 +676,11 @@ let sessionsCatalogDriver: SingleFlightDriver | null = null
  * accepted redacted snapshot as a read-only `accounts-pool` host event. Same
  * lifecycle as `sessionsCatalogDriver`.
  */
+const usagePublication = createUsagePublication()
+let usageDriver: SingleFlightDriver | null = null
+let usageAbort: AbortController | null = null
+let usagePending = false
+const usageEnabled = process.env.CATCODE_USAGE_DASHBOARD === '1'
 let accountsPoolDriver: SingleFlightDriver | null = null
 let accountDeleteInFlight = false
 let accountDeleteAbort: AbortController | null = null
@@ -984,18 +989,52 @@ function startSessionsCatalogRefresh(): void {
  * requiring a session to exist, which is the whole point of moving this read off
  * the per-session plane.
  *
- * The same run also carries that page's usage analytics, emitted as its own
- * `usage-stats` event for the same reason and with the same last-good-value
- * failure posture.
+ * Usage analytics have an independent read-only worker and driver below.
  */
+function startUsageRefresh(): void {
+  if (usageDriver) return
+  if (!usageEnabled) {
+    sendHostEvent({ type: 'usage-dashboard', result: { type: 'error', version: 1, code: 'unavailable' } })
+    return
+  }
+  const abort = new AbortController()
+  usageAbort = abort
+  let restoreSaved = true
+  usageDriver = createSingleFlightDriver({
+    intervalMs: USAGE_REFRESH_INTERVAL_MS,
+    logLabel: 'usage-runner',
+    run: async () => {
+      usagePending = true
+      sendHostEvent({ type: 'usage-dashboard-loading' })
+      const generation = usagePublication.begin()
+      if (restoreSaved) {
+        restoreSaved = false
+        const saved = await runUsageStatsWorker({
+          command: sidecarLaunch().command,
+          args: sidecarLaunch().argsFor('usage-stats', ['--bare', '--cached']),
+          cwd: process.cwd(), signal: abort.signal, timeoutMs: 5000,
+        })
+        if (!abort.signal.aborted && saved.type === 'usage' && usagePublication.accept(generation, saved)) {
+          sendHostEvent({ type: 'usage-dashboard', result: saved })
+          sendHostEvent({ type: 'usage-dashboard-loading' })
+        }
+      }
+      const result = await runUsageStatsWorker({
+        command: sidecarLaunch().command,
+        args: sidecarLaunch().argsFor('usage-stats', ['--bare']),
+        cwd: process.cwd(), signal: abort.signal,
+      })
+      usagePending = false
+      if (!abort.signal.aborted && usagePublication.accept(generation, result)) sendHostEvent({ type: 'usage-dashboard', result })
+    },
+  })
+  usageDriver.start()
+}
+
 function startAccountsPoolRefresh(): void {
   if (accountsPoolDriver) return
   const abort = new AbortController()
   accountsPoolAbort = abort
-  // Which run this is, so the expensive transcript aggregation rides only every
-  // Nth one (see `USAGE_STATS_EVERY_N_RUNS`). Run 0 always carries it, so the
-  // Accounts page is populated at launch rather than up to 5 minutes later.
-  let runIndex = 0
   accountsPoolDriver = createSingleFlightDriver({
     intervalMs: ACCOUNTS_POOL_REFRESH_INTERVAL_MS,
     logLabel: 'accounts-runner',
@@ -1003,13 +1042,10 @@ function startAccountsPoolRefresh(): void {
       if (accountDeleteInFlight) return Promise.resolve()
       const generation = accountsPoolPublicationGate.beginRead()
       const onWorkerLifecycle = createWorkerLifecycleLogger('accounts-pool')
-      const withUsageStats = runCarriesUsageStats(runIndex)
-      runIndex += 1
       return runAccountsPoolWorker({
         command: sidecarLaunch().command,
         args: sidecarLaunch().argsFor('accounts-pool', [
           '--bare',
-          ...(withUsageStats ? ['--usage-stats'] : []),
         ]),
         cwd: process.cwd(),
         signal: abort.signal,
@@ -1018,16 +1054,11 @@ function startAccountsPoolRefresh(): void {
           if (!accountsPoolPublicationGate.canPublish(generation)) return
           sendHostEvent({ type: 'accounts-pool', pool })
         },
-        // Same run, same page, separate event: the two are independent reads and
-        // a stats failure must not withhold the pool (nor the reverse).
-        onUsageStats: stats => {
-          if (!accountsPoolPublicationGate.canPublish(generation)) return
-          sendHostEvent({ type: 'usage-stats', stats })
-        },
         log: line => process.stderr.write(`${line}\n`),
       })
     },
-    log: line => process.stderr.write(`${line}\n`),
+    // Teardown cancels this read intentionally; keep real runtime failures visible.
+    log: line => { if (!abort.signal.aborted) process.stderr.write(`${line}\n`) },
   })
   accountsPoolDriver.start()
 }
@@ -1669,6 +1700,7 @@ function createWindow(): void {
     // Accounts owner (decisions/ACCOUNTS-OWNERSHIP.md): arm the pool refresh the
     // same way, so the Accounts page has live data with no session open.
     startupTimers.schedule(startAccountsPoolRefresh)
+    startupTimers.schedule(startUsageRefresh)
     // IDLE-PARK (decisions/IDLE-PARK.md §4): arm the RAM-reclaim policy driver
     // here too, off the launch critical path; it self-reschedules its TTL sweep
     // and re-evaluates the cap on host events.
@@ -2262,6 +2294,11 @@ function registerIpcHandlers(): void {
       deliver(pending.map(frame => traceFrame(frame, 'attachment.replayed')))
     }
     readinessLatch.rendererReady()
+    for (const result of usagePublication.replay()) {
+      if (usageEnabled && result.type === 'error' && result.code === 'unavailable') continue
+      sendHostEvent({ type: 'usage-dashboard', result })
+    }
+    if (usagePending) sendHostEvent({ type: 'usage-dashboard-loading' })
   })
 
   ipcMain.on(CH_DELIVERY_ACK, (_e, payload: unknown) => {
@@ -3656,6 +3693,11 @@ function stopBackgroundDrivers(): void {
   sessionsCatalogDriver = null
   sessionsCatalogAbort?.abort()
   sessionsCatalogAbort = null
+  usagePublication.invalidate()
+  usageDriver?.stop()
+  usageDriver = null
+  usageAbort?.abort()
+  usageAbort = null
   accountsPoolDriver?.stop()
   accountsPoolDriver = null
   accountsPoolAbort?.abort()

@@ -23,6 +23,7 @@ const MODES = {
   'transcript-backfill': () => import('./transcriptBackfillWorker.js'),
   'catalog': () => import('./sessionsCatalogWorker.js'),
   'accounts-pool': () => import('./accountsPoolWorker.js'),
+  'usage-stats': () => import('./usageStatsWorker.js'),
   'debug-cleanup': () => import('./debugCleanupWorker.js'),
 } as const
 

@@ -10,6 +10,7 @@ import type {
   UsageStatsRange,
   UsageStatsSnapshot,
 } from '../../shared/protocol.js'
+import { useEffect, useState } from 'react'
 
 /**
  * Renderer projection of the P4-5 accounts read-seam.
@@ -259,6 +260,66 @@ export function selectGlobalAccountsSnapshot(
   state: AccountsState,
 ): AccountsSnapshot | null {
   return state.pool ?? selectFirstAccountsSnapshot(state)
+}
+
+/**
+ * The Welcome launcher's pool view. Once main's global snapshot has published,
+ * it wins; before then, preserve the active session as the more relevant
+ * launch-gap fallback before considering another session's snapshot.
+ */
+export function selectWelcomeAccountsSnapshot(
+  state: AccountsState,
+  activeSessionId: SessionId | null,
+): AccountsSnapshot | null {
+  return (
+    state.pool ??
+    selectAccountsSnapshot(state, activeSessionId) ??
+    selectFirstAccountsSnapshot(state)
+  )
+}
+
+/** The local display state for Welcome usage while a renderer document starts. */
+export type AccountsPoolPresentationState = 'pending' | 'loaded' | 'unavailable'
+
+/**
+ * A renderer display deadline, not a worker timeout. Reopening or reloading the
+ * renderer starts a new local presentation window without changing the pool.
+ */
+export const ACCOUNTS_POOL_PRESENTATION_TIMEOUT_MS = 2 * 60 * 1000
+
+/**
+ * Keeps the Welcome usage rail neutral until main has published its first
+ * global pool event, then latches that arrival for this mounted document.
+ */
+export function useAccountsPoolPresentationState(
+  hasGlobalPool: boolean,
+  timeoutMs: number = ACCOUNTS_POOL_PRESENTATION_TIMEOUT_MS,
+): AccountsPoolPresentationState {
+  const [presentationState, setPresentationState] = useState<AccountsPoolPresentationState>(
+    () => (hasGlobalPool ? 'loaded' : 'pending'),
+  )
+
+  useEffect(() => {
+    if (hasGlobalPool) {
+      setPresentationState('loaded')
+      return
+    }
+
+    // A global event already arrived in this renderer document. Do not start a
+    // new display deadline if a later snapshot temporarily has no usage rows.
+    if (presentationState !== 'pending') return
+
+    let mounted = true
+    const handle = setTimeout(() => {
+      if (mounted) setPresentationState('unavailable')
+    }, timeoutMs)
+    return () => {
+      mounted = false
+      clearTimeout(handle)
+    }
+  }, [hasGlobalPool, presentationState, timeoutMs])
+
+  return presentationState
 }
 
 /** The rows in pool order (the active account is flagged via `isDefault`). */

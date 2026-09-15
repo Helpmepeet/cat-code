@@ -541,6 +541,7 @@ test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff i
     'sessions',
     'goals',
     'accounts',
+    'usage',
     'settings',
   ]) {
     const marker = `data-sidebar-nav-id="${id}"`
@@ -899,6 +900,7 @@ test('the collapsed rail keeps the account glyph below the destinations like the
     'sessions',
     'goals',
     'accounts',
+    'usage',
     'settings',
   ]) {
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)

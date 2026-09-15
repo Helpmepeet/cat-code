@@ -1,3 +1,5 @@
+import { UsagePage } from './UsagePage.js'
+import { initialUsageDashboardState, reduceUsageDashboard } from './usageDashboardState.js'
 import {
   useCallback,
   useEffect,
@@ -216,7 +218,9 @@ import {
   selectActiveAnthropicAccount,
   selectGlobalAccountsSnapshot,
   selectOAuthProgress,
+  selectWelcomeAccountsSnapshot,
   selectUsageStatsForRange,
+  useAccountsPoolPresentationState,
 } from './accountsState.js'
 import { selectAccountHealthBanner } from './accountHealthBanner.js'
 import { BannerStack, type BannerNotice } from './BannerStack.js'
@@ -465,6 +469,7 @@ function defaultPromptDraftStorage(): Pick<Storage, 'getItem' | 'setItem'> | nul
 }
 
 export function App() {
+  const [usageDashboard, dispatchUsageDashboard] = useReducer(reduceUsageDashboard, initialUsageDashboardState)
   const pendingDeliveryStateAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const pendingDeliveryCommitAcksRef = useRef<Array<{ sessionId: SessionId; sequence: number; deliveryAttempt: number; streamEpoch: string; traceId: string }>>([])
   const [state, dispatch] = useReducer(
@@ -773,6 +778,10 @@ export function App() {
     undefined,
     createAccountsState,
   )
+  const accountsPoolPresentationState = useAccountsPoolPresentationState(
+    accounts.pool !== null,
+  )
+  const accountsUsagePending = accountsPoolPresentationState === 'pending'
   const [workspaceTrust, dispatchWorkspaceTrust] = useReducer(
     reduceWorkspaceTrustStateBatched,
     undefined,
@@ -881,7 +890,7 @@ export function App() {
     'anthropic',
   )
   const [activeView, setActiveView] = useState<
-    'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+    'chat' | 'sessions' | 'goals' | 'accounts' | 'usage' | 'settings'
   >('chat')
   // The app-level session roster — a projection of the host control plane's
   // HostEvent stream (REGISTRY §6.1), not a poll loop. Seeded once from
@@ -1243,6 +1252,14 @@ export function App() {
       // Usage analytics ride the same accounts worker run, for the same reason:
       // the Accounts page opens with no session attached, and the per-session
       // stats frame cannot reach it there. Also NOT a roster row.
+      if (event.type === 'usage-dashboard-loading') {
+        dispatchUsageDashboard({ type: 'loading' })
+        return
+      }
+      if (event.type === 'usage-dashboard') {
+        dispatchUsageDashboard(event.result)
+        return
+      }
       if (event.type === 'usage-stats') {
         dispatchAccounts({ type: 'usage-stats', stats: event.stats })
         return
@@ -3411,6 +3428,7 @@ export function App() {
 	             * its worker holds. This pane's own session, not the active one. */
 	            leases={panelLeases}
 	            accountsSnapshot={panelAccounts}
+	            accountsUsagePending={accountsUsagePending}
 	            activeAccount={panelActiveCodexAccount}
 	            activeAnthropicAccount={panelActiveAnthropicAccount}
 	            accountsLastResult={accounts.lastResult}
@@ -3867,6 +3885,7 @@ export function App() {
   // first-run OAuth (no credentialed account → pool initialized but empty),
   // mirroring the engine's trust→auth startup order (`init.ts`).
   const activeAccountsSnapshot = selectAccountsSnapshot(accounts, activeSessionId)
+  const welcomeAccounts = selectWelcomeAccountsSnapshot(accounts, activeSessionId)
   const activeTrustSnapshot = selectWorkspaceTrustSnapshot(
     workspaceTrust,
     activeSessionId,
@@ -4328,6 +4347,8 @@ export function App() {
             />
           ) : activeView === 'goals' ? (
             <GoalsPage rows={selectThreadGoalRows(goalMemory, sessionCatalogRows)} />
+          ) : activeView === 'usage' ? (
+            <UsagePage state={usageDashboard} />
           ) : activeView === 'accounts' ? (
             <AccountsPage
               snapshot={selectGlobalAccountsSnapshot(accounts)}
@@ -4467,7 +4488,8 @@ export function App() {
             // (post-spawn trust gate).
             <WelcomeScreen
               recents={welcomeRecents}
-              accounts={activeAccountsSnapshot ?? selectGlobalAccountsSnapshot(accounts)}
+              accounts={welcomeAccounts}
+              accountsUsagePending={accountsUsagePending}
               onOpenRecent={openRecentWorkspace}
               onOpenFolder={() => void newSession()}
               rosterFailure={

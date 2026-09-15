@@ -18,6 +18,7 @@ import { createTranscriptState } from './transcriptProjector.js'
 export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
   return {
     accountsSnapshot: null,
+    accountsUsagePending: false,
     accountsLastResult: null,
     activeConnection: { status: 'ready', inputEnabled: true },
     activeDescriptor: undefined,

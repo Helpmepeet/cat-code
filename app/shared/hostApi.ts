@@ -1,3 +1,4 @@
+import type { UsageCollectionResult } from './usageDashboard.js'
 /**
  * The host control-plane contract (D1 — `decisions/REGISTRY.md` §6.1; trust zone
  * — `decisions/SECURITY-MINIMUM.md` Addendum 2026-07-04, T8 / HC1–HC4).
@@ -337,15 +338,10 @@ export type SaveTextInput = {
  *    ran on it at the worker and again at main's parse boundary. The event never
  *    carries a renderer-authored write. A successful session-independent profile
  *    deletion causes main to emit the worker's freshly redacted pool here.
- *  - `usage-stats` — the Accounts page's usage analytics for BOTH ranges,
- *    aggregated by that same accounts worker run (`accountsPoolWorker.ts`
- *    `usageStats`). It exists for the same reason `accounts-pool` does: the
- *    Accounts page is reachable with no session open, and the per-session
- *    `stats.usage.snapshot` frame can only arrive from an attached sidecar, so
- *    without this the page rendered zeros and told the user they had no history.
- *    Read-only OUTBOUND display metadata (C3 precedent): aggregate token counts,
- *    dates and model names, never prompt text. Emitted only when a run actually
- *    carried the field, so a failed stats read leaves the last good value.
+ *  - `usage-dashboard` carries the independently validated usage worker result.
+ *    Success and failure are explicit; the renderer retains the last successful
+ *    snapshot with its original UTC cutoff. See USAGE-DASHBOARD.md.
+ *  - `usage-stats` is a retained legacy shape, no longer published by main.
  *
  * The first three carry the full descriptor (except `removed`, which carries only
  * the id) so a subscriber can update without a follow-up read.
@@ -357,6 +353,8 @@ export type HostEvent =
   | { type: 'sessions-catalog'; catalog: SessionsCatalogSnapshot }
   | { type: 'accounts-pool'; pool: AccountsSnapshot }
   | { type: 'usage-stats'; stats: UsageStatsByRange }
+  | { type: 'usage-dashboard'; result: UsageCollectionResult }
+  | { type: 'usage-dashboard-loading' }
 
 /* ------------------------------------------------------------------------- *
  * Bounds (HC4 + title cap)

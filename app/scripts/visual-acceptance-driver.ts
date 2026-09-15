@@ -19,6 +19,9 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const outDir = mustEnv('CATCODE_CAPTURE_OUT')
+// Isolate the single-instance lock and window preferences from an open dev app.
+mkdirSync(join(outDir, 'electron-profile'), { recursive: true })
+app.setPath('userData', join(outDir, 'electron-profile'))
 /** Milliseconds to let the shell settle after first paint before the first frame. */
 const settleMs = Number(process.env.CATCODE_CAPTURE_SETTLE_MS ?? '1200')
 
@@ -80,7 +83,37 @@ type Shot = {
  * where Stage 2's interaction steps attach; keeping it a plain array means adding
  * a state is adding a row, not editing the driver.
  */
-const SHOTS: Shot[] = [{ name: 'shell-default', settleMs: 400 }]
+const SHOTS: Shot[] = process.env.CATCODE_CAPTURE_SCENE === 'usage' ? [
+  { name: 'usage-normal', prepare: async window => {
+    window.setMinimumSize(400, 400)
+    window.setContentSize(1200, 900)
+    await window.webContents.executeJavaScript(`document.querySelector('[data-sidebar-nav-id="usage"]')?.click()`)
+    for (let i = 0; i < 100; i++) {
+      if (await window.webContents.executeJavaScript(`Boolean(document.querySelector('.usage-day-readout'))`)) return
+      await settle(100)
+    }
+    throw new Error('Usage fixture did not arrive')
+  } },
+  { name: 'usage-narrow', prepare: async window => { window.setContentSize(520, 1900) } },
+  { name: 'usage-30d', prepare: async window => {
+    window.setContentSize(1920, 1056)
+    await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '30 days')?.click()`)
+  } },
+  { name: 'usage-activity', prepare: async window => {
+    window.setContentSize(1440, 1056)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'start' }); document.querySelectorAll('.usage-heatmap g[role="button"]')[315]?.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))`)
+  } },
+  { name: 'usage-week-activity', prepare: async window => {
+    window.setContentSize(1440, 1056)
+    await window.webContents.executeJavaScript(`Array.from(document.querySelectorAll('.usage-range button')).find(b => b.textContent === '7 days')?.click()`)
+    await settle(100)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'center' })`)
+  } },
+  { name: 'usage-activity-narrow', prepare: async window => {
+    window.setContentSize(520, 1100)
+    await window.webContents.executeJavaScript(`document.querySelector('.usage-heatmap')?.closest('section')?.scrollIntoView({ block: 'start' })`)
+  } },
+] : [{ name: 'shell-default', settleMs: 400 }]
 
 function settle(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))

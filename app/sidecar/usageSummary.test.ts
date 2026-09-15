@@ -1,0 +1,20 @@
+import { expect, test } from 'bun:test';
+import { emptyTokens, groupUsageSummary, usageCategory } from './usageSummary.js';
+import type { UsageRangeSummary } from '../shared/usageDashboard.js';
+test('grouping preserves exact daily/model/tool totals and distinguishes reserved names', () => {
+    const models = Array.from({ length: 100 }, (_, i) => ({ ...usageCategory(i === 0 ? 'Other' : `模型${i}`), tokens: { ...emptyTokens(), fresh: i + 1 } }));
+    const summary: UsageRangeSummary = { range: '7d', startInclusive: '', endExclusive: '', tokens: { ...emptyTokens(), fresh: 5050 }, sessions: 1, records: 1, requests: 100, identifiedRequests: 100, fallbackRequests: 0, activeDays: 1, cachedInputShare: 0, cacheWriteReporting: 'reported', models, tools: models.map(m => ({ id: m.id, kind: m.kind, label: m.label, requests: 1, results: 1, errors: 1 })), days: [{ date: '2026-09-13', hourlyRequests: [100, ...Array(23).fill(0)], tokens: { ...emptyTokens(), fresh: 5050 }, cacheWriteReporting: 'reported', models: models.map(m => ({ id: m.id, total: m.tokens.fresh })), sessions: 1, records: 1, requests: 100 }], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+    const grouped = groupUsageSummary(summary);
+    expect(grouped.models).toHaveLength(9);
+    expect(grouped.models.reduce((n, m) => n + m.tokens.fresh, 0)).toBe(5050);
+    expect(grouped.days[0]!.models.reduce((n, m) => n + m.total, 0)).toBe(5050);
+    expect(grouped.tools.reduce((n, t) => n + t.requests, 0)).toBe(100);
+    expect(grouped.tools.reduce((n, t) => n + t.errors, 0)).toBe(100);
+    expect(grouped.tools.reduce((n, t) => n + t.results, 0)).toBe(100);
+    expect(grouped.detail).toEqual({ state: 'grouped', omittedModels: 92, omittedTools: 90 });
+    expect(usageCategory('Other').id).not.toBe('other');
+    expect(usageCategory('Unknown').id).not.toBe('unknown');
+    expect(usageCategory('模型'.repeat(500)).label.length).toBeGreaterThan(0);
+    expect(Buffer.byteLength(usageCategory('模型'.repeat(500)).label)).toBeLessThanOrEqual(160);
+    expect(usageCategory('x'.repeat(200) + 'a').id).not.toBe(usageCategory('x'.repeat(200) + 'b').id);
+});

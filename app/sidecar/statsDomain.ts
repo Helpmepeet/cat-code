@@ -223,3 +223,28 @@ export async function tryGetUsageStatsSnapshots(
     return null
   }
 }
+
+/** Independent desktop overview; the old per-session query contract is unchanged. */
+export async function collectUsageDashboard(): Promise<import('../shared/usageDashboard.js').UsageCollectionResult> {
+  const { aggregateUsageDashboard } = await import('../../src/utils/stats.js')
+  const { UsageResourceError } = await import('../../src/utils/statsUsage.js')
+  const { groupUsageSummary } = await import('./usageSummary.js')
+  const { parseUsageCollectionResult } = await import('../shared/usageStatsWorker.js')
+  try {
+    const snapshot = await aggregateUsageDashboard(undefined, { finalize: snapshot => {
+      const raw = snapshot.ranges
+      for (const limit of [8, 4, 0]) {
+        snapshot.ranges = {
+          '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit),
+          '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit),
+        }
+        const result = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })
+        if (result?.type === 'usage') return result.snapshot
+      }
+      throw new Error('Invalid usage summary')
+    } })
+    return parseUsageCollectionResult({ type: 'usage', version: 1, snapshot }) ?? { type: 'error', version: 1, code: 'invalid-output' }
+  } catch (error) {
+    return { type: 'error', version: 1, code: error instanceof UsageResourceError || (error instanceof Error && /resource limit/.test(error.message)) ? 'resource-limit' : error instanceof Error && /timeout/i.test(error.message) ? 'timeout' : 'collection' }
+  }
+}

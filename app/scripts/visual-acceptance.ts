@@ -11,7 +11,7 @@
  * driver injection. The difference is what the driver does once it is in.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -25,7 +25,8 @@ import {
 const here = dirname(fileURLToPath(import.meta.url))
 const appRoot = join(here, '..')
 const electronBin = join(appRoot, 'node_modules', '.bin', 'electron')
-const rendererUrl = 'http://localhost:5173'
+const capturePort = process.env.CATCODE_CAPTURE_PORT ?? '5173'
+const rendererUrl = `http://localhost:${capturePort}`
 const driverOut = join(here, 'visual-acceptance-driver.cjs')
 
 const outDir = resolve(
@@ -52,6 +53,24 @@ async function main(): Promise<void> {
   scratch = realpathSync(mkdtempSync(join(tmpdir(), 'catcode-visual-cwd-')))
   configHome = mkdtempSync(join(tmpdir(), 'catcode-visual-config-'))
 
+  if (process.env.CATCODE_CAPTURE_SCENE === 'usage') {
+    const project = join(configHome, 'projects', 'usage-fixture')
+    mkdirSync(project, { recursive: true })
+    mkdirSync(join(configHome, 'fixture-home'), { recursive: true })
+    const rows = []
+    const cutoff = new Date()
+    for (let day = 0; day < 30; day++) for (let model = 0; model < 4; model++) for (let hour = 0; hour < 24; hour++) {
+      const timestamp = new Date(Date.UTC(cutoff.getUTCFullYear(), cutoff.getUTCMonth(), cutoff.getUTCDate() - day, hour))
+      if (timestamp > cutoff || hour < 5 || hour > 21 || (day + hour + model) % 5 === 0) continue
+      const copies = hour >= 10 && hour <= 17 ? 3 : 1
+      for (let n = 0; n < copies; n++) {
+        const id = `${day}-${model}-${hour}-${n}`
+        rows.push({ type: 'assistant', sessionId: 'fixture', uuid: id, timestamp: timestamp.toISOString(), message: { id, model: ['Claude Sonnet', 'GPT Codex', 'Claude Haiku', 'Other'][model], usage: { input_tokens: (31-day)*(model+1)*120, cache_read_input_tokens: (31-day)*180, cache_creation_input_tokens: 240, output_tokens: (31-day)*30 }, content: [{ type: 'tool_use', id, name: ['Bash','Read','Edit','Search'][model] }] } })
+        if ((day + hour + n) % 7 !== 0) rows.push({ type: 'user', sessionId: 'fixture', uuid: `result-${id}`, timestamp: timestamp.toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: (day + hour + model + n) % (model + 9) === 0 }] } })
+      }
+    }
+    writeFileSync(join(project, 'fixture.jsonl'), rows.map(row => JSON.stringify(row)).join('\n'))
+  }
   try {
     const build = spawnSync('bun', ['run', join(here, 'build-electron.ts')], {
       stdio: 'inherit',
@@ -77,7 +96,7 @@ async function main(): Promise<void> {
 
     viteProcess = spawn(
       'bunx',
-      ['vite', '--config', join(appRoot, 'renderer', 'vite.config.ts')],
+      ['vite', '--config', join(appRoot, 'renderer', 'vite.config.ts'), '--port', capturePort],
       { cwd: appRoot, stdio: ['ignore', 'pipe', 'pipe'] },
     )
     viteProcess.stderr?.on('data', chunk => process.stderr.write(chunk))
@@ -110,6 +129,10 @@ async function main(): Promise<void> {
         CATCODE_HEADLESS_CAPTURE: '1',
         CATCODE_CAPTURE_OUT: outDir,
         CLAUDE_CONFIG_DIR: configHome,
+        ...(process.env.CATCODE_CAPTURE_SCENE === 'usage' ? {
+          CATCODE_USAGE_DASHBOARD: '1', HOME: join(configHome, 'fixture-home'),
+          ANTHROPIC_API_KEY: '', CLAUDE_CODE_OAUTH_TOKEN: '', OPENAI_API_KEY: '',
+        } : {}),
       },
     })
     electronProcess = electron

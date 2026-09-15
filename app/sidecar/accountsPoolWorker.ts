@@ -52,13 +52,7 @@
  * generates a completion. Failures leave the pool without fresh usage and do
  * not fail the worker run. Forced refreshes bypass that shared observation.
  *
- * It also aggregates the Accounts page's usage analytics for both ranges
- * (`readUsageStats`), for the same reason the pool read moved here: that page
- * must work with no session open. Local disk only, and best-effort — a failure
- * omits the field and never fails the run. Unlike everything else here it runs
- * only when main passes `--usage-stats`, because it is a full pass over the
- * transcript corpus rather than a bounded vault read; the cadence and its
- * reasoning live on `USAGE_STATS_EVERY_N_RUNS` in `app/main/accountsPoolRunner.ts`.
+ * Retained-history analytics are owned by the independent usageStatsWorker.
  *
  * The emitted record is the ALREADY-redacted `AccountsSnapshot` (no token, no
  * vault path by construction), and it is `secretGuard`-scanned here AND again at
@@ -69,12 +63,10 @@ import {
   ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
   MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
   parseAccountsPoolWorkerDeleteRequest,
-  shedOversizeUsageStats,
   type AccountsPoolWorkerDeleteRequest,
   type AccountsPoolWorkerResult,
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import type { UsageStatsByRange } from '../shared/protocol.js'
 import {
   bootstrapWorkerEngine,
   emitWorkerRecord,
@@ -195,17 +187,7 @@ async function main(): Promise<void> {
     version: ACCOUNTS_POOL_WORKER_BOUNDARY_VERSION,
     pool,
   }
-  // Only when main asked. It gates this per run because the read is a full pass
-  // over the transcript corpus, unlike everything else in this worker — see
-  // `USAGE_STATS_EVERY_N_RUNS` in `app/main/accountsPoolRunner.ts` for the
-  // cadence and its reason.
-  const usageStats = process.argv.includes('--usage-stats')
-    ? await readUsageStats()
-    : null
-  if (usageStats) result.usageStats = usageStats
-  if (shedOversizeUsageStats(result).shed) {
-    process.stderr.write('[accounts-worker] usage stats dropped: record too large\n')
-  }
+  // Usage has its own read-only worker and publication lifecycle.
   const secret = scanForSecrets(result)
   if (!secret.ok) {
     process.stderr.write('[accounts-worker] blocked secret-keyed pool result\n')
@@ -223,38 +205,6 @@ async function main(): Promise<void> {
   process.exit(0)
 }
 
-/**
- * Usage analytics for both ranges, through the SAME `statsDomain` projection a
- * session sidecar uses (CLAUDE.md §8 rule 10 — reuse the real entry point, do
- * not re-derive the aggregation here). Local disk only: no network, no
- * credential, no config write.
- *
- * Best-effort by contract, and it must FAIL rather than degrade. Either range
- * reading null omits the WHOLE field, so the renderer keeps its last good value
- * and the empty-history claim stays something only a successful read can make.
- * Degrading a failure to a zeroed snapshot instead would publish "you have no
- * history" as measured fact, which is the exact bug this feed was built to fix.
- *
- * `bypassCache` is deliberately NOT set: the domain's 5-second TTL cannot span
- * two runs of this disposable process (a fresh one starts cold every time), so
- * asking for a bypass would claim a behavioural difference that does not exist.
- */
-async function readUsageStats(): Promise<UsageStatsByRange | null> {
-  try {
-    const { tryGetUsageStatsSnapshots } = await import('./statsDomain.js')
-    const snapshots = await tryGetUsageStatsSnapshots()
-    if (!snapshots) {
-      process.stderr.write('[accounts-worker] usage stats read failed\n')
-      return null
-    }
-    return snapshots
-  } catch (error) {
-    process.stderr.write(
-      `[accounts-worker] usage stats skipped: ${errorText(error)}\n`,
-    )
-    return null
-  }
-}
 
 /**
  * The two Anthropic route booleans, read with the minimal-mode switch lifted for

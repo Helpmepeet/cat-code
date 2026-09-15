@@ -53,7 +53,7 @@ describe('statsDomain', () => {
       ],
       dailyModelTokens: [
         { date: '2026-08-13', tokensByModel: { 'claude-3-5-sonnet': 40000 } },
-        { date: '2026-08-14', tokensByModel: { 'claude-3-5-sonnet': 60000 } },
+        { date: '2026-08-14', tokensByModel: { 'claude-3-5-sonnet': 30000 } },
       ],
       longestSession: null,
       modelUsage: {
@@ -83,6 +83,7 @@ describe('statsDomain', () => {
     expect(snapshot.totalMessages).toBe(120)
     expect(snapshot.activeDays).toBe(5)
     expect(snapshot.dailyModelTokens).toHaveLength(2)
+    expect(snapshot.dailyModelTokens.reduce((sum, day) => sum + Object.values(day.tokensByModel).reduce((n, value) => n + value, 0), 0)).toBe(snapshot.totalTokens)
     expect(snapshot.dailyActivity).toHaveLength(2)
   })
 

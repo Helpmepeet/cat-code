@@ -281,14 +281,15 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
     />,
   )
   expect(html).toContain('Codex')
-  expect(html).toContain('>1</span> account')
+  expect(html).toContain('>2</span> accounts')
   // Prototype header: status-`healthy` count labelled "healthy" (main is healthy,
   // backup is capped → 1).
   expect(html).toContain('>1</span> healthy')
   expect(html).toContain('main')
-  expect(html).not.toContain('backup')
-  expect(html).not.toContain('capped')
+  expect(html).toContain('backup')
+  expect(html).toContain('capped')
   expect(html).toContain('20%')
+  expect(html).toContain('100%')
   expect(html).toContain('aria-label="5-hour reset: 3h"')
   expect(html).toContain('aria-label="Weekly reset: 4h"')
   // Flat accent-gradient bars, not tone-coded green/amber/red.
@@ -301,14 +302,20 @@ test('the Codex table renders real pool rows (alias, capped badge, usage %)', ()
   expect(html).toContain('grid-cols-2')
 })
 
-test('the Welcome table filters blocked rows locally and counts visible rows', () => {
+test('the Welcome table filters out re-login accounts locally and keeps usable and capped rows', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
       accounts={pool([
         account({ id: 'active', alias: 'active', isDefault: true }),
         account({ id: 'warned', alias: 'warned', availability: 'warned' }),
-        account({ id: 'blocked', alias: 'blocked', availability: 'blocked' }),
+        account({
+          id: 'dead-account',
+          alias: 'dead-account',
+          status: 'dead',
+          availability: 'blocked',
+          availabilityLabel: 'Needs re-login',
+        }),
       ])}
       onOpenRecent={noop}
       onOpenFolder={noop}
@@ -318,14 +325,46 @@ test('the Welcome table filters blocked rows locally and counts visible rows', (
   expect(html).toContain('>2</span> accounts')
   expect(html).toContain('active')
   expect(html).toContain('warned')
-  expect(html).not.toContain('blocked')
+  expect(html).not.toContain('dead-account')
+})
+
+test('the Welcome table keeps usable accounts with no usage data', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([
+        account({
+          id: 'fresh',
+          alias: 'fresh-account',
+          status: 'healthy',
+          usagePrimary: null,
+          usageWeekly: null,
+          usagePrimaryWindowSeconds: null,
+          usageSecondaryWindowSeconds: null,
+        }),
+      ])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('>1</span> account')
+  expect(html).toContain('>1</span> healthy')
+  expect(html).toContain('fresh-account')
 })
 
 test('a loaded snapshot with no usable accounts has a distinct empty state', () => {
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
-      accounts={pool([account({ id: 'blocked', availability: 'blocked' })])}
+      accounts={pool([
+        account({
+          id: 'dead-account',
+          status: 'dead',
+          availability: 'blocked',
+          availabilityLabel: 'Needs re-login',
+        }),
+      ])}
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -334,6 +373,115 @@ test('a loaded snapshot with no usable accounts has a distinct empty state', () 
   expect(html).toContain('>0</span> accounts')
   expect(html).toContain('No usable Codex accounts.')
   expect(html).not.toContain('No Codex account data for this view yet.')
+})
+
+test('a pending row with no recognized usage renders a neutral decorative rail', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: null,
+        usageWeekly: null,
+        usagePrimaryWindowSeconds: null,
+        usageSecondaryWindowSeconds: null,
+        usageResetAt: null,
+        usageWeeklyResetAt: null,
+      })])}
+      accountsUsagePending
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('data-welcome-usage-region="true"')
+  expect(html).toContain('data-welcome-usage-state="pending"')
+  expect(html).toContain('aria-hidden="true"')
+  expect(html).not.toContain('>5h<')
+  expect(html).not.toContain('>7d<')
+  expect(html).not.toMatch(/\d+%/)
+  expect(html).not.toContain('reset:')
+  expect(html).not.toContain('role="progressbar"')
+  expect(html).not.toContain('aria-valuenow')
+  expect(html).not.toContain('animate-pulse')
+})
+
+test('a recognized usage window wins over the pending rail', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 37,
+        usagePrimaryWindowSeconds: 18_000,
+        usageWeekly: null,
+        usageSecondaryWindowSeconds: null,
+      })])}
+      accountsUsagePending
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('data-welcome-usage-region="true"')
+  expect(html).toContain('data-welcome-usage-state="real"')
+  expect(html).not.toContain('data-welcome-usage-state="pending"')
+  expect(html).toContain('animate-toast-in')
+  expect(html).toContain('aria-label="5-hour usage: 37%"')
+  expect(html).not.toContain('>7d<')
+})
+
+test('a loaded row without usage renders no rail or fabricated metric', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: null,
+        usageWeekly: null,
+        usagePrimaryWindowSeconds: null,
+        usageSecondaryWindowSeconds: null,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('data-welcome-usage-region="true"')
+  expect(html).not.toContain('data-welcome-usage-state=')
+  expect(html).not.toContain('role="progressbar"')
+  expect(html).not.toContain('>5h<')
+  expect(html).not.toContain('>7d<')
+  expect(html).not.toMatch(/\d+%/)
+})
+
+test('usage-state replacement preserves the account row and usage-region geometry classes', () => {
+  const noUsage = pool([account({
+    usagePrimary: null,
+    usageWeekly: null,
+    usagePrimaryWindowSeconds: null,
+    usageSecondaryWindowSeconds: null,
+  })])
+  const withUsage = pool([account({ usagePrimary: 20, usagePrimaryWindowSeconds: 18_000 })])
+  const render = (accounts: AccountsSnapshot, accountsUsagePending: boolean) =>
+    renderToStaticMarkup(
+      <WelcomeScreen
+        recents={[]}
+        accounts={accounts}
+        accountsUsagePending={accountsUsagePending}
+        onOpenRecent={noop}
+        onOpenFolder={noop}
+      />,
+    )
+  const accountRowClass =
+    'grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]'
+  const usageRegionClass = 'grid min-w-0'
+
+  for (const html of [
+    render(noUsage, true),
+    render(noUsage, false),
+    render(withUsage, false),
+  ]) {
+    expect(html).toContain(`class="${accountRowClass}"`)
+    expect(html).toContain(`class="${usageRegionClass}"`)
+  }
 })
 
 test('weekly-only usage expands across the full usage track', () => {

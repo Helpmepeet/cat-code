@@ -2591,6 +2591,9 @@ export type AccountResultFrame = {
  * Usage Analytics Snapshot & Query Protocol (Real engine-backed stats)
  * ------------------------------------------------------------------------- */
 
+// The dedicated Usage destination uses usageDashboard.ts v1. This legacy
+// per-session query remains compatible and is not an overview publisher.
+// See decisions/USAGE-DASHBOARD.md.
 export type UsageStatsRange = '7d' | '30d'
 
 export type UsageStatsDailyModelTokens = {
