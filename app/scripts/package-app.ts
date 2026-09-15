@@ -192,8 +192,19 @@ function makeIcon(): string | null {
     run('sips', ['-z', String(size * 2), String(size * 2), source, '--out', join(iconset, `icon_${size}x${size}@2x.png`)], { quiet: true })
   }
   const icns = join(OUT_DIR, 'catcode.icns')
-  run('iconutil', ['-c', 'icns', iconset, '-o', icns], { quiet: true })
+  const conversion = spawnSync('iconutil', ['-c', 'icns', iconset, '-o', icns], {
+    encoding: 'utf8',
+  })
   rmSync(iconset, { recursive: true, force: true })
+  if (conversion.status !== 0 || !existsSync(icns)) {
+    // macOS 26 currently rejects otherwise-valid iconsets, including the one
+    // shipped by Electron. The stock Electron icon is a safe fallback; a
+    // platform icon-conversion quirk must not prevent testing the real bundle.
+    process.stderr.write(
+      '[package] custom icon conversion unavailable; using the stock Electron icon\n',
+    )
+    return null
+  }
   return icns
 }
 
