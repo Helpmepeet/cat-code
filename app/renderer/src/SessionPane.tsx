@@ -67,6 +67,7 @@ import {
   type MessageActionHandler,
   type RestorePhase,
 } from './TranscriptView.js'
+import type { ToolCardExpansionStore } from './toolCardExpansion.js'
 import { observePaneBottomLock } from './markdownScrollCoordinator.js'
 import { selectPaneFollowIntent } from './paneAnchorModel.js'
 import {
@@ -198,6 +199,7 @@ export function SessionPane({
   activeLog,
   activeSessionId,
   createdPeerNavigation,
+  toolCardExpansionStore,
   isActivePane,
   composerFocusRequest,
   preview = false,
@@ -1164,6 +1166,7 @@ export function SessionPane({
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onMessageAction={onMessageAction}
             createdPeerNavigation={createdPeerNavigation}
+            toolCardExpansionStore={toolCardExpansionStore}
           />
 
           {/* D1a — a message sent during a response waits here until the engine
@@ -1988,6 +1991,8 @@ type SessionPaneProps = {
   activeSessionId: SessionId | null
   /** Shell-owned lookup and navigation for completed CreatePeer rows. */
   createdPeerNavigation?: CreatedPeerNavigation | null
+  /** Shell-lifetime card/disclosure memory, shared by every pane. */
+  toolCardExpansionStore?: ToolCardExpansionStore | null
   /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
   isActivePane: boolean
   /** Monotonic request to focus this pane's composer after a historical rewrite. */

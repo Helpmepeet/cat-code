@@ -401,6 +401,10 @@ import {
   writePromptDraftsToStorage,
 } from './promptDraftPersistence.js'
 import { SessionPane } from './SessionPane.js'
+import {
+  createToolCardExpansionStore,
+  type ToolCardExpansionStore,
+} from './toolCardExpansion.js'
 import { errorMessage } from './appModel.js'
 
 // Perf F3 (2026-07-08): batch-folding reducer variants, defined at module scope
@@ -906,6 +910,8 @@ export function App() {
   // the active tab is removed.
   const shellRef = useRef(shell)
   shellRef.current = shell
+  const toolCardExpansionStoreRef = useRef<ToolCardExpansionStore | null>(null)
+  toolCardExpansionStoreRef.current ??= createToolCardExpansionStore()
   const activeSessionIdRef = useRef(activeSessionId)
   activeSessionIdRef.current = activeSessionId
   const pendingCloseRequestsRef = useRef<
@@ -3495,6 +3501,7 @@ export function App() {
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
 	            createdPeerNavigation={createdPeerNavigation}
+	            toolCardExpansionStore={toolCardExpansionStoreRef.current}
                 isActivePane={sessionId === activeSessionId}
                 composerFocusRequest={composerFocusRequests[sessionId]}
                 preview={panelTranscript.preview}

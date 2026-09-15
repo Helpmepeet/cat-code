@@ -617,6 +617,20 @@ test('P4-40 wiring tripwire: a Welcome recent with no app id reaches the history
   expect(applyBody).toContain('void openHistorySession(route.engineSessionId)')
 })
 
+test('tool-card expansion memory is shell-owned and reaches every session pane', () => {
+  const source = readFileSync(new URL('./App.tsx', import.meta.url), 'utf8')
+
+  expect(source).toContain(
+    'toolCardExpansionStoreRef.current ??= createToolCardExpansionStore()',
+  )
+  const paneStart = source.indexOf('<SessionPane')
+  const paneEnd = source.indexOf('/>', paneStart)
+  expect(paneStart).toBeGreaterThan(-1)
+  expect(source.slice(paneStart, paneEnd)).toContain(
+    'toolCardExpansionStore={toolCardExpansionStoreRef.current}',
+  )
+})
+
 test('P4-29 wiring tripwire: the Sessions-page one-shots are disarmed when the page unmounts', () => {
   // The defect this pins: `sessionsRenameRequest` and `sessionsTagEcho` are
   // one-shot COMMANDS whose de-dupe guard is a ref inside SessionsPage — and

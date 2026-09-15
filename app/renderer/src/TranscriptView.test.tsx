@@ -2043,6 +2043,32 @@ test('a confirmed CreatePeer row separates immutable navigation from details', (
   expect(html).toContain('aria-label="Session created"')
 })
 
+test('a created peer detail expansion survives a transcript remount', () => {
+  const row = toolRow({
+    toolName: 'CreatePeer',
+    toolFamily: 'other',
+    input: { prompt: 'Check the example tests' },
+    status: 'success',
+    result: {
+      isError: false,
+      content: 'Created Bear and sent it your instruction.',
+      diff: null,
+      createdPeer: {
+        name: 'Bear',
+        appSessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    },
+  })
+  const store = createToolCardExpansionStore()
+
+  expect(renderWithStore([row], store)).toContain('aria-expanded="false"')
+  store.set(row.toolUseId, true)
+  const remounted = renderWithStore([row], store)
+
+  expect(remounted).toContain('aria-expanded="true"')
+  expect(remounted).toContain('Created Bear and sent it your instruction.')
+})
+
 test('a partial creation remains navigable but names the undelivered instruction', () => {
   const row = toolRow({
     toolName: 'CreatePeer',

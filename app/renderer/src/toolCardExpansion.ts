@@ -18,10 +18,9 @@
  *
  * GROWTH. One entry per card the user actually CLICKS, never one per tool call, so
  * this tracks deliberate interactions rather than transcript size — a session that
- * runs ten thousand tools and opens six cards holds six entries. The store lives as
- * long as the transcript view is mounted (`TranscriptView` is mounted once by
- * `App`, not per session), and `toolUseId` is globally unique, so nothing collides
- * across a session switch.
+ * runs ten thousand tools and opens six cards holds six entries. App supplies one
+ * store for its shell lifetime, and `toolUseId` is globally unique, so nothing
+ * collides across a session switch or a pane remount.
  */
 
 import { createContext, useContext, useReducer, useRef } from 'react'

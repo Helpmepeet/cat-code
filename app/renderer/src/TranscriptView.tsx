@@ -345,6 +345,7 @@ export const TranscriptView = memo(function TranscriptView({
   onMessageAction,
   agentBackground = null,
   createdPeerNavigation,
+  toolCardExpansionStore = null,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -390,6 +391,8 @@ export const TranscriptView = memo(function TranscriptView({
   agentBackground?: AgentBackgroundControl | null
   /** Shell-owned lookup and open action for a recorded peer session id. */
   createdPeerNavigation?: CreatedPeerNavigation | null
+  /** One shell-lifetime store, so a tab round-trip preserves explicit details. */
+  toolCardExpansionStore?: ToolCardExpansionStore | null
 }) {
   return (
     <TranscriptRowsView
@@ -411,6 +414,7 @@ export const TranscriptView = memo(function TranscriptView({
       onMessageAction={onMessageAction}
       agentBackground={agentBackground}
       createdPeerNavigation={createdPeerNavigation}
+      toolCardExpansionStore={toolCardExpansionStore}
     />
   )
 })
@@ -433,6 +437,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onMessageAction,
   agentBackground = null,
   createdPeerNavigation = null,
+  toolCardExpansionStore = null,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
@@ -454,6 +459,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onSaveDiagnostics?: () => void
   onMessageAction?: MessageActionHandler
   createdPeerNavigation?: CreatedPeerNavigation | null
+  toolCardExpansionStore?: ToolCardExpansionStore | null
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -484,15 +490,13 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   // the engine's `toolUseId` (`toolCardExpansion.ts`). A ref, not state — a toggle
   // must re-render the clicked card, never the whole transcript.
   //
-  // An ancestor's store WINS when there is one. This is a TEST SEAM, not a planned
-  // lift: the renderer suite is SSR-only, so "the user's content survives a
-  // regroup" can only be shown by driving ONE store through two different row
-  // shapes, and without an injection point the fix would ship with no evidence for
-  // the property it exists for. Nothing mounts a store today.
+  // The App-owned store survives a tab/pane remount; an ancestor provider is the
+  // standalone-test seam, and the local ref keeps direct use graceful.
   const inheritedStore = useContext(ToolCardExpansionContext)
   const expansionRef = useRef<ToolCardExpansionStore | null>(null)
   expansionRef.current ??= createToolCardExpansionStore()
-  const expansionStore = inheritedStore ?? expansionRef.current
+  const expansionStore =
+    toolCardExpansionStore ?? inheritedStore ?? expansionRef.current
   // One face registry per SESSION, so every worker on screen is deduped against
   // every other one and none of them changes silhouette mid-session.
   //
