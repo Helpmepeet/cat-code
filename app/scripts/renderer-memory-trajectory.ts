@@ -19,7 +19,6 @@
  *
  *   cd /Users/pt/cat-code && \
  *   CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code \
- *   CATCODE_INITIAL_CWD=/Users/pt/cat-code \
  *   CATCODE_DEBUG_STATE=1 \
  *   bun run --cwd app dev
  *
@@ -80,6 +79,17 @@ const USAGE = `Renderer memory trajectory sampler
 
 Start the desktop app yourself before running this. Press Ctrl-C at any time to
 stop early and still get a run file and a summary.
+
+For a packaged run, give the artifact an isolated config home and give this
+sampler the same path. Example (the operator performs the visible launch):
+
+  P57_CONFIG=/private/tmp/catcode-p57-trajectory
+  CLAUDE_CONFIG_DIR="$P57_CONFIG" "app/dist-app/Cat Code.app/Contents/MacOS/Cat Code"
+  CLAUDE_CONFIG_DIR="$P57_CONFIG" bun run app/scripts/renderer-memory-trajectory.ts --workload three-pane --require-packaged
+
+Packaged builds intentionally do not write the dev debug-state export, so pane
+count is unreported there. Keep the named workload visibly arranged for the run;
+the launchId and renderer pid still come from the packaged operational log.
 `
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -332,12 +342,19 @@ async function main(): Promise<void> {
     const reason = rendererPid === null
       ? `no renderer pid was found in ${logPath}`
       : `the renderer pid ${rendererPid} from ${logPath} is not running`
+    if (requirePackaged) {
+      fail(
+        `${reason}\n\n` +
+        'Quit any stale copy, launch the packaged artifact again with this isolated ' +
+        'CLAUDE_CONFIG_DIR, wait for its window, then rerun the sampler. ' +
+        'Packaged provenance cannot be overridden with --pid.',
+      )
+    }
     fail(
       `${reason}\n\n` +
       'Start the desktop app first, in its own terminal, then run this again:\n\n' +
       '  cd /Users/pt/cat-code && \\\n' +
       '  CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code \\\n' +
-      '  CATCODE_INITIAL_CWD=/Users/pt/cat-code \\\n' +
       '  CATCODE_DEBUG_STATE=1 \\\n' +
       '  bun run --cwd app dev\n\n' +
       'If the app is running but its log cannot be read, pass --pid with the renderer process id.',

@@ -136,4 +136,11 @@ test('renderer trajectories can require an isolated packaged launch record', () 
   expect(trajectory).toContain(
     'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
   )
+  expect(trajectory).toContain('For a packaged run, give the artifact an isolated config home')
+  expect(trajectory).toContain('Packaged provenance cannot be overridden with --pid.')
+  expect(trajectory).not.toContain('CATCODE_INITIAL_CWD')
+  expect(trajectory.match(/if \(requirePackaged\) \{/g)).toHaveLength(2)
+  expect(trajectory.lastIndexOf('if (requirePackaged) {')).toBeLessThan(
+    trajectory.indexOf('If the app is running but its log cannot be read, pass --pid'),
+  )
 })

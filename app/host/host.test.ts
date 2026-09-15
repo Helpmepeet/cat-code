@@ -11,6 +11,7 @@
 
 import { afterEach, expect, test } from 'bun:test'
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -1458,6 +1459,46 @@ test('registry_unavailable: a failing registry write does not kill the session',
   expect(registry.lastWriteFailed).toBe(true)
   // The degradation is observable (the host surfaced registry_unavailable).
   expect(logs.some(l => l.includes('registry_unavailable'))).toBe(true)
+})
+
+test('registry_unavailable: an unwritable config directory leaves the session live', async () => {
+  const storageDir = tempDir()
+  const cwd = join(storageDir, 'proj')
+  mkdirSync(cwd, { recursive: true })
+  const logs: string[] = []
+  const registry = new SessionRegistry({
+    storageDir,
+    log: line => logs.push(line),
+    // Lock acquisition has its own bounded retry policy. This case is about
+    // the write after ownership, so model an already-acquired lock and let the
+    // real atomic write hit the directory permissions below.
+    acquireLock: async () => async () => {},
+  })
+  const supervisor = new FakeSupervisor()
+  const host = new Host({
+    supervisor: supervisor as never,
+    registry,
+    validateCwd: (candidate: string) =>
+      candidate === cwd ? { ok: true, realpath: candidate } : { ok: false },
+    log: line => logs.push(line),
+  })
+
+  // Exercise the operating-system failure rather than an injected writer. The
+  // project already exists, so removing write permission from the config home
+  // blocks only registry persistence; it must not take down the live engine.
+  chmodSync(storageDir, 0o500)
+  try {
+    const result = await host.createSession({ cwd })
+
+    expect(result.ok).toBe(true)
+    expect(supervisor.records.size).toBe(1)
+    expect(registry.lastWriteFailed).toBe(true)
+    expect(logs.some(line => line.includes('registry_unavailable'))).toBe(true)
+    expect(logs.some(line => line.includes('EACCES'))).toBe(true)
+    expect(existsSync(registry.filePath)).toBe(false)
+  } finally {
+    chmodSync(storageDir, 0o700)
+  }
 })
 
 test('setPeerWakeBlocked reports a failed write instead of claiming the block was saved', async () => {
