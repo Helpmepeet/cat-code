@@ -337,11 +337,14 @@ assert(
   `worker records: ${JSON.stringify(workers).slice(0, 600)}`,
 )
 
-// B5 — the same fact from the failure side. These lines are what a wrong
-// packaged sidecar path actually produces; main writes them unconditionally.
+// B5 — the same fact from the failure side. A credentialless scratch home may
+// make the accounts worker abort after it starts; that is expected here and is
+// not evidence of a bad packaged path. A wrong sidecar path, however, produces
+// an ENOENT/missing-executable failure, which is the condition this assertion
+// must catch.
 assert(
-  !/\[(catalog|accounts)-runner\] refresh failed/.test(launchLog),
-  'no worker spawn failure on the packaged path',
+  !/\[(catalog|accounts)-runner\] refresh failed:.*(?:ENOENT|no such file|not found)/i.test(launchLog),
+  'no missing packaged worker executable on the packaged path',
   launchLog.slice(-800),
 )
 

@@ -19,7 +19,6 @@
  *
  *   cd /Users/pt/cat-code && \
  *   CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code \
- *   CATCODE_INITIAL_CWD=/Users/pt/cat-code \
  *   CATCODE_DEBUG_STATE=1 \
  *   bun run --cwd app dev
  *
@@ -52,8 +51,11 @@ import {
   buildTrajectoryRun,
   formatSummary,
   parseVmmapSummary,
+  RENDERER_PID_EVENTS,
+  selectPackagedRenderer,
   selectTagRow,
   type SeriesOptions,
+  type TrajectoryLogRecord,
   type TrajectorySample,
   type WorkloadId,
 } from './rendererMemoryTrajectory.js'
@@ -73,9 +75,21 @@ const USAGE = `Renderer memory trajectory sampler
   --out <dir>            output directory (default app/.ram-scratch/trajectory)
   --pid <n>              renderer pid override, when the log cannot be read
   --log <path>           operational log override
+  --require-packaged     fail unless the log proves app.isPackaged was true
 
 Start the desktop app yourself before running this. Press Ctrl-C at any time to
 stop early and still get a run file and a summary.
+
+For a packaged run, give the artifact an isolated config home and give this
+sampler the same path. Example (the operator performs the visible launch):
+
+  P57_CONFIG=/private/tmp/catcode-p57-trajectory
+  CLAUDE_CONFIG_DIR="$P57_CONFIG" "app/dist-app/Cat Code.app/Contents/MacOS/Cat Code"
+  CLAUDE_CONFIG_DIR="$P57_CONFIG" bun run app/scripts/renderer-memory-trajectory.ts --workload three-pane --require-packaged
+
+Packaged builds intentionally do not write the dev debug-state export, so pane
+count is unreported there. Keep the named workload visibly arranged for the run;
+the launchId and renderer pid still come from the packaged operational log.
 `
 
 function parseArgs(argv: string[]): Record<string, string> {
@@ -99,11 +113,7 @@ function fail(message: string): never {
  * Operational log reader
  * -------------------------------------------------------------------------- */
 
-type LogRecord = {
-  timestamp: string
-  event: string
-  fields: Record<string, unknown>
-}
+type LogRecord = TrajectoryLogRecord
 
 /**
  * The sink rotates at 512 KB into a new file and repoints `latest-operational`,
@@ -157,7 +167,12 @@ function createLogReader(symlinkPath: string) {
           const fields = item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields)
             ? (item.fields as Record<string, unknown>)
             : {}
-          records.push({ timestamp: item.timestamp, event: item.event, fields })
+          records.push({
+            timestamp: item.timestamp,
+            event: item.event,
+            launchId: typeof item.launchId === 'string' ? item.launchId : null,
+            fields,
+          })
         } catch {
           // A half-written trailing line is normal while the app is running.
         }
@@ -174,8 +189,6 @@ function numberField(record: LogRecord, key: string): number | null {
   const value = record.fields[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
-
-const RENDERER_PID_EVENTS = new Set(['window.created', 'renderer.recovery.succeeded'])
 
 /* -------------------------------------------------------------------------- *
  * Process capture
@@ -292,15 +305,34 @@ async function main(): Promise<void> {
 
   const reader = createLogReader(logPath)
   let rendererPid: number | null = null
+  const requirePackaged = args['require-packaged'] === 'true'
+  let selectedLaunchId: string | null = null
   const startupRecords = reader.drain()
-  for (const record of startupRecords) {
-    if (RENDERER_PID_EVENTS.has(record.event)) {
-      const pid = numberField(record, 'pid')
-      if (pid !== null) rendererPid = pid
+  if (requirePackaged) {
+    if (args.pid) {
+      fail(
+        '--pid cannot be combined with --require-packaged; renderer ownership must come from the packaged launch records',
+      )
+    }
+    const selection = selectPackagedRenderer(startupRecords)
+    if (!selection.ok) {
+      fail(
+        selection.reason + ' in ' + logPath + '\n' +
+        'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
+      )
+    }
+    selectedLaunchId = selection.launchId
+    rendererPid = selection.rendererPid
+  } else {
+    for (const record of startupRecords) {
+      if ((RENDERER_PID_EVENTS as readonly string[]).includes(record.event)) {
+        const pid = numberField(record, 'pid')
+        if (pid !== null) rendererPid = pid
+      }
     }
   }
 
-  if (args.pid) {
+  if (!requirePackaged && args.pid) {
     const override = Number(args.pid)
     if (!Number.isInteger(override) || override <= 0) fail('--pid must be a positive integer')
     rendererPid = override
@@ -310,12 +342,19 @@ async function main(): Promise<void> {
     const reason = rendererPid === null
       ? `no renderer pid was found in ${logPath}`
       : `the renderer pid ${rendererPid} from ${logPath} is not running`
+    if (requirePackaged) {
+      fail(
+        `${reason}\n\n` +
+        'Quit any stale copy, launch the packaged artifact again with this isolated ' +
+        'CLAUDE_CONFIG_DIR, wait for its window, then rerun the sampler. ' +
+        'Packaged provenance cannot be overridden with --pid.',
+      )
+    }
     fail(
       `${reason}\n\n` +
       'Start the desktop app first, in its own terminal, then run this again:\n\n' +
       '  cd /Users/pt/cat-code && \\\n' +
       '  CATCODE_TEST_CWD_ALLOWLIST=/Users/pt/cat-code \\\n' +
-      '  CATCODE_INITIAL_CWD=/Users/pt/cat-code \\\n' +
       '  CATCODE_DEBUG_STATE=1 \\\n' +
       '  bun run --cwd app dev\n\n' +
       'If the app is running but its log cannot be read, pass --pid with the renderer process id.',
@@ -353,7 +392,8 @@ async function main(): Promise<void> {
   for (let index = 0; ; index++) {
     const drained = reader.drain()
     for (const record of drained) {
-      if (RENDERER_PID_EVENTS.has(record.event)) {
+      if (selectedLaunchId !== null && record.launchId !== selectedLaunchId) continue
+      if ((RENDERER_PID_EVENTS as readonly string[]).includes(record.event)) {
         const pid = numberField(record, 'pid')
         if (pid !== null && pid !== rendererPid) {
           process.stderr.write(`renderer process changed to pid ${pid}, following it\n`)

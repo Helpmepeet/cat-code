@@ -233,20 +233,21 @@ Done means simultaneous-use and same-transcript rules are enforced rather than d
 
 🧠 **Model: ANY · Difficulty: 7/10 · 🖐 GUI**
 
-*Distilled from the original P5-7, P5-9, and P5-11. Three narrow jobs, not three
-audits. Resist the pull to grow this back into a full audit; if you find
-something large, report it and let the operator scope it.*
+*Distilled from the original P5-7, P5-9, and P5-11. P5-7 is an umbrella gate:
+P5-7a, P5-7b, and P5-7c must all complete before it is complete. Three narrow
+jobs, not three audits. Resist the pull to grow this back into a full audit; if
+you find something large, report it and let the operator scope it.*
 
 ```text
 Work in /Users/pt/cat-code on branch migration. This is P5-7. Echo the Model/Difficulty header before starting and read docs/migration/process/GUI-VERIFICATION.md before live checks.
 
-Three narrow jobs against the P5-1 artifact. Do not expand any of them into a full audit; report anything larger instead of absorbing it.
+Three narrow jobs against the P5-1 artifact. Do not expand any of them into a full audit; report anything larger instead of absorbing it. P5-7 is complete only when P5-7a, P5-7b, and P5-7c are all complete.
 
-1. PACKAGING SECURITY DELTA. The existing hardening suite already covers the sidecar boundary against source. Cover only what packaging changes: packaged BrowserWindow settings, navigation and window-open policy, CSP behavior under the packaged renderer, and preload exports in the production preload. P5-1 owns the no-secrets-in-the-bundle scan; do not rebuild it here. The threat model is injection through displayed model output and fetched content, not other users, so a single-user product does not relax SECURITY-MINIMUM. Every finding needs a source-verified failure scenario and a focused regression or an explicit accepted residual. Use synthetic secrets and hostile-content fixtures only.
+1. P5-7a — PACKAGING SECURITY DELTA. The existing hardening suite already covers the sidecar boundary against source. Cover only what packaging changes: packaged BrowserWindow settings, navigation and window-open policy, CSP behavior under the packaged renderer, and preload exports in the production preload. P5-1 owns the no-secrets-in-the-bundle scan; do not rebuild it here. The threat model is injection through displayed model output and fetched content, not other users, so a single-user product does not relax SECURITY-MINIMUM. Every finding needs a source-verified failure scenario and a focused regression or an explicit accepted residual. Use synthetic secrets and hostile-content fixtures only.
 
-2. LEAK CHECK AGAINST THE PACKAGED BUILD. Reuse app/scripts/renderer-memory-trajectory.ts and the ram-* probes rather than building a soak harness. The retained trajectory is pre-CC-59-remediation and failed, so re-baseline it against the packaged artifact. Check for leaked sidecars/helpers, stale sockets and temp directories, unbounded log or cache growth, and listeners or timers that grow with iterations across repeated session create/run/close and renderer reload. Own exact PIDs; never sweep-kill. A bounded repeated run is enough; a formal soak duration gate is waived.
+2. P5-7b — LEAK CHECK AGAINST THE PACKAGED BUILD. Explicitly not part of P5-7a. Reuse app/scripts/renderer-memory-trajectory.ts and the ram-* probes rather than building a soak harness. The retained trajectory is pre-CC-59-remediation and failed, so re-baseline it against the packaged artifact. Check for leaked sidecars/helpers, stale sockets and temp directories, unbounded log or cache growth, and listeners or timers that grow with iterations across repeated session create/run/close and renderer reload. Own exact PIDs; never sweep-kill. A bounded repeated run is enough; a formal soak duration gate is waived.
 
-3. HONEST FAILURE. One rule matters more than a failure matrix: a failed or partial restore must never silently open a fresh session that impersonates the operator's old one. Verify that, plus the handful of cases a local user actually hits: sidecar spawn failure, one sidecar crashing while others run, a corrupt or missing transcript, an unwritable config directory, and expired authentication. Each must end in an honest state: retry, restart, explicit non-recoverable loss, or safe degradation. Preserve the closed diagnostic schemas, bounded retention, and redaction in app/shared/operationalLog.ts, app/main/deliveryTraceSink.ts, and app/main/diagnosticsBundle.ts; raw logs, transcripts, and settings must never become model context.
+3. P5-7c — HONEST FAILURE. Explicitly not part of P5-7a. One rule matters more than a failure matrix: a failed or partial restore must never silently open a fresh session that impersonates the operator's old one. Verify that, plus the handful of cases a local user actually hits: sidecar spawn failure, one sidecar crashing while others run, a corrupt or missing transcript, an unwritable config directory, and expired authentication. Each must end in an honest state: retry, restart, explicit non-recoverable loss, or safe degradation. Preserve the closed diagnostic schemas, bounded retention, and redaction in app/shared/operationalLog.ts, app/main/deliveryTraceSink.ts, and app/main/diagnosticsBundle.ts; raw logs, transcripts, and settings must never become model context.
 
 Done means the packaging delta has regressions or recorded residuals, the packaged build has a current leak baseline with cleanup returning to baseline, the restore-honesty rule is enforced by a test rather than by inspection, misleading copy is corrected, operator steps cover only what is unavailable headlessly, all affected batteries pass, and STATUS records the verdict plus every accepted residual.
 ```
@@ -258,8 +259,8 @@ Done means the packaging delta has regressions or recorded residuals, the packag
 | Original | Now owned by | Why |
 |---|---|---|
 | **P5-2** Packaged runtime and sidecar smoke | P5-1 | Building the artifact and proving it launches is one loop, not two sessions. Splitting them invites a "packaged" claim with no launch behind it. |
-| **P5-9** Soak, resource lifetime, cleanup | P5-7 job 2 | The existing memory-trajectory and ram-* probes already do the measuring. What was missing is a baseline against a packaged build, not a new harness. |
-| **P5-11** Failure recovery and support diagnostics | P5-7 job 3 | One rule (no silent fresh session impersonating restore) carries nearly all the value. The other twelve matrix cells are release-support ceremony. |
+| **P5-9** Soak, resource lifetime, cleanup | P5-7b | The existing memory-trajectory and ram-* probes already do the measuring. What was missing is a baseline against a packaged build, not a new harness. |
+| **P5-11** Failure recovery and support diagnostics | P5-7c | One rule (no silent fresh session impersonating restore) carries nearly all the value. The other twelve matrix cells are release-support ceremony. |
 
 ## Waived — local-only scope
 
@@ -443,7 +444,7 @@ The gate must expose skipped, flaky, timed-out, and missing-prerequisite cases r
 Done means a documented command or small command set produces a machine-readable and human-readable release verdict from a clean checkout, repeat runs have stable membership/counts, failures name the owning layer, package tests from P5-1/P5-2 are included, maps/docs are current, and STATUS is updated with measured evidence.
 ```
 
-## Original P5-7 — Packaged security and privacy audit (narrowed into the new P5-7 job 1)
+## Original P5-7 — Packaged security and privacy audit (narrowed into P5-7a)
 
 🧠 **Model: ANY · Difficulty: 9/10 · 🖐 GUI**
 
@@ -471,7 +472,7 @@ Set numeric release budgets before using them as pass/fail gates. Record hardwar
 Done means benchmark commands use synthetic bounded fixtures, results are machine-readable, thresholds are test-enforced without moving them to fit a bad run, baseline numbers are recorded, regressions identify the owning stage, all spawned processes are reconciled, applicable batteries pass, and STATUS is updated.
 ```
 
-## Original P5-9 — Soak, resource lifetime, and cleanup (merged into the new P5-7 job 2)
+## Original P5-9 — Soak, resource lifetime, and cleanup (merged into P5-7b)
 
 🧠 **Model: ANY · Difficulty: 8/10 · 🖐 GUI**
 
@@ -499,7 +500,7 @@ Automate structural and keyboard behavior where the existing DOM harness can pro
 Done means automated checks cover stable invariants, exact operator steps cover VoiceOver/native/visual behavior, critical workflows are completable without a pointer, no control depends only on color or hover, failures have owners and regression tests, renderer/build batteries pass, and STATUS records the accessibility verdict and unverified platform limits.
 ```
 
-## Original P5-11 — Failure recovery and support diagnostics (merged into the new P5-7 job 3)
+## Original P5-11 — Failure recovery and support diagnostics (merged into P5-7c)
 
 🧠 **Model: ANY · Difficulty: 8/10 · 🖐 GUI**
 

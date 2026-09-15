@@ -20,6 +20,7 @@ const STATUS_COVERAGE: Record<ConnectionSnapshot['status'], true> = {
   starting: true,
   ready: true,
   dead: true,
+  restore_failed: true,
   disconnected: true,
   failed: true,
   exited: true,
@@ -163,7 +164,13 @@ test('classifies the spawn-in-flight statuses as transient and the rest as termi
   const terminal = ALL_STATUSES.filter(status =>
     isTerminalConnectionStatus(status),
   )
-  expect(terminal.sort()).toEqual(['dead', 'disconnected', 'exited', 'failed'])
+  expect(terminal.sort()).toEqual([
+    'dead',
+    'disconnected',
+    'exited',
+    'failed',
+    'restore_failed',
+  ])
 })
 
 /* ------------------------------------------------------------------------- *
@@ -200,7 +207,7 @@ test('an intentional park is read off the exit code, not treated as a crash', ()
   expect(connectionRecoveryMessage('parked')).toBeNull()
 })
 
-test('only the park exit code is a park; every other death stays honest', () => {
+test('resume failure stays distinct from retryable process deaths', () => {
   const readyFor = (sessionId: string): ServerFrame =>
     ({ ...validReady, sessionId }) as ServerFrame
   const exitWith = (sessionId: string, code: number | null): ServerFrame =>
@@ -216,21 +223,63 @@ test('only the park exit code is a park; every other death stays honest', () => 
   for (const sessionId of ['crash', 'resume-failed', 'signalled', 'clean']) {
     state = reduceConnectionState(state, readyFor(sessionId))
   }
-  // A real crash, the RESUME_FAILED_EXIT_CODE death of an unloadable transcript,
-  // a signal kill, and a plain zero exit are all still `exited` — the honest
-  // "this stopped" reading with its danger tone and recovery sentence.
+  // A real crash, a signal kill, and a plain zero exit remain retryable process
+  // deaths. The dedicated resume-failed code is the engine's proof that retrying
+  // this saved conversation cannot succeed.
   state = reduceConnectionState(state, exitWith('crash', 1))
   state = reduceConnectionState(state, exitWith('resume-failed', 4))
   state = reduceConnectionState(state, exitWith('signalled', null))
   state = reduceConnectionState(state, exitWith('clean', 0))
 
-  for (const sessionId of ['crash', 'resume-failed', 'signalled', 'clean']) {
+  for (const sessionId of ['crash', 'signalled', 'clean']) {
     expect(selectConnection(state, sessionId).status).toBe('exited')
   }
+  expect(selectConnection(state, 'resume-failed')).toEqual({
+    status: 'restore_failed',
+    inputEnabled: false,
+  })
   expect(connectionTone('exited')).toBe('danger')
   expect(connectionRecoveryMessage('exited')).toBe(
     'This session stopped unexpectedly. Restart it to keep working.',
   )
+  expect(isTerminalConnectionStatus('restore_failed')).toBe(true)
+  expect(connectionHasEngine('restore_failed')).toBe(false)
+  expect(connectionRecoveryMessage('restore_failed')).toBe(
+    'The saved conversation is unavailable. This session cannot be restarted.',
+  )
+})
+
+test('a late send error cannot overwrite an unloadable restore', () => {
+  for (const code of [
+    'session_not_found',
+    'session_not_ready',
+    'session_disconnected',
+  ] as const) {
+    let state = reduceConnectionState(
+      createConnectionState(),
+      validReady as ServerFrame,
+    )
+    state = reduceConnectionState(state, {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status: 'exited',
+      exit: { code: 4, signal: null },
+    } as ServerFrame)
+    state = reduceConnectionState(state, {
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      code,
+      message: 'late response from the old connection',
+      retryable: code === 'session_not_ready',
+    } as ServerFrame)
+
+    expect(selectConnection(state, 'session-1')).toEqual({
+      status: 'restore_failed',
+      inputEnabled: false,
+    })
+  }
 })
 
 test('a park exit code cannot smuggle a park reading into a non-exit lifecycle status', () => {

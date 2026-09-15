@@ -40,6 +40,25 @@ describe('scanPackagedBundle', () => {
     ])
   })
 
+  test('a production preload containing the development debug bridge is rejected', () => {
+    const root = bundle({
+      'Contents/Resources/app/preload/preload.cjs':
+        'ipcRenderer.send("catcode:debug:shell-state")',
+    })
+    expect(scanPackagedBundle(root)).toEqual([
+      {
+        path: join(
+          'Contents',
+          'Resources',
+          'app',
+          'preload',
+          'preload.cjs',
+        ),
+        reason: 'development debug bridge',
+      },
+    ])
+  })
+
   test.each([
     ['Contents/Resources/app/node_modules/pkg/index.js', 'node_modules tree'],
     ['Contents/Resources/app/main/main.js.map', 'source map'],

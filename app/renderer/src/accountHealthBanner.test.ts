@@ -156,6 +156,25 @@ describe('every account blocked', () => {
     )
   })
 
+  test('expired authentication is an explicit, non-blocking repair state', () => {
+    const expired = dead('expired')
+    expired.lastError = 'invalid_grant'
+    expired.availabilityLabel = 'Needs re-login'
+
+    const banner = selectAccountHealthBanner(snapshot([expired]), NOW)
+    expect(banner).toMatchObject({
+      id: ACCOUNT_HEALTH_SIGNIN_ID,
+      tone: 'danger',
+      title: 'No Codex account is ready to use',
+      detail: 'Sending will keep failing until an account recovers.',
+      dismissable: true,
+      actions: [{ key: ACCOUNT_HEALTH_ACTION_KEY, label: 'Open Accounts' }],
+    })
+    // The engine's reason remains diagnostic state; the banner gives the user
+    // a repair route without printing protocol or OAuth vocabulary at them.
+    expect(JSON.stringify(banner)).not.toContain('invalid_grant')
+  })
+
   test('an all-quarantined pool needs repair', () => {
     const stuck = account({
       status: 'quarantined',

@@ -81,6 +81,21 @@ test('a disconnected descriptor is dead + restartable', () => {
   expect(visual.restartable).toBe(true)
 })
 
+test('an unloadable restored conversation is explicit and not restartable', () => {
+  const visual = deriveTabVisualState({
+    descriptor: descriptor({ status: 'disconnected', restorable: false }),
+    connection: { status: 'restore_failed', inputEnabled: false },
+    pendingPermissionCount: 0,
+    isActive: false,
+  })
+  expect(visual).toEqual({
+    label: 'unavailable',
+    tone: 'dead',
+    restartable: false,
+    needsAttention: false,
+  })
+})
+
 test('an idle-PARKED tab is neither a failure nor a restart prompt', () => {
   // IDLE-PARK — the host descriptor here is the crash descriptor verbatim
   // (disconnected + restorable), because the descriptor deliberately cannot carry

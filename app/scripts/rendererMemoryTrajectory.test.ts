@@ -10,10 +10,12 @@ import {
   formatSummary,
   parseSizeToken,
   parseVmmapSummary,
+  selectPackagedRenderer,
   selectTagRow,
   slopePerMinute,
   type SeriesOptions,
   type SeriesPoint,
+  type TrajectoryLogRecord,
   type TrajectorySample,
 } from './rendererMemoryTrajectory.js'
 
@@ -381,6 +383,56 @@ describe('buildTrajectoryRun', () => {
     })
     expect(hidden.analysis.hiddenSampleCount).toBe(31)
     expect(formatSummary(hidden)).toContain('window hidden')
+  })
+})
+
+describe('packaged renderer provenance', () => {
+  const record = (
+    event: string,
+    launchId: string | null,
+    fields: Record<string, unknown> = {},
+  ): TrajectoryLogRecord => ({
+    timestamp: '2026-09-15T00:00:00.000Z',
+    event,
+    launchId,
+    fields,
+  })
+
+  test('rejects a development launch after an older packaged launch', () => {
+    expect(
+      selectPackagedRenderer([
+        record('app.start', 'packaged-launch', { packaged: true }),
+        record('window.created', 'packaged-launch', { pid: 4242 }),
+        record('app.start', 'development-launch', { packaged: false }),
+        record('window.created', 'development-launch', { pid: 5151 }),
+      ]),
+    ).toEqual({
+      ok: false,
+      reason: 'the latest app.start record is not packaged',
+    })
+  })
+
+  test('selects the renderer pid only from the current packaged launch', () => {
+    expect(
+      selectPackagedRenderer([
+        record('app.start', 'old-launch', { packaged: false }),
+        record('app.start', 'current-launch', { packaged: true }),
+        record('window.created', 'old-launch', { pid: 4242 }),
+        record('window.created', 'current-launch', { pid: 5151 }),
+      ]),
+    ).toEqual({ ok: true, launchId: 'current-launch', rendererPid: 5151 })
+  })
+
+  test('rejects packaged evidence without a launch id', () => {
+    expect(
+      selectPackagedRenderer([
+        record('app.start', null, { packaged: true }),
+        record('window.created', null, { pid: 4242 }),
+      ]),
+    ).toEqual({
+      ok: false,
+      reason: 'the packaged app.start record has no launchId',
+    })
   })
 })
 

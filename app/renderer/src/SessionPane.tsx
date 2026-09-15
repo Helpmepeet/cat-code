@@ -1911,11 +1911,10 @@ export function ConnectionRecovery({
   sessionId: SessionId | null
 }) {
   const [restartError, setRestartError] = useState<string | null>(null)
-  // Only a TERMINAL connection earns a failure bar and a Restart invitation. A
-  // still-spawning session (`connecting`/`starting`) has not failed, so the
-  // shared two-tone grammar decides this rather than a local status list: the
-  // danger tone is the gate, and a transient reads neutral, which mounts
-  // nothing. A status added to the union inherits that by construction.
+  // Only a TERMINAL connection earns a failure bar. Retryable failures also
+  // offer Restart; a proven unloadable restore does not. A still-spawning
+  // session (`connecting`/`starting`) has not failed, so the shared two-tone
+  // grammar decides whether anything mounts.
   const tone = connectionTone(connection.status)
   const message = connectionRecoveryMessage(connection.status)
   if (!sessionId || tone !== 'danger' || message === null) {
@@ -1925,15 +1924,17 @@ export function ConnectionRecovery({
   return (
     <div className="flex items-center gap-3 text-sm text-tone-danger">
       <span>{message}</span>
-      <button
-        className="rounded border border-tone-danger px-3 py-1 text-xs"
-        onClick={() => {
-          void restartConnection(getBridge(), sessionId).then(setRestartError)
-        }}
-        type="button"
-      >
-        Restart
-      </button>
+      {connection.status !== 'restore_failed' ? (
+        <button
+          className="rounded border border-tone-danger px-3 py-1 text-xs"
+          onClick={() => {
+            void restartConnection(getBridge(), sessionId).then(setRestartError)
+          }}
+          type="button"
+        >
+          Restart
+        </button>
+      ) : null}
       {restartError ? <span>{restartError}</span> : null}
     </div>
   )
