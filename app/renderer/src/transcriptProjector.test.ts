@@ -3390,6 +3390,76 @@ test('an Agent tool_use_result carries the worker name onto the row, @-stripped'
   expect(row.result?.agentId).toBe('agent-1')
 })
 
+test('a CreatePeer tool_use_result retains only a valid immutable destination', () => {
+  const project = (toolUseResult: unknown) => {
+    let state = createTranscriptState()
+    state = projectServerFrame(state, ready('session-1'))
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'assistant',
+        message: {
+          id: 'msg_create_peer',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_create_peer',
+              name: 'CreatePeer',
+              input: { prompt: 'Check the example tests' },
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-0000000d0003',
+      }),
+    )
+    state = projectServerFrame(
+      state,
+      messageFrame('session-1', {
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'toolu_create_peer',
+              content: 'Created Bear and sent it your instruction.',
+              is_error: false,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: toolUseResult,
+        uuid: '00000000-0000-4000-8000-0000000d0004',
+      }),
+    )
+    const row = selectTranscriptRows(state, 'session-1')[0]
+    if (row?.kind !== 'tool-use') throw new Error('expected tool-use row')
+    return row.result?.createdPeer
+  }
+
+  expect(
+    project({
+      name: 'Bear',
+      appSessionId: '11111111-1111-4111-8111-111111111111',
+      failedStep: 'prompt',
+    }),
+  ).toEqual({
+    name: 'Bear',
+    appSessionId: '11111111-1111-4111-8111-111111111111',
+    failedStep: 'prompt',
+  })
+  expect(project({ name: 'Bear', appSessionId: 'reused-name' })).toBeUndefined()
+  expect(
+    project({
+      name: 'Bear',
+      appSessionId: '11111111-1111-4111-8111-111111111111',
+      failedStep: 'unknown',
+    }),
+  ).toBeUndefined()
+})
+
 test('an Agent tool_use_result carries the leased Codex account, or nothing at all', () => {
   const project = (result: unknown) => {
     let state = createTranscriptState()

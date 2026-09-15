@@ -271,6 +271,16 @@ export type ToolResultProjection = {
     description: string
     output: string
   }
+  /**
+   * The immutable destination supplied by the `CreatePeer` tool's own structured
+   * result. Names can be reissued after registry reaping, so navigation must use
+   * this application session id rather than reconstructing a destination by name.
+   */
+  createdPeer?: {
+    name: string
+    appSessionId: SessionId
+    failedStep?: 'ready' | 'prompt'
+  }
 }
 
 /**
@@ -2393,6 +2403,8 @@ function projectToolResultBlock(
   const agentAccount = extractAgentAccount(toolUseResult)
   const agentUsage = extractAgentUsage(toolUseResult)
   const taskOutput = extractTaskOutput(toolUseResult)
+  const createdPeer =
+    block.is_error === true ? null : extractCreatedPeer(toolUseResult)
   return {
     isError: block.is_error === true,
     ...(isCancelled ? { isCancelled: true as const } : {}),
@@ -2405,6 +2417,38 @@ function projectToolResultBlock(
     ...(agentAccount !== null ? { agentAccount } : {}),
     ...(agentUsage !== null ? { agentUsage } : {}),
     ...(taskOutput !== null ? { taskOutput } : {}),
+    ...(createdPeer !== null ? { createdPeer } : {}),
+  }
+}
+
+const APP_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+/**
+ * Keep the creation facts only when the result has the closed success shape.
+ * An unknown failed step could otherwise look like confirmed delivery, and an
+ * arbitrary string id could become a navigation target.
+ */
+function extractCreatedPeer(
+  toolUseResult: unknown,
+): ToolResultProjection['createdPeer'] | null {
+  if (!isRecord(toolUseResult)) return null
+  const { name, appSessionId, failedStep } = toolUseResult
+  if (
+    typeof name !== 'string' ||
+    name.trim().length === 0 ||
+    typeof appSessionId !== 'string' ||
+    !APP_SESSION_ID_RE.test(appSessionId)
+  ) {
+    return null
+  }
+  if (failedStep !== undefined && failedStep !== 'ready' && failedStep !== 'prompt') {
+    return null
+  }
+  return {
+    name,
+    appSessionId,
+    ...(failedStep === undefined ? {} : { failedStep }),
   }
 }
 

@@ -488,6 +488,19 @@ export function resolveSessionOpenRoute(
 }
 
 /**
+ * Resolve a transcript-recorded peer destination by its immutable application
+ * id. A peer name is intentionally not an input: registry reaping can reissue a
+ * name to a different session.
+ */
+export function resolveCreatedPeerSessionRoute(
+  rows: readonly MergedSessionRow[],
+  appSessionId: SessionId,
+): SessionOpenRoute | null {
+  const row = rows.find(candidate => candidate.appSessionId === appSessionId)
+  return row === undefined ? null : resolveSessionOpenRoute(row)
+}
+
+/**
  * The row's ENGINE session id, or null when nothing has named this session yet.
  *
  * `sessionId` is the merge key `engineSessionId ?? appSessionId`

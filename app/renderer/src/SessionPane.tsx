@@ -63,6 +63,7 @@ import {
   ImagePreview,
   TranscriptView,
   type AgentBackgroundControl,
+  type CreatedPeerNavigation,
   type MessageActionHandler,
   type RestorePhase,
 } from './TranscriptView.js'
@@ -196,6 +197,7 @@ export function SessionPane({
   sandboxed,
   activeLog,
   activeSessionId,
+  createdPeerNavigation,
   isActivePane,
   composerFocusRequest,
   preview = false,
@@ -1161,6 +1163,7 @@ export function SessionPane({
             onOpenAccounts={onManageAccounts}
             onSaveDiagnostics={() => void getBridge().saveDiagnosticsBundle()}
             onMessageAction={onMessageAction}
+            createdPeerNavigation={createdPeerNavigation}
           />
 
           {/* D1a — a message sent during a response waits here until the engine
@@ -1983,6 +1986,8 @@ type SessionPaneProps = {
    * the empty-state meta strip's "Start in" column. */
   sandboxed?: boolean
   activeSessionId: SessionId | null
+  /** Shell-owned lookup and navigation for completed CreatePeer rows. */
+  createdPeerNavigation?: CreatedPeerNavigation | null
   /** This pane is the operator's focused one — gates window-level keyboard ownership in a split. */
   isActivePane: boolean
   /** Monotonic request to focus this pane's composer after a historical rewrite. */

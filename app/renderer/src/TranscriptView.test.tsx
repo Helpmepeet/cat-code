@@ -1979,7 +1979,7 @@ test('a peer read names the peer, and marks a search only when it really searche
   expect(search).not.toContain('read Bear')
 })
 
-test('a create shows the instruction, because the new name does not exist yet', () => {
+test('a legacy create shows its instruction without inventing a destination', () => {
   const html = render(
     toolRow({
       toolName: 'CreatePeer',
@@ -1992,6 +1992,120 @@ test('a create shows the instruction, because the new name does not exist yet', 
   expect(html).toContain('+')
   expect(html).not.toContain('>CreatePeer<')
   expect(html).not.toContain('new session:')
+  expect(html).not.toContain('Open session')
+})
+
+test('a pending create remains disclosure-only while it is creating', () => {
+  const html = render(
+    toolRow({
+      toolName: 'CreatePeer',
+      toolFamily: 'other',
+      input: { prompt: 'Check the example tests' },
+      status: 'pending',
+    }),
+  )
+
+  expect(html).toContain('Creating…')
+  expect(html).toContain('Check the example tests')
+  expect(html).not.toContain('Open session')
+})
+
+test('a confirmed CreatePeer row separates immutable navigation from details', () => {
+  const row = toolRow({
+    toolName: 'CreatePeer',
+    toolFamily: 'other',
+    input: { prompt: 'Check the example tests' },
+    status: 'success',
+    result: {
+      isError: false,
+      content: 'Created Bear and sent it your instruction.',
+      diff: null,
+      createdPeer: {
+        name: 'Bear',
+        appSessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    },
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      createdPeerNavigation={{
+        availabilityFor: () => 'available',
+        open: () => {},
+      }}
+    />,
+  )
+
+  expect(html).toContain('aria-label="Open session Bear"')
+  expect(html).toContain('aria-label="Show creation details for Bear"')
+  expect(html).toContain('>Bear</span><span class="text-text-ghost"> · </span>')
+  expect(html).toContain('>Open →</span>')
+  expect(html).toContain('aria-label="Session created"')
+})
+
+test('a partial creation remains navigable but names the undelivered instruction', () => {
+  const row = toolRow({
+    toolName: 'CreatePeer',
+    toolFamily: 'other',
+    input: { prompt: 'Check the example tests' },
+    status: 'success',
+    result: {
+      isError: false,
+      content: 'Created Bear, but your instruction did not reach it.',
+      diff: null,
+      createdPeer: {
+        name: 'Bear',
+        appSessionId: '11111111-1111-4111-8111-111111111111',
+        failedStep: 'prompt',
+      },
+    },
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      createdPeerNavigation={{
+        availabilityFor: () => 'available',
+        open: () => {},
+      }}
+    />,
+  )
+
+  expect(html).toContain('aria-label="Open session Bear"')
+  expect(html).toContain('Session created. The instruction did not reach it.')
+  expect(html).toContain('aria-label="Session created, instruction not delivered"')
+})
+
+test('an unavailable created peer never substitutes a same-named destination', () => {
+  const row = toolRow({
+    toolName: 'CreatePeer',
+    toolFamily: 'other',
+    input: { prompt: 'Check the example tests' },
+    status: 'success',
+    result: {
+      isError: false,
+      content: 'Created Bear and sent it your instruction.',
+      diff: null,
+      createdPeer: {
+        name: 'Bear',
+        appSessionId: '11111111-1111-4111-8111-111111111111',
+      },
+    },
+  })
+  const html = renderToStaticMarkup(
+    <TranscriptRowsView
+      rows={[row]}
+      createdPeerNavigation={{
+        availabilityFor: () => 'unavailable',
+        open: () => {
+          throw new Error('must not open a different session')
+        },
+      }}
+    />,
+  )
+
+  expect(html).toContain('>Unavailable</span>')
+  expect(html).not.toContain('aria-label="Open session Bear"')
+  expect(html).toContain('aria-label="Show creation details for Bear"')
 })
 
 test('a roster listing says what it listed instead of its own tool name', () => {

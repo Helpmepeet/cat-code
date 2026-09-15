@@ -270,6 +270,7 @@ import {
   createSessionsCatalogState,
   filterInteractiveSessionDescriptors,
   reduceSessionsCatalogState,
+  resolveCreatedPeerSessionRoute,
   resolveRecentOpenRoute,
   resolveSessionOpenRoute,
   selectMergedSessionRows,
@@ -2882,6 +2883,35 @@ export function App() {
     [applyOpenRoute],
   )
 
+  const createdPeerNavigation = useMemo(
+    () => ({
+      availabilityFor(appSessionId: SessionId) {
+        const route = resolveCreatedPeerSessionRoute(
+          sessionCatalogRows,
+          appSessionId,
+        )
+        if (route === null) {
+          return hostSnapshotReady ? ('unavailable' as const) : ('unknown' as const)
+        }
+        return route.kind === 'none'
+          ? ('unavailable' as const)
+          : ('available' as const)
+      },
+      open(appSessionId: SessionId) {
+        const route = resolveCreatedPeerSessionRoute(
+          sessionCatalogRows,
+          appSessionId,
+        )
+        if (route === null || route.kind === 'none') {
+          toast('This session is no longer available.', { tone: 'danger' })
+          return
+        }
+        applyOpenRoute(route)
+      },
+    }),
+    [applyOpenRoute, hostSnapshotReady, sessionCatalogRows, toast],
+  )
+
   // P4-40 — the Welcome launcher opens a project through that same one decision.
   // It used to open by app id only, so a project whose sessions were all created
   // in the terminal had nothing to open with and its click was dropped here.
@@ -3464,6 +3494,7 @@ export function App() {
 	            activeDescriptor={descriptor}
 	            activeLog={sessionLog}
 	            activeSessionId={sessionId}
+	            createdPeerNavigation={createdPeerNavigation}
                 isActivePane={sessionId === activeSessionId}
                 composerFocusRequest={composerFocusRequests[sessionId]}
                 preview={panelTranscript.preview}

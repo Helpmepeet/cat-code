@@ -14,6 +14,7 @@ import {
   formatRelativeTime,
   groupByWorkspace,
   reduceSessionsCatalogState,
+  resolveCreatedPeerSessionRoute,
   resolveRecentOpenRoute,
   resolveSessionLabel,
   resolveSessionOpenRoute,
@@ -904,6 +905,33 @@ describe('resolveSessionOpenRoute (P4-29 — one open decision, no per-caller co
       kind: 'none',
     })
   })
+})
+
+test('a created peer opens only its recorded app session id when names are reused', () => {
+  const original = row({
+    sessionId: 'engine-original',
+    appSessionId: 'app-original',
+    inRegistry: true,
+    live: false,
+    restorable: false,
+    cwdExists: false,
+    name: 'Bear',
+  })
+  const reusedName = row({
+    sessionId: 'engine-reused',
+    appSessionId: 'app-reused',
+    inRegistry: true,
+    live: true,
+    name: 'Bear',
+  })
+
+  expect(
+    resolveCreatedPeerSessionRoute([original, reusedName], 'app-original'),
+  ).toEqual({ kind: 'none' })
+  expect(
+    resolveCreatedPeerSessionRoute([original, reusedName], 'app-reused'),
+  ).toEqual({ kind: 'focus', appSessionId: 'app-reused' })
+  expect(resolveCreatedPeerSessionRoute([reusedName], 'app-original')).toBeNull()
 })
 
 describe('selectRecentWorkspaces (P4-17 Welcome recents)', () => {

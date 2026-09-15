@@ -1,7 +1,8 @@
 # Clickable created-peer row
 
 Date: 2026-09-15
-Status: proposed design and implementation plan. No application changes implemented.
+Status: implemented 2026-09-15; focused headless validation complete. Cat Code Dev visual
+comparison remains for the operator.
 
 ## Request
 
@@ -12,11 +13,11 @@ Visual artifact: [created-peer row mockup](../design-html/2026-09-15-created-pee
 ## Existing behavior and constraints
 
 - [`peerToolPresentation`](../../app/renderer/src/peerSurfaces.ts) gives `CreatePeer` the existing `+` mark, `Peer` family word, and shared peer hue.
-- [`derivePeerTargetParts`](../../app/renderer/src/TranscriptView.tsx) takes the creation header from `input.prompt`, including a 160-character cap. It does not read the returned name.
-- [`ToolCardShell`](../../app/renderer/src/TranscriptView.tsx) makes the whole header a disclosure button. The dot reports tool-call status, not the created session's activity.
+- Before this implementation, [`derivePeerTargetParts`](../../app/renderer/src/TranscriptView.tsx) took the creation header from `input.prompt`, including a 160-character cap, and did not read the returned name.
+- The ordinary [`ToolCardShell`](../../app/renderer/src/TranscriptView.tsx) makes the whole header a disclosure button. The dot reports tool-call status, not the created session's activity.
 - [`toolCardStyle.ts`](../../app/renderer/src/toolCardStyle.ts) already supports Cards and Lines. The proposal preserves both, including the existing fonts, colors, shell, and density from [`theme.css`](../../app/renderer/src/theme.css).
-- [`peerRequestPlane.ts`](../../app/main/peerRequestPlane.ts) already returns `name`, `appSessionId`, and an optional `failedStep` for `peer.create`. [`HostRequestValues`](../../app/shared/protocol.ts) includes those fields. However, [`narrowCreatedPeer`](../../app/sidecar/createPeerTool.ts) drops the ID, and `CreatePeerOutput` retains only the name and failed step on success.
-- [`projectToolResultBlock`](../../app/renderer/src/transcriptProjector.ts) already reads the structured `tool_use_result` alongside its display text. It does not yet project a created-peer destination.
+- [`peerRequestPlane.ts`](../../app/main/peerRequestPlane.ts) returns `name`, `appSessionId`, and an optional `failedStep` for `peer.create`. [`HostRequestValues`](../../app/shared/protocol.ts) includes those fields, and [`narrowCreatedPeer`](../../app/sidecar/createPeerTool.ts) retains the validated ID in successful output.
+- [`projectToolResultBlock`](../../app/renderer/src/transcriptProjector.ts) reads the structured `tool_use_result` alongside display text and projects validated created-peer destination facts.
 - [`SessionDescriptor`](../../app/shared/hostApi.ts) explicitly documents that names can be reused after registry reaping, while application session IDs are not reused. Never reconstruct a historical destination from a name.
 - [`App.tsx`](../../app/renderer/src/App.tsx) owns navigation: `selectTab` focuses an existing session and respects split panels; `applyOpenRoute` and `resolveSessionOpenRoute` share the live/restore/history decision. `performRestore` prefers transcript preview but may restore the session when no preview exists. Clicking is an explicit user navigation action; rendering must not trigger this path.
 
@@ -105,4 +106,4 @@ Real app acceptance requires separately authorized Cat Code Dev GUI work under [
 
 ## Out of scope
 
-No application changes are part of this design delivery. No automatic tab switch, session creation from the card, new lifecycle control, session retry, live peer status, clickable prose/name matching, sidebar redesign, or expansion to other peer tools. No format migration or loss of saved sessions.
+This implementation does not add automatic tab switching, session creation from the card, lifecycle control, session retry, live peer status, clickable prose/name matching, sidebar redesign, or expansion to other peer tools. It makes no format migration and preserves saved sessions.

@@ -312,6 +312,14 @@ export type MessageActionHandler = (
   action: MessageActionKind,
   userMessageId: string,
 ) => void
+export type CreatedPeerAvailability = 'available' | 'unavailable' | 'unknown'
+export type CreatedPeerNavigation = {
+  availabilityFor: (appSessionId: SessionId) => CreatedPeerAvailability
+  open: (appSessionId: SessionId) => void
+}
+const CreatedPeerNavigationContext = createContext<CreatedPeerNavigation | null>(
+  null,
+)
 
 // Perf (2026-07-08, F3): memoized so an App re-render that did NOT change this
 // session's transcript slice (a keystroke in the composer, another session's
@@ -336,6 +344,7 @@ export const TranscriptView = memo(function TranscriptView({
   onSaveDiagnostics,
   onMessageAction,
   agentBackground = null,
+  createdPeerNavigation,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
@@ -379,6 +388,8 @@ export const TranscriptView = memo(function TranscriptView({
   leases?: LeaseSnapshot | null
   /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
   agentBackground?: AgentBackgroundControl | null
+  /** Shell-owned lookup and open action for a recorded peer session id. */
+  createdPeerNavigation?: CreatedPeerNavigation | null
 }) {
   return (
     <TranscriptRowsView
@@ -399,6 +410,7 @@ export const TranscriptView = memo(function TranscriptView({
       onSaveDiagnostics={onSaveDiagnostics}
       onMessageAction={onMessageAction}
       agentBackground={agentBackground}
+      createdPeerNavigation={createdPeerNavigation}
     />
   )
 })
@@ -420,6 +432,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onSaveDiagnostics,
   onMessageAction,
   agentBackground = null,
+  createdPeerNavigation = null,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
@@ -440,6 +453,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onOpenAccounts?: () => void
   onSaveDiagnostics?: () => void
   onMessageAction?: MessageActionHandler
+  createdPeerNavigation?: CreatedPeerNavigation | null
 }) {
   // P4-1: the tool row a card asked to inspect (null = drawer closed). Owned here
   // — above the memoized rows — so opening the drawer never mutates a row and the
@@ -615,25 +629,27 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
           <AgentBackgroundContext.Provider value={agentBackground}>
-          <ToolInspectorContext.Provider value={openInspector}>
-            <TurnErrorActionsContext.Provider
-              value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
-            >
-              <FilePathMenuContext.Provider value={filePathMenuContextValue}>
-                {content}
-                <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
-                {filePathMenuState ? (
-                  <FilePathActionsMenu
-                    anchor={filePathMenuState.anchor}
-                    rawPath={filePathMenuState.rawPath}
-                    cwd={cwd}
-                    sessionId={filePathMenuState.sessionId}
-                    onClose={closeFilePathMenu}
-                  />
-                ) : null}
-              </FilePathMenuContext.Provider>
-            </TurnErrorActionsContext.Provider>
-          </ToolInspectorContext.Provider>
+            <CreatedPeerNavigationContext.Provider value={createdPeerNavigation}>
+              <ToolInspectorContext.Provider value={openInspector}>
+                <TurnErrorActionsContext.Provider
+                  value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
+                >
+                  <FilePathMenuContext.Provider value={filePathMenuContextValue}>
+                    {content}
+                    <ToolInspectorOverlay row={inspected} onClose={closeInspector} />
+                    {filePathMenuState ? (
+                      <FilePathActionsMenu
+                        anchor={filePathMenuState.anchor}
+                        rawPath={filePathMenuState.rawPath}
+                        cwd={cwd}
+                        sessionId={filePathMenuState.sessionId}
+                        onClose={closeFilePathMenu}
+                      />
+                    ) : null}
+                  </FilePathMenuContext.Provider>
+                </TurnErrorActionsContext.Provider>
+              </ToolInspectorContext.Provider>
+            </CreatedPeerNavigationContext.Provider>
           </AgentBackgroundContext.Provider>
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
@@ -2465,6 +2481,170 @@ function ToolCardShell({
   )
 }
 
+function createPeerPrompt(row: ToolUseNestedRow): string {
+  const prompt = row.input['prompt']
+  return typeof prompt === 'string' && prompt.length > 0
+    ? prompt
+    : 'a new session'
+}
+
+function PendingCreatePeerCard({ row }: { row: ToolUseNestedRow }) {
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const presentation = peerToolPresentation(row.toolName, row.input)
+  const parts = derivePeerTargetParts(
+    row.toolName,
+    key => {
+      const value = row.input[key]
+      return typeof value === 'string' && value.length > 0 ? value : null
+    },
+    row.input,
+  )
+  return (
+    <ToolCardShell
+      family={row.toolFamily}
+      presentation={presentation ?? undefined}
+      tone={PEER_TONE_CLASS}
+      target={deriveTarget(row)}
+      targetNode={parts === null ? undefined : <PeerTargetLine parts={parts} />}
+      status="pending"
+      headerBadge={
+        <span className="shrink-0 text-[11px] text-text-muted">Creating…</span>
+      }
+      expansionKey={row.toolUseId}
+      defaultExpanded={toolsExpanded}
+    >
+      <ToolCardBody row={row} content="" ack={null} />
+    </ToolCardShell>
+  )
+}
+
+function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
+  const created = row.result?.createdPeer
+  if (!created) return null
+
+  const navigation = useContext(CreatedPeerNavigationContext)
+  const availability = navigation?.availabilityFor(created.appSessionId) ?? 'unknown'
+  const { expanded: toolsExpanded } = useContext(ToolsExpandedContext)
+  const [expanded, setExpanded] = useToolCardExpanded(
+    row.toolUseId,
+    toolsExpanded,
+  )
+  const { style } = useContext(ToolCardStyleContext)
+  const detailsId = useId()
+  const prompt = createPeerPrompt(row)
+  const partialNote =
+    created.failedStep === 'ready'
+      ? 'Session created. It did not finish starting and has not received the instruction.'
+      : created.failedStep === 'prompt'
+        ? 'Session created. The instruction did not reach it.'
+        : null
+  const warning = partialNote !== null
+  const headerClass =
+    style === 'cards'
+      ? 'flex w-full items-stretch text-left'
+      : 'flex w-full items-stretch rounded text-left hover:bg-white/[0.04]'
+  const mainClass =
+    style === 'cards'
+      ? 'group flex min-w-0 flex-1 items-center gap-2.5 px-3 py-2 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-peer'
+      : 'group flex min-w-0 flex-1 items-center gap-2.5 py-0.5 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-peer'
+  const detailsClass =
+    style === 'cards'
+      ? 'shrink-0 border-l border-shell-seam px-3 text-[11px] text-text-subtle hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-peer'
+      : 'ml-2 shrink-0 px-1.5 text-[11px] text-text-subtle hover:text-text-primary focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-peer'
+  const noteClass =
+    style === 'cards'
+      ? 'border-t border-shell-seam px-3 py-1.5 text-xs text-tone-warn'
+      : 'ml-6 border-l border-shell-seam py-1 pl-3 text-xs text-tone-warn'
+  const target = (
+    <>
+      <span className="font-medium text-text-primary">{created.name}</span>
+      <span className="text-text-ghost"> · </span>
+      <span className="text-text-muted">{peerTargetFragment(prompt)}</span>
+    </>
+  )
+  const state = (
+    <>
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          warning ? 'bg-tone-warn' : 'bg-tone-success'
+        }`}
+        role="img"
+        aria-label={
+          warning
+            ? 'Session created, instruction not delivered'
+            : 'Session created'
+        }
+      />
+      {availability === 'unavailable' ? (
+        <span className="shrink-0 text-[11px] text-text-muted">Unavailable</span>
+      ) : (
+        <span className="shrink-0 text-[11px] text-text-muted group-hover:text-peer">
+          Open →
+        </span>
+      )}
+    </>
+  )
+
+  return (
+    <div className={TOOL_CARD_SHELL_CLASS[style]}>
+      <div className={headerClass}>
+        {availability === 'unavailable' ? (
+          <div className={mainClass}>
+            <span className="w-4 shrink-0 text-center text-[13px] text-peer" aria-hidden>
+              +
+            </span>
+            <span className="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-peer">
+              Peer
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs">{target}</span>
+            {state}
+          </div>
+        ) : (
+          <button
+            type="button"
+            className={mainClass}
+            aria-label={`Open session ${created.name}`}
+            onClick={() => navigation?.open(created.appSessionId)}
+          >
+            <span className="w-4 shrink-0 text-center text-[13px] text-peer" aria-hidden>
+              +
+            </span>
+            <span className="shrink-0 text-[10.5px] font-bold uppercase tracking-[0.08em] text-peer">
+              Peer
+            </span>
+            <span className="min-w-0 flex-1 truncate text-xs">{target}</span>
+            {state}
+          </button>
+        )}
+        <button
+          type="button"
+          className={detailsClass}
+          aria-controls={detailsId}
+          aria-expanded={expanded}
+          aria-label={
+            expanded
+              ? `Hide creation details for ${created.name}`
+              : `Show creation details for ${created.name}`
+          }
+          onClick={() => setExpanded(!expanded)}
+        >
+          Details <span aria-hidden>⌄</span>
+        </button>
+      </div>
+      {partialNote !== null ? <div className={noteClass}>{partialNote}</div> : null}
+      {expanded ? (
+        <div id={detailsId} className={TOOL_CARD_BODY_CLASS[style]}>
+          <pre
+            className={`${TOOL_CARD_BODY_INNER_CLASS[style]} overflow-x-auto whitespace-pre-wrap font-mono text-[11.5px] leading-relaxed text-text-subtle`}
+          >
+            {`Prompt\n${prompt}\n\nResult\n${row.result?.content ?? ''}`}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 /**
  * P4-18b tool card: dispatches the shared shell (family mark/word/target/
  * state-dot/collapse) with a per-family body rendered from the REAL projected
@@ -2521,6 +2701,12 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
         <ToolCancelledBody />
       </ToolCardShell>
     )
+  }
+  if (row.toolName === 'CreatePeer') {
+    if (row.status === 'pending') return <PendingCreatePeerCard row={row} />
+    if (row.status === 'success' && row.result?.createdPeer) {
+      return <CreatedPeerCard row={row} />
+    }
   }
   // D2/C2: the Agent tool_use is rendered as the Agent member of this same
   // tool-card family (specialized body + C4 child nesting), not a sibling row.

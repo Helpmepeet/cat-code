@@ -79,7 +79,13 @@ type InputSchema = ReturnType<typeof inputSchema>
 type Input = z.infer<InputSchema>
 
 export type CreatePeerOutput =
-  | { ok: true; name: string; failedStep?: 'ready' | 'prompt' }
+  | {
+      ok: true
+      name: string
+      /** Immutable app-owned address for the created session. */
+      appSessionId: string
+      failedStep?: 'ready' | 'prompt'
+    }
   | { ok: false; message: string }
 
 /**
@@ -105,6 +111,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /** The failed steps `peer.create` can report, closed here as well as at main. */
 const FAILED_STEPS: readonly ('ready' | 'prompt')[] = ['ready', 'prompt']
+const APP_SESSION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 /**
  * Narrow one `peer.create` answer, or reject it.
@@ -112,19 +120,29 @@ const FAILED_STEPS: readonly ('ready' | 'prompt')[] = ['ready', 'prompt']
  * The name is the whole point of the result: it is how the caller addresses the
  * new session afterwards, and how the operator recognises the tab. So an answer
  * without a readable name is rejected outright rather than reported as a success
- * nobody can act on. An unrecognised `failedStep` is dropped instead of being
- * passed through, which is the safe direction: the caller is told the prompt
- * landed only when nothing said otherwise, and the session list is the check the
- * result already points at.
+ * nobody can act on. An unrecognised `failedStep` rejects the whole result:
+ * treating it as absent would falsely report that the prompt landed.
  */
 export function narrowCreatedPeer(
   value: unknown,
-): { name: string; failedStep?: 'ready' | 'prompt' } | null {
+): { name: string; appSessionId: string; failedStep?: 'ready' | 'prompt' } | null {
   if (!isRecord(value)) return null
-  const { name, failedStep } = value
-  if (typeof name !== 'string' || name === '') return null
+  const { name, appSessionId, failedStep } = value
+  if (
+    typeof name !== 'string' ||
+    name === '' ||
+    typeof appSessionId !== 'string' ||
+    !APP_SESSION_ID_RE.test(appSessionId)
+  ) {
+    return null
+  }
   const known = FAILED_STEPS.find(candidate => candidate === failedStep)
-  return { name, ...(known !== undefined ? { failedStep: known } : {}) }
+  if (failedStep !== undefined && known === undefined) return null
+  return {
+    name,
+    appSessionId,
+    ...(known !== undefined ? { failedStep: known } : {}),
+  }
 }
 
 export function createCreatePeerTool(

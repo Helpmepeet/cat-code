@@ -69,7 +69,7 @@ original meaning of a recipient that takes nothing at all.
 Dedupe lives in the transcript, keyed by main's own `messageId`, so it survives
 a restart for as long as the row a duplicate would double. At-least-once
 transport, effectively-once processing.
-| `peer.create`: no auto-retry; result names the peer and any failed step | in | the row is named and visible, so a model checks `ListPeers` before retrying |
+| `peer.create`: no auto-retry; result names the peer and any failed step | in | the row is named and visible, so a model checks `ListPeers` before retrying. The desktop transcript retains the returned immutable `appSessionId` only in structured result data, so its Open action cannot resolve a reissued name. |
 | idempotency key and cached results | **cut** | solves a retry the client never makes |
 | model and effort inherited via two spawn-env keys | in | R7, at the cost of two env keys read where `resumedModel` already is |
 | post-ready replay, run-controls snapshot store, forwarded-mode record | **cut** | the env keys do the same at boot |

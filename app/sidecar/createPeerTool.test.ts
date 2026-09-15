@@ -28,6 +28,7 @@ function hostAnswers<V extends HostRequestVerb>(
 }
 
 type CreateArgs = HostRequestArgs['peer.create']
+const CREATED_SESSION_ID = '11111111-1111-4111-8111-111111111111'
 
 function requester(answer: unknown): {
   requestHost: PeerHostRequester
@@ -63,7 +64,17 @@ function requester(answer: unknown): {
         error: { code: 'timeout', message: 'no answer in time' },
       })
     }
-    return Promise.resolve(hostAnswers<V>(answer))
+    const record =
+      typeof answer === 'object' && answer !== null && !Array.isArray(answer)
+        ? (answer as Record<string, unknown>)
+        : null
+    const value =
+      record !== null &&
+      typeof record.name === 'string' &&
+      record.appSessionId === undefined
+        ? { ...record, appSessionId: CREATED_SESSION_ID }
+        : answer
+    return Promise.resolve(hostAnswers<V>(value))
   }
   return { requestHost, asked }
 }
@@ -155,10 +166,35 @@ test('a peer whose prompt did not land is reported as created, not as a failure'
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-1')
 
+  expect(result.data).toEqual({
+    ok: true,
+    name: 'Pyrite',
+    appSessionId: CREATED_SESSION_ID,
+    failedStep: 'prompt',
+  })
   expect(block.is_error).toBeUndefined()
   expect(String(block.content)).toContain('Pyrite')
   expect(String(block.content)).toContain('did not reach it')
   expect(String(block.content)).toContain('SendToPeer')
+})
+
+test('a successful creation retains the host-minted application session id', async () => {
+  const { requestHost } = requester({
+    name: 'Bear',
+    appSessionId: '22222222-2222-4222-8222-222222222222',
+  })
+  const tool = createCreatePeerTool(requestHost)
+
+  const result = await tool.call(
+    { prompt: 'Check the example tests' },
+    contextWithEffort(undefined),
+  )
+
+  expect(result.data).toEqual({
+    ok: true,
+    name: 'Bear',
+    appSessionId: '22222222-2222-4222-8222-222222222222',
+  })
 })
 
 test('a peer that never finished starting is reported with its name', async () => {
@@ -168,6 +204,12 @@ test('a peer that never finished starting is reported with its name', async () =
   const result = await tool.call({ prompt: 'Start' }, contextWithEffort(undefined))
   const block = tool.mapToolResultToToolResultBlockParam(result.data, 'tu-2')
 
+  expect(result.data).toEqual({
+    ok: true,
+    name: 'Galena',
+    appSessionId: CREATED_SESSION_ID,
+    failedStep: 'ready',
+  })
   expect(block.is_error).toBeUndefined()
   expect(String(block.content)).toContain('Galena')
   expect(String(block.content)).toContain('does not have your instruction')
@@ -224,9 +266,8 @@ test('an unreadable answer never reports a peer that may not exist', async () =>
 
   expect(block.is_error).toBe(true)
   expect(String(block.content)).toContain('not clear whether a peer was created')
-  expect(narrowCreatedPeer({ name: 'Bear', failedStep: 'exploded' })).toEqual({
-    name: 'Bear',
-  })
+  expect(narrowCreatedPeer({ name: 'Bear', failedStep: 'exploded' })).toBeNull()
+  expect(narrowCreatedPeer({ name: 'Bear', appSessionId: 'not-an-id' })).toBeNull()
   expect(narrowCreatedPeer({ name: '' })).toBeNull()
   expect(narrowCreatedPeer(['Bear'])).toBeNull()
 })
