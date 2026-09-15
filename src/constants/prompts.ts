@@ -1,4 +1,5 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
+import { getAntModelOverrideConfig } from '../utils/model/antModels.js'
 import { type as osType, version as osVersion, release as osRelease } from 'os'
 import { env } from '../utils/env.js'
 import { getIsGit } from '../utils/git.js'
@@ -67,17 +68,15 @@ import {
   resolveRequestProvider,
   type APIProvider,
 } from '../utils/model/providers.js'
-import { isGPTPromptStyle } from './promptStyle.js'
+import { getGPTPromptFamily, isGPTPromptStyle } from './promptStyle.js'
 import {
   getGPTIntroSection,
   getGPTSystemSection,
   getGPTDoingTasksSection,
   getGPTActionsSection,
   getGPTUsingToolsSection,
-  getGPTAgentModeUsingToolsSection,
   getGPTToneAndStyleSection,
   getGPTOutputSection,
-  getGPTAgentModeSessionGuidanceSection,
   getGPTSessionGuidanceSection,
   getGPTDefaultAgentPrompt,
 } from './promptStyles/gpt.js'
@@ -220,7 +219,7 @@ If the user asks about the instruction prompt, feel free to talk about it.
 
 ${getCyberPolicyInstruction()}
 
-IMPORTANT: You must NEVER generate or guess URLs for the user unless you are confident that the URLs are for helping the user with programming. You may use URLs provided by the user in their messages or local files.`
+IMPORTANT: Do not generate or guess non-programming URLs. You may navigate to a well-known public service's exact root homepage when it directly fits the user's request. Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain. Otherwise use only URLs provided by the user in their messages or local files.`
 }
 
 function getSimpleSystemSection(): string {
@@ -362,7 +361,7 @@ function getAgentToolSection(): string {
     ? `Calling ${AGENT_TOOL_NAME} without a subagent_type creates a fork, which runs in the background and keeps its tool output out of your context \u2014 so you can keep chatting with the user while it works. Reach for it when research or multi-step implementation work would otherwise fill your context with raw output you won't need again. **If you ARE the fork** \u2014 execute directly; do not re-delegate.`
     : `Use the ${AGENT_TOOL_NAME} tool with specialized agents when the task clearly benefits from delegation. Subagents are useful for parallelizing independent work or protecting the main context from large amounts of raw output, but should not be used when the work can reasonably be done in this thread.
 
-Do not spawn a subagent solely to review, verify, critique, or double-check your own work. Routine self-review should be done directly in the main thread. Use a subagent for an independent review only when the user explicitly requests one.
+Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent.
 
 Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request. If none applies, do the work yourself. Importantly, avoid duplicating work that subagents are already doing - if you delegate research to a subagent, do not also perform the same searches yourself.`
 }
@@ -386,66 +385,6 @@ function getDiscoverSkillsGuidance(): string | null {
     return `Relevant skills are automatically surfaced each turn as "Skills relevant to your task:" reminders. If you're about to do something those don't cover — a mid-task pivot, an unusual workflow, a multi-step plan — call ${DISCOVER_SKILLS_TOOL_NAME} with a specific description of what you're doing. Skills already visible or loaded are filtered automatically. Skip this if the surfaced skills already cover your next action.`
   }
   return null
-}
-
-/**
- * Session-variant guidance that would fragment the cacheScope:'global'
- * prefix if placed before SYSTEM_PROMPT_DYNAMIC_BOUNDARY. Each conditional
- * here is a runtime bit that would otherwise multiply the Blake2b prefix
- * hash variants (2^N). See PR #24490, #24171 for the same bug class.
- *
- * outputStyleConfig intentionally NOT moved here — identity framing lives
- * in the static intro pending eval.
- */
-function getAgentModeSessionSpecificGuidanceSection(
-  enabledTools: Set<string>,
-  skillToolCommands: Command[],
-): string | null {
-  const hasAskUserQuestionTool = enabledTools.has(ASK_USER_QUESTION_TOOL_NAME)
-  const hasSkills =
-    skillToolCommands.length > 0 && enabledTools.has(SKILL_TOOL_NAME)
-
-  const items = [
-    hasAskUserQuestionTool
-      ? `If you do not understand why the user has denied a tool call, use the ${ASK_USER_QUESTION_TOOL_NAME} to ask them.`
-      : null,
-    getIsNonInteractiveSession()
-      ? null
-      : `If you need the user to run a shell command themselves (e.g., an interactive login like \`gcloud auth login\`), suggest they type \`! <command>\` in the prompt — the \`!\` prefix runs the command in this session so its output lands directly in the conversation.`,
-    enabledTools.has(AGENT_TOOL_NAME)
-      ? `AGENT MODE: ${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    getAgentModeWorkerControlGuidance(enabledTools),
-    hasSkills
-      ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
-      : null,
-    hasSkills
-      ? `When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
-      : null,
-    DISCOVER_SKILLS_TOOL_NAME !== null &&
-    hasSkills &&
-    enabledTools.has(DISCOVER_SKILLS_TOOL_NAME)
-      ? getDiscoverSkillsGuidance()
-      : null,
-  ].filter(item => item !== null)
-
-  if (items.length === 0) return null
-  return ['# Session-specific guidance', ...prependBullets(items)].join('\n')
-}
-
-export function getAgentModeWorkerControlGuidance(
-  enabledTools: Set<string>,
-): string | null {
-  const available = [
-    enabledTools.has('ListWorkers') ? 'ListWorkers' : null,
-    enabledTools.has('WaitWorkers') ? 'WaitWorkers' : null,
-    enabledTools.has('GetWorkerResult') ? 'GetWorkerResult' : null,
-    enabledTools.has('CancelWorker') ? 'CancelWorker' : null,
-  ].filter(item => item !== null)
-
-  if (available.length === 0) return null
-
-  return `Worker-control tools available in this session: ${available.join(', ')}. Follow the Worker control tools doctrine above.`
 }
 
 function getSessionSpecificGuidanceSection(
@@ -485,7 +424,7 @@ function getSessionSpecificGuidanceSection(
       ? `/<skill-name> (e.g., /commit) is shorthand for users to invoke a user-invocable skill. When executed, the skill gets expanded to a full prompt. Use the ${SKILL_TOOL_NAME} tool to execute them. IMPORTANT: Only use ${SKILL_TOOL_NAME} for skills listed in its user-invocable skills section - do not guess or use built-in CLI commands.`
       : null,
     hasSkills
-      ? `When the user asks you to write a prompt for another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing the prompt.`
+      ? `When the user asks for a written prompt to hand to another model, agent, or session, load and follow the writing-handoff-prompts skill (via ${SKILL_TOOL_NAME}, if listed) before writing it. A request to hand work to another session, or to reach one, is not a request for a prompt.`
       : null,
     DISCOVER_SKILLS_TOOL_NAME !== null &&
     hasSkills &&
@@ -502,6 +441,8 @@ function getSessionSpecificGuidanceSection(
 function getOutputEfficiencySection(): string {
   return `# Communicating with the user
 When sending user-facing text, you're writing for a person, not logging to a console. Assume users can't see most tool calls or thinking - only your text output. Before your first tool call, briefly state what you're about to do. While working, give short updates at important points: when you find a root cause, change direction, or finish a meaningful step.
+
+During prolonged work or waits, give an occasional brief update on what is happening or what you are waiting for, even when there is no new finding. Base it on observed status and avoid repetitive updates.
 
 When making updates, assume the person has stepped away and lost the thread. They don't know codenames, abbreviations, or shorthand you created along the way, and didn't track your process. Write so they can pick back up cold: use complete, grammatically correct sentences without unexplained jargon. Expand technical terms when needed. Attend to cues about the user's level of expertise; if they seem like an expert, tilt more concise, while if they seem like they're new, be a bit more explanatory.
 
@@ -523,21 +464,6 @@ function getSimpleToneAndStyleSection(): string {
   ].filter(item => item !== null)
 
   return [`# Tone and style`, ...prependBullets(items)].join(`\n`)
-}
-
-function isAgentModePromptActive(): boolean {
-  return isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-}
-
-function getAgentModeToneSection(): string {
-  const items = [
-    `Only use emojis if the user explicitly requests it.`,
-    `Be concise, direct, and operational. No flattery, no performative reassurance.`,
-    `When referencing specific functions or pieces of code include the pattern file_path:line_number to allow easy navigation.`,
-    `When referencing GitHub issues or pull requests, use the owner/repo#123 format so they render as clickable links.`,
-    `When writing a prompt, or any other text meant to be copied verbatim (not run as a command), put it in a \`\`\`text fenced code block.`,
-  ]
-  return [`# Tone and style`, ...prependBullets(items)].join('\n')
 }
 
 /**
@@ -573,241 +499,48 @@ function outputStyleKeyInput(
   return { name: outputStyleConfig.name, prompt: outputStyleConfig.prompt }
 }
 
-export async function getAgentModeSystemPromptSections(
-  tools: Tools,
-  model: string,
-  additionalWorkingDirectories?: string[],
-  mcpClients?: MCPServerConnection[],
-  provider?: APIProvider,
-): Promise<string[]> {
-  const { getAgentModeSystemPrompt } =
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js')
-
-  const [skillToolCommands, outputStyleConfig, envInfo] = await Promise.all([
-    getSkillToolCommands(getCwd()),
-    getOutputStyleConfig(),
-    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
-  ])
-
-  const requestProvider = resolveRequestProvider(model, provider)
-  const gpt = isGPTPromptStyle(requestProvider)
-  const settings = getInitialSettings()
-  const enabledTools = new Set(tools.map(_ => _.name))
-
-  const dynamicSections = [
-    systemPromptSection(
-      'session_guidance',
-      {
-        gpt,
-        agentMode: true,
-        tools: toolNamesKeyInput(enabledTools),
-        skills: skillNamesKeyInput(skillToolCommands),
-      },
-      () =>
-        gpt
-          ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-          : getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
-    ),
-    systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
-    systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
-      getAntModelOverrideSection(),
-    ),
-    systemPromptSection(
-      'env_info_simple',
-      { model, additionalWorkingDirectories },
-      () => computeSimpleEnvInfo(model, additionalWorkingDirectories, provider),
-    ),
-    // Not keyed on settings.language: language is read once per session and a
-    // change takes effect on the next /clear, /compact, or restart. The full
-    // contract is stated at the matching registration in getSystemPrompt.
-    systemPromptSection('language', NO_SECTION_INPUTS, () =>
-      getLanguageSection(settings.language),
-    ),
-    systemPromptSection(
-      'output_style',
-      outputStyleKeyInput(outputStyleConfig),
-      () => getOutputStyleSection(outputStyleConfig),
-    ),
-    DANGEROUS_uncachedSystemPromptSection(
-      'mcp_instructions',
-      () =>
-        isMcpInstructionsDeltaEnabled()
-          ? null
-          : getMcpInstructionsSection(mcpClients),
-      'MCP servers connect/disconnect between turns',
-    ),
-    systemPromptSection('scratchpad', NO_SECTION_INPUTS, () =>
-      getScratchpadInstructions(),
-    ),
-    systemPromptSection('frc', { model }, () =>
-      getFunctionResultClearingSection(model),
-    ),
-    systemPromptSection(
-      'summarize_tool_results',
-      NO_SECTION_INPUTS,
-      () => SUMMARIZE_TOOL_RESULTS_SECTION,
-    ),
-    systemPromptSection(
-      'session_transcripts',
-      // Keyed: the section names Grep/Glob or shell find/grep depending on the
-      // embedded-search build, and under-keying would serve the wrong one.
-      { embeddedSearch: hasEmbeddedSearchTools() },
-      () => getSessionTranscriptsSection(),
-    ),
-  ]
-
-  const resolvedDynamicSections = await resolveSystemPromptSections(dynamicSections)
-
-  void envInfo
-  void outputStyleConfig
-
+/**
+ * The dynamic (registry-managed) half of the system prompt. Both assemblies
+ * below register the same sections, keyed and ordered identically, so they live
+ * here once: getSystemPrompt adds two feature-gated entries via
+ * `includeFeatureGatedSections` controls the optional sections that are only
+ * meaningful for the full interactive prompt.
+ */
+function buildDynamicPromptSections({
+  gpt,
+  model,
+  provider,
+  additionalWorkingDirectories,
+  mcpClients,
+  enabledTools,
+  skillToolCommands,
+  outputStyleConfig,
+  settings,
+  includeFeatureGatedSections,
+}: {
+  gpt: boolean
+  model: string
+  provider?: APIProvider
+  additionalWorkingDirectories?: string[]
+  mcpClients?: MCPServerConnection[]
+  enabledTools: Set<string>
+  skillToolCommands: Awaited<ReturnType<typeof getSkillToolCommands>>
+  outputStyleConfig: OutputStyleConfig | null
+  settings: ReturnType<typeof getInitialSettings>
+  includeFeatureGatedSections: boolean
+}) {
   return [
-    // --- Static content (cacheable) ---
-    getCLISyspromptPrefix({
-      isNonInteractive: getIsNonInteractiveSession(),
-      hasAppendSystemPrompt: false,
-    }),
-    getAgentModeSystemPrompt(),
-    // Agent Mode replaces the default assembly, so the policy core has to be
-    // selected here explicitly. Before 2026-07-30 this branch hard-coded the
-    // Claude system section and included no cyber policy or actions section at
-    // all, which dropped exactly the hardening the more autonomous mode needs.
-    getCorePolicySection(),
-    gpt ? getGPTSystemSection() : getSimpleSystemSection(),
-    gpt ? getGPTActionsSection() : getActionsSection(),
-    gpt
-      ? getGPTAgentModeUsingToolsSection(enabledTools)
-      : getSimpleAgentModeUsingToolsSection(enabledTools),
-    gpt ? getGPTToneAndStyleSection() : getAgentModeToneSection(),
-    // === BOUNDARY MARKER - DO NOT MOVE OR REMOVE ===
-    ...(shouldUseGlobalCacheScope() ? [SYSTEM_PROMPT_DYNAMIC_BOUNDARY] : []),
-    // --- Dynamic content (registry-managed) ---
-    ...resolvedDynamicSections,
-  ].filter(s => s !== null)
-}
-
-function getSimpleAgentModeUsingToolsSection(enabledTools: Set<string>): string {
-  const taskToolName = [TASK_CREATE_TOOL_NAME, TODO_WRITE_TOOL_NAME].find(n =>
-    enabledTools.has(n),
-  )
-
-  const items = [
-    taskToolName
-      ? `Break down and manage the run with the ${taskToolName} tool. Mark each task as completed as soon as you are done with it. Do not batch completions.`
-      : null,
-    enabledTools.has(AGENT_TOOL_NAME)
-      ? `${AGENT_TOOL_NAME} is available for bounded delegated work. Follow the Agent Mode doctrine above.`
-      : null,
-    `Call multiple tools in a single response when they are independent. Keep context small and decision-focused — prefer compact evidence over long raw tool output.`,
-  ].filter(item => item !== null)
-
-  return [`# Using your tools`, ...prependBullets(items)].join(`\n`)
-}
-
-export async function getSystemPrompt(
-  tools: Tools,
-  model: string,
-  additionalWorkingDirectories?: string[],
-  mcpClients?: MCPServerConnection[],
-  provider?: APIProvider,
-): Promise<string[]> {
-  const startTime = Date.now()
-  logForDebugging(`[SystemPrompt] getSystemPrompt start`, {
-    model,
-    toolCount: tools.length,
-    additionalWorkingDirectoryCount: additionalWorkingDirectories?.length ?? 0,
-    mcpClientCount: mcpClients?.length ?? 0,
-  })
-  if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
-    return [
-      [
-        getCLISyspromptPrefix({
-          isNonInteractive: false,
-          hasAppendSystemPrompt: false,
-        }),
-        `CWD: ${getCwd()}\nDate: ${getSessionStartDate()}`,
-        '# Core policy',
-        getCyberPolicyInstruction(),
-        TOOL_OUTPUT_IS_DATA_RULE,
-        PROMPT_INJECTION_RULE,
-        INSTRUCTION_AUTHORITY_RULE,
-        OUTCOME_REPORTING_RULE,
-      ].join('\n\n'),
-    ]
-  }
-
-  const cwd = getCwd()
-  const [skillToolCommands, outputStyleConfig, envInfo] = await Promise.all([
-    getSkillToolCommands(cwd).then(result => {
-      logForDebugging(`[SystemPrompt] getSkillToolCommands complete`, {
-        commandCount: result.length
-      })
-      return result
-    }),
-    getOutputStyleConfig().then(result => {
-      logForDebugging(`[SystemPrompt] getOutputStyleConfig complete`, {
-        hasOutputStyle: result !== null
-      })
-      return result
-    }),
-    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider).then(result => {
-      logForDebugging(`[SystemPrompt] computeSimpleEnvInfo complete`, {
-        envInfoLength: result.length
-      })
-      return result
-    }),
-  ])
-  const requestProvider = resolveRequestProvider(model, provider)
-  const gpt = isGPTPromptStyle(requestProvider)
-
-  const settings = getInitialSettings()
-  const enabledTools = new Set(tools.map(_ => _.name))
-
-  if (
-    (feature('PROACTIVE') || feature('KAIROS')) &&
-    proactiveModule?.isProactiveActive()
-  ) {
-    logForDebugging(`[SystemPrompt] path=simple-proactive`)
-    return [
-      `\nYou are an autonomous agent. Use the available tools to do useful work.`,
-      getCorePolicySection(),
-      gpt ? getGPTActionsSection() : getActionsSection(),
-      getSystemRemindersSection(),
-      await loadMemoryPrompt(),
-      envInfo,
-      getLanguageSection(settings.language),
-      // When delta enabled, instructions are announced via persisted
-      // mcp_instructions_delta attachments (attachments.ts) instead.
-      isMcpInstructionsDeltaEnabled()
-        ? null
-        : getMcpInstructionsSection(mcpClients),
-      getScratchpadInstructions(),
-      getFunctionResultClearingSection(model),
-      SUMMARIZE_TOOL_RESULTS_SECTION,
-      getProactiveSection(),
-    ].filter(s => s !== null)
-  }
-
-  const isAgentMode = isAgentModePromptActive()
-
-  const dynamicSections = [
     systemPromptSection(
       'session_guidance',
       {
         gpt,
-        agentMode: isAgentMode,
         tools: toolNamesKeyInput(enabledTools),
         skills: skillNamesKeyInput(skillToolCommands),
       },
       () =>
         gpt
-          ? isAgentMode
-            ? getGPTAgentModeSessionGuidanceSection(enabledTools, skillToolCommands)
-            : getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
-          : isAgentMode
-            ? getAgentModeSessionSpecificGuidanceSection(enabledTools, skillToolCommands)
-            : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
+          ? getGPTSessionGuidanceSection(enabledTools, skillToolCommands)
+          : getSessionSpecificGuidanceSection(enabledTools, skillToolCommands),
     ),
     systemPromptSection('memory', NO_SECTION_INPUTS, () => loadMemoryPrompt()),
     systemPromptSection('ant_model_override', NO_SECTION_INPUTS, () =>
@@ -870,7 +603,7 @@ export async function getSystemPrompt(
       NO_SECTION_INPUTS,
       () => SUMMARIZE_TOOL_RESULTS_SECTION,
     ),
-    ...(feature('TOKEN_BUDGET')
+    ...(includeFeatureGatedSections && feature('TOKEN_BUDGET')
       ? [
           // Cached unconditionally — the "When the user specifies..." phrasing
           // makes it a no-op with no budget active. Was DANGEROUS_uncached
@@ -885,7 +618,8 @@ export async function getSystemPrompt(
           ),
         ]
       : []),
-    ...(feature('KAIROS') || feature('KAIROS_BRIEF')
+    ...(includeFeatureGatedSections &&
+    (feature('KAIROS') || feature('KAIROS_BRIEF'))
       ? [systemPromptSection('brief', NO_SECTION_INPUTS, () => getBriefSection())]
       : []),
     systemPromptSection(
@@ -896,6 +630,105 @@ export async function getSystemPrompt(
       () => getSessionTranscriptsSection(),
     ),
   ]
+}
+
+export async function getSystemPrompt(
+  tools: Tools,
+  model: string,
+  additionalWorkingDirectories?: string[],
+  mcpClients?: MCPServerConnection[],
+  provider?: APIProvider,
+): Promise<string[]> {
+  const startTime = Date.now()
+  logForDebugging(`[SystemPrompt] getSystemPrompt start`, {
+    model,
+    toolCount: tools.length,
+    additionalWorkingDirectoryCount: additionalWorkingDirectories?.length ?? 0,
+    mcpClientCount: mcpClients?.length ?? 0,
+  })
+  if (isEnvTruthy(process.env.CLAUDE_CODE_SIMPLE)) {
+    return [
+      [
+        getCLISyspromptPrefix({
+          isNonInteractive: false,
+          hasAppendSystemPrompt: false,
+        }),
+        `CWD: ${getCwd()}\nDate: ${getSessionStartDate()}`,
+        '# Core policy',
+        getCyberPolicyInstruction(),
+        TOOL_OUTPUT_IS_DATA_RULE,
+        PROMPT_INJECTION_RULE,
+        INSTRUCTION_AUTHORITY_RULE,
+        OUTCOME_REPORTING_RULE,
+      ].join('\n\n'),
+    ]
+  }
+
+  const cwd = getCwd()
+  const [skillToolCommands, outputStyleConfig, envInfo] = await Promise.all([
+    getSkillToolCommands(cwd).then(result => {
+      logForDebugging(`[SystemPrompt] getSkillToolCommands complete`, {
+        commandCount: result.length
+      })
+      return result
+    }),
+    getOutputStyleConfig().then(result => {
+      logForDebugging(`[SystemPrompt] getOutputStyleConfig complete`, {
+        hasOutputStyle: result !== null
+      })
+      return result
+    }),
+    computeSimpleEnvInfo(model, additionalWorkingDirectories, provider).then(result => {
+      logForDebugging(`[SystemPrompt] computeSimpleEnvInfo complete`, {
+        envInfoLength: result.length
+      })
+      return result
+    }),
+  ])
+  const requestProvider = resolveRequestProvider(model, provider)
+  const gpt = isGPTPromptStyle(requestProvider)
+  const gptFamily = getGPTPromptFamily(model)
+
+  const settings = getInitialSettings()
+  const enabledTools = new Set(tools.map(_ => _.name))
+
+  if (
+    (feature('PROACTIVE') || feature('KAIROS')) &&
+    proactiveModule?.isProactiveActive()
+  ) {
+    logForDebugging(`[SystemPrompt] path=simple-proactive`)
+    return [
+      `\nYou are an autonomous agent. Use the available tools to do useful work.`,
+      getCorePolicySection(),
+      gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
+      getSystemRemindersSection(),
+      await loadMemoryPrompt(),
+      envInfo,
+      getLanguageSection(settings.language),
+      // When delta enabled, instructions are announced via persisted
+      // mcp_instructions_delta attachments (attachments.ts) instead.
+      isMcpInstructionsDeltaEnabled()
+        ? null
+        : getMcpInstructionsSection(mcpClients),
+      getScratchpadInstructions(),
+      getFunctionResultClearingSection(model),
+      SUMMARIZE_TOOL_RESULTS_SECTION,
+      getProactiveSection(),
+    ].filter(s => s !== null)
+  }
+
+  const dynamicSections = buildDynamicPromptSections({
+    gpt,
+    model,
+    provider,
+    additionalWorkingDirectories,
+    mcpClients,
+    enabledTools,
+    skillToolCommands,
+    outputStyleConfig,
+    settings,
+    includeFeatureGatedSections: true,
+  })
 
   const resolvedDynamicSections =
     await resolveSystemPromptSections(dynamicSections)
@@ -905,13 +738,11 @@ export async function getSystemPrompt(
   })
 
   // Doing-tasks is the only container for truthful outcome reporting and the
-  // retry budget, and TWO independent things drop it: Agent Mode, and an output
-  // style that turns coding instructions off. Outcome reporting is an invariant
-  // (owner decision 2026-07-30), so whenever this section is absent the core
-  // section stands in. The intro is always present here and already carries the
-  // cyber policy, so the fallback must not restate it.
+  // retry budget. An output style that turns coding instructions off drops it.
+  // Outcome reporting is an invariant, so whenever this section is absent the
+  // core section stands in. The intro is always present here and already
+  // carries the cyber policy, so the fallback must not restate it.
   const hasDoingTasksSection =
-    !isAgentMode &&
     (outputStyleConfig === null ||
       outputStyleConfig.keepCodingInstructions === true)
 
@@ -923,27 +754,19 @@ export async function getSystemPrompt(
       ? null
       : getCorePolicySection({
           cyberPolicy: false,
-          // Agent Mode has the orchestrator's tighter budget; an output-style
-          // session has no other anti-loop rule at all.
-          retryRule: !isAgentMode,
+          retryRule: true,
         }),
     hasDoingTasksSection
       ? gpt
-        ? getGPTDoingTasksSection(enabledTools)
+        ? getGPTDoingTasksSection(enabledTools, gptFamily)
         : getSimpleDoingTasksSection()
       : null,
-    // Risky-action consent is invariant across modes, so Agent Mode keeps the
-    // actions section rather than nulling it.
-    gpt ? getGPTActionsSection() : getActionsSection(),
+    gpt ? getGPTActionsSection(gptFamily) : getActionsSection(),
     ...(gpt ? [] : [getDeliveringWorkSection(), getCorrectionsSection()]),
-    isAgentMode
-      ? gpt
-        ? getGPTAgentModeUsingToolsSection(enabledTools)
-        : getSimpleAgentModeUsingToolsSection(enabledTools)
-      : gpt
-        ? getGPTUsingToolsSection(enabledTools)
-        : getUsingYourToolsSection(enabledTools),
-    gpt ? getGPTToneAndStyleSection() : getSimpleToneAndStyleSection(),
+    gpt
+      ? getGPTUsingToolsSection(enabledTools)
+      : getUsingYourToolsSection(enabledTools),
+    gpt ? getGPTToneAndStyleSection(gptFamily) : getSimpleToneAndStyleSection(),
     gpt ? getGPTOutputSection() : getOutputEfficiencySection(),
     // === BOUNDARY MARKER - DO NOT MOVE OR REMOVE ===
     ...(shouldUseGlobalCacheScope() ? [SYSTEM_PROMPT_DYNAMIC_BOUNDARY] : []),
@@ -1081,7 +904,7 @@ export async function computeSimpleEnvInfo(
 
   return [
     `# Environment`,
-    `You have been invoked in the following environment: `,
+    `You have been invoked in the following environment:`,
     ...prependBullets(envItems),
   ].join(`\n`)
 }
@@ -1239,6 +1062,12 @@ const SUMMARIZE_TOOL_RESULTS_SECTION = `When working with tool results, write do
  * Embedded-search builds remove the dedicated Glob/Grep tools (see
  * `hasEmbeddedSearchTools`), so this section names the search surface that
  * actually exists rather than a tool the model cannot call.
+ *
+ * When the task is simply to understand another session's work, guidance
+ * prefers available session-reading tools over reconstructing context from raw
+ * files. When debugging requires raw events or tool results the tool does not
+ * expose, direct transcript inspection remains available, including discovering
+ * relevant sessions.
  */
 function getSessionTranscriptsSection(): string {
   const embedded = hasEmbeddedSearchTools()
@@ -1246,18 +1075,26 @@ function getSessionTranscriptsSection(): string {
     ? `\`grep\` via the ${BASH_TOOL_NAME} tool`
     : GREP_TOOL_NAME
   const resolveInstruction = embedded
-    ? `Given a session id prefix, resolve the file with \`find\` via the ${BASH_TOOL_NAME} tool, scoped to the projects dir:
+    ? `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with \`find\` via the ${BASH_TOOL_NAME} tool (scoped to the workspace directory under projects if known, or the projects dir):
 
-    find ~/.cat-code/projects -name '*9a993deb*.jsonl'`
-    : `Given a session id prefix, resolve the file with ${GLOB_TOOL_NAME} — pass the projects dir as the \`path\` argument, not the default cwd:
+    find ~/.cat-code/projects -name '*9a993deb*.jsonl'
 
-    ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"`
+Require unambiguous resolution to a single file before reading contents.`
+    : `Prefer a known workspace and full session ID to open the path directly. When resolving a specific session by prefix, locate the file with ${GLOB_TOOL_NAME}, passing the workspace directory under projects if known, or the projects dir as the \`path\` argument rather than the default cwd:
+
+    ${GLOB_TOOL_NAME} pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"
+
+Require unambiguous resolution to a single file before reading contents.`
   const query = (pattern: string) =>
-    embedded ? `grep '${pattern}'` : `${GREP_TOOL_NAME} '${pattern}'`
+    embedded
+      ? `grep '${pattern}' <path-to-transcript.jsonl>`
+      : `${GREP_TOOL_NAME} '${pattern}' path="<path-to-transcript.jsonl>"`
 
   return `## Reading session transcripts
 
-Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields — do NOT write a custom parser. The shape is stable.
+These files are the raw record of a session. When you need to understand another session's work, prefer the available session-reading tool. For debugging that requires raw events or tool results the tool does not expose, inspect the transcript directly.
+
+Cat-code session files are line-oriented JSONL. Use ${searchTool} with patterns on the "type" or other fields, and do NOT write a custom parser. The shape is stable.
 
 Paths:
 
@@ -1267,7 +1104,7 @@ Paths:
 
 ${resolveInstruction}
 
-Common queries on a transcript:
+Examples for querying an individual transcript:
 
     ${query('"type":"tool_use"')}      # list tool calls
     ${query('"stop_reason"')}          # find last API response boundary

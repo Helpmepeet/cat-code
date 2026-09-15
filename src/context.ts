@@ -15,6 +15,7 @@ import { isBareMode, isEnvTruthy } from './utils/envUtils.js'
 import { execFileNoThrow } from './utils/execFileNoThrow.js'
 import { getBranch, getDefaultBranch, getIsGit, gitExe } from './utils/git.js'
 import { shouldIncludeGitInstructions } from './utils/gitSettings.js'
+import { getTimeZone } from './utils/intl.js'
 import { logError } from './utils/log.js'
 
 const MAX_STATUS_CHARS = 2000
@@ -231,6 +232,7 @@ export const getUserContext = memoize(
     return {
       ...(claudeMd && { claudeMd }),
       currentDate: `Today's date is ${getLocalISODate()}.`,
+      timezone: `Host local timezone: ${getTimeZone()}.`,
     }
   },
 )

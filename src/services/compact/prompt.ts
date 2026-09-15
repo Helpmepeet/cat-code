@@ -2,34 +2,7 @@ import { feature } from 'bun:bundle'
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'
 import type { APIProvider } from '../../utils/model/providers.js'
 
-type RunStatus =
-  | 'planning'
-  | 'awaiting_approval'
-  | 'executing'
-  | 'verifying'
-  | 'completed'
-  | 'blocked'
-  | 'cancelled'
-
-type ApprovalStatus = 'pending' | 'approved' | 'required'
-
-type HandoffBlock = {
-  summary: string
-  open_questions: string[]
-  resume_hint: string
-}
-
-type VerificationSummary = {
-  verdict: 'pass' | 'fail' | 'warn'
-  evidence: string
-  issues: string[]
-  recommended_direction: 'fix' | 're-plan' | 'block' | null
-}
 import type { PartialCompactDirection } from '../../types/message.js'
-import {
-  formatAgentModeSessionState,
-  type AgentModeSessionState,
-} from '../../agent-mode/sessionState.js'
 
 // Dead code elimination: conditional import for proactive mode
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -195,126 +168,6 @@ When summarizing the conversation focus on typescript code changes and also reme
 When you are using compact - please focus on test output and code changes. Include file reads verbatim.
 </example>
 `
-
-const AGENT_MODE_COMPACT_APPENDIX = `
-
-AGENT MODE CONTINUITY REQUIREMENTS:
-- This conversation may be an Agent mode orchestrator session. In that case, preserve session-critical state exactly and explicitly.
-- Treat conversation history as secondary to durable session state. Do NOT infer or rewrite the objective, last handoff summary, active workers, or pending approvals from chat history when explicit session-state facts are provided.
-- Preserve these items in the summary when present: objective, last handoff summary, active workers, and pending approvals.
-- Keep worker transcripts, long logs, and noisy tool output out of the summary unless they are necessary to explain the current decision state.
-- Prefer compact decision state over raw transcript history. The resumed orchestrator should be able to recover from persisted session state first and conversation summary second.
-`
-
-const AGENT_MODE_ANALYSIS_INSTRUCTION_BASE = `Before providing your final summary, wrap your analysis in <analysis> tags to organize your thoughts.
-
-In your analysis process:
-1. Verify the authoritative session-critical state first: objective, last handoff summary, active workers, pending approvals, and any explicitly provided session-state facts.
-2. Then identify only the continuity-relevant conversation details that still matter for the next orchestrator decision.
-3. Exclude transcript-heavy detail that can be recovered from the codebase, git/worktree state, or persisted artifacts.
-4. Double-check that your final summary stays compact, decision-focused, and does not override explicit session-state facts with transcript inference.`
-
-const GPT_AGENT_MODE_ANALYSIS_INSTRUCTION_BASE = `ANALYSIS PHASE:
-- First, verify the authoritative session-critical state: objective, last handoff summary, active workers, pending approvals, and any explicitly provided session-state facts.
-- Then identify only the conversation details that still matter for the next orchestrator decision.
-- Exclude transcript-heavy detail that can be recovered from the codebase, git/worktree state, or persisted artifacts.
-- Before leaving <analysis>, verify that the final summary stays compact, decision-focused, and does not override explicit session-state facts with transcript inference.`
-
-const AGENT_MODE_BASE_COMPACT_PROMPT = `Your task is to create a compact Agent mode continuity summary for an orchestrated coding run.
-
-This is NOT a normal conversation summary. Preserve session-critical decision state first, and summarize conversation details only when they are still needed for the next orchestrator decision.
-
-${AGENT_MODE_ANALYSIS_INSTRUCTION_BASE}
-
-Your summary should include the following sections:
-
-1. Session State: Preserve the authoritative objective, last handoff summary, active workers, pending approvals, and any other explicitly provided session-state facts exactly.
-2. What Changed Since The Last Clean Boundary: Summarize only the meaningful planning, research, implementation, or verification progress that affects continuation.
-3. Relevant Code And Artifact State: Mention only files, diffs, commands, or artifacts that the orchestrator still needs in active context. If something can be recovered from the repo, git state, or a run artifact, prefer a short pointer over a long transcript dump.
-4. User Messages And Decisions: List all non-tool user messages and any explicit user approvals, rejections, or scope decisions that still matter.
-5. Pending Tasks / Immediate Next Action: State exactly what should happen next when the run resumes.
-
-Critical rules:
-- Durable session state is authoritative. When authoritative session-state facts are provided, copy them forward accurately and do not override them with transcript inference.
-- Keep the summary compact and decision-focused. Do not preserve worker transcript noise, long logs, or recoverable code excerpts unless they are necessary for the next step.
-- If a detail can be recovered from the codebase, git/worktree state, or a persisted file outside prompt context, do not spend summary budget on it.
-- The resumed orchestrator must be able to recover from session state first and summary second.
-
-Return format:
-<analysis>
-[Chronological analysis that verifies the session-critical state and captures only continuity-relevant details]
-</analysis>
-
-<summary>
-1. Session State:
-   [Authoritative session state]
-
-2. What Changed Since The Last Clean Boundary:
-   [Meaningful progress only]
-
-3. Relevant Code And Artifact State:
-   [Only what still needs to stay in active context]
-
-4. User Messages And Decisions:
-   - [Non-tool user message or decision]
-
-5. Pending Tasks / Immediate Next Action:
-   [Exact next step]
-</summary>`
-
-const GPT_AGENT_MODE_BASE_COMPACT_PROMPT = `TASK CONTRACT: Create a compact Agent mode continuity summary for an orchestrated coding run.
-
-This is NOT a normal conversation summary. Preserve session-critical decision state first. Summarize conversation details only when they are still needed for the next orchestrator decision.
-
-OUTPUT CONTRACT:
-- Return exactly two top-level blocks in this order: <analysis> then <summary>.
-- Complete the entire <analysis> block before starting <summary>.
-- Inside <summary>, return exactly 5 numbered sections in the order shown below.
-- Every numbered section must be present and non-empty. If a section has no material content, write "None." and briefly say why.
-- Keep the XML-style tags balanced and correctly nested.
-
-${GPT_AGENT_MODE_ANALYSIS_INSTRUCTION_BASE}
-
-Required <summary> sections in order:
-1. Session State: Preserve the authoritative objective, last handoff summary, active workers, pending approvals, and any other explicitly provided session-state facts exactly.
-2. What Changed Since The Last Clean Boundary: Summarize only the meaningful planning, research, implementation, or verification progress that affects continuation.
-3. Relevant Code And Artifact State: Mention only files, diffs, commands, or artifacts that the orchestrator still needs in active context. If something can be recovered from the repo, git state, or a run artifact, prefer a short pointer over a long transcript dump.
-4. User Messages And Decisions: List all non-tool user messages and any explicit user approvals, rejections, or scope decisions that still matter.
-5. Pending Tasks / Immediate Next Action: State exactly what should happen next when the run resumes.
-
-Critical rules:
-- Durable session state is authoritative. When authoritative session-state facts are provided, copy them forward accurately and do not override them with transcript inference.
-- Keep the summary compact and decision-focused. Do not preserve worker transcript noise, long logs, or recoverable code excerpts unless they are necessary for the next step.
-- If a detail can be recovered from the codebase, git/worktree state, or a persisted file outside prompt context, do not spend summary budget on it.
-- The resumed orchestrator must be able to recover from session state first and summary second.
-
-Before finalizing, verify:
-- section 1 preserves the provided session-critical state accurately
-- the summary excludes worker transcript noise and recoverable details that do not need to stay in active context
-- every non-tool user message that still matters appears in section 4
-- section 5 gives an exact next action for immediate continuation
-
-Return format:
-<analysis>
-[Chronological analysis that verifies session-critical state and continuity-relevant details]
-</analysis>
-
-<summary>
-1. Session State:
-   [Authoritative session state]
-
-2. What Changed Since The Last Clean Boundary:
-   [Meaningful progress only]
-
-3. Relevant Code And Artifact State:
-   [Only what still needs to stay in active context]
-
-4. User Messages And Decisions:
-   - [Non-tool user message or decision]
-
-5. Pending Tasks / Immediate Next Action:
-   [Exact next step]
-</summary>`
 
 const GPT_BASE_COMPACT_PROMPT = `TASK CONTRACT: Create a detailed summary of the conversation so far. Preserve enough technical detail, code patterns, and architectural decisions that development can continue without losing context.
 
@@ -684,20 +537,11 @@ export function getPartialCompactPrompt(
 export function getCompactPrompt(
   customInstructions?: string,
   provider?: APIProvider,
-  agentMode?: boolean,
 ): string {
-  const template = agentMode
-    ? isGPTPromptStyle(provider)
-      ? GPT_AGENT_MODE_BASE_COMPACT_PROMPT
-      : AGENT_MODE_BASE_COMPACT_PROMPT
-    : isGPTPromptStyle(provider)
+  const template = isGPTPromptStyle(provider)
       ? GPT_BASE_COMPACT_PROMPT
       : BASE_COMPACT_PROMPT
   let prompt = NO_TOOLS_PREAMBLE + template
-
-  if (!agentMode) {
-    prompt += AGENT_MODE_COMPACT_APPENDIX
-  }
 
   if (customInstructions && customInstructions.trim() !== '') {
     prompt += `\n\nAdditional Instructions:\n${customInstructions}`
@@ -740,119 +584,19 @@ export function formatCompactSummary(summary: string): string {
   return formattedSummary.trim()
 }
 
-type AgentModeRunState = {
-  objective: string
-  planSummary: string | null
-  currentPhase: RunStatus
-  approvalStatus: ApprovalStatus
-  approvalReason: string | null
-  blockedReason: string | null
-  executionTarget: string | null
-  latestVerifierVerdict: VerificationSummary | null
-  handoff: HandoffBlock | null
-  nextAction: string
-}
-
-// A union, not one all-optional object, so that AgentModeSessionState is
-// assignable to NEITHER member. AgentModeRunPhase and RunStatus are identical
-// unions, so an all-optional shape would silently accept the narrow state and
-// drop the worker roster — the defect this type is guarding against.
-// `readSessionState()` is the only compaction-time source of Agent Mode state;
-// route it through toAgentModeCompactState() rather than widening it by hand.
-export type AgentModeCompactState =
-  | (AgentModeRunState & { sessionState?: AgentModeSessionState | null })
-  | { sessionState: AgentModeSessionState }
-
-export function toAgentModeCompactState(
-  sessionState: AgentModeSessionState | null | undefined,
-): AgentModeCompactState | undefined {
-  return sessionState ? { sessionState } : undefined
-}
-
-function formatAgentModeState(state: AgentModeCompactState): string {
-  const lines: string[] = []
-
-  // Only emit the run-state block when a caller supplied run fields. With just
-  // a nested sessionState the block would restate objective/phase/next action
-  // and print placeholders for the rest.
-  if ('objective' in state) {
-    const verifierVerdict = state.latestVerifierVerdict
-      ? [
-          `- Verdict: ${state.latestVerifierVerdict.verdict}`,
-          `- Evidence: ${state.latestVerifierVerdict.evidence}`,
-          `- Issues: ${
-            state.latestVerifierVerdict.issues.length > 0
-              ? state.latestVerifierVerdict.issues.join('; ')
-              : 'none'
-          }`,
-          `- Recommended direction: ${
-            state.latestVerifierVerdict.recommended_direction ?? 'none'
-          }`,
-        ].join('\n')
-      : '- None recorded.'
-
-    const handoff = state.handoff
-      ? [
-          `- Summary: ${state.handoff.summary}`,
-          `- Open questions: ${
-            state.handoff.open_questions.length > 0
-              ? state.handoff.open_questions.join('; ')
-              : 'none'
-          }`,
-          `- Resume hint: ${state.handoff.resume_hint}`,
-        ].join('\n')
-      : '- None recorded.'
-
-    lines.push(
-      'Agent Mode Run State (authoritative):',
-      `- Objective: ${state.objective}`,
-      `- Approved plan summary: ${state.planSummary ?? 'None recorded.'}`,
-      `- Current phase: ${state.currentPhase}`,
-      `- Approval status: ${state.approvalStatus}`,
-      `- Approval reason: ${state.approvalReason ?? 'none'}`,
-      `- Blocked reason: ${state.blockedReason ?? 'none'}`,
-      `- Execution target: ${state.executionTarget ?? 'none recorded.'}`,
-      'Latest verifier verdict:',
-      verifierVerdict,
-      'Handoff block:',
-      handoff,
-      `- Next action: ${state.nextAction}`,
-    )
-  }
-
-  if (state.sessionState) {
-    lines.push(formatAgentModeSessionState(state.sessionState))
-  }
-
-  return lines.join('\n')
-}
-
 export function getCompactUserSummaryMessage(
   summary: string,
   suppressFollowUpQuestions?: boolean,
   transcriptPath?: string,
   recentMessagesPreserved?: boolean,
   provider?: APIProvider,
-  agentModeState?: AgentModeCompactState,
 ): string {
   const formattedSummary = formatCompactSummary(summary)
-  const sessionStatePrefix = agentModeState
-    ? `${formatAgentModeState(agentModeState)}\n\n`
-    : ''
-
-  let baseSummary = agentModeState
-    ? isGPTPromptStyle(provider)
-      ? `This session is continuing after context compaction. The structured Agent Mode run state below is authoritative; the summary below is preserved continuity context only.
-
-${sessionStatePrefix}${formattedSummary}`
-      : `This session is being continued from a previous conversation that ran out of context. The structured Agent Mode run state below is authoritative; the summary below is preserved continuity context only.
-
-${sessionStatePrefix}${formattedSummary}`
-    : isGPTPromptStyle(provider)
-      ? `This session is continuing after context compaction. The summary below covers the earlier portion of the conversation and should be treated as preserved context for continuing the work.
+  let baseSummary = isGPTPromptStyle(provider)
+    ? `This session is continuing after context compaction. The summary below covers the earlier portion of the conversation and should be treated as preserved context for continuing the work.
 
 ${formattedSummary}`
-      : `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
+    : `This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.
 
 ${formattedSummary}`
 
@@ -865,16 +609,10 @@ ${formattedSummary}`
   }
 
   if (suppressFollowUpQuestions) {
-    let continuation = agentModeState
-      ? isGPTPromptStyle(provider)
-        ? `${baseSummary}
-Resume directly from the last task. Do not acknowledge the summary, do not recap prior work, and do not ask the user to restate context. Continue as if the interruption never happened.`
-        : `${baseSummary}
-Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary, do not recap what was happening, do not preface with "I'll continue" or similar. Pick up the last task as if the break never happened.`
-      : isGPTPromptStyle(provider)
-        ? `${baseSummary}
+    let continuation = isGPTPromptStyle(provider)
+      ? `${baseSummary}
 Continue as if the interruption never happened.`
-        : `${baseSummary}
+      : `${baseSummary}
 Continue the conversation from where it left off without asking the user any further questions.`
 
     if (

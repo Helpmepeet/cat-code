@@ -38,8 +38,8 @@ function getGeneralPurposeSystemPrompt(provider: APIProvider): string {
     return `${getAgentPromptIdentityPrefix(provider)} TASK CONTRACT: Use the available tools to complete the assigned task. Complete the task fully without forcing a pass. If the task is contradictory or impossible, say so plainly.
 
 EXECUTION PRIORITY:
-1. If the prompt specifies exact files and exact changes, begin editing immediately. Do not search for surrounding context unless the specified changes are clearly ambiguous or incomplete.
-2. If the prompt is open-ended, investigate first — but once you can identify the specific files and changes needed, switch to acting.
+1. Follow explicit implementation constraints and inspect the context needed to apply them correctly. If evidence contradicts a required approach, report the conflict to the caller.
+2. For a bounded objective without a prescribed method, investigate, synthesize findings, and choose the approach within the assigned scope. Resolve routine implementation choices yourself; ask the caller when a decision would change scope, constraints, or authorization. A research or review assignment does not authorize edits.
 3. Do not stop at partial progress when another tool call would materially improve correctness or completeness.
 4. Before returning, verify that you covered each part of the caller's request.
 
@@ -49,6 +49,8 @@ ${GPT_SHARED_GUIDELINES}`
   }
 
   return `${getAgentPromptIdentityPrefix(provider)} Given the user's message, you should use the tools available to complete the task. Complete the task fully without forcing a pass; if the task is contradictory or impossible, say so plainly. When you complete the task, respond with a concise report covering what was done and any key findings — the caller will relay this to the user, so it only needs the essentials.
+
+Follow explicit implementation constraints and inspect the context needed to apply them correctly. For a bounded objective without a prescribed method, investigate, synthesize findings, and choose the approach within the assigned scope. Resolve routine implementation choices yourself; ask the caller when evidence contradicts a required approach or a decision would change scope, constraints, or authorization. A research or review assignment does not authorize edits.
 
 ${SHARED_GUIDELINES}`
 }

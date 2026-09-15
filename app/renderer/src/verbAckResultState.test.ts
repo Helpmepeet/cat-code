@@ -42,22 +42,7 @@ function recallAnswer(
   }
 }
 
-/* ── frame builders (the four previously-unconsumed verb-ack results) ──────── */
-
-function agentModeResult(
-  sessionId: string,
-  ok: boolean,
-  message: string,
-): VerbAckResultFrame {
-  return {
-    kind: 'agent-mode.set.result',
-    protocolVersion: 1,
-    sessionId,
-    requestId: `agent-${sessionId}-${ok}`,
-    ok,
-    message,
-  }
-}
+/* ── frame builders ────────────────────────────────────────────────────────── */
 
 function taskControlResult(
   sessionId: string,
@@ -107,6 +92,22 @@ function settingsResult(
   }
 }
 
+function promptForceResult(
+  sessionId: string,
+  ok: boolean,
+  message: string,
+): VerbAckResultFrame {
+  return {
+    kind: 'prompt-force.result',
+    protocolVersion: 1,
+    sessionId,
+    requestId: `force-${sessionId}-${ok}`,
+    promptId: 'queued-1',
+    ok,
+    message,
+  }
+}
+
 function correlatedBadRequest(
   sessionId: string,
   message: string,
@@ -123,10 +124,10 @@ function correlatedBadRequest(
 }
 
 const BUILDERS = [
-  ['agent-mode.set.result', agentModeResult],
   ['task-control.result', taskControlResult],
   ['run-control.result', runControlResult],
   ['settings.result', settingsResult],
+  ['prompt-force.result', promptForceResult],
 ] as const
 
 /* ── reducer: each verb's result is stored per session ─────────────────────── */
@@ -183,7 +184,7 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   let state = createVerbAckResultState()
   state = reduceVerbAckResultState(state, {
     type: 'frame',
-    frame: agentModeResult('s1', false, 'boom'),
+    frame: taskControlResult('s1', false, 'boom'),
   })
   const before = state
   state = reduceVerbAckResultState(state, {
@@ -237,6 +238,23 @@ for (const [kind, build] of BUILDERS) {
     expect(verbAckErrorToast(build('s1', true, 'ok'))).toBeNull()
   })
 }
+
+test('a stale task.background refusal is a warning, not a danger error', () => {
+  const frame: VerbAckResultFrame = {
+    kind: 'task-control.result',
+    protocolVersion: 1,
+    sessionId: 's1',
+    requestId: 'background-stale',
+    verb: 'task.background',
+    ok: false,
+    message: 'No foreground task is running.',
+  }
+
+  expect(verbAckErrorToast(frame)).toEqual({
+    message: 'No foreground task is running.',
+    tone: 'warn',
+  })
+})
 
 /* ── D1b: a recall that lost the race is a report, not a fault ─────────────── */
 

@@ -1,7 +1,7 @@
 /**
  * WelcomeScreen (P4-17) — the first-run / empty-session launcher (`Welcome.jsx`),
  * rebuilt at the D5 DERIVED scope (`decisions/WELCOME-LAUNCHER.md`): a neon-cat
- * hero + wordmark, an interactive meta strip (Project · Start-in · Orchestrator),
+ * hero + wordmark, an interactive meta strip (Project · Start-in),
  * and the read-only Codex pool table. It replaces the minimal `EmptyShell`.
  *
  * It is PURELY PRESENTATIONAL — it reads props App wires from the EXISTING domain
@@ -12,10 +12,6 @@
  *  - trust    = best-effort per-cwd flags App joins from live sessions'
  *               `workspace-trust.snapshot` (P4-15) — the per-session-create trust
  *               GATE itself fires post-spawn on `onOpenFolder`, the real flow;
- *  - orchestrator = the P4-5/agent-mode `active` flag. INTERACTIVE in the session
- *               variant (P4-8b `onToggleOrchestrator` → the `agent-mode.set` verb →
- *               the engine's own `matchSessionMode`, a live per-session env switch);
- *               READ-ONLY in the launcher variant (no session yet to toggle).
  *
  * HC1: the renderer authors no path. A recent with an `appSessionId` opens/restores
  * that registry row; a history-only project (no app id) is browse-only (the P4-6b
@@ -39,8 +35,8 @@
  *  - Greeting username: DEFERRED — no engine-user seam in the renderer today.
  *  - Per-recent trust badge: best-effort (only live sessions expose trust); a
  *    global projects-trust feed is out of scope (no new feed rule).
- *  - Per-window reset: the pool seam carries ONE `usageResetAt`, not per-5h/weekly,
- *    so one reset label is shown (prototype's two reset columns were mock).
+ *  - Per-window reset: the pool seam carries the upstream position resets and
+ *    durations, so each recognized duration shows its own countdown.
  *
  * ➕ real-added (ruled), P4-48 — the first-run order line under the greeting. It
  * has no prototype counterpart: `Startup.jsx:461-489` gates trust and OAuth at
@@ -68,6 +64,7 @@ import catYawning from './assets/welcome-cat-yawning.png'
 import { basename } from './pathUtils.js'
 import { resolveRecentOpenRoute } from './sessionsCatalogState.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
+import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
 const welcomeCats = [
@@ -95,14 +92,13 @@ const welcomeCat = welcomeCats[Math.floor(Math.random() * welcomeCats.length)]!
  *    session-create and the renderer authors no path, so Project is READ-ONLY
  *    context (the session's real cwd), not a picker, and the recents launcher /
  *    "Open folder…" is absent — you are already in a project. The hero, Codex
- *    pool table, and orchestrator reflect are identical to the launcher.
+ *    pool table are identical to the launcher.
  */
 type WelcomeScreenProps =
   | {
       variant?: 'launcher'
       recents: readonly RecentWorkspace[]
       accounts: AccountsSnapshot | null
-      orchestratorActive: boolean
       /** Open/restore a recent project's most-recent openable session (HC1: id-only). */
       onOpenRecent: (recent: RecentWorkspace) => void
       /** HC1 native folder picker → spawn (the per-path trust gate fires post-spawn). */
@@ -125,20 +121,10 @@ type WelcomeScreenProps =
        * worktree option is cut. */
       sandboxed?: boolean
       accounts: AccountsSnapshot | null
-      orchestratorActive: boolean
-      /**
-       * P4-8b — set THIS session's agent mode on/off (the in-session Orchestrator
-       * toggle). Present only in the session variant (there IS a session to
-       * toggle); when supplied the control is interactive, else it stays a
-       * read-only reflect. The launcher variant never gets it (no session yet).
-       */
-      onToggleOrchestrator?: (next: boolean) => void
     }
 
 export function WelcomeScreen(props: WelcomeScreenProps) {
-  const { accounts, orchestratorActive } = props
-  const onToggleOrchestrator =
-    props.variant === 'session' ? props.onToggleOrchestrator : undefined
+  const { accounts } = props
   // The sign-in card's OWN predicate, read against the session-free pool view
   // the launcher already gets, so the line promises a sign-in step on exactly
   // the states that produce one: a configured Anthropic route or any pooled
@@ -221,13 +207,6 @@ export function WelcomeScreen(props: WelcomeScreenProps) {
                   </MetaCol>
                 </>
               ) : null}
-              <div className="w-px bg-shell-seam" />
-              <MetaCol icon={<AgentIcon />} label="Orchestrator">
-                <OrchestratorReflect
-                  active={orchestratorActive}
-                  onToggle={onToggleOrchestrator}
-                />
-              </MetaCol>
             </div>
           </div>
         </div>
@@ -395,7 +374,7 @@ function ProjectPicker({
 /**
  * One recent-project row. Exported so its openable/unopenable rendering can be
  * asserted directly: the dropdown is closed on first paint, so the rows never
- * appear in this package's SSR markup (the `OrchestratorReflect` convention).
+ * appear in this package's SSR markup while the menu is closed.
  */
 export function RecentItem({
   recent,
@@ -461,83 +440,12 @@ export function RecentItem({
   )
 }
 
-/**
- * The orchestrator (Agent Mode) switch. INTERACTIVE when `onToggle` is supplied
- * (P4-8b — the in-session `variant:'session'` case: clicking calls the callback
- * with the negated `active`, which drives `setAgentMode` → the engine's own
- * `matchSessionMode`, a live env switch that the NEXT turn picks up — no respawn).
- * READ-ONLY otherwise (the launcher variant: there is no session to toggle, so the
- * element stays an honest `aria-readonly` reflect of the focused session's
- * `agentMode.active`, ledger §29). Exported for the DOM-free handler test (this
- * package has no click harness — AccountsPage.test.tsx convention).
- */
-export function OrchestratorReflect({
-  active,
-  onToggle,
-}: {
-  active: boolean
-  onToggle?: (next: boolean) => void
-}) {
-  const visual = (
-    <>
-      <span
-        className={
-          'relative h-[22px] w-[38px] shrink-0 rounded-full border transition-colors ' +
-          (active
-            ? 'border-accent/45 bg-accent/20'
-            : 'border-white/10 bg-white/[0.07]')
-        }
-      >
-        <span
-          className={
-            'absolute top-1 h-3 w-3 rounded-full transition-all ' +
-            (active ? 'left-[18px] bg-accent-soft' : 'left-1 bg-text-subtle')
-          }
-        />
-      </span>
-      <span
-        className={
-          'text-[13px] font-medium ' +
-          (active ? 'font-mono text-accent-soft' : 'text-text-subtle')
-        }
-      >
-        {active ? 'On' : 'Off'}
-      </span>
-    </>
-  )
-
-  if (onToggle) {
-    return (
-      <button
-        type="button"
-        role="switch"
-        aria-checked={active}
-        onClick={() => onToggle(!active)}
-        title="Toggle this session's Agent Mode. Takes effect on the next turn."
-        className="inline-flex items-center gap-2.5"
-      >
-        {visual}
-      </button>
-    )
-  }
-
-  return (
-    <span
-      role="switch"
-      aria-checked={active}
-      aria-readonly="true"
-      title="Reflects the focused session's Agent Mode, which is set at session start."
-      className="inline-flex items-center gap-2.5"
-    >
-      {visual}
-    </span>
-  )
-}
-
 /* ── Codex account table (read-only, P4-5) ──────────────────────────────── */
 
 function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
-  const rows = accounts?.accounts ?? []
+  const rows = (accounts?.accounts ?? []).filter(
+    account => account.availability !== 'blocked',
+  )
   // Prototype header counts status-`healthy` accounts and labels them "healthy"
   // (`Welcome.jsx:434`), not the stricter ready = healthy-and-not-capped metric.
   const healthyCount = rows.filter(a => a.status === 'healthy').length
@@ -555,8 +463,8 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
         {accounts ? (
           <div className="flex items-center gap-2 text-[12.5px] text-text-muted">
             <span>
-              <span className="text-text-primary">{accounts.poolCount}</span>{' '}
-              account{accounts.poolCount === 1 ? '' : 's'}
+              <span className="text-text-primary">{rows.length}</span>{' '}
+              account{rows.length === 1 ? '' : 's'}
             </span>
             <span className="text-text-subtle">·</span>
             <span>
@@ -574,7 +482,7 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
       {rows.length === 0 ? (
         <div className="border-t border-shell-seam px-1 py-6 text-[12.5px] text-text-subtle">
-          No Codex account data for this view yet.
+          {accounts ? 'No usable Codex accounts.' : 'No Codex account data for this view yet.'}
         </div>
       ) : (
         rows.map(account => <CodexRow key={account.id} account={account} />)
@@ -585,10 +493,10 @@ function CodexTable({ accounts }: { accounts: AccountsSnapshot | null }) {
 
 function CodexRow({ account }: { account: AccountStatus }) {
   const capped = account.status === 'capped' || account.usageLimitReached
-  const reset =
-    account.usageResetAt != null ? formatResetCompact(account.usageResetAt) : ''
+  const { fiveHour, weekly } = selectWelcomeUsageWindows(account)
+  const hasBothWindows = fiveHour !== null && weekly !== null
   return (
-    <div className="grid grid-cols-[1.4fr_1.6fr_0.5fr_0.6fr_1.6fr_0.5fr_0.6fr] items-center gap-x-2.5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
+    <div className="grid grid-cols-[1.4fr_4.9fr] items-center gap-x-5 border-t border-white/[0.04] px-1 py-3.5 text-[13px]">
       <div className="flex min-w-0 items-center gap-2.5">
         <Radio on={account.isDefault} />
         <span className="truncate font-medium text-text-primary">
@@ -600,15 +508,54 @@ function CodexRow({ account }: { account: AccountStatus }) {
           </span>
         ) : null}
       </div>
-      <UsageBar label="5-hour" pct={account.usagePrimary} />
-      <UsagePct pct={account.usagePrimary} />
-      <ResetCell label="5-hour reset" value={reset} />
-      <UsageBar label="Weekly" pct={account.usageWeekly} />
-      <UsagePct pct={account.usageWeekly} />
-      {/* §0: the seam carries ONE `usageResetAt` (the 5h/primary window), so the
-          weekly reset column stays blank rather than duplicating or fabricating
-          a second value — never a mock. */}
-      <ResetCell label="Weekly reset" value="" />
+      <div
+        className={
+          'grid min-w-0 ' +
+          (hasBothWindows ? 'grid-cols-2 gap-x-7' : 'grid-cols-1')
+        }
+      >
+        {fiveHour ? (
+          <UsageTrack label="5-hour" shortLabel="5h" window={fiveHour} />
+        ) : null}
+        {weekly ? (
+          <UsageTrack label="Weekly" shortLabel="7d" window={weekly} />
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function UsageTrack({
+  label,
+  shortLabel,
+  window,
+}: {
+  label: string
+  shortLabel: string
+  window: { percent: number | null; resetAt: number | null }
+}) {
+  return (
+    <div className="grid min-w-0 grid-cols-[1.5rem_minmax(0,1fr)_2.75rem_3.75rem] items-center gap-x-2.5">
+      <span
+        aria-hidden="true"
+        className="font-mono text-[10px] font-medium uppercase tracking-[0.06em] text-text-faint"
+      >
+        {shortLabel}
+      </span>
+      {window.percent != null ? (
+        <UsageBar label={label} pct={window.percent} />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      {window.percent != null ? (
+        <UsagePct pct={window.percent} />
+      ) : (
+        <span aria-hidden="true" />
+      )}
+      <ResetCell
+        label={`${label} reset`}
+        value={window.resetAt != null ? formatResetCompact(window.resetAt) : ''}
+      />
     </div>
   )
 }
@@ -618,8 +565,8 @@ function CodexRow({ account }: { account: AccountStatus }) {
  * for every account regardless of percentage — NOT the threshold red/green/amber
  * of the AccountsPage meter. Min 2% fill so a live account is always visible.
  */
-function UsageBar({ label, pct }: { label: string; pct: number | null }) {
-  const value = pct ?? 0
+function UsageBar({ label, pct }: { label: string; pct: number }) {
+  const value = pct
   const filled = Math.max(2, Math.min(100, value))
   return (
     <div
@@ -627,7 +574,7 @@ function UsageBar({ label, pct }: { label: string; pct: number | null }) {
       aria-valuemax={100}
       aria-valuemin={0}
       aria-valuenow={value}
-      className="h-[5px] min-w-0 max-w-[220px] overflow-hidden rounded-[3px] bg-white/[0.06]"
+      className="h-[5px] min-w-0 overflow-hidden rounded-[3px] bg-white/[0.06]"
       role="progressbar"
     >
       {/* §0 EXCEPTION: data-driven width Tailwind can't express — the single
@@ -642,8 +589,8 @@ function UsageBar({ label, pct }: { label: string; pct: number | null }) {
 
 /** Percent label — accent-tinted like the prototype (`pctColor`, `Welcome.jsx:149`),
  * darker at ≥100%; never the tone-coded green/amber/red. */
-function UsagePct({ pct }: { pct: number | null }) {
-  const p = pct ?? 0
+function UsagePct({ pct }: { pct: number }) {
+  const p = pct
   return (
     <span
       aria-hidden="true"
@@ -663,7 +610,7 @@ function ResetCell({ label, value }: { label: string; value: string }) {
     <span
       aria-hidden={value ? undefined : 'true'}
       aria-label={value ? `${label}: ${value}` : undefined}
-      className="truncate font-mono text-[12px] tabular-nums text-text-subtle"
+      className="truncate text-right font-mono text-[12px] tabular-nums text-text-subtle"
     >
       {value}
     </span>
@@ -720,17 +667,6 @@ function MonitorIcon() {
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
       <rect x="2" y="3" width="20" height="14" rx="2" stroke="currentColor" strokeWidth="1.7" />
       <path d="M8 21h8M12 17v4" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-function AgentIcon() {
-  return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-      <circle cx="12" cy="5" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="5" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <circle cx="19" cy="18" r="2.4" stroke="currentColor" strokeWidth="1.7" />
-      <path d="M12 7.4v3.6M12 11l-6 5M12 11l6 5" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   )
 }

@@ -59,7 +59,7 @@ describe('mapLogOptionToCatalogEntry', () => {
       messageCount: 12,
       gitBranch: 'feature/x',
       tag: 'bug',
-      mode: 'agent',
+      mode: 'normal',
       agentSetting: 'reviewer',
       prNumber: 42,
       prRepository: 'me/proj',

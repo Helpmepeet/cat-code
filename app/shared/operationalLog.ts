@@ -83,6 +83,13 @@ export const OPERATIONAL_EVENTS = [
   'worker.completed',
   'worker.failed',
   'diagnostic',
+  // One line per PEER MESSAGE main routed (PEER-SESSIONS §10). Metadata only:
+  // who, to whom, which message, what happened. The body is not representable
+  // here — `peer.message.routed` admits five keys and none of them is the text,
+  // so there is no field a future caller could quietly widen into a content
+  // slot. This is the audit trail for "which session caused this" until a view
+  // exists (§12, deferred).
+  'peer.message.routed',
   'log.coverage.incomplete',
   'log.suppressed',
 ] as const
@@ -101,6 +108,7 @@ const OPERATIONAL_FIELD_KEYS = new Set([
   'frame', 'messageCount', 'missed', 'navigation', 'packaged', 'pid',
   'platform', 'queuedBytes', 'reason', 'role', 'samples', 'sessions', 'source', 'version',
   'signal', 'expected', 'visible', 'jsHeapUsedBytes', 'rendererWorkingSetKiB', 'rendersCommitted', 'phase',
+  'from', 'to', 'kind', 'messageId', 'outcome',
 ])
 
 /**
@@ -184,6 +192,13 @@ const OPERATIONAL_EVENT_FIELD_KEYS: Partial<Record<OperationalEvent, readonly st
   // number, so it can carry no payload, and a drop reported without its
   // magnitude reads the same whether one frame or a whole restore was lost.
   diagnostic: ['source', 'category', 'queuedBytes', 'reason', 'count'],
+  // PEER-SESSIONS §10, and the field list IS the privacy guarantee: `from` and
+  // `to` are peer NAMES (pool words, not ids and not paths), `kind` says which
+  // of the two message shapes it was, `messageId` is main's own mint, `outcome`
+  // is the closed outcome enum. The message TEXT has no key here and cannot
+  // acquire one without editing this line, which is the point of discriminating
+  // fields by event rather than sharing one broad set.
+  'peer.message.routed': ['from', 'to', 'kind', 'messageId', 'outcome'],
   'log.coverage.incomplete': ['source', 'reason', 'expected'],
   'log.suppressed': ['count', 'reason', 'category'],
 }

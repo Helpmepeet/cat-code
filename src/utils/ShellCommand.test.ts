@@ -5,6 +5,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { setTimeout as sleep } from 'timers/promises'
+import { TaskOutput } from './task/TaskOutput.js'
+import { wrapSpawn } from './ShellCommand.js'
 
 function processExists(pid: number): boolean {
   try {
@@ -110,5 +112,32 @@ describe('ShellCommand', () => {
       }
       await rm(dir, { recursive: true, force: true })
     }
+  })
+
+  test('reports a real SIGTERM death as exit code 143, not the 144 sentinel', async () => {
+    // Under the universal 128+N convention, 143 (128+15) is SIGTERM and 144
+    // (128+16) is SIGURG on macOS. #exitHandler used to hardcode 144 for a
+    // signal-killed process with no exit code, even though this same file
+    // already defines `const SIGTERM = 143` for exactly this case.
+    if (process.platform === 'win32') {
+      return
+    }
+
+    const child = spawn('/bin/sh', ['-c', 'sleep 30'], {
+      stdio: ['ignore', 'ignore', 'ignore'],
+    })
+    const shellCommand = wrapSpawn(
+      child,
+      new AbortController().signal,
+      60_000,
+      new TaskOutput('shell_command_sigterm_test', null, false),
+    )
+
+    // Let the shell actually start running before signaling it.
+    await sleep(50)
+    child.kill('SIGTERM')
+
+    const result = await shellCommand.result
+    expect(result.code).toBe(143)
   })
 })

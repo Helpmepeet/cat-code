@@ -15,6 +15,7 @@ import type { IncomingMessage } from 'http'
 import WSNode from 'ws'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { logForDebugging, TURN_LOCK_STALL_PREFIX } from '../../utils/debug.js'
+import { isCodexAuthErrorCode } from './codexErrorCodes.js'
 
 // Optional callback invoked when a stale previous_response_id is detected and
 // the turn is retried as a full send. Registered by the fetch adapter so that
@@ -958,21 +959,6 @@ function isUsageLimitRejection(code: string, message: string): boolean {
   )
 }
 
-// Local mirror of the adapter's CODEX_ACCOUNT_AUTH_ERROR_CODES: this module
-// cannot import the adapter (the adapter imports it), so — exactly as
-// isUsageLimitRejection mirrors the adapter's cap detection — the WS `type:error`
-// auth codes are matched here and normalized to CodexAccountAuthError adapter-side.
-// Keep this list in sync with CODEX_ACCOUNT_AUTH_ERROR_CODES.
-function isAuthTokenRejection(code: string): boolean {
-  const normalized = code.toLowerCase()
-  return (
-    normalized === 'token_invalidated' ||
-    normalized === 'token_expired' ||
-    normalized === 'token_revoked' ||
-    normalized === 'invalid_token'
-  )
-}
-
 export async function* streamTurnViaWebSocket(
   conversationId: string,
   codexBody: Record<string, unknown>,
@@ -1188,7 +1174,7 @@ async function* _streamTurnAttempt(
         return
       }
 
-      if (isAuthTokenRejection(code)) {
+      if (isCodexAuthErrorCode(code)) {
         // Revoked/superseded token surfaced over WS. Normalized to
         // CodexAccountAuthError adapter-side so withRetry runs auth recovery.
         enqueue({ error: new CodexWebSocketAuthError(msg) })
@@ -1413,7 +1399,7 @@ async function* _streamTurnAttempt(
   // has no response-id correlation, so an open socket is the whole hazard.
   let reachedTerminalDisposition = false
 
-  // Yield events until response.completed, error, or close.
+  // Yield events until a terminal response event, error, or close.
   try {
     while (true) {
       // Drain the queue first.
@@ -1497,14 +1483,16 @@ async function* _streamTurnAttempt(
           return
         }
 
-        // response.failed: the attempt produced no committed baseline (state is
-        // only recorded on response.completed above), so the PREVIOUS good
-        // baseline is still valid to chain from. Item 3 rule 3: kill the socket
-        // (its late events must not bleed into the next turn) but keep the
-        // continuation baseline. Account-cap response.failed events are
-        // reclassified upstream (createCodexResponseFailedError → clear +
-        // CodexAccountCapError) so rotation still drops state where it must.
-        if (event.type === 'response.failed') {
+        // A failed or incomplete response produced no committed baseline (state
+        // only records on response.completed above), so the previous completed
+        // baseline remains valid. Kill the physical stream to prevent late
+        // events from reaching the next turn while preserving that baseline.
+        // Account failures are reclassified upstream, where account rotation
+        // clears the conversation state.
+        if (
+          event.type === 'response.failed' ||
+          event.type === 'response.incomplete'
+        ) {
           reachedTerminalDisposition = true
           closeSocketPreservingState(conversationId)
           clearIdle()

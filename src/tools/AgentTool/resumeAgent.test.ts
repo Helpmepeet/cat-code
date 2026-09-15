@@ -18,10 +18,13 @@ import {
   resetStateForTests,
   switchSession,
 } from '../../bootstrap/state.js'
-import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
 import * as localAgentTask from '../../tasks/LocalAgentTask/LocalAgentTask.js'
 import { asAgentId, asSessionId } from '../../types/ids.js'
-import { getEmptyToolPermissionContext } from '../../Tool.js'
+import {
+  getEmptyToolPermissionContext,
+  type ToolUseContext,
+} from '../../Tool.js'
+import * as runAgentModule from './runAgent.js'
 import {
   getAgentTranscriptPath,
   getTranscriptPath,
@@ -30,10 +33,15 @@ import {
 import * as diskOutput from '../../utils/task/diskOutput.js'
 import * as agentToolUtils from './agentToolUtils.js'
 import {
+  _resetAgentLifecycleOwnershipForTest,
+  runWithAgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
+import {
   AgentResumeInProgressError,
   resumeAgentBackground,
   TranscriptNotFoundError,
 } from './resumeAgent.js'
+import { FORK_AGENT } from './forkSubagent.js'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -46,7 +54,6 @@ function deferred<T>() {
 }
 
 describe('resumeAgentBackground', () => {
-  const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
   const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
   const originalSessionId = getSessionId()
   const originalProjectDir = getSessionProjectDir()
@@ -57,10 +64,10 @@ describe('resumeAgentBackground', () => {
   let getTaskOutputPath: ReturnType<typeof spyOn>
 
   beforeEach(async () => {
+    _resetAgentLifecycleOwnershipForTest()
     resetStateForTests()
     tempDir = mkdtempSync(join(tmpdir(), 'resume-agent-'))
     switchSession(asSessionId('session-resume'), tempDir)
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
 
     await writeAgentTranscript('agent-resume')
@@ -91,16 +98,16 @@ describe('resumeAgentBackground', () => {
   })
 
   afterEach(async () => {
+    _resetAgentLifecycleOwnershipForTest()
     await diskOutput._clearOutputsForTest()
     diskOutput._resetTaskOutputDirForTest()
     mock.restore()
     switchSession(asSessionId(originalSessionId), originalProjectDir)
-    restoreEnv('CLAUDE_CODE_AGENT_MODE', originalAgentMode)
     restoreEnv('CLAUDE_CODE_COORDINATOR_MODE', originalCoordinatorMode)
     await rm(tempDir, { recursive: true, force: true })
   })
 
-  test('passes Agent Mode session state tracking into the async lifecycle', async () => {
+  test('resumes onto the async lifecycle and records the spawn on the parent transcript', async () => {
     await resumeAgentBackground({
       agentId: 'agent-resume',
       prompt: 'continue',
@@ -115,18 +122,71 @@ describe('resumeAgentBackground', () => {
       expect.objectContaining({
         parentSessionId: 'session-resume',
         parentTranscriptPath: getTranscriptPath(),
-        sessionStateTracking: {
-          sessionId: 'session-resume',
-          mode: 'agent',
-          objective: 'Continue current objective',
-          statePath: getSessionStatePathFromTranscriptPath(getTranscriptPath()),
-        },
+        // Durable worker state is coordinator-only, so an ordinary session
+        // resumes without any tracking to thread through.
+        sessionStateTracking: undefined,
       }),
     )
     const parentTranscript = await readFile(getTranscriptPath(), 'utf-8')
     expect(parentTranscript).toContain('"type":"subagent-spawned"')
     expect(parentTranscript).toContain('"toolUseId":"toolu-resume"')
     expect(parentTranscript).toContain('"agentId":"agent-resume"')
+  })
+
+  test('keeps exact parent MCP inputs when resuming a fork', async () => {
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: FORK_AGENT.agentType,
+      description: 'Continue current objective',
+    })
+    const parentTools = [{ name: 'parent-tool' }]
+    const parentCommands = [{ name: 'parent-command' }]
+    const parentClients = [{ name: 'parent-server', type: 'connected' }]
+    const parentResources = {
+      'parent-server': [{ uri: 'file://parent', name: 'parent' }],
+    }
+    const context = createToolUseContext() as unknown as ToolUseContext
+    context.renderedSystemPrompt = ['parent prompt'] as never
+    let snapshotReads = 0
+    Object.assign(context.options, {
+      tools: parentTools,
+      commands: parentCommands,
+      mcpClients: parentClients,
+      mcpResources: parentResources,
+      getMcpRuntimeSnapshot: () => {
+        snapshotReads++
+        return {
+          tools: [{ name: 'new-tool' }],
+          commands: [{ name: 'new-command' }],
+          clients: [{ name: 'new-server', type: 'connected' }],
+          resources: {},
+        } as never
+      },
+    })
+    let childContext: ToolUseContext | undefined
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream(({ toolUseContext }) => {
+          childContext = toolUseContext
+          throw new Error('stop after capturing child context')
+        })
+        await expect(stream.next()).rejects.toThrow(
+          'stop after capturing child context',
+        )
+      }) as never,
+    )
+
+    await resumeAgentBackground({
+      agentId: 'agent-resume',
+      prompt: 'continue',
+      canUseTool: (() => undefined) as never,
+      toolUseContext: context,
+    })
+
+    expect(snapshotReads).toBe(0)
+    expect(childContext?.options.tools).toBe(parentTools)
+    expect(childContext?.options.commands).toEqual(parentCommands)
+    expect(childContext?.options.mcpClients).toEqual(parentClients)
+    expect(childContext?.options.mcpResources).toEqual(parentResources)
   })
 
   test('holds lifecycle ownership until the detached background run settles, not just through setup', async () => {
@@ -156,6 +216,41 @@ describe('resumeAgentBackground', () => {
     await Promise.resolve()
 
     await expect(resume()).resolves.toMatchObject({ agentId: 'agent-resume' })
+  })
+
+  test('rejects resume while a non-resume background lifecycle is still finalizing', async () => {
+    const finalizationStarted = deferred<void>()
+    const finalizationRelease = deferred<void>()
+    const priorLifecycle = runWithAgentLifecycleOwnership(
+      'agent-resume',
+      async () => {
+        finalizationStarted.resolve()
+        await finalizationRelease.promise
+      },
+    )
+    await finalizationStarted.promise
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toBeInstanceOf(AgentResumeInProgressError)
+    expect(registerAsyncAgent).not.toHaveBeenCalled()
+
+    finalizationRelease.resolve()
+    await priorLifecycle
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
   })
 
   test('releases lifecycle ownership on setup failure without ever launching a lifecycle', async () => {
@@ -223,6 +318,162 @@ describe('resumeAgentBackground', () => {
       process.off('unhandledRejection', onUnhandledRejection)
     }
   })
+
+  test('fails resume when the recorded worktree no longer exists', async () => {
+    const missingWorktree = join(tempDir, 'missing-worktree')
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: missingWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).rejects.toThrow(
+      `Cannot resume agent agent-resume: recorded worktree ${missingWorktree} no longer exists.`,
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('fails resume when assigned cwd exists but the recorded worktree was removed', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    const removedWorktree = join(tempDir, 'missing-worktree')
+    await mkdir(resumedCwd, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: removedWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).rejects.toThrow(
+      `Cannot resume agent agent-resume: recorded worktree ${removedWorktree} no longer exists.`,
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('rejects resume when both assignedCwd and worktreePath are present', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    const resumedWorktree = join(tempDir, 'worktree')
+    await mkdir(resumedCwd, { recursive: true })
+    await mkdir(resumedWorktree, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      assignedCwd: resumedCwd,
+      worktreePath: resumedWorktree,
+    })
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).rejects.toThrow(
+      'Cannot resume agent agent-resume: recorded metadata includes both assignedCwd and worktreePath.',
+    )
+
+    expect(runAsyncAgentLifecycle).not.toHaveBeenCalled()
+  })
+
+  test('passes explicitly recorded cwd metadata when no worktree is recorded', async () => {
+    const resumedCwd = join(tempDir, 'explicit-cwd')
+    await mkdir(resumedCwd, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      assignedCwd: resumedCwd,
+    })
+
+    let capturedRunAgentParams:
+      | Parameters<typeof runAgentModule.runAgent>[0]
+      | undefined
+    const runAgentSpy = spyOn(runAgentModule, 'runAgent').mockImplementation(
+      mock((params => {
+        capturedRunAgentParams = params
+        return (async function* () {
+          return
+        })()
+      }) as never),
+    )
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream()
+        await stream.next()
+      }) as never,
+    )
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext([resumedCwd]),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+    expect(capturedRunAgentParams?.cwd).toBe(resumedCwd)
+    expect(capturedRunAgentParams?.worktreePath).toBeUndefined()
+
+    runAgentSpy.mockRestore()
+  })
+
+  test('passes worktree metadata when no cwd is recorded', async () => {
+    const resumedWorktree = join(tempDir, 'worktree')
+    await mkdir(resumedWorktree, { recursive: true })
+    await writeAgentMetadata(asAgentId('agent-resume'), {
+      agentType: 'general-purpose',
+      description: 'Continue current objective',
+      worktreePath: resumedWorktree,
+    })
+
+    let capturedRunAgentParams:
+      | Parameters<typeof runAgentModule.runAgent>[0]
+      | undefined
+    const runAgentSpy = spyOn(runAgentModule, 'runAgent').mockImplementation(
+      mock((params => {
+        capturedRunAgentParams = params
+        return (async function* () {
+          return
+        })()
+      }) as never),
+    )
+    runAsyncAgentLifecycle.mockImplementation(
+      mock(async ({ makeStream }) => {
+        const stream = makeStream()
+        await stream.next()
+      }) as never,
+    )
+
+    await expect(
+      resumeAgentBackground({
+        agentId: 'agent-resume',
+        prompt: 'continue',
+        canUseTool: (() => undefined) as never,
+        toolUseContext: createToolUseContext(),
+      }),
+    ).resolves.toMatchObject({ agentId: 'agent-resume' })
+
+    expect(capturedRunAgentParams?.cwd).toBeUndefined()
+    expect(capturedRunAgentParams?.worktreePath).toBe(resumedWorktree)
+
+    runAgentSpy.mockRestore()
+  })
 })
 
 async function writeAgentTranscript(agentId: string): Promise<void> {
@@ -247,11 +498,20 @@ async function writeAgentTranscript(agentId: string): Promise<void> {
   )
 }
 
-function createToolUseContext() {
+function createToolUseContext(additionalWorkingDirectories: string[] = []) {
   let state = {
     toolPermissionContext: {
       ...getEmptyToolPermissionContext(),
       mode: 'acceptEdits',
+      additionalWorkingDirectories: new Map(
+        additionalWorkingDirectories.map(dir => [
+          dir,
+          {
+            path: dir,
+            source: 'session',
+          },
+        ]),
+      ),
     },
     mcp: { tools: [] },
     tasks: {},

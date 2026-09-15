@@ -40,10 +40,19 @@ import {
   type ReactNode,
 } from 'react'
 import Markdown from 'react-markdown'
+import { createPortal } from 'react-dom'
 import remarkGfm from 'remark-gfm'
 import type { AccountsSnapshot, SessionId } from '../../shared/protocol.js'
 import { WelcomeScreen } from './WelcomeScreen.js'
 import { BoundedMarkdown } from './BoundedMarkdown.js'
+import {
+  PEER_BUBBLE_CLASS,
+  PEER_TONE_CLASS,
+  isPeerSpeechCall,
+  peerActivityText,
+  peerToolPresentation,
+  type PeerToolPresentation,
+} from './peerSurfaces.js'
 import {
   renderMarkdownTree,
   type MarkdownComponents,
@@ -65,7 +74,10 @@ import {
   type CompositeChildMeasurement,
   type CompositeChildWindow,
 } from './compositeChildWindow.js'
-import { REHYPE_PLUGINS } from './markdownPlugins.js'
+import {
+  REHYPE_PLUGINS,
+  TRANSCRIPT_REHYPE_PLUGINS,
+} from './markdownPlugins.js'
 import { useModalFocus } from './overlayFocus.js'
 import { useToast } from './toastContext.js'
 import {
@@ -96,6 +108,7 @@ import {
   TOOL_CARD_SHELL_CLASS,
   TOOL_CARD_SUB_CLASS,
   ToolCardStyleContext,
+  type ToolCardStyle,
 } from './toolCardStyle.js'
 import { ToolsExpandedContext } from './toolsExpanded.js'
 import {
@@ -149,6 +162,7 @@ import {
 } from './filePathActions.js'
 import {
   ActionBranchIcon,
+  ActionCloseIcon,
   ActionCopyIcon,
   ActionFileIcon,
   ActionRewindIcon,
@@ -228,6 +242,45 @@ import {
  * always-visible entry to a destination that repeated the card, so the drawer is
  * reached only for output a card had to cut.
  */
+/**
+ * Backgrounding one running subagent, from its own transcript card.
+ *
+ * A context rather than a prop drilled through the row tree, mirroring
+ * `ToolInspectorContext` right below: an agent card sits an unknown number of
+ * levels down (top-level row, delegate-group member, nested sub-agent branch),
+ * and every level between here and it is generic over row kind.
+ *
+ * `backgroundable` is the set of `tool_use` ids whose worker is running in the
+ * FOREGROUND right now, derived from `TasksSnapshot.subagents`. It gates display
+ * only — the sidecar re-resolves the id against its live store and fails closed,
+ * so a stale set can never background the wrong worker (see
+ * `TaskBackgroundOneMessage`).
+ */
+export type AgentBackgroundControl = {
+  backgroundable: ReadonlySet<string>
+  onBackground: (toolUseId: string) => void
+}
+
+// Not exported: only this module reads it, and a runtime export from a `.tsx`
+// would break the Fast Refresh boundary (`lint:fast-refresh`). The TYPE above is
+// exported so a pane can build the value; type-only exports are allowed.
+const AgentBackgroundContext = createContext<AgentBackgroundControl | null>(null)
+
+/**
+ * Where the card's Background control pins itself: the identity line's right
+ * edge, in whichever card style is drawn. It is positioned rather than laid out
+ * because the identity line lives INSIDE the collapse `<button>` and interactive
+ * content may not nest there, so the control has to be a sibling of that button
+ * while still reading as part of the row it acts on.
+ *
+ * The heights are the identity line's own: `TOOL_CARD_INSET_CLASS` padding either
+ * side of a 19px `AgentFace` (33px in `cards`, 25px in `lines`).
+ */
+const AGENT_BACKGROUND_ANCHOR_CLASS: Record<ToolCardStyle, string> = {
+  cards: 'right-3 h-[33px]',
+  lines: 'right-0 h-[25px]',
+}
+
 const ToolInspectorContext = createContext<((row: ToolUseNestedRow) => void) | null>(
   null,
 )
@@ -270,8 +323,6 @@ export const TranscriptView = memo(function TranscriptView({
   compacting,
   activeSessionId,
   accounts,
-  orchestratorActive,
-  onToggleOrchestrator,
   cwd,
   branch,
   sandboxed,
@@ -283,18 +334,14 @@ export const TranscriptView = memo(function TranscriptView({
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
+  agentBackground = null,
 }: {
   state: TranscriptState
   /** A compaction is running in this session (`selectIsCompacting`). */
   compacting?: boolean
   activeSessionId: SessionId | null
-  /** In-session empty-state Welcome context (Chat.jsx:1272) — the real P4-5 Codex
-   * pool snapshot + agent-mode active flag + fixed cwd + git branch; read-only (HC1). */
+  /** In-session empty-state Welcome context (Chat.jsx:1272). */
   accounts?: AccountsSnapshot | null
-  orchestratorActive?: boolean
-  /** P4-8b — toggle THIS session's agent mode from the empty-state Orchestrator
-   * switch (the session variant is interactive; the launcher stays read-only). */
-  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
   /** Whether this session's tools run sandboxed, read by the empty state's
@@ -327,6 +374,8 @@ export const TranscriptView = memo(function TranscriptView({
    * holds. Optional and null-tolerant: the plane is Codex-only and per-process.
    */
   leases?: LeaseSnapshot | null
+  /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
+  agentBackground?: AgentBackgroundControl | null
 }) {
   return (
     <TranscriptRowsView
@@ -335,8 +384,6 @@ export const TranscriptView = memo(function TranscriptView({
       )}
       compacting={compacting ?? false}
       accounts={accounts ?? null}
-      orchestratorActive={orchestratorActive ?? false}
-      onToggleOrchestrator={onToggleOrchestrator}
       cwd={cwd ?? null}
       branch={branch ?? null}
       sandboxed={sandboxed ?? false}
@@ -347,6 +394,7 @@ export const TranscriptView = memo(function TranscriptView({
       onOpenAccounts={onOpenAccounts}
       onSaveDiagnostics={onSaveDiagnostics}
       onMessageAction={onMessageAction}
+      agentBackground={agentBackground}
     />
   )
 })
@@ -356,8 +404,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   compacting = false,
   leases = null,
   accounts = null,
-  orchestratorActive = false,
-  onToggleOrchestrator,
   cwd = null,
   branch = null,
   sandboxed = false,
@@ -368,15 +414,16 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
   onOpenAccounts,
   onSaveDiagnostics,
   onMessageAction,
+  agentBackground = null,
 }: {
   rows: NestedTranscriptRow[]
   /** A compaction is running: mounts the live seam under the last row. */
   compacting?: boolean
   /** This session's Codex leases; null on an Anthropic path and after a restore. */
   leases?: LeaseSnapshot | null
+  /** Per-worker backgrounding, or null when this pane cannot issue the verb. */
+  agentBackground?: AgentBackgroundControl | null
   accounts?: AccountsSnapshot | null
-  orchestratorActive?: boolean
-  onToggleOrchestrator?: (next: boolean) => void
   cwd?: string | null
   branch?: string | null
   sandboxed?: boolean
@@ -460,7 +507,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
       ) : (
         // Empty session → the rich WelcomeScreen (Chat.jsx:1272 renders the SAME
         // WelcomeScreen when `isEmpty`): the cat|wordmark hero + the REAL Codex
-        // pool table (P4-5) + the orchestrator reflect. HC1 session variant —
+        // pool table (P4-5). HC1 session variant —
         // Project is the read-only cwd (no picker), and no recents launcher/"Open
         // folder…" (you are already in a project). Real data only: a null pool
         // snapshot degrades to "No Codex account data for this view yet.", never a
@@ -471,8 +518,6 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
           branch={branch}
           sandboxed={sandboxed}
           accounts={accounts}
-          orchestratorActive={orchestratorActive}
-          onToggleOrchestrator={onToggleOrchestrator}
         />
       )
   } else {
@@ -562,6 +607,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
     <ToolCardExpansionContext.Provider value={expansionStore}>
       <AgentFaceRegistryContext.Provider value={faceRegistry}>
         <LeaseSnapshotContext.Provider value={leases}>
+          <AgentBackgroundContext.Provider value={agentBackground}>
           <ToolInspectorContext.Provider value={openInspector}>
             <TurnErrorActionsContext.Provider
               value={{ openAccounts: onOpenAccounts, saveDiagnostics: onSaveDiagnostics }}
@@ -581,6 +627,7 @@ export const TranscriptRowsView = memo(function TranscriptRowsView({
               </FilePathMenuContext.Provider>
             </TurnErrorActionsContext.Provider>
           </ToolInspectorContext.Provider>
+          </AgentBackgroundContext.Provider>
         </LeaseSnapshotContext.Provider>
       </AgentFaceRegistryContext.Provider>
     </ToolCardExpansionContext.Provider>
@@ -1057,6 +1104,7 @@ const TranscriptRowView = memo(function TranscriptRowView({
       return (
         <UserBubble
           content={row.content}
+          sourceId={row.id}
           {...(onMessageAction
             ? {
                 onEdit: () =>
@@ -1298,7 +1346,8 @@ function AssistantProse({
       <BoundedMarkdown
         sourceId={sourceId}
         source={content}
-        rehypePlugins={REHYPE_PLUGINS}
+        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+        math
         recognizeCallouts
         renderLeaf={leaf =>
           // A fence too long to mount whole arrives as one merged code leaf:
@@ -1658,6 +1707,32 @@ const MARKDOWN_COMPONENTS = {
   ),
 }
 
+const USER_BUBBLE_MARKDOWN_COMPONENTS = {
+  ...MARKDOWN_COMPONENTS,
+  p: ({ children }: ComponentPropsWithoutRef<'p'>) => (
+    <p className="whitespace-pre-wrap">{children}</p>
+  ),
+  a: ({
+    children,
+    href,
+    node: _node,
+    ...props
+  }: ComponentPropsWithoutRef<'a'> & { node?: unknown }) => {
+    void _node
+    return (
+      <a
+        {...props}
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="text-accent underline hover:text-accent-soft"
+      >
+        {children}
+      </a>
+    )
+  },
+}
+
 function MarkdownCode({
   className,
   children,
@@ -1987,6 +2062,134 @@ const STATE_STYLE: Record<
   },
 }
 
+/**
+ * How much of a peer argument the one-line slot is allowed to carry.
+ *
+ * The slot itself is a single truncated line, so CSS already cuts anything too
+ * wide for the window. This cap is about the string, not the pixels: a create
+ * prompt and a read query are bounded by nothing in their schemas, so a whole
+ * essay would otherwise be collapsed onto one line and handed to the DOM for
+ * every card on screen. It no longer sees a peer MESSAGE: a send is drawn as
+ * speech and shows its text in full.
+ */
+const PEER_TARGET_MAX_CHARS = 160
+
+/**
+ * One line of a peer argument, whitespace collapsed so a multi-line body reads
+ * as a sentence rather than as its first word. The marker is added ONLY when
+ * this cut something, so a short message is never made to look abridged.
+ */
+function peerTargetFragment(value: string): string {
+  const oneLine = value.replace(/\s+/g, ' ').trim()
+  return oneLine.length > PEER_TARGET_MAX_CHARS
+    ? `${oneLine.slice(0, PEER_TARGET_MAX_CHARS)}…`
+    : oneLine
+}
+
+/**
+ * A peer call's target, split so the NAME can read as a name.
+ *
+ * The verb is no longer in here: it moved to the mark (`peerToolPresentation`),
+ * so repeating it would print the same thing twice in two registers, which is
+ * what the `• TOOL message Basalt: …` fallback did. Every value comes from
+ * `row.input`, which is what THIS session sent, so no text from another session
+ * reaches the header on any of these paths.
+ */
+type PeerTargetParts = {
+  /** The peer this call is about, when the call names one before it runs. */
+  name: string | null
+  /** The one argument worth a header slot. */
+  detail: string | null
+  /** A search query is mono the way `grep`'s pattern is; prose is not. */
+  detailMono: boolean
+}
+
+function derivePeerTargetParts(
+  toolName: string,
+  str: (key: string) => string | null,
+  input: Record<string, unknown>,
+): PeerTargetParts | null {
+  switch (toolName) {
+    // `SEND_TO_PEER_TOOL_NAME`/`READ_PEER_TOOL_NAME`/`CREATE_PEER_TOOL_NAME`
+    // (`app/sidecar/sendToPeerTool.ts:48`, `readPeerTool.ts:71`,
+    // `createPeerTool.ts:36`); the argument keys are those files' own schemas.
+    case 'SendToPeer': {
+      // Only reached if the speech row is somehow bypassed; a send is drawn as
+      // speech, not as a card (`PeerSpeechRow`).
+      const to = str('to')
+      return to === null ? null : { name: to, detail: null, detailMono: false }
+    }
+    case 'ReadPeer': {
+      // A call missing its required field still projects before the tool
+      // validates it. Returning null here would hand the slot back to the
+      // family fallback, which is `row.toolName` — the raw identifier this
+      // whole treatment exists to keep off the screen.
+      const peer = str('peer') ?? 'a peer'
+      if (peer === null) return null
+      // A query is the whole of what makes a read a search since the tool
+      // returns turns (`readPeerTool.ts` input schema; `view` and `limit` were
+      // removed 2026-09-05). A whitespace-only query is absent to the tool, so
+      // it is absent here too.
+      const query = str('query')?.trim() || null
+      return {
+        name: peer,
+        // Capped like every other peer argument: `query` is bounded by nothing
+        // in the tool's schema (`readPeerTool.ts` `z.string().optional()`), and
+        // this value also reaches the agent activity line through `deriveTarget`.
+        detail: query === null ? null : peerTargetFragment(query),
+        detailMono: query !== null,
+      }
+    }
+    case 'CreatePeer': {
+      // No name to show: the peer is named by main and the name comes back in
+      // the result, so at this point the instruction is all there is.
+      const prompt = str('prompt')
+      return {
+        name: null,
+        detail: prompt === null ? 'a new session' : peerTargetFragment(prompt),
+        detailMono: false,
+      }
+    }
+    case 'ListPeers':
+      // The one optional flag widens the roster to closed rows
+      // (`listPeersTool.ts:44`), which is the only thing the call can vary.
+      return {
+        name: null,
+        detail: input['all'] === true ? 'every peer' : 'open peers',
+        detailMono: false,
+      }
+    default:
+      return null
+  }
+}
+
+/** The name reads as a name, the argument as an argument. */
+function PeerTargetLine({ parts }: { parts: PeerTargetParts }) {
+  return (
+    <>
+      {parts.name === null ? null : (
+        <span className="font-medium text-text-primary">{parts.name}</span>
+      )}
+      {parts.name !== null && parts.detail !== null ? (
+        <span className="text-text-ghost"> · </span>
+      ) : null}
+      {parts.detail === null ? null : (
+        <span
+          className={`text-text-muted ${parts.detailMono ? 'font-mono' : ''}`}
+        >
+          {parts.detail}
+        </span>
+      )}
+    </>
+  )
+}
+
+/** The same parts as one line, for `target` and anything reading it as text. */
+function peerTargetText(parts: PeerTargetParts): string {
+  if (parts.name === null) return parts.detail ?? ''
+  return parts.detail === null ? parts.name : `${parts.name} · ${parts.detail}`
+}
+
 /** Family-specific one-line target framing derived from the REAL tool input. */
 function deriveTarget(
   row: ToolUseNestedRow,
@@ -1997,6 +2200,8 @@ function deriveTarget(
     const value = input[key]
     return typeof value === 'string' && value.length > 0 ? value : null
   }
+  const peerParts = derivePeerTargetParts(row.toolName, str, input)
+  if (peerParts !== null) return peerTargetText(peerParts)
   switch (row.toolFamily) {
     case 'bash':
       return str('command') ?? row.toolName
@@ -2117,6 +2322,9 @@ function ToolCardShell({
   collapsedExtra,
   defaultExpanded,
   expansionKey,
+  presentation,
+  tone,
+  targetNode,
   children,
 }: {
   family: ToolFamily
@@ -2141,13 +2349,36 @@ function ToolCardShell({
    * for a shell with no single tool behind it, which then remembers per instance.
    */
   expansionKey?: string | null
+  /**
+   * Replaces the family's mark and word, keeping everything else. The peer
+   * tools are the only caller: they have no family of their own, so they arrive
+   * as `other` and would draw the `•`/`Tool` fallback — which said nothing, and
+   * pushed the verb into the mono slot where Bash puts its command. Their mark
+   * says which OPERATION it is and their tone is the peer colour
+   * (`peerSurfaces.ts`), so the peer hue is the whole of what separates a peer
+   * read from a file read.
+   */
+  presentation?: PeerToolPresentation
+  tone?: string
+  /**
+   * Replaces the rendered target and drops the mono face with it. Mono is right
+   * for a path or a command; a peer target is a NAME plus a short argument, and
+   * this is what lets the name read as a name. `target` stays the plain string
+   * so the hover swap and the file-path menu keep working off one value.
+   */
+  targetNode?: ReactNode
   children?: ReactNode
 }) {
   const [expanded, setExpanded] = useToolCardExpanded(
     expansionKey ?? null,
     defaultExpanded ?? false,
   )
-  const fam = FAMILY_STYLE[family]
+  const base = FAMILY_STYLE[family]
+  const fam = {
+    mark: presentation?.mark ?? base.mark,
+    word: presentation?.word ?? base.word,
+    color: tone ?? base.color,
+  }
   const st = STATE_STYLE[status]
   const hasBody = children !== undefined && children !== null
   const { style } = useContext(ToolCardStyleContext)
@@ -2169,9 +2400,9 @@ function ToolCardShell({
           {fam.word}
         </span>
         <span
-          className={`min-w-0 flex-1 truncate font-mono text-xs text-text-primary ${
-            targetFilePath ? 'hover:text-accent-soft' : ''
-          }`}
+          className={`min-w-0 flex-1 truncate text-xs text-text-primary ${
+            targetNode === undefined ? 'font-mono' : 'font-sans'
+          } ${targetFilePath ? 'hover:text-accent-soft' : ''}`}
           title={targetFilePath ? 'Right-click for file actions' : undefined}
           onContextMenu={
             targetFilePath
@@ -2187,7 +2418,9 @@ function ToolCardShell({
               : undefined
           }
         >
-          {targetHover === undefined ? (
+          {targetNode !== undefined ? (
+            targetNode
+          ) : targetHover === undefined ? (
             target
           ) : (
             <>
@@ -2245,10 +2478,32 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
   const target = deriveTarget(row, filePathContext?.cwd ?? null)
   const targetFilePath =
     filePath === null ? undefined : { rawPath: filePath, sessionId: row.sessionId }
+  // A send is speech, not a card. Ahead of the cancelled branch because the
+  // shape does not change when the call was stopped: the row still says who
+  // this session was talking to and what it said.
+  if (isPeerSpeechCall(row.toolName)) return <PeerSpeechRow row={row} />
+  const peerPresentation = peerToolPresentation(row.toolName, row.input)
+  const peerParts =
+    peerPresentation === null
+      ? null
+      : derivePeerTargetParts(
+          row.toolName,
+          key => {
+            const value = row.input[key]
+            return typeof value === 'string' && value.length > 0 ? value : null
+          },
+          row.input,
+        )
+  const peerTone = peerPresentation === null ? undefined : PEER_TONE_CLASS
+  const peerTargetNode =
+    peerParts === null ? undefined : <PeerTargetLine parts={peerParts} />
   if (row.status === 'cancelled') {
     return (
       <ToolCardShell
         family={row.toolFamily}
+        presentation={peerPresentation ?? undefined}
+        tone={peerTone}
+        targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
         status={row.status}
@@ -2287,6 +2542,9 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
     <div className="w-full">
       <ToolCardShell
         family={row.toolFamily}
+        presentation={peerPresentation ?? undefined}
+        tone={peerTone}
+        targetNode={peerTargetNode}
         target={target}
         targetFilePath={targetFilePath}
         status={row.status}
@@ -2312,6 +2570,154 @@ function ToolCard({ row }: { row: ToolUseNestedRow }) {
           <NestedRowList className="flex flex-col gap-2" rows={row.children} />
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * What became of a send, read from the tool's OWN result rather than from the
+ * row status.
+ *
+ * THREE VALUES, NOT TWO. The tool reports confirmed delivery, confirmed
+ * non-delivery and unconfirmed delivery as distinct facts: a request that timed
+ * out may still be delivered once the peer finishes starting, so `unconfirmed`
+ * is neither a success nor a failure and must not be drawn as either.
+ *
+ * THE ROW STATUS CANNOT ANSWER THIS. `SendToPeer` never throws and never sets
+ * `is_error`: every refusal returns `{delivery, outcome, summary}` as ordinary
+ * result data, deliberately, so a refusal does not reach the model as a bug in
+ * its own call (`app/sidecar/sendToPeerTool.ts` `describeError`, and the
+ * `mapToolResultToToolResultBlockParam` that emits no `is_error`). The
+ * projector derives status from that field alone, so all thirteen outcomes
+ * — `no_such_peer`, `blocked_by_user`, `loop_stopped`, `peer_queue_full` and
+ * the rest — arrive as `success`. Keying the row off `status === 'error'` drew
+ * every one of them as delivered.
+ *
+ * A row RECORDED BEFORE the three-valued field existed carries the old
+ * `delivered` boolean and no `delivery` key, and a transcript is replayed from
+ * disk, so those rows are still drawn long after the change. Reading only the
+ * new key answered null for every one of them, and null with a result present
+ * is the ARRIVAL rendering below, so every old refusal redrew as delivered on
+ * reopen. The boolean is read as the fallback it now is: it never carried the
+ * unconfirmed case, which is precisely why it was replaced.
+ *
+ * Null when there is no result yet, or when the result is not the shape this
+ * tool documents: an unreadable result must not be reported as a failure.
+ */
+function peerSendDelivery(
+  row: ToolUseNestedRow,
+): 'delivered' | 'not_delivered' | 'unconfirmed' | null {
+  const content = row.result?.content
+  if (typeof content !== 'string' || content.length === 0) return null
+  try {
+    const parsed: unknown = JSON.parse(content)
+    if (typeof parsed !== 'object' || parsed === null) return null
+    const fields = parsed as Record<string, unknown>
+    const value = fields['delivery']
+    if (
+      value === 'delivered' ||
+      value === 'not_delivered' ||
+      value === 'unconfirmed'
+    ) {
+      return value
+    }
+    const legacy = fields['delivered']
+    if (typeof legacy === 'boolean') {
+      return legacy ? 'delivered' : 'not_delivered'
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `SendToPeer`, drawn as speech rather than as a tool card (operator,
+ * 2026-09-05). It is this session talking to another one, so it takes a quote
+ * mark, the recipient, and the message as prose.
+ *
+ * NOT a mirrored user bubble: that was considered and rejected, because an
+ * outgoing peer message is the assistant's action, not the user's, and the
+ * right side of this column is where things that ARRIVE go. And no arrow: `←`
+ * is CHANNEL_ARROW (`src/constants/figures.ts:21`), still owned by the channel
+ * row, so an arrow here would name the wrong sender.
+ *
+ * The mark sits in the same 16px column every family mark uses, so the target
+ * column still lines up with the cards above and below it.
+ *
+ * EVERY STATE BUT ARRIVAL IS DRAWN, because this row replaced a card that had a
+ * status dot and losing it would draw an in-flight or stopped message as one
+ * that arrived. The tool's own failure summaries are written for the MODEL
+ * ("try once more later", `describeOutcome`), so the reason is not printed at
+ * the user; the row says the one thing the user needs.
+ *
+ * Only `not delivered` is danger-toned. `not confirmed` means the app never
+ * said either way and the message may still arrive, so it takes the same
+ * subtle tone as `sending`: drawing an open question in red reports a failure
+ * nobody established.
+ */
+function PeerSpeechRow({ row }: { row: ToolUseNestedRow }) {
+  const to = typeof row.input['to'] === 'string' ? row.input['to'] : null
+  const text = typeof row.input['text'] === 'string' ? row.input['text'] : ''
+  const delivery = peerSendDelivery(row)
+  // An engine-level error is the one case the tool's own result cannot speak
+  // for: the call never returned a result of its documented shape, so there is
+  // no delivery field to read. It is a confirmed non-send (the frame was never
+  // built), and it is reachable without anything exotic, e.g. an empty `text`
+  // failing the input schema. Left out, it fell through every arm below to the
+  // arrival rendering, drawing a message that was never sent as one that landed.
+  const failed = delivery === 'not_delivered' || row.status === 'error'
+  const state =
+    row.status === 'cancelled'
+      ? 'stopped'
+      : row.status === 'error'
+        ? 'not sent'
+        : failed
+          ? 'not delivered'
+          : delivery === 'unconfirmed'
+            ? 'not confirmed'
+            : delivery === null && row.result == null
+              ? 'sending'
+              : null
+  return (
+    <div className="flex w-full gap-2.5">
+      <span
+        className={`w-4 shrink-0 text-center text-[17px] leading-[1.35] ${
+          failed
+            ? 'text-tone-danger'
+            : state === null
+              ? to
+                ? PEER_TONE_CLASS
+                : 'text-text-ghost'
+              : 'text-text-ghost'
+        }`}
+        aria-hidden
+      >
+        &ldquo;
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] text-text-subtle">
+          {to ? (
+            <>
+              <span className="font-normal">To </span>
+              <span className={PEER_TONE_CLASS}>{to}</span>
+            </>
+          ) : (
+            'To peer'
+          )}
+          {state === null ? null : (
+            <span
+              className={failed ? 'text-tone-danger' : 'text-text-subtle/70'}
+            >
+              {' · '}
+              {state}
+            </span>
+          )}
+        </div>
+        <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-text-muted">
+          {text}
+        </div>
+      </div>
     </div>
   )
 }
@@ -2773,7 +3179,7 @@ function toolRunDigest(family: ToolRunFamily, row: ToolRunMember): string | null
  * from THIS row: the `tool_use` `input` (`subagent_type`/`description`/`prompt`/
  * `run_in_background`, the real Agent-tool input keys — `AgentTool/UI.tsx`) and
  * the read-time correlated `status`. It NEVER reads the session-plane
- * `agent-mode.snapshot` (`orchestratorState.ts`) — that cross-plane read is the
+ * `workers.snapshot` (`workersState.ts`) — that cross-plane read is the
  * D2 §4 sin the decision forbids.
  */
 function agentToolSourceOf(row: ToolUseNestedRow): AgentToolSource {
@@ -2858,6 +3264,12 @@ function agentActivityOf(row: ToolUseNestedRow): string | null {
   for (let index = row.children.length - 1; index >= 0; index -= 1) {
     const child = row.children[index]
     if (child === undefined || child.kind !== 'tool-use') continue
+    // Peer tools carry their verb in a mark the activity line does not have, so
+    // they supply a whole phrase and skip the prefix below — which would
+    // otherwise print their raw PascalCase names at the user (§7), and print
+    // `ListPeers` twice now that the call has a target of its own.
+    const peerActivity = peerActivityText(child.toolName, child.input)
+    if (peerActivity !== null) return peerActivity
     const target = agentActivityTarget(child)
     // `agentActivityTarget` falls back to the tool's OWN name for several families, and
     // already spells MCP as `server › tool`. Prefixing either prints the name
@@ -3081,6 +3493,7 @@ function AgentIdentityLine({
   typeWord,
   slot,
   slotLive,
+  slotYields = false,
 }: {
   axes: FaceAxes
   fill: number
@@ -3090,10 +3503,19 @@ function AgentIdentityLine({
   typeWord: string | null
   slot: string | null
   slotLive: boolean
+  /**
+   * The card is offering its Background control, which pins itself to this same
+   * right edge (`AGENT_BACKGROUND_ANCHOR_CLASS`). The slot steps aside on hover
+   * so the two never overlap; both are right-anchored, so neither moves.
+   */
+  slotYields?: boolean
 }) {
   const { style } = useContext(ToolCardStyleContext)
   // `span`, not `div`: on a card with a body the whole two-line block IS the
-  // collapse button, and only phrasing content may live inside a `button`.
+  // collapse button, and only phrasing content may live inside a `button`. That
+  // is also why the Background control is NOT rendered here: an interactive
+  // element nested in a `button` makes the HTML parser close the outer one, so it
+  // rides as a sibling of the collapse button instead (`AgentToolCard`).
   return (
     <span className={`flex items-center gap-[9px] ${TOOL_CARD_INSET_CLASS[style]}`}>
       <AgentFace axes={axes} fill={fill} pulse={pulse} />
@@ -3119,8 +3541,8 @@ function AgentIdentityLine({
       {slot === null ? null : (
         <span
           className={`ml-auto shrink-0 whitespace-nowrap font-mono text-[11px] tabular-nums ${
-            slotLive ? 'text-blue-400' : 'text-text-subtle'
-          }`}
+            slotYields ? 'group-hover/agentcard:invisible ' : ''
+          }${slotLive ? 'text-blue-400' : 'text-text-subtle'}`}
         >
           {slot}
         </span>
@@ -3147,8 +3569,8 @@ function AgentIdentityLine({
  * the worker ran on, and no such fact exists on the transcript plane. The only
  * account fact the app holds is `LeaseOwnerRow.accountAlias` on the session-plane
  * `lease.snapshot` (Codex-only, and gone with the engine process), and joining
- * that onto a transcript card is exactly the cross-plane read
- * `decisions/AGENT-CHROME.md` §4 forbids. Surfacing it needs a transcript-plane
+ * that onto a transcript card would cross the transcript/session boundary.
+ * Surfacing it needs a transcript-plane
  * field, which is a protocol decision, not a render choice.
  */
 function AgentTaskLine({
@@ -3252,8 +3674,7 @@ function RejectedResumeCard({
 }
 
 /**
- * D2/C4 inline Agent card — the Agent member of the P2-2 tool-card family
- * (`decisions/AGENT-CHROME.md` §2), fed from TRANSCRIPT-derived data only
+ * Inline Agent card, fed from TRANSCRIPT-derived data only
  * (`agentToolSourceOf`): identity from the row's `input` and its nested frames,
  * state from its read-time `status` (`deriveAgentToolState`), activity and cost
  * from its children and its structured result.
@@ -3279,6 +3700,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   const { style: cardStyle } = useContext(ToolCardStyleContext)
   const faces = useAgentFaceRegistry()
   const leases = useContext(LeaseSnapshotContext)
+  const agentBackground = useContext(AgentBackgroundContext)
   const resumeAck =
     row.toolName === 'ResumeAgent' ? toolAckForResult(row.result) : null
   const vocab = deriveAgentDisplayVocabulary(agentToolSourceOf(row))
@@ -3345,6 +3767,13 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
   // registry, and it never moves with a state.
   const stateWord =
     state === 'failed' || state === 'stopped' ? vocab.state.label : null
+  // Only a worker the live snapshot still reports as FOREGROUND gets the control;
+  // a backgrounded, finished or launch-record card has nothing to offer. The set
+  // gates display only — the sidecar re-resolves and fails closed.
+  const backgroundAction =
+    agentBackground !== null && agentBackground.backgroundable.has(row.toolUseId)
+      ? agentBackground
+      : null
   const lines = (
     <>
       <AgentIdentityLine
@@ -3358,6 +3787,7 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
         }
         slot={slot}
         slotLive={!isLaunchRecord && (state === 'running' || state === 'background')}
+        slotYields={backgroundAction !== null}
       />
       <AgentTaskLine
         stateWord={stateWord}
@@ -3369,7 +3799,19 @@ function AgentToolCard({ row }: { row: ToolUseNestedRow }) {
     </>
   )
   return (
-    <div className={TOOL_CARD_SHELL_CLASS[cardStyle]}>
+    <div
+      className={`${TOOL_CARD_SHELL_CLASS[cardStyle]} group/agentcard relative`}
+    >
+      {backgroundAction === null ? null : (
+        <button
+          className={`invisible absolute top-0 z-10 flex items-center whitespace-nowrap font-mono text-[11px] text-text-subtle group-hover/agentcard:visible hover:text-text-primary ${AGENT_BACKGROUND_ANCHOR_CLASS[cardStyle]}`}
+          onClick={() => backgroundAction.onBackground(row.toolUseId)}
+          title="Keep this worker running in the background"
+          type="button"
+        >
+          Send to background
+        </button>
+      )}
       {body === null ? (
         lines
       ) : (
@@ -3471,7 +3913,7 @@ function OrphanedAgentCard({ row }: { row: OrphanedAgentNestedRow }) {
 }
 
 /**
- * D2/§3 DelegateGroup — parallel agents the orchestrator co-spawned in one turn
+ * DelegateGroup — parallel agents co-spawned in one turn
  * (same `message.id` — `src/utils/groupToolUses.ts:76`) render as ONE grouped
  * card instead of N sibling cards; a member never also appears on its own
  * elsewhere. Grouping is a read-time DERIVATION (`groupAgentDelegates`), never a
@@ -4531,10 +4973,12 @@ function BubbleCopyChip({
  */
 function UserBubble({
   content,
+  sourceId,
   onEdit,
   onBranch,
 }: {
   content: string
+  sourceId: string
   onEdit?: () => void
   onBranch?: () => void
 }) {
@@ -4549,14 +4993,44 @@ function UserBubble({
     },
     [],
   )
+  const bubble = (
+    <div className="max-w-[82%] break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
+      <BoundedMarkdown
+        sourceId={sourceId}
+        source={content}
+        rehypePlugins={TRANSCRIPT_REHYPE_PLUGINS}
+        math
+        recognizeCallouts
+        renderLeaf={leaf =>
+          leaf.kind === 'code' ? (
+            <MarkdownErrorBoundary fallback={leaf.codeSource}>
+              <CodeBlock
+                code={leaf.codeSource}
+                streaming={leaf.codeOpen}
+                highlighted={
+                  <MarkdownTree
+                    tree={leaf.content}
+                    components={USER_BUBBLE_MARKDOWN_COMPONENTS}
+                  />
+                }
+              />
+            </MarkdownErrorBoundary>
+          ) : (
+            <div className="md-prose font-sans text-sm leading-relaxed">
+              <MarkdownErrorBoundary fallback={content}>
+                <MarkdownTree
+                  tree={leaf.tree}
+                  components={USER_BUBBLE_MARKDOWN_COMPONENTS}
+                />
+              </MarkdownErrorBoundary>
+            </div>
+          )
+        }
+      />
+    </div>
+  )
   if (!onEdit) {
-    return (
-      <div className="flex justify-end">
-        <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
-          {content}
-        </div>
-      </div>
-    )
+    return <div className="flex justify-end">{bubble}</div>
   }
   const copy = (): void => {
     const clipboard =
@@ -4581,9 +5055,7 @@ function UserBubble({
   }
   return (
     <div className="group/message flex flex-col items-end">
-      <div className="max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br border border-accent/20 bg-accent/10 px-4 py-2.5 text-sm leading-relaxed text-text-primary">
-        {content}
-      </div>
+      {bubble}
       <div className="flex h-[25px] items-center gap-0.5 pr-1 pt-0.5 opacity-0 transition-opacity duration-150 group-hover/message:opacity-100 group-focus-within/message:opacity-100">
         <button
           type="button"
@@ -4666,28 +5138,98 @@ function CommandEchoBubble({
 
 /**
  * UserImageRow: a pasted image content block. Right-aligned, user-side tinted
- * tile. Caption-less by design (the source shows only `[Image]`). Malformed or
- * empty sources degrade to a placeholder label rather than a broken `<img>`.
+ * tile that opens a viewport-bounded preview. Caption-less by design (the source
+ * shows only `[Image]`). Malformed or empty sources degrade to a placeholder
+ * label rather than a broken `<img>`.
  */
 function UserImageRowView({ source }: { source: UserImageSource }) {
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const closePreview = useCallback(() => setPreviewOpen(false), [])
   const src =
     source.type === 'base64'
       ? `data:${source.mediaType};base64,${source.data}`
       : source.url
   return (
-    <div className="flex justify-end">
-      <div className="max-w-[82%] rounded-2xl rounded-br border border-accent/20 bg-accent/[0.08] p-2">
-        {src.length > 0 ? (
-          <img
-            src={src}
-            alt="Pasted image"
-            className="max-w-[220px] rounded-lg border border-shell-seam"
-          />
-        ) : (
-          <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
-        )}
+    <>
+      <div className="flex justify-end">
+        <div className="max-w-[82%] rounded-2xl rounded-br border border-accent/20 bg-accent/[0.08] p-2">
+          {src.length > 0 ? (
+            <button
+              type="button"
+              aria-label="Expand sent image"
+              onClick={() => setPreviewOpen(true)}
+              className="block cursor-zoom-in rounded-lg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+            >
+              <img
+                src={src}
+                alt="Sent image"
+                className="max-w-[220px] rounded-lg border border-shell-seam"
+              />
+            </button>
+          ) : (
+            <span className="font-mono text-[11px] text-text-subtle">[Image]</span>
+          )}
+        </div>
       </div>
-    </div>
+      {previewOpen ? (
+        <ImagePreview
+          src={src}
+          label="Sent image preview"
+          onClose={closePreview}
+        />
+      ) : null}
+    </>
+  )
+}
+
+export function ImagePreview({
+  src,
+  label,
+  onClose,
+}: {
+  src: string
+  label: string
+  onClose: () => void
+}) {
+  const dialogRef = useRef<HTMLDivElement>(null)
+  useModalFocus({
+    open: true,
+    containerRef: dialogRef,
+    onEscape: onClose,
+  })
+
+  return createPortal(
+    <div
+      role="presentation"
+      data-window-overlay
+      onClick={onClose}
+      className="fixed inset-0 z-[200] flex items-center justify-center bg-scrim p-8 backdrop-blur-sm"
+    >
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        tabIndex={-1}
+        onClick={event => event.stopPropagation()}
+        className="relative flex max-h-full max-w-full items-center justify-center rounded-xl border border-white/10 bg-surface-panel p-2 shadow-[var(--elev-modal)]"
+      >
+        <button
+          type="button"
+          aria-label="Close image preview"
+          onClick={onClose}
+          className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-black/70 text-white shadow-md transition-colors hover:bg-black/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <ActionCloseIcon />
+        </button>
+        <img
+          src={src}
+          alt={label}
+          className="max-h-[calc(100vh-80px)] max-w-[calc(100vw-80px)] rounded-lg object-contain"
+        />
+      </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -5011,6 +5553,7 @@ function SystemNoticeBox({
     | 'api_retry'
     | 'local_command_output'
     | 'account_diagnostic'
+    | 'provider_error'
   content: string
 }) {
   const { glyph, glyphTone } = NOTICE_STYLE[noticeType]
@@ -5029,12 +5572,14 @@ function SystemNoticeBox({
 const NOTICE_STYLE: Record<
   | 'api_retry'
   | 'local_command_output'
-  | 'account_diagnostic',
+  | 'account_diagnostic'
+  | 'provider_error',
   { glyph: string; glyphTone: string }
 > = {
   api_retry: { glyph: '↻', glyphTone: 'text-tone-warn' },
   local_command_output: { glyph: '›', glyphTone: 'text-text-muted' },
   account_diagnostic: { glyph: '!', glyphTone: 'text-tone-warn' },
+  provider_error: { glyph: '!', glyphTone: 'text-tone-warn' },
 }
 
 
@@ -5173,7 +5718,7 @@ function AgentCompletionBody({
 }
 
 /**
- * InjectedTurnRow: one of the four other engine-injected `role:'user'` turns.
+ * InjectedTurnRow: one of the other engine-injected `role:'user'` turns.
  * Rendered in the SAME left-aligned notice grammar as TaskNotificationBox — the
  * GUI's "this row came from the engine, not from you" shape — never the
  * right-aligned accent bubble they used to land in.
@@ -5192,6 +5737,11 @@ function AgentCompletionBody({
  *    come from the engine's own canonical description of each kind in
  *    `wrapCommandText` (`src/utils/messages.ts:5681,5686`) — the one exhaustive
  *    per-kind statement in the engine. §0 flag: 🔁 adapted(no TUI precedent).
+ *  - `peer` — NOT drawn here at all. A peer message is a message, not a
+ *    notice, so it leaves for `PeerMessageBubble` at the top of this function
+ *    (operator, 2026-09-05). It used to take this shape with `←` and an
+ *    emphasised sender; both are gone, and `←` stays with `channel`, which owns
+ *    it (`CHANNEL_ARROW`, `src/constants/figures.ts:21`).
  *  - anything else — a kind minted by a newer engine: neutral "Injected
  *    message" heading, row still rendered (display degrades, never drops).
  */
@@ -5204,21 +5754,88 @@ function InjectedTurnBox({
   label: string | null
   content: string
 }) {
+  // A peer message is the one injected origin that is a MESSAGE rather than a
+  // notice, so it leaves this shape entirely (operator, 2026-09-05).
+  if (injectedKind === 'peer') {
+    return <PeerMessageBubble label={label} content={content} />
+  }
   const style = INJECTED_TURN_STYLE[injectedKind] ?? INJECTED_TURN_FALLBACK
   return (
     <div className="flex items-start gap-2 rounded-lg border border-shell-seam bg-shell-hover/40 px-3 py-1.5">
-      <span className="text-[12px] leading-5 text-accent" aria-hidden>
+      <span
+        className={
+'text-[12px] leading-5 text-accent'
+        }
+        aria-hidden
+      >
         {style.glyph}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 text-xs">
-          <span className="font-medium text-text-muted">
+          <span
+className="font-medium text-text-muted"
+          >
             {label === null ? style.heading : `${style.prefix}${label}`}
           </span>
         </div>
         <div className="mt-0.5 whitespace-pre-wrap break-words text-xs text-text-muted">
           {content}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A message from another session, drawn as the USER bubble in another voice
+ * (operator, 2026-09-05): right-aligned, flush with the user's own right edge,
+ * the same geometry, and `UserBubble`'s own recipe — `border-accent/20` over
+ * `bg-accent/10` — with the peer colour in place of the accent.
+ *
+ * RIGHT, not left, and that is the argument for the whole shape: the right of
+ * this column is what ARRIVES and drives a turn. The user's prompts are there;
+ * a peer's message arrives the same way. It used to sit left among the tool
+ * cards, which said it was something this session did.
+ *
+ * No glyph. The `←` it used to carry is CHANNEL_ARROW
+ * (`src/constants/figures.ts:21`), still owned by the channel row, so keeping
+ * it here would name the wrong sender.
+ *
+ * A row that arrived with no usable name degrades to a NEUTRAL surface, not a
+ * quieter peer one: the colour marks the peer namespace and an unattributed
+ * message has no name to be in it.
+ */
+function PeerMessageBubble({
+  label,
+  content,
+}: {
+  label: string | null
+  content: string
+}) {
+  return (
+    <div className="flex flex-col items-end">
+      <span
+        className={`mb-1 pr-1 text-[11px] ${
+          label === null ? 'text-text-subtle/70' : ''
+        }`}
+      >
+        {label === null ? (
+          'Peer message'
+        ) : (
+          <>
+            <span className="text-text-subtle font-normal">From </span>
+            <span className={PEER_TONE_CLASS}>{label}</span>
+          </>
+        )}
+      </span>
+      <div
+        className={`max-w-[82%] whitespace-pre-wrap break-words rounded-2xl rounded-br px-4 py-2.5 text-sm leading-relaxed text-text-primary ${
+          label === null
+            ? 'border border-shell-seam bg-white/[0.05]'
+            : PEER_BUBBLE_CLASS
+        }`}
+      >
+        {content}
       </div>
     </div>
   )

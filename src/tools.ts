@@ -13,7 +13,6 @@ import { GlobTool } from './tools/GlobTool/GlobTool.js'
 import { NotebookEditTool } from './tools/NotebookEditTool/NotebookEditTool.js'
 import { WebFetchTool } from './tools/WebFetchTool/WebFetchTool.js'
 import { TaskStopTool } from './tools/TaskStopTool/TaskStopTool.js'
-import { CancelWorkerTool } from './tools/CancelWorkerTool/CancelWorkerTool.js'
 import { BriefTool } from './tools/BriefTool/BriefTool.js'
 import { ClaudeCliTool } from './tools/ClaudeCliTool/ClaudeCliTool.js'
 // Dead code elimination: conditional import for ant-only tools
@@ -57,9 +56,6 @@ const SubscribePRTool = feature('KAIROS_GITHUB_WEBHOOKS')
   : null
 /* eslint-enable custom-rules/no-process-env-top-level, @typescript-eslint/no-require-imports */
 import { TaskOutputTool } from './tools/TaskOutputTool/TaskOutputTool.js'
-import { GetWorkerResultTool } from './tools/GetWorkerResultTool/GetWorkerResultTool.js'
-import { ListWorkersTool } from './tools/ListWorkersTool/ListWorkersTool.js'
-import { WaitWorkersTool } from './tools/WaitWorkersTool/WaitWorkersTool.js'
 import { WebSearchTool } from './tools/WebSearchTool/WebSearchTool.js'
 import { TodoWriteTool } from './tools/TodoWriteTool/TodoWriteTool.js'
 import { ExitPlanModeV2Tool } from './tools/ExitPlanModeTool/ExitPlanModeV2Tool.js'
@@ -82,7 +78,7 @@ const getResumeAgentTool = () =>
     .ResumeAgentTool as typeof import('./tools/ResumeAgentTool/ResumeAgentTool.js').ResumeAgentTool
 /* eslint-enable @typescript-eslint/no-require-imports */
 import { AskUserQuestionTool } from './tools/AskUserQuestionTool/AskUserQuestionTool.js'
-import { AskOrchestratorTool } from './tools/AskOrchestratorTool/AskOrchestratorTool.js'
+import { AskParentSessionTool } from './tools/AskParentSessionTool/AskParentSessionTool.js'
 import { GetGoalTool } from './tools/GetGoalTool/GetGoalTool.js'
 import { CreateGoalTool } from './tools/CreateGoalTool/CreateGoalTool.js'
 import { LSPTool } from './tools/LSPTool/LSPTool.js'
@@ -137,9 +133,6 @@ const coordinatorModeModule = feature('COORDINATOR_MODE')
   : null
 const SnipTool = feature('HISTORY_SNIP')
   ? require('./tools/SnipTool/SnipTool.js').SnipTool
-  : null
-const ListPeersTool = feature('UDS_INBOX')
-  ? require('./tools/ListPeersTool/ListPeersTool.js').ListPeersTool
   : null
 const WorkflowTool = feature('WORKFLOW_SCRIPTS')
   ? (() => {
@@ -234,11 +227,7 @@ export function getAllBaseTools(): Tools {
     WebSearchTool,
     ClaudeCliTool,
     TaskStopTool,
-    ListWorkersTool,
-    WaitWorkersTool,
-    GetWorkerResultTool,
-    CancelWorkerTool,
-    AskOrchestratorTool,
+    AskParentSessionTool,
     AskUserQuestionTool,
     SkillTool,
     EnterPlanModeTool,
@@ -259,7 +248,6 @@ export function getAllBaseTools(): Tools {
     ...(isWorktreeModeEnabled() ? [EnterWorktreeTool, ExitWorktreeTool] : []),
     getResumeAgentTool(),
     getSendMessageTool(),
-    ...(ListPeersTool ? [ListPeersTool] : []),
     ...(isAgentSwarmsEnabled()
       ? [getTeamCreateTool(), getTeamDeleteTool()]
       : []),
@@ -374,19 +362,25 @@ export const getTools = (permissionContext: ToolPermissionContext): Tools => {
  * use this function to ensure consistent tool pool assembly.
  *
  * The function:
- * 1. Gets built-in tools via getTools() (respects mode filtering)
+ * 1. Gets the base tools — the caller's own set when supplied, otherwise
+ *    built-ins via getTools() (which respects mode filtering)
  * 2. Filters MCP tools by deny rules
- * 3. Deduplicates by tool name (built-in tools take precedence)
+ * 3. Deduplicates by tool name (base tools take precedence)
  *
  * @param permissionContext - Permission context for filtering built-in tools
  * @param mcpTools - MCP tools from appState.mcp.tools
- * @returns Combined, deduplicated array of built-in and MCP tools
+ * @param baseTools - Caller-supplied base tools. Passed through as given (the
+ *   caller already decided what belongs in it), so a harness, test, or app
+ *   runtime that injects its own tool set keeps it instead of having the
+ *   default built-ins regenerated over the top. Omit to use getTools().
+ * @returns Combined, deduplicated array of base and MCP tools
  */
 export function assembleToolPool(
   permissionContext: ToolPermissionContext,
   mcpTools: Tools,
+  baseTools?: Tools,
 ): Tools {
-  const builtInTools = getTools(permissionContext)
+  const builtInTools = baseTools ?? getTools(permissionContext)
 
   // Filter out MCP tools that are in the deny list
   const allowedMcpTools = filterToolsByDenyRules(mcpTools, permissionContext)

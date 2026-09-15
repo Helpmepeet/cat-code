@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Background control label</title>
+<style>
+  @font-face{font-family:"DM Sans";src:url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");font-weight:100 1000;font-display:swap}
+  @font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
+  @font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2");font-weight:500;font-display:swap}
+
+  :root{
+    --app-bg:#09090b;
+    --shell-seam:rgba(255,255,255,0.06);
+    --text-primary:#f4f4f5;
+    --text-subtle:#98989f;
+    --text-faint:#838389;
+    --accent:#f472b6;
+    --blue-400:#60a5fa;
+    --zinc-400:#a1a1aa;
+    --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  }
+
+  html,body{margin:0;background:var(--app-bg)}
+  body{font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+
+  /* ---------- chrome (x- prefix; never matches inside a specimen) ---------- */
+  .x-page{max-width:760px;margin:0 auto;padding:40px 28px 90px}
+  .x-label{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
+           text-transform:uppercase;color:#808080;margin:0 0 9px}
+  .x-state{margin:18px 0 6px;color:#5f5f5f}
+  .x-rule{height:1px;background:#2e2e2e;border:0;margin:40px 0 22px}
+  .x-stack{display:grid;grid-template-columns:1fr;gap:10px}
+
+  /* ---------- specimen: agent tool card (TranscriptView, `cards` style) ---------- */
+  .card{position:relative;width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);
+        background:rgba(255,255,255,0.025);font-family:var(--font-sans)}
+  .cardbtn{display:block;width:100%;text-align:left;background:none;border:0;padding:0;
+           color:inherit;font:inherit;cursor:default}
+  .idline{display:flex;align-items:center;gap:9px;padding:7px 12px}
+  .idline svg{flex-shrink:0}
+  .idnames{display:inline-flex;min-width:0;align-items:baseline;gap:6px}
+  .agentname{flex-shrink:0;font-family:var(--font-mono);font-size:13px;font-weight:600;
+             letter-spacing:.04em;color:var(--zinc-400)}
+  .agenttype{min-width:0;font-family:var(--font-mono);font-size:11px;text-transform:lowercase;color:var(--text-faint);
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .slot{margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:var(--font-mono);font-size:11px;
+        font-variant-numeric:tabular-nums;color:var(--blue-400)}
+  .slot.settled{color:var(--text-subtle)}
+  .taskline{display:flex;align-items:center;gap:10px;border-top:1px solid var(--shell-seam);padding:7px 12px}
+  .tasktext{min-width:0;flex:1;font-size:13.5px;line-height:18px;color:var(--text-primary);
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .taskmeta{display:inline-flex;flex-shrink:0;align-items:center;gap:8px;white-space:nowrap}
+  .model{font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+
+  /* the action: sibling of the collapse button, pinned to the identity line's right edge */
+  .act{position:absolute;top:0;right:12px;height:33px;display:flex;align-items:center;
+       background:none;border:0;padding:0;margin:0;font-family:var(--font-mono);font-size:11px;
+       color:var(--text-subtle);cursor:pointer;white-space:nowrap}
+  .act:hover{color:var(--text-primary)}
+  .act.accent{color:var(--accent)}
+  .act.accent:hover{color:var(--accent)}
+
+  /* every specimen below is shown in its HOVERED state: that is when the label reads */
+  .shown .slot{visibility:hidden}
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <p class="x-label">The slot's existing words</p>
+  <div class="x-stack">
+    <div class="card">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+          <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+          <span class="slot">starting</span>
+        </span>
+        <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+      </button>
+    </div>
+    <div class="card">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+          <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+      </button>
+    </div>
+    <div class="card">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+          <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+          <span class="slot settled">backgrounded</span>
+        </span>
+        <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+      </button>
+    </div>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Label</p>
+
+  <p class="x-label x-state">A &middot; shipped today</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act" type="button">Background</button>
+  </div>
+
+  <p class="x-label x-state">B</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act" type="button">Run in background</button>
+  </div>
+
+  <p class="x-label x-state">C</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act" type="button">Send to background</button>
+  </div>
+
+  <p class="x-label x-state">D</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act" type="button">Keep running, stop waiting</button>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Colour</p>
+
+  <p class="x-label x-state">Status grey</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act" type="button">Run in background</button>
+  </div>
+
+  <p class="x-label x-state">Accent</p>
+  <div class="card shown">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+        <span class="idnames"><span class="agentname">Turing</span><span class="agenttype">general-purpose</span></span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline"><span class="tasktext">map the seam</span><span class="taskmeta"><span class="model">gpt-5.6-luna</span></span></span>
+    </button>
+    <button class="act accent" type="button">Run in background</button>
+  </div>
+
+</div>
+</body>
+</html>

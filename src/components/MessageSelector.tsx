@@ -14,6 +14,7 @@ import { useKeybinding, useKeybindings } from '../keybindings/useKeybinding.js';
 import type { Message, PartialCompactDirection, UserMessage } from '../types/message.js';
 import { stripDisplayTags } from '../utils/displayTags.js';
 import { createUserMessage, dropPreservedMessageDuplicates, extractTag, isEmptyMessageText, isSyntheticMessage, isToolUseResultMessage } from '../utils/messages.js';
+import { isOperatorAuthoredOrigin, isReplayableOrigin } from '../utils/messages/origins.js';
 import { isTaskNotificationText } from '../utils/taskNotification.js';
 import { type OptionWithDescription, Select } from './CustomSelect/select.js';
 import { Spinner } from './Spinner.js';
@@ -774,7 +775,13 @@ function computeDiffStatsBetweenMessages(messages: Message[], fromMessageId: UUI
     deletions
   };
 }
-export function selectableUserMessagesFilter(message: Message): message is UserMessage {
+/**
+ * Everything both filters below agree on: a user-role message whose body is the
+ * turn's own text, not a tool result, a synthetic marker, a compact summary, or
+ * command/tick output pasted back into the transcript. Provenance is the only
+ * thing the two disagree about, and each answers it through `origins.ts`.
+ */
+function userTurnTextFilter(message: Message): message is UserMessage {
   if (message.type !== 'user') {
     return false;
   }
@@ -794,11 +801,32 @@ export function selectableUserMessagesFilter(message: Message): message is UserM
   const lastBlock = typeof content === 'string' ? null : content[content.length - 1];
   const messageText = typeof content === 'string' ? content.trim() : lastBlock && isTextBlock(lastBlock) ? lastBlock.text.trim() : '';
 
-  // Filter out non-user-authored messages (command outputs, task notifications, ticks).
-  if (message.origin?.kind === 'teammate' || message.origin?.kind === 'task-notification' || messageText.indexOf(`<${LOCAL_COMMAND_STDOUT_TAG}>`) !== -1 || messageText.indexOf(`<${LOCAL_COMMAND_STDERR_TAG}>`) !== -1 || messageText.indexOf(`<${BASH_STDOUT_TAG}>`) !== -1 || messageText.indexOf(`<${BASH_STDERR_TAG}>`) !== -1 || isTaskNotificationText(messageText) || messageText.indexOf(`<${TICK_TAG}>`) !== -1) {
+  // Filter out machine output that wears a user role (command output, task
+  // notification banners, ticks).
+  if (messageText.indexOf(`<${LOCAL_COMMAND_STDOUT_TAG}>`) !== -1 || messageText.indexOf(`<${LOCAL_COMMAND_STDERR_TAG}>`) !== -1 || messageText.indexOf(`<${BASH_STDOUT_TAG}>`) !== -1 || messageText.indexOf(`<${BASH_STDERR_TAG}>`) !== -1 || isTaskNotificationText(messageText) || messageText.indexOf(`<${TICK_TAG}>`) !== -1) {
     return false;
   }
   return true;
+}
+
+/**
+ * A message the operator may edit, branch from, or rewind to. Used by the
+ * message selector, `/rewind`, `/branch`, and the desktop's session actions
+ * through `isSelectableUserMessage` (src/utils/conversationRecovery.ts) - which
+ * is the trust boundary, so this predicate is the only thing standing between a
+ * peer session's message and being edited as the operator's own prompt.
+ */
+export function selectableUserMessagesFilter(message: Message): message is UserMessage {
+  return userTurnTextFilter(message) && isOperatorAuthoredOrigin(message.origin);
+}
+
+/**
+ * A turn worth replaying to an out-of-process consumer and checkpointing file
+ * history at, whoever authored it. Injected instruction turns belong here:
+ * the ack path stamps their provenance onto the replayed frame on purpose.
+ */
+export function replayableUserMessagesFilter(message: Message): message is UserMessage {
+  return userTurnTextFilter(message) && isReplayableOrigin(message.origin);
 }
 
 /**

@@ -15,10 +15,10 @@ Returns full task details:
 - **description**: Detailed requirements and context
 - **status**: 'pending', 'in_progress', or 'completed'
 - **blocks**: Tasks waiting on this one to complete
-- **blockedBy**: Tasks that must complete before this one can start
+- **blockedBy**: Dependency IDs for this task, including prerequisites that have already completed
 
 ## Tips
 
-- After fetching a task, verify its blockedBy list is empty before beginning work.
+- Before starting, check that every prerequisite is completed. TaskGet's blockedBy contains dependency IDs, including completed prerequisites; TaskList omits completed prerequisites from its blockedBy summary.
 - Use TaskList to see all tasks in summary form.
 `

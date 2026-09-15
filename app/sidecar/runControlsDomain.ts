@@ -17,7 +17,7 @@
  * `setSessionProvider`) and per-session app-state (`store.setState`). Because the
  * sidecar is one process per session (N-process, LOCKED), the "global" overrides
  * are correctly session-scoped. The executor is behind a seam (like
- * `agentModeDomain`): the real one wires the engine functions; tests inject a fake
+ * workers domain): the real one wires the engine functions; tests inject a fake
  * so the domain round-trip is proven without mutating real process globals.
  *
  * Read-only snapshot is secretGuard-clean by construction: model ids / effort
@@ -58,8 +58,10 @@ import {
 } from '../../src/services/compact/autoCompact.js'
 import {
   getDefaultCodexModel,
+  getDefaultMainLoopModel,
   getMainLoopModel,
   getMarketingNameForModel,
+  parseUserSpecifiedModel,
 } from '../../src/utils/model/model.js'
 import {
   getModelOptions,
@@ -89,7 +91,7 @@ export type RunControlSetResult = {
  * The engine run-control ops, behind a seam (P4-24c). The real implementation
  * wires the engine's OWN `/model`, `/effort`, and `/fast` write logic; tests inject
  * a fake so a headless round-trip proves the wiring without mutating the real
- * process globals (mirrors `agentModeDomain`'s executor seam).
+ * process globals (mirrors the worker domain's executor seam).
  */
 export type RunControlExecutor = {
   /** Set this session's main-loop model (the `/model` write, session-scoped). */
@@ -419,6 +421,29 @@ function safe<T>(fn: () => T, fallback: T): T {
 }
 
 /**
+ * The effort levels one PICKER ROW would offer, for `RunControlModelOption`.
+ *
+ * A row's `value` is a selection, not a model id — an alias (`opus`, `haiku`),
+ * a canonical id, or null for the provider-local Default — and the effort
+ * helpers answer for model ids: `modelSupportsEffort('opus')` is false while
+ * `modelSupportsEffort('claude-opus-5')` is true. So the selection is resolved
+ * FIRST, through the engine's own `parseUserSpecifiedModel` /
+ * `getDefaultMainLoopModel` (the pair `getMainLoopModel` itself is built from),
+ * and the levels then come off the same two engine functions the live snapshot
+ * uses for the current model. No second capability table.
+ */
+export function effortOptionsForSelection(value: string | null): string[] {
+  const model =
+    value == null
+      ? safe(() => getDefaultMainLoopModel(), null)
+      : safe(() => parseUserSpecifiedModel(value), null)
+  if (!model) return []
+  return safe(() => modelSupportsEffort(model), false)
+    ? safe(() => [...getSupportedEffortLevels(model)], [])
+    : []
+}
+
+/**
  * Pure snapshot builder over the live app-state + the engine's OWN model/effort/
  * fast helpers. Throw-free (display = degrade gracefully): any engine read that
  * fails degrades that slice to a safe default rather than crashing the snapshot.
@@ -440,6 +465,7 @@ export function buildRunControlsSnapshot(state: AppState): RunControlsSnapshot {
       provider: toRunControlProvider(
         resolveModelSelectionProvider(option.value),
       ),
+      effortOptions: effortOptionsForSelection(option.value),
     }))
 
   const selected = safe(

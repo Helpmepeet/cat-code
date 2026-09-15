@@ -38,6 +38,8 @@
 import { mkdirSync, rmSync, writeFileSync, utimesSync, statSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { parseArgs } from './ramInstrument.js'
+
 // ---------------------------------------------------------------------------
 // Seeded PRNG (mulberry32) — deterministic, no global RNG state.
 // ---------------------------------------------------------------------------
@@ -63,22 +65,6 @@ function deterministicUuid(rng: () => number): string {
 /** Mirror of engine sanitizePath (`sessionStoragePortable.ts:311`) for short names. */
 function sanitizePath(name: string): string {
   return name.replace(/[^a-zA-Z0-9]/g, '-')
-}
-
-// ---------------------------------------------------------------------------
-// CLI
-// ---------------------------------------------------------------------------
-function parseArgs(argv: string[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i]
-    if (a.startsWith('--')) {
-      const key = a.slice(2)
-      const val = argv[i + 1] && !argv[i + 1].startsWith('--') ? argv[++i] : 'true'
-      out[key] = val
-    }
-  }
-  return out
 }
 
 const WORDS = [

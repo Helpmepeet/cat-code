@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import type { AgentModeWorkerItem } from '../../shared/protocol.js'
+import type { LiveWorkerItem } from '../../shared/protocol.js'
 import { PermissionQueue } from './PermissionQueue.js'
 import type { PermissionQueueItem, PermissionRequest } from './permissionState.js'
 
@@ -42,7 +42,7 @@ const MALFORMED_ASK: PermissionRequest = {
 const ALLOW_ROW = '>Yes<'
 const REFUSE_ROW = 'No, and tell Cat Code what to do differently'
 
-const WORKER: AgentModeWorkerItem = {
+const WORKER: LiveWorkerItem = {
   agentId: 'worker-42',
   handle: 'Vale',
   role: 'coding-worker',

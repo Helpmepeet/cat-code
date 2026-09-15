@@ -14,6 +14,7 @@ import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js';
 import type { SetToolJSXFn, ToolCallProgress, ToolUseContext, ValidationResult } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { backgroundExistingForegroundTask, markTaskNotified, registerForeground, spawnShellTask, unregisterForeground } from '../../tasks/LocalShellTask/LocalShellTask.js';
+import { shouldRegisterForegroundShellTask } from '../../tasks/LocalShellTask/guards.js';
 import type { AgentId } from '../../types/ids.js';
 import type { AssistantMessage } from '../../types/message.js';
 import { parseForSecurity } from '../../utils/bash/ast.js';
@@ -44,6 +45,7 @@ import { userFacingName as fileEditUserFacingName } from '../FileEditTool/UI.js'
 import { trackGitOperations } from '../shared/gitOperationTracking.js';
 import { bashToolHasPermission, commandHasAnyCd, matchWildcardPattern, permissionRuleExtractPrefix } from './bashPermissions.js';
 import { interpretCommandResult } from './commandSemantics.js';
+import { checkKillOwnership } from './killOwnership.js';
 import { getBashPrompt, getDefaultTimeoutMs, getMaxTimeoutMs } from './prompt.js';
 import { checkReadOnlyConstraints } from './readOnlyValidation.js';
 import { parseSedEditCommand } from './sedEditParser.js';
@@ -226,6 +228,7 @@ const DISALLOWED_AUTO_BACKGROUND_COMMANDS = ['sleep' // Sleep should run in fore
 const isBackgroundTasksDisabled =
 // eslint-disable-next-line custom-rules/no-process-env-top-level -- Intentional: schema must be defined at module load
 isEnvTruthy(process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS);
+
 const fullInputSchema = lazySchema(() => z.strictObject({
   command: z.string().describe('The command to execute'),
   timeout: semanticNumber(z.number().optional()).describe(`Optional timeout in milliseconds (max ${getMaxTimeoutMs()})`),
@@ -430,8 +433,8 @@ export const BashTool = buildTool({
   }) {
     return description || 'Run shell command';
   },
-  async prompt({ provider }) {
-    return getBashPrompt(provider);
+  async prompt({ provider, tools }) {
+    return getBashPrompt(provider, new Set(tools.map(tool => tool.name)));
   },
   isConcurrencySafe(input) {
     return this.isReadOnly?.(input) ?? false;
@@ -539,6 +542,13 @@ export const BashTool = buildTool({
     };
   },
   async checkPermissions(input, context): Promise<PermissionResult> {
+    // Runs ahead of bashToolHasPermission so a worker cannot reach a process it
+    // did not start through an allow rule, auto mode, or bypassPermissions: a
+    // deny returned here is honoured at step 1d of the permission pipeline,
+    // before any of those. Kept out of bashPermissions.ts because
+    // bashToolHasPermission sits against Bun's feature() DCE budget.
+    const ownership = checkKillOwnership(input.command, context);
+    if (ownership) return ownership;
     return bashToolHasPermission(input, context);
   },
   renderToolUseMessage,
@@ -930,7 +940,11 @@ async function* runShellCommand({
     },
     preventCwdChanges,
     shouldUseSandbox: shouldUseSandbox(input),
-    shouldAutoBackground
+    shouldAutoBackground,
+    // Already carried this far to attribute background tasks to their agent.
+    // exec needs the same fact to decide whether the child gets the worker
+    // environment allowlist.
+    agentId
   });
 
   // Start the command execution
@@ -1141,10 +1155,14 @@ async function* runShellCommand({
       const elapsed = Date.now() - startTime;
       const elapsedSeconds = Math.floor(elapsed / 1000);
 
-      // Show minimal backgrounding UI if available
-      // Skip if background tasks are disabled
-      if (!isBackgroundTasksDisabled && backgroundShellId === undefined && elapsedSeconds >= PROGRESS_THRESHOLD_MS / 1000 && setToolJSX) {
-        // Register this command as a foreground task so it can be backgrounded via Ctrl+B
+      // Register independently of terminal JSX: desktop and headless runtimes
+      // need the same live task record even though they render no Ink hint.
+      if (shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: isBackgroundTasksDisabled,
+        backgroundShellId,
+        elapsedSeconds,
+        progressThresholdMs: PROGRESS_THRESHOLD_MS,
+      })) {
         if (!foregroundTaskId) {
           foregroundTaskId = registerForeground({
             command,
@@ -1153,12 +1171,14 @@ async function* runShellCommand({
             agentId
           }, setAppState, toolUseId);
         }
-        setToolJSX({
-          jsx: <BackgroundHint />,
-          shouldHidePromptInput: false,
-          shouldContinueAnimation: true,
-          showSpinner: true
-        });
+        if (setToolJSX) {
+          setToolJSX({
+            jsx: <BackgroundHint />,
+            shouldHidePromptInput: false,
+            shouldContinueAnimation: true,
+            showSpinner: true
+          });
+        }
       }
       yield {
         type: 'progress',

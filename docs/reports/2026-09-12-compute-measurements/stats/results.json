@@ -1,0 +1,645 @@
+{
+  "manifest": {
+    "repo": "/Users/pt/cat-code",
+    "beforeCommit": "d9f5eef5dad750ceffe411e6913692e8789bc9ca",
+    "afterCommit": "d58b9f10f7fb6d31a033045bc7321bbccccaf885",
+    "sourcePath": "src/utils/stats.ts",
+    "blobs": {
+      "before": {
+        "path": "/var/folders/2p/ftpy23hs0p572q84m6mx0b_c0000gn/T/cat-code-stats-benchmark-9s_riasd/modules/stats-before.ts",
+        "sha256": "3d34994fe2e7a8f927665e0df417fa0f8248e176b466ce3fc361f64e818084d9"
+      },
+      "after": {
+        "path": "/var/folders/2p/ftpy23hs0p572q84m6mx0b_c0000gn/T/cat-code-stats-benchmark-9s_riasd/modules/stats-after.ts",
+        "sha256": "411f29fcac6bf025292676686f7aecfd3000402e7b28609d7960a237d535ee3b"
+      }
+    }
+  },
+  "date": "2026-09-12T08:37:44.246Z",
+  "bun": "1.4.0",
+  "arch": "arm64",
+  "platform": "darwin",
+  "stages": [
+    {
+      "corpus": {
+        "sessions": 128,
+        "transcriptFiles": 160,
+        "transcriptBytes": 20181824,
+        "messagesPerFile": 96
+      },
+      "outputParity": true,
+      "outputSha256": "a46e528e5d53d6984a735b298e63671d8466782f6d6e5a0922b4872a55df1aba",
+      "repetitions": 16,
+      "calibration": [
+        {
+          "variant": "before",
+          "repetitions": 2,
+          "elapsedMs": 61.184375000000045,
+          "cpuUserMs": 70.788,
+          "cpuSystemMs": 74.346,
+          "cpuTotalMs": 145.134,
+          "elapsedMsPerPass": 30.592187500000023,
+          "cpuMsPerPass": 72.567
+        },
+        {
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 129.90937500000007,
+          "cpuUserMs": 155.108,
+          "cpuSystemMs": 157.484,
+          "cpuTotalMs": 312.592,
+          "elapsedMsPerPass": 32.47734375000002,
+          "cpuMsPerPass": 78.148
+        },
+        {
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 246.64387499999998,
+          "cpuUserMs": 347.244,
+          "cpuSystemMs": 314.433,
+          "cpuTotalMs": 661.677,
+          "elapsedMsPerPass": 30.830484374999997,
+          "cpuMsPerPass": 82.709625
+        },
+        {
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 498.623292,
+          "cpuUserMs": 613.648,
+          "cpuSystemMs": 624.061,
+          "cpuTotalMs": 1237.709,
+          "elapsedMsPerPass": 31.16395575,
+          "cpuMsPerPass": 77.3568125
+        }
+      ],
+      "samples": [
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 545.7514999999999,
+          "cpuUserMs": 625.336,
+          "cpuSystemMs": 600.405,
+          "cpuTotalMs": 1225.741,
+          "elapsedMsPerPass": 34.10946874999999,
+          "cpuMsPerPass": 76.6088125
+        },
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 390.8254159999997,
+          "cpuUserMs": 396.88,
+          "cpuSystemMs": 385.067,
+          "cpuTotalMs": 781.947,
+          "elapsedMsPerPass": 24.42658849999998,
+          "cpuMsPerPass": 48.8716875
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 354.28549999999996,
+          "cpuUserMs": 433.476,
+          "cpuSystemMs": 389.847,
+          "cpuTotalMs": 823.323,
+          "elapsedMsPerPass": 22.142843749999997,
+          "cpuMsPerPass": 51.4576875
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 569.1970000000001,
+          "cpuUserMs": 621.603,
+          "cpuSystemMs": 654.912,
+          "cpuTotalMs": 1276.515,
+          "elapsedMsPerPass": 35.57481250000001,
+          "cpuMsPerPass": 79.7821875
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 595.0842499999999,
+          "cpuUserMs": 693.16,
+          "cpuSystemMs": 609.416,
+          "cpuTotalMs": 1302.576,
+          "elapsedMsPerPass": 37.19276562499999,
+          "cpuMsPerPass": 81.411
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 353.9164580000006,
+          "cpuUserMs": 385.571,
+          "cpuSystemMs": 411.825,
+          "cpuTotalMs": 797.396,
+          "elapsedMsPerPass": 22.119778625000038,
+          "cpuMsPerPass": 49.83725
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 321.5539170000002,
+          "cpuUserMs": 370.048,
+          "cpuSystemMs": 415.223,
+          "cpuTotalMs": 785.271,
+          "elapsedMsPerPass": 20.09711981250001,
+          "cpuMsPerPass": 49.0794375
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 496.3850000000002,
+          "cpuUserMs": 604.549,
+          "cpuSystemMs": 599.822,
+          "cpuTotalMs": 1204.371,
+          "elapsedMsPerPass": 31.024062500000014,
+          "cpuMsPerPass": 75.2731875
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 530.5932499999999,
+          "cpuUserMs": 633.962,
+          "cpuSystemMs": 609.314,
+          "cpuTotalMs": 1243.276,
+          "elapsedMsPerPass": 33.162078124999994,
+          "cpuMsPerPass": 77.70475
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 319.4779589999998,
+          "cpuUserMs": 370.969,
+          "cpuSystemMs": 412.066,
+          "cpuTotalMs": 783.035,
+          "elapsedMsPerPass": 19.96737243749999,
+          "cpuMsPerPass": 48.9396875
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 16,
+          "elapsedMs": 334.1426250000004,
+          "cpuUserMs": 394.53,
+          "cpuSystemMs": 412.788,
+          "cpuTotalMs": 807.318,
+          "elapsedMsPerPass": 20.883914062500025,
+          "cpuMsPerPass": 50.457375
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 16,
+          "elapsedMs": 494.06524999999965,
+          "cpuUserMs": 609.621,
+          "cpuSystemMs": 615.587,
+          "cpuTotalMs": 1225.208,
+          "elapsedMsPerPass": 30.879078124999978,
+          "cpuMsPerPass": 76.5755
+        }
+      ],
+      "summary": {
+        "before": {
+          "medianElapsedMsPerPass": 33.63577343749999,
+          "medianCpuMsPerPass": 77.15678125,
+          "minElapsedMsPerPass": 30.879078124999978,
+          "maxElapsedMsPerPass": 37.19276562499999
+        },
+        "after": {
+          "medianElapsedMsPerPass": 21.50184634375003,
+          "medianCpuMsPerPass": 49.45834375,
+          "minElapsedMsPerPass": 19.96737243749999,
+          "maxElapsedMsPerPass": 24.42658849999998
+        }
+      },
+      "reductionsPercent": {
+        "elapsed": 36.07447028472976,
+        "cpu": 35.898902275683
+      }
+    },
+    {
+      "corpus": {
+        "sessions": 384,
+        "transcriptFiles": 480,
+        "transcriptBytes": 60545472,
+        "messagesPerFile": 96
+      },
+      "outputParity": true,
+      "outputSha256": "7d4320101b5cc6334d45993ede123f387a864d36aa0e1c0435ff536f6e488fa3",
+      "repetitions": 8,
+      "calibration": [
+        {
+          "variant": "before",
+          "repetitions": 2,
+          "elapsedMs": 177.63258399999995,
+          "cpuUserMs": 225.274,
+          "cpuSystemMs": 235.458,
+          "cpuTotalMs": 460.732,
+          "elapsedMsPerPass": 88.81629199999998,
+          "cpuMsPerPass": 230.366
+        },
+        {
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 362.9324579999993,
+          "cpuUserMs": 458.341,
+          "cpuSystemMs": 489.706,
+          "cpuTotalMs": 948.047,
+          "elapsedMsPerPass": 90.73311449999983,
+          "cpuMsPerPass": 237.01175
+        },
+        {
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 778.4386249999998,
+          "cpuUserMs": 943.545,
+          "cpuSystemMs": 1053.538,
+          "cpuTotalMs": 1997.083,
+          "elapsedMsPerPass": 97.30482812499997,
+          "cpuMsPerPass": 249.635375
+        }
+      ],
+      "samples": [
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 735.8077920000014,
+          "cpuUserMs": 924.322,
+          "cpuSystemMs": 972.117,
+          "cpuTotalMs": 1896.439,
+          "elapsedMsPerPass": 91.97597400000018,
+          "cpuMsPerPass": 237.054875
+        },
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 499.1712919999991,
+          "cpuUserMs": 586.525,
+          "cpuSystemMs": 612.565,
+          "cpuTotalMs": 1199.09,
+          "elapsedMsPerPass": 62.396411499999886,
+          "cpuMsPerPass": 149.88625
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 491.53020899999865,
+          "cpuUserMs": 576.901,
+          "cpuSystemMs": 594.077,
+          "cpuTotalMs": 1170.978,
+          "elapsedMsPerPass": 61.44127612499983,
+          "cpuMsPerPass": 146.37225
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 770.8707909999994,
+          "cpuUserMs": 932.814,
+          "cpuSystemMs": 1001.608,
+          "cpuTotalMs": 1934.422,
+          "elapsedMsPerPass": 96.35884887499992,
+          "cpuMsPerPass": 241.80275
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 735.2982909999992,
+          "cpuUserMs": 922.101,
+          "cpuSystemMs": 1004.319,
+          "cpuTotalMs": 1926.42,
+          "elapsedMsPerPass": 91.9122863749999,
+          "cpuMsPerPass": 240.8025
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 498.1503330000014,
+          "cpuUserMs": 587.083,
+          "cpuSystemMs": 647.764,
+          "cpuTotalMs": 1234.847,
+          "elapsedMsPerPass": 62.268791625000176,
+          "cpuMsPerPass": 154.355875
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 494.87175000000025,
+          "cpuUserMs": 566.339,
+          "cpuSystemMs": 635.677,
+          "cpuTotalMs": 1202.016,
+          "elapsedMsPerPass": 61.85896875000003,
+          "cpuMsPerPass": 150.252
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 917.3812909999997,
+          "cpuUserMs": 948.681,
+          "cpuSystemMs": 866.328,
+          "cpuTotalMs": 1815.009,
+          "elapsedMsPerPass": 114.67266137499996,
+          "cpuMsPerPass": 226.876125
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 798.0925829999996,
+          "cpuUserMs": 954.208,
+          "cpuSystemMs": 969.499,
+          "cpuTotalMs": 1923.707,
+          "elapsedMsPerPass": 99.76157287499996,
+          "cpuMsPerPass": 240.463375
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 483.7649999999994,
+          "cpuUserMs": 573.984,
+          "cpuSystemMs": 638.577,
+          "cpuTotalMs": 1212.561,
+          "elapsedMsPerPass": 60.47062499999993,
+          "cpuMsPerPass": 151.570125
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 8,
+          "elapsedMs": 527.2430000000004,
+          "cpuUserMs": 592.154,
+          "cpuSystemMs": 721.541,
+          "cpuTotalMs": 1313.695,
+          "elapsedMsPerPass": 65.90537500000005,
+          "cpuMsPerPass": 164.211875
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 8,
+          "elapsedMs": 752.9329580000012,
+          "cpuUserMs": 924.898,
+          "cpuSystemMs": 934.147,
+          "cpuTotalMs": 1859.045,
+          "elapsedMsPerPass": 94.11661975000015,
+          "cpuMsPerPass": 232.380625
+        }
+      ],
+      "summary": {
+        "before": {
+          "medianElapsedMsPerPass": 95.23773431250004,
+          "medianCpuMsPerPass": 238.759125,
+          "minElapsedMsPerPass": 91.9122863749999,
+          "maxElapsedMsPerPass": 114.67266137499996
+        },
+        "after": {
+          "medianElapsedMsPerPass": 62.063880187500104,
+          "medianCpuMsPerPass": 150.9110625,
+          "minElapsedMsPerPass": 60.47062499999993,
+          "maxElapsedMsPerPass": 65.90537500000005
+        }
+      },
+      "reductionsPercent": {
+        "elapsed": 34.83267883730602,
+        "cpu": 36.79359375269951
+      }
+    },
+    {
+      "corpus": {
+        "sessions": 768,
+        "transcriptFiles": 960,
+        "transcriptBytes": 121090944,
+        "messagesPerFile": 96
+      },
+      "outputParity": true,
+      "outputSha256": "d436c9b918d525869990c9b53742cd03d2b06ad77241de52270c0c9cc8d9f66e",
+      "repetitions": 4,
+      "calibration": [
+        {
+          "variant": "before",
+          "repetitions": 2,
+          "elapsedMs": 374.86041599999953,
+          "cpuUserMs": 468.426,
+          "cpuSystemMs": 469.607,
+          "cpuTotalMs": 938.033,
+          "elapsedMsPerPass": 187.43020799999977,
+          "cpuMsPerPass": 469.0165
+        },
+        {
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 805.9563750000016,
+          "cpuUserMs": 947.472,
+          "cpuSystemMs": 919.818,
+          "cpuTotalMs": 1867.29,
+          "elapsedMsPerPass": 201.4890937500004,
+          "cpuMsPerPass": 466.8225
+        }
+      ],
+      "samples": [
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 769.6654589999998,
+          "cpuUserMs": 941.125,
+          "cpuSystemMs": 1123.161,
+          "cpuTotalMs": 2064.286,
+          "elapsedMsPerPass": 192.41636474999996,
+          "cpuMsPerPass": 516.0715
+        },
+        {
+          "pair": 1,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 491.10729100000026,
+          "cpuUserMs": 577.176,
+          "cpuSystemMs": 637.932,
+          "cpuTotalMs": 1215.108,
+          "elapsedMsPerPass": 122.77682275000006,
+          "cpuMsPerPass": 303.777
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 506.94158300000345,
+          "cpuUserMs": 576.146,
+          "cpuSystemMs": 635.96,
+          "cpuTotalMs": 1212.106,
+          "elapsedMsPerPass": 126.73539575000086,
+          "cpuMsPerPass": 303.0265
+        },
+        {
+          "pair": 2,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 742.1950829999987,
+          "cpuUserMs": 914.323,
+          "cpuSystemMs": 944.81,
+          "cpuTotalMs": 1859.133,
+          "elapsedMsPerPass": 185.54877074999968,
+          "cpuMsPerPass": 464.78325
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 830.9955829999999,
+          "cpuUserMs": 937.335,
+          "cpuSystemMs": 945.014,
+          "cpuTotalMs": 1882.349,
+          "elapsedMsPerPass": 207.74889574999997,
+          "cpuMsPerPass": 470.58725
+        },
+        {
+          "pair": 3,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 488.70508399999744,
+          "cpuUserMs": 555.583,
+          "cpuSystemMs": 652.486,
+          "cpuTotalMs": 1208.069,
+          "elapsedMsPerPass": 122.17627099999936,
+          "cpuMsPerPass": 302.01725
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 546.6996660000004,
+          "cpuUserMs": 605.744,
+          "cpuSystemMs": 569.616,
+          "cpuTotalMs": 1175.36,
+          "elapsedMsPerPass": 136.6749165000001,
+          "cpuMsPerPass": 293.84
+        },
+        {
+          "pair": 4,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 796.0000419999997,
+          "cpuUserMs": 941.943,
+          "cpuSystemMs": 1251.168,
+          "cpuTotalMs": 2193.111,
+          "elapsedMsPerPass": 199.00001049999992,
+          "cpuMsPerPass": 548.27775
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 826.7663749999992,
+          "cpuUserMs": 959.281,
+          "cpuSystemMs": 1104.36,
+          "cpuTotalMs": 2063.641,
+          "elapsedMsPerPass": 206.6915937499998,
+          "cpuMsPerPass": 515.91025
+        },
+        {
+          "pair": 5,
+          "order": "before/after",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 574.5234580000033,
+          "cpuUserMs": 606.309,
+          "cpuSystemMs": 781.903,
+          "cpuTotalMs": 1388.212,
+          "elapsedMsPerPass": 143.63086450000083,
+          "cpuMsPerPass": 347.053
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "after",
+          "repetitions": 4,
+          "elapsedMs": 553.0821670000005,
+          "cpuUserMs": 604.438,
+          "cpuSystemMs": 580.271,
+          "cpuTotalMs": 1184.709,
+          "elapsedMsPerPass": 138.27054175000012,
+          "cpuMsPerPass": 296.17725
+        },
+        {
+          "pair": 6,
+          "order": "after/before",
+          "variant": "before",
+          "repetitions": 4,
+          "elapsedMs": 803.1186669999988,
+          "cpuUserMs": 964.189,
+          "cpuSystemMs": 919.005,
+          "cpuTotalMs": 1883.194,
+          "elapsedMsPerPass": 200.7796667499997,
+          "cpuMsPerPass": 470.7985
+        }
+      ],
+      "summary": {
+        "before": {
+          "medianElapsedMsPerPass": 199.8898386249998,
+          "medianCpuMsPerPass": 493.354375,
+          "minElapsedMsPerPass": 185.54877074999968,
+          "maxElapsedMsPerPass": 207.74889574999997
+        },
+        "after": {
+          "medianElapsedMsPerPass": 131.70515612500049,
+          "medianCpuMsPerPass": 302.521875,
+          "minElapsedMsPerPass": 122.17627099999936,
+          "maxElapsedMsPerPass": 143.63086450000083
+        }
+      },
+      "reductionsPercent": {
+        "elapsed": 34.1111298948598,
+        "cpu": 38.680613706932256
+      }
+    }
+  ]
+}

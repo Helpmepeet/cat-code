@@ -28,6 +28,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const GLASS_STORAGE_KEY = 'catcode.glass.v1'
 
@@ -40,38 +45,19 @@ export const GLASS_ATTRIBUTE_ON = 'on'
 /** Solid, as the app has always shipped. */
 export const DEFAULT_GLASS_ENABLED = false
 
-type GlassStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedGlass = {
-  version: 1
-  enabled: boolean
-}
-
-export function readGlassFromStorage(storage: GlassStorage | null): boolean | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(GLASS_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedGlass>
-    if (value.version !== 1 || typeof value.enabled !== 'boolean') return null
-    return value.enabled
-  } catch {
-    return null
-  }
+export function readGlassFromStorage(
+  storage: ViewPreferenceStorage | null,
+): boolean | null {
+  return readViewPreference(storage, GLASS_STORAGE_KEY, 'enabled', value =>
+    typeof value === 'boolean' ? value : null,
+  )
 }
 
 export function writeGlassToStorage(
-  storage: GlassStorage | null,
+  storage: ViewPreferenceStorage | null,
   enabled: boolean,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedGlass = { version: 1, enabled }
-    storage.setItem(GLASS_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (codeTheme.ts:118).
-  }
+  writeViewPreference(storage, GLASS_STORAGE_KEY, 'enabled', enabled)
 }
 
 /**

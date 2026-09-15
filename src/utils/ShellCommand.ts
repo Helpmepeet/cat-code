@@ -1,9 +1,9 @@
 import type { ChildProcess } from 'child_process'
 import { stat } from 'fs/promises'
 import type { Readable } from 'stream'
-import treeKill from 'tree-kill'
 import { generateTaskId } from '../Task.js'
 import { formatDuration } from './format.js'
+import { killProcessGroupSync, killProcessTree } from './processTree.js'
 import {
   MAX_TASK_OUTPUT_BYTES,
   MAX_TASK_OUTPUT_BYTES_DISPLAY,
@@ -35,6 +35,15 @@ export type ShellCommand = {
   kill: () => void
   status: 'running' | 'backgrounded' | 'completed' | 'killed'
   /**
+   * Process id of the spawned shell, or undefined when nothing was spawned or
+   * the child reference has been released by cleanup(). The shell is its own
+   * process group leader, so this doubles as the group id used by
+   * killProcessGroupSync. Surfaced so callers can decide whether a process a
+   * command names is one this runtime started: see checkKillOwnership in
+   * tools/BashTool/killOwnership.ts.
+   */
+  readonly pid?: number
+  /**
    * Cleans up stream resources (event listeners).
    * Should be called after the command completes or is killed to prevent memory leaks.
    */
@@ -55,30 +64,6 @@ const SIZE_WATCHDOG_INTERVAL_MS = 5_000
 
 function prependStderr(prefix: string, stderr: string): string {
   return stderr ? `${prefix} ${stderr}` : prefix
-}
-
-function killProcessGroupSync(childProcess: ChildProcess): boolean {
-  const pid = childProcess.pid
-  if (!pid || process.platform === 'win32') {
-    return false
-  }
-
-  try {
-    process.kill(-pid, 'SIGKILL')
-    return true
-  } catch {
-    return false
-  }
-}
-
-function killChildProcess(childProcess: ChildProcess, signal: NodeJS.Signals): void {
-  if (killProcessGroupSync(childProcess)) {
-    return
-  }
-
-  if (childProcess.pid) {
-    treeKill(childProcess.pid, signal)
-  }
 }
 
 /**
@@ -208,6 +193,10 @@ class ShellCommandImpl implements ShellCommand {
     return this.#status
   }
 
+  get pid(): number | undefined {
+    return this.#childProcess?.pid
+  }
+
   #abortHandler(): void {
     // On 'interrupt' (user submitted a new message), don't kill — let the
     // caller background the process so the model can see partial output.
@@ -222,7 +211,7 @@ class ShellCommandImpl implements ShellCommand {
       code !== null && code !== undefined
         ? code
         : signal === 'SIGTERM'
-          ? 144
+          ? SIGTERM
           : 1
     this.#resolveExitCode(exitCode)
   }
@@ -376,7 +365,7 @@ class ShellCommandImpl implements ShellCommand {
 
   #doKill(code?: number): void {
     this.#status = 'killed'
-    killChildProcess(this.#childProcess, 'SIGKILL')
+    killProcessTree(this.#childProcess, 'SIGKILL')
     this.#resolveExitCode(code ?? SIGKILL)
   }
 

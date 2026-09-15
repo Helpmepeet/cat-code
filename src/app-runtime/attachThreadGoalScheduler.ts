@@ -96,7 +96,6 @@ export type AttachThreadGoalSchedulerOptions = {
   ownerId: string
   getGoal(): ThreadGoal | null
   saveGoal(goal: ThreadGoal): void
-  isAgentMode?(): boolean
   hasExternalScheduler?(): boolean
   now?(): number
 }
@@ -111,7 +110,6 @@ export function attachThreadGoalScheduler({
   ownerId,
   getGoal,
   saveGoal,
-  isAgentMode,
   hasExternalScheduler,
   now = () => Date.now(),
 }: AttachThreadGoalSchedulerOptions): ThreadGoalSchedulerAttachment {
@@ -153,7 +151,6 @@ export function attachThreadGoalScheduler({
       handle.unref?.()
       return () => clearTimeout(handle)
     },
-    ...(isAgentMode ? { isAgentMode } : {}),
     ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
     startTurn: ({ prompt, attemptId }) => {
       // Not awaited: submit resolves when the TURN ends, and awaiting it would

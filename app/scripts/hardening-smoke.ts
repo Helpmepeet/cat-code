@@ -214,6 +214,9 @@ async function runProductionHardeningSmoke(
       'deleteAccount',
       'ping',
       'refreshAccountsPool',
+      // Send-now is bound to an engine-minted queued prompt id and revalidated
+      // by the sidecar before it can interrupt a turn.
+      'forcePrompt',
       // D1b — take back messages still waiting for the running response. Fixed
       // one-way sender; the renderer authors only a correlation id, so it names
       // no target and cannot reach a subagent's queued work.
@@ -230,7 +233,6 @@ async function runProductionHardeningSmoke(
       'restart',
       'runControlVerb',
       'sessionActionVerb',
-      'setAgentMode',
       'setPermissionMode',
       'settingsVerb',
       'submit',
@@ -245,11 +247,18 @@ async function runProductionHardeningSmoke(
       // SESSIONS-UNIFICATION (2026-07-20) — open a terminal-created session by its
       // engine id (HC3 fixed sender; renderer authors no cwd, HC1).
       'openHistorySession',
+      'pickAttachmentFile',
       'pickDirectory',
       'previewSession',
       // F2 — read-only cold-launch sessions-catalog baseline (HC3 fixed sender).
       'readSessionsCatalog',
       'restoreSession',
+      // PEER-SESSIONS §6 — the user's standing "don't let peers reopen this
+      // session" decision (HC3 fixed sender). Id plus a boolean: the renderer
+      // names an existing row and authors no rule, no path and no peer, main
+      // re-validates both arguments, and the host re-checks the id (HC2). It
+      // reaches no engine, so it adds no engine vocabulary.
+      'setPeerWakeBlocked',
       // 2026-08-13 — open a transcript-cited file in the OS handler. The renderer
       // DOES name a path here, so main is the boundary and re-validates it whole
       // (`app/main/openWorkspaceFile.ts`): closed key set, 4,096-char cap, NUL

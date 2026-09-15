@@ -292,7 +292,9 @@ describe('codex continuation e2e: normalization → translation → reconciliati
     expect(result.mismatchReason).toContain('tool_result_replaced')
   })
 
-  test('structured Apply_patch output stays incremental after transcript replay', () => {
+  test.each(['apply_patch', 'Apply_patch'])(
+    'structured %s output stays incremental after transcript replay',
+    toolName => {
     const callId = 'call_patch_structured'
     const ops = [{ type: 'delete', path: 'src/gone.ts' }]
     const turn1Input = transcriptToCodexInput([userMsg('delete the file')])
@@ -300,14 +302,14 @@ describe('codex continuation e2e: normalization → translation → reconciliati
       {
         type: 'custom_tool_call',
         call_id: callId,
-        name: 'Apply_patch',
+        name: toolName,
         input: JSON.stringify({ ops }, null, 2),
       },
     ])
 
     const turn2Input = transcriptToCodexInput([
       userMsg('delete the file'),
-      toolUseMsg('Apply_patch', callId, { ops }),
+      toolUseMsg(toolName, callId, { ops }),
       toolResultMsg(callId, 'Done!'),
       userMsg('what changed?'),
     ])
@@ -321,7 +323,8 @@ describe('codex continuation e2e: normalization → translation → reconciliati
       output: 'Done!',
     })
     expect(delta![1]).toMatchObject({ role: 'user', content: 'what changed?' })
-  })
+    },
+  )
 
   test('normalization drift in sent-input portion does not block canonical reconciliation', () => {
     // Core regression from the bug report: normalizeMessagesForAPI rewrites the

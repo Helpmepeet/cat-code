@@ -122,7 +122,7 @@ pending promise → `normalizePermissionResponse` spreads the response
 `applyPermissionUpdates` `src/utils/permissions/PermissionUpdate.ts:196`,
 `persistPermissionUpdates` `:349`, `session`-destination skipping persistence via
 `supportsPersistence` `:208-216`). Destinations are whatever the engine chose when minting (e.g.
-`localSettings`, `src/tools/BashTool/bashPermissions.ts:2534`) — the renderer has no influence.
+`localSettings`, `src/tools/BashTool/bashPermissions.ts:2561`) — the renderer has no influence.
 `permission.resolved` echoes the response **including** the attached updates, which is the
 multi-window "permanent" signal and the audit trail.
 

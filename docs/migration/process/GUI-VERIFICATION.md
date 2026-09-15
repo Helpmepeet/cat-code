@@ -147,15 +147,34 @@ usage/quota for no benefit.
     (`app/supervisor/supervisor.ts:218`), and with `mainLoopModel` at its null
     default the engine resolves the model from `ANTHROPIC_MODEL`
     (`getUserSpecifiedModelSetting`, `src/utils/model/model.ts:109`) — so the
-    session is on Luna from turn one. Confirm via `/model`.
-  - **There is NO in-app way to change the model** in the current desktop build —
-    P4-19 deferred the model picker, and `/model` has no desktop UI (it's a silent
-    no-op, confirmed live 2026-07-10), so the launch env var above is the ONLY
-    method. If you launched without it, quit and relaunch with it. Do NOT try to
-    confirm via Settings → Diagnostics: the Model row shows the explicit
-    `mainLoopModel` *override*, which stays "Default"/null when the model comes
-    from `ANTHROPIC_MODEL`, so it won't reflect Luna even though Luna is running.
-- **Effort:** low, via `/effort low`.
+    session is on Luna from turn one. Confirm on the composer's model face.
+  - **In-app, from the composer run controls (P4-24c).** The composer rail
+    carries live Model and Reasoning pickers, so a running session's model and
+    effort CAN be changed without relaunching. They are ordinary controls, not
+    dev-gated: `ComposerActionsBar.tsx:1187-1189` arms them purely on the live
+    snapshot plus the setter handler, and a selection travels renderer → preload
+    → main → sidecar to the engine's own `setMainLoopModelOverride` /
+    `executeEffort` (`app/sidecar/runControlsDomain.ts:115-160`). Two real
+    limits: the Reasoning picker is interactive only when the current model
+    accepts an effort parameter, and a cross-provider model switch is refused
+    once the session is provider-bound or has consumed input tokens. Setting the
+    env var at launch is still preferred, because it has Luna live before the
+    first turn can fire; the pickers are how you correct a session you already
+    launched.
+  - **Slash commands are NOT the way.** `/model` and `/effort` are `local-jsx`
+    (`src/commands/model/index.ts:6`, `src/commands/effort/index.ts:5`) and the
+    sidecar filters `local-jsx` out of the desktop slash catalog, since a
+    non-interactive session has no terminal to render them into
+    (`app/sidecar/sessionController.ts:441-448`). Use the composer pickers
+    instead. Do NOT try to confirm via Settings → Diagnostics either: the Model
+    row shows the explicit `mainLoopModel` *override*, which stays
+    "Default"/null when the model comes from `ANTHROPIC_MODEL`, so it won't
+    reflect Luna even though Luna is running.
+- **Effort:** low, set from the composer's Reasoning picker (or inherited by a
+  peer from its creator, below).
+- **Peers:** a peer created with `CreatePeer` starts on its creator's model and
+  effort unless the create names others (PEER-SESSIONS R7), so set Luna and low
+  effort in the creator before creating test peers.
 - **Account:** whichever Codex account is currently healthy — do not hardcode
   a specific account as policy. Check `/accounts` first; if the pool's active
   account is dead/capped, use `/switch-account <alias>` once to move onto a

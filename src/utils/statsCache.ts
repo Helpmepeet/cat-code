@@ -5,15 +5,17 @@ import { join } from 'path'
 import type { ModelUsage } from '../entrypoints/agentSdkTypes.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
-import { errorMessage } from './errors.js'
+import { errorMessage, isENOENT } from './errors.js'
 import { getFsImplementation } from './fsOperations.js'
 import { logError } from './log.js'
+import * as lockfile from './lockfile.js'
 import { jsonParse, jsonStringify } from './slowOperations.js'
 import type { DailyActivity, DailyModelTokens, SessionStats } from './stats.js'
 
-export const STATS_CACHE_VERSION = 3
+export const STATS_CACHE_VERSION = 4
 const MIN_MIGRATABLE_VERSION = 1
-const STATS_CACHE_FILENAME = 'stats-cache.json'
+const STATS_CACHE_FILENAME = 'stats-cache-v4.json'
+const LEGACY_STATS_CACHE_FILENAME = 'stats-cache.json'
 
 /**
  * Simple in-memory lock to prevent concurrent cache operations.
@@ -36,9 +38,17 @@ export async function withStatsCacheLock<T>(fn: () => Promise<T>): Promise<T> {
     releaseLock = resolve
   })
 
+  let releaseProcessLock: (() => Promise<void>) | undefined
   try {
+    releaseProcessLock = await lockfile.lock(getStatsCachePath(), {
+      realpath: false,
+      stale: 120_000,
+      update: 30_000,
+      retries: { retries: 100, minTimeout: 10, maxTimeout: 100 },
+    })
     return await fn()
   } finally {
+    await releaseProcessLock?.().catch(() => {})
     // Release the lock
     statsCacheLockPromise = null
     releaseLock?.()
@@ -72,6 +82,16 @@ export type PersistedStatsCache = {
   totalSpeculationTimeSavedMs: number
   // Shot distribution: map of shot count → number of sessions (ant-only)
   shotDistribution?: { [shotCount: number]: number }
+  /** One compact summary per session; no transcript messages are retained. */
+  sessionIndex: { [sessionId: string]: SessionStats }
+  /** Records the unavoidable attribution limit when adopting an aggregate-only cache. */
+  legacyMigration?: {
+    sourceVersion: number
+    notice: string
+    legacySessionCheckpoints?: {
+      [sessionId: string]: { observedMessageCount: number }
+    }
+  }
 }
 
 export function getStatsCachePath(): string {
@@ -92,6 +112,7 @@ function getEmptyCache(): PersistedStatsCache {
     hourCounts: {},
     totalSpeculationTimeSavedMs: 0,
     shotDistribution: {},
+    sessionIndex: {},
   }
 }
 
@@ -137,6 +158,18 @@ function migrateStatsCache(
     // Preserve undefined (don't default to {}) so the SHOT_STATS recompute
     // check in loadStatsCache fires for v1/v2 caches that lacked this field.
     shotDistribution: parsed.shotDistribution,
+    sessionIndex: parsed.sessionIndex ?? {},
+    ...(parsed.version < 4
+      ? {
+          legacyMigration: {
+            sourceVersion: parsed.version,
+            notice: 'Some older activity may be estimated.',
+            legacySessionCheckpoints: {},
+          },
+        }
+      : parsed.legacyMigration
+        ? { legacyMigration: parsed.legacyMigration }
+        : {}),
   }
 }
 
@@ -149,7 +182,16 @@ export async function loadStatsCache(): Promise<PersistedStatsCache> {
   const cachePath = getStatsCachePath()
 
   try {
-    const content = await fs.readFile(cachePath, { encoding: 'utf-8' })
+    let content: string
+    try {
+      content = await fs.readFile(cachePath, { encoding: 'utf-8' })
+    } catch (error) {
+      if (!isENOENT(error)) throw error
+      content = await fs.readFile(
+        join(getClaudeConfigHomeDir(), LEGACY_STATS_CACHE_FILENAME),
+        { encoding: 'utf-8' },
+      )
+    }
     const parsed = jsonParse(content) as PersistedStatsCache
 
     // Validate version
@@ -200,7 +242,7 @@ export async function loadStatsCache(): Promise<PersistedStatsCache> {
       return getEmptyCache()
     }
 
-    return parsed
+    return { ...parsed, sessionIndex: parsed.sessionIndex ?? {} }
   } catch (error) {
     logForDebugging(`Failed to load stats cache: ${errorMessage(error)}`)
     return getEmptyCache()
@@ -338,16 +380,37 @@ export function mergeCacheWithNewStats(
     hourCounts[hourNum] = (hourCounts[hourNum] || 0) + count
   }
 
-  // Update session aggregates
-  const totalSessions =
-    existingCache.totalSessions + newStats.sessionStats.length
+  // Reconcile fragments by stable transcript identity. Daily sessionCount stays
+  // an active-session-per-day metric, while all-time sessions are unique.
+  const sessionIndex = { ...existingCache.sessionIndex }
+  let addedSessions = 0
+  for (const session of newStats.sessionStats) {
+    const previous = sessionIndex[session.sessionId]
+    if (!previous) {
+      sessionIndex[session.sessionId] = { ...session }
+      addedSessions++
+      continue
+    }
+    const start = previous.timestamp < session.timestamp ? previous.timestamp : session.timestamp
+    const end = Math.max(
+      new Date(previous.timestamp).getTime() + previous.duration,
+      new Date(session.timestamp).getTime() + session.duration,
+    )
+    sessionIndex[session.sessionId] = {
+      sessionId: session.sessionId,
+      timestamp: start,
+      duration: end - new Date(start).getTime(),
+      messageCount: previous.messageCount + session.messageCount,
+    }
+  }
+  const totalSessions = existingCache.totalSessions + addedSessions
   const totalMessages =
     existingCache.totalMessages +
     newStats.sessionStats.reduce((sum, s) => sum + s.messageCount, 0)
 
   // Find longest session (compare existing with new)
   let longestSession = existingCache.longestSession
-  for (const session of newStats.sessionStats) {
+  for (const session of Object.values(sessionIndex)) {
     if (!longestSession || session.duration > longestSession.duration) {
       longestSession = session
     }
@@ -379,6 +442,10 @@ export function mergeCacheWithNewStats(
     totalSpeculationTimeSavedMs:
       existingCache.totalSpeculationTimeSavedMs +
       newStats.totalSpeculationTimeSavedMs,
+    sessionIndex,
+    ...(existingCache.legacyMigration
+      ? { legacyMigration: existingCache.legacyMigration }
+      : {}),
   }
 
   if (feature('SHOT_STATS')) {

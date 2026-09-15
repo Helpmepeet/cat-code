@@ -9,8 +9,7 @@ const sessionTranscriptModule = feature('KAIROS')
 
 import { APIUserAbortError } from '@anthropic-ai/sdk'
 import { markPostCompaction } from 'src/bootstrap/state.js'
-import { getInvokedSkillsForAgent, getSessionId } from '../../bootstrap/state.js'
-import { readSessionState } from '../../agent-mode/sessionState.js'
+import { getInvokedSkillsForAgent } from '../../bootstrap/state.js'
 import type { QuerySource } from '../../constants/querySource.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../../Tool.js'
@@ -117,11 +116,11 @@ import {
   roughTokenCountEstimationForMessages,
 } from '../tokenEstimation.js'
 import { groupMessagesByApiRound } from './grouping.js'
+import { summarizedRelayedInput } from './relayProvenance.js'
 import {
   getCompactPrompt,
   getCompactUserSummaryMessage,
   getPartialCompactPrompt,
-  toAgentModeCompactState,
 } from './prompt.js'
 
 export const POST_COMPACT_MAX_FILES_TO_RESTORE = 5
@@ -467,15 +466,12 @@ export async function compactConversation(
       true,
     )
 
-    const sessionState =
-      context.agentId ? null : await readSessionState(getSessionId())
     const compactPrompt = getCompactPrompt(
       customInstructions,
       resolveRequestProvider(
         context.options.mainLoopModel,
         context.options.mainLoopProvider,
       ),
-      !!sessionState,
     )
     const summaryRequest = createUserMessage({
       content: compactPrompt,
@@ -546,7 +542,10 @@ export async function compactConversation(
       throw new Error(
         `Failed to generate conversation summary - response did not contain valid text content`,
       )
-    } else if (startsWithApiErrorPrefix(summary)) {
+    } else if (
+      summaryResponse.isApiErrorMessage ||
+      startsWithApiErrorPrefix(summary)
+    ) {
       logEvent('tengu_compact_failed', {
         reason:
           'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -672,9 +671,9 @@ export async function compactConversation(
             context.options.mainLoopModel,
             context.options.mainLoopProvider,
           ),
-          toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
+        summarizedRelayedInput: summarizedRelayedInput(messages),
         isVisibleInTranscriptOnly: true,
       }),
     ]
@@ -866,9 +865,6 @@ export async function partialCompactConversation(
     }
 
     const preCompactTokenCount = tokenCountWithEstimation(allMessages)
-    const sessionState =
-      context.agentId ? null : await readSessionState(getSessionId())
-
     context.onCompactProgress?.({
       type: 'hooks_start',
       hookType: 'pre_compact',
@@ -973,7 +969,10 @@ export async function partialCompactConversation(
       throw new Error(
         'Failed to generate conversation summary - response did not contain valid text content',
       )
-    } else if (startsWithApiErrorPrefix(summary)) {
+    } else if (
+      summaryResponse.isApiErrorMessage ||
+      startsWithApiErrorPrefix(summary)
+    ) {
       logEvent('tengu_partial_compact_failed', {
         reason:
           'api_error' as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1106,9 +1105,9 @@ export async function partialCompactConversation(
             context.options.mainLoopModel,
             context.options.mainLoopProvider,
           ),
-          toAgentModeCompactState(sessionState),
         ),
         isCompactSummary: true,
+        summarizedRelayedInput: summarizedRelayedInput(messagesToSummarize),
         ...(messagesToKeep.length > 0
           ? {
               summarizeMetadata: {

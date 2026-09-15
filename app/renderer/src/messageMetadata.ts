@@ -62,6 +62,7 @@ export type MessageMetadata = {
     toolUseId: string
     isSidechain: boolean
     spawnedAt: number
+    isBackgrounded: boolean
   } | null
   /** result frames only. */
   totalCostUsd: number | null

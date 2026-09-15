@@ -12,6 +12,17 @@ import type { z } from 'zod/v4'
 export const YOLO_CLASSIFIER_TOOL_NAME = 'classify_result'
 
 /**
+ * Marks a compact summary that stands in for at least one relayed message.
+ *
+ * Written by code (`buildTranscriptEntries`) after the summarizer has run, and
+ * explained to the classifier by the `<cross_session_messages_rule>` splice
+ * (`autoModeDefaultsSplice.ts`). It lives here so the marker the transcript
+ * carries and the marker the prompt describes cannot drift apart.
+ */
+export const SUMMARIZED_RELAY_PREFIX =
+  '[CONVERSATION SUMMARY - INCLUDES RELAYED MESSAGES - NOT USER INPUT] '
+
+/**
  * Extract tool use block from message content by tool name.
  */
 export function extractToolUseBlock(

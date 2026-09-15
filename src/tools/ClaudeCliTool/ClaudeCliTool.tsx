@@ -10,9 +10,11 @@ import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
 import { pwd } from '../../utils/cwd.js'
 import { errorMessage } from '../../utils/errors.js'
 import { expandPath } from '../../utils/path.js'
+import { killProcessTree, registerDelegatedChild } from '../../utils/processTree.js'
 import { lazySchema } from '../../utils/lazySchema.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { subprocessEnv } from '../../utils/subprocessEnv.js'
+import { resolveWorkerCapabilities } from '../../utils/agentCapabilities.js'
 import { CLAUDE_CLI_TOOL_NAME } from './constants.js'
 import { DESCRIPTION, PROMPT } from './prompt.js'
 
@@ -112,6 +114,8 @@ type CapturedOutput = {
 type ClaudeCliChildProcess = {
   stdout?: Readable | null
   stderr?: Readable | null
+  /** Undefined until the spawn succeeds, and after the process is reaped. */
+  readonly pid?: number | undefined
   once(event: 'close', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown
   once(event: 'error', listener: (error: Error) => void): unknown
   kill(signal?: NodeJS.Signals): boolean
@@ -219,6 +223,18 @@ function isTrustedBypassParentMode(context: Pick<ToolUseContext, 'getAppState'>)
   )
 }
 
+// Permission modes that let the delegated Claude CLI process apply edits
+// without asking. Worker instructions never pass either of these to a delegated
+// run; this enforces that in code rather
+// than relying on the worker to comply. 'dontAsk' and 'auto' are excluded on
+// purpose: 'dontAsk' converts an ask into a deny (permissions.ts, dontAsk mode
+// transformation) and 'auto' still routes through the classifier, so neither
+// skips the permission system the way these two do.
+const WORKER_FORBIDDEN_DELEGATED_PERMISSION_MODES = new Set([
+  'acceptEdits',
+  'bypassPermissions',
+])
+
 function isPathLikeExecutable(executable: string): boolean {
   return (
     executable.includes('/') ||
@@ -311,7 +327,7 @@ function formatPromptSummary(prompt: string | undefined, limit = 80): string {
 
 async function runClaudeCliTask(
   input: Input,
-  context: Pick<ToolUseContext, 'abortController'>,
+  context: Pick<ToolUseContext, 'abortController' | 'agentId'>,
   spawnImpl: ClaudeCliSpawn = spawn as ClaudeCliSpawn,
 ): Promise<ClaudeCliToolOutput> {
   const command = buildClaudeCliCommand(input)
@@ -344,12 +360,19 @@ async function runClaudeCliTask(
     let forcedStatus: ClaudeCliToolOutput['status'] | undefined
     let timeout: ReturnType<typeof setTimeout> | undefined
     let onAbort = (): void => {}
+    let onProcessExit = (): void => {}
+    let unregisterDelegatedChild = (): void => {}
 
     const finish = (output: ClaudeCliToolOutput): void => {
       if (settled) return
       settled = true
+      unregisterDelegatedChild()
       if (timeout) clearTimeout(timeout)
       context.abortController.signal.removeEventListener('abort', onAbort)
+      // Through the EventEmitter view: process.off('exit', …) does not
+      // typecheck against the ambient process shim in this repo, and a
+      // listener per delegated run would otherwise stay for the session.
+      ;(process as NodeJS.EventEmitter).off('exit', onProcessExit)
       resolve(output)
     }
 
@@ -360,17 +383,50 @@ async function runClaudeCliTask(
         GIT_EDITOR: 'true',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // The delegated CLI is an engine: it starts an MCP server child per
+      // configured server, and those survive a signal aimed at the CLI alone
+      // (the leftover cua-driver processes in
+      // docs/reports/2026-09-06-subagent-escalation-and-delegation-failures.md).
+      // Detaching makes the CLI a process group leader, which is the only
+      // thing that lets killProcessTree reach its descendants. It also moves
+      // the child out of this process's group, so a terminal SIGINT no longer
+      // reaches it and termination becomes ours alone to do: the same trade
+      // Shell.ts makes for bash.
+      detached: process.platform !== 'win32',
       windowsHide: true,
     })
 
-    onAbort = (): void => {
-      forcedStatus = 'interrupted'
+    // Tracked so the worker that spawned this (if any) can reap it from
+    // runAgent.ts's finally block even if neither abort nor the timeout below
+    // catches it first: the streaming tool executor can discard an in-flight
+    // tool call without aborting it, same as the process-exit reaper exists
+    // for below. finish() unregisters this on every settlement path.
+    unregisterDelegatedChild = registerDelegatedChild(context.agentId, child)
+
+    // Group kill first so descendants go too; the direct kill then covers a
+    // child that never led a group (Windows, or a spawn that failed).
+    const killDelegatedTree = (): void => {
+      killProcessTree(child, 'SIGKILL')
       child.kill('SIGKILL')
     }
 
+    onAbort = (): void => {
+      forcedStatus = 'interrupted'
+      killDelegatedTree()
+    }
+
+    // Abort is not guaranteed to arrive. An async subagent runs on an
+    // abortController unlinked from its parent's (runAgent), and the streaming
+    // tool executor can discard an in-flight tool call without aborting it, so
+    // engine exit is the last point at which this tree can still be reaped.
+    onProcessExit = (): void => {
+      killDelegatedTree()
+    }
+    process.on('exit', onProcessExit)
+
     timeout = setTimeout(() => {
       forcedStatus = 'timeout'
-      child.kill('SIGKILL')
+      killDelegatedTree()
     }, command.timeoutMs)
     timeout.unref?.()
 
@@ -495,9 +551,55 @@ export const ClaudeCliTool = buildTool({
       : 'Asking Claude CLI'
   },
   toAutoClassifierInput(input) {
-    return input.prompt
+    // Returning the whole parsed input, not a hand-formatted string, is what
+    // keeps this forgery-resistant: the classifier's transcript builder
+    // JSON-encodes whatever this returns (yoloClassifier.ts toCompactBlock),
+    // so cwd/model/effort/permission_mode always land as their own JSON keys
+    // with the caller's real values, and anything inside `prompt` that reads
+    // like one of those keys stays escaped text nested in the "prompt"
+    // string, never a sibling key that could override the real one. A field
+    // the caller left unset is simply absent from the object (and therefore
+    // from the JSON), rather than showing up as some specific mode.
+    return input
   },
   async checkPermissions(input, context) {
+    // context.agentId is only set for a subagent call; the main thread leaves
+    // it undefined (Tool.ts). Everything below is a backstop: the ordinary
+    // path already keeps ClaudeCli out of a worker's pool unless its own
+    // agent definition names it (ASYNC_AGENT_EXPLICIT_GRANT_TOOLS), so this
+    // only matters if some other path assembles a worker's pool without that
+    // filter.
+    if (context.agentId !== undefined) {
+      const capabilities = resolveWorkerCapabilities(
+        context.options.tools.map(tool => tool.name),
+      )
+      if (!capabilities.mayDelegateExternally) {
+        return {
+          behavior: 'deny',
+          message:
+            'This worker does not have Claude CLI in its tool pool. Do the work yourself instead of delegating to Claude CLI.',
+          decisionReason: {
+            type: 'other',
+            reason: 'claude_cli_not_granted_to_worker',
+          },
+        }
+      }
+
+      if (
+        input.permission_mode !== undefined &&
+        WORKER_FORBIDDEN_DELEGATED_PERMISSION_MODES.has(input.permission_mode)
+      ) {
+        return {
+          behavior: 'deny',
+          message: `A delegated Claude CLI run from a worker cannot use permission_mode ${input.permission_mode}. Drop permission_mode, or pick a mode that does not edit files automatically.`,
+          decisionReason: {
+            type: 'other',
+            reason: 'delegated_worker_permission_mode_edits_files',
+          },
+        }
+      }
+    }
+
     if (
       input.permission_mode === 'bypassPermissions' &&
       !isTrustedBypassParentMode(context)

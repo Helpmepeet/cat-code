@@ -74,11 +74,20 @@ import {
 import { generateToolUseSummary } from './services/toolUseSummary/toolUseSummaryGenerator.js'
 import { buildProviderInstructionAssembly } from './services/api/instructionAssembly.js'
 import {
+  createAgentPendingMessageAttachment,
   createAttachmentMessage,
   filterDuplicateMemoryAttachments,
   getAttachmentMessages,
   startRelevantMemoryPrefetch,
 } from './utils/attachments.js'
+import {
+  claimPendingMessagesOrClose,
+  claimPendingMessagesForRequest,
+  settleAgentMessagesForTerminal,
+  settleAgentMessagesForRun,
+  settleAgentMessageDeliveries,
+  submitPreparedAgentMessages,
+} from './tasks/LocalAgentTask/LocalAgentTask.js'
 /* eslint-disable @typescript-eslint/no-require-imports */
 const skillPrefetch = feature('EXPERIMENTAL_SKILL_SEARCH')
   ? (require('./services/skillSearch/prefetch.js') as typeof import('./services/skillSearch/prefetch.js'))
@@ -601,15 +610,27 @@ async function* queryLoop(
       toolUseContext.options.mainLoopProvider,
     )
 
+    // Compaction budgets and summary requests must use the model selected for
+    // this iteration. Keep the user's configured base model on the durable
+    // context so leaving plan mode restores it naturally.
+    const compactionToolUseContext: ToolUseContext = {
+      ...toolUseContext,
+      options: {
+        ...toolUseContext.options,
+        mainLoopModel: currentModel,
+        mainLoopProvider: currentProvider,
+      },
+    }
+
     queryCheckpoint('query_autocompact_start')
     const { compactionResult, consecutiveFailures } = await deps.autocompact(
       messagesForQuery,
-      toolUseContext,
+      compactionToolUseContext,
       {
         systemPrompt,
         userContext,
         systemContext,
-        toolUseContext,
+        toolUseContext: compactionToolUseContext,
         forkContextMessages: messagesForQuery,
       },
       querySource,
@@ -814,6 +835,11 @@ async function* queryLoop(
       | undefined
 
     let attemptWithFallback = true
+    const localAgentRequestId = toolUseContext.agentId
+      ? deps.uuid()
+      : undefined
+    let submittedLocalAgentMessageIds: string[] = []
+    let confirmedLocalAgentMessageIds = false
 
     queryCheckpoint('query_api_loop_start')
     try {
@@ -827,6 +853,14 @@ async function* queryLoop(
             userContext,
             systemContext,
           })
+          if (toolUseContext.agentId && localAgentRequestId) {
+            submittedLocalAgentMessageIds = submitPreparedAgentMessages(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              localAgentRequestId,
+              toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+            )
+          }
 
           let streamingFallbackOccured = false
           queryCheckpoint('query_api_streaming_start')
@@ -1049,6 +1083,30 @@ async function* queryLoop(
             }
           }
           queryCheckpoint('query_api_streaming_end')
+          const completedAssistantMessage = assistantMessages.at(-1)
+          if (
+            toolUseContext.agentId &&
+            submittedLocalAgentMessageIds.length > 0 &&
+            !confirmedLocalAgentMessageIds &&
+            completedAssistantMessage &&
+            !completedAssistantMessage.isApiErrorMessage &&
+            !streamingFallbackOccured &&
+            !toolUseContext.abortController.signal.aborted
+          ) {
+            settleAgentMessageDeliveries(
+              toolUseContext.agentId,
+              submittedLocalAgentMessageIds,
+              toolUseContext.agentRunId,
+              'delivered',
+              'The provider returned a valid response.',
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            await toolUseContext.onLocalAgentMessagesDelivered?.(
+              submittedLocalAgentMessageIds,
+            )
+            confirmedLocalAgentMessageIds = true
+          }
 
           // Yield deferred microcompact boundary message using actual API-reported
           // token deletion count instead of client-side estimates.
@@ -1144,6 +1202,17 @@ async function* queryLoop(
         }
       }
     } catch (error) {
+      if (toolUseContext.agentId) {
+        settleAgentMessagesForRun(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'undelivered',
+          submittedLocalAgentMessageIds.length > 0
+            ? 'The request failed after submission.'
+            : 'The request could not be prepared.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+      }
       logError(error)
       const errorMessage =
         error instanceof Error ? error.message : String(error)
@@ -1503,6 +1572,21 @@ async function* queryLoop(
       const partialStreamFailure =
         getEligibleCodexPartialStreamFailure(lastMessage)
       if (partialStreamFailure && lastMessage) {
+        if (
+          toolUseContext.agentId &&
+          submittedLocalAgentMessageIds.length > 0 &&
+          !confirmedLocalAgentMessageIds
+        ) {
+          settleAgentMessageDeliveries(
+            toolUseContext.agentId,
+            submittedLocalAgentMessageIds,
+            toolUseContext.agentRunId,
+            'uncertain',
+            'The provider stream ended ambiguously after submission.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+          confirmedLocalAgentMessageIds = true
+        }
         const abortSignal = toolUseContext.abortController.signal
         // The marker reports what the provider stream showed. This reports
         // what the engine actually materialized. They should agree, and a
@@ -1591,11 +1675,35 @@ async function* queryLoop(
         }
       }
 
+      if (
+        toolUseContext.agentId &&
+        submittedLocalAgentMessageIds.length > 0 &&
+        !confirmedLocalAgentMessageIds
+      ) {
+        settleAgentMessageDeliveries(
+          toolUseContext.agentId,
+          submittedLocalAgentMessageIds,
+          toolUseContext.agentRunId,
+          'uncertain',
+          'The request ended without a valid provider response.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        confirmedLocalAgentMessageIds = true
+      }
+
       // Skip stop hooks when the last message is an API error (rate limit,
       // prompt-too-long, auth failure, etc.). The model never produced a
       // real response — hooks evaluating it create a death spiral:
       // error → hook blocking → retry → error → …
       if (lastMessage?.isApiErrorMessage) {
+        if (toolUseContext.agentId) {
+          settleAgentMessagesForTerminal(
+            toolUseContext.agentId,
+            toolUseContext.agentRunId,
+            'The provider returned an error before accepting the instruction.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+        }
         void executeStopFailureHooks(lastMessage, toolUseContext)
         return { reason: 'completed' }
       }
@@ -1622,6 +1730,14 @@ async function* queryLoop(
       }
 
       if (stopHookResult.preventContinuation) {
+        if (toolUseContext.agentId) {
+          settleAgentMessagesForTerminal(
+            toolUseContext.agentId,
+            toolUseContext.agentRunId,
+            'The worker stopped before accepting the instruction.',
+            toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+          )
+        }
         return { reason: 'stop_hook_prevented' }
       }
 
@@ -1668,10 +1784,25 @@ async function* queryLoop(
           logForDebugging(
             `Token budget continuation #${decision.continuationCount}: ${decision.pct}% (${decision.turnTokens.toLocaleString()} / ${decision.budget.toLocaleString()})`,
           )
+          const localContinuationMessages = toolUseContext.agentId
+            ? claimPendingMessagesForRequest(
+                toolUseContext.agentId,
+                toolUseContext.agentRunId,
+                toolUseContext.setAppStateForTasks ??
+                  toolUseContext.setAppState,
+              )
+            : []
+          const localContinuationAttachments =
+            localContinuationMessages.map(message =>
+              createAttachmentMessage(
+                createAgentPendingMessageAttachment(message),
+              ),
+            )
           state = {
             messages: [
               ...messagesForQuery,
               ...assistantMessages,
+              ...localContinuationAttachments,
               createUserMessage({
                 content: decision.nudgeMessage,
                 isMeta: true,
@@ -1702,6 +1833,113 @@ async function* queryLoop(
             queryChainId: queryChainIdForAnalytics,
             queryDepth: queryTracking.depth,
           })
+          if (toolUseContext.agentId) {
+            const localCompletion = claimPendingMessagesOrClose(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            if (localCompletion.kind === 'claimed') {
+              settleAgentMessagesForTerminal(
+                toolUseContext.agentId,
+                toolUseContext.agentRunId,
+                'The token budget ended before the instruction was submitted.',
+                toolUseContext.setAppStateForTasks ??
+                  toolUseContext.setAppState,
+              )
+            }
+          }
+        }
+      }
+
+      if (toolUseContext.agentId) {
+        const targetedNotifications = getCommandsByMaxPriority('later').filter(
+          cmd =>
+            cmd.mode === 'task-notification' &&
+            cmd.agentId === toolUseContext.agentId,
+        )
+        if (targetedNotifications.length > 0) {
+          const notificationAttachments: AttachmentMessage[] = []
+          for await (const attachment of getAttachmentMessages(
+            null,
+            toolUseContext,
+            null,
+            targetedNotifications,
+            [...messagesForQuery, ...assistantMessages],
+            querySource,
+          )) {
+            notificationAttachments.push(attachment)
+          }
+          removeFromQueue(targetedNotifications)
+          state = {
+            messages: [
+              ...messagesForQuery,
+              ...assistantMessages,
+              ...notificationAttachments,
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
+            hasAttemptedReactiveCompact: false,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount,
+            transition: { reason: 'next_turn' },
+          }
+          continue
+        }
+        const localContinuation = claimPendingMessagesOrClose(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        if (localContinuation.kind === 'claimed') {
+          const nextTurnCount = turnCount + 1
+          const continuationAttachments = localContinuation.messages.map(
+            message =>
+              createAttachmentMessage(
+                createAgentPendingMessageAttachment(message),
+              ),
+          )
+          if (maxTurns && nextTurnCount > maxTurns) {
+            settleAgentMessagesForTerminal(
+              toolUseContext.agentId,
+              toolUseContext.agentRunId,
+              'The turn budget was exhausted before the instruction was submitted.',
+              toolUseContext.setAppStateForTasks ??
+                toolUseContext.setAppState,
+            )
+            yield createAttachmentMessage({
+              type: 'max_turns_reached',
+              maxTurns,
+              turnCount: nextTurnCount,
+            })
+            return { reason: 'max_turns', turnCount: nextTurnCount }
+          }
+          for (const attachment of continuationAttachments) {
+            yield attachment
+          }
+          state = {
+            messages: [
+              ...messagesForQuery,
+              ...assistantMessages,
+              ...continuationAttachments,
+            ],
+            toolUseContext,
+            autoCompactTracking: tracking,
+            maxOutputTokensRecoveryCount: 0,
+            codexPartialStreamContinuationCount,
+            hasAttemptedReactiveCompact,
+            maxOutputTokensOverride: undefined,
+            pendingToolUseSummary: undefined,
+            stopHookActive: undefined,
+            turnCount: nextTurnCount,
+            transition: { reason: 'next_turn' },
+          }
+          continue
         }
       }
 
@@ -1935,12 +2173,13 @@ async function* queryLoop(
     // drain their own agentId. User prompts (mode:'prompt') still go to main
     // only; subagents never see the prompt stream.
     // eslint-disable-next-line custom-rules/require-tool-match-name -- ToolUseBlock.name has no aliases
+    const nextTurnCount = turnCount + 1
     const sleepRan = toolUseBlocks.some(b => b.name === SLEEP_TOOL_NAME)
     const isMainThread =
       querySource.startsWith('repl_main_thread') || querySource === 'sdk'
     const currentAgentId = toolUseContext.agentId
     const queuedCommandsSnapshot = getCommandsByMaxPriority(
-      sleepRan ? 'later' : 'next',
+      sleepRan || !isMainThread ? 'later' : 'next',
     ).filter(cmd => {
       if (isSlashCommand(cmd)) return false
       if (cmd.origin?.kind === 'deferred-continuation') return false
@@ -1950,6 +2189,7 @@ async function* queryLoop(
       return cmd.mode === 'task-notification' && cmd.agentId === currentAgentId
     })
 
+    const preparedQueuedAttachments: AttachmentMessage[] = []
     for await (const attachment of getAttachmentMessages(
       null,
       updatedToolUseContext,
@@ -1958,8 +2198,26 @@ async function* queryLoop(
       [...messagesForQuery, ...assistantMessages, ...toolResults],
       querySource,
     )) {
-      yield attachment
-      toolResults.push(attachment)
+      if (
+        maxTurns &&
+        nextTurnCount > maxTurns &&
+        attachment.attachment.type === 'queued_command' &&
+        attachment.attachment.commandMode === 'local-agent-message'
+      ) {
+        continue
+      }
+      preparedQueuedAttachments.push(attachment)
+    }
+
+    // Attachment preparation may resize images or perform other asynchronous
+    // work. A send-now interruption during that window still owns the queued
+    // prompt: leave it queued for the sidecar's between-turn submission, and
+    // do not publish a transcript attachment that was never sent to a model.
+    if (!toolUseContext.abortController.signal.aborted) {
+      for (const attachment of preparedQueuedAttachments) {
+        yield attachment
+        toolResults.push(attachment)
+      }
     }
 
     // Memory prefetch consume: only if settled and not already consumed on
@@ -2002,9 +2260,11 @@ async function* queryLoop(
 
     // Remove only commands that were actually consumed as attachments.
     // Prompt and task-notification commands are converted to attachments above.
-    const consumedCommands = queuedCommandsSnapshot.filter(
-      cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
-    )
+    const consumedCommands = toolUseContext.abortController.signal.aborted
+      ? []
+      : queuedCommandsSnapshot.filter(
+          cmd => cmd.mode === 'prompt' || cmd.mode === 'task-notification',
+        )
     if (consumedCommands.length > 0) {
       for (const cmd of consumedCommands) {
         if (cmd.uuid) {
@@ -2029,8 +2289,24 @@ async function* queryLoop(
       queryDepth: queryTracking.depth,
     })
 
-    // Refresh tools between turns so newly-connected MCP servers become available
-    if (updatedToolUseContext.options.refreshTools) {
+    // Refresh runtime inputs between turns so newly-connected MCP servers
+    // become available. refreshMcpRuntime replaces the tools-only seam when a
+    // caller supplies it: tools, commands, clients, and resources all have to
+    // come from one MCP generation, because tool execution and subagent setup
+    // read clients and resources off options while the model sees tools.
+    if (updatedToolUseContext.options.refreshMcpRuntime) {
+      const refreshed = updatedToolUseContext.options.refreshMcpRuntime()
+      updatedToolUseContext = {
+        ...updatedToolUseContext,
+        options: {
+          ...updatedToolUseContext.options,
+          tools: refreshed.tools,
+          commands: refreshed.commands,
+          mcpClients: refreshed.mcpClients,
+          mcpResources: refreshed.mcpResources,
+        },
+      }
+    } else if (updatedToolUseContext.options.refreshTools) {
       const refreshedTools = updatedToolUseContext.options.refreshTools()
       if (refreshedTools !== updatedToolUseContext.options.tools) {
         updatedToolUseContext = {
@@ -2047,9 +2323,6 @@ async function* queryLoop(
       ...updatedToolUseContext,
       queryTracking,
     }
-
-    // Each time we have tool results and are about to recurse, that's a turn
-    const nextTurnCount = turnCount + 1
 
     // Periodic task summary for `claude ps` — fires mid-turn so a
     // long-running agent still refreshes what it's working on. Gated
@@ -2076,6 +2349,21 @@ async function* queryLoop(
 
     // Check if we've reached the max turns limit
     if (maxTurns && nextTurnCount > maxTurns) {
+      if (toolUseContext.agentId) {
+        settleAgentMessagesForRun(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'undelivered',
+          'The turn budget was exhausted before the instruction was submitted.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+        settleAgentMessagesForTerminal(
+          toolUseContext.agentId,
+          toolUseContext.agentRunId,
+          'The worker reached its turn limit before accepting another instruction.',
+          toolUseContext.setAppStateForTasks ?? toolUseContext.setAppState,
+        )
+      }
       yield createAttachmentMessage({
         type: 'max_turns_reached',
         maxTurns,

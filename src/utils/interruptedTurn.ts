@@ -118,9 +118,9 @@ function recordPath(sessionId: string): string {
  * The transcript position a record is bound to: the last user/assistant message
  * on the chain.
  *
- * user/assistant are the only message types guaranteed to reach the transcript
- * (attachments are dropped by `isLoggableMessage` for non-ant users, and
- * system/progress records are bookkeeping), so this is the one definition that
+ * user/assistant are the only message types this walk considers: attachments
+ * reach the transcript too but are turn payload, not a position, and
+ * system/progress records are bookkeeping. So this is the one definition that
  * yields the same answer at capture time from in-memory messages and at resume
  * time from the loaded chain.
  */

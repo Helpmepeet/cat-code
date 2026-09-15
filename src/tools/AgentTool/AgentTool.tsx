@@ -1,23 +1,25 @@
 import { feature } from 'bun:bundle';
+import { promises as fsp } from 'fs';
+import { isAbsolute, resolve } from 'path';
 import * as React from 'react';
-import { buildTool, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
+import { buildTool, type McpRuntimeSnapshot, type ToolDef, type ToolUseContext, toolMatchesName } from 'src/Tool.js';
 import type { Message as MessageType, NormalizedUserMessage } from 'src/types/message.js';
 import { getQuerySourceForAgent } from 'src/utils/promptCategory.js';
 import { z } from 'zod/v4';
 import type { BetaJSONOutputFormat } from '@anthropic-ai/sdk/resources/index.mjs';
 import { clearInvokedSkillsForAgent, getSessionId, getSdkAgentProgressSummariesEnabled } from '../../bootstrap/state.js';
 import { enhanceSystemPromptWithEnvDetails, getSystemPrompt } from '../../constants/prompts.js';
-import { getCurrentSessionMode } from '../../agent-mode/agentMode.js';
-import { isAgentMode } from '../../agent-mode/agentMode.js';
+import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js';
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js';
-import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js';
-import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryReserveWorkerName } from '../../agent-mode/workerNames.js';
+import { getSessionStatePathFromTranscriptPath, readSessionState, recordWorkerSessionSpawn, recordWorkerSessionTerminal } from '../../utils/workerState.js';
+import { allocateWorkerName, releaseWorkerName, selectWorkerNameCandidate, tryReserveWorkerName } from '../../utils/workerNames.js';
 import { startAgentSummarization } from '../../services/AgentSummary/agentSummary.js';
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js';
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from '../../services/analytics/index.js';
+import { selectAvailableMcpServerNames } from '../../services/mcp/mcpState.js';
 import { clearDumpState } from '../../services/api/dumpPrompts.js';
 import { EMPTY_USAGE } from '../../services/api/emptyUsage.js';
-import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentNotification, failAgentTask as failAsyncAgent, getProgressUpdate, getTokenCountFromTracker, isLocalAgentTask, killAsyncAgent, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
+import { completeAgentTask as completeAsyncAgent, createActivityDescriptionResolver, createProgressTracker, enqueueAgentMessageDeliveryReportsToOrigins, enqueueAgentNotification, failAgentTask as failAsyncAgent, formatAgentMessageDeliveryRecords, getProgressUpdate, getTokenCountFromTracker, getUnresolvedAgentMessageDeliveries, isLocalAgentTask, killAsyncAgent, markAgentMessageDeliveriesReported, registerAgentForeground, registerAsyncAgent, unregisterAgentForeground, updateAgentProgress as updateAsyncAgentProgress, updateProgressFromMessage } from '../../tasks/LocalAgentTask/LocalAgentTask.js';
 import { registerCodexLease, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js';
 import { clearWebSocketSession } from '../../services/api/codex-websocket-transport.js';
@@ -36,6 +38,7 @@ import { lazySchema } from '../../utils/lazySchema.js';
 import { createUserMessage, extractTextContent, isSyntheticMessage, normalizeMessages } from '../../utils/messages.js';
 import { getAgentModel } from '../../utils/model/agent.js';
 import type { EffortLevel } from '../../utils/effort.js';
+import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js';
 import { permissionModeSchema } from '../../utils/permissions/PermissionMode.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
 import { filterDeniedAgents, getDenyRuleForAgent } from '../../utils/permissions/permissions.js';
@@ -59,6 +62,7 @@ import { formatAgentId } from '../../utils/agentId.js';
 import { recipientNameKey } from '../../utils/recipientIdentity.js';
 import { allocateTeamRecipient, RecipientConflictError, tombstoneFailedRecipient, transitionTeamRecipient } from '../../utils/swarm/teamHelpers.js';
 import { setAgentColor } from './agentColorManager.js';
+import { runWithAgentLifecycleOwnership } from './agentLifecycleOwnership.js';
 import { agentToolResultSchema, classifyHandoffIfNeeded, emitTaskProgress, extractPartialResult, filterToolsForAgent, finalizeAgentTool, formatForkWorkerResultForNotification, getAgentContinuationCapabilities, getForkWorkerResultOutputFormat, getLastToolUseName, runAsyncAgentLifecycle, type AgentContinuationMetadata } from './agentToolUtils.js';
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js';
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME, ONE_SHOT_BUILTIN_AGENT_TYPES } from './constants.js';
@@ -74,45 +78,44 @@ import { renderGroupedAgentToolUse, renderToolResultMessage, renderToolUseErrorM
 const proactiveModule = feature('PROACTIVE') || feature('KAIROS') ? require('../../proactive/index.js') as typeof import('../../proactive/index.js') : null;
 /* eslint-enable @typescript-eslint/no-require-imports */
 
-export function deriveSessionStateTrackingObjective({
-  threadGoalObjective,
-  description,
-}: {
-  threadGoalObjective?: string
-  description?: string
-}): string {
-  return threadGoalObjective ?? description ?? 'Continue current objective'
-}
-
 export type AgentSessionStateTracking = {
   sessionId: string
   mode: Exclude<ReturnType<typeof getCurrentSessionMode>, 'normal'>
-  objective: string
   statePath: string
+}
+
+/**
+ * Transfer ownership of a live synchronous agent iterator to its detached
+ * background consumer. `firstResult` is the `next()` already in flight when the
+ * background signal won the race, so consuming it first preserves every message
+ * without starting a second agent conversation.
+ */
+export async function continueAgentIterator(
+  iterator: AsyncIterator<MessageType, void>,
+  firstResult: Promise<IteratorResult<MessageType, void>>,
+  onMessage: (message: MessageType) => void,
+): Promise<void> {
+  let result = await firstResult
+  while (!result.done) {
+    onMessage(result.value)
+    result = await iterator.next()
+  }
 }
 
 export function buildAgentSessionStateTracking({
   sessionMode,
   sessionId,
-  threadGoalObjective,
-  description,
 }: {
   sessionMode: ReturnType<typeof getCurrentSessionMode>
   sessionId: string
-  threadGoalObjective?: string
-  description?: string
 }): AgentSessionStateTracking | undefined {
-  if (sessionMode !== 'agent' && sessionMode !== 'coordinator') {
+  if (sessionMode !== 'coordinator') {
     return undefined
   }
 
   return {
     sessionId,
     mode: sessionMode,
-    objective: deriveSessionStateTrackingObjective({
-      threadGoalObjective,
-      description,
-    }),
     statePath: getSessionStatePathFromTranscriptPath(getTranscriptPath()),
   }
 }
@@ -149,14 +152,12 @@ export async function finalizeFailedAgentLaunch({
   const errMsg = errorMessage(error)
 
   if (sessionStateTracking) {
-    const reservedWorkerHandles = (
-      (
-        await readSessionState(
-          sessionStateTracking.sessionId,
-          sessionStateTracking.statePath,
-        )
-      )?.knownWorkers ??
-      []
+    const trackedState = await readSessionState(
+      sessionStateTracking.sessionId,
+      sessionStateTracking.statePath,
+    )
+    const reservedWorkerHandles = Object.values(
+      trackedState?.knownWorkers ?? {},
     )
       .map(worker => worker.handle)
       .filter((handle): handle is string => Boolean(handle && handle.length > 0))
@@ -168,7 +169,6 @@ export async function finalizeFailedAgentLaunch({
       await recordSpawn({
         sessionId: sessionStateTracking.sessionId,
         mode: sessionStateTracking.mode,
-        objective: sessionStateTracking.objective,
         ...(sessionStateTracking.statePath
           ? { statePath: sessionStateTracking.statePath }
           : {}),
@@ -179,18 +179,16 @@ export async function finalizeFailedAgentLaunch({
         worktreePath: worktreePath ?? null,
         spawnedAt,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker spawn failure: ${_err}`),
+        logForDebugging(`Failed to record worker spawn failure: ${_err}`),
       )
 
       await recordTerminal({
         sessionId: sessionStateTracking.sessionId,
         agentId,
         status: 'failed',
-        error: errMsg,
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker launch failure: ${_err}`),
+        logForDebugging(`Failed to record worker launch failure: ${_err}`),
       )
     } finally {
       if (workerName) releaseWorkerName(workerName)
@@ -358,7 +356,7 @@ async function getReservedSubagentNames({
       sessionStateTracking.sessionId,
       sessionStateTracking.statePath,
     )
-    for (const worker of trackedState?.knownWorkers ?? []) {
+    for (const worker of Object.values(trackedState?.knownWorkers ?? {})) {
       if (worker.handle) reserved.add(worker.handle)
     }
   }
@@ -520,7 +518,7 @@ const baseInputSchema = lazySchema(() => z.object({
   description: z.string().describe('A short (3-5 word) description of the task'),
   prompt: z.string().describe('The task for the agent to perform'),
   subagent_type: z.string().optional().describe('The type of specialized agent to use for this task'),
-  model: z.enum(['sonnet', 'opus', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
+  model: z.enum(['sonnet', 'opus', 'claude-opus-5', 'gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']).optional().describe("Optional model override. OMIT this — leave it unset and the subagent inherits your model (or its own pin, like Explore's fast cheap model). Set it only when the user explicitly named a model for this work; otherwise do not pass it. When present, this choice is authoritative, including lower-tier models."),
   effort: z.enum(effortLevels).optional().describe("Optional reasoning effort override. OMIT this — leave it unset and the subagent inherits your effort level (or its own pin). Set it only when the user explicitly named an effort level for this work. Do not reason about how much effort a task deserves; that is not your call to make. Levels the subagent's model does not support fall back to high."),
   run_in_background: z.boolean().optional().describe('Set to true to run this agent in the background. You will be notified when it completes.')
 }));
@@ -546,9 +544,7 @@ const fullInputSchema = lazySchema(() => {
 // type, but call() destructures via the explicit AgentToolInput type below
 // which always includes all optional fields.
 export const inputSchema = lazySchema(() => {
-  let schema = feature('KAIROS') ? fullInputSchema() : fullInputSchema().omit({
-    cwd: true
-  });
+  let schema = fullInputSchema();
 
   // The multi-agent params (name/team_name/mode) only do anything in the
   // agent-teams/swarm spawn path: `name` is the teammate's required roster
@@ -692,7 +688,6 @@ export const AgentTool = buildTool({
     // Use inline env check instead of coordinatorModule to avoid circular
     // dependency issues during test module loading.
     const isCoordinator = feature('COORDINATOR_MODE') ? isEnvTruthy(process.env.CLAUDE_CODE_COORDINATOR_MODE) : false;
-    const isAgentMode = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE);
     // Derived from the SAME resolved tool array this invocation's own API
     // tool definitions come from — never re-derived elsewhere — so the
     // continuation guidance below can't advertise a tool this context
@@ -703,7 +698,6 @@ export const AgentTool = buildTool({
       isCoordinator,
       allowedAgentTypes,
       provider,
-      isAgentMode,
       capabilities,
     );
   },
@@ -795,7 +789,6 @@ export const AgentTool = buildTool({
           prompt,
           description,
           team_name: teamName,
-          use_splitpane: true,
           plan_mode_required: spawnMode === 'plan',
           model: model ?? agentDef?.model,
           agent_type: subagent_type,
@@ -880,6 +873,13 @@ export const AgentTool = buildTool({
     // narrowing property types across the if-else assignment above.
     const requiredMcpServers = selectedAgent.requiredMcpServers;
 
+    // One MCP generation for this launch. Read after any required-server wait
+    // below, so a server that connects during the wait reaches the subagent in
+    // this iteration instead of the next main-query one. Everything the
+    // subagent gets (availability verdict, tool pool, clients, resources)
+    // comes from this one read.
+    let mcpRuntimeSnapshot: McpRuntimeSnapshot | undefined;
+
     // Check if required MCP servers have tools available
     // A server that's connected but not authenticated won't have any tools
     if (requiredMcpServers?.length) {
@@ -905,18 +905,11 @@ export const AgentTool = buildTool({
         }
       }
 
-      // Get servers that actually have tools (meaning they're connected AND authenticated)
-      const serversWithTools: string[] = [];
-      for (const tool of currentAppState.mcp.tools) {
-        if (tool.name?.startsWith('mcp__')) {
-          // Extract server name from tool name (format: mcp__serverName__toolName)
-          const parts = tool.name.split('__');
-          const serverName = parts[1];
-          if (serverName && !serversWithTools.includes(serverName)) {
-            serversWithTools.push(serverName);
-          }
-        }
-      }
+      mcpRuntimeSnapshot = toolUseContext.options.getMcpRuntimeSnapshot?.();
+
+      const currentMcp =
+        mcpRuntimeSnapshot ?? currentAppState.mcp;
+      const serversWithTools = selectAvailableMcpServerNames(currentMcp);
       if (!hasRequiredMcpServers(selectedAgent, serversWithTools)) {
         const missing = requiredMcpServers.filter(pattern => !serversWithTools.some(server => server.toLowerCase().includes(pattern.toLowerCase())));
         throw new Error(`Agent '${selectedAgent.agentType}' requires MCP servers matching: ${missing.join(', ')}. ` + `MCP servers with tools: ${serversWithTools.length > 0 ? serversWithTools.join(', ') : 'none'}. ` + `Use /mcp to configure and authenticate the required MCP servers.`);
@@ -997,6 +990,32 @@ export const AgentTool = buildTool({
         data: Output;
       };
     }
+
+    let validatedCwd: string | undefined = cwd
+    if (validatedCwd !== undefined) {
+      if (effectiveIsolation === 'worktree') {
+        throw new Error(
+          'Cannot set a custom cwd with worktree isolation.',
+        )
+      }
+      if (!isAbsolute(validatedCwd)) {
+        throw new Error('Custom cwd must be an absolute path.')
+      }
+      const resolvedCwd = resolve(validatedCwd)
+      const stat = await fsp.stat(resolvedCwd).catch(() => {
+        throw new Error(`Cannot use cwd ${resolvedCwd}: directory does not exist.`)
+      })
+      if (!stat.isDirectory()) {
+        throw new Error(`Cannot use cwd ${resolvedCwd}: not a directory.`)
+      }
+      if (!pathInAllowedWorkingPath(resolvedCwd, appState.toolPermissionContext)) {
+        throw new Error(
+          `Cannot use cwd ${resolvedCwd}: it is outside allowed working directories.`,
+        )
+      }
+      validatedCwd = resolvedCwd
+    }
+
     // System prompt + prompt messages: branch on fork path.
     //
     // Fork path: child inherits the PARENT's system prompt (not FORK_AGENT's)
@@ -1062,7 +1081,8 @@ export const AgentTool = buildTool({
       ...appState.toolPermissionContext,
       mode: selectedAgent.permissionMode ?? 'acceptEdits'
     };
-    const workerTools = assembleToolPool(workerPermissionContext, appState.mcp.tools);
+    mcpRuntimeSnapshot ??= toolUseContext.options.getMcpRuntimeSnapshot?.();
+    const workerTools = assembleToolPool(workerPermissionContext, mcpRuntimeSnapshot?.tools ?? appState.mcp.tools);
 
     let worktreeInfo: {
       worktreePath: string;
@@ -1076,8 +1096,6 @@ export const AgentTool = buildTool({
     const sessionStateTracking = buildAgentSessionStateTracking({
       sessionMode: getCurrentSessionMode(),
       sessionId: parentSessionId,
-      threadGoalObjective: appState.threadGoal?.objective,
-      description,
     });
     const {
       agentName,
@@ -1184,16 +1202,27 @@ export const AgentTool = buildTool({
       // returns the override path.
       override: isForkPath ? {
         systemPrompt: forkParentSystemPrompt
-      } : enhancedSystemPrompt && !worktreeInfo && !cwd ? {
+      } : enhancedSystemPrompt && !worktreeInfo && !validatedCwd ? {
         systemPrompt: asSystemPrompt(enhancedSystemPrompt)
       } : undefined,
       availableTools: isForkPath ? toolUseContext.options.tools : workerTools,
+      ...(isForkPath
+        ? {
+            mcpRuntimeInputs: {
+              tools: toolUseContext.options.tools,
+              commands: toolUseContext.options.commands,
+              mcpClients: toolUseContext.options.mcpClients,
+              mcpResources: toolUseContext.options.mcpResources,
+            },
+          }
+        : { mcpRuntimeSnapshot }),
       // Pass parent conversation when the fork-subagent path needs full
       // context. useExactTools inherits thinkingConfig (runAgent.ts:624).
       forkContextMessages: isForkPath ? toolUseContext.messages : undefined,
       ...(isForkPath && {
         useExactTools: true
       }),
+      cwd: validatedCwd,
       worktreePath: worktreeInfo?.worktreePath,
       description,
       agentName,
@@ -1243,9 +1272,9 @@ export const AgentTool = buildTool({
       });
     }
 
-    // Helper to wrap execution with a cwd override: explicit cwd arg (KAIROS)
-    // takes precedence over worktree isolation path.
-    const cwdOverridePath = cwd ?? worktreeInfo?.worktreePath;
+    // Helper to wrap execution with the selected cwd override path.
+    // Explicit cwd takes precedence over worktree isolation.
+    const cwdOverridePath = validatedCwd ?? worktreeInfo?.worktreePath;
     const wrapWithCwd = <T,>(fn: () => T): T => cwdOverridePath ? runWithCwdOverride(cwdOverridePath, fn) : fn();
 
     // Helper to clean up worktree after agent completes
@@ -1382,11 +1411,13 @@ export const AgentTool = buildTool({
       void runWithAgentContext(asyncAgentContext, () => wrapWithCwd(() => runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
         abortController: agentBackgroundTask.abortController!,
+        runId: agentBackgroundTask.runId,
         makeStream: onCacheSafeParams => runAgent({
           ...runAgentParams,
           override: {
             ...runAgentParams.override,
             agentId: asAgentId(agentBackgroundTask.agentId),
+            agentRunId: agentBackgroundTask.runId,
             abortController: agentBackgroundTask.abortController!
           },
           onCacheSafeParams
@@ -1473,6 +1504,9 @@ export const AgentTool = buildTool({
         // Register as foreground task immediately so it can be backgrounded at any time
         // Skip registration if background tasks are disabled
         let foregroundTaskId: string | undefined;
+        let foregroundAbortController: AbortController | undefined;
+        let foregroundRunId: string | undefined;
+        let detachParentAbort = () => {};
         // Seeded at spawn and refreshed at the terminal, because the two
         // moments can disagree (failover, repair, follow-main reassignment) and
         // only the terminal read is still true. Undefined for an Anthropic
@@ -1509,6 +1543,22 @@ export const AgentTool = buildTool({
             toolUseContext.options.mainLoopProvider,
           );
           foregroundTaskId = registration.taskId;
+          foregroundAbortController = registration.abortController;
+          foregroundRunId = registration.runId;
+          const parentSignal = toolUseContext.abortController.signal;
+          const forwardParentAbort = () => {
+            registration.abortController.abort(parentSignal.reason);
+          };
+          if (parentSignal.aborted) {
+            forwardParentAbort();
+          } else {
+            parentSignal.addEventListener('abort', forwardParentAbort, {
+              once: true
+            });
+            detachParentAbort = () => {
+              parentSignal.removeEventListener('abort', forwardParentAbort);
+            };
+          }
           backgroundPromise = registration.backgroundSignal.then(() => ({
             type: 'background' as const
           }));
@@ -1530,12 +1580,23 @@ export const AgentTool = buildTool({
           ...runAgentParams,
           override: {
             ...runAgentParams.override,
-            agentId: syncAgentId
+            agentId: syncAgentId,
+            agentRunId: foregroundRunId,
+            ...(foregroundAbortController
+              ? { abortController: foregroundAbortController }
+              : {})
           },
           onCacheSafeParams: summaryTaskId && getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
             const {
               stop
-            } = startAgentSummarization(summaryTaskId, syncAgentId, params, rootSetAppState);
+            } = startAgentSummarization(
+              summaryTaskId,
+              syncAgentId,
+              params,
+              rootSetAppState,
+              {},
+              foregroundRunId,
+            );
             stopForegroundSummarization = stop;
           } : undefined
         })[Symbol.asyncIterator]();
@@ -1583,60 +1644,42 @@ export const AgentTool = buildTool({
               if (isLocalAgentTask(task) && task.isBackgrounded) {
                 // Capture the taskId for use in the async callback
                 const backgroundedTaskId = foregroundTaskId;
+                const backgroundedRunId = foregroundRunId;
                 wasBackgrounded = true;
-                // Stop foreground summarization; the backgrounded closure
-                // below owns its own independent stop function.
-                stopForegroundSummarization?.();
+                // The detached consumer keeps the same live agent and therefore
+                // the same summarizer. Transfer cleanup ownership so the outer
+                // foreground finally does not stop it prematurely.
+                const stopBackgroundedSummarization = stopForegroundSummarization;
+                stopForegroundSummarization = undefined;
 
                 // Workload: inherited via ALS at `void` invocation time,
                 // same as the async-from-start path above.
                 // Continue agent in background and return async result
-                void runWithAgentContext(syncAgentContext, async () => {
-                  let stopBackgroundedSummarization: (() => void) | undefined;
+                void runWithAgentContext(syncAgentContext, () =>
+                  runWithAgentLifecycleOwnership(backgroundedTaskId, async () => {
                   const tracker = createProgressTracker();
                   const resolveActivity2 = createActivityDescriptionResolver(toolUseContext.options.tools);
                   try {
-                    // Clean up the foreground iterator so its finally block runs
-                    // (releases MCP connections, session hooks, prompt cache tracking, etc.)
-                    // Timeout prevents blocking if MCP server cleanup hangs.
-                    // .catch() prevents unhandled rejection if timeout wins the race.
-                    await Promise.race([agentIterator.return(undefined).catch(() => { }), sleep(1000)]);
                     // Initialize progress tracking from existing messages
                     for (const existingMsg of agentMessages) {
                       updateProgressFromMessage(tracker, existingMsg, resolveActivity2, toolUseContext.options.tools);
                     }
-                    for await (const msg of runAgent({
-                      ...runAgentParams,
-                      isAsync: true,
-                      // Agent is now running in background
-                      override: {
-                        ...runAgentParams.override,
-                        agentId: asAgentId(backgroundedTaskId),
-                        abortController: task.abortController
-                      },
-                      sessionStateTracking: runAgentParams.sessionStateTracking
-                        ? {
-                            ...runAgentParams.sessionStateTracking,
-                            recordSpawn: false,
-                          }
-                        : undefined,
-                      onCacheSafeParams: getSdkAgentProgressSummariesEnabled() ? (params: CacheSafeParams) => {
-                        const {
-                          stop
-                        } = startAgentSummarization(backgroundedTaskId, asAgentId(backgroundedTaskId), params, rootSetAppState);
-                        stopBackgroundedSummarization = stop;
-                      } : undefined
-                    })) {
+                    await continueAgentIterator(agentIterator, nextMessagePromise, msg => {
                       agentMessages.push(msg);
 
                       // Track progress for backgrounded agents
                       updateProgressFromMessage(tracker, msg, resolveActivity2, toolUseContext.options.tools);
-                      updateAsyncAgentProgress(backgroundedTaskId, getProgressUpdate(tracker), rootSetAppState);
+                      updateAsyncAgentProgress(
+                        backgroundedTaskId,
+                        getProgressUpdate(tracker),
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       const lastToolName = getLastToolUseName(msg);
                       if (lastToolName) {
                         emitTaskProgress(tracker, backgroundedTaskId, toolUseContext.toolUseId, description, startTime, lastToolName);
                       }
-                    }
+                    });
                     const terminalLeaseAccount = reportableLeaseAccount(
                       backgroundedTaskId,
                       resolvedAgentModel,
@@ -1663,7 +1706,12 @@ export const AgentTool = buildTool({
                     // Mirrors the sync path's terminalError handling.
                     if (agentResult.error) {
                       const apiErrorMsg = agentResult.error;
-                      failAsyncAgent(backgroundedTaskId, apiErrorMsg, rootSetAppState);
+                      failAsyncAgent(
+                        backgroundedTaskId,
+                        apiErrorMsg,
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       let finalMessage = extractTextContent(agentResult.content, '\n');
                       if (isForkPath && finalMessage.trim()) {
                         finalMessage = formatForkWorkerResultForNotification(finalMessage, resolveRequestProvider(toolUseContext.options.mainLoopModel, toolUseContext.options.mainLoopProvider));
@@ -1682,15 +1730,14 @@ export const AgentTool = buildTool({
                         sessionId: parentSessionId,
                         agentId: backgroundedTaskId,
                         status: 'failed',
-                        error: apiErrorMsg,
-                        outputSummary: description,
                         createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
-                        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+                        logForDebugging(`Failed to record worker failure: ${_err}`),
                       );
                       unregisterActiveSubagent(backgroundedTaskId);
                       enqueueAgentNotification({
                         taskId: backgroundedTaskId,
+                        runId: backgroundedRunId,
                         description,
                         status: 'failed',
                         error: apiErrorMsg,
@@ -1711,7 +1758,11 @@ export const AgentTool = buildTool({
                     // unblocks immediately. classifyHandoffIfNeeded and
                     // cleanupWorktreeIfNeeded can hang — they must not gate
                     // the status transition (gh-20236).
-                    completeAsyncAgent(agentResult, rootSetAppState);
+                    completeAsyncAgent(
+                      agentResult,
+                      rootSetAppState,
+                      backgroundedRunId,
+                    );
 
                     // Extract text from agent result content for the notification
                     let finalMessage = extractTextContent(agentResult.content, '\n');
@@ -1747,14 +1798,14 @@ export const AgentTool = buildTool({
                       sessionId: parentSessionId,
                       agentId: backgroundedTaskId,
                       status: 'completed',
-                      outputSummary: description,
                       createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
-                      logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
+                    logForDebugging(`Failed to record worker completion: ${_err}`),
                     );
                     unregisterActiveSubagent(backgroundedTaskId);
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
+                      runId: backgroundedRunId,
                       description,
                       status: 'completed',
                       setAppState: rootSetAppState,
@@ -1771,7 +1822,11 @@ export const AgentTool = buildTool({
                     if (error instanceof AbortError) {
                       // Transition status BEFORE worktree cleanup so
                       // TaskOutput unblocks even if git hangs (gh-20236).
-                      killAsyncAgent(backgroundedTaskId, rootSetAppState);
+                      killAsyncAgent(
+                        backgroundedTaskId,
+                        rootSetAppState,
+                        backgroundedRunId,
+                      );
                       logEvent('tengu_agent_tool_terminated', {
                         agent_type: metadata.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
                         model: metadata.resolvedAgentModel as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1792,16 +1847,16 @@ export const AgentTool = buildTool({
                         sessionId: parentSessionId,
                         agentId: backgroundedTaskId,
                         status: 'killed',
-                        outputSummary: description,
                         createStateIfMissing: runAgentParams.sessionStateTracking,
                       }).catch(_err =>
-                        logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+                        logForDebugging(`Failed to record worker kill: ${_err}`),
                       );
                       unregisterActiveSubagent(backgroundedTaskId);
                       const worktreeResult = await cleanupWorktreeIfNeeded();
                       const partialResult = extractPartialResult(agentMessages);
                       enqueueAgentNotification({
                         taskId: backgroundedTaskId,
+                        runId: backgroundedRunId,
                         description,
                         status: 'killed',
                         setAppState: rootSetAppState,
@@ -1817,7 +1872,12 @@ export const AgentTool = buildTool({
                       return;
                     }
                     const errMsg = errorMessage(error);
-                    failAsyncAgent(backgroundedTaskId, errMsg, rootSetAppState);
+                    failAsyncAgent(
+                      backgroundedTaskId,
+                      errMsg,
+                      rootSetAppState,
+                      backgroundedRunId,
+                    );
                     appendSubagentTerminal(parentTranscriptPath, {
                       sessionId: parentSessionId,
                       agentId: asAgentId(backgroundedTaskId),
@@ -1831,17 +1891,16 @@ export const AgentTool = buildTool({
                       sessionId: parentSessionId,
                       agentId: backgroundedTaskId,
                       status: 'failed',
-                      error: errMsg,
-                      outputSummary: description,
                       createStateIfMissing: runAgentParams.sessionStateTracking,
                     }).catch(_err =>
-                      logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+                      logForDebugging(`Failed to record worker failure: ${_err}`),
                     );
                     unregisterActiveSubagent(backgroundedTaskId);
                     const worktreeResult = await cleanupWorktreeIfNeeded();
                     const partialResult = extractPartialResult(agentMessages);
                     enqueueAgentNotification({
                       taskId: backgroundedTaskId,
+                      runId: backgroundedRunId,
                       description,
                       status: 'failed',
                       error: errMsg,
@@ -1862,7 +1921,8 @@ export const AgentTool = buildTool({
                     // Note: worktree cleanup is done before enqueueAgentNotification
                     // in both try and catch paths so we can include worktree info
                   }
-                });
+                  }),
+                );
 
                 // Return async_launched result immediately
                 const canCheckProgress = toolUseContext.options.tools.some(t => toolMatchesName(t, TASK_OUTPUT_TOOL_NAME));
@@ -1917,7 +1977,12 @@ export const AgentTool = buildTool({
                 // enabled, so updateAgentSummary reads correct token/tool counts
                 // instead of zeros.
                 if (getSdkAgentProgressSummariesEnabled()) {
-                  updateAsyncAgentProgress(foregroundTaskId, getProgressUpdate(syncTracker), rootSetAppState);
+                  updateAsyncAgentProgress(
+                    foregroundTaskId,
+                    getProgressUpdate(syncTracker),
+                    rootSetAppState,
+                    foregroundRunId,
+                  );
                 }
               }
             }
@@ -1993,10 +2058,9 @@ export const AgentTool = buildTool({
               sessionId: parentSessionId,
               agentId: syncAgentId,
               status: 'killed',
-              outputSummary: description,
               createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
-              logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+              logForDebugging(`Failed to record worker kill: ${_err}`),
             );
             unregisterActiveSubagent(syncAgentId);
             throw error;
@@ -2010,6 +2074,10 @@ export const AgentTool = buildTool({
           // Store the error to handle after cleanup
           syncAgentError = toError(error);
         } finally {
+          // A backgrounded worker is independent from the parent turn from this
+          // point onward; task-stop owns the same controller the live iterator
+          // has used since spawn.
+          detachParentAbort();
           // Clear the background hint UI
           if (toolUseContext.setToolJSX) {
             toolUseContext.setToolJSX(null);
@@ -2022,16 +2090,36 @@ export const AgentTool = buildTool({
 
           // Unregister foreground task if agent completed without being backgrounded
           if (foregroundTaskId) {
+            const foregroundTerminalStatus = wasAborted
+              ? 'killed'
+              : syncAgentError
+                ? 'failed'
+                : 'completed';
             // The account comes back FROM the release, not from a read ordered
             // before it: `releaseCodexLease` deletes the entry, so a separate
             // read here would be silently order-dependent. Preferred over the
             // spawn-time seed because a lease that failed over, was repaired, or
             // was reassigned mid-run ends somewhere else.
             syncLeaseAccount = reportableAccount(
-              unregisterAgentForeground(foregroundTaskId, rootSetAppState),
+              unregisterAgentForeground(
+                foregroundTaskId,
+                rootSetAppState,
+                foregroundTerminalStatus,
+              ),
               resolvedAgentModel,
               toolUseContext.options.mainLoopProvider,
             ) ?? syncLeaseAccount;
+            if (!wasBackgrounded) {
+              enqueueAgentMessageDeliveryReportsToOrigins({
+                taskId: foregroundTaskId,
+                description,
+                status: foregroundTerminalStatus,
+                error: syncAgentError?.message,
+                setAppState: rootSetAppState,
+                toolUseId: toolUseContext.toolUseId,
+                runId: foregroundRunId,
+              });
+            }
             // Notify SDK consumers (e.g. VS Code subagent panel) that this
             // foreground agent is done. Goes through drainSdkEvents() — does
             // NOT trigger the print.ts XML task_notification parser or the LLM loop.
@@ -2054,8 +2142,11 @@ export const AgentTool = buildTool({
             }
           }
 
-          // Clean up scoped skills so they don't accumulate in the global map
-          clearInvokedSkillsForAgent(syncAgentId);
+          // The detached continuation still owns the same live agent scope.
+          // Its finally block releases skills and dump state when it terminates.
+          if (!wasBackgrounded) {
+            clearInvokedSkillsForAgent(syncAgentId);
+          }
 
           // Clean up dumpState entry for this agent to prevent unbounded growth
           // Skip if backgrounded — the backgrounded agent's finally handles cleanup
@@ -2100,10 +2191,9 @@ export const AgentTool = buildTool({
             sessionId: parentSessionId,
             agentId: syncAgentId,
             status: 'killed',
-            outputSummary: description,
             createStateIfMissing: runAgentParams.sessionStateTracking,
           }).catch(_err =>
-            logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+            logForDebugging(`Failed to record worker kill: ${_err}`),
           );
           unregisterActiveSubagent(syncAgentId);
           throw new AbortError();
@@ -2129,11 +2219,9 @@ export const AgentTool = buildTool({
               sessionId: parentSessionId,
               agentId: syncAgentId,
               status: 'failed',
-              error: syncAgentError.message,
-              outputSummary: description,
               createStateIfMissing: runAgentParams.sessionStateTracking,
             }).catch(_err =>
-              logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+          logForDebugging(`Failed to record worker failure: ${_err}`),
             );
             unregisterActiveSubagent(syncAgentId);
             throw syncAgentError;
@@ -2175,6 +2263,42 @@ export const AgentTool = buildTool({
             }, ...agentResult.content];
           }
         }
+        if (foregroundTaskId) {
+          const foregroundTask = toolUseContext.getAppState().tasks[
+            foregroundTaskId
+          ]
+          if (isLocalAgentTask(foregroundTask)) {
+            const mainDeliveryRecords =
+              getUnresolvedAgentMessageDeliveries(foregroundTask).filter(
+                message => !message.originAgentId,
+              )
+            const deliveryReport =
+              formatAgentMessageDeliveryRecords(mainDeliveryRecords)
+            if (deliveryReport) {
+              agentResult.content = [
+                ...agentResult.content,
+                { type: 'text' as const, text: `\n\n${deliveryReport}` },
+              ]
+              markAgentMessageDeliveriesReported(
+                foregroundTaskId,
+                mainDeliveryRecords.map(message => message.id),
+                rootSetAppState,
+                foregroundRunId,
+              )
+            }
+            rootSetAppState(prev => {
+              const task = prev.tasks[foregroundTaskId]
+              if (!isLocalAgentTask(task)) return prev
+              return {
+                ...prev,
+                tasks: {
+                  ...prev.tasks,
+                  [foregroundTaskId]: { ...task, notified: true },
+                },
+              }
+            })
+          }
+        }
         // Treat synthetic API-error terminals (set by finalizeAgentTool when
         // the subagent's last assistant message has isApiErrorMessage=true)
         // the same as a thrown syncAgentError. The two represent equivalent
@@ -2197,10 +2321,9 @@ export const AgentTool = buildTool({
           agentId: syncAgentId,
           status: completedWithError ? 'failed' : 'completed',
           ...(terminalError ? { error: terminalError } : {}),
-          outputSummary: description,
           createStateIfMissing: runAgentParams.sessionStateTracking,
         }).catch(_err =>
-          logForDebugging(`Failed to record Agent Mode worker terminal state: ${_err}`),
+          logForDebugging(`Failed to record worker terminal state: ${_err}`),
         );
         unregisterActiveSubagent(syncAgentId);
         return {
@@ -2284,8 +2407,7 @@ The agent is now running and will receive instructions via mailbox.`
     if (data.status === 'async_launched') {
       const oneShotAsync =
         data.agentType &&
-        ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) &&
-        !isAgentMode()
+        ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType)
       const target = data.agentName ? `@${data.agentName}` : data.agentId
       const nameLine = data.agentName ? `\nagentName: ${data.agentName}` : ''
       // Historical results persisted before this field existed render
@@ -2335,7 +2457,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
       // 34M Explore runs/week ≈ 1-2 Gtok/week). Telemetry doesn't parse this
       // block (it uses logEvent in finalizeAgentTool), so dropping is safe.
       // agentType is optional for resume compat — missing means show trailer.
-      if (!isAgentMode() && data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
+      if (data.status === 'completed' && data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !worktreeInfoText) {
         return {
           tool_use_id: toolUseID,
           type: 'tool_result',
@@ -2352,7 +2474,7 @@ output_file: ${data.outputFile} (debug transcript path only; do not read it for 
           : ` (use ResumeAgent({ agentId: '${data.agentId}', prompt }) to continue this agent)`
         : ''
       const continuationText =
-        data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType) && !isAgentMode()
+        data.agentType && ONE_SHOT_BUILTIN_AGENT_TYPES.has(data.agentType)
           ? `agentId: ${data.agentId}`
           : data.agentName
             ? `agentId: ${data.agentId}\nagentName: ${data.agentName}${resumeHint}`

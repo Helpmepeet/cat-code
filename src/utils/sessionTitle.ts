@@ -36,6 +36,25 @@ import { resolveRequestProvider } from './model/providers.js'
 import { asSystemPrompt } from './systemPromptType.js'
 
 const MAX_CONVERSATION_TEXT = 1000
+const MAX_TITLE_DESCRIPTION_LENGTH = 4096
+const TITLE_DESCRIPTION_HEAD_LENGTH = 3072
+const TITLE_DESCRIPTION_SEPARATOR = '\n...\n'
+
+function excerptTitleDescription(description: string): string {
+  if (description.length <= MAX_TITLE_DESCRIPTION_LENGTH) return description
+
+  // Retain the request and its ending without sending large pasted bodies to
+  // the title model. Only this auxiliary copy is shortened.
+  const tailLength =
+    MAX_TITLE_DESCRIPTION_LENGTH -
+    TITLE_DESCRIPTION_HEAD_LENGTH -
+    TITLE_DESCRIPTION_SEPARATOR.length
+  const head = description
+    .slice(0, TITLE_DESCRIPTION_HEAD_LENGTH)
+    .replace(/[\uD800-\uDBFF]$/, '')
+  const tail = description.slice(-tailLength).replace(/^[\uDC00-\uDFFF]/, '')
+  return head + TITLE_DESCRIPTION_SEPARATOR + tail
+}
 
 /**
  * Flatten a message array into a single text string for Haiku title input.
@@ -103,7 +122,9 @@ export async function generateSessionTitle(
       required: ['title'],
       additionalProperties: false,
     } as const
-    const userMessage = createUserMessage({ content: trimmed })
+    const userMessage = createUserMessage({
+      content: excerptTitleDescription(trimmed),
+    })
     const model = getSmallFastModelForProvider()
     const provider = resolveRequestProvider(model)
     const syntheticOutputResult =

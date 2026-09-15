@@ -8,10 +8,10 @@ type Worker = { agentId: string; status: string; handle?: string }
 let override: { workers: Worker[] | null } | null = null
 let readShouldThrow = false
 
-const realSessionState = await import('../agent-mode/sessionState.js')
+const realSessionState = await import('./workerState.js')
 const realReadSessionState = realSessionState.readSessionState
 
-mock.module('../agent-mode/sessionState.js', () => ({
+mock.module('./workerState.js', () => ({
   ...realSessionState,
   readSessionState: async (...args: Parameters<typeof realReadSessionState>) => {
     if (readShouldThrow) throw new Error('session state unreadable')
@@ -44,10 +44,9 @@ describe('the goal dependency cache', () => {
   })
 
   test('a completed worker does not deadlock the goal against itself', async () => {
-    // `synthesisStatus === 'pending'` is set when a worker COMPLETES and is
-    // cleared by the orchestrator reading its result, i.e. by this goal's own
-    // next turn. Parking on it made the goal wait for something only the turn
-    // it refused to take could clear.
+    // A completed worker's result is delivered to the parent session on its
+    // next turn. Parking on completed work made the goal wait for something
+    // only the turn it refused to take could clear.
     override = { workers: [{ agentId: 'a-1', status: 'completed' }] }
     const cache = createThreadGoalDependencyCache()
     await cache.refresh()

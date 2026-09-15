@@ -32,8 +32,11 @@ import {
   renderComposerDom,
 } from './composerDom.js'
 import { pasteIdAtCaret } from './composerState.js'
+import { selectAttachableImageFile } from './imageAttachment.js'
 import type { PasteEntry } from './composerState.js'
 import type { ComposerTypeaheadA11y } from './composerTypeaheadA11y.js'
+import type { ComposerPlaceholderParts } from './composerState.js'
+import { PEER_TONE_CLASS } from './peerSurfaces.js'
 
 /** The textarea-shaped surface the pane's handlers drive the field through. */
 export type ComposerInputHandle = {
@@ -51,11 +54,22 @@ type ComposerInputProps = {
   onCompositionEnd: () => void
   onCompositionStart: () => void
   onFocus: () => void
+  /** Attach an image dropped onto the field, through the pane's existing
+   * `attachImage` path. Absent = drops carry text only. */
+  onAttachImageFile?: (file: File) => void
   onPointerDown: () => void
   /** `at` is the live start offset of the occurrence the user clicked. */
   onRemovePaste: (entry: PasteEntry, at: number) => void
   onValueChange: (next: string) => void
   placeholder: string
+  /**
+   * The same text with the session's own name split out, so it can carry the
+   * peer colour. Absent for an unnamed session and for the connection copy,
+   * which render `placeholder` plainly. `placeholder` stays the whole string
+   * either way: it is what reaches `aria-placeholder`, and assistive tech must
+   * get one sentence rather than three spans.
+   */
+  placeholderParts?: ComposerPlaceholderParts | null
   /** Collapsed pastes for this session, oldest first. */
   pastes: PasteEntry[]
   /** A live session that cannot accept input right now (history, crashed). */
@@ -72,6 +86,7 @@ const PREVIEW_CLOSE_MS = 160
 export function ComposerInput({
   ariaLabel,
   disabled,
+  onAttachImageFile,
   onCompositionEnd,
   onCompositionStart,
   onFocus,
@@ -79,6 +94,7 @@ export function ComposerInput({
   onRemovePaste,
   onValueChange,
   placeholder,
+  placeholderParts,
   pastes,
   readOnly,
   ref,
@@ -258,10 +274,25 @@ export function ComposerInput({
    * while serialized text matches the draft, so the foreign DOM would sit there
    * visible and unaccounted for. Same rule as paste: take the plain text, place
    * it ourselves, let nothing else in.
+   *
+   * The one exception is a dropped IMAGE. A Finder drag exposes its payload on
+   * `dataTransfer.files` and usually leaves `text/plain` empty, so the early
+   * return below made dragging a screenshot in a silent no-op. Files are checked
+   * first and an image is handed to the SAME byte-based attach path ⌘V uses
+   * (`onAttachImageFile` → `prepareImageAttachment`). Any other dropped file is
+   * still ignored: converting one into a path the engine reads would make the
+   * renderer the author of a filesystem path (HC1).
    */
   const handleDrop = (event: React.DragEvent<HTMLDivElement>): void => {
     event.preventDefault()
     if (!editable) return
+    const image = selectAttachableImageFile(
+      Array.from(event.dataTransfer.files),
+    )
+    if (image) {
+      onAttachImageFile?.(image)
+      return
+    }
     const root = rootRef.current
     if (!root) return
     const text = event.dataTransfer.getData('text')
@@ -311,7 +342,15 @@ export function ComposerInput({
           aria-hidden
           className="pointer-events-none absolute left-0 top-1.5 text-[15px] font-medium leading-normal text-text-faint"
         >
-          {placeholder}
+          {placeholderParts == null ? (
+            placeholder
+          ) : (
+            <>
+              {placeholderParts.lead}
+              <span className={PEER_TONE_CLASS}>{placeholderParts.name}</span>
+              {placeholderParts.tail}
+            </>
+          )}
         </div>
       ) : null}
 

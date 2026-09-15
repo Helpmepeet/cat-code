@@ -60,12 +60,24 @@ export type FilePathActionsPlacement = {
   flipFlyoutLeft: boolean
 }
 
+const LINE_SUFFIX_PATTERN = /:\d+(?::\d+)?$/
+const WINDOWS_ABSOLUTE_PATH_PATTERN = /^[A-Za-z]:[\\/]/
+const ABSOLUTE_URL_LIKE_PATTERN = /^[A-Za-z][A-Za-z\d+.-]*:\/\//
+
+function isAbsoluteUrlLike(path: string): boolean {
+  return (
+    !WINDOWS_ABSOLUTE_PATH_PATTERN.test(path) &&
+    ABSOLUTE_URL_LIKE_PATTERN.test(path)
+  )
+}
+
 export function stripLineSuffix(path: string): string {
-  return path.replace(/:\d+(?::\d+)?$/, '')
+  return isAbsoluteUrlLike(path) ? path : path.replace(LINE_SUFFIX_PATTERN, '')
 }
 
 export function extractLineSuffix(path: string): string | null {
-  const match = path.match(/:\d+(?::\d+)?$/)
+  if (isAbsoluteUrlLike(path)) return null
+  const match = path.match(LINE_SUFFIX_PATTERN)
   return match ? match[0] : null
 }
 
@@ -81,7 +93,11 @@ export function resolveFilePathParts({
   const filename = basename(cleanPath) || cleanPath
 
   let absolutePath: string | null = null
-  if (cleanPath.startsWith('/') || /^[A-Za-z]:[\\/]/.test(cleanPath)) {
+  if (
+    cleanPath.startsWith('/') ||
+    WINDOWS_ABSOLUTE_PATH_PATTERN.test(cleanPath) ||
+    isAbsoluteUrlLike(cleanPath)
+  ) {
     absolutePath = rawPath
   } else if (cwd && cwd.trim().length > 0) {
     const baseAbs = resolvePathFromCwd(cwd, cleanPath)

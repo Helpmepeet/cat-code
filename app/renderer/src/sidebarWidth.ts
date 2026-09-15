@@ -11,12 +11,18 @@
  * Every comparable desktop app (VS Code, Xcode, Finder, Slack, Notion) does the
  * same. The one window-relative rule that IS worth having is the ceiling below.
  *
- * Renderer-local persistence, the `sidebarWorkspaceOrder.ts` idiom verbatim:
+ * Renderer-local persistence through the shared codec (`viewPreference.ts`):
  * versioned JSON under a `catcode.`-prefixed key, read/written through an
- * injectable `Pick<Storage, …>`, best-effort. No protocol frame, no registry
- * field, no preload channel — a view preference with no engine meaning
+ * injectable storage, best-effort. No protocol frame, no registry field, no
+ * preload channel — a view preference with no engine meaning
  * (SECURITY-MINIMUM §2).
  */
+
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const SIDEBAR_WIDTH_STORAGE_KEY = 'catcode.sidebarWidth.v1'
 
@@ -62,52 +68,31 @@ export function clampSidebarWidth(width: number, windowWidth: number): number {
   return Math.min(Math.max(ceiling, SIDEBAR_MIN_WIDTH), Math.max(SIDEBAR_MIN_WIDTH, width))
 }
 
-type SidebarWidthStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedSidebarWidth = {
-  version: 1
-  width: number
-}
-
 /**
  * The persisted width, or null when nothing valid is stored. Clamped against the
  * FIXED bounds only: the window it is about to be rendered in is not this
  * function's business, and `clampSidebarWidth` runs again at layout time.
  */
 export function readSidebarWidthFromStorage(
-  storage: SidebarWidthStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): number | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(SIDEBAR_WIDTH_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedSidebarWidth>
-    if (value.version !== 1) return null
-    if (typeof value.width !== 'number' || !Number.isFinite(value.width)) {
-      return null
-    }
+  return readViewPreference(storage, SIDEBAR_WIDTH_STORAGE_KEY, 'width', value => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null
     return Math.min(
       SIDEBAR_MAX_WIDTH,
-      Math.max(SIDEBAR_MIN_WIDTH, Math.round(value.width)),
+      Math.max(SIDEBAR_MIN_WIDTH, Math.round(value)),
     )
-  } catch {
-    return null
-  }
+  })
 }
 
 export function writeSidebarWidthToStorage(
-  storage: SidebarWidthStorage | null,
+  storage: ViewPreferenceStorage | null,
   width: number,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedSidebarWidth = {
-      version: 1,
-      width: Math.round(width),
-    }
-    storage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (workspaceLayout.ts:88).
-  }
+  writeViewPreference(
+    storage,
+    SIDEBAR_WIDTH_STORAGE_KEY,
+    'width',
+    Math.round(width),
+  )
 }

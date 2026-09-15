@@ -20,6 +20,7 @@
  * outlining the whole page in near-white. Use the tokens in `theme.css`.
  */
 
+import type { ReactNode } from 'react'
 import {
   DailyModelTokenChart,
   DailyActivityChart,
@@ -27,6 +28,7 @@ import {
   ModelBreakdownBars,
   CacheUsageBar,
   ActivitySparkline,
+  UsageBarsIcon,
 } from './AccountsUsageCharts.js'
 import {
   formatTokens,
@@ -55,13 +57,80 @@ function UnknownValue({ dataState }: { dataState: UsageStatsDisplayState }) {
   )
 }
 
+/** The measured number on a KPI card, in the one type treatment all four share. */
+function KpiValue({ children }: { children: ReactNode }) {
+  return (
+    <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
+      {children}
+    </span>
+  )
+}
+
+/**
+ * One KPI card: its label, then the measured value or the not-loaded stand-in
+ * that keeps the card from claiming a result it does not have.
+ *
+ * `bodyClass` carries the per-card layout of the value row, the only thing the
+ * four differ in. `trailing` renders in BOTH states, so the tokens card's
+ * sparkline stays on screen while the snapshot is still coming.
+ */
+function KpiCard({
+  label,
+  dataState,
+  bodyClass,
+  children,
+  trailing,
+}: {
+  label: ReactNode
+  dataState: UsageStatsDisplayState
+  bodyClass: string
+  children: ReactNode
+  trailing?: ReactNode
+}) {
+  return (
+    <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
+      <span className="text-[12px] text-text-subtle">{label}</span>
+      <div className={bodyClass}>
+        {dataState === 'loaded' ? children : <UnknownValue dataState={dataState} />}
+        {trailing}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * One half-width analytics panel: heading, a line of description, then the
+ * chart centred in whatever height is left.
+ *
+ * `descriptionGap` exists only because the caching panel sits 4px tighter than
+ * the other three. Matching them would be a visual change, not a simplification.
+ */
+function ChartCard({
+  title,
+  description,
+  descriptionGap = 'mb-4',
+  children,
+}: {
+  title: string
+  description: string
+  descriptionGap?: 'mb-3' | 'mb-4'
+  children: ReactNode
+}) {
+  return (
+    <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
+      <h3 className="mb-1 text-[12px] font-semibold text-text-primary">{title}</h3>
+      <p className={`${descriptionGap} text-[11px] text-text-subtle`}>{description}</p>
+      <div className="flex flex-1 flex-col justify-center">{children}</div>
+    </div>
+  )
+}
+
 export function AccountsUsageSection({
   stats,
   activeRange,
   onRangeChange,
 }: AccountsUsageSectionProps) {
   const dataState = useUsageStatsDisplayState(stats !== null)
-  const isUnknown = dataState !== 'loaded'
   const totalTokens = stats?.totalTokens ?? 0
   const activeDays = stats?.activeDays ?? 0
   const dailyAverage =
@@ -85,20 +154,7 @@ export function AccountsUsageSection({
       <div className="flex flex-col gap-3 border-b border-shell-seam pb-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <svg
-              className="h-4 w-4 text-accent"
-              fill="none"
-              viewBox="0 0 24 24"
-              strokeWidth="2"
-              stroke="currentColor"
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 0 1 3 19.875v-6.75ZM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V8.625ZM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 0 1-1.125-1.125V4.125Z"
-              />
-            </svg>
+            <UsageBarsIcon className="h-4 w-4 text-accent" strokeWidth="2" />
             <h2 className="text-[13px] font-semibold tracking-tight text-text-primary">
               Usage Analytics
             </h2>
@@ -143,77 +199,37 @@ export function AccountsUsageSection({
 
       {/* 4 Summary Cards (KPIs) */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {/* Tokens in Period */}
-        <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
-          <span className="text-[12px] text-text-subtle">
-            Tokens in {activeRange === '30d' ? '30d' : '7d'}
+        <KpiCard
+          label={<>Tokens in {activeRange === '30d' ? '30d' : '7d'}</>}
+          dataState={dataState}
+          bodyClass="mt-1.5 flex items-baseline justify-between"
+          trailing={<ActivitySparkline data={dailyTotals} />}
+        >
+          <KpiValue>{formatTokens(totalTokens)}</KpiValue>
+        </KpiCard>
+
+        <KpiCard label="Daily Average" dataState={dataState} bodyClass="mt-1.5">
+          <KpiValue>{formatTokens(dailyAverage)}</KpiValue>
+          <span className="ml-1 text-[11px] text-text-subtle">/ active day</span>
+        </KpiCard>
+
+        <KpiCard
+          label="Cache Hit Rate"
+          dataState={dataState}
+          bodyClass="mt-1.5 flex items-baseline gap-1.5"
+        >
+          <KpiValue>{cacheHitRate}%</KpiValue>
+          <span className="text-[11px] font-medium text-emerald-400">
+            prompt cache
           </span>
-          <div className="mt-1.5 flex items-baseline justify-between">
-            {isUnknown ? (
-              <UnknownValue dataState={dataState} />
-            ) : (
-              <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
-                {formatTokens(totalTokens)}
-              </span>
-            )}
-            <ActivitySparkline data={dailyTotals} />
-          </div>
-        </div>
+        </KpiCard>
 
-        {/* Daily Average */}
-        <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
-          <span className="text-[12px] text-text-subtle">Daily Average</span>
-          <div className="mt-1.5">
-            {isUnknown ? (
-              <UnknownValue dataState={dataState} />
-            ) : (
-              <>
-                <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
-                  {formatTokens(dailyAverage)}
-                </span>
-                <span className="ml-1 text-[11px] text-text-subtle">/ active day</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Cache Hit Rate */}
-        <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
-          <span className="text-[12px] text-text-subtle">Cache Hit Rate</span>
-          <div className="mt-1.5 flex items-baseline gap-1.5">
-            {isUnknown ? (
-              <UnknownValue dataState={dataState} />
-            ) : (
-              <>
-                <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
-                  {cacheHitRate}%
-                </span>
-                <span className="text-[11px] font-medium text-emerald-400">
-                  prompt cache
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Sessions & Messages */}
-        <div className="flex flex-col justify-between rounded-xl border border-shell-seam bg-surface-panel p-3.5">
-          <span className="text-[12px] text-text-subtle">Active Sessions</span>
-          <div className="mt-1.5">
-            {isUnknown ? (
-              <UnknownValue dataState={dataState} />
-            ) : (
-              <>
-                <span className="font-mono text-xl font-bold tracking-tight text-text-primary">
-                  {totalSessions}
-                </span>
-                <span className="ml-1 text-[11px] text-text-subtle">
-                  ({totalMessages.toLocaleString()} msgs)
-                </span>
-              </>
-            )}
-          </div>
-        </div>
+        <KpiCard label="Active Sessions" dataState={dataState} bodyClass="mt-1.5">
+          <KpiValue>{totalSessions}</KpiValue>
+          <span className="ml-1 text-[11px] text-text-subtle">
+            ({totalMessages.toLocaleString()} msgs)
+          </span>
+        </KpiCard>
       </div>
 
       {/* Daily Tokens by Model Chart */}
@@ -238,78 +254,55 @@ export function AccountsUsageSection({
 
       {/* Workload Grid: what the tokens were spent on, and what a session costs */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Work per Day */}
-        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
-          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
-            Work per Day
-          </h3>
-          <p className="mb-4 text-[11px] text-text-subtle">
-            Sessions, messages, and tool calls, each on its own scale
-          </p>
-          <div className="flex flex-1 flex-col justify-center">
-            <DailyActivityChart
-              dailyActivity={stats?.dailyActivity ?? []}
-              range={activeRange}
-              dataState={dataState}
-            />
-          </div>
-        </div>
+        <ChartCard
+          title="Work per Day"
+          description="Sessions, messages, and tool calls, each on its own scale"
+        >
+          <DailyActivityChart
+            dailyActivity={stats?.dailyActivity ?? []}
+            range={activeRange}
+            dataState={dataState}
+          />
+        </ChartCard>
 
-        {/* Tokens per Session */}
-        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
-          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
-            Tokens per Session
-          </h3>
-          <p className="mb-4 text-[11px] text-text-subtle">
-            What one session costs, day by day, against the window average
-          </p>
-          <div className="flex flex-1 flex-col justify-center">
-            <TokensPerSessionChart
-              dailyModelTokens={stats?.dailyModelTokens ?? []}
-              dailyActivity={stats?.dailyActivity ?? []}
-              range={activeRange}
-              dataState={dataState}
-            />
-          </div>
-        </div>
+        <ChartCard
+          title="Tokens per Session"
+          description="What one session costs, day by day, against the window average"
+        >
+          <TokensPerSessionChart
+            dailyModelTokens={stats?.dailyModelTokens ?? []}
+            dailyActivity={stats?.dailyActivity ?? []}
+            range={activeRange}
+            dataState={dataState}
+          />
+        </ChartCard>
       </div>
 
       {/* Breakdown Grid */}
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Token Distribution by Model */}
-        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
-          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
-            Token Distribution by Model
-          </h3>
-          <p className="mb-4 text-[11px] text-text-subtle">
-            Share of tokens per model, split into input and output
-          </p>
-          <div className="flex flex-1 flex-col justify-center">
-            <ModelBreakdownBars
-              modelUsage={stats?.modelUsage ?? {}}
-              dataState={dataState}
-            />
-          </div>
-        </div>
+        <ChartCard
+          title="Token Distribution by Model"
+          description="Share of tokens per model, split into input and output"
+        >
+          <ModelBreakdownBars
+            modelUsage={stats?.modelUsage ?? {}}
+            dataState={dataState}
+          />
+        </ChartCard>
 
-        {/* Prompt Caching & Efficiency */}
-        <div className="flex flex-col rounded-xl border border-shell-seam bg-surface-panel p-4">
-          <h3 className="mb-1 text-[12px] font-semibold text-text-primary">
-            Prompt Caching & Efficiency
-          </h3>
-          <p className="mb-3 text-[11px] text-text-subtle">
-            Cache reads, writes, and fresh token balance
-          </p>
-          <div className="flex flex-1 flex-col justify-center">
-            <CacheUsageBar
-              cacheReadTokens={stats?.cacheReadTokens ?? 0}
-              cacheWriteTokens={stats?.cacheWriteTokens ?? 0}
-              freshInputTokens={stats?.freshInputTokens ?? 0}
-              cacheHitRate={cacheHitRate}
-              dataState={dataState}
-            />
-          </div>
-        </div>
+        <ChartCard
+          title="Prompt Caching & Efficiency"
+          description="Cache reads, writes, and fresh token balance"
+          descriptionGap="mb-3"
+        >
+          <CacheUsageBar
+            cacheReadTokens={stats?.cacheReadTokens ?? 0}
+            cacheWriteTokens={stats?.cacheWriteTokens ?? 0}
+            freshInputTokens={stats?.freshInputTokens ?? 0}
+            cacheHitRate={cacheHitRate}
+            dataState={dataState}
+          />
+        </ChartCard>
       </div>
     </div>
   )

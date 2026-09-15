@@ -12,7 +12,10 @@ import type { AssistantMessage, Message } from '../../types/message.js'
 import { createUserMessage } from '../../utils/messages.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { queryModelWithStreaming } from './claude.js'
-import { translateCodexWsStreamToAnthropic } from './codex-fetch-adapter.js'
+import {
+  translateCodexStreamToAnthropic,
+  translateCodexWsStreamToAnthropic,
+} from './codex-fetch-adapter.js'
 import { CodexWebSocketClosedBeforeCompletedError } from './codex-websocket-transport.js'
 
 /**
@@ -23,12 +26,10 @@ import { CodexWebSocketClosedBeforeCompletedError } from './codex-websocket-tran
  * that stopped materializing the sealed block or stopped carrying the marker
  * to `apiError`, or a query loop reading a field nobody mints any more.
  *
- * This drives ONE real break through all three. Only the Codex socket is fake:
- * a generator that emits text deltas and then throws the same
- * `CodexWebSocketClosedBeforeCompletedError` the websocket transport throws.
- * Above it everything is production code — the real adapter builds the SSE
- * body, the real Anthropic SDK reads it, real `claude.ts` materializes and
- * classifies, real `query.ts` decides.
+ * HTTP supplies raw SSE that ends before completion; websocket supplies the
+ * typed close error raised by its transport. Above those fake sources,
+ * production code runs: the adapter builds SSE, the Anthropic SDK reads it,
+ * `claude.ts` materializes and classifies, and `query.ts` decides.
  *
  * The two substitutions and why they are not the thing under test:
  *  - `deps.callModel` wraps the real `queryModelWithStreaming` only to inject
@@ -155,7 +156,7 @@ describe('Codex partial-stream recovery, adapter through query loop', () => {
     macroState.MACRO = originalMacro
   })
 
-  test('a real adapter break continues the turn and keeps the sealed text', async () => {
+  test.each(['websocket', 'http'] as const)('a real %s adapter break continues the turn and keeps the sealed text', async transport => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
     fixturesRoot = mkdtempSync(join(tmpdir(), 'cat-code-codex-e2e-'))
     macroState.MACRO = { VERSION: 'test-version' }
@@ -175,17 +176,29 @@ describe('Codex partial-stream recovery, adapter through query loop', () => {
           'the non-streaming fallback replayed a turn whose output was already read',
         )
       }
-      return translateCodexWsStreamToAnthropic(
-        dispatchedBodies.length === 1
-          ? interruptedCodexTurn()
-          : completedCodexTurn(),
+      const metadata = {
+        accountId: 'acct_e2e',
+        model: 'gpt-5.6-luna',
+        cacheContextKey: 'acct_e2e:gpt-5.6-luna',
+        conversationId: `conv_e2e_${Date.now()}`,
+      }
+      if (transport === 'websocket') {
+        return translateCodexWsStreamToAnthropic(
+          dispatchedBodies.length === 1 ? interruptedCodexTurn() : completedCodexTurn(),
+          'gpt-5.6-luna',
+          metadata,
+        )
+      }
+      const events: Record<string, unknown>[] = []
+      if (dispatchedBodies.length === 1) {
+        events.push({ type: 'response.output_text.delta', delta: PARTIAL_TEXT })
+      } else {
+        for await (const event of completedCodexTurn()) events.push(event)
+      }
+      return translateCodexStreamToAnthropic(
+        new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('')),
         'gpt-5.6-luna',
-        {
-          accountId: 'acct_e2e',
-          model: 'gpt-5.6-luna',
-          cacheContextKey: 'acct_e2e:gpt-5.6-luna',
-          conversationId: `conv_e2e_${Date.now()}`,
-        },
+        metadata,
       )
     }
 

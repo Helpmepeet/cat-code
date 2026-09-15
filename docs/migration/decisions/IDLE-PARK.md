@@ -11,7 +11,7 @@
 > sidecar parking-latch + exit-code-is-truth, no ack frame (§3); focus protection
 > = accept / restore-on-click (§4a); `MAX_LIVE_ENGINES=4`, `PARK_IDLE_TTL_MS=20m`
 > (§4). **Review found + closed** a no-turn-loss hole: the park gate's task check
-> missed a *foregrounded* running agent-mode worker — fixed by a raw-store,
+> missed a *foregrounded* running local-agent worker — fixed by a raw-store,
 > foreground-inclusive `tasksDomain.hasLiveWork()` (§3), with a test.
 > **Measured fleet reclaim** (headless `app/scripts/ram-fleet.ts`, 2026-07-22):
 > **~223 MB RSS / ~183 MB footprint reclaimed per parked session** — 6 engines
@@ -422,7 +422,7 @@ The latch is therefore an ordering guarantee over whole dispatches:
      (`app/sidecar/tasksDomain.ts:23,61-65`; this is the gate the audit noted
      "does not exist yet" — it is a read, not new state; backgrounded
      `local_agent` workers are tasks in the same store, so this one read covers
-     agent-mode workers too).
+     all active workers too).
 2. **If any gate fails → do nothing.** The session stays live; the park is
    silently declined (main re-evaluates on its next trigger). A turn/permission
    that was *accepted before this dispatch* thus **aborts the park, not the
@@ -555,6 +555,20 @@ module mirroring the existing `sessionsCatalogDriver` lifecycle
   20–30 min) is parked even under the cap, to reclaim genuinely-abandoned tabs.
   This needs a low-frequency timer in the driver.
 
+> **Retuned 2026-09-02: `PARK_IDLE_TTL_MS` 20 min → 120 min.** The §4 ruling set
+> 20 min; measurement showed that is shorter than the operator's gap between
+> visits to a session they multiplex, so the TTL was reclaiming sessions that
+> were merely quiet, which is the case it exists to avoid. Three days of
+> operational log hold 11 parks, ALL TTL-driven and none cap-driven, 6 restored
+> within the hour and 3 within 15 minutes; the primary session was parked four
+> times and restored after 4, 13, 35 and 38 minutes. At 120 min every one of
+> those restores finds a live engine. Cost is bounded by the cap: ~223 MB per
+> engine × `MAX_LIVE_ENGINES`, about 0.9 GB total on the operator's 24 GB
+> machine. `MAX_LIVE_ENGINES` is deliberately unchanged — no cap-driven park
+> exists in the log, so raising it has no evidence behind it. Full analysis:
+> `reviews/2026-09-02-idle-park-disconnect-truncation-assessment.md` §5 item 3,
+> §9.1, §10.1.
+
 > **Corrected 2026-08-03.** This clause originally specified recency as
 > `lastMessageSentAt ?? lastAttachedAt ?? createdAt`, and `idleParkDriver.ts`
 > implemented that faithfully. `??` is precedence, not recency: it returns the
@@ -680,7 +694,7 @@ below are the ones the operator is asked to ratify as DIE):
 | **Effort override** (xhigh/ultra/numeric ephemeral; low/med/high shared LWW) | **DIES / SHARED-LWW** | F5 matrix (`effort.ts`, `runControlsDomain.ts`) |
 | **Permission MODE; session-scoped rules; model override; fast mode** | **DIE** (in-memory, session-scoped) | `runControlsDomain.ts`; `sidecarServer.ts` setMode is session-scoped |
 | Pending permission requests; in-flight turn | **GATED AWAY** (park refuses) | §3 |
-| Agent-mode restoration fidelity | **DEGRADES** (`modeApi:null` on headless resume) | `sessionResume.ts:88-99` |
+| Legacy session-mode records | **NORMALIZES** — legacy `agent` records restore as `normal`; coordinator records remain coordinator | `src/types/logs.ts` `normalizeSessionMode`; `src/utils/sessionStorage.ts` |
 | Scroll position; MCP (`mcpClients:[]`) | DIES / MOOT | `App.tsx`; `sessionController.ts:227` |
 
 These are identical to what a **crash→restore** already loses today — park adds
@@ -711,6 +725,18 @@ not a park-specific obligation.
   `registry.ts:491` — and reap treats it like any terminal restorable row).
   Foldable back to a tab only via an explicit restore (`foldTabMembership`
   never grants a tab to a hydrated restorable-only row, `shellState.ts:154-163`).
+  **Amended 2026-09-02:** that read-time rule is for the app-crashed-while-parked
+  case ONLY. An ordinary quit now marks parked rows `'clean'` first
+  (`markLiveCleanSync`, `registry.ts`), because a park is a reclaim the host
+  chose and a quit that finds one is still an ordinary quit. Until then every
+  quit left them `'parked'` on disk and the next launch read them as `crashed`:
+  with a TTL shorter than the operator's gap between visits, most background
+  sessions are parked at any moment, so most of the sidebar, the Sessions page
+  and the ⌘K palette came back dead-toned after a normal relaunch. Evidence:
+  three days of operational log hold 11 sidecar exits, all parks and 0 crashes,
+  against 53 `crashed` rows in the registry
+  (`reviews/2026-09-02-idle-park-disconnect-truncation-assessment.md` §3, §10.1).
+  A genuine crash is still never relabelled.
 - **Unpark = the existing restore machinery, no new UX:** `performRestore` /
   `engagePreview` (`App.tsx:1327-1417`) → `CH_HOST_RESTORE`
   (`main.ts:1051-1073`, arms P4-28 replay coalescing at `:1060`) →

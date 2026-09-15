@@ -3,8 +3,8 @@ import { describe, expect, test } from 'bun:test'
 import { SKILL_TOOL_NAME } from '../tools/SkillTool/constants.js'
 
 // Dynamic imports: loading coordinatorMode.js first trips a pre-existing
-// circular-init issue in the tool-constant graph (same one noted in
-// rolePrompts.test.ts), so the tool pool module is imported first to prime it.
+// circular-init issue in the tool-constant graph, so the tool pool module is
+// imported first to prime it.
 async function getSystemPrompt(): Promise<string> {
   await import('../tools.js')
   const { getCoordinatorSystemPrompt } = await import('./coordinatorMode.js')

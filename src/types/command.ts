@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import type { ContentBlockParam } from '@anthropic-ai/sdk/resources/index.mjs'
 import type { UUID } from 'crypto'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
@@ -96,7 +97,6 @@ export type LocalJSXCommandContext = ToolUseContext & {
     log: LogOption,
     entrypoint: ResumeEntrypoint,
   ) => Promise<void>
-  enterAgentModeSession?: () => Promise<void>
 }
 
 export type ResumeEntrypoint =

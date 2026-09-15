@@ -9,8 +9,10 @@
  * source guard is weaker than an invocation, and it is the strongest evidence
  * available here. What it is guarding against is specific and has a shape:
  *
- *   - the channel exists on both sides under the SAME literal, since a renamed
- *     constant on one side is a silently dead preference, not a build error;
+ *   - the channel exists on both sides under the SAME literal. Both ends now
+ *     import that literal from `app/shared/ipcChannels.ts`, so a rename on one
+ *     side IS a build error; what this checks is that the arrangement holds and
+ *     neither side has gone back to a local copy;
  *   - main narrows the payload itself. The preload also checks, but the preload
  *     is not the trust boundary, and this is the check that has to hold if a
  *     renderer is ever compromised;
@@ -35,9 +37,14 @@ function preloadSource(): string {
   return readFileSync(new URL('../preload/preload.ts', import.meta.url), 'utf8')
 }
 
+function channelsSource(): string {
+  return readFileSync(new URL('../shared/ipcChannels.ts', import.meta.url), 'utf8')
+}
+
 test('the appearance channel is one literal, declared on both sides', () => {
-  expect(mainSource()).toContain(`const CH_SET_APPEARANCE = ${CHANNEL}`)
-  expect(preloadSource()).toContain(`const CH_SET_APPEARANCE = ${CHANNEL}`)
+  expect(channelsSource()).toContain(`export const CH_SET_APPEARANCE = ${CHANNEL}`)
+  expect(mainSource()).toContain('CH_SET_APPEARANCE')
+  expect(preloadSource()).toContain('CH_SET_APPEARANCE')
 })
 
 test('the preload exposes it as the three-value choice and guards the send', () => {

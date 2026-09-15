@@ -499,64 +499,38 @@ function isFreeAgainst(taken: readonly Uint8Array[], axes: FaceAxes, bar: number
 }
 
 /**
+ * One rung of the dedupe walk: step `step` values along one axis's own list,
+ * wrapping, and leave every other axis alone. The reader/writer pair is spelled
+ * out per rung rather than derived from a field name, which keeps the walk
+ * cast-free and makes the axis list the only place a value set is written down.
+ */
+function rungFor<T>(
+  values: readonly T[],
+  read: (axes: FaceAxes) => T,
+  write: (axes: FaceAxes, value: T) => FaceAxes,
+): { count: number; rotate: (axes: FaceAxes, step: number) => FaceAxes } {
+  return {
+    count: values.length,
+    rotate: (axes, step) =>
+      write(axes, values[(values.indexOf(read(axes)) + step) % values.length]),
+  }
+}
+
+/**
  * The dedupe walk, in the order it steps: the cheapest differences first (mouth,
- * markings), the silhouette-shaping ones last. Each entry rotates its own axis by
- * `step` values, which keeps the walk cast-free and makes the axis list the only
- * place a value set is written down.
+ * markings), the silhouette-shaping ones last.
  */
 const DEDUPE_AXES: readonly {
   readonly count: number
   readonly rotate: (axes: FaceAxes, step: number) => FaceAxes
 }[] = [
-  {
-    count: MOUTHS.length,
-    rotate: (a, step) => ({
-      ...a,
-      mouth: MOUTHS[(MOUTHS.indexOf(a.mouth) + step) % MOUTHS.length],
-    }),
-  },
-  {
-    count: MARKS.length,
-    rotate: (a, step) => ({
-      ...a,
-      mark: MARKS[(MARKS.indexOf(a.mark) + step) % MARKS.length],
-    }),
-  },
-  {
-    count: CHINS.length,
-    rotate: (a, step) => ({
-      ...a,
-      chin: CHINS[(CHINS.indexOf(a.chin) + step) % CHINS.length],
-    }),
-  },
-  {
-    count: EARS.length,
-    rotate: (a, step) => ({
-      ...a,
-      ear: EARS[(EARS.indexOf(a.ear) + step) % EARS.length],
-    }),
-  },
-  {
-    count: FILLS.length,
-    rotate: (a, step) => ({
-      ...a,
-      fill: FILLS[(FILLS.indexOf(a.fill) + step) % FILLS.length],
-    }),
-  },
-  {
-    count: WIDTHS.length,
-    rotate: (a, step) => ({
-      ...a,
-      width: WIDTHS[(WIDTHS.indexOf(a.width) + step) % WIDTHS.length],
-    }),
-  },
-  {
-    count: HEADS.length,
-    rotate: (a, step) => ({
-      ...a,
-      head: HEADS[(HEADS.indexOf(a.head) + step) % HEADS.length],
-    }),
-  },
+  rungFor(MOUTHS, a => a.mouth, (a, mouth) => ({ ...a, mouth })),
+  rungFor(MARKS, a => a.mark, (a, mark) => ({ ...a, mark })),
+  rungFor(CHINS, a => a.chin, (a, chin) => ({ ...a, chin })),
+  rungFor(EARS, a => a.ear, (a, ear) => ({ ...a, ear })),
+  rungFor(FILLS, a => a.fill, (a, fill) => ({ ...a, fill })),
+  rungFor(WIDTHS, a => a.width, (a, width) => ({ ...a, width })),
+  rungFor(HEADS, a => a.head, (a, head) => ({ ...a, head })),
 ]
 
 /**

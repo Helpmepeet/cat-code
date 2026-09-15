@@ -29,11 +29,14 @@ import {
 } from '../tools/AgentTool/loadAgentsDir.js'
 import { TODO_WRITE_TOOL_NAME } from '../tools/TodoWriteTool/constants.js'
 import { asSessionId } from '../types/ids.js'
+import { normalizeSessionMode } from '../types/logs.js'
 import type {
   AttributionSnapshotMessage,
   ContextCollapseCommitEntry,
   ContextCollapseSnapshotEntry,
+  LegacySessionMode,
   PersistedWorktreeSession,
+  SessionMode,
   SubagentSpawnedMessage,
   SubagentTerminalMessage,
 } from '../types/logs.js'
@@ -89,7 +92,7 @@ type ResumeResult = {
   agentName?: string
   agentColor?: string
   agentSetting?: string
-  mode?: 'agent' | 'coordinator' | 'normal'
+  mode?: LegacySessionMode
   prNumber?: number
   prUrl?: string
   prRepository?: string
@@ -157,23 +160,6 @@ export function restoreSessionStateFromLog(
     attributionRestoreStateFromLog(result.attributionSnapshots, newState => {
       setAppState(prev => ({ ...prev, attribution: newState }))
     })
-  }
-
-  // Restore context-collapse commit log + staged snapshot. Must run before
-  // the first query() so projectView() can rebuild the collapsed view from
-  // the resumed Message[]. Called unconditionally (even with
-  // undefined/empty entries) because restoreFromEntries resets the store
-  // first — without that, an in-session /resume into a session with no
-  // commits would leave the prior session's stale commit log intact.
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    ;(
-      require('../services/contextCollapse/persist.js') as typeof import('../services/contextCollapse/persist.js')
-    ).restoreFromEntries(
-      result.contextCollapseCommits ?? [],
-      result.contextCollapseSnapshot,
-    )
-    /* eslint-enable @typescript-eslint/no-require-imports */
   }
 
   // Restore TodoWrite state from transcript (SDK/non-interactive only).
@@ -328,8 +314,8 @@ export type ProcessedResume = {
  * Subset of the session mode API needed for session resume.
  */
 type SessionModeApi = {
-  matchSessionMode(mode?: 'agent' | 'coordinator' | 'normal'): string | undefined
-  getCurrentSessionMode(): 'agent' | 'coordinator' | 'normal'
+  matchSessionMode(mode?: SessionMode): string | undefined
+  getCurrentSessionMode(): SessionMode
 }
 
 /**
@@ -349,7 +335,7 @@ type ResumeLoadResult = {
   agentSetting?: string
   customTitle?: string
   tag?: string
-  mode?: 'agent' | 'coordinator' | 'normal'
+  mode?: LegacySessionMode
   worktreeSession?: PersistedWorktreeSession | null
   prNumber?: number
   prUrl?: string
@@ -738,7 +724,9 @@ export async function processResumedConversation(
   // Match coordinator/normal mode to the resumed session
   let modeWarning: string | undefined
   if (feature('COORDINATOR_MODE')) {
-    modeWarning = context.modeApi?.matchSessionMode(result.mode)
+    modeWarning = context.modeApi?.matchSessionMode(
+      normalizeSessionMode(result.mode),
+    )
     if (modeWarning) {
       result.messages.push(createSystemMessage(modeWarning, 'warning'))
     }
@@ -814,21 +802,6 @@ export async function processResumedConversation(
     } else {
       adopt()
     }
-  }
-
-  // Restore context-collapse commit log + staged snapshot. The interactive
-  // /resume path goes through restoreSessionStateFromLog (REPL.tsx); CLI
-  // --continue/--resume goes through here instead. Called unconditionally
-  // — see the restoreSessionStateFromLog callsite above for why.
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    ;(
-      require('../services/contextCollapse/persist.js') as typeof import('../services/contextCollapse/persist.js')
-    ).restoreFromEntries(
-      result.contextCollapseCommits ?? [],
-      result.contextCollapseSnapshot,
-    )
-    /* eslint-enable @typescript-eslint/no-require-imports */
   }
 
   // Restore agent setting from resumed session

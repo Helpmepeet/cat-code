@@ -8,11 +8,15 @@ import {
   getDefaultBashTimeoutMs,
   getMaxBashTimeoutMs,
 } from '../../utils/timeouts.js'
+import { isGPTPromptStyle } from '../../constants/promptStyle.js'
+import { getAPIProvider, type APIProvider } from '../../utils/model/providers.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { POWERSHELL_TOOL_NAME } from './toolName.js'
 
 export function getDefaultTimeoutMs(): number {
@@ -70,14 +74,45 @@ function getEditionSection(edition: PowerShellEdition | null): string {
    - To chain commands conditionally: \`A; if ($?) { B }\`. Unconditionally: \`A; B\`.`
 }
 
-export async function getPrompt(): Promise<string> {
+export async function getPrompt(
+  provider: APIProvider = getAPIProvider(),
+): Promise<string> {
   const backgroundNote = getBackgroundUsageNote()
   const sleepGuidance = getSleepGuidance()
   const edition = await getPowerShellEdition()
+  const editToolName = isGPTPromptStyle(provider)
+    ? FILE_PATCH_TOOL_NAME
+    : FILE_EDIT_TOOL_NAME
+
+  const policySection = isGPTPromptStyle(provider)
+    ? `FILE MUTATIONS: Use ${editToolName} for local file edits. Do not create or edit files with Out-File, Set-Content, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.
+
+SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.
+
+READS AND SEARCH: \`rg\`, \`rg --files\`, Select-String, Get-Content line slices, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run here. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded and numbered.`
+    : `IMPORTANT: This tool is for terminal operations via PowerShell: git, npm, docker, and PS cmdlets. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.`
+
+  const toolPreferenceItems = isGPTPromptStyle(provider)
+    ? [
+        `File search: Use ${GLOB_TOOL_NAME}, or \`rg --files\` (or Get-ChildItem -Recurse)`,
+        `Content search: Use ${GREP_TOOL_NAME}, or \`rg\` (or Select-String)`,
+        `Read files: Use ${FILE_READ_TOOL_NAME} for whole files; line ranges are fine here for a slice`,
+        `Edit files: Use ${editToolName}`,
+        `Write files: Use ${FILE_WRITE_TOOL_NAME}`,
+        'Communication: Output text directly (NOT Write-Output/Write-Host)',
+      ]
+    : [
+        `File search: Use ${GLOB_TOOL_NAME} (NOT Get-ChildItem -Recurse)`,
+        `Content search: Use ${GREP_TOOL_NAME} (NOT Select-String)`,
+        `Read files: Use ${FILE_READ_TOOL_NAME} (NOT Get-Content)`,
+        `Edit files: Use ${editToolName}`,
+        `Write files: Use ${FILE_WRITE_TOOL_NAME} (NOT Set-Content/Out-File)`,
+        'Communication: Output text directly (NOT Write-Output/Write-Host)',
+      ]
 
   return `Executes a given PowerShell command with optional timeout. Working directory persists between commands; shell state (variables, functions) does not.
 
-IMPORTANT: This tool is for terminal operations via PowerShell: git, npm, docker, and PS cmdlets. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use the specialized tools for this instead.
+${policySection}
 
 ${getEditionSection(edition)}
 
@@ -124,13 +159,8 @@ Usage notes:
   - It is very helpful if you write a clear, concise description of what this command does.
   - If the output exceeds ${getMaxOutputLength()} characters, output will be truncated before being returned to you.
 ${backgroundNote ? backgroundNote + '\n' : ''}\
-  - Avoid using PowerShell to run commands that have dedicated tools, unless explicitly instructed:
-    - File search: Use ${GLOB_TOOL_NAME} (NOT Get-ChildItem -Recurse)
-    - Content search: Use ${GREP_TOOL_NAME} (NOT Select-String)
-    - Read files: Use ${FILE_READ_TOOL_NAME} (NOT Get-Content)
-    - Edit files: Use ${FILE_EDIT_TOOL_NAME}
-    - Write files: Use ${FILE_WRITE_TOOL_NAME} (NOT Set-Content/Out-File)
-    - Communication: Output text directly (NOT Write-Output/Write-Host)
+   - Tool routing:
+${toolPreferenceItems.map(item => `     - ${item}`).join('\n')}
   - When issuing multiple commands:
     - If the commands are independent and can run in parallel, make multiple ${POWERSHELL_TOOL_NAME} tool calls in a single message.
     - If the commands depend on each other and must run sequentially, chain them in a single ${POWERSHELL_TOOL_NAME} call (see edition-specific chaining syntax above).

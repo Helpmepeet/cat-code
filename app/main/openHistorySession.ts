@@ -29,6 +29,18 @@
  *    `openHistoryInFlight`). Together they stop the app double-opening its own
  *    session; a much narrower residual collapses to the concurrency note below.
  *
+ * PEER IDENTITY IS NOT RESUMED, on purpose. A `spawn` result mints a fresh
+ * `appSessionId`, so the host allocates a new peer `name` and the row carries no
+ * `createdBy` — even when this transcript once had both and lost them to the
+ * over-bound reap (`app/host/registry.ts` `enforceBound`). Restoring the former
+ * name is not available: PEER-SESSIONS §2 releases a name on reap and lets the
+ * pool hand it out again, so a name from a dropped row may already belong to a
+ * live session. What the operator reads as the session's identity is carried
+ * across by `title` below, seeded from the catalog entry they clicked, so the
+ * conversation keeps its label and only its peer address is new. The one field
+ * that is the USER's decision rather than the allocator's, `peerWakeBlocked`, is
+ * protected on the other side instead: the reap discards blocked rows last.
+ *
  * NOT guarded (engine precedent, on record): a transcript that is LIVE in a
  * terminal process right now. The engine's own `--resume`/`/resume <id>` path
  * does no liveness check (`src/utils/conversationRecovery.ts:536-538`) and the

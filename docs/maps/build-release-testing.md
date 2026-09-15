@@ -1,6 +1,6 @@
 # Build, Release, And Testing Routing Map
 
-Last refreshed: 2026-08-28 against `CLAUDE.md`,
+Last refreshed: 2026-09-06 against `CLAUDE.md`,
 `docs/maps/WORKSPACE_MAP.md`, `package.json`, `scripts/build.ts`,
 `scripts/test-codex-*.ts`,
 `scripts/typecheck/renderer-engine-types/`, `renderer-theme/`,
@@ -42,7 +42,7 @@ files, then verify current source before changing code.
 | Portable desktop renderer theme check | `renderer-theme/README.md` | `renderer-theme/theme.css`, `renderer-theme/package.json`, `renderer-theme/vite.config.ts` | This is a temporary Tailwind v4 build harness for design-token handoff, not the final renderer scaffold. Run `bun run build` from `renderer-theme/`. |
 | Renderer-to-engine type adoption check | `scripts/typecheck/renderer-engine-types/README.md` | `scripts/typecheck/renderer-engine-types/tsconfig.json`, snapshot declarations, `fixture.ts` | This portable type-only fixture currently uses cited snapshots because direct aliases pull in the engine runtime graph. Re-sync snapshots from their canonical source types before renderer adoption, then run the documented isolated `tsc` command. |
 | Electron desktop development | `app/package.json` | `app/scripts/dev.ts`, `app/main/main.ts`, `app/main/mainDecisions.ts`, `app/renderer/vite.config.ts` | `bun run --cwd app dev` builds Electron sources, starts the renderer dev server, and launches the desktop shell. The Bun engine runs in a separate sidecar process; `SIDECAR_RUNTIME_ARGS` enables the classifier and reactive-compaction runtime features. |
-| Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
+| Electron desktop verification | `app/package.json` | `app/tsconfig.json`, `app/scripts/sidecar-typecheck.ts`, `app/scripts/run-hardening-smoke.ts` | Run desktop tests, both typecheck boundaries, the renderer build, and the hardening smoke independently; the hardening route also protects the fixed native file-selection boundary. The root lint configuration does not yet cover `app/**`. The sidecar wrapper reports owned `app/sidecar/` and `app/shared/` diagnostics while tolerating known upstream engine diagnostics. |
 | Electron desktop packaging | `app/scripts/package-app.ts` | `app/package.json`, `app/main/mainDecisions.ts`, `app/sidecar/packagedEntry.ts`, `docs/migration/decisions/LOCAL-USE-CONTRACT.md` | `bun run --cwd app package` builds the macOS `.app` into its generated output directory, wiping that directory first. It compiles the sidecar and its engine graph into one standalone Bun executable with the same features `SIDECAR_RUNTIME_ARGS` passes in development, stamps `CATCODE_BUILD_ID`/`CATCODE_COMMIT_ID` as build-time constants, sets `com.catcode.desktop`, and ad-hoc signs the nested binary before the bundle. No packaging dependency is involved. |
 | Packaged bundle stowaway scan | `app/scripts/packagedBundleScan.ts` | `app/scripts/package-app.ts`, `app/scripts/packagedBundleScan.test.ts` | Path and content rules that fail the packaging build when a credential, key material, test source, source map, `node_modules` tree, or the development preload appears in the bundle. There is deliberately no artifact manifest; the local-use contract rules one out. |
 | Packaged launch verification | `app/scripts/packaged-launch-smoke.ts` | `app/scripts/package-app.ts`, `app/main/main.ts` | `bun run --cwd app smoke:packaged` proves the generated artifact is self-contained: the compiled sidecar runs with no `bun` on `PATH` and a working directory outside the checkout, and the launched app takes the packaged branch while a development renderer URL is set. Electron ignores `--require` in a packaged app, so it asserts on production main's own stdout rather than an injected harness. |
@@ -83,7 +83,7 @@ KAIROS_CHANNELS, LODESTONE, MCP_RICH_OUTPUT, MESSAGE_ACTIONS,
 NATIVE_CLIPBOARD_IMAGE, NEW_INIT, POWERSHELL_AUTO_MODE,
 PROMPT_CACHE_BREAK_DETECTION, QUICK_SEARCH, SHOT_STATS, TEAMMEM, TOKEN_BUDGET,
 TREE_SITTER_BASH, TREE_SITTER_BASH_SHADOW, ULTRAPLAN, ULTRATHINK,
-UNATTENDED_RETRY, VERIFICATION_AGENT, VOICE_MODE
+UNATTENDED_RETRY, VOICE_MODE
 ```
 
 Feature changes need both sides checked: the build-time list in
@@ -110,7 +110,6 @@ the same cross-process-locked sequence.
 | Opus to Opus 1M merge | `src/migrations/migrateOpusToOpus1m.ts` | Eligible merged-Opus users with user settings `model: "opus"` move to `opus[1m]` or default unset. |
 | Bridge config rename | `src/migrations/migrateReplBridgeEnabledToRemoteControlAtStartup.ts` | Copies old global `replBridgeEnabled` to `remoteControlAtStartup` only when new key is unset. |
 | Auto-mode prompt reset | `src/migrations/resetAutoModeOptInForDefaultOffer.ts` | Feature-gated by `TRANSCRIPT_CLASSIFIER`; clears old skip prompt only for enabled auto-mode users not defaulting to auto. |
-| Fennec to Opus | `src/migrations/migrateFennecToOpus.ts` | Ant-only in source intent, but current external build dead-code condition means it does not run in normal external builds. |
 | Upstream/fork data copy | `src/migrations/migrateFromUpstreamClaude.ts` | Shared `init()` awaits this copy-only migration before enabling configs. Its destination check and copy run under a lock beside the destination directory. |
 
 ## Release Notes
@@ -147,6 +146,7 @@ release-note behavior through `src/utils/releaseNotes.ts` and
 | Validation | Command | Owner |
 |---|---|---|
 | Full repo build gate requested by root docs | `bun run build:dev:full` | `CLAUDE.md`, `package.json`, `scripts/build.ts` |
+| Undefined-name gate | `bun run lint:undefined-names` | `scripts/undefinedNamesLint.ts`, `tsconfig.json` |
 | Docs-only whitespace/path sanity | `git diff --check` | Git diff |
 | Focused unit tests | `bun test <test-paths>` | Colocated `*.test.ts` / `*.test.tsx` |
 | Portable renderer theme | `cd renderer-theme && bun run build` | `renderer-theme/package.json`, Vite |
@@ -173,14 +173,15 @@ paths.
 | Change area | First tests |
 |---|---|
 | Codex adapter/request/stream behavior | `bun test src/services/api/codex-fetch-adapter.test.ts src/services/api/codex-websocket-transport.test.ts src/services/api/codex-continuation-e2e.test.ts` |
+| Runtime undefined-name regressions | `bun run lint:undefined-names` | Zero TS2304/TS2503 diagnostics is required even though the root typecheck has a broader known-red baseline. |
 | Codex account pool, lease, refresh, usage | `bun test src/services/api/codexAccountPool.test.ts src/services/api/codexAccountLeaseManager.test.ts src/services/api/codexTokenRefresh.test.ts src/services/api/codexUsage.test.ts` |
 | Minimal Codex core | `bun test src/codex-core/request.test.ts` plus the `scripts/test-codex-*.ts` smoke scripts when real account access is relevant. |
-| Agent Mode behavior | `bun test src/agent-mode/*.test.ts src/agent-mode/*.test.tsx src/tools/AgentTool/*.test.ts` with narrower paths preferred for small changes. |
+| Agents and worker behavior | `bun test src/tools/AgentTool/*.test.ts src/tasks/LocalAgentTask/LocalAgentTask.test.ts` with narrower paths preferred for small changes. |
 | Tasks and workers | `bun test src/tasks/LocalAgentTask/LocalAgentTask.test.ts src/tasks/RemoteAgentTask/RemoteAgentTask.test.ts` |
 | Compact/context behavior | `bun test src/services/compact/*.test.ts` |
 | App runtime | `bun test src/app-runtime/*.test.ts` |
 | P5-5c cross-process contention probes | `src/utils/atomicFile.probe.test.ts`, `src/utils/transcriptLease.probe.test.ts`, `src/migrations/runEngineMigrations.probe.test.ts`, `src/codex-core/accountRefreshContention.probe.test.ts`, `src/utils/secureStorage/crossProcessStorage.probe.test.ts`, `src/services/autoDream/consolidationLock.probe.test.ts`, `src/services/teamMemorySync/teamMemorySync.probe.test.ts` | Run `bun test src/utils/atomicFile.probe.test.ts src/utils/transcriptLease.probe.test.ts src/migrations/runEngineMigrations.probe.test.ts src/codex-core/accountRefreshContention.probe.test.ts src/utils/secureStorage/crossProcessStorage.probe.test.ts src/services/autoDream/consolidationLock.probe.test.ts src/services/teamMemorySync/teamMemorySync.probe.test.ts` with synthetic isolated files and no live account/network access. |
-| Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts src/commands/agent/agent.test.ts`. |
+| Commands | Run the specific command test, for example `bun test src/commands/goal/goal.test.ts`. |
 | Components/helpers | Use colocated tests such as `src/components/ConsoleOAuthFlow.test.ts` or `src/tools/*/*.test.tsx`. |
 
 Colocated tests use `bun:test` imports (`describe`, `test`, `expect`,

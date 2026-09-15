@@ -1,4 +1,5 @@
 import { feature } from 'bun:bundle'
+import type { UUID } from 'crypto'
 import type {
   ContentBlockParam,
   ToolResultBlockParam,
@@ -41,6 +42,17 @@ import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
+import {
+  FilePatchError,
+  MAX_FILE_PATCH_ERROR_REPAIR_LENGTH,
+  MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
+  MAX_FILE_PATCH_FAILURE_DETAILS,
+  serializeFilePatchError,
+  type FilePatchFailureDetail,
+  type FilePatchModelError,
+  type FilePatchOperationType,
+} from '../../tools/FilePatchTool/types.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../../tools/NotebookEditTool/constants.js'
 import { POWERSHELL_TOOL_NAME } from '../../tools/PowerShellTool/toolName.js'
 import { parseGitCommitId } from '../../tools/shared/gitOperationTracking.js'
@@ -48,7 +60,6 @@ import {
   isDeferredTool,
   TOOL_SEARCH_TOOL_NAME,
 } from '../../tools/ToolSearchTool/prompt.js'
-import { getAllBaseTools } from '../../tools.js'
 import type { HookProgress } from '../../types/hooks.js'
 import type {
   AssistantMessage,
@@ -149,6 +160,9 @@ const SLOW_PHASE_LOG_THRESHOLD_MS = 2000
  * - Fallback: "Error" (better than a mangled 3-char identifier)
  */
 export function classifyToolError(error: unknown): string {
+  if (error instanceof FilePatchError) {
+    return `FilePatchError:${error.code}`
+  }
   if (
     error instanceof TelemetrySafeError_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS
   ) {
@@ -169,6 +183,93 @@ export function classifyToolError(error: unknown): string {
     return 'Error'
   }
   return 'UnknownError'
+}
+
+function buildToolErrorResult(
+  error: unknown,
+  content: string,
+): { modelContent: string; persistedResult: unknown } {
+  if (error instanceof FilePatchError) {
+    const structured = serializeFilePatchError(error)
+    return {
+      modelContent: `<tool_use_error>${jsonStringify(structured)}</tool_use_error>`,
+      persistedResult: structured,
+    }
+  }
+  return {
+    modelContent: content,
+    persistedResult: `Error: ${content}`,
+  }
+}
+
+function buildFilePatchValidationError(
+  message: string,
+  meta: Record<string, unknown> | undefined,
+): FilePatchModelError | null {
+  if (typeof meta?.code !== 'string') return null
+
+  const details = Array.isArray(meta.details)
+    ? meta.details.slice(0, MAX_FILE_PATCH_FAILURE_DETAILS).flatMap(detail => {
+        if (typeof detail !== 'object' || detail === null) return []
+        const candidate = detail as Record<string, unknown>
+        if (
+          typeof candidate.code !== 'string' ||
+          !isFilePatchOperationType(candidate.operation) ||
+          typeof candidate.path !== 'string' ||
+          typeof candidate.message !== 'string'
+        ) {
+          return []
+        }
+        const normalized: FilePatchFailureDetail = {
+          code: candidate.code,
+          operation: candidate.operation,
+          path: candidate.path,
+          message: boundFilePatchErrorText(
+            candidate.message,
+            MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
+          ),
+          ...(typeof candidate.moveTo === 'string'
+            ? { moveTo: candidate.moveTo }
+            : {}),
+          ...(typeof candidate.hunkIndex === 'number'
+            ? { hunkIndex: candidate.hunkIndex }
+            : {}),
+          ...(typeof candidate.hunkCount === 'number'
+            ? { hunkCount: candidate.hunkCount }
+            : {}),
+        }
+        return [normalized]
+      })
+    : []
+  return {
+    type: 'file_patch_error',
+    code: meta.code,
+    ...(isFilePatchOperationType(meta.operation)
+      ? { operation: meta.operation }
+      : {}),
+    ...(typeof meta.path === 'string' ? { path: meta.path } : {}),
+    ...(typeof meta.moveTo === 'string' ? { moveTo: meta.moveTo } : {}),
+    ...(typeof meta.hunkIndex === 'number'
+      ? { hunkIndex: meta.hunkIndex }
+      : {}),
+    ...(typeof meta.hunkCount === 'number'
+      ? { hunkCount: meta.hunkCount }
+      : {}),
+    details,
+    mutationOutcome: 'no-mutation',
+    repair: boundFilePatchErrorText(message, MAX_FILE_PATCH_ERROR_REPAIR_LENGTH),
+  }
+}
+
+function isFilePatchOperationType(
+  value: unknown,
+): value is FilePatchOperationType {
+  return value === 'add' || value === 'update' || value === 'delete'
+}
+
+function boundFilePatchErrorText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text
+  return `${text.slice(0, maxLength - 20)}… [truncated]`
 }
 
 /**
@@ -342,19 +443,10 @@ export async function* runToolUse(
   toolUseContext: ToolUseContext,
 ): AsyncGenerator<MessageUpdateLazy, void> {
   const toolName = toolUse.name
-  // First try to find in the available tools (what the model sees)
-  let tool = findToolByName(toolUseContext.options.tools, toolName)
-
-  // If not found, check if it's a deprecated tool being called by alias
-  // (e.g., old transcripts calling "KillShell" which is now an alias for "TaskStop")
-  // Only fall back for tools where the name matches an alias, not the primary name
-  if (!tool) {
-    const fallbackTool = findToolByName(getAllBaseTools(), toolName)
-    // Only use fallback if the tool was found via alias (deprecated name)
-    if (fallbackTool && fallbackTool.aliases?.includes(toolName)) {
-      tool = fallbackTool
-    }
-  }
+  // Resolve canonical names and aliases only inside the pool granted to this
+  // execution. Looking an alias up in the global registry would reintroduce a
+  // capability that the current worker/session deliberately excluded.
+  const tool = findToolByName(toolUseContext.options.tools, toolName)
   const messageId = assistantMessage.message.id
   const requestId = assistantMessage.requestId
   const mcpServerType = getMcpServerType(
@@ -697,8 +789,14 @@ async function checkPermissionsAndCallTool(
       messageID:
         messageId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       toolName: sanitizeToolNameForAnalytics(tool.name),
-      error:
-        isValidCall.message as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
+      error: (
+        tool.name === FILE_PATCH_TOOL_NAME
+          ? String(
+              (isValidCall.meta as { code?: unknown } | undefined)?.code ??
+                `ValidationError:${isValidCall.errorCode}`,
+            )
+          : isValidCall.message
+      ) as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
       errorCode: isValidCall.errorCode,
       isMcp: tool.isMcp ?? false,
 
@@ -719,15 +817,23 @@ async function checkPermissionsAndCallTool(
       }),
       ...mcpToolDetailsForAnalytics(tool.name, mcpServerType, mcpServerBaseUrl),
     })
+    const structuredPatchValidation = buildFilePatchValidationError(
+      isValidCall.message,
+      isValidCall.meta,
+    )
+    const validationContent =
+      structuredPatchValidation === null
+        ? isValidCall.message
+        : jsonStringify(structuredPatchValidation)
     const validationToolUseResult =
       isValidCall.meta === undefined
         ? `Error: ${isValidCall.message}`
         : {
             type: 'validation_error',
-            content: `Error: ${isValidCall.message}`,
+            content: `Error: ${validationContent}`,
             message: isValidCall.message,
             errorCode: isValidCall.errorCode,
-            meta: isValidCall.meta,
+            meta: structuredPatchValidation ?? isValidCall.meta,
           }
     return [
       {
@@ -735,7 +841,7 @@ async function checkPermissionsAndCallTool(
           content: [
             {
               type: 'tool_result',
-              content: `<tool_use_error>${isValidCall.message}</tool_use_error>`,
+              content: `<tool_use_error>${validationContent}</tool_use_error>`,
               is_error: true,
               tool_use_id: toolUseID,
             },
@@ -1125,6 +1231,24 @@ async function checkPermissionsAndCallTool(
 
     return resultingMessages
   }
+
+  // Permission can be asynchronous. A terminal handoff or interruption may
+  // cancel the owning query while that decision is pending; re-check before
+  // crossing the execution boundary so the tool cannot start afterward.
+  if (toolUseContext.abortController.signal.aborted) {
+    const content = createToolResultStopMessage(toolUseID)
+    content.content = withMemoryCorrectionHint(CANCEL_MESSAGE)
+    resultingMessages.push({
+      message: createUserMessage({
+        content: [content],
+        toolUseResult: CANCEL_MESSAGE,
+        toolResultStatus: 'cancelled',
+        sourceToolAssistantUUID: assistantMessage.uuid as UUID,
+      }),
+    })
+    return resultingMessages
+  }
+
   logEvent('tengu_tool_use_can_use_tool_allowed', {
     messageID:
       messageId as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1157,7 +1281,10 @@ async function checkPermissionsAndCallTool(
   // Prepare tool parameters for logging in tool_result event.
   // Gated by OTEL_LOG_TOOL_DETAILS — tool parameters can contain sensitive
   // content (bash commands, MCP server names, etc.) so they're opt-in only.
-  const telemetryToolInput = extractToolInputForTelemetry(processedInput)
+  const telemetryToolInput =
+    tool.name === FILE_PATCH_TOOL_NAME
+      ? undefined
+      : extractToolInputForTelemetry(processedInput)
   let toolParameters: Record<string, unknown> = {}
   if (isToolDetailsLoggingEnabled()) {
     if (tool.name === BASH_TOOL_NAME && 'command' in processedInput) {
@@ -1201,6 +1328,7 @@ async function checkPermissionsAndCallTool(
   const startTime = Date.now()
 
   startSessionActivity('tool_exec')
+  toolUseContext.onToolExecutionStart?.()
   // If processedInput still points at the backfill clone, no hook/permission
   // replaced it — pass the pre-backfill callInput so call() sees the model's
   // original field values. Otherwise converge on the hook-supplied input.
@@ -1226,6 +1354,15 @@ async function checkPermissionsAndCallTool(
   } else if (processedInput !== backfilledClone) {
     callInput = processedInput
   }
+  // Everything accumulated so far is pre-call: PreToolUse hook output,
+  // hookSpecificOutput.additionalContext, and the PermissionRequest-hook
+  // decision attachment. The catch below returns a freshly built error result,
+  // so it must re-emit this prefix or the user's hook ran for nothing exactly
+  // when the model needs the injected context most. Only the prefix is
+  // carried: messages pushed inside the try may already include a tool_result
+  // for this toolUseID (addToolResult runs before the PostToolUse hooks, which
+  // can throw), and the error path emits its own.
+  const preCallMessageCount = resultingMessages.length
   try {
     const result = await tool.call(
       callInput,
@@ -1620,7 +1757,10 @@ async function checkPermissionsAndCallTool(
 
     endToolExecutionSpan({
       success: false,
-      error: errorMessage(error),
+      error:
+        error instanceof FilePatchError
+          ? classifyToolError(error)
+          : errorMessage(error),
     })
     endToolSpan()
 
@@ -1704,7 +1844,10 @@ async function checkPermissionsAndCallTool(
         use_id: toolUseID,
         success: 'false',
         duration_ms: String(durationMs),
-        error: errorMessage(error),
+        error:
+          error instanceof FilePatchError
+            ? classifyToolError(error)
+            : errorMessage(error),
         ...(Object.keys(toolParameters).length > 0 && {
           tool_parameters: jsonStringify(toolParameters),
         }),
@@ -1717,6 +1860,7 @@ async function checkPermissionsAndCallTool(
       })
     }
     const content = formatError(error)
+    const errorResult = buildToolErrorResult(error, content)
 
     // Determine if this was a user interrupt
     const isInterrupt = error instanceof AbortError
@@ -1740,18 +1884,24 @@ async function checkPermissionsAndCallTool(
       hookMessages.push(hookResult)
     }
 
+    // Pre-call hook messages first, then the error tool_result, then the
+    // PostToolUseFailure output — the same relative order the success path
+    // produces. Aborts are included too: the hook already ran, its context is
+    // real, and the existing code already returns PostToolUseFailure messages
+    // on an interrupt.
     return [
+      ...resultingMessages.slice(0, preCallMessageCount),
       {
         message: createUserMessage({
           content: [
             {
               type: 'tool_result',
-              content,
+              content: errorResult.modelContent,
               is_error: true,
               tool_use_id: toolUseID,
             },
           ],
-          toolUseResult: `Error: ${content}`,
+          toolUseResult: errorResult.persistedResult,
           mcpMeta: toolUseContext.agentId
             ? undefined
             : error instanceof

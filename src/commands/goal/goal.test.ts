@@ -12,7 +12,7 @@ import {
   recordWorkerSessionSpawn,
   readSessionState,
   updateSessionState,
-} from '../../agent-mode/sessionState.js'
+} from '../../utils/workerState.js'
 import { asSessionId } from '../../types/ids.js'
 import type { LocalJSXCommandOnDone } from '../../types/command.js'
 import { createThreadGoal, updateThreadGoalStatus } from '../../utils/threadGoal.js'
@@ -108,66 +108,7 @@ describe('/goal command', () => {
     expect(state.threadGoal?.objective).toBe(rawObjective)
   })
 
-  test('syncs the durable Agent Mode objective when setting a goal', async () => {
-    let state = { threadGoal: null as ReturnType<typeof createThreadGoal> | null }
-
-    await updateSessionState(
-      sessionId,
-      () =>
-        createSessionState({
-          sessionId,
-          mode: 'agent',
-          objective: 'stale worker description',
-        }),
-      () => {},
-    )
-
-    await call(
-      () => {},
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-      } as Parameters<typeof call>[1],
-      'finish the real goal',
-    )
-
-    expect((await readSessionState(sessionId))?.objective).toBe(
-      'finish the real goal',
-    )
-  })
-
-  test('clears the durable Agent Mode objective when clearing a goal', async () => {
-    const threadGoal = createThreadGoal(sessionId, 'finish the real goal')
-    let state = { threadGoal }
-
-    await updateSessionState(
-      sessionId,
-      () =>
-        createSessionState({
-          sessionId,
-          mode: 'agent',
-          objective: threadGoal.objective,
-        }),
-      () => {},
-    )
-
-    await call(
-      () => {},
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-      } as Parameters<typeof call>[1],
-      'clear',
-    )
-
-    expect((await readSessionState(sessionId))?.objective).toBe('')
-  })
-
-  test('setting a new goal after a completed one resets usage and worker state through shared action', async () => {
+  test('setting a new goal after a completed one resets usage through the shared action', async () => {
     const completedGoal = updateThreadGoalStatus(
       {
         ...createThreadGoal(sessionId, 'old goal', 10_000, 100),
@@ -185,15 +126,13 @@ describe('/goal command', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: completedGoal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: completedGoal.objective,
+      mode: 'coordinator',
       handle: 'old-worker',
       agentId: randomUUID().slice(0, 8),
       role: 'implementor',
@@ -216,11 +155,9 @@ describe('/goal command', () => {
     expect(state.threadGoal?.tokenBudget).toBe(20_000)
     expect(state.threadGoal?.tokensUsed).toBe(0)
     expect(state.threadGoal?.timeUsedSeconds).toBe(0)
-    expect((await readSessionState(sessionId))?.objective).toBe('new goal')
-    expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
-  test('explicit replace swaps an active goal and resets durable worker state', async () => {
+  test('explicit replace swaps an active goal', async () => {
     const oldGoal = createThreadGoal(sessionId, 'old goal', 10_000, 100)
     let state = { threadGoal: oldGoal }
 
@@ -229,15 +166,13 @@ describe('/goal command', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: oldGoal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: oldGoal.objective,
+      mode: 'coordinator',
       handle: 'old-worker',
       agentId: randomUUID().slice(0, 8),
       role: 'implementor',
@@ -263,8 +198,6 @@ describe('/goal command', () => {
     expect(state.threadGoal?.objective).toBe('new goal')
     expect(state.threadGoal?.tokenBudget).toBe(25_000)
     expect(state.threadGoal?.goalId).not.toBe(oldGoal.goalId)
-    expect((await readSessionState(sessionId))?.objective).toBe('new goal')
-    expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
   test('plain set with an active goal opens replacement confirmation without replacing immediately', async () => {
@@ -325,7 +258,7 @@ describe('/goal command', () => {
     ])
   })
 
-  test('confirming replacement swaps the goal and resets durable worker state', async () => {
+  test('confirming replacement swaps the goal', async () => {
     const oldGoal = createThreadGoal(sessionId, 'old goal', 10_000, 100)
     let state = { threadGoal: oldGoal }
     let output: string | undefined
@@ -335,15 +268,13 @@ describe('/goal command', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: oldGoal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: oldGoal.objective,
+      mode: 'coordinator',
       handle: 'old-worker',
       agentId: randomUUID().slice(0, 8),
       role: 'implementor',
@@ -372,8 +303,6 @@ describe('/goal command', () => {
     expect(output).toContain('Objective: new goal')
     expect(state.threadGoal?.objective).toBe('new goal')
     expect(state.threadGoal?.goalId).not.toBe(oldGoal.goalId)
-    expect((await readSessionState(sessionId))?.objective).toBe('new goal')
-    expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
   test('cancelling replacement keeps the current goal', async () => {
@@ -401,52 +330,6 @@ describe('/goal command', () => {
 
     expect(output).toBeUndefined()
     expect(state.threadGoal).toBe(oldGoal)
-  })
-
-  test('keeps the durable Agent Mode objective in sync on pause and resume', async () => {
-    const threadGoal = createThreadGoal(sessionId, 'finish the real goal')
-    let state = { threadGoal }
-
-    await updateSessionState(
-      sessionId,
-      () =>
-        createSessionState({
-          sessionId,
-          mode: 'agent',
-          objective: threadGoal.objective,
-        }),
-      () => {},
-    )
-
-    await call(
-      () => {},
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-      } as Parameters<typeof call>[1],
-      'pause',
-    )
-
-    expect((await readSessionState(sessionId))?.objective).toBe(
-      'finish the real goal',
-    )
-
-    await call(
-      () => {},
-      {
-        getAppState: () => state,
-        setAppState: updater => {
-          state = updater(state)
-        },
-      } as Parameters<typeof call>[1],
-      'resume',
-    )
-
-    expect((await readSessionState(sessionId))?.objective).toBe(
-      'finish the real goal',
-    )
   })
 
   test('pause, resume, and clear do not inject extra model-visible meta reminders', async () => {

@@ -48,7 +48,6 @@ const fullExperimentalFeatures = [
   'ULTRAPLAN',
   'ULTRATHINK',
   'UNATTENDED_RETRY',
-  'VERIFICATION_AGENT',
   'VOICE_MODE',
 ] as const
 

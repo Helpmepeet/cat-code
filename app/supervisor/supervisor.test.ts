@@ -10,7 +10,8 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { MAX_PROMPT_BYTES } from '../shared/limits.js'
+import { MAX_PROMPT_BYTES, PARKED_EXIT_CODE } from '../shared/limits.js'
+import type { OperationalFields, OperationalLogLevel } from '../shared/operationalLog.js'
 import {
   createPrivateSocketDir,
   SidecarSendError,
@@ -250,10 +251,13 @@ test('a self-exiting sidecar reports its exit, never a transport failure first',
   // consumer that classifies on the exit CODE then had to overwrite it. That is
   // what made an intentional idle-park (a gated `process.exit(PARKED_EXIT_CODE)`)
   // flash "This session lost its connection" and a Restart button before settling
-  // (IDLE-PARK.md §1a). This mimics the park: end the socket, then exit 5.
+  // (IDLE-PARK.md §1a). The ordering is the same mechanism for any self-exit, so
+  // this drives it with a genuine crash code: that keeps the coverage assertion
+  // below meaningful, since a park deliberately reports no lost coverage. The
+  // park half of both properties is pinned in the exit-code test that follows.
   const socketDir = makeTempDir('catcode-supervisor-selfexit-')
   const script = readyScript({
-    afterOpen: 'setTimeout(() => { socket.end(); process.exit(5) }, 50)',
+    afterOpen: 'setTimeout(() => { socket.end(); process.exit(139) }, 50)',
   })
   const operationalEvents: string[] = []
   const supervisor = new SidecarSupervisor({
@@ -274,11 +278,74 @@ test('a self-exiting sidecar reports its exit, never a transport failure first',
   supervisor.spawnSession('self-exit-session')
 
   await waitFor(() => statuses.includes('exited'), 'self-exit was never reported')
-  expect(exitCode).toBe(5)
+  expect(exitCode).toBe(139)
   // Wait out the settle window: a dropped report must stay dropped.
   await new Promise(resolve => setTimeout(resolve, 400))
   expect(statuses).not.toContain('disconnected')
   expect(operationalEvents).toContain('log.coverage.incomplete')
+})
+
+test('a park and a crash are told apart in the record, by code, level, and coverage claim', async () => {
+  // The record is the ONLY account of why an engine process died: the child is
+  // gone and its stderr dies with the dev terminal. A park is a DESIGNED
+  // non-zero exit (`PARKED_EXIT_CODE`, the code `app/host/host.ts` classifies
+  // on), so judging it by non-zero-ness alone filed all eleven parks in one real
+  // log window as `level: error, expected: false` and minted one false
+  // `log.coverage.incomplete` apiece, which is what pinned the diagnostics
+  // export's coverage verdict to "incomplete". Both directions are pinned here.
+  async function exitReportFor(code: number): Promise<{
+    fields: OperationalFields
+    level: OperationalLogLevel
+    events: string[]
+  }> {
+    const socketDir = makeTempDir(`catcode-supervisor-exit-${code}-`)
+    const script = readyScript({
+      afterOpen: `setTimeout(() => { socket.end(); process.exit(${code}) }, 50)`,
+    })
+    const events: string[] = []
+    let fields: OperationalFields | undefined
+    let level: OperationalLogLevel | undefined
+    const supervisor = new SidecarSupervisor({
+      sidecarCommand: process.execPath,
+      sidecarArgs: ['-e', script],
+      socketDir,
+      disconnectSettleMs: 250,
+      onOperationalEvent: event => {
+        events.push(event.event)
+        if (event.event === 'sidecar.exit') {
+          fields = event.fields
+          level = event.level
+        }
+      },
+    })
+    supervisors.push(supervisor)
+    supervisor.spawnSession(`exit-code-${code}-session`)
+    await waitFor(() => fields !== undefined, `no sidecar.exit record for code ${code}`)
+    // The coverage record is emitted synchronously after the exit record, so it
+    // is already present or already declined by the time the wait resolves.
+    return { fields: fields!, level: level!, events }
+  }
+
+  const parked = await exitReportFor(PARKED_EXIT_CODE)
+  const crashed = await exitReportFor(139)
+
+  // 1. The code itself, which is the field that survives into the export.
+  expect(parked.fields.exitCode).toBe(PARKED_EXIT_CODE)
+  expect(crashed.fields.exitCode).toBe(139)
+  // A code-carrying exit reports no signal; the signal branch is the other half
+  // (`app/main/diagnosticsBundle.test.ts` exports a SIGKILL record).
+  expect(parked.fields.signal).toBeUndefined()
+
+  // 2. The park is a designed exit, so it is neither an error nor unexpected.
+  expect(parked.fields.expected).toBe(true)
+  expect(parked.level).toBe('info')
+  expect(crashed.fields.expected).toBe(false)
+  expect(crashed.level).toBe('error')
+
+  // 3. A park closes its log stream as deliberately as a zero exit does, so it
+  // claims no lost coverage. A real abnormal exit still must.
+  expect(parked.events).not.toContain('log.coverage.incomplete')
+  expect(crashed.events).toContain('log.coverage.incomplete')
 })
 
 test('a socket that drops under a LIVING child still reports disconnected', async () => {
@@ -706,4 +773,106 @@ test('a sidecar that exits on SIGTERM is never force-killed', async () => {
   // Well past the grace period: a live timer would have fired by now.
   await Bun.sleep(400)
   expect(lines.filter(line => line.includes('SIGKILL'))).toEqual([])
+})
+
+test('carries the peer spawn-env keys and CLEARS the ones the host did not supply', async () => {
+  // PEER-SESSIONS §2/§5 + HOST-REQUEST-PLANE §5. The spawn environment is main's
+  // only contact with a sidecar before its socket exists, and the sidecar needs
+  // its name and creator at CONSTRUCTION (its system prompt is fixed then), so
+  // these cannot arrive as a frame.
+  //
+  // The poisoning is the point. This object spreads the parent environment and
+  // then `sidecarEnv` BEFORE the peer keys, so a key merely left unset would be
+  // INHERITED, letting a process outside main name a session. `sidecarEnv` is
+  // the LATER of the two spreads, so a fix that defeats a poisoned `sidecarEnv`
+  // necessarily defeats a poisoned `process.env` too; the next test covers the
+  // literal parent-environment case as well. Same guard the resume id above has.
+  const socketDir = makeTempDir('catcode-supervisor-peer-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedPath = join(socketDir, 'observed-peer.json')
+  const keys = [
+    'CATCODE_SIDECAR_NAME',
+    'CATCODE_SIDECAR_CREATED_BY',
+    'CATCODE_SIDECAR_CREATED_BY_NAME',
+    'CATCODE_SIDECAR_MODEL',
+    'CATCODE_SIDECAR_EFFORT',
+  ]
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    `const keys = ${JSON.stringify(keys)}`,
+    'const seen = {}',
+    "for (const key of keys) seen[key] = key in process.env ? process.env[key] : 'ABSENT'",
+    'writeFileSync(process.argv[1], JSON.stringify(seen))',
+  ].join(';')
+
+  const supervisor = new SidecarSupervisor({
+    sidecarCommand: process.execPath,
+    sidecarArgs: ['-e', script, observedPath],
+    sidecarCwd: sessionCwd,
+    // Every peer key poisoned, so an unwritten key would arrive as this value.
+    sidecarEnv: {
+      CATCODE_SIDECAR_NAME: 'InheritedName',
+      CATCODE_SIDECAR_CREATED_BY: 'inherited-creator-id',
+      CATCODE_SIDECAR_CREATED_BY_NAME: 'InheritedCreator',
+      CATCODE_SIDECAR_MODEL: 'inherited-model',
+      CATCODE_SIDECAR_EFFORT: 'inherited-effort',
+    },
+    socketDir,
+  })
+  supervisors.push(supervisor)
+  supervisor.spawnSession('peer-session', {
+    cwd: sessionCwd,
+    name: 'Bear',
+    createdBy: 'creator-app-session-id',
+    createdByName: 'Quartz',
+    // model / effort deliberately omitted: they must arrive EMPTY, never
+    // carrying the poisoned inherited value.
+  })
+
+  await waitFor(
+    () => existsSync(observedPath) && readFileSync(observedPath, 'utf8').length > 0,
+    'sidecar did not report its peer environment',
+  )
+  expect(JSON.parse(readFileSync(observedPath, 'utf8'))).toEqual({
+    CATCODE_SIDECAR_NAME: 'Bear',
+    CATCODE_SIDECAR_CREATED_BY: 'creator-app-session-id',
+    CATCODE_SIDECAR_CREATED_BY_NAME: 'Quartz',
+    CATCODE_SIDECAR_MODEL: '',
+    CATCODE_SIDECAR_EFFORT: '',
+  })
+})
+
+test('a session spawned without a name does not inherit one from the parent process', async () => {
+  // The literal `...process.env` case: a `CATCODE_SIDECAR_NAME` in main's own
+  // environment must not name a session main never named. This is the
+  // `CATCODE_SIDECAR_RESUME_SESSION_ID` lesson applied to identity.
+  const socketDir = makeTempDir('catcode-supervisor-peer-inherit-')
+  const sessionCwd = makeTempDir('catcode-supervisor-cwd-')
+  const observedPath = join(socketDir, 'observed-name.txt')
+  const script = [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(process.argv[1], JSON.stringify(process.env.CATCODE_SIDECAR_NAME ?? 'ABSENT'))",
+  ].join(';')
+
+  const previous = process.env.CATCODE_SIDECAR_NAME
+  process.env.CATCODE_SIDECAR_NAME = 'InheritedName'
+  try {
+    const supervisor = new SidecarSupervisor({
+      sidecarCommand: process.execPath,
+      sidecarArgs: ['-e', script, observedPath],
+      sidecarCwd: sessionCwd,
+      socketDir,
+    })
+    supervisors.push(supervisor)
+    supervisor.spawnSession('unnamed-session', { cwd: sessionCwd })
+
+    await waitFor(
+      () => existsSync(observedPath) && readFileSync(observedPath, 'utf8').length > 0,
+      'sidecar did not report its name environment',
+    )
+    expect(JSON.parse(readFileSync(observedPath, 'utf8'))).toBe('')
+  } finally {
+    if (previous === undefined) delete process.env.CATCODE_SIDECAR_NAME
+    else process.env.CATCODE_SIDECAR_NAME = previous
+  }
 })

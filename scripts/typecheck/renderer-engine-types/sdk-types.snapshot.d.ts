@@ -350,6 +350,7 @@ export type SDKMessageOrigin =
   | { kind: 'channel'; server: string; user?: string }
   | { kind: 'teammate'; from?: string }
   | { kind: 'deferred-continuation' }
+  | { kind: 'peer'; name: string }
 
 export type SDKUserMessage = SDKBaseMessage & {
   type: 'user'

@@ -22,9 +22,11 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 import {
+  type AttachmentFileTokenSelection,
+  type AttachmentImageMediaType,
   MAX_LIVE_SESSIONS,
   type SaveTextErrorCode,
   type SessionDescriptor,
@@ -35,9 +37,10 @@ import {
   PROTOCOL_VERSION,
   type ServerFrame,
   type SessionId,
+  type SubmitPrompt,
 } from '../shared/protocol.js'
 import type { TranscriptBackfillItem } from '../shared/transcriptBackfill.js'
-import type { SupervisorEvent } from '../supervisor/supervisor.js'
+import type { SidecarStatus, SupervisorEvent } from '../supervisor/supervisor.js'
 
 /**
  * Keep the desktop sidecar on the engine's default runtime features. Without
@@ -499,6 +502,121 @@ export function createRendererRecoveryPolicy({
  * frame after being classified correctly. Dropping it also stops main running the
  * terminal persist + replay-evict twice per death.
  */
+/**
+ * Stamp main's view anchor onto an outbound `history.loadEarlier`
+ * (decisions/HISTORY-LOAD-EARLIER.md §The view anchor).
+ *
+ * WHY MAIN AND NOT THE RENDERER. The anchor answers "which message does the
+ * reader's transcript currently START at", and after a renderer reload the
+ * answer is main's replay ring, because the pane is rebuilt from that ring and
+ * nothing else. Main owns the ring, so main is the only party that knows. A
+ * renderer-stated uuid would put a validated identity the renderer controls on
+ * the inbound boundary for a fact the renderer is not the source of, which is
+ * the wrong side of it (SECURITY-MINIMUM §2 R2, CLAUDE.md §8 mistake 5).
+ *
+ * WHY IT CANNOT BE FORGED. The renderer-supplied key is DESTRUCTURED AWAY
+ * first, unconditionally, and re-added only from `anchor`. A frame arriving
+ * with a forged `viewAnchorUuid` therefore leaves here carrying main's value or
+ * carrying none — there is no branch in which the inbound one survives. This
+ * runs at `forward`, the single point every renderer frame passes through on
+ * its way to a sidecar, so the property holds for every route into the verb
+ * rather than for the one IPC channel that has a handler today.
+ *
+ * Non-load-earlier messages are returned by identity, so the common path
+ * allocates nothing.
+ */
+export function stampHistoryViewAnchor<T extends { type: string }>(
+  message: T,
+  anchor: string | undefined,
+): T {
+  if (message.type !== 'history.loadEarlier') return message
+  const { viewAnchorUuid: _rendererAuthored, ...rest } =
+    message as T & { viewAnchorUuid?: unknown }
+  return (anchor === undefined ? rest : { ...rest, viewAnchorUuid: anchor }) as T
+}
+
+/**
+ * Is a supervisor record a LIVE engine, or a tombstone?
+ *
+ * `SidecarSupervisor.listSessions()` returns every record it holds with its
+ * status and filters nothing, and the supervisor deletes a record only in
+ * `killSession`. So an engine that exited — which for an idle-parked session is
+ * the DESIGNED path, a self-exit with `PARKED_EXIT_CODE` — leaves a record
+ * behind reading `exited`. Membership in that list is therefore not liveness,
+ * and treating it as liveness is a false POSITIVE: the dead read as alive.
+ *
+ * That direction is the dangerous one for the peer plane. A `peer.deliver` to a
+ * row that reads live skips the wake-block check, skips `restoreSession`, skips
+ * the wait for `ready`, and forwards into a socket that is not there — so the
+ * message is refused and dropped, and "a message to a parked peer wakes it"
+ * (PEER-SESSIONS §15 step 6's own acceptance criterion) can never happen for any
+ * row parked, crashed or closed during the run. `peers.list` reports the same
+ * rows as `live` with no presence, which contradicts what absence of presence
+ * means on the wire.
+ *
+ * The rule is the host's own, not a second opinion: `Host.liveCount()` counts
+ * exactly `!isTerminalStatus`, and this must agree with it or the two planes
+ * disagree about which sessions exist.
+ *
+ * It lives HERE, in the Electron-free decisions module, because as a lambda in
+ * main's host wiring it was the one line of the peer plane no test could reach:
+ * every plane test injects its own `isLive`, so the real predicate had no
+ * coverage at all and its defect was invisible to a green battery.
+ */
+export function isLiveSidecarStatus(status: SidecarStatus): boolean {
+  return status !== 'exited' && status !== 'failed'
+}
+
+/**
+ * Liveness for one session, over the supervisor's own record list. See
+ * `isLiveSidecarStatus` for why membership alone is the wrong test.
+ */
+export function isSessionLive(
+  records: readonly { sessionId: string; status: SidecarStatus }[],
+  appSessionId: string,
+): boolean {
+  const record = records.find(row => row.sessionId === appSessionId)
+  return record !== undefined && isLiveSidecarStatus(record.status)
+}
+
+/**
+ * Can this session take a frame RIGHT NOW?
+ *
+ * A different question from `isLiveSidecarStatus`, and the reason both exist.
+ * That one answers whether a session EXISTS, deliberately matching
+ * `Host.liveCount()`'s `!isTerminalStatus` so the two planes never disagree
+ * about the set of sessions. Existence is the wrong test for a delivery:
+ * `spawning`, `connecting` and `disconnected` are all non-terminal, so a row in
+ * any of them exists, and `SidecarSupervisor.send` still refuses the frame
+ * (`sendFailureCodeForStatus`). Only `ready` means the socket is there.
+ *
+ * The cost of conflating them fell on the peer plane, which read existence and
+ * concluded delivery: a `peer.deliver` to a row in one of those three skipped
+ * the wake block, skipped `restoreSession`, skipped the wait for `ready`, and
+ * handed the frame to a socket that was not there. The sender got
+ * `delivery_failed`, and for a `disconnected` row it got it every time, because
+ * a row that reads live is never woken.
+ *
+ * So the two predicates answer two questions and neither may stand in for the
+ * other: existence for anything that counts or lists sessions, readiness for
+ * anything that writes to one.
+ */
+export function isReadyForFrames(status: SidecarStatus): boolean {
+  return status === 'ready'
+}
+
+/**
+ * Readiness for one session, over the supervisor's own record list. A row with
+ * no record at all is not ready, the same way it is not live.
+ */
+export function isSessionReadyForFrames(
+  records: readonly { sessionId: string; status: SidecarStatus }[],
+  appSessionId: string,
+): boolean {
+  const record = records.find(row => row.sessionId === appSessionId)
+  return record !== undefined && isReadyForFrames(record.status)
+}
+
 export function supervisorEventToServerFrame(
   event: SupervisorEvent,
 ): ServerFrame | null {
@@ -625,6 +743,122 @@ export function createCwdTokenStore(
       return entry.realpath
     },
   }
+}
+
+export type AttachmentFileTokenStore = {
+  /** Issue a short-lived token for a file the user selected in main. */
+  mint(sessionId: SessionId, realpath: string): AttachmentFileTokenSelection
+  /** Resolve only in the session that owns the selection. */
+  resolve(sessionId: SessionId, token: string): string | undefined
+}
+
+export function detectAttachmentImageMediaType(
+  bytes: Uint8Array,
+): AttachmentImageMediaType | null {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png'
+  }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return 'image/jpeg'
+  }
+  if (
+    bytes.length >= 6 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x38 &&
+    (bytes[4] === 0x37 || bytes[4] === 0x39) &&
+    bytes[5] === 0x61
+  ) {
+    return 'image/gif'
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp'
+  }
+  return null
+}
+
+/**
+ * Keeps native-picker file paths out of the renderer. Unlike cwd tokens this is
+ * reusable during its short lifetime, so a rejected queued submit can return to
+ * the composer without requiring the user to choose the same file again.
+ */
+export function createAttachmentFileTokenStore(
+  options: {
+    now?: () => number
+    newToken?: () => string
+    ttlMs?: number
+  } = {},
+): AttachmentFileTokenStore {
+  const now = options.now ?? Date.now
+  const newToken = options.newToken ?? randomUUID
+  const ttlMs = options.ttlMs ?? CWD_TOKEN_TTL_MS
+  const tokens = new Map<
+    string,
+    { sessionId: SessionId; realpath: string; expiresAt: number }
+  >()
+
+  return {
+    mint(sessionId, realpath) {
+      const token = newToken()
+      tokens.set(token, { sessionId, realpath, expiresAt: now() + ttlMs })
+      return { kind: 'file', token, name: basename(realpath) }
+    },
+    resolve(sessionId, token) {
+      const entry = tokens.get(token)
+      if (!entry) return undefined
+      if (entry.expiresAt < now()) {
+        tokens.delete(token)
+        return undefined
+      }
+      return entry.sessionId === sessionId ? entry.realpath : undefined
+    },
+  }
+}
+
+/**
+ * Main adds this trusted `@` mention after resolving the opaque native-picker
+ * token. The engine's existing attachment pipeline then performs the bounded
+ * read before the model turn begins.
+ */
+export function appendAttachmentFileMention(
+  prompt: SubmitPrompt,
+  realpath: string,
+): SubmitPrompt {
+  const mention = `@"${realpath}"`
+  if (typeof prompt === 'string') return `${prompt}\n${mention}`
+
+  const textIndex = prompt.findIndex(block => block.type === 'text')
+  if (textIndex < 0) return [...prompt, { type: 'text', text: mention }]
+  return prompt.map((block, index) => {
+    if (index !== textIndex || block.type !== 'text') return block
+    return { type: 'text' as const, text: `${block.text}\n${mention}` }
+  })
 }
 
 /* ------------------------------------------------------------------------- *

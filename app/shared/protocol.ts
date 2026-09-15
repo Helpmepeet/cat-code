@@ -57,6 +57,7 @@ import type {
 // must never merge with `ErrorFrame['code']` (F3 §3). Re-surfaced on the bridge
 // here because the renderer reaches both planes through the one preload.
 import type {
+  AttachmentFileSelection,
   CreateSessionInput,
   HostEvent,
   HostResult,
@@ -494,14 +495,18 @@ export type AppParkMessage = {
  * TAIL and the rest of it — which exists, whole, in the engine's own JSONL —
  * had no route back into the app at all. This verb is that route.
  *
- * PARAMETERLESS BY DECISION, and that is the entire security story. The frame
- * names a session and a verb; it carries no cursor, no offset, no count, no
- * path, so there is nothing on it for the sidecar to trust and nothing for a
- * compromised renderer to aim. The sidecar owns every number: the read ceiling
- * (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much is already on screen, and where
- * the file is — the transcript path is resolved from the sidecar's OWN session
- * identity via the engine's `getTranscriptPath()`, never from frame content
- * (SECURITY-MINIMUM HC1's posture, applied to a read).
+ * RENDERER-PARAMETERLESS BY DECISION, and that is the entire security story.
+ * The renderer names a session and a verb; it authors no cursor, no offset, no
+ * count, no path, so there is nothing renderer-supplied on it for the sidecar
+ * to trust and nothing for a compromised renderer to aim. The one non-verb
+ * field, `viewAnchorUuid`, is authored by ELECTRON MAIN and overwritten there
+ * on every forward (`stampHistoryViewAnchor`, `app/main/mainDecisions.ts`), so
+ * a renderer-supplied value never survives the hop. The sidecar still owns
+ * every number: the read ceiling (`MAX_HISTORY_LOAD_EARLIER_BYTES`), how much
+ * is already on screen, and where the file is — the transcript path is
+ * resolved from the sidecar's OWN session identity via the engine's
+ * `getTranscriptPath()`, never from frame content (SECURITY-MINIMUM HC1's
+ * posture, applied to a read).
  *
  * Paging was rejected: the measured corpus has a 2,988-record maximum, so a
  * whole real transcript fits one bounded read, and a cursor would buy nothing
@@ -523,21 +528,369 @@ export type HistoryLoadEarlierVerbType =
   (typeof HISTORY_LOAD_EARLIER_VERB_TYPES)[number]
 
 /**
- * Read further back into THIS session's transcript. Carries nothing but the
- * T5a-analog `requestId`; the envelope supplies the protocol version and the
- * session address.
+ * Read further back into THIS session's transcript. The renderer authors
+ * nothing but the T5a-analog `requestId`; the envelope supplies the protocol
+ * version and the session address.
  */
 export type HistoryLoadEarlierMessage = {
   type: 'history.loadEarlier'
   requestId: string
+  /**
+   * MAIN-AUTHORED (decisions/HISTORY-LOAD-EARLIER.md §The view anchor). The uuid
+   * of the oldest transcript message Electron main's replay ring still retains
+   * for this session, present ONLY when that ring is lossy — i.e. only when the
+   * view the reader is holding is known to start below where the sidecar
+   * believes it does.
+   *
+   * It exists because the sidecar's own per-connection anchor answers "what did
+   * I send this socket", and that stops being what the reader HOLDS the moment
+   * main's ring evicts a head or a renderer reload rebuilds the pane from that
+   * ring alone. Without it the sidecar can answer `complete: true` over a
+   * transcript with a hole in it, and the renderer clears the boundary row that
+   * was the reader's only route back.
+   *
+   * NEVER renderer-authored: `stampHistoryViewAnchor`
+   * (`app/main/mainDecisions.ts`) drops whatever key arrived from the renderer
+   * and re-stamps it from main's own ring at `forward`, the single point every
+   * renderer frame passes through on its way to the sidecar. It is still
+   * validated at the sidecar as inbound vocabulary (uuid-shaped, on the closed
+   * `checkStrictKeys` allowlist), because the sidecar is the trust boundary and
+   * a preload-side or main-side check is never sufficient on its own
+   * (SECURITY-MINIMUM §2 R2). Nothing is authorized by it: it is compared for
+   * equality against uuids from the sidecar's OWN disk read and steers no file,
+   * no budget, and no amount.
+   *
+   * Additive under v1 — no `PROTOCOL_VERSION` bump. Absent means "main has
+   * nothing to add", which is the pre-existing behaviour.
+   */
+  viewAnchorUuid?: string
+}
+
+/* ------------------------------------------------------------------------- *
+ * HOST-REQUEST-PLANE (decisions/HOST-REQUEST-PLANE.md)
+ *
+ * The one place the desktop wire runs the OTHER way: a sidecar asks Electron
+ * main to do something, and main answers. Everything else inbound is a renderer
+ * verb; these two are main-originated, and they are the only two inbound kinds
+ * SECURITY-MINIMUM's Addendum 2026-07-04 (as amended 2026-09-03, HRP §9) admits.
+ * A third is not an addition, it is a re-opened ruling.
+ *
+ * Both are app-owned vocabulary validated by sidecar-LOCAL schemas plus a closed
+ * `checkStrictKeys` entry, exactly like C2 and the load-earlier verb: the
+ * engine's shared `appClientMessageSchema` is deliberately NOT extended.
+ * Additive under v1 — no `PROTOCOL_VERSION` bump.
+ * ------------------------------------------------------------------------- */
+
+/**
+ * The CLOSED verb allowlist (HR1). Three are the model-facing verbs of HRP §2;
+ * `peer.ack` is the fourth and is not model-facing at all.
+ *
+ * `peer.ack` exists because HRP §4 step 6 makes main hold a routed message until
+ * the recipient sidecar says it took it — but names no transport for the ack
+ * itself. (Step 6's "ack = enqueued" was reruled to "ack = consumed" on
+ * 2026-09-04: an enqueue is not a hand-off, so acking there lost the message
+ * whenever the recipient died before its turn read it. The verb and its payload
+ * are unchanged; only the moment the sidecar sends it moved, which is why this
+ * needed no wire change at all.) The two candidates were a new OUTBOUND frame
+ * kind (which §5's change list does not list, and which would put a third
+ * app-owned kind on the wire for one boolean) and this: an existing frame, an
+ * existing handler, one more entry in a list main already closes. It carries no
+ * model input — the sidecar mints it from a `messageId` main itself stamped —
+ * and it is unreachable from any tool.
+ */
+export const HOST_REQUEST_VERBS = [
+  'peers.list',
+  'peer.create',
+  'peer.deliver',
+  'peer.ack',
+] as const
+
+export type HostRequestVerb = (typeof HOST_REQUEST_VERBS)[number]
+
+/**
+ * The host-request plane's own closed error vocabulary — a THIRD union beside
+ * `ErrorFrame['code']` (transport) and `HostErrorCode` (control plane). It is
+ * kept separate for the same reason those two are (hostApi.ts F3 §3): merging
+ * them would make one plane's refusal readable as another's, and this one is the
+ * only plane whose caller is a model rather than a person or a process.
+ */
+export const HOST_REQUEST_ERROR_CODES = [
+  /** Args failed the per-verb schema, or a strict-key check. */
+  'bad_request',
+  /** HR1 — over `MAX_HOST_REQUEST_BYTES`. */
+  'too_large',
+  /** HR1 — over `MAX_HOST_REQUESTS_PER_WINDOW` in the window. */
+  'rate_limited',
+  /** Not on the closed verb allowlist. */
+  'unknown_verb',
+  /** HR3 — no such row, or a row the caller may not name (another workspace). */
+  'session_not_found',
+  /** HR4 — HC4's caps, or the registry churn rule. */
+  'session_limit',
+  /** The requester's own workspace no longer exists. */
+  'invalid_cwd',
+  /** The child process failed to start. */
+  'spawn_failed',
+  /** Main failed in a way the caller cannot act on. */
+  'internal_error',
+  /**
+   * Minted on BOTH sides for the same fact, that a call did not answer in
+   * time: by the sidecar when no `host.result` arrives inside
+   * `HOST_REQUEST_TIMEOUT_MS`, and by main when a host call it made outlives
+   * `PEER_HOST_CALL_TIMEOUT_MS`. Main used to report its own timeout as
+   * `spawn_failed`, which said the work had not happened when the truth was
+   * that it had not answered, and the work then often completed. It is in this
+   * union rather than a second one so a
+   * caller pattern-matches ONE closed set; the requesting side never hangs, and
+   * a timeout on `peer.create` deliberately does not auto-retry — the row is
+   * named and visible from the moment it is persisted, so the answer is to look
+   * at the peer list, not to spawn again.
+   */
+  'timeout',
+  /** SIDECAR-minted: no connection to main is open, so nothing can be asked. */
+  'unavailable',
+] as const
+
+export type HostRequestErrorCode = (typeof HOST_REQUEST_ERROR_CODES)[number]
+
+/** A typed host-request failure. Never a throw into main (HR1). */
+export type HostRequestError = {
+  code: HostRequestErrorCode
+  message: string
+}
+
+/** A peer row's liveness, as `peers.list` reports it (PEER-SESSIONS §3). */
+export type PeerStatus = 'live' | 'parked' | 'closed'
+
+/**
+ * What a live session is DOING, as the `activity` frame reports it. `needs_user`
+ * outranks `running` because a peer stuck on a permission prompt is the case a
+ * creator most needs to see, and it is not "busy".
+ */
+export const ACTIVITY_PRESENCES = ['running', 'needs_user', 'idle'] as const
+
+export type ActivityPresence = (typeof ACTIVITY_PRESENCES)[number]
+
+/** One row of the `peers.list` answer (HRP §2 verb table, PEER-SESSIONS §3). */
+export type PeerDescriptor = {
+  name: string
+  appSessionId: SessionId
+  /**
+   * The transcript key. Null until the row's first ready frame, which means
+   * "nothing to read yet", NOT "no such peer". It is here because a later
+   * wave's reader opens `<engineSessionId>.jsonl` itself and the mapping lives
+   * only in main's registry, which R2 forbids a sidecar to read.
+   */
+  engineSessionId: string | null
+  status: PeerStatus
+  /** From the `activity` frame. ABSENT for a row that is not live. */
+  presence?: ActivityPresence
+  /**
+   * What the session is RUNNING on: the resolved model id and the reasoning
+   * effort actually applied, read off the row's own `run-controls.snapshot`
+   * ({@link RunControlsSnapshot} `model.current` / `effort.current`). ABSENT for
+   * a closed row, and absent for one that has not announced yet, on the
+   * `presence` rule: a value nobody measured is not filled in.
+   *
+   * OBSERVED, never the value a `CreatePeer` asked for, because a spawn-time
+   * value is wrong three ways: a user-created session never had one, a `/model`
+   * or `/effort` change moves the session without telling main, and an
+   * unrecognised effort is dropped at the child in favour of the user's saved
+   * setting — so the asked-for value may never have been what ran. A parked row
+   * keeps its last observed value: its engine is gone, so nothing can move it
+   * while parked. On the way back it is briefly the PREVIOUS process's value: a
+   * restoring row counts as live while it spawns, and the sidecar sends `ready`
+   * before it sends the run-controls snapshot, so a `peers.list` timed into that
+   * gap reads a value the new process has not confirmed. One synchronous frame
+   * dispatch wide, and only a concurrent list can observe it.
+   *
+   * The model id is NOT checked against a known set anywhere on this path. The
+   * engine passes unrecognised ids through so a new model works the day it
+   * ships; reporting the value is what makes a typo visible, and a typo is
+   * exactly what the reader needs to see here.
+   */
+  model?: string
+  effort?: string
+  /**
+   * The creating session, when an agent created this one. `name` is null when
+   * the creator's row has been reaped: ids are not reused and names are, so the
+   * id is what is stored and the name is resolved at read time.
+   */
+  createdBy?: { appSessionId: SessionId; name: string | null }
+  title: string | null
+  lastActivity: number
+}
+
+/** Why main refused to route a peer message (HRP §4 step 6). */
+export const PEER_DELIVER_REFUSAL_REASONS = [
+  'user_stopped',
+  'hop_loop',
+  'hop_runaway',
+  'rate',
+  'duplicate',
+  'queue_full',
+  'wake_failed',
+  /**
+   * The recipient was ALREADY AWAKE and the hand-off to its process failed
+   * anyway. Distinct from `wake_failed` on purpose: that one means a parked row
+   * could not be brought back, and reporting it for a live peer tells the
+   * sending model its peer is unreachable when the peer is sitting there
+   * running. Not in §4 step 6's original list; the decision doc needs the
+   * addition recorded.
+   */
+  'delivery_failed',
+  /**
+   * The sender addressed the session that created it, and the row now holding
+   * that name is NOT that session (F17, ruling 11 of 2026-09-06;
+   * HOST-REQUEST-PLANE §4 step 1a, PEER-SESSIONS §2).
+   *
+   * A peer learns its creator's name once, at spawn. Names are unique only
+   * among current registry rows and are released when a row is reaped
+   * (`app/host/peerNames.ts`, `app/host/registry.ts` `isReapableForBound`), so
+   * a reissued name makes the remembered one point at a stranger. The ruling
+   * is that such a send is REFUSED, never redirected: delivering it would put
+   * one session's private context into another's transcript.
+   */
+  'creator_reissued',
+] as const
+
+export type PeerDeliverRefusalReason =
+  (typeof PEER_DELIVER_REFUSAL_REASONS)[number]
+
+/**
+ * What happened to one routed peer message. The sending model reads this in its
+ * tool result, so it never reasons from a false belief that a peer heard it.
+ */
+export type PeerDeliverOutcome =
+  | 'queued_live'
+  | 'queued_wake'
+  | `refused:${PeerDeliverRefusalReason}`
+
+/**
+ * Per-verb ARGS. Model-authored (HRP §8 A1), so every one of these is validated
+ * at main under a per-verb Zod schema before anything is done with it. Note what
+ * is absent by decision: no path anywhere (HC1/HR3 — main sources the cwd from
+ * the requester's own registry row), no account field (R10), no permission mode
+ * (§0a), and no `from` (HR2 — identity is the connection).
+ *
+ * `expectCreatorId` is the one id on this plane, and it does not weaken that
+ * list. It is not the SENDER's identity, which is still the connection and
+ * nothing else; it is not model-authored, since the sidecar reads it from its
+ * own spawn env (`CATCODE_SIDECAR_CREATED_BY`, host-owned like the cwd) and no
+ * tool argument reaches it; and it can only ever NARROW a delivery, never widen
+ * one, because main resolves the name first and the id is compared against the
+ * row that name already produced. See the field's own comment below.
+ */
+export type HostRequestArgs = {
+  'peers.list': Record<string, never>
+  'peer.create': { prompt: string; model?: string; effort?: string }
+  'peer.deliver': {
+    to: string
+    text: string
+    /**
+     * The `appSessionId` this sender remembers as its creator's, sent ONLY when
+     * `to` names that creator (F17, ruling 11 of 2026-09-06;
+     * HOST-REQUEST-PLANE §4 step 1a, PEER-SESSIONS §2).
+     *
+     * Names are released on reap and reissued; ids are not. So main compares
+     * this against the row the name resolved to and refuses
+     * `refused:creator_reissued` when they differ, rather than delivering to
+     * whoever now holds the name. Absent means the ordinary path, unchanged:
+     * the sender is not addressing its creator, or it never had one.
+     */
+    expectCreatorId?: string
+  }
+  'peer.ack': { messageId: string }
+}
+
+/** Per-verb `value` on a successful `host.result`. */
+export type HostRequestValues = {
+  'peers.list': { peers: PeerDescriptor[] }
+  'peer.create': {
+    name: string
+    appSessionId: SessionId
+    /**
+     * Present when the row exists but a later step failed. `ready` = the child
+     * never announced itself in time; `prompt` = it did and the opening message
+     * was refused. The row is KEPT either way: it is a real session the operator
+     * can see, and the caller can send it the prompt itself.
+     */
+    failedStep?: 'ready' | 'prompt'
+  }
+  'peer.deliver': { messageId: string; outcome: PeerDeliverOutcome }
+  'peer.ack': { messageId: string }
+}
+
+/**
+ * Main's answer to one `host.request`, correlated by the `requestId` the SIDECAR
+ * minted (the T5a analog `history.loadEarlier.result` already uses). A result
+ * whose id matches no pending request is dropped and logged at the sidecar.
+ *
+ * `protocolVersion` and `sessionId` are deliberately absent: they are the
+ * `ClientFrame` envelope `supervisor.send` adds, not fields the handler authors
+ * twice (HRP §2).
+ */
+export type HostResultMessage = {
+  type: 'host.result'
+  requestId: string
+  ok: boolean
+  /** Present when `ok`. */
+  value?: HostRequestValues[HostRequestVerb]
+  /** Present when not `ok`. */
+  error?: HostRequestError
+}
+
+/**
+ * One peer message, routed by main to the recipient sidecar (HRP §4 step 2).
+ *
+ * Every field is MAIN-STAMPED. `from` and `fromSessionId` are the requester's
+ * identity as main read it off the connection (HR2), never anything the sending
+ * sidecar wrote; `messageId` is minted by main and is what the ack and the
+ * operational-log line are keyed on. The recipient sidecar treats all of it as
+ * DATA.
+ *
+ * There is deliberately NO hop chain on this frame. An earlier revision carried
+ * one so a recipient could show where a message came through, and nothing ever
+ * read it: it crossed the trust boundary, was validated, and was dropped. HR5's
+ * whole posture is the smallest inbound surface that does the job, and a field
+ * with no consumer is surface for nothing. The chain stays entirely main-side,
+ * where the loop stop lives (§4 step 2) and where a compromised sidecar cannot
+ * reach it — which it could not anyway, since main derived it rather than
+ * reading it, but a field that does not exist cannot be argued about later.
+ *
+ * The only field carrying model-authored content is `text`, and it is bounded by
+ * `MAX_PEER_TEXT_BYTES` at main and re-bounded at the sidecar.
+ */
+export type PeerDeliverMessage = {
+  type: 'peer.deliver'
+  messageId: string
+  /** The SENDER's peer name, for the transcript label and the tag attribute. */
+  from: string
+  fromSessionId: SessionId
+  text: string
+  /**
+   * Deliver the text WITHOUT the `<cross-session-message>` wrapper.
+   *
+   * True for exactly one message: the creation prompt of a session this peer
+   * plane just spawned (PEER-SESSIONS §5). R8 defines an agent-created session
+   * as the operator opening a tab, so its opening instruction is its own first
+   * prompt; tagging it would make the auto-mode classifier judge every gated
+   * action in that session with zero user intent behind it.
+   *
+   * OPTIONAL and default-false on purpose: absent means tagged, which is the
+   * fail-closed direction. It is an explicit flag rather than something the
+   * sidecar infers from "is this the first message", because inferring it would
+   * make the classifier's posture depend on a race.
+   */
+  untagged?: boolean
 }
 
 /**
  * Everything a client may send toward a sidecar: the engine's allowlisted
  * vocabulary plus the app-owned C2 frame, the P4-5 account verbs, main's
  * host-originated account-deletion invalidation, the P4-13 RemoteSettings verbs,
- * the P4-19 settings write verb, the IDLE-PARK frame, and the load-earlier read
- * verb.
+ * the P4-19 settings write verb, the IDLE-PARK frame, the load-earlier read
+ * verb, and the two host-request-plane kinds above.
  */
 export type SidecarClientMessage =
   | AppClientMessage
@@ -548,15 +901,17 @@ export type SidecarClientMessage =
   | WorkspaceTrustMessage
   | RemoteVerbMessage
   | SettingsVerbMessage
-  | AgentModeSetMessage
   | TaskControlVerbMessage
   | RunControlVerbMessage
   | SessionActionVerbMessage
   | ContextBreakdownVerbMessage
   | StatsQueryMessage
   | PromptRecallMessage
+  | PromptForceMessage
   | AppParkMessage
   | HistoryLoadEarlierMessage
+  | HostResultMessage
+  | PeerDeliverMessage
 
 /**
  * The complete set of frames a client may send toward a sidecar. The `message`
@@ -594,12 +949,12 @@ export type ReadyFrame = {
  * — serialized to one JSON frame. This is the raw-forwarding serializer proven
  * in TRANSPORT-DECISION.md §2, NOT `createAppSessionEventMapper`.
  *
- * **User-turn provenance (`SDKUserMessage.origin`).** Five of the engine's six
- * `MessageOrigin` kinds (`src/types/message.ts:10`) are engine-INJECTED turns
+ * **User-turn provenance (`SDKUserMessage.origin`).** Most of the engine's
+ * `MessageOrigin` kinds (`src/types/message.ts`) are engine-INJECTED turns
  * that nonetheless carry `role: 'user'` — `task-notification`, `coordinator`,
- * `channel`, `teammate`, `deferred-continuation`. Until this field existed the
- * discriminant never left the engine process, so the renderer could only sniff
- * message TEXT for one of them and rendered the other four as the operator's own
+ * `channel`, `teammate`, `deferred-continuation` and `peer`. Until this field
+ * existed the discriminant never left the engine process, so the renderer could
+ * only sniff message TEXT for one of them and rendered the rest as the operator's own
  * pink right-aligned bubble. `origin` now rides the raw `SDKUserMessage` on this
  * frame (engine side: `mappers.ts` `toSDKMessageOrigin`), and
  * `transcriptProjector.ts` reads it instead of re-implementing the engine's
@@ -1290,6 +1645,17 @@ export type TaskSubagentMetadata = {
   agentType: string
   isSidechain: true
   spawnedAt: number
+  /**
+   * Whether this worker already runs in the background, so a card can tell a
+   * backgroundable worker from one there is nothing left to do to.
+   *
+   * It has to ride HERE rather than on `TaskSnapshotItem`: `items` is display-
+   * filtered by `isVisibleBackgroundTask` (`tasksDomain.ts`), which excludes a
+   * FOREGROUND `local_agent` by construction — precisely the worker
+   * `task.background.one` targets. This list is the one that carries them
+   * ("Includes foregrounded workers too", `TasksSnapshot.subagents`).
+   */
+  isBackgrounded: boolean
 }
 
 export type TasksSnapshot = {
@@ -1298,6 +1664,8 @@ export type TasksSnapshot = {
   subagents?: TaskSubagentMetadata[]
   /** Task id currently foregrounded (viewed in the main pane); already excluded from `items`. */
   foregroundedTaskId?: string
+  /** The engine currently owns a foreground Bash or local-agent task that Ctrl+B could background. */
+  hasForegroundTask?: boolean
 }
 
 export type TasksSnapshotFrame = {
@@ -1308,90 +1676,54 @@ export type TasksSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * Agent-mode / Orchestrator read-seam (P4-8, D2 `decisions/AGENT-CHROME.md`)
+ * Live worker read-seam
  * ------------------------------------------------------------------------- *
  *
- * The orchestrator surfaces the real worker roster/state. Per D2 §4 there are two
- * real engine feeds, joined at the sidecar trust boundary and served as ONE
- * redacted display snapshot (never a mock worker object — D2 C5):
- *   1. Session plane (D2 §4.2) — the engine's PERSISTED agent-mode state
- *      (`<transcript>.agent-mode-state.json`, `src/agent-mode/sessionState.ts:68`),
- *      read through the engine's OWN exact-session `readSessionState` entry point
- *      (`sessionState.ts`) — objective, run phase, and persisted workers for the
- *      current engine session. Cross-session continuity stays inside the engine's
- *      resume machinery and is not part of this desktop snapshot.
- *   2. Live plane — the `local_agent` workers the current session delegated via the
- *      Agent tool (`AppState.tasks`, the SAME store P4-9's tasks domain reads),
- *      carrying the real handoff gate: `handoffStatus:'blocked'` is the "waiting on
- *      orchestrator" state (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:184`), not
- *      a fixture field — plus its `blockReason` and verification `verdict`.
- * Outbound-only, read-only, no new inbound vocabulary. secretGuard-clean by
- * construction: identity/role/status/description text only, never a token.
+ * This is a read-only projection of the current session's live `local_agent`
+ * task records. It is outbound-only: worker lifecycle controls continue to use
+ * the generic task-control verbs, and no mode toggle or persisted worker ledger
+ * crosses the desktop boundary.
  */
 
-/** Run phase mirrored from the engine's `AgentModeRunPhase` (`sessionState.ts:7`). */
-export type AgentModeRunPhase =
-  | 'planning'
-  | 'awaiting_approval'
-  | 'executing'
-  | 'verifying'
-  | 'completed'
-  | 'blocked'
-  | 'cancelled'
-
-export type AgentModeWorkerItem = {
-  /** Stable worker id — persisted `AgentModeWorkerSession.agentId`, else the live task id. */
+export type LiveWorkerItem = {
+  /** Stable worker id from the live task record. */
   agentId: string
-  /** Display handle (persisted `handle` / live task `agentName`); null when unnamed. */
+  /** Display handle from the live task; null when unnamed. */
   handle: string | null
-  /** Role / subagent type (persisted `role` / live task `agentType`); null when unknown. */
+  /** Role / subagent type from the live task; null when unknown. */
   role: string | null
-  /** Lifecycle status. Live task `pending` folds to `running` (in-flight). */
+  /** Lifecycle status. A live task `pending` folds to `running` (in-flight). */
   status: 'running' | 'completed' | 'failed' | 'killed'
-  /** Delegated task/prompt text (persisted `description` / live task `label`); null when absent. */
+  /** Delegated task text; null when absent. */
   description: string | null
-  /** Persisted synthesis gate (result-ready / reviewed) — agent-mode session plane only. */
-  synthesisStatus?: 'pending' | 'synthesized'
-  /** Engine-origin metadata; the desktop sidecar's exact-session read normally yields `current`. */
-  origin?: 'current' | 'prior'
-  /** Persisted resumability (meaningful for `prior`-origin workers). */
-  resumable?: boolean
-  /**
-   * Live `local_agent` handoff gate. `blocked` is the real "waiting on orchestrator"
-   * state (orchestrator-owned, neutral) — the source of the `waiting` display state.
-   */
+  /** Live handoff gate. */
   handoffStatus?: 'done' | 'blocked'
-  /** Live `local_agent` block reason (only present when `handoffStatus === 'blocked'`). */
+  /** Live block reason, only present when the handoff is blocked. */
   blockReason?: string
-  /** Live `local_agent` verification verdict, when the worker is a verifier. */
+  /** Live verification verdict, when the worker is a verifier. */
   verdict?: 'PASS' | 'FAIL' | 'PARTIAL'
-  /** Live `local_agent` backgrounded flag. */
+  /** Whether the live worker runs in the background. */
   isBackgrounded?: boolean
-  /** Persisted agent output summary (agent-mode session plane), when present. */
-  outputSummary?: string
+  /**
+   * Bounded text-only content from the live task result. The sidecar omits this
+   * field when the result is unavailable or fails its secret scan.
+   */
+  resultSummary?: string
 }
 
-export type AgentModeSnapshot = {
-  /** Process-level agent-mode flag (`isAgentMode()`); false = a normal delegating session. */
-  active: boolean
-  /** Objective from the persisted agent-mode ledger; '' when none. */
-  objective: string
-  /** Derived run phase from the persisted state; 'planning' when none. */
-  phase: AgentModeRunPhase
-  /** Unified worker list: live `local_agent` workers ∪ this session's persisted workers. */
-  workers: AgentModeWorkerItem[]
+export type LiveWorkersSnapshot = {
+  workers: LiveWorkerItem[]
 }
 
-export type AgentModeSnapshotFrame = {
-  kind: 'agent-mode.snapshot'
+export type WorkersSnapshotFrame = {
+  kind: 'workers.snapshot'
   protocolVersion: typeof PROTOCOL_VERSION
   sessionId: SessionId
-  agentMode: AgentModeSnapshot
+  workers: LiveWorkersSnapshot
 }
 
 /* ------------------------------------------------------------------------- *
- * Codex lease read-seam (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7
- * + §10 ruling 2026-07-30)
+ * Codex lease read-seam (P4-32b, L1, 2026-07-30 ruling)
  * ------------------------------------------------------------------------- *
  *
  * "Which Codex account is each agent in this swarm leasing right now?" is real
@@ -1418,8 +1750,8 @@ export type AgentModeSnapshotFrame = {
  * (`src/query.ts:325`). A `local_agent` task's id IS that same agentId
  * (`createTaskStateBase(agentId, 'local_agent', …)`,
  * `src/tasks/LocalAgentTask/LocalAgentTask.tsx:618`), and the roster carries it as
- * `AgentModeWorkerItem.agentId` (`app/sidecar/agentModeDomain.ts:212`). So
- * `ownerId === AgentModeWorkerItem.agentId` needs no new field on either side.
+ * `LiveWorkerItem.agentId` (`app/sidecar/workersDomain.ts`). So
+ * `ownerId === LiveWorkerItem.agentId` needs no new field on either side.
  *
  * CUT (§10): the prototype's failover/rotation EVENT strip. The engine exposes
  * current lease/failover state (`failoverCount` + `lastFailureReason`), not an
@@ -1464,7 +1796,7 @@ export type LeaseMovedFrom = {
 /** One owner→account lease row, projected from the engine's `CodexLease` (`codexAccountLeaseManager.ts:24-37`). */
 export type LeaseOwnerRow = {
   leaseId: string
-  /** `'main-thread'` for the main lease, else the subagent `agentId` (joins `AgentModeWorkerItem.agentId`). */
+  /** `'main-thread'` for the main lease, else the subagent `agentId` (joins `LiveWorkerItem.agentId`). */
   ownerId: string
   ownerType: 'main' | 'subagent'
   /** Engine-authored label: `'Main thread'` or the delegated task description. */
@@ -1513,9 +1845,9 @@ export type LeaseSnapshot = {
 }
 
 /**
- * P4-32b outbound frame. Emitted on attach beside the other read-seam snapshots
- * and re-broadcast on the same app-state store change that re-broadcasts
- * `agent-mode.snapshot` (a worker spawn/finish is exactly when leases move).
+ * Outbound frame. Emitted on attach beside the other read-seam snapshots and
+ * re-broadcast on the same app-state store change as the worker roster (a worker
+ * spawn/finish is exactly when leases move).
  * Read-only: there is no lease verb.
  */
 export type LeaseSnapshotFrame = {
@@ -1526,65 +1858,17 @@ export type LeaseSnapshotFrame = {
 }
 
 /* ------------------------------------------------------------------------- *
- * P4-8b — agent-mode WRITE verb (the in-session Orchestrator toggle's set)
+ * P4-8b — task/worker lifecycle verbs
  * ------------------------------------------------------------------------- *
  *
- * The WelcomeScreen's Orchestrator control was a read-only reflect of
- * `AgentModeSnapshot.active`; this verb makes the in-session (`variant:'session'`)
- * toggle ACTUALLY switch the addressed session's agent mode. Like the P4-5
- * account verbs, the P4-15 workspace-trust accept, and the P4-19 settings write,
- * it is app-owned inbound vocabulary the engine's shared `appClientMessageSchema`
- * does NOT carry — it is validated by a sidecar-LOCAL Zod schema at the trust
- * boundary and dispatched to the engine's OWN runtime mode switch
- * `matchSessionMode` (`src/agent-mode/agentMode.ts:102`), the SAME function the
- * `/agent` command uses. It sets/clears `CLAUDE_CODE_AGENT_MODE` in THIS session's
- * sidecar process only (N-process, LOCKED) and logs `tengu_agent_mode_switched`;
- * `isAgentMode()` is a live env read (`agentMode.ts:37`), so the NEXT turn's system
- * prompt (`src/utils/queryContext.ts:66`) runs in the new mode. NO engine respawn,
- * NO session-lifecycle change (`decisions/AGENT-MODE-TOGGLE.md`).
- *
- *  - The renderer authors ONLY the boolean intent; the sidecar calls the engine
- *    function and re-reads `isAgentMode()`. No path, no token crosses either way.
- *  - T5a-analog — the verb carries a `requestId` echoed on `agent-mode.set.result`.
- *  - T7 — the existing inbound size/rate caps apply unchanged.
- */
-export const AGENT_MODE_VERB_TYPES = ['agent-mode.set'] as const
-
-export type AgentModeVerbType = (typeof AGENT_MODE_VERB_TYPES)[number]
-
-/** Set the addressed session's agent mode on/off (live env switch; no respawn). */
-export type AgentModeSetMessage = {
-  type: 'agent-mode.set'
-  requestId: string
-  active: boolean
-}
-
-/**
- * P4-8b outbound result echoing the verb's `requestId`, followed by an updated
- * `agent-mode.snapshot` (with the new `active`) when the switch changed the mode.
- */
-export type AgentModeSetResultFrame = {
-  kind: 'agent-mode.set.result'
-  protocolVersion: typeof PROTOCOL_VERSION
-  sessionId: SessionId
-  requestId: string
-  ok: boolean
-  /** Redacted, human-readable outcome; NEVER carries token material. */
-  message: string
-}
-
-/* ------------------------------------------------------------------------- *
- * P4-8b — task/worker STOP verb (the deferred worker-control action)
- * ------------------------------------------------------------------------- *
- *
- * P4-8's orchestrator roster/detail/focus surfaces landed READ-ONLY; the
- * `WorkerDetail` Stop button (`decisions/AGENT-CHROME.md` §2 keep/adapt +
- * PARITY-LEDGER §20 row "`WorkerDetail` Stop button", and the TasksPage
+ * P4-8's worker roster/detail/focus surfaces landed READ-ONLY; the
+ * `WorkerDetail` Stop button, the PARITY-LEDGER §20 row
+ * "`WorkerDetail` Stop button", and the TasksPage
  * `K → stop` deferral in PARITY-LEDGER §21) was DEFERRED as "needs an inbound
  * write verb". This is that verb. Like the P4-5 account verbs, the P4-8b
- * agent-mode set, the P4-15 workspace-trust accept, the P4-19 settings write,
- * and the P4-24c run-controls, it is app-owned inbound vocabulary the engine's
- * shared `appClientMessageSchema` does NOT carry — validated by a sidecar-LOCAL
+ * P4-15 workspace-trust accept, the P4-19 settings write, and the P4-24c
+ * run-controls, it is app-owned inbound vocabulary the engine's shared
+ * `appClientMessageSchema` does NOT carry — validated by a sidecar-LOCAL
  * Zod schema at the trust boundary and dispatched to the engine's OWN task-abort
  * machinery `stopTask` (`src/tasks/stopTask.ts:58` — the SAME function
  * `TaskStopTool` and the SDK `stop_task` control use). `stopTask` looks the task
@@ -1602,8 +1886,14 @@ export type AgentModeSetResultFrame = {
  *  - T5a-analog — the verb carries a `requestId` echoed on `task-control.result`.
  *  - T7 — the existing inbound size/rate caps apply unchanged.
  *  - No new snapshot frame: `stopTask`'s store mutation drives the existing
- *    `tasks.snapshot` / `agent-mode.snapshot` re-broadcasts (the store-subscription
+ *    `tasks.snapshot` / `workers.snapshot` re-broadcasts (the store-subscription
  *    path, the SAME live path any engine-side kill takes — not a synthetic frame).
+ *
+ * `task.background` is the terminal Ctrl+B operation. It carries no task id:
+ * the sidecar re-reads the live store and calls the engine's own `backgroundAll`,
+ * so a compromised renderer cannot choose a hidden task or author task state.
+ * This follows `decisions/SECURITY-MINIMUM.md` §2's app-owned inbound posture:
+ * strict sidecar-local validation and the existing T7 frame/rate limits.
  *
  * `task.dismiss` (2026-08-09) is the TERMINAL half of the same family, and it
  * exists because a finished worker does not always leave on its own. The engine
@@ -1618,7 +1908,7 @@ export type AgentModeSetResultFrame = {
  * (`src/state/teammateViewHelpers.ts:116`, wired at
  * `src/components/PromptInput/PromptInput.tsx:1872`), which sets `evictAfter: 0`.
  * This verb is that same escape hatch, reached from the worker detail's controls
- * (`decisions/AGENT-CHROME.md` §2 `WorkerDetail` adapt; PARITY-LEDGER §20 sits the
+ * (`WorkerDetail` adapt; PARITY-LEDGER §20 sits the
  * Stop control there already). The full diagnosis is the CC-32 row in
  * `docs/migration/STATUS.md`.
  *
@@ -1633,7 +1923,12 @@ export type AgentModeSetResultFrame = {
  *    notification). A worker whose completion notification is still in flight is
  *    marked and then evicted by the panel reaper on its next beat.
  */
-export const TASK_CONTROL_VERB_TYPES = ['task.stop', 'task.dismiss'] as const
+export const TASK_CONTROL_VERB_TYPES = [
+  'task.stop',
+  'task.dismiss',
+  'task.background',
+  'task.background.one',
+] as const
 
 export type TaskControlVerbType = (typeof TASK_CONTROL_VERB_TYPES)[number]
 
@@ -1657,11 +1952,50 @@ export type TaskDismissMessage = {
   taskId: string
 }
 
-export type TaskControlVerbMessage = TaskStopMessage | TaskDismissMessage
+/** Background every foreground Bash or local-agent task in this session, matching terminal Ctrl+B. */
+export type TaskBackgroundMessage = {
+  type: 'task.background'
+  requestId: string
+}
+
+/**
+ * Background ONE foreground subagent — the per-worker counterpart of the
+ * session-wide `task.background` above, and the verb the transcript's agent card
+ * carries.
+ *
+ * It names a `toolUseId`, NOT a task id, and that is the whole point of the
+ * shape. The renderer holds a worker's `toolUseId` legitimately: it is on the
+ * `tool_use` row the card is drawn from, and `TasksSnapshot.subagents` already
+ * joins on that key (`messageMetadata.ts` `selectMessageMetadata`). A FOREGROUND
+ * worker's `AppState.tasks` key, by contrast, is NOT on the wire at all —
+ * `items` filters it out — so a task-id verb would have required widening the
+ * read seam to hand the renderer an id it has no other reason to hold.
+ *
+ * Same trust shape as `task.stop` (T6-analog): the id is a CLAIM. The sidecar
+ * re-resolves it against the live store and acts only on a `local_agent` that is
+ * running and not already backgrounded; anything else fails closed with
+ * `ok:false`, no side effect. T5a-analog `requestId`; T7 caps unchanged. The
+ * write itself is the engine's own `backgroundAgentTask`
+ * (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:762`), never a store mutation in
+ * `app/` code, so the live agent-iterator handoff added on 2026-09-01 keeps
+ * working; the store mutation drives the existing snapshot re-broadcasts.
+ */
+export type TaskBackgroundOneMessage = {
+  type: 'task.background.one'
+  requestId: string
+  /** The target worker's `tool_use` id, as carried by its transcript row. */
+  toolUseId: string
+}
+
+export type TaskControlVerbMessage =
+  | TaskStopMessage
+  | TaskDismissMessage
+  | TaskBackgroundMessage
+  | TaskBackgroundOneMessage
 
 /**
  * P4-8b outbound result echoing the verb's `requestId` (T5a-analog). The updated
- * `tasks.snapshot` / `agent-mode.snapshot` follow from the store subscription, not
+ * `tasks.snapshot` / `workers.snapshot` follow from the store subscription, not
  * from here. `ok:false` when the task was gone or already terminal (fail-closed).
  */
 export type TaskControlResultFrame = {
@@ -1680,10 +2014,10 @@ export type TaskControlResultFrame = {
  * ------------------------------------------------------------------------- *
  *
  * The composer's Model / Reasoning-effort / Fast faces (P4-24, read-only) become
- * interactive. Like the P4-5 account verbs, the P4-8b agent-mode set, the P4-15
- * workspace-trust accept, and the P4-19 settings write, these are app-owned
- * inbound vocabulary the engine's shared `appClientMessageSchema` does NOT carry
- * — each is validated by a sidecar-LOCAL Zod schema at the trust boundary and
+ * interactive. Like the P4-5 account verbs, the P4-15 workspace-trust accept,
+ * and the P4-19 settings write, these are app-owned inbound vocabulary the
+ * engine's shared `appClientMessageSchema` does NOT carry — each is validated by
+ * a sidecar-LOCAL Zod schema at the trust boundary and
  * dispatched to the engine's OWN per-session setters (`decisions/
  * COMPOSER-RUN-CONTROLS.md`), a LIVE per-session change with NO respawn:
  *
@@ -1779,6 +2113,22 @@ export type RunControlModelOption = {
   label: string
   /** Resolved request route if this option is selected in the current session. */
   provider: RunControlProvider
+  /**
+   * The effort levels THIS option would offer, resolved at the sidecar by the
+   * engine's own `modelSupportsEffort` / `getSupportedEffortLevels` over the
+   * model the option's value resolves to (`parseUserSpecifiedModel`, the same
+   * resolver `getMainLoopModel` uses). Empty when the model takes no effort
+   * knob at all.
+   *
+   * Additive alongside `RunControlsSnapshot.effort.options`, which answers only
+   * for the CURRENT model and therefore cannot say what a row a user has not
+   * picked yet would offer. The composer's model card needs that BEFORE the
+   * pick: the ladder's length is a property of the model and some models have no
+   * ladder at all, a switch silently drops a level the new model cannot take
+   * (`reconcileEffortForModel`), and the card's second face has to know whether
+   * the row it just applied has one at all.
+   */
+  effortOptions: string[]
 }
 
 export type RunControlsSnapshot = {
@@ -1913,10 +2263,10 @@ export type RunControlsSnapshotFrame = {
  * ------------------------------------------------------------------------- *
  *
  * Session-scoped mutations share one result family. Like the P4-5
- * account verbs, the P4-8b agent-mode set, the P4-15 workspace-trust accept, the
- * P4-19 settings write, and the P4-24c run-controls, these are app-owned inbound
- * vocabulary the engine's shared `appClientMessageSchema` does NOT carry — each is
- * validated by a sidecar-LOCAL Zod schema at the trust boundary + the closed
+ * account verbs, the P4-15 workspace-trust accept, the P4-19 settings write, and
+ * the P4-24c run-controls, these are app-owned inbound vocabulary the engine's
+ * shared `appClientMessageSchema` does NOT carry — each is validated by a
+ * sidecar-LOCAL Zod schema at the trust boundary + the closed
  * `checkStrictKeys` allowlist, then dispatched to the engine's OWN machinery for
  * THIS session (the sidecar is one process per session, N-process LOCKED):
  *
@@ -2125,13 +2475,33 @@ export type AccountStatus = {
    */
   hasVaultProfile: boolean
   source: 'vault' | 'config'
-  /** 5-hour window used-percent (0–100), or null when no fresh usage hint. */
+  /**
+   * Legacy percentage field for the upstream primary position (0–100), or null
+   * when unavailable. Its duration metadata controls Welcome presentation.
+   */
   usagePrimary: number | null
-  /** Weekly window used-percent (0–100), or null. */
+  /**
+   * Legacy percentage field for the upstream secondary position (0–100), or
+   * null when unavailable. Its duration metadata controls Welcome presentation.
+   */
   usageWeekly: number | null
+  /**
+   * Duration metadata for the upstream primary position. The welcome table
+   * uses this duration to resolve the five-hour slot rather than assuming the
+   * position's meaning.
+   */
+  usagePrimaryWindowSeconds?: number | null
+  /**
+   * Duration metadata for the upstream secondary position. The welcome table
+   * uses this duration to resolve the weekly slot rather than assuming the
+   * position's meaning.
+   */
+  usageSecondaryWindowSeconds?: number | null
   usageLimitReached: boolean
-  /** wham/usage reset, Unix SECONDS (the pool's native unit), or null. */
+  /** Upstream primary-position reset, Unix SECONDS, or null. */
   usageResetAt: number | null
+  /** Upstream secondary-position reset, Unix SECONDS, or null when omitted. */
+  usageWeeklyResetAt?: number | null
   lastRefreshIso: string | null
   /** Normalized block reason (no token content by construction), or null. */
   lastError: string | null
@@ -2339,12 +2709,11 @@ export type OAuthLoginProgressFrame = {
  * skill prompt bodies. Proven in `extensionsDomain.test.ts`.
  *
  * Deliberate deferrals (P4-12 §0 flags — render truth, defer the rest):
- *  - **MCP live runtime is EMPTY in the desktop session today** (the
- *    `sessionController.ts` empty-mcpClients stub, flagged for an
- *    `app-runtime` extract, NOT a sidecar hand-wire — §8.1). So MCP entries are
- *    CONFIGURED servers only: connection status / tool+resource counts /
- *    reconnect+auth+enable+remove actions are unavailable until that runtime is
- *    wired, and are omitted here rather than mocked.
+ *  - MCP entries remain CONFIGURED-server metadata only. The sidecar has a live
+ *    MCP runtime, but this spawn-time frame intentionally carries no connection
+ *    status, tool/resource counts, or reconnect/auth/enable/remove actions.
+ *    Those need a separate redacted live projection or write verb and are
+ *    omitted here rather than mocked.
  *  - All WRITES (add/remove/enable-toggle/update/install) are deferred to the
  *    `SettingsUpdater`-under-lock write-seam (P3-5a/DR-2), a later session.
  *  - Plugin marketplace BROWSING is deferred (real domain exists — the
@@ -2779,10 +3148,12 @@ export type DiagnosticsSnapshotFrame = {
  *
  * Catalog owner (decision #4, `docs/migration/decisions/CATALOG-OWNERSHIP.md`):
  * a single main-supervised disposable worker enumerates this off any sidecar and
- * delivers it to the renderer as a `sessions-catalog` host event on a ~30 s timer
+ * delivers it to the renderer as a `sessions-catalog` host event on a fixed timer
  * (`sessionsCatalogRunner.ts SESSIONS_CATALOG_REFRESH_INTERVAL_MS`), so a session
- * created after launch still appears (same freshness contract as the old
- * per-sidecar refresh). Read-only display metadata only — no message bodies, no
+ * created after launch still appears. The interval is a tuning knob, not a
+ * contract (CATALOG-OWNERSHIP §7 names lengthening it as an available lever);
+ * it was widened from the inherited per-sidecar 30 s once the per-run boot cost
+ * was measured. Read-only display metadata only — no message bodies, no
  * credentials — so it is `secretGuard`-clean by construction. It ALSO carries the
  * winning display title (custom-title > ai-title) so the catalog/sidebar can show
  * real session names instead of the cwd-basename fallback (the P4-6 title rider,
@@ -2852,8 +3223,12 @@ export type SessionCatalogEntry = {
   gitBranch: string | null
   /** The single searchable tag on the session, else null. */
   tag: string | null
-  /** Session mode (agent/coordinator/normal), else null. */
-  mode: 'agent' | 'coordinator' | 'normal' | null
+  /**
+   * Session mode, else null. The sidecar normalizes before emitting, so a
+   * legacy transcript recorded with mode `agent` arrives as
+   * `normal` rather than as a third value no current surface can render.
+   */
+  mode: 'coordinator' | 'normal' | null
   /** The `--agents` setting string, else null. */
   agentSetting: string | null
   /** PR number + repository (owner/repo#N chip), else null. */
@@ -3058,6 +3433,23 @@ export type PromptRecallMessage = {
   requestId: string
 }
 
+/**
+ * Ask the sidecar to interrupt the current response only while this exact
+ * engine-minted queued prompt is still waiting at the head of the queue.
+ * App-owned inbound vocabulary under `decisions/SECURITY-MINIMUM.md` §2:
+ * sidecar-local validation, closed keys, T7 limits, and no renderer-authored
+ * prompt content or queue priority.
+ */
+export type PromptForceMessage = {
+  type: 'prompt.force'
+  requestId: string
+  promptId: string
+}
+
+export const PROMPT_FORCE_VERB_TYPES = ['prompt.force'] as const
+
+export type PromptForceVerbType = (typeof PROMPT_FORCE_VERB_TYPES)[number]
+
 export type RecalledPrompt = {
   /** The uuid its staged row carried, so a reader can match the two up. */
   id: string
@@ -3094,6 +3486,18 @@ export type PromptRecallResultFrame = {
   recalled: RecalledPrompt[]
   /** How many waiting messages the engine had already taken. */
   alreadyDelivered: number
+}
+
+/** Correlated answer to {@link PromptForceMessage}. */
+export type PromptForceResultFrame = {
+  kind: 'prompt-force.result'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  promptId: string
+  ok: boolean
+  /** Redacted, human-readable outcome; NEVER carries prompt content. */
+  message: string
 }
 
 /**
@@ -3192,6 +3596,60 @@ export type HistoryLoadEarlierResultFrame = {
   complete: boolean
 }
 
+/**
+ * The sidecar asking main to do something (HOST-REQUEST-PLANE §2).
+ *
+ * The one outbound frame that is NOT engine output and NOT for the renderer.
+ * Main INTERCEPTS it in `wireRendererBridge` and returns before the attachment
+ * gate, the same shape the `session-title` rider already has, so a
+ * model-authored request payload never reaches the least-trusted zone and never
+ * enters a replay buffer. Its `FRAME_RETENTION` entry
+ * (`app/main/replayBuffer.ts`) therefore classifies a frame the buffer can never
+ * see; it exists because that table is exhaustive by construction.
+ *
+ * `requestId` is minted by the SIDECAR and echoed on the result. It correlates
+ * one pending call and authorizes nothing.
+ *
+ * It rides the normal outbound `send`, so `secretGuard` runs on it like every
+ * other frame (HR7): a verb arg carrying a credential-SHAPED KEY is blocked at
+ * the sidecar before it can leave. The guard is key-name-only by design and
+ * nothing here relies on value scanning.
+ */
+export type HostRequestFrame = {
+  kind: 'host.request'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  requestId: string
+  verb: HostRequestVerb
+  args: HostRequestArgs[HostRequestVerb]
+}
+
+/**
+ * What this session is doing right now (HOST-REQUEST-PLANE §4 step 4a, the half
+ * that survived the §0a cut).
+ *
+ * It exists because main knows only RECENCY (`idleParkDriver.ts` `recencyOf`)
+ * and deliberately does not read the engine's `turn.status` vocabulary, so
+ * without this frame `peers.list` could not tell a creator "Bear is running"
+ * from "Bear is stuck on a permission prompt" from "Bear is done". The same
+ * app-owned-field pattern as `ReadyFrame.engineSessionId`: the sidecar computes
+ * the app's answer, main stores it, and no engine event vocabulary crosses.
+ *
+ * `sticky` in `FRAME_RETENTION`: point-in-time state a reader applies wholesale,
+ * replaced by the next one, never a transcript row.
+ *
+ * Its initial value is emitted at attach, derived from the SAME two sources the
+ * ready payload is built from, so a freshly ready idle session is `idle` at once
+ * rather than absent. Presence is a fact about a LIVE row only; main clears it
+ * on every terminal lifecycle, and absence means not live, nothing else.
+ */
+export type ActivityFrame = {
+  kind: 'activity'
+  protocolVersion: typeof PROTOCOL_VERSION
+  sessionId: SessionId
+  presence: ActivityPresence
+}
+
 export type ServerFramePayload =
   | ReadyFrame
   | SessionTitleFrame
@@ -3207,9 +3665,8 @@ export type ServerFramePayload =
   | MemorySnapshotFrame
   | ContextBreakdownSnapshotFrame
   | TasksSnapshotFrame
-  | AgentModeSnapshotFrame
+  | WorkersSnapshotFrame
   | LeaseSnapshotFrame
-  | AgentModeSetResultFrame
   | TaskControlResultFrame
   | RunControlsSnapshotFrame
   | RunControlResultFrame
@@ -3230,8 +3687,11 @@ export type ServerFramePayload =
   | UsageStatsSnapshotFrame
   | QueuedPromptsSnapshotFrame
   | PromptRecallResultFrame
+  | PromptForceResultFrame
   | SubmitResultFrame
   | HistoryLoadEarlierResultFrame
+  | HostRequestFrame
+  | ActivityFrame
 
 /**
  * Metadata-only delivery envelope. Optional so an older sidecar remains
@@ -3267,8 +3727,7 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'memory.snapshot': true,
   'context-breakdown.snapshot': true,
   'tasks.snapshot': true,
-  'agent-mode.snapshot': true,
-  'agent-mode.set.result': true,
+  'workers.snapshot': true,
   'lease.snapshot': true,
   'task-control.result': true,
   'run-controls.snapshot': true,
@@ -3289,8 +3748,11 @@ const SERVER_FRAME_KINDS: Record<ServerFrameKind, true> = {
   'stats.usage.snapshot': true,
   'queued-prompts.snapshot': true,
   'prompt-recall.result': true,
+  'prompt-force.result': true,
   'submit.result': true,
   'history.loadEarlier.result': true,
+  'host.request': true,
+  activity: true,
 }
 
 export function isServerFrameKind(value: unknown): value is ServerFrameKind {
@@ -3465,17 +3927,8 @@ export type CatCodeBridge = {
    */
   workspaceTrustVerb(sessionId: SessionId, verb: WorkspaceTrustMessage): void
   /**
-   * P4-8b — set the addressed session's agent mode on/off (the in-session
-   * WelcomeScreen Orchestrator toggle). The renderer authors ONLY the boolean
-   * intent; the sidecar calls the engine's own `matchSessionMode` (a live
-   * `CLAUDE_CODE_AGENT_MODE` env switch in THIS session's process — no respawn,
-   * no lifecycle change) and re-broadcasts `agent-mode.snapshot`. main mints the
-   * `requestId`; the outcome arrives as an `agent-mode.set.result` frame.
-   */
-  setAgentMode(sessionId: SessionId, active: boolean): void
-  /**
    * P4-8b — stop/kill a running task on the addressed session's sidecar (the
-   * deferred worker-control action; primary case: an orchestrator `local_agent`
+   * deferred worker-control action; primary case: a delegated `local_agent`
    * worker). The renderer authors ONLY the target `taskId` (a `TaskSnapshotItem.id`
    * already on the wire) + a `requestId`; the sidecar re-resolves it against the
    * LIVE `AppState.tasks` and dispatches the engine's OWN `stopTask` — no path, no
@@ -3483,10 +3936,9 @@ export type CatCodeBridge = {
    * frame echoing `requestId` (`ok:false` when the task was gone/terminal), and the
    * kill's store mutation drives the existing `tasks.snapshot` re-broadcast.
    *
-   * The same channel carries `task.dismiss`, the terminal counterpart: it retires a
-   * FINISHED worker row the engine's grace deadline will never retire on its own
-   * (see TASK_CONTROL_VERB_TYPES above), through the engine's own
-   * `stopOrDismissAgent` + `evictTerminalTask`.
+   * The same channel carries `task.dismiss`, which retires a FINISHED worker row,
+   * and `task.background`, which invokes the engine's terminal Ctrl+B operation
+   * over the addressed session's live store.
    */
   taskControlVerb(sessionId: SessionId, verb: TaskControlVerbMessage): void
   /**
@@ -3516,6 +3968,12 @@ export type CatCodeBridge = {
    * No engine object, no path, no token crosses.
    */
   recallPrompts(sessionId: SessionId, verb: PromptRecallMessage): void
+  /**
+   * Interrupt the running response only if `promptId` is still the oldest queued
+   * prompt. The sidecar validates that engine-minted identity before aborting, so
+   * a delayed or duplicate click cannot stop the queued turn after it starts.
+   */
+  forcePrompt(sessionId: SessionId, verb: PromptForceMessage): void
   /**
    * Read further back into the addressed session's transcript
    * (decisions/HISTORY-LOAD-EARLIER.md). The renderer authors ONLY a
@@ -3640,6 +4098,13 @@ export type CatCodeBridge = {
     target?: OpenWorkspaceFileTarget,
   ): Promise<boolean>
   /**
+   * Main owns the native chooser and keeps the chosen path private. Image
+   * selections return bounded bytes; other files return opaque tokens.
+   */
+  pickAttachmentFile(
+    appSessionId: SessionId,
+  ): Promise<AttachmentFileSelection | null>
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §4, option (b)) — report which sessions the
    * user can currently SEE, so main's park policy never reclaims an engine out
    * from under a pane on screen. Sent on every change to the visible set; main
@@ -3701,6 +4166,22 @@ export type CatCodeBridge = {
   previewSession(appSessionId: SessionId): Promise<TranscriptCache | null>
   /** Graceful close; the row is kept restorable. */
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /**
+   * PEER-SESSIONS §6 — set or clear this session's "do not let peers reopen me"
+   * standing decision, the user's ONE control over the ruling that a peer
+   * message may wake a closed session. HC3 fixed sender, modelled on
+   * `closeSession`: a session id and a boolean, nothing else. The renderer
+   * authors no path and no rule, and only the user can clear it — no peer, and
+   * no reopen, does.
+   *
+   * Durable host state, so it survives close, park, restore and relaunch, and an
+   * unknown id answers `session_not_found` (HC2) rather than reporting a success
+   * that persisted nothing.
+   */
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>>
   /** Snapshot of live ∪ restorable sessions. */
   listSessions(): Promise<SessionDescriptor[]>
   /**
@@ -3765,6 +4246,12 @@ export type CatCodeBridge = {
 export type SubmitOptions = {
   isMeta?: boolean
   goalSnapshot?: unknown
+  /**
+   * An opaque main-issued non-image file selection. Main resolves it to an
+   * internal `@` mention and strips this renderer-authored token before the
+   * sidecar.
+   */
+  fileAttachmentToken?: string
   /**
    * The renderer's own correlation id for THIS submit, answered exactly once by
    * a {@link SubmitResultFrame} carrying it back. See that frame for why the

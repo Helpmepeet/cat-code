@@ -6,6 +6,21 @@ import type { AgentId } from './ids.js'
 import type { Message } from './message.js'
 import type { QueueOperationMessage } from './messageQueueTypes.js'
 
+export type SessionMode = 'coordinator' | 'normal'
+export type LegacySessionMode = SessionMode | 'agent'
+
+export function normalizeSessionMode(mode: unknown): SessionMode | undefined {
+  switch (mode) {
+    case 'agent':
+      return 'normal'
+    case 'coordinator':
+    case 'normal':
+      return mode
+    default:
+      return undefined
+  }
+}
+
 export type SerializedMessage = Message & {
   cwd: string
   userType: string
@@ -58,7 +73,7 @@ export type LogOption = {
   prNumber?: number // GitHub PR number linked to this session
   prUrl?: string // Full URL to the linked PR
   prRepository?: string // Repository in "owner/repo" format
-  mode?: 'agent' | 'coordinator' | 'normal' // Session mode for restore-mode detection
+  mode?: LegacySessionMode // Session mode for restore-mode detection
   worktreeSession?: PersistedWorktreeSession | null // Worktree state at session end (null = exited, undefined = never entered)
   threadGoal?: ThreadGoal | null // Last-wins thread goal state for resume/hydration
   contentReplacements?: ContentReplacementRecord[] // Replacement decisions for resume reconstruction
@@ -151,7 +166,7 @@ export type PRLinkMessage = {
 export type ModeEntry = {
   type: 'mode'
   sessionId: UUID
-  mode: 'agent' | 'coordinator' | 'normal'
+  mode: LegacySessionMode
 }
 
 export type ThreadGoalUpdatedEntry = {

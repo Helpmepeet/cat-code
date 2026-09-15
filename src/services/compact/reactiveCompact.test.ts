@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { APIConnectionTimeoutError } from '@anthropic-ai/sdk'
 import {
   getSessionId,
   getSessionProjectDir,
@@ -43,6 +44,12 @@ function assistant(id: string, text: string): AssistantMessage {
       stop_sequence: null,
     },
   } as AssistantMessage
+}
+
+function typedSummaryError(text: string): AssistantMessage {
+  const message = assistant('summary-error', text)
+  message.isApiErrorMessage = true
+  return message
 }
 
 function assistantWithToolUse(id: string, toolUseId: string): AssistantMessage {
@@ -157,6 +164,16 @@ describe('reactiveCompactOnPromptTooLong', () => {
       queryModelWithStreaming: mock(async function* (params: unknown) {
         summarizerRequests.push(JSON.stringify(params))
         yield responses[Math.min(attempt++, responses.length - 1)]!
+      }),
+    }))
+  }
+
+  function mockSummarizerFailure(error: Error) {
+    return mock.module('../api/claude.js', () => ({
+      ...realClaudeApi,
+      queryModelWithStreaming: mock(async function* () {
+        summarizerRequests.push('attempt')
+        throw error
       }),
     }))
   }
@@ -362,6 +379,56 @@ describe('reactiveCompactOnPromptTooLong', () => {
     expect(outcome.ok).toBe(false)
     expect(outcome.reason).toBe('exhausted')
     expect(outcome.result).toBeUndefined()
+  })
+
+  test('rejects a typed summary error whose text lacks the API Error prefix', async () => {
+    await mockSummarizer([typedSummaryError('Request timed out')])
+    const { reactiveCompactOnPromptTooLong } = await import(
+      './reactiveCompact.js'
+    )
+
+    const { messages } = fourRoundConversation()
+    const originalOldestMessage = messages[0]
+    const context = createToolUseContext(messages)
+    const outcome = await reactiveCompactOnPromptTooLong(
+      messages,
+      cacheSafeParamsFor(context, messages),
+      { trigger: 'auto' },
+    )
+
+    expect(outcome.ok).toBe(false)
+    expect(outcome.reason).toBe('error')
+    expect(outcome.error).toEqual(new Error('Request timed out'))
+    expect(messages[0]).toBe(originalOldestMessage)
+  })
+
+  test('keeps transient reactive failures out of the auto-compact failure budget', async () => {
+    await mockSummarizerFailure(new APIConnectionTimeoutError())
+    const { autoCompactIfNeeded } = await import('./autoCompact.js')
+    const { messages } = fourRoundConversation()
+    ;(messages[7] as AssistantMessage).message.usage.input_tokens = 340_000
+    const context = createToolUseContext(messages)
+    const cacheSafeParams = cacheSafeParamsFor(context, messages)
+    let consecutiveFailures: number | undefined
+
+    for (let turn = 0; turn < 4; turn++) {
+      const result = await autoCompactIfNeeded(
+        messages,
+        context,
+        cacheSafeParams,
+        'repl_main_thread',
+        {
+          compacted: false,
+          turnCounter: turn,
+          turnId: String(turn),
+          consecutiveFailures,
+        },
+      )
+      consecutiveFailures = result.consecutiveFailures
+    }
+
+    expect(consecutiveFailures).toBeUndefined()
+    expect(summarizerRequests).toHaveLength(4)
   })
 
   test('reports too_few_groups instead of splitting a single round', async () => {

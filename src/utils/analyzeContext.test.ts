@@ -37,7 +37,6 @@ mock.module('../tools/SkillTool/prompt.js', () => ({
 }))
 mock.module('src/constants/prompts.js', () => ({
   getSystemPrompt: async () => [],
-  getAgentModeSystemPromptSections: async () => [],
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY: '__dynamic_boundary__',
 }))
 
@@ -47,11 +46,6 @@ test('/context resolves the Plan-mode runtime model with the request path\'s 200
   expect(source).toMatch(
     /exceeds200kTokens:\s*toolPermissionContext\.mode === 'plan' &&\s*doesMostRecentAssistantMessageExceed200k\(messages\),/,
   )
-})
-
-test('/context measures the Agent Mode prompt assembled for that runtime model', () => {
-  expect(source).toContain('getAgentModeSystemPromptSections(\n          tools,\n          runtimeModel,')
-  expect(source).toContain('agentModePromptSections,')
 })
 
 test('/context builds the prompt with the same working directories and MCP clients a turn passes', () => {

@@ -2,12 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { getSessionId, getSessionProjectDir, switchSession } from '../../bootstrap/state.js'
 import {
   createSessionState,
-  markWorkerResultSynthesized,
   recordWorkerSessionSpawn,
   recordWorkerSessionTerminal,
   readSessionState,
   updateSessionState,
-} from '../../agent-mode/sessionState.js'
+} from '../../utils/workerState.js'
 import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
 import {
@@ -95,7 +94,7 @@ describe('UpdateGoalTool', () => {
     )
   })
 
-  test('completion uses shared goal action and clears Agent Mode objective', async () => {
+  test('completion uses shared goal action while worker state exists', async () => {
     const goal = createThreadGoal(
       sessionId,
       'finish shared action test',
@@ -110,15 +109,13 @@ describe('UpdateGoalTool', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: goal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: goal.objective,
+      mode: 'coordinator',
       handle: 'review-1',
       agentId: workerAgentId,
       role: 'reviewer',
@@ -129,13 +126,7 @@ describe('UpdateGoalTool', () => {
       sessionId,
       agentId: workerAgentId,
       status: 'completed',
-      outputSummary: 'Reviewed',
     })
-    await markWorkerResultSynthesized({
-      sessionId,
-      agentId: workerAgentId,
-    })
-
     const result = await UpdateGoalTool.call(
       { status: 'complete' },
       context as never,
@@ -148,8 +139,6 @@ describe('UpdateGoalTool', () => {
     })
     expect(getState().threadGoal?.status).toBe('complete')
     expect(getCurrentThreadGoal(sessionId)?.status).toBe('complete')
-    expect((await readSessionState(sessionId))?.objective).toBe('')
-    expect((await readSessionState(sessionId))?.knownWorkers).toEqual([])
   })
 
   test('returns budget usage details for a budgeted goal', async () => {
@@ -455,15 +444,13 @@ describe('UpdateGoalTool', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: goal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: goal.objective,
+      mode: 'coordinator',
       handle: 'implement-1',
       agentId: workerAgentId,
       role: 'implementor',
@@ -479,7 +466,7 @@ describe('UpdateGoalTool', () => {
     })
   })
 
-  test('rejects completion while a completed worker is pending synthesis', async () => {
+  test('allows completion once every worker has reached a terminal status', async () => {
     const goal = createThreadGoal(sessionId, 'finish phase 1A', undefined, 100)
     const { context } = createContext(goal)
     const workerAgentId = randomUUID().slice(0, 8)
@@ -489,15 +476,13 @@ describe('UpdateGoalTool', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: goal.objective,
+          mode: 'coordinator',
         }),
       () => {},
     )
     await recordWorkerSessionSpawn({
       sessionId,
-      mode: 'agent',
-      objective: goal.objective,
+      mode: 'coordinator',
       handle: 'review-1',
       agentId: workerAgentId,
       role: 'reviewer',
@@ -508,15 +493,12 @@ describe('UpdateGoalTool', () => {
       sessionId,
       agentId: workerAgentId,
       status: 'completed',
-      outputSummary: 'Looks good',
     })
 
+    // The gate is running-only: a finished worker owes the goal nothing.
     await expect(
       UpdateGoalTool.validateInput?.({ status: 'complete' }, context as never),
-    ).resolves.toMatchObject({
-      result: false,
-      errorCode: 6,
-    })
+    ).resolves.toMatchObject({ result: true })
   })
 
   test('rejects model-visible goalId at the schema level', () => {

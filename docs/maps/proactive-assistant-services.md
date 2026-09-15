@@ -146,7 +146,7 @@ work, mutate project files, or replace prompt suggestions.
 
 | Concern | Owner | Routing decision |
 |---|---|---|
-| Service | `src/services/AgentSummary/agentSummary.ts` | Every 30 seconds, read agent transcript, filter incomplete tool calls, fork a no-tool summary prompt, and update local agent task progress. |
+| Service | `src/services/AgentSummary/agentSummary.ts` | Every 30 seconds, read agent transcript and filter incomplete tool calls; fork a no-tool summary prompt and update local agent task progress only when the filtered transcript changed since the last request (length + last uuid signature), so an idle sub-agent sends nothing. |
 | Call sites | `src/tools/AgentTool/agentToolUtils.ts`, `src/tools/AgentTool/AgentTool.tsx` | Started for SDK/background progress summaries when cache-safe params are available; stopped when the foreground/background agent lifecycle ends. |
 | Cache contract | `src/services/AgentSummary/agentSummary.ts` | Keep parent cache-safe params and deny tools by callback; do not add output-token overrides that change cache keys. |
 

@@ -1,6 +1,6 @@
 # Tools And Permissions Map
 
-Last refreshed: 2026-08-26 against the current source tree.
+Last refreshed: 2026-09-07 against the current source tree.
 
 ## Purpose
 
@@ -61,7 +61,7 @@ The live tool system is assembled in layers:
 | Permission-context construction | `src/utils/permissions/permissionSetup.ts` | `src/utils/permissions/permissionsLoader.ts`, `src/utils/settings/settings.ts`, `src/commands/add-dir/validation.ts` | This is where session mode, additional working dirs, auto-mode safety stripping, and on-disk rule loading are assembled into `ToolPermissionContext`. |
 | File/path permission policy | `src/utils/permissions/filesystem.ts` | `src/utils/permissions/pathValidation.ts`, `src/tools/BashTool/pathValidation.ts`, `src/utils/fsOperations.ts` | Routing owner for dangerous config files, `.cat-code` plus legacy `.claude`/`.git` protections, internal editable/readable paths, and permission suggestions. |
 | Sandbox integration | `src/utils/permissions/pathValidation.ts` | `src/utils/sandbox/sandbox-adapter.ts`, `src/tools/BashTool/shouldUseSandbox.ts`, `src/utils/permissions/permissions.ts` | The path validator treats sandbox write allowlists as an extra write scope for out-of-working-dir paths. Bash sandbox auto-allow is decided higher up in permissions. |
-| Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Main per-call pipeline: schema parsing, validation, hook execution, permission decision, tool call, result processing, and failure handling. |
+| Tool execution lifecycle | `src/services/tools/toolExecution.ts` | `src/services/tools/toolHooks.ts`, `src/hooks/useCanUseTool.tsx`, `src/utils/toolResultStorage.ts` | Main per-call pipeline: schema parsing, validation, hook execution, permission decision, tool call, result processing, and failure handling. A tool-call failure preserves already-produced PreToolUse context before its error result and PostToolUseFailure output. |
 | Concurrent tool orchestration | `src/services/tools/toolOrchestration.ts` | `src/services/tools/StreamingToolExecutor.ts`, tool `isConcurrencySafe()` implementations | Non-read-only or non-concurrency-safe tools serialize. Read-only safe batches can run together. Context modifiers are applied after concurrent batches complete. |
 | Tool hooks | `src/services/tools/toolHooks.ts` | `src/utils/hooks.ts`, `src/schemas/hooks.ts`, `src/types/hooks.ts` | Start here for PreToolUse, PostToolUse, and PostToolUseFailure behavior and how hook outputs affect continuation or MCP output rewrites. |
 | MCP config layering | `src/services/mcp/config.ts` | `src/utils/config.ts`, `src/utils/plugins/mcpPluginIntegration.ts`, `src/utils/settings/types.ts` | Config layering spans global, project, managed, plugin, and connector sources. Deduplication is content-based, not just by server name. |
@@ -221,8 +221,8 @@ authority-checked boundary. Start with `src/utils/teammateMailbox.ts`.
 | Deferred built-in tools | tool implementation file, `src/tools/ToolSearchTool/prompt.ts`, `src/utils/toolSearch.ts` | `shouldDefer: true` marks built-ins for tool search when enabled. |
 | MCP tools | `src/services/mcp/client.ts`, `src/tools/MCPTool/MCPTool.ts` | MCP tools use JSON Schema directly via `inputJSONSchema`. Their runtime prompt text comes from MCP server descriptions. |
 | Resource tools | `src/tools/ListMcpResourcesTool/`, `src/tools/ReadMcpResourceTool/` | Separate from normal MCP call tools; still part of the tool pool and can be deferred. |
-| Agent orchestration tools | `src/tools/AgentTool/`, worker-control tool dirs, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
-| Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. |
+| Agent orchestration tools | `src/tools/{AgentTool,ResumeAgentTool,SendMessageTool,TaskStopTool,AskParentSessionTool}/`, `src/services/tools/toolOrchestration.ts` | These shape subagent behavior and can change the global tool pool seen by workers. |
+| Shell tools | `src/tools/BashTool/`, `src/tools/PowerShellTool/`, `src/tools/REPLTool/` | These have the deepest permission logic and mode-specific behavior. In Bash, lookup-altering assignments (`PATH`, `BASH_ENV`, `LD_*`, `DYLD_*`, including declaration and loop forms) bypass sandbox auto-allow: only an exact existing rule may allow them; otherwise they require approval. |
 | File mutation and persisted result bounds | `src/tools/{FileEditTool,FileWriteTool,FilePatchTool,NotebookEditTool}/` | `src/utils/{diff,analyzeContext}.ts`, the tool-specific tests, `src/utils/fileOperationAnalytics.ts` | Validate every destination, including move destinations, before mutation. The tool result must retain bounded, useful diff/line context rather than whole edited files or notebooks; rollback and result enumeration remain part of the safety contract. |
 
 ## Tool Search And Deferred Loading
@@ -289,6 +289,7 @@ Use focused checks first, then the documented build:
 | Permission suggestions and filesystem safety | `bun test src/utils/permissions/filesystemSuggestions.test.ts` and nearby permission tests |
 | Auto-mode classifier | `bun test src/utils/permissions/yoloClassifier.test.ts` and `bun --feature=AUTO_MODE_UPSTREAM_PORT test src/utils/permissions/yoloClassifier.test.ts` |
 | Agent tool and worker-control integration | `bun test src/tools/AgentTool/AgentTool.test.ts` plus worker-control tool tests |
+| Tool failure hook context | `bun test src/services/tools/toolExecution.test.ts` |
 | File read/write bounds and replacement safety | `bun test src/tools/FileReadTool/FileReadTool.test.ts src/tools/FileWriteTool/FileWriteTool.test.ts src/utils/fileWriteSafety.test.ts` |
 | GPT image generation backend and model limits | `bun test src/tools/GenerateImageTool/GenerateImageTool.test.ts` |
 | Mailbox control authority (closed union, authority matrix, request correlation) | `bun test src/utils/teammateMailbox.test.ts src/utils/attachments.test.ts src/hooks/useInboxPoller.test.ts src/utils/swarm/inProcessRunner.test.ts src/tools/SendMessageTool/SendMessageTool.test.ts src/tools/ExitPlanModeTool/ExitPlanModeV2Tool.test.ts` |

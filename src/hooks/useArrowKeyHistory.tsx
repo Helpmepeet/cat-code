@@ -97,6 +97,19 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
   const pastedContentsRef = useRef(pastedContents);
   const currentModeRef = useRef(currentMode);
 
+  // Per-entry edits made while navigating history, keyed by history index
+  // (1-based, matching historyIndexRef). Index 0 is the composer draft and
+  // stays in lastShownHistoryEntry. The on-disk history is never mutated:
+  // these edits live only for this navigation session, like a shell's.
+  const editedEntriesRef = useRef<Map<number, HistoryEntry & {
+    mode?: HistoryMode;
+  }>>(new Map());
+
+  // True between an Up keypress and the async load/apply that follows it.
+  // While set, the composer still holds the PREVIOUS entry's text, so reading
+  // it would record that text as an edit of the entry we are moving to.
+  const navPendingRef = useRef(false);
+
   // Keep refs in sync with props (synchronous update on each render)
   currentInputRef.current = currentInput;
   pastedContentsRef.current = pastedContents;
@@ -111,6 +124,39 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
     const value_0 = mode_0 === 'bash' ? input.display.slice(1) : input.display;
     setInputWithCursor(value_0, mode_0, input.pastedContents ?? {}, cursorToStart_0);
   }, [setInputWithCursor]);
+  // Write the composer back into the edit map before leaving history index
+  // `index`. An emptied entry records nothing, so the pristine history line is
+  // restored on return, matching how an emptied draft is treated at index 0.
+  const saveEditAt = useCallback((index: number): void => {
+    if (index <= 0 || navPendingRef.current) return;
+    const input_0 = currentInputRef.current;
+    if (input_0.trim() === '') {
+      editedEntriesRef.current.delete(index);
+      return;
+    }
+    editedEntriesRef.current.set(index, {
+      display: input_0,
+      pastedContents: pastedContentsRef.current,
+      mode: currentModeRef.current
+    });
+  }, []);
+
+  // Show history index `index`, preferring an edit made earlier in this
+  // navigation session over the pristine entry.
+  const showEntryAt = useCallback((index_0: number, cursorToStart_1 = false): void => {
+    const edited = editedEntriesRef.current.get(index_0);
+    if (edited) {
+      // An edit carries the mode it was typed in. updateInput would re-derive
+      // the mode from the text, which strips a leading '!' a second time.
+      if (edited.mode) {
+        setInputWithCursor(edited.display, edited.mode, edited.pastedContents ?? {}, cursorToStart_1);
+        return;
+      }
+      updateInput(edited, cursorToStart_1);
+      return;
+    }
+    updateInput(historyCache.current[index_0 - 1], cursorToStart_1);
+  }, [setInputWithCursor, updateInput]);
   const showSearchHint = useCallback((): void => {
     addNotification({
       key: 'search-history-hint',
@@ -139,7 +185,11 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
         pastedContents: pastedContentsAtPress,
         mode: modeAtPress
       } : undefined);
+    } else {
+      // Preserve any edit made to the entry we are leaving
+      saveEditAt(targetIndex);
     }
+    navPendingRef.current = true;
     const modeFilter = initialModeFilterRef.current;
     void (async () => {
       const neededCount = targetIndex + 1; // How many entries we need
@@ -149,6 +199,9 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
         historyCache.current = [];
         historyCacheModeFilter.current = modeFilter;
         historyIndexRef.current = 0;
+        // Edits are keyed by position in the old cache, so they no longer
+        // refer to anything once the cache is rebuilt under a new filter
+        editedEntriesRef.current.clear();
       }
 
       // Load more entries if needed
@@ -166,12 +219,14 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
       if (targetIndex >= historyCache.current.length) {
         // Rollback the ref since we can't navigate
         historyIndexRef.current--;
+        navPendingRef.current = false;
         // Keep the draft intact - user stays on their current input
         return;
       }
       const newIndex = targetIndex + 1;
       setHistoryIndex(newIndex);
-      updateInput(historyCache.current[targetIndex], true);
+      showEntryAt(newIndex, true);
+      navPendingRef.current = false;
 
       // Show hint once per session after navigating through 2 history entries
       if (newIndex >= 2 && !hasShownSearchHintRef.current) {
@@ -179,15 +234,17 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
         showSearchHint();
       }
     })();
-  }, [updateInput, showSearchHint]);
+  }, [saveEditAt, showEntryAt, showSearchHint]);
   const onHistoryDown = useCallback((): boolean => {
     // Use the ref for consistent reads
     const currentIndex = historyIndexRef.current;
     if (currentIndex > 1) {
+      saveEditAt(currentIndex);
       historyIndexRef.current--;
       setHistoryIndex(currentIndex - 1);
-      updateInput(historyCache.current[currentIndex - 2]);
+      showEntryAt(currentIndex - 1);
     } else if (currentIndex === 1) {
+      saveEditAt(currentIndex);
       historyIndexRef.current = 0;
       setHistoryIndex(0);
       if (lastShownHistoryEntry) {
@@ -204,11 +261,13 @@ export function useArrowKeyHistory(onSetInput: (value: string, mode: HistoryMode
       }
     }
     return currentIndex <= 0;
-  }, [lastShownHistoryEntry, updateInput, setInputWithCursor]);
+  }, [lastShownHistoryEntry, saveEditAt, showEntryAt, updateInput, setInputWithCursor]);
   const resetHistory = useCallback((): void => {
     setLastShownHistoryEntry(undefined);
     setHistoryIndex(0);
     historyIndexRef.current = 0;
+    editedEntriesRef.current.clear();
+    navPendingRef.current = false;
     initialModeFilterRef.current = undefined;
     removeNotification('search-history-hint');
     historyCache.current = [];

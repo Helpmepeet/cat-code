@@ -1343,6 +1343,9 @@ export const SDKAccountDiagnosticProviderSchema = lazySchema(() =>
  *    trap `SettingsSnapshot.resolved` is shaped as an array to avoid.
  *  - `teammate` carries the sender handle only, never the full
  *    `TeammateMessageContract[]` payload.
+ *  - `peer` carries the sender's name only: that is the row's label. The
+ *    sender's `appSessionId` is app-side addressing with no display meaning,
+ *    and stays engine-side like `task-notification`'s `taskId`.
  * Nothing here is credential-bearing, and every field is already present in the
  * message text a consumer receives anyway.
  */
@@ -1382,6 +1385,7 @@ export const SDKMessageOriginSchema = lazySchema(() =>
     }),
     z.object({ kind: z.literal('teammate'), from: z.string().optional() }),
     z.object({ kind: z.literal('deferred-continuation') }),
+    z.object({ kind: z.literal('peer'), name: z.string() }),
   ]),
 )
 

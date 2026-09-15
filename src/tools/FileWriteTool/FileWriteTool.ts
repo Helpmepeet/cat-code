@@ -3,9 +3,6 @@ import { logEvent } from 'src/services/analytics/index.js'
 import { z } from 'zod/v4'
 import { getFeatureValue_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
 import { diagnosticTracker } from '../../services/diagnosticTracking.js'
-import { clearDeliveredDiagnosticsForFile } from '../../services/lsp/LSPDiagnosticRegistry.js'
-import { getLspServerManager } from '../../services/lsp/manager.js'
-import { notifyVscodeFileUpdated } from '../../services/mcp/vscodeSdkMcp.js'
 import { checkTeamMemSecrets } from '../../services/teamMemorySync/teamMemSecretGuard.js'
 import {
   activateConditionalSkillsForPaths,
@@ -14,8 +11,8 @@ import {
 } from '../../skills/loadSkillsDir.js'
 import type { ToolUseContext } from '../../Tool.js'
 import { buildTool, type ToolDef } from '../../Tool.js'
+import { acquireFileMutationLock } from '../../utils/atomicFile.js'
 import { getCwd } from '../../utils/cwd.js'
-import { logForDebugging } from '../../utils/debug.js'
 import {
   boundPatchLinesForPersistence,
   countLinesChanged,
@@ -26,8 +23,6 @@ import { isENOENT } from '../../utils/errors.js'
 import {
   fileIdentitiesEqual,
   getFileIdentity,
-  getFileModificationTime,
-  writeTextContentWithVerifiedIdentity,
 } from '../../utils/file.js'
 import { isCompleteUnboundedRead } from '../../utils/fileStateCache.js'
 import {
@@ -42,7 +37,6 @@ import {
   type ToolUseDiff,
 } from '../../utils/gitDiff.js'
 import { lazySchema } from '../../utils/lazySchema.js'
-import { logError } from '../../utils/log.js'
 import { expandPath } from '../../utils/path.js'
 import {
   checkWritePermissionForTool,
@@ -51,6 +45,7 @@ import {
 import type { PermissionDecision } from '../../utils/permissions/PermissionResult.js'
 import { matchWildcardPattern } from '../../utils/permissions/shellRuleMatching.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
+import { writeFileWithSideEffects } from '../FileEditTool/shared.js'
 import { gitDiffSchema, hunkSchema } from '../FileEditTool/types.js'
 import { FILE_WRITE_TOOL_NAME, getWriteToolDescription } from './prompt.js'
 import {
@@ -265,7 +260,9 @@ export const FileWriteTool = buildTool({
     // Activate conditional skills whose path patterns match this file
     activateConditionalSkillsForPaths([fullFilePath], cwd)
 
-    await diagnosticTracker.beforeFileEdited(fullFilePath)
+    const releaseMutationLock = await acquireFileMutationLock(fullFilePath)
+    try {
+      await diagnosticTracker.beforeFileEdited(fullFilePath)
 
     // Ensure parent directory exists before the atomic read-modify-write section.
     // Must stay OUTSIDE the critical section below (a yield between the staleness
@@ -297,6 +294,7 @@ export const FileWriteTool = buildTool({
       }
     }
 
+    let expectedIdentity: ReturnType<typeof getFileIdentity> | undefined
     if (meta !== null) {
       const lastRead = readFileState.get(fullFilePath)
       // Recheck the same whole-file-read condition used at permission time:
@@ -306,10 +304,14 @@ export const FileWriteTool = buildTool({
       }
       if (
         lastRead.fileIdentity === undefined ||
-        !fileIdentitiesEqual(lastRead.fileIdentity, getFileIdentity(fullFilePath))
+        !fileIdentitiesEqual(
+          lastRead.fileIdentity,
+          getFileIdentity(fullFilePath),
+        )
       ) {
         throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
       }
+      expectedIdentity = lastRead.fileIdentity
     }
 
     const enc = meta?.encoding ?? 'utf8'
@@ -320,47 +322,14 @@ export const FileWriteTool = buildTool({
     // the old file's line endings (or sampled the repo via ripgrep for new
     // files), which silently corrupted e.g. bash scripts with \r on Linux when
     // overwriting a CRLF file or when binaries in cwd poisoned the repo sample.
-    const didWrite = writeTextContentWithVerifiedIdentity(
-      fullFilePath,
-      content,
-      enc,
-      'LF',
-      meta === null ? undefined : readFileState.get(fullFilePath)?.fileIdentity,
-    )
-    if (!didWrite) {
-      throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
-    }
-
-    // Notify LSP servers about file modification (didChange) and save (didSave)
-    const lspManager = getLspServerManager()
-    if (lspManager) {
-      // Clear previously delivered diagnostics so new ones will be shown
-      clearDeliveredDiagnosticsForFile(`file://${fullFilePath}`)
-      // didChange: Content has been modified
-      lspManager.changeFile(fullFilePath, content).catch((err: Error) => {
-        logForDebugging(
-          `LSP: Failed to notify server of file change for ${fullFilePath}: ${err.message}`,
-        )
-        logError(err)
-      })
-      // didSave: File has been saved to disk (triggers diagnostics in TypeScript server)
-      lspManager.saveFile(fullFilePath).catch((err: Error) => {
-        logForDebugging(
-          `LSP: Failed to notify server of file save for ${fullFilePath}: ${err.message}`,
-        )
-        logError(err)
-      })
-    }
-
-    // Notify VSCode about the file change for diff view
-    notifyVscodeFileUpdated(fullFilePath, oldContent, content)
-
-    // Update read timestamp, to invalidate stale writes
-    readFileState.set(fullFilePath, {
-      content,
-      timestamp: getFileModificationTime(fullFilePath),
-      offset: undefined,
-      limit: undefined,
+    writeFileWithSideEffects({
+      absoluteFilePath: fullFilePath,
+      originalFileContents: oldContent,
+      updatedFile: content,
+      encoding: enc,
+      lineEndings: 'LF',
+      readFileState,
+      expectedIdentity,
     })
 
     // Log when writing to CLAUDE.md
@@ -442,6 +411,9 @@ export const FileWriteTool = buildTool({
 
     return {
       data,
+    }
+    } finally {
+      await releaseMutationLock()
     }
   },
   mapToolResultToToolResultBlockParam({ filePath, type }, toolUseID) {

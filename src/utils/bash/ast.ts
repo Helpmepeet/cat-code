@@ -65,6 +65,84 @@ const STRUCTURAL_TYPES = new Set([
 const SEPARATOR_TYPES = new Set(['&&', '||', '|', ';', '&', '|&', '\n'])
 
 /**
+ * Shell variables that carry bash's integer attribute by default. Assigning
+ * to one of these is EVALUATION, not storage: bash runs the RHS through
+ * arithmetic evaluation, and arithmetic evaluation expands array subscripts,
+ * which performs command substitution.
+ *
+ * The primitive is the same one `declare -i` guards against in
+ * collectCommands, but with no flag to key off — the attribute is already
+ * on the variable. It survives indirection, so no textual `$(` needs to
+ * appear in the assignment that evaluates:
+ *
+ *   x='a[$(id)]' && OPTIND=x     # bash resolves `x` DURING arithmetic
+ *                                # evaluation and runs id
+ *
+ * Superset across shells and versions: a name here that turns out to be a
+ * plain string variable costs one permission prompt, a name missing from here
+ * is a bypass. Verified live on bash 3.2 for OPTIND and HISTCMD. The zsh
+ * names are included because checkSemantics already has to reason about zsh
+ * builtins reaching this parser. Contains every name in upstream Claude
+ * Code's equivalent set (recovered from the 2.1.214-2.1.239 binaries, where
+ * it is byte-stable) plus the bash names upstream omits.
+ */
+const INTEGER_ATTRIBUTE_VARS = new Set([
+  'ARGC',
+  'BASH_SUBSHELL',
+  'BASHPID',
+  'CHILD_MAX',
+  'COLUMNS',
+  'COMP_CWORD',
+  'COMP_KEY',
+  'COMP_POINT',
+  'COMP_TYPE',
+  'EGID',
+  'EPOCHREALTIME',
+  'EPOCHSECONDS',
+  'ERRNO',
+  'EUID',
+  'FUNCNEST',
+  'GID',
+  'GROUPS',
+  'HISTCMD',
+  'HISTFILESIZE',
+  'HISTSIZE',
+  'KEYTIMEOUT',
+  'LINENO',
+  'LINES',
+  'LISTMAX',
+  'LOGCHECK',
+  'MAILCHECK',
+  'MBEGIN',
+  'MEND',
+  'OPTERR',
+  'OPTIND',
+  'PERIOD',
+  'PPID',
+  'RANDOM',
+  'SAVEHIST',
+  'SECONDS',
+  'SHLVL',
+  'SRANDOM',
+  'TMOUT',
+  'TRY_BLOCK_ERROR',
+  'TRY_BLOCK_INTERRUPT',
+  'TTYIDLE',
+  'UID',
+  'ZLE_RPROMPT_INDENT',
+  'ZSH_SUBSHELL',
+  'status',
+])
+
+/**
+ * The only RHS shape that is provably inert for an integer-attributed
+ * variable: a plain decimal literal evaluates to itself, with no identifier
+ * to resolve and no subscript to expand. `OPTIND=1` (the standard getopts
+ * reset) and `HISTSIZE=1000` stay allowed; everything else asks.
+ */
+const PLAIN_INTEGER_RE = /^[+-]?[0-9]+$/
+
+/**
  * Placeholder string used in outer argv when a $() is recursively extracted.
  * The actual $() output is runtime-determined; the inner command(s) are
  * checked against permission rules separately. Using a placeholder keeps
@@ -739,7 +817,14 @@ function collectCommands(
     // SECURITY: `for PS4 in '$(id)'; do set -x; :; done` sets PS4 directly
     // via varScope.set below — walkVariableAssignment's PS4/IFS checks never
     // fire. Trace-time RCE (PS4) or word-split bypass (IFS). No legit use.
-    if (loopVar === 'PS4' || loopVar === 'IFS') {
+    // An integer-attributed loop var is the same bypass with a live payload:
+    // `for OPTIND in 'a[$(id)]'; do :; done` assigns per iteration, and that
+    // assignment arithmetically evaluates the word. Verified on bash 3.2.
+    if (
+      loopVar === 'PS4' ||
+      loopVar === 'IFS' ||
+      INTEGER_ATTRIBUTE_VARS.has(loopVar)
+    ) {
       return {
         kind: 'too-complex',
         reason: `${loopVar} as loop variable bypasses assignment validation`,
@@ -1847,6 +1932,26 @@ function walkVariableAssignment(
     return {
       kind: 'too-complex',
       reason: 'IFS assignment changes word-splitting — cannot model statically',
+      nodeType: 'variable_assignment',
+    }
+  }
+  // SECURITY: Assigning to an integer-attributed variable is arithmetic
+  // EVALUATION, not storage — see INTEGER_ATTRIBUTE_VARS. Bash resolves bare
+  // identifiers and expands array subscripts during that evaluation, so
+  // `x='a[$(id)]' && OPTIND=x` runs id even though no `$(` appears in the
+  // assignment that evaluates. Neither the command_substitution walk (the
+  // payload is a raw_string in a different assignment) nor the `declare -i`
+  // flag check (no flag here) sees it. A plain decimal literal is the one
+  // RHS with nothing left to resolve; reject everything else, including
+  // placeholders (cmdsub/tracked-var values are runtime-unknowable) and
+  // `+=` (arithmetic addition, same evaluation).
+  if (
+    INTEGER_ATTRIBUTE_VARS.has(name) &&
+    (isAppend || !PLAIN_INTEGER_RE.test(value))
+  ) {
+    return {
+      kind: 'too-complex',
+      reason: `${name} has the shell's integer attribute — assignment arithmetically evaluates the value, which can run commands`,
       nodeType: 'variable_assignment',
     }
   }

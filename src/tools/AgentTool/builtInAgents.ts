@@ -9,10 +9,6 @@ import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import { PLAN_AGENT } from './built-in/planAgent.js'
 import { STATUSLINE_SETUP_AGENT } from './built-in/statuslineSetup.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
-import {
-  AGENT_MODE_CODING_WORKER,
-  AGENT_MODE_VERIFIER,
-} from '../../agent-mode/rolePrompts.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 
 export function areExplorePlanAgentsEnabled(): boolean {
@@ -32,19 +28,6 @@ export function getBuiltInAgents(): AgentDefinition[] {
     getIsNonInteractiveSession()
   ) {
     return []
-  }
-
-  // Use lazy require inside the function body to avoid circular dependency
-  // issues at module init time. The coordinator/agent-mode modules depend on tools
-  // which depend on AgentTool which imports this file.
-  if (isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)) {
-    return [
-      GENERAL_PURPOSE_AGENT,
-      STATUSLINE_SETUP_AGENT,
-      EXPLORE_AGENT,
-      AGENT_MODE_CODING_WORKER,
-      AGENT_MODE_VERIFIER,
-    ]
   }
 
   if (feature('COORDINATOR_MODE')) {

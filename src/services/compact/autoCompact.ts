@@ -25,6 +25,7 @@ import { jsonStringify } from '../../utils/slowOperations.js'
 import { tokenCountWithEstimation } from '../../utils/tokens.js'
 import { roughTokenCountEstimationForContent } from '../tokenEstimation.js'
 import { getCodexLeaseExhaustedMessage } from '../api/codexAccountLeaseManager.js'
+import { API_TIMEOUT_ERROR_MESSAGE } from '../api/errors.js'
 import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
 import {
@@ -154,7 +155,8 @@ function isTransientAutoCompactFailure(error: unknown): boolean {
   if (
     isAbortError(error) ||
     hasExactErrorMessage(error, ERROR_MESSAGE_USER_ABORT) ||
-    hasExactErrorMessage(error, ERROR_MESSAGE_INCOMPLETE_RESPONSE)
+    hasExactErrorMessage(error, ERROR_MESSAGE_INCOMPLETE_RESPONSE) ||
+    hasExactErrorMessage(error, API_TIMEOUT_ERROR_MESSAGE)
   ) {
     return true
   }
@@ -489,43 +491,8 @@ export async function shouldAutoCompact(
   if (querySource === 'session_memory' || querySource === 'compact') {
     return false
   }
-  // marble_origami is the ctx-agent — if ITS context blows up and
-  // autocompact fires, runPostCompactCleanup calls resetContextCollapse()
-  // which destroys the MAIN thread's committed log (module-level state
-  // shared across forks). Inside feature() so the string DCEs from
-  // external builds (it's in excluded-strings.txt).
-  if (feature('CONTEXT_COLLAPSE')) {
-    if (querySource === 'marble_origami') {
-      return false
-    }
-  }
-
   if (!isAutoCompactEnabled()) {
     return false
-  }
-
-  // Context-collapse mode: same suppression. Collapse IS the context
-  // management system when it's on — the 90% commit / 95% blocking-spawn
-  // flow owns the headroom problem. Autocompact's threshold is model-scaled,
-  // but it still sits inside collapse's ladder and would race collapse,
-  // usually winning and nuking granular context that collapse was about to
-  // save. Gating here rather than in isAutoCompactEnabled() keeps
-  // reactiveCompact alive as the 413 fallback (it consults
-  // isAutoCompactEnabled directly) and leaves sessionMemory + manual
-  // /compact working.
-  //
-  // Consult isContextCollapseEnabled (not the raw gate) so the
-  // CLAUDE_CONTEXT_COLLAPSE env override is honored here too. require()
-  // inside the block breaks the init-time cycle (this file exports
-  // getEffectiveContextWindowSize which collapse's index imports).
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const { isContextCollapseEnabled } =
-      require('../contextCollapse/index.js') as typeof import('../contextCollapse/index.js')
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    if (isContextCollapseEnabled()) {
-      return false
-    }
   }
 
   // Pass the current request model so tokenCountWithEstimation invalidates a
@@ -644,6 +611,9 @@ async function tryReactivePrefixCompaction(
       // exists to stop retrying, so it must NOT be classified transient.
       if (outcome.reason === 'aborted') {
         throw new Error(ERROR_MESSAGE_USER_ABORT)
+      }
+      if (outcome.error !== undefined) {
+        throw outcome.error
       }
       throw new Error(`Reactive compaction failed: ${outcome.reason}`)
     }

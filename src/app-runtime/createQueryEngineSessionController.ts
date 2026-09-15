@@ -5,6 +5,7 @@ import type { MessageOrigin } from '../types/message.js'
 import type { UserMessage } from '../types/message.js'
 import {
   AppSessionController,
+  type AppSessionAbortIntent,
   type AppSessionPrompt,
   type AppSessionControllerAdapter,
 } from './AppSessionController.js'
@@ -28,7 +29,7 @@ export type QueryEngineSessionLike = {
     prompt: AppSessionPrompt,
     options?: QueryEngineSessionOptions,
   ): AsyncIterable<SDKMessage>
-  interrupt?: () => void
+  interrupt?: (intent?: AppSessionAbortIntent) => void
   refreshAbortController?: () => AbortController
   selectUserMessage?: (targetUuid: string) => UserMessage
   rewindBeforeUserMessage?: (
@@ -50,8 +51,12 @@ export function createQueryEngineSessionAdapter(
         onPermissionRequest,
       })
     },
-    abort() {
-      session.interrupt?.()
+    abort(intent) {
+      if (intent === undefined) {
+        session.interrupt?.()
+      } else {
+        session.interrupt?.(intent)
+      }
     },
     selectUserMessage: session.selectUserMessage
       ? targetUuid => session.selectUserMessage!(targetUuid)

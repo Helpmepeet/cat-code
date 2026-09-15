@@ -42,7 +42,14 @@ const SNAPSHOT: RunControlsSnapshot = {
     selected: 'gpt-5.6-sol',
     provider: 'openai',
     providerSwitchLocked: false,
-    options: [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', provider: 'openai' }],
+    options: [
+      {
+        value: 'gpt-5.6-sol',
+        label: 'GPT-5.6 Sol',
+        provider: 'openai',
+        effortOptions: ['low', 'medium', 'high'],
+      },
+    ],
   },
   effort: { current: 'high', selected: 'high', supported: true, options: ['high'] },
   fast: { active: true, supportedByModel: true, available: true, unavailableReason: null },

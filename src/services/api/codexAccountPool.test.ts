@@ -13,6 +13,7 @@ import {
   getCodexAccountAvailability,
   getCodexPlanMetadataFromIdToken,
   getPoolStatus,
+  hasSelectableAccountOtherThan,
   getRedemptionEligibility,
   isCodexAccountSwitchable,
   loadVaultAccountsForTest,
@@ -56,6 +57,9 @@ function buildPoolAccount(
     usageAllowed: overrides.usageAllowed,
     usageLimitReached: overrides.usageLimitReached,
     usageResetAt: overrides.usageResetAt,
+    usageWeeklyResetAt: overrides.usageWeeklyResetAt,
+    usagePrimaryWindowSeconds: overrides.usagePrimaryWindowSeconds,
+    usageSecondaryWindowSeconds: overrides.usageSecondaryWindowSeconds,
     cappedAt: overrides.cappedAt,
     lastErrorAt: overrides.lastErrorAt,
     statusReason: overrides.statusReason,
@@ -79,6 +83,19 @@ function createIdToken(auth: Record<string, unknown>): string {
 
 describe('codexAccountPool availability', () => {
   const NOW = Date.parse('2026-04-21T00:00:00+00:00')
+
+  test('replacement eligibility is relative to the failed account', () => {
+    seedCodexAccountPoolForTest({
+      accounts: [
+        buildPoolAccount({ accountId: 'failed', status: 'capped' }),
+        buildPoolAccount({ accountId: 'replacement' }),
+      ],
+      activeAccountId: 'replacement',
+    })
+
+    expect(hasSelectableAccountOtherThan('failed')).toBe(true)
+    expect(hasSelectableAccountOtherThan('replacement')).toBe(false)
+  })
 
   test('expired plan metadata is a warning, not a blocker', () => {
     const account = buildPoolAccount({
@@ -1578,6 +1595,8 @@ describe('quota belief reconciler directional semantics', () => {
         accountId: 'capped-acct',
         primaryPercent: 10,
         weeklyPercent: 5,
+        primaryWindowSeconds: 18_000,
+        secondaryWindowSeconds: 604_800,
         allowed: true,
         limitReached: false,
         fetchedAt: cappedAt + 1,
@@ -1588,6 +1607,8 @@ describe('quota belief reconciler directional semantics', () => {
     expect(acct.status).toBe('capped')
     expect(acct.cappedAt).toBe(cappedAt)
     expect(acct.usageResetAt).toBe(resetAt)
+    expect(acct.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(acct.usageSecondaryWindowSeconds).toBe(604_800)
     expect(getCodexAccountAvailability(acct).kind).toBe('blocked')
   })
 
@@ -1620,6 +1641,8 @@ describe('quota belief reconciler directional semantics', () => {
         allowed: false,
         limitReached: true,
         fetchedAt: redeemedAt + 1,
+        primaryWindowSeconds: 18_000,
+        secondaryWindowSeconds: 604_800,
       },
     ])
 
@@ -1628,6 +1651,8 @@ describe('quota belief reconciler directional semantics', () => {
     expect(acct.usageAllowed).toBe(true)
     expect(acct.usageLimitReached).toBe(false)
     expect(acct.usageFetchedAt).toBeUndefined()
+    expect(acct.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(acct.usageSecondaryWindowSeconds).toBe(604_800)
     expect(getCodexAccountAvailability(acct).kind).not.toBe('blocked')
   })
 

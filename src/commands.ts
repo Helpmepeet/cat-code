@@ -141,7 +141,6 @@ import hooks from './commands/hooks/index.js'
 import files from './commands/files/index.js'
 import branch from './commands/branch/index.js'
 import agents from './commands/agents/index.js'
-import agent from './commands/agent/index.js'
 import plugin from './commands/plugin/index.js'
 import reloadPlugins from './commands/reload-plugins/index.js'
 import rewind from './commands/rewind/index.js'
@@ -268,7 +267,6 @@ export const INTERNAL_ONLY_COMMANDS = [
 const COMMANDS = memoize((): Command[] => [
   accounts,
   addDir,
-  agent,
   advisor,
   agents,
   branch,
@@ -700,6 +698,25 @@ export function isBridgeSafeCommand(cmd: Command): boolean {
   if (cmd.type === 'local-jsx') return false
   if (cmd.type === 'prompt') return true
   return BRIDGE_SAFE_COMMANDS.has(cmd)
+}
+
+/**
+ * Whether a slash command can run with no Ink terminal to render into.
+ *
+ * `local-jsx` commands return an interactive Ink component, so with no terminal
+ * `processSlashCommand` resolves them to `{messages: [], shouldQuery: false}` —
+ * silently nothing. Both headless `-p` runs and desktop sidecar sessions set
+ * `isNonInteractiveSession`, so both must filter their advertised catalog
+ * through this predicate or they offer commands that cannot do anything.
+ *
+ * Sibling of `isBridgeSafeCommand` above, which blocks the same `local-jsx`
+ * class for the same reason on the Remote Control path, but gates `local`
+ * commands on a curated allowlist rather than the declared flag.
+ */
+export function isHeadlessSafeCommand(cmd: Command): boolean {
+  if (cmd.type === 'prompt') return !cmd.disableNonInteractive
+  if (cmd.type === 'local') return cmd.supportsNonInteractive
+  return false
 }
 
 /**

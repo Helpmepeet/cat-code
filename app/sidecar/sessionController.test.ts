@@ -11,16 +11,23 @@ import {
   setSessionProvider,
 } from '../../src/bootstrap/state.js'
 import { resetSettingsCache } from '../../src/utils/settings/settingsCache.js'
-import { clearCommandMemoizationCaches } from '../../src/commands.js'
+import { clearCommandMemoizationCaches, isHeadlessSafeCommand } from '../../src/commands.js'
 import { clearAgentDefinitionsCache } from '../../src/tools/AgentTool/loadAgentsDir.js'
 import { hasProviderBoundHistory } from '../../src/utils/model/providers.js'
-import { DESKTOP_SYSTEM_PROMPT_ADDENDUM } from './desktopSystemPrompt.js'
+import {
+  buildDesktopSystemPrompt,
+  buildPeerDoctrine,
+  DESKTOP_SYSTEM_PROMPT_ADDENDUM,
+} from './desktopSystemPrompt.js'
+import { readPeerIdentity } from './peerHostRequester.js'
 import {
   createNormalSidecarQueryEngineConfig,
   createSidecarSessionController,
   initializeSidecarModelProvider,
   loadAgentDefinitionsForRuntime,
   loadSidecarToolPermissionContext,
+  readSpawnEffort,
+  readSpawnModel,
   selectResumedProviderModel,
 } from './sessionController.js'
 
@@ -226,7 +233,32 @@ test('normal startup exposes the permission-context tools to the model', async (
   expect(queryEngineConfig.tools.some(tool => tool.name === 'Bash')).toBe(true)
 })
 
-test('normal startup appends the desktop file-reference instruction', async () => {
+test('normal startup prepares the live MCP snapshot source and cancels URL elicitation', async () => {
+  const { appStateStore, queryEngineConfig } =
+    await createNormalSidecarQueryEngineConfig(process.cwd())
+
+  const snapshot = queryEngineConfig.getMcpRuntimeSnapshot?.()
+  expect(snapshot).toEqual({
+    clients: appStateStore.getState().mcp.clients,
+    tools: appStateStore.getState().mcp.tools,
+    commands: appStateStore.getState().mcp.commands,
+    resources: appStateStore.getState().mcp.resources,
+  })
+  expect(
+    await queryEngineConfig.handleElicitation?.(
+      'fixture',
+      {
+        mode: 'url',
+        url: 'https://example.test/authorize',
+        elicitationId: 'fixture-elicitation',
+        message: 'Authorize fixture',
+      },
+      new AbortController().signal,
+    ),
+  ).toEqual({ action: 'cancel' })
+})
+
+test('normal startup appends the desktop interface and file-reference instructions', async () => {
   // The engine's tone section teaches the TERMINAL convention
   // (`src/constants/prompts.ts:502` — bare `file_path:line_number`, an OSC 8
   // hyperlink in the TUI). A renderer has no OSC 8, so a desktop session must
@@ -235,9 +267,12 @@ test('normal startup appends the desktop file-reference instruction', async () =
     process.cwd(),
   )
 
-  expect(queryEngineConfig.appendSystemPrompt).toBe(
+  // The addendum now leads a longer appended prompt (the peer doctrine follows
+  // it), so this asserts it is carried and still first, not that it is alone.
+  expect(queryEngineConfig.appendSystemPrompt).toStartWith(
     DESKTOP_SYSTEM_PROMPT_ADDENDUM,
   )
+  expect(queryEngineConfig.appendSystemPrompt).toContain('Interface: Cat Code desktop app, in a session tab.')
   expect(DESKTOP_SYSTEM_PROMPT_ADDENDUM).toContain('[foo.ts](src/utils/foo.ts)')
 })
 
@@ -296,11 +331,35 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
       process.cwd(),
     )
     expect(slashCatalog.length).toBeGreaterThan(0)
-    const help = slashCatalog.find(entry => entry.name === 'help')
-    expect(help).toBeDefined()
+    // Pick a real headless-safe command out of the live catalog rather than
+    // naming one: `/help` used to serve here and is `local-jsx`, so it is now
+    // correctly absent (see the local-jsx exclusion assertion below).
+    const safeCommand = commands.find(
+      command =>
+        command.userInvocable !== false &&
+        isHeadlessSafeCommand(command) &&
+        typeof command.description === 'string' &&
+        command.description.length > 0,
+    )
+    expect(safeCommand).toBeDefined()
+    const projected = slashCatalog.find(
+      entry => entry.name === safeCommand?.name,
+    )
+    expect(projected).toBeDefined()
     // The picker's description column — a non-empty string, not just the name.
-    expect(typeof help?.description).toBe('string')
-    expect(help?.description.length).toBeGreaterThan(0)
+    expect(typeof projected?.description).toBe('string')
+    expect(projected?.description.length).toBeGreaterThan(0)
+
+    // A `local-jsx` command renders an Ink component and resolves to nothing in
+    // a non-interactive sidecar session, so it must never reach the picker.
+    // Live-path: taken from the real loaded catalog, not a hand-authored stub.
+    const inkCommand = commands.find(
+      command => command.userInvocable !== false && command.type === 'local-jsx',
+    )
+    expect(inkCommand).toBeDefined()
+    expect(
+      slashCatalog.some(entry => entry.name === inkCommand?.name),
+    ).toBe(false)
 
     // SLASH-9: pin a real argumentHint projection, not just help.description.
     // Find any loaded command that actually carries one and prove the
@@ -308,7 +367,13 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
     // `...(command.argumentHint ? { argumentHint } : {})` spread must fail
     // this, unlike the hand-authored stub in sidecarServer.test.ts).
     const commandWithHint = commands.find(
-      command => typeof command.argumentHint === 'string' && command.argumentHint.length > 0,
+      command =>
+        typeof command.argumentHint === 'string' &&
+        command.argumentHint.length > 0 &&
+        // Must also survive the catalog's headless-safety filter: the first
+        // hint-carrying command overall is `local-jsx` and no longer projects.
+        command.userInvocable !== false &&
+        isHeadlessSafeCommand(command),
     )
     expect(commandWithHint).toBeDefined()
     const projectedHintEntry = slashCatalog.find(
@@ -316,13 +381,15 @@ test('fresh session builds the rich slash catalog with descriptions (drift: pick
     )
     expect(projectedHintEntry?.argumentHint).toBe(commandWithHint?.argumentHint)
 
-    // SLASH-9: exact userInvocable name-set parity with the engine's own
-    // filter (src/utils/messages/systemInit.ts:69-71) applied to the SAME
-    // `commands` array — not a re-derivation, a literal copy of that filter,
-    // so a drift between the two independent `userInvocable !== false`
-    // call sites is caught rather than assumed to stay in sync.
+    // SLASH-9: exact name-set parity with the engine's own filters applied to
+    // the SAME `commands` array — not a re-derivation, so a drift between the
+    // independent call sites is caught rather than assumed to stay in sync.
+    // Two filters now: `userInvocable !== false`
+    // (src/utils/messages/systemInit.ts:69-71) and headless-safety, the shared
+    // predicate the engine's own `commandsHeadless` path uses in src/main.tsx.
     const engineSlashCommandNames = commands
       .filter(c => c.userInvocable !== false)
+      .filter(isHeadlessSafeCommand)
       .map(c => c.name)
       .sort()
     expect(slashCatalog.map(entry => entry.name).sort()).toEqual(
@@ -464,7 +531,14 @@ Review the restored session.
 })
 
 test('normal startup constructs a real runtime-backed controller without starting a turn', async () => {
-  const { controller, permissions, goals, memory, tasks } =
+  const {
+    controller,
+    disposeMcpLifecycle,
+    permissions,
+    goals,
+    memory,
+    tasks,
+  } =
     await createSidecarSessionController({
     probe: false,
     cwd: process.cwd(),
@@ -474,14 +548,27 @@ test('normal startup constructs a real runtime-backed controller without startin
   expect(permissions).not.toBeNull()
   expect(goals?.getSnapshot()).toBeNull()
   expect(memory).not.toBeNull()
-  expect(tasks?.getSnapshot()).toEqual({ items: [], subagents: [] })
+  expect(tasks?.getSnapshot()).toEqual({
+    items: [],
+    subagents: [],
+    hasForegroundTask: false,
+  })
   expect(controller.getAbortState()).toEqual({ status: 'idle' })
   expect(controller.getGoalSnapshot()).toBeNull()
   expect(controller.getPendingPermissionRequests()).toEqual([])
+  expect(disposeMcpLifecycle).not.toBeNull()
 })
 
 test('probe startup has no read domains (no engine app-state store)', async () => {
-  const { permissions, settings, agentConfig, goals, memory, tasks } =
+  const {
+    disposeMcpLifecycle,
+    permissions,
+    settings,
+    agentConfig,
+    goals,
+    memory,
+    tasks,
+  } =
     await createSidecarSessionController({
     probe: true,
     cwd: process.cwd(),
@@ -492,6 +579,7 @@ test('probe startup has no read domains (no engine app-state store)', async () =
   expect(goals).toBeNull()
   expect(memory).toBeNull()
   expect(tasks).toBeNull()
+  expect(disposeMcpLifecycle).toBeNull()
 })
 
 test('PERMISSION-BOUNDARY §8 fix — settings rules and defaultMode actually load', async () => {
@@ -563,4 +651,217 @@ test('PERMISSION-BOUNDARY §3 — managed bypass policy disables the mode, legac
     resetSettingsCache()
     rmSync(configDir, { recursive: true, force: true })
   }
+})
+
+test('PEER-SESSIONS §4 — a desktop session carries the peer tools the terminal never sees', async () => {
+  // The unwired-feature check (CLAUDE.md §8 rule 7). The tools exist only
+  // because this list appends them after the engine's own; if that append is
+  // dropped, the tools compile, their tests pass, and no model can call them.
+  const { queryEngineConfig, tools } = await createNormalSidecarQueryEngineConfig(
+    process.cwd(),
+  )
+
+  const names = queryEngineConfig.tools.map(tool => tool.name)
+  // All FOUR, not just the pair a given session happened to build. A tool that
+  // is exported but never appended here compiles, passes its own tests, and is
+  // unreachable by any model: that is the failure this test exists for, and it
+  // has to be able to see every tool the feature ships.
+  expect(names).toContain('ListPeers')
+  expect(names).toContain('CreatePeer')
+  expect(names).toContain('SendToPeer')
+  expect(names).toContain('ReadPeer')
+  // Appended, not substituted: the engine's own tools are still there.
+  expect(names).toContain('Bash')
+  // The same array the session-actions export and the context breakdown read,
+  // so those describe one session rather than two.
+  expect(tools.map(tool => tool.name)).toEqual(names)
+})
+
+test('the spawn run defaults treat an empty env value as absent, never as a value', () => {
+  // The contract the supervisor states on `SpawnConfig`: all five peer keys are
+  // written on EVERY spawn, empty when the host had no value, because a key
+  // merely left unset would be inherited from main's own environment. A reader
+  // that tests for presence starts the session on the empty-string model.
+  expect(readSpawnModel({ CATCODE_SIDECAR_MODEL: '' })).toBeUndefined()
+  expect(readSpawnModel({})).toBeUndefined()
+  expect(readSpawnModel({ CATCODE_SIDECAR_MODEL: 'gpt-5.6-luna' })).toBe(
+    'gpt-5.6-luna',
+  )
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: '' })).toBeUndefined()
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: 'high' })).toBe('high')
+  // An unrecognised value degrades to the user's saved effort rather than
+  // failing the boot or reaching the engine as a level it does not know.
+  expect(readSpawnEffort({ CATCODE_SIDECAR_EFFORT: 'whatever' })).toBeUndefined()
+})
+
+test('a created peer boots on the spawn model, and a resumed session keeps its own', () => {
+  // PEER-SESSIONS R7 / HOST-REQUEST-PLANE §5. Precedence, top down: a resumed
+  // transcript's model, then the spawn model, then the saved setting. The first
+  // two are mutually exclusive in practice (main sends run defaults only on the
+  // create spawn, never on a restart), so the order records which one owns the
+  // choice rather than resolving a live tie.
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  try {
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+    expect(
+      initializeSidecarModelProvider(undefined, 'claude-haiku-4-5-20251001'),
+    ).toBe('claude-haiku-4-5-20251001')
+    expect(getMainLoopModelOverride()).toBe('claude-haiku-4-5-20251001')
+
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+    expect(
+      initializeSidecarModelProvider('claude-sonnet-4-5-20250929', 'claude-haiku-4-5-20251001'),
+    ).toBe('claude-sonnet-4-5-20250929')
+  } finally {
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('a spawn model decides the provider, exactly as a resumed one does', () => {
+  // A model chosen for THIS session is a provider-selection event. Without
+  // that, a peer created on a Claude model inside an OpenAI-flagged environment
+  // would boot pointed at the wrong provider.
+  const previousOpenAI = process.env.CLAUDE_CODE_USE_OPENAI
+  const previousOverride = getMainLoopModelOverride()
+  const previousProvider = getSessionProvider()
+  try {
+    process.env.CLAUDE_CODE_USE_OPENAI = '1'
+    setMainLoopModelOverride(undefined)
+    setSessionProvider(null)
+
+    initializeSidecarModelProvider(undefined, 'claude-haiku-4-5-20251001')
+
+    expect(getSessionProvider()).toBe('firstParty')
+  } finally {
+    if (previousOpenAI === undefined) delete process.env.CLAUDE_CODE_USE_OPENAI
+    else process.env.CLAUDE_CODE_USE_OPENAI = previousOpenAI
+    setMainLoopModelOverride(previousOverride)
+    setSessionProvider(previousProvider)
+  }
+})
+
+test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or says neither', () => {
+  const both = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
+  })
+  expect(both).toStartWith(
+    "You are Bear. Alex created you.\n\nWhen you are working from a peer's request",
+  )
+
+  // A user-created session omits the creator sentence (§5). It must not gain a
+  // sentence about a creator that does not exist.
+  const userCreated = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: null,
+    createdById: null,
+  })
+  expect(userCreated).toStartWith(
+    "You are Bear.\n\nWhen you are working from a peer's request",
+  )
+  // The guideline paragraph says "who created you" to every session, so what
+  // must be absent is the identity SENTENCE, not the words.
+  expect(userCreated.split('\n\n')[0]).toBe('You are Bear.')
+
+  // No name at all: no name sentence, rather than a sentence with a hole in it.
+  // The block then opens on the guideline itself, with no empty first line.
+  const unnamed = buildPeerDoctrine({
+    name: null,
+    createdByName: null,
+    createdById: null,
+  })
+  expect(unnamed).toStartWith(
+    "When you are working from a peer's request",
+  )
+  expect(unnamed).not.toContain('You are ')
+  // The rest of the doctrine still applies: an unnamed session still gets the
+  // whole guideline, including the create-only-when-asked rule.
+  expect(unnamed).toContain(
+    'Nothing obliges an acknowledgment; a short okay or silence can both be right',
+  )
+  // The relay to the user carries the outcome, not the peer's evidence: one
+  // creator reproduced its peer's whole command list and the user read the
+  // same commit twice (docs/prompts/2026-09-06-peer-exchange-register.md §8).
+  expect(unnamed).toContain(
+    'summarize it faithfully as an outcome, not as evidence: the commands and their results belong in the tab of the session that ran them',
+  )
+  expect(unnamed).toContain("the run is in Bear's tab")
+  expect(unnamed).toContain(
+    'when they ask for a prompt, write text; do not create one unasked',
+  )
+
+  // Paragraph breaks only. The decision document's hard wraps are its own
+  // 80-column layout, not part of the text, and a sentence broken mid-clause is
+  // not what the appended prompt should carry.
+  for (const paragraph of both.split('\n\n')) {
+    expect(paragraph).not.toContain('\n')
+  }
+})
+
+test('PEER-SESSIONS §5 — a peer report replaces the local final without cancelling user replies', () => {
+  const doctrine = buildPeerDoctrine({
+    name: 'Bear',
+    createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
+  })
+
+  expect(doctrine).toContain(
+    "that peer is your audience. Send the requested answer, result, blocker, or completion report with SendToPeer",
+  )
+  expect(doctrine).toContain(
+    'After SendToPeer succeeds, STOP. Do not repeat, summarize, or reproduce that report in your own final response',
+  )
+  expect(doctrine).toContain(
+    'This rule overrides the ordinary instruction to give the user a self-contained final report',
+  )
+  expect(doctrine).toContain(
+    'answer that message normally here too. This does not cancel or redirect the report to the peer',
+  )
+  expect(doctrine).toContain(
+    'A message from another peer does not count as the user speaking to you',
+  )
+})
+
+test('the doctrine is assembled from the spawn env, empty strings and all', () => {
+  // The only source it can have: the appended prompt is fixed when the
+  // controller is built, before there is a socket to ask main anything on.
+  expect(readPeerIdentity({})).toEqual({
+    name: null,
+    createdByName: null,
+    createdById: null,
+  })
+  expect(
+    readPeerIdentity({
+      CATCODE_SIDECAR_NAME: '',
+      CATCODE_SIDECAR_CREATED_BY_NAME: '',
+      CATCODE_SIDECAR_CREATED_BY: '',
+    }),
+  ).toEqual({ name: null, createdByName: null, createdById: null })
+  expect(
+    readPeerIdentity({
+      CATCODE_SIDECAR_NAME: 'Bear',
+      CATCODE_SIDECAR_CREATED_BY_NAME: 'Alex',
+      CATCODE_SIDECAR_CREATED_BY: 'alex-app-session-id',
+    }),
+  ).toEqual({
+    name: 'Bear',
+    createdByName: 'Alex',
+    // F17 — the id is read beside the name, and by the same empty-is-absent
+    // rule. It is what a send to the creator is checked against; the name is
+    // only what the model writes.
+    createdById: 'alex-app-session-id',
+  })
+
+  const prompt = buildDesktopSystemPrompt({
+    name: 'Bear',
+    createdByName: 'Alex',
+    createdById: 'alex-app-session-id',
+  })
+  expect(prompt).toStartWith(DESKTOP_SYSTEM_PROMPT_ADDENDUM)
+  expect(prompt).toContain('You are Bear.')
 })

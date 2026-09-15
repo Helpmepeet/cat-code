@@ -12,7 +12,7 @@ import {
 } from '../../utils/mcpOutputStorage.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
 import { isOutputLineTruncated } from '../../utils/terminal.js'
-import { DESCRIPTION, PROMPT } from './prompt.js'
+import { DESCRIPTION, PROMPT, READ_MCP_RESOURCE_TOOL_NAME } from './prompt.js'
 import {
   renderToolResultMessage,
   renderToolUseMessage,
@@ -57,7 +57,7 @@ export const ReadMcpResourceTool = buildTool({
     return `${input.server} ${input.uri}`
   },
   shouldDefer: true,
-  name: 'ReadMcpResourceTool',
+  name: READ_MCP_RESOURCE_TOOL_NAME,
   searchHint: 'read a specific MCP resource by URI',
   maxResultSizeChars: 100_000,
   async description() {

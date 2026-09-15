@@ -1,7 +1,8 @@
 import { promises as fsp } from 'fs'
+import { isAbsolute } from 'path'
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js'
-import { getSessionStatePathFromTranscriptPath } from '../../agent-mode/sessionState.js'
-import { getCurrentSessionMode } from '../../agent-mode/agentMode.js'
+import { getSessionStatePathFromTranscriptPath } from '../../utils/workerState.js'
+import { getCurrentSessionMode } from '../../coordinator/coordinatorMode.js'
 import { getSystemPrompt } from '../../constants/prompts.js'
 import { isCoordinatorMode } from '../../coordinator/coordinatorMode.js'
 import type { CanUseToolFn } from '../../hooks/useCanUseTool.js'
@@ -39,7 +40,13 @@ import type { SystemPrompt } from '../../utils/systemPromptType.js'
 import { getTaskOutputPath } from '../../utils/task/diskOutput.js'
 import { getParentSessionId } from '../../utils/teammate.js'
 import { reconstructForSubagentResume } from '../../utils/toolResultStorage.js'
+import { pathInAllowedWorkingPath } from '../../utils/permissions/filesystem.js'
 import { runAsyncAgentLifecycle } from './agentToolUtils.js'
+import {
+  acquireAgentLifecycleOwnership,
+  releaseAgentLifecycleOwnership,
+  type AgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
 import { GENERAL_PURPOSE_AGENT } from './built-in/generalPurposeAgent.js'
 import { FORK_AGENT, isForkSubagentEnabled } from './forkSubagent.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
@@ -75,32 +82,26 @@ type ResumeAgentBackgroundArgs = {
   sourceSessionId?: string
 }
 
-// Lifecycle ownership, not setup ownership: an agentId is held from the
-// start of resumeAgentBackground until the detached runAsyncAgentLifecycle
-// promise it launches actually settles, not merely until launch setup
-// finishes. Otherwise a second resume could slip in while the first
-// lifecycle is still running in the background (its Set membership having
-// already been released right after setup).
-const activeResumeLifecycles = new Set<string>()
-
 export async function resumeAgentBackground(
   args: ResumeAgentBackgroundArgs,
 ): Promise<ResumeAgentResult> {
-  if (activeResumeLifecycles.has(args.agentId)) {
+  const lifecycleOwnership = acquireAgentLifecycleOwnership(args.agentId)
+  if (!lifecycleOwnership) {
     throw new AgentResumeInProgressError(args.agentId)
   }
-  activeResumeLifecycles.add(args.agentId)
   let ownershipTransferred = false
   try {
-    return await resumeAgentBackgroundLocked(args, lifecycle => {
+    return await resumeAgentBackgroundLocked(args, lifecycleOwnership, lifecycle => {
       ownershipTransferred = true
       const release = () => {
-        activeResumeLifecycles.delete(args.agentId)
+        releaseAgentLifecycleOwnership(lifecycleOwnership)
       }
       void lifecycle.then(release, release)
     })
   } finally {
-    if (!ownershipTransferred) activeResumeLifecycles.delete(args.agentId)
+    if (!ownershipTransferred) {
+      releaseAgentLifecycleOwnership(lifecycleOwnership)
+    }
   }
 }
 
@@ -113,6 +114,7 @@ async function resumeAgentBackgroundLocked(
     invokingRequestId,
     sourceSessionId,
   }: ResumeAgentBackgroundArgs,
+  lifecycleOwnership: AgentLifecycleOwnership,
   onLifecycleStarted: (lifecycle: Promise<void>) => void,
 ): Promise<ResumeAgentResult> {
   const startTime = Date.now()
@@ -146,16 +148,54 @@ async function resumeAgentBackgroundLocked(
     resumedMessages,
     transcript.contentReplacements,
   )
-  // Best-effort: if the original worktree was removed externally, fall back
-  // to parent cwd rather than crashing on chdir later.
+  const resumedCwd = meta?.assignedCwd
+    ? await fsp.stat(meta.assignedCwd).then(
+        s => {
+          if (!s.isDirectory()) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is not a directory.`,
+            )
+          }
+          if (!isAbsolute(meta.assignedCwd)) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is not an absolute path.`,
+            )
+          }
+          if (!pathInAllowedWorkingPath(meta.assignedCwd, appState.toolPermissionContext)) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} is outside allowed working directories.`,
+            )
+          }
+          return meta.assignedCwd
+        },
+        () => {
+          throw new Error(
+            `Cannot resume agent ${agentId}: recorded cwd ${meta.assignedCwd} no longer exists.`,
+          )
+        },
+      )
+    : undefined
+  if (meta?.assignedCwd !== undefined && meta.worktreePath !== undefined) {
+    throw new Error(
+      `Cannot resume agent ${agentId}: recorded metadata includes both assignedCwd and worktreePath.`,
+    )
+  }
+  // Fail closed if the originally recorded worktree path disappeared. Falling
+  // back to the parent cwd could run the resumed worker in the wrong tree.
   const resumedWorktreePath = meta?.worktreePath
     ? await fsp.stat(meta.worktreePath).then(
-        s => (s.isDirectory() ? meta.worktreePath : undefined),
+        s => {
+          if (!s.isDirectory()) {
+            throw new Error(
+              `Cannot resume agent ${agentId}: recorded worktree ${meta.worktreePath} is not a directory.`,
+            )
+          }
+          return meta.worktreePath
+        },
         () => {
-          logForDebugging(
-            `Resumed worktree ${meta.worktreePath} no longer exists; falling back to parent cwd`,
+          throw new Error(
+            `Cannot resume agent ${agentId}: recorded worktree ${meta.worktreePath} no longer exists.`,
           )
-          return undefined
         },
       )
     : undefined
@@ -229,19 +269,24 @@ async function resumeAgentBackgroundLocked(
     ...appState.toolPermissionContext,
     mode: selectedAgent.permissionMode ?? 'acceptEdits',
   }
+  const mcpRuntimeSnapshot = isResumedFork
+    ? undefined
+    : toolUseContext.options.getMcpRuntimeSnapshot?.()
   const workerTools = isResumedFork
     ? toolUseContext.options.tools
-    : assembleToolPool(workerPermissionContext, appState.mcp.tools)
+    : assembleToolPool(
+        workerPermissionContext,
+        mcpRuntimeSnapshot?.tools ?? appState.mcp.tools,
+      )
 
   const currentSessionMode = getCurrentSessionMode()
   const parentTranscriptPath = getTranscriptPath()
   const parentSessionId = getSessionId()
   const sessionStateTracking =
-    currentSessionMode === 'agent' || currentSessionMode === 'coordinator'
+    currentSessionMode === 'coordinator'
       ? {
           sessionId: parentSessionId,
           mode: currentSessionMode,
-          objective: meta?.description ?? 'Continue current objective',
           statePath: getSessionStatePathFromTranscriptPath(parentTranscriptPath),
         }
       : undefined
@@ -252,6 +297,9 @@ async function resumeAgentBackgroundLocked(
       ...resumedMessages,
       createUserMessage({ content: prompt }),
     ],
+    ...(resumedMessages.length > 0
+      ? { seededMessagesForPersistence: resumedMessages }
+      : {}),
     toolUseContext,
     canUseTool,
     isAsync: true,
@@ -267,11 +315,21 @@ async function resumeAgentBackgroundLocked(
       ? { systemPrompt: forkParentSystemPrompt }
       : undefined,
     availableTools: workerTools,
+    mcpRuntimeSnapshot,
+    ...(isResumedFork && {
+      mcpRuntimeInputs: {
+        tools: toolUseContext.options.tools,
+        commands: toolUseContext.options.commands,
+        mcpClients: toolUseContext.options.mcpClients,
+        mcpResources: toolUseContext.options.mcpResources,
+      },
+    }),
     // Transcript already contains the parent context slice from the
     // original fork. Re-supplying it would cause duplicate tool_use IDs.
     forkContextMessages: undefined,
     ...(isResumedFork && { useExactTools: true }),
     // Re-persist so metadata survives runAgent's writeAgentMetadata overwrite
+    ...(resumedCwd !== undefined ? { cwd: resumedCwd } : {}),
     worktreePath: resumedWorktreePath,
     description: meta?.description,
     agentName: meta?.agentName,
@@ -356,8 +414,11 @@ async function resumeAgentBackgroundLocked(
     invocationEmitted: false,
   }
 
+  const resumedWorkingDirectory = resumedCwd ?? resumedWorktreePath
   const wrapWithCwd = <T>(fn: () => T): T =>
-    resumedWorktreePath ? runWithCwdOverride(resumedWorktreePath, fn) : fn()
+    resumedWorkingDirectory
+      ? runWithCwdOverride(resumedWorkingDirectory, fn)
+      : fn()
 
   // Capture the detached lifecycle promise (rather than fire-and-forgetting
   // it with `void`) and hand it to the caller's ownership-transfer callback
@@ -368,12 +429,14 @@ async function resumeAgentBackgroundLocked(
       runAsyncAgentLifecycle({
         taskId: agentBackgroundTask.agentId,
         abortController: agentBackgroundTask.abortController!,
+        runId: agentBackgroundTask.runId,
         makeStream: onCacheSafeParams =>
           runAgent({
             ...runAgentParams,
             override: {
               ...runAgentParams.override,
               agentId: asAgentId(agentBackgroundTask.agentId),
+              agentRunId: agentBackgroundTask.runId,
               abortController: agentBackgroundTask.abortController!,
             },
             onCacheSafeParams,
@@ -395,6 +458,7 @@ async function resumeAgentBackgroundLocked(
         parentTranscriptPath,
         parentSessionId,
         sessionStateTracking: runAgentParams.sessionStateTracking,
+        lifecycleOwnership,
       }),
     ),
   )

@@ -11,23 +11,16 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { openWorkspaceFile } from './openWorkspaceFile.js'
 
 function session(cwd: string): SessionDescriptor {
-  return {
+  return sessionDescriptorFixture({
     appSessionId: 'session-1',
-    engineSessionId: null,
     cwd,
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
     createdAt: 1,
     lastAttachedAt: 1,
-    lastMessageSentAt: null,
-  }
+  })
 }
 
 test('opens an existing workspace-relative regular file', async () => {

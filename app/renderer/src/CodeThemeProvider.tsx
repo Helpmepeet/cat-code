@@ -16,7 +16,7 @@
  * (`ReasoningLayoutProvider.tsx:26-33`).
  */
 
-import { useCallback, useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { ReactNode } from 'react'
 import {
   CodeThemeContext,
@@ -24,37 +24,24 @@ import {
   readCodeThemeFromStorage,
   writeCodeThemeToStorage,
   type CodeThemeContextValue,
-  type CodeThemeKey,
 } from './codeTheme.js'
-
-type CodeThemeStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-function defaultStorage(): CodeThemeStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
-}
+import {
+  useViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export function CodeThemeProvider({
   children,
   storage,
 }: {
   children: ReactNode
-  storage?: CodeThemeStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
-  const store = storage === undefined ? defaultStorage() : storage
-  const [theme, setThemeState] = useState<CodeThemeKey>(
-    () => readCodeThemeFromStorage(store) ?? DEFAULT_CODE_THEME,
-  )
-  const setTheme = useCallback(
-    (next: CodeThemeKey) => {
-      setThemeState(next)
-      writeCodeThemeToStorage(store, next)
-    },
-    [store],
+  const [theme, setTheme] = useViewPreference(
+    storage,
+    readCodeThemeFromStorage,
+    writeCodeThemeToStorage,
+    DEFAULT_CODE_THEME,
   )
   const value = useMemo<CodeThemeContextValue>(
     () => ({ theme, setTheme }),

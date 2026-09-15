@@ -1,6 +1,6 @@
 # Analytics And Diagnostics Map
 
-Last refreshed: 2026-08-24
+Last refreshed: 2026-09-06
 
 ## Purpose
 
@@ -20,7 +20,7 @@ active local features.
 |---|---|---|---|
 | Analytics API and gates | `src/services/analytics/index.ts`, `src/services/analytics/growthbook.ts` | `src/services/analytics/{sink,config,metadata}.ts`, analytics call sites | Public logging remains a compatibility boundary; inspect metadata redaction and gate/config fallbacks before changing a call site. |
 | Local telemetry and tracing | `src/utils/telemetry/instrumentation.ts`, `src/utils/telemetry/perfettoTracing.ts` | `src/utils/telemetry/{events,sessionTracing,betaSessionTracing}.ts`, `src/entrypoints/init.ts` | OTEL entrypoints are inert in this build; Perfetto remains the env-enabled local trace writer. |
-| Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. |
+| Desktop operational diagnostics | `app/main/operationalLogSink.ts` | `app/shared/operationalLog.ts`, `app/main/{deliveryTraceSink,diagnosticsBundle}.ts`, `app/sidecar/operationalLogger.ts` | Main owns bounded private JSONL and allowlisted support export; raw sidecar stderr never persists. Turn lifecycle is priority-preserved and exempt from short rate dedupe; peer-routing records are metadata-only with no message-text field. |
 | Desktop usage statistics | `app/sidecar/statsDomain.ts`, `app/shared/protocol.ts` | `app/sidecar/sidecarServer.ts`, `app/renderer/src/{App,AccountsPage,AccountsUsageSection}.tsx`, `app/renderer/src/statsState.ts`, `src/utils/stats.ts` | The sidecar projects real transcript-derived aggregates into a redacted `stats.usage.snapshot`; renderer range changes are a closed `stats.query` verb for 7d or 30d. |
 | Doctor, status, and validation | `src/commands/{doctor,status}/` | `src/screens/Doctor.tsx`, `src/components/Settings/Status.tsx`, `src/utils/doctorDiagnostic.ts`, `src/utils/status.tsx`, `src/utils/envValidation.ts` | `/doctor` and `/status` overlap but have distinct owners; settings and environment validation feed their displays. |
 | IDE diagnostics and debug/error logs | `src/services/diagnosticTracking.ts`, `src/utils/debug.ts` | `src/utils/{attachments,log,errorLogSink}.ts`, `src/components/DiagnosticsDisplay.tsx` | IDE diagnostics are local edit feedback; debug/error output has separate enablement, filtering, and persistence paths. |
@@ -99,7 +99,7 @@ active local features.
 | Status property builders | `src/utils/status.tsx` | Account, provider, proxy/mTLS, IDE, MCP summary, sandbox, memory, installation, settings sources, model label. |
 | `cat-code codex status --json` | `src/cli/handlers/codexStatus.ts`, `src/services/api/codexStatus.ts` | Emits a single advisory JSON observation and exits. Valid observations exit 0 even for no-account or all-blocked pools; nonzero is reserved for internal command failure. |
 | `/stats` command | `src/commands/stats/stats.tsx` | Lazy-renders `Stats` dialog. |
-| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files, aggregates sessions/messages/model usage/activity/streaks/speculation time, and uses stats cache helpers. |
+| Stats aggregation | `src/utils/stats.ts` | Reads transcript JSONL files and aggregates sessions/messages/model usage/activity/streaks/speculation time by event date, crediting usage increases once across streaming splits. The paired 7d/30d API shares discovery, modification-time checks and JSONL reads with independent range accumulators; a session's opening date does not exclude later activity. The accounts worker reaches it through `tryGetUsageStatsSnapshots` in `app/sidecar/statsDomain.ts`, which preserves last-good data when a read fails. The `all` range retains its existing durable cache. |
 | Stats UI | `src/components/Stats.tsx` | Overview/models tabs, date-range switching, heatmap/charts, screenshot copy, async cache for range loads. |
 | In-session metrics | `src/context/stats.tsx` | `StatsProvider` exposes counters/gauges/timers/sets and persists `lastSessionMetrics` on process exit. |
 | Desktop usage statistics | `app/sidecar/statsDomain.ts` | The sidecar reads `aggregateClaudeCodeStatsForRange()` and sends redacted totals, daily model/activity data, cache metrics, and model names to the Accounts surface; no transcript text or credentials cross the boundary. |

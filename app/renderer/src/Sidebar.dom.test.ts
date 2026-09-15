@@ -15,7 +15,7 @@
  */
 
 import { afterAll, afterEach, beforeAll, expect, test } from 'bun:test'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import { createDomTestHarness } from './domTestHarness.js'
 import type { DomTestHarness } from './domTestHarness.js'
 import { Sidebar } from './Sidebar.js'
@@ -49,7 +49,7 @@ function storageWithWidth(width: number): Pick<Storage, 'getItem' | 'setItem'> {
   }
 }
 
-function sidebarWithStorage(storage: Pick<Storage, 'getItem' | 'setItem'>) {
+function sidebar(over: Partial<Parameters<typeof Sidebar>[0]> = {}) {
   return createElement(Sidebar, {
     rows: [],
     activeSessionId: null,
@@ -58,8 +58,13 @@ function sidebarWithStorage(storage: Pick<Storage, 'getItem' | 'setItem'>) {
     onSelectLive: () => {},
     onRestore: () => {},
     onOpenHistory: () => {},
-    storage,
+    storage: null,
+    ...over,
   })
+}
+
+function sidebarWithStorage(storage: Pick<Storage, 'getItem' | 'setItem'>) {
+  return sidebar({ storage })
 }
 
 /** The <aside>'s published expanded width, in px, or null when unset. */
@@ -88,4 +93,93 @@ test('a persisted width the window can afford is restored untouched', async () =
   setWindowWidth(1440)
   const tree = await harness.mount(sidebarWithStorage(storageWithWidth(SIDEBAR_MAX_WIDTH)))
   expect(publishedWidth(tree.container)).toBe(SIDEBAR_MAX_WIDTH)
+})
+
+test('a hover-expanded destination remains direct and dismisses the overlay after selection', async () => {
+  const selections: string[] = []
+  const tree = await harness.mount(
+    sidebar({ onSelectView: view => { selections.push(view) } }),
+  )
+  const aside = tree.container.querySelector('aside')
+  expect(aside).not.toBeNull()
+
+  await act(async () => {
+    aside!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+    await new Promise(resolve => setTimeout(resolve, 140))
+  })
+  expect(aside!.className).toContain('sidebar-expanded')
+
+  const destination = tree.container.querySelector<HTMLButtonElement>(
+    '[data-sidebar-nav-id="sessions"]',
+  )
+  expect(destination?.textContent).toContain('Sessions')
+  expect(tree.container.textContent).not.toContain('Show destinations')
+
+  await act(async () => {
+    destination!.click()
+  })
+  expect(selections).toEqual(['sessions'])
+  expect(aside!.className).toContain('w-12')
+})
+
+test('selecting a destination preserves an explicitly pinned sidebar', async () => {
+  const selections: string[] = []
+  const tree = await harness.mount(
+    sidebar({ onSelectView: view => { selections.push(view) } }),
+  )
+  const aside = tree.container.querySelector('aside')
+  const collapsedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+
+  await act(async () => {
+    collapsedPin!.focus()
+  })
+  const expandedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+  await act(async () => {
+    expandedPin!.click()
+  })
+  expect(tree.container.querySelector('[aria-label="Unpin sidebar"]')).not.toBeNull()
+
+  const destination = tree.container.querySelector<HTMLButtonElement>(
+    '[data-sidebar-nav-id="goals"]',
+  )
+  await act(async () => {
+    destination!.click()
+  })
+  expect(selections).toEqual(['goals'])
+  expect(aside!.className).toContain('sidebar-expanded')
+  expect(tree.container.querySelector('[aria-label="Unpin sidebar"]')).not.toBeNull()
+
+  await act(async () => {
+    tree.container.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside!.className).toContain('sidebar-expanded')
+})
+
+test('an outside click collapses a pinned sidebar on a non-Chat page', async () => {
+  const tree = await harness.mount(sidebar({ activeView: 'settings' }))
+  const aside = tree.container.querySelector('aside')
+  const collapsedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+
+  await act(async () => {
+    collapsedPin!.focus()
+  })
+  const expandedPin = tree.container.querySelector<HTMLButtonElement>(
+    '[aria-label="Pin sidebar open"]',
+  )
+  await act(async () => {
+    expandedPin!.click()
+  })
+  expect(aside!.className).toContain('sidebar-expanded')
+
+  await act(async () => {
+    tree.container.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+  })
+  expect(aside!.className).toContain('w-12')
+  expect(tree.container.querySelector('[aria-label="Pin sidebar open"]')).not.toBeNull()
 })

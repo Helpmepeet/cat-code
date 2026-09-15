@@ -72,13 +72,6 @@ export const SETTINGS_SCOPE_KINDS = [
 
 export type SettingsScopeKind = (typeof SETTINGS_SCOPE_KINDS)[number]
 
-export function isSettingsScopeKind(value: unknown): value is SettingsScopeKind {
-  return (
-    typeof value === 'string' &&
-    (SETTINGS_SCOPE_KINDS as readonly string[]).includes(value)
-  )
-}
-
 export const SETTINGS_SCOPE_LABEL: Record<SettingsScopeKind, string> = {
   user: 'My defaults',
   project: 'Project',

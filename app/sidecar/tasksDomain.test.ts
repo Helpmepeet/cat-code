@@ -179,6 +179,9 @@ test('excludes the foregrounded local_agent — its messages already render in t
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      // The FOREGROUNDED worker is excluded from `items` but still listed here,
+      // which is what lets a card offer `task.background.one` at all.
+      isBackgrounded: false,
     },
   ])
   expect(snapshot.foregroundedTaskId).toBe('a1')
@@ -304,8 +307,41 @@ test('hasLiveWork — true for a running FOREGROUNDED local_agent the display sn
   const domain = createSidecarTasksDomain(store)
   // The display snapshot hides it (foregrounded + non-backgrounded)…
   expect(domain.getSnapshot().items).toHaveLength(0)
+  expect(domain.getSnapshot().hasForegroundTask).toBe(true)
   // …but the park gate must still see it — no turn loss.
   expect(domain.hasLiveWork()).toBe(true)
+})
+
+test('the task-mode snapshot turns off once the same worker is backgrounded', () => {
+  const worker = agentTask({
+    id: 'a1',
+    status: 'running',
+    isBackgrounded: true,
+  })
+  const domain = createSidecarTasksDomain(storeWith({ a1: worker }))
+
+  expect(domain.getSnapshot().hasForegroundTask).toBe(false)
+})
+
+test('the task-mode snapshot hides Background when terminal backgrounding is disabled', () => {
+  const previous = process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+  process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = '1'
+  try {
+    const worker = agentTask({
+      id: 'a1',
+      status: 'running',
+      isBackgrounded: false,
+    })
+    const domain = createSidecarTasksDomain(storeWith({ a1: worker }, 'a1'))
+
+    expect(domain.getSnapshot().hasForegroundTask).toBe(false)
+  } finally {
+    if (previous === undefined) {
+      delete process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS
+    } else {
+      process.env.CLAUDE_CODE_DISABLE_BACKGROUND_TASKS = previous
+    }
+  }
 })
 
 test('hasLiveWork — false when every task is terminal', () => {

@@ -11,6 +11,7 @@ function row(partial: Partial<MergedSessionRow> & { sessionId: string }): Merged
     cwdExists: true,
     title: null,
     displayLabel: partial.sessionId,
+    name: null,
     live: false,
     restorable: false,
     parked: false,
@@ -167,6 +168,7 @@ const live = (sessionId: string, extra: Partial<MergedSessionRow> = {}) =>
     live: true,
     status: 'ready',
     displayLabel: sessionId,
+    name: null,
     ...extra,
   })
 

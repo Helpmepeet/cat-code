@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import { getSdkAgentProgressSummariesEnabled, getSessionId } from '../../bootstrap/state.js';
 import { getCodexLeaseForOwner, releaseCodexLease, snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js';
 import { markPoolAccountLastError } from '../../services/api/codexAccountPool.js';
@@ -13,7 +14,7 @@ import { findToolByName } from '../../Tool.js';
 import type { AgentToolResult } from '../../tools/AgentTool/agentToolUtils.js';
 import type { AgentDefinition } from '../../tools/AgentTool/loadAgentsDir.js';
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from '../../tools/SyntheticOutputTool/SyntheticOutputTool.js';
-import { asAgentId } from '../../types/ids.js';
+import { asAgentId, type AgentId } from '../../types/ids.js';
 import type { Message, SystemMessageLevel } from '../../types/message.js';
 import { createAbortController, createChildAbortController } from '../../utils/abortController.js';
 import { registerCleanup } from '../../utils/cleanupRegistry.js';
@@ -49,6 +50,25 @@ export type AgentProgress = {
 };
 export type VerificationVerdict = 'PASS' | 'FAIL' | 'PARTIAL';
 const MAX_RECENT_ACTIVITIES = 5;
+export type LocalAgentMessageDeliveryStatus =
+  | 'pending'
+  | 'prepared'
+  | 'submitted'
+  | 'delivered'
+  | 'undelivered'
+  | 'uncertain'
+
+export type LocalAgentMessageDelivery = {
+  id: string
+  message: string
+  originAgentId?: AgentId
+  status: LocalAgentMessageDeliveryStatus
+  acceptedAt: number
+  runId?: string
+  requestId?: string
+  outcome?: string
+  reported?: boolean
+}
 export type ProgressTracker = {
   toolUseCount: number;
   // Track input and output separately to avoid double-counting.
@@ -167,8 +187,12 @@ export type LocalAgentTaskState = TaskStateBase & {
   lastReportedTokenCount: number;
   // Whether the task has been backgrounded (false = foreground running, true = backgrounded)
   isBackgrounded: boolean;
-  // Messages queued mid-turn via SendMessage, drained at tool-round boundaries
-  pendingMessages: string[];
+  // Local-worker instructions and their delivery outcomes.
+  pendingMessages: LocalAgentMessageDelivery[];
+  // A completed query closes this gate before terminal status is published.
+  acceptingMessages?: boolean
+  // Identifies the run that owns callbacks mutating this task.
+  runId?: string
   // UI is holding this task: blocks eviction, enables stream-append, triggers
   // disk bootstrap. Set by enterTeammateView. Separate from viewingAgentTaskId
   // (which is "what am I LOOKING at") — retain is "what am I HOLDING."
@@ -212,26 +236,445 @@ export function isPanelAgentTask(t: unknown): t is LocalAgentTaskState {
  * result depends on that synchronous guarantee — never call this with an
  * asynchronous (e.g. React) state setter.
  */
-export function queuePendingMessageIfRunning(taskId: string, message: string, setAppState: SetAppState): boolean {
+function normalizePendingMessages(
+  messages: unknown,
+): LocalAgentMessageDelivery[] {
+  if (!Array.isArray(messages)) return []
+  return messages.flatMap(message => {
+    if (typeof message === 'string') {
+      return [{
+        id: randomUUID(),
+        message,
+        status: 'pending' as const,
+        acceptedAt: Date.now(),
+      }]
+    }
+    if (
+      typeof message !== 'object' ||
+      message === null ||
+      typeof (message as { id?: unknown }).id !== 'string' ||
+      typeof (message as { message?: unknown }).message !== 'string'
+    ) {
+      return []
+    }
+    const record = message as LocalAgentMessageDelivery
+    if (
+      ![
+        'pending',
+        'prepared',
+        'submitted',
+        'delivered',
+        'undelivered',
+        'uncertain',
+      ].includes(record.status)
+    ) {
+      return []
+    }
+    return [{
+      ...record,
+      acceptedAt:
+        typeof record.acceptedAt === 'number' ? record.acceptedAt : Date.now(),
+    }]
+  })
+}
+
+function taskRunMatches(
+  task: LocalAgentTaskState,
+  runId: string | undefined,
+): boolean {
+  return runId === undefined || task.runId === runId
+}
+
+function isUnresolvedDelivery(record: LocalAgentMessageDelivery): boolean {
+  return (
+    record.status === 'pending' ||
+    record.status === 'prepared' ||
+    record.status === 'submitted' ||
+    ((record.status === 'undelivered' || record.status === 'uncertain') &&
+      record.reported !== true)
+  )
+}
+
+export function getUnresolvedAgentMessageDeliveries(
+  task: LocalAgentTaskState,
+): LocalAgentMessageDelivery[] {
+  return normalizePendingMessages(task.pendingMessages).filter(
+    isUnresolvedDelivery,
+  )
+}
+
+export function formatAgentMessageDeliveryReport(
+  task: LocalAgentTaskState,
+): string | undefined {
+  return formatAgentMessageDeliveryRecords(
+    getUnresolvedAgentMessageDeliveries(task),
+  )
+}
+
+export function formatAgentMessageDeliveryRecords(
+  records: readonly LocalAgentMessageDelivery[],
+): string | undefined {
+  if (records.length === 0) return undefined
+  const lines = ['Unresolved worker instructions:']
+  const undelivered = records.filter(
+    record => record.status === 'undelivered' || record.status === 'pending',
+  )
+  const uncertain = records.filter(
+    record => record.status === 'uncertain' || record.status === 'prepared' || record.status === 'submitted',
+  )
+  if (undelivered.length > 0) {
+    lines.push(
+      `Undelivered: ${undelivered
+        .map(record =>
+          record.outcome
+            ? `${record.message} (${record.outcome})`
+            : record.message,
+        )
+        .join(' | ')}`,
+    )
+  }
+  if (uncertain.length > 0) {
+    lines.push(
+      `Uncertain: ${uncertain
+        .map(record =>
+          record.outcome
+            ? `${record.message} (${record.outcome})`
+            : record.message,
+        )
+        .join(' | ')}`,
+    )
+  }
+  return lines.join('\n')
+}
+
+/**
+ * Atomically decide whether a task is currently accepting messages and, if so,
+ * record the instruction before returning success to the caller.
+ */
+export function queuePendingMessageIfRunning(
+  taskId: string,
+  message: string,
+  setAppState: SetAppState,
+  originAgentId?: AgentId,
+): boolean {
   let queued = false;
   setAppState(prev => {
     const task = prev.tasks[taskId];
-    if (!isPanelAgentTask(task) || task.status !== 'running') {
+    if (
+      !isPanelAgentTask(task) ||
+      task.status !== 'running' ||
+      task.acceptingMessages === false
+    ) {
       return prev;
     }
     queued = true;
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
     return {
       ...prev,
       tasks: {
         ...prev.tasks,
         [taskId]: {
           ...task,
-          pendingMessages: [...task.pendingMessages, message]
+          pendingMessages: [
+            ...pendingMessages,
+            {
+              id: randomUUID(),
+              message,
+              ...(originAgentId ? { originAgentId } : {}),
+              status: 'pending',
+              acceptedAt: Date.now(),
+              reported: false,
+            },
+          ],
         }
       }
     };
   });
   return queued;
+}
+
+export type AgentMessageClaim =
+  | { kind: 'claimed'; messages: LocalAgentMessageDelivery[] }
+  | { kind: 'closed' }
+
+export function claimPendingMessagesForRequest(
+  taskId: string,
+  runId: string | undefined,
+  setAppState: SetAppState,
+): LocalAgentMessageDelivery[] {
+  let claimed: LocalAgentMessageDelivery[] = []
+  setAppState(prev => {
+    const task = prev.tasks[taskId]
+    if (
+      !isLocalAgentTask(task) ||
+      task.status !== 'running' ||
+      !taskRunMatches(task, runId)
+    ) {
+      return prev
+    }
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    claimed = pendingMessages.filter(message => message.status === 'pending')
+    if (claimed.length === 0) return prev
+    const claimedIds = new Set(claimed.map(message => message.id))
+    return {
+      ...prev,
+      tasks: {
+        ...prev.tasks,
+        [taskId]: {
+          ...task,
+          pendingMessages: pendingMessages.map(message =>
+            claimedIds.has(message.id)
+              ? {
+                  ...message,
+                  status: 'prepared',
+                  runId: runId ?? task.runId,
+                }
+              : message,
+          ),
+        },
+      },
+    }
+  })
+  return claimed.map(message => ({
+    ...message,
+    status: 'prepared',
+    runId: runId,
+  }))
+}
+
+export function claimPendingMessagesOrClose(
+  taskId: string,
+  runId: string | undefined,
+  setAppState: SetAppState,
+): AgentMessageClaim {
+  let result: AgentMessageClaim = { kind: 'closed' }
+  setAppState(prev => {
+    const task = prev.tasks[taskId]
+    if (
+      !isLocalAgentTask(task) ||
+      task.status !== 'running' ||
+      !taskRunMatches(task, runId)
+    ) {
+      return prev
+    }
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    const claimable = pendingMessages.filter(
+      message => message.status === 'pending',
+    )
+    if (claimable.length > 0) {
+      result = {
+        kind: 'claimed',
+        messages: claimable.map(message => ({
+          ...message,
+          status: 'prepared',
+          runId: runId ?? task.runId,
+        })),
+      }
+      const claimableIds = new Set(claimable.map(message => message.id))
+      return {
+        ...prev,
+        tasks: {
+          ...prev.tasks,
+          [taskId]: {
+            ...task,
+            pendingMessages: pendingMessages.map(message =>
+              claimableIds.has(message.id)
+                ? {
+                    ...message,
+                    status: 'prepared',
+                    runId: runId ?? task.runId,
+                  }
+                : message,
+            ),
+          },
+        },
+      }
+    }
+    result = { kind: 'closed' }
+    if (task.acceptingMessages === false) return prev
+    return {
+      ...prev,
+      tasks: {
+        ...prev.tasks,
+        [taskId]: {
+          ...task,
+          pendingMessages,
+          acceptingMessages: false,
+        },
+      },
+    }
+  })
+  return result
+}
+
+export function submitPreparedAgentMessages(
+  taskId: string,
+  runId: string | undefined,
+  requestId: string,
+  setAppState: SetAppState,
+): string[] {
+  let submitted: string[] = []
+  setAppState(prev => {
+    const task = prev.tasks[taskId]
+    if (
+      !isLocalAgentTask(task) ||
+      task.status !== 'running' ||
+      !taskRunMatches(task, runId)
+    ) {
+      return prev
+    }
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    submitted = pendingMessages
+      .filter(
+        message =>
+          message.status === 'prepared' &&
+          (message.runId === undefined || message.runId === runId),
+      )
+      .map(message => message.id)
+    if (submitted.length === 0) return prev
+    const submittedIds = new Set(submitted)
+    return {
+      ...prev,
+      tasks: {
+        ...prev.tasks,
+        [taskId]: {
+          ...task,
+          pendingMessages: pendingMessages.map(message =>
+            submittedIds.has(message.id)
+              ? {
+                  ...message,
+                  status: 'submitted',
+                  runId: runId ?? task.runId,
+                  requestId,
+                }
+              : message,
+          ),
+        },
+      },
+    }
+  })
+  return submitted
+}
+
+export function settleAgentMessageDeliveries(
+  taskId: string,
+  messageIds: string[],
+  runId: string | undefined,
+  status: 'delivered' | 'undelivered' | 'uncertain',
+  outcome: string,
+  setAppState: SetAppState,
+): void {
+  if (messageIds.length === 0) return
+  const ids = new Set(messageIds)
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    const nextMessages = pendingMessages.flatMap(message => {
+      if (
+        !ids.has(message.id) ||
+        (message.runId !== undefined && message.runId !== runId) ||
+        (message.status !== 'prepared' && message.status !== 'submitted')
+      ) {
+        return [message]
+      }
+      if (status === 'delivered') return []
+      return [{ ...message, status, outcome, runId }]
+    })
+    return {
+      ...task,
+      pendingMessages: nextMessages,
+    }
+  })
+}
+
+export function settleAgentMessagesForTerminal(
+  taskId: string,
+  runId: string | undefined,
+  outcome: string,
+  setAppState: SetAppState,
+): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    const nextMessages = pendingMessages.map(message => {
+      if (
+        message.status === 'pending' ||
+        message.status === 'prepared'
+      ) {
+        return {
+          ...message,
+          status: 'undelivered' as const,
+          outcome,
+          runId,
+        }
+      }
+      if (message.status === 'submitted') {
+        return {
+          ...message,
+          status: 'uncertain' as const,
+          outcome,
+          runId,
+        }
+      }
+      return message
+    })
+    return {
+      ...task,
+      acceptingMessages: false,
+      pendingMessages: nextMessages,
+    }
+  })
+}
+
+export function settleAgentMessagesForRun(
+  taskId: string,
+  runId: string | undefined,
+  status: 'undelivered' | 'uncertain',
+  outcome: string,
+  setAppState: SetAppState,
+): void {
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    return {
+      ...task,
+      pendingMessages: pendingMessages.map(message => {
+        if (
+          (message.status !== 'prepared' && message.status !== 'submitted') ||
+          (message.runId !== undefined && message.runId !== runId)
+        ) {
+          return message
+        }
+        return {
+          ...message,
+          status:
+            message.status === 'submitted' ? 'uncertain' : status,
+          outcome,
+          runId,
+        }
+      }),
+    }
+  })
+}
+
+export function markAgentMessageDeliveriesReported(
+  taskId: string,
+  messageIds: string[],
+  setAppState: SetAppState,
+  runId?: string,
+): void {
+  if (messageIds.length === 0) return
+  const ids = new Set(messageIds)
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    return {
+      ...task,
+      pendingMessages: pendingMessages.map(message =>
+        ids.has(message.id) ? { ...message, reported: true } : message,
+      ),
+    }
+  })
 }
 
 /**
@@ -255,22 +698,89 @@ export function markAgentTaskResumed(taskId: string, setAppState: (f: (prev: App
     resumedAt: Date.now()
   }));
 }
-export function drainPendingMessages(taskId: string, getAppState: () => AppState, setAppState: (f: (prev: AppState) => AppState) => void): string[] {
-  const task = getAppState().tasks[taskId];
-  if (!isLocalAgentTask(task) || task.pendingMessages.length === 0) {
-    return [];
-  }
-  const drained = task.pendingMessages;
-  updateTaskState<LocalAgentTaskState>(taskId, setAppState, t => ({
-    ...t,
-    pendingMessages: []
-  }));
-  return drained;
-}
-
 /**
  * Enqueue an agent notification to the message queue.
  */
+export function enqueueAgentMessageDeliveryReportsToOrigins({
+  taskId,
+  description,
+  status,
+  error,
+  setAppState,
+  toolUseId,
+  runId,
+}: {
+  taskId: string
+  description: string
+  status: 'completed' | 'failed' | 'killed'
+  error?: string
+  setAppState: SetAppState
+  toolUseId?: string
+  runId?: string
+}, {
+  enqueueNotification = enqueuePendingNotification,
+}: {
+  enqueueNotification?: typeof enqueuePendingNotification
+} = {}): void {
+  let taskSnapshot: LocalAgentTaskState | undefined
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
+    if (!taskRunMatches(task, runId)) return task
+    taskSnapshot = task
+    return task
+  })
+  if (!taskSnapshot) return
+
+  const originGroups = new Map<AgentId, LocalAgentMessageDelivery[]>()
+  for (const message of getUnresolvedAgentMessageDeliveries(taskSnapshot)) {
+    if (!message.originAgentId) continue
+    const group = originGroups.get(message.originAgentId) ?? []
+    group.push(message)
+    originGroups.set(message.originAgentId, group)
+  }
+  const agentLabel = taskSnapshot.agentName
+    ? `@${taskSnapshot.agentName}`
+    : `"${description}"`
+  const summary =
+    status === 'completed'
+      ? `Agent ${agentLabel} completed`
+      : status === 'failed'
+        ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}`
+        : `Agent ${agentLabel} was stopped`
+
+  for (const [originAgentId, records] of originGroups) {
+    const deliveryReport = formatAgentMessageDeliveryRecords(records)
+    if (!deliveryReport) continue
+    const details = {
+      taskId,
+      outputFile: getTaskOutputPath(taskId),
+      toolUseId,
+      status,
+      summary,
+      result: deliveryReport,
+    } as const
+    try {
+      enqueueNotification({
+        value: formatTaskNotificationText(details),
+        mode: 'task-notification',
+        origin: toTaskNotificationOrigin(details),
+        agentId: originAgentId,
+      })
+    } catch (enqueueError) {
+      logForDebugging(
+        `Failed to enqueue local worker delivery report: ${enqueueError}`,
+        { level: 'warn' },
+      )
+      continue
+    }
+    markAgentMessageDeliveriesReported(
+      taskId,
+      records.map(record => record.id),
+      setAppState,
+      runId,
+    )
+  }
+}
+
 export function enqueueAgentNotification({
   taskId,
   description,
@@ -281,7 +791,8 @@ export function enqueueAgentNotification({
   usage,
   toolUseId,
   worktreePath,
-  worktreeBranch
+  worktreeBranch,
+  runId,
 }: {
   taskId: string;
   description: string;
@@ -297,41 +808,53 @@ export function enqueueAgentNotification({
   toolUseId?: string;
   worktreePath?: string;
   worktreeBranch?: string;
-}): void {
-  // Atomically check and set notified flag to prevent duplicate notifications.
-  // If the task was already marked as notified (e.g., by TaskStopTool), skip
-  // enqueueing to avoid sending redundant messages to the model.
-  let shouldEnqueue = false;
-  let agentName: string | undefined;
+  runId?: string;
+}, {
+  enqueueNotification = enqueuePendingNotification,
+}: {
+  enqueueNotification?: typeof enqueuePendingNotification
+} = {}): void {
+  let taskSnapshot: LocalAgentTaskState | undefined;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    agentName = task.agentName;
-    if (task.notified) {
+    if (!taskRunMatches(task, runId)) {
       return task;
     }
-    shouldEnqueue = true;
-    return {
-      ...task,
-      notified: true
-    };
+    taskSnapshot = task;
+    return task
   });
-  if (!shouldEnqueue) {
+  if (!taskSnapshot) {
     return;
   }
 
-  // Abort any active speculation — background task state changed, so speculated
-  // results may reference stale task output. The prompt suggestion text is
-  // preserved; only the pre-computed response is discarded.
+  const unresolved = getUnresolvedAgentMessageDeliveries(taskSnapshot)
+  const mainDeliveryRecords = unresolved.filter(
+    message => !message.originAgentId,
+  )
+
   abortSpeculation(setAppState);
-  const agentLabel = agentName ? `@${agentName}` : `"${description}"`;
+  enqueueAgentMessageDeliveryReportsToOrigins(
+    {
+      taskId,
+      description,
+      status,
+      error,
+      setAppState,
+      toolUseId,
+      runId,
+    },
+    { enqueueNotification },
+  )
+  const agentLabel = taskSnapshot.agentName
+    ? `@${taskSnapshot.agentName}`
+    : `"${description}"`;
   const summary = status === 'completed' ? `Agent ${agentLabel} completed` : status === 'failed' ? `Agent ${agentLabel} failed: ${error || 'Unknown error'}` : `Agent ${agentLabel} was stopped`;
   const outputPath = getTaskOutputPath(taskId);
-  const details = {
+  const baseDetails = {
     taskId,
     outputFile: outputPath,
     toolUseId,
     status,
     summary,
-    result: finalMessage,
     usage: usage
       ? {
           totalTokens: usage.totalTokens,
@@ -342,11 +865,40 @@ export function enqueueAgentNotification({
     worktreePath,
     worktreeBranch,
   } as const;
-  enqueuePendingNotification({
-    value: formatTaskNotificationText(details),
-    mode: 'task-notification',
-    origin: toTaskNotificationOrigin(details)
-  });
+
+  if (taskSnapshot.notified) {
+    return;
+  }
+  const deliveryReport = formatAgentMessageDeliveryRecords(mainDeliveryRecords)
+  const resultWithDeliveryReport = [finalMessage, deliveryReport]
+    .filter((value): value is string => Boolean(value))
+    .join('\n\n');
+  const details = {
+    ...baseDetails,
+    result: resultWithDeliveryReport || undefined,
+  } as const;
+  try {
+    enqueueNotification({
+      value: formatTaskNotificationText(details),
+      mode: 'task-notification',
+      origin: toTaskNotificationOrigin(details)
+    });
+  } catch (enqueueError) {
+    logForDebugging(
+      `Failed to enqueue local worker notification: ${enqueueError}`,
+      { level: 'warn' },
+    );
+    return;
+  }
+  markAgentMessageDeliveriesReported(
+    taskId,
+    mainDeliveryRecords.map(message => message.id),
+    setAppState,
+    runId,
+  );
+  updateTaskState<LocalAgentTaskState>(taskId, setAppState, task =>
+    taskRunMatches(task, runId) ? { ...task, notified: true } : task,
+  );
 }
 
 /**
@@ -371,18 +923,43 @@ function releaseAgentCodexResources(taskId: string): void {
 /**
  * Kill an agent task. No-op if already killed/completed.
  */
-export function killAsyncAgent(taskId: string, setAppState: SetAppState): void {
+export function killAsyncAgent(
+  taskId: string,
+  setAppState: SetAppState,
+  runId?: string,
+): void {
   let killed = false;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    if (task.status !== 'running') {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
     killed = true;
     task.abortController?.abort();
     task.unregisterCleanup?.();
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
     return {
       ...task,
       status: 'killed',
+      acceptingMessages: false,
+      pendingMessages: pendingMessages.map(message => {
+        if (message.status === 'pending' || message.status === 'prepared') {
+          return {
+            ...message,
+            status: 'undelivered' as const,
+            outcome: 'Worker was stopped before the instruction was submitted.',
+            runId,
+          }
+        }
+        if (message.status === 'submitted') {
+          return {
+            ...message,
+            status: 'uncertain' as const,
+            outcome: 'Worker was stopped while the instruction was in flight.',
+            runId,
+          }
+        }
+        return message
+      }),
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
       abortController: undefined,
@@ -409,9 +986,8 @@ export function killAllRunningAgentTasks(tasks: Record<string, TaskState>, setAp
 }
 
 /**
- * Mark a task as notified without enqueueing a notification.
- * Used by chat:killAgents bulk kill to suppress per-agent async notifications
- * when a single aggregate message is sent instead.
+ * Mark a task as notified without enqueueing its ordinary notification.
+ * Delivery uncertainty still causes a follow-up report to be queued.
  */
 export function markAgentsNotified(taskId: string, setAppState: SetAppState): void {
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
@@ -430,9 +1006,14 @@ export function markAgentsNotified(taskId: string, setAppState: SetAppState): vo
  * Preserves the existing summary field so that background summarization
  * results are not clobbered by progress updates from assistant messages.
  */
-export function updateAgentProgress(taskId: string, progress: AgentProgress, setAppState: SetAppState): void {
+export function updateAgentProgress(
+  taskId: string,
+  progress: AgentProgress,
+  setAppState: SetAppState,
+  runId?: string,
+): void {
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    if (task.status !== 'running') {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
     const existingSummary = task.progress?.summary;
@@ -450,7 +1031,12 @@ export function updateAgentProgress(taskId: string, progress: AgentProgress, set
  * Update the background summary for an agent task.
  * Called by the periodic summarization service to store a 1-2 sentence progress summary.
  */
-export function updateAgentSummary(taskId: string, summary: string, setAppState: SetAppState): void {
+export function updateAgentSummary(
+  taskId: string,
+  summary: string,
+  setAppState: SetAppState,
+  runId?: string,
+): void {
   let captured: {
     tokenCount: number;
     toolUseCount: number;
@@ -458,7 +1044,7 @@ export function updateAgentSummary(taskId: string, summary: string, setAppState:
     toolUseId: string | undefined;
   } | null = null;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    if (task.status !== 'running') {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
     captured = {
@@ -535,20 +1121,60 @@ function getResultMetadata(result: AgentToolResult): Pick<LocalAgentTaskState, '
 /**
  * Complete an agent task with result.
  */
-export function completeAgentTask(result: AgentToolResult, setAppState: SetAppState): void {
+export function completeAgentTask(
+  result: AgentToolResult,
+  setAppState: SetAppState,
+  runId?: string,
+): void {
   const taskId = result.agentId;
   const resultMetadata = getResultMetadata(result);
+  let transitioned = false;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    if (task.status !== 'running') {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
+    transitioned = true;
     task.unregisterCleanup?.();
     const isBlocked = resultMetadata.handoffStatus === 'blocked';
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
+    const terminalMessages = pendingMessages.map(message => {
+      if (message.status === 'pending' || message.status === 'prepared') {
+        return {
+          ...message,
+          status: 'undelivered' as const,
+          outcome: 'Worker completed before the instruction was submitted.',
+          runId,
+        }
+      }
+      if (message.status === 'submitted') {
+        return {
+          ...message,
+          status: 'uncertain' as const,
+          outcome: 'Worker completed while the instruction was in flight.',
+          runId,
+        }
+      }
+      return message
+    })
+    const deliveryReport = formatAgentMessageDeliveryRecords(
+      terminalMessages.filter(message => !message.originAgentId),
+    )
+    const resultWithDeliveryReport = deliveryReport
+      ? {
+          ...result,
+          content: [
+            ...result.content,
+            { type: 'text' as const, text: `\n\n${deliveryReport}` },
+          ],
+        }
+      : result
     return {
       ...task,
       status: 'completed',
+      acceptingMessages: false,
+      pendingMessages: terminalMessages,
       agentName: result.agentName ?? task.agentName,
-      result,
+      result: resultWithDeliveryReport,
       ...resultMetadata,
       endTime: Date.now(),
       evictAfter: task.retain || isBlocked ? undefined : Date.now() + PANEL_GRACE_MS,
@@ -557,23 +1183,53 @@ export function completeAgentTask(result: AgentToolResult, setAppState: SetAppSt
       selectedAgent: undefined
     };
   });
-  releaseAgentCodexResources(taskId);
-  void evictTaskOutput(taskId);
+  if (transitioned) {
+    releaseAgentCodexResources(taskId);
+    void evictTaskOutput(taskId);
+  }
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
 
 /**
  * Fail an agent task with error.
  */
-export function failAgentTask(taskId: string, error: string, setAppState: SetAppState): void {
+export function failAgentTask(
+  taskId: string,
+  error: string,
+  setAppState: SetAppState,
+  runId?: string,
+): void {
+  let transitioned = false;
   updateTaskState<LocalAgentTaskState>(taskId, setAppState, task => {
-    if (task.status !== 'running') {
+    if (task.status !== 'running' || !taskRunMatches(task, runId)) {
       return task;
     }
+    transitioned = true;
     task.unregisterCleanup?.();
+    const pendingMessages = normalizePendingMessages(task.pendingMessages)
     return {
       ...task,
       status: 'failed',
+      acceptingMessages: false,
+      pendingMessages: pendingMessages.map(message => {
+        if (message.status === 'pending' || message.status === 'prepared') {
+          return {
+            ...message,
+            status: 'undelivered' as const,
+            outcome: 'Worker failed before the instruction was submitted.',
+            runId,
+          }
+        }
+        if (message.status === 'submitted') {
+          return {
+            ...message,
+            status: 'uncertain' as const,
+            outcome: 'Worker failed while the instruction was in flight.',
+            runId,
+          }
+        }
+        return message
+      }),
       error,
       endTime: Date.now(),
       evictAfter: task.retain ? undefined : Date.now() + PANEL_GRACE_MS,
@@ -582,10 +1238,12 @@ export function failAgentTask(taskId: string, error: string, setAppState: SetApp
       selectedAgent: undefined
     };
   });
-  const failedLease = getCodexLeaseForOwner(taskId)
-  if (failedLease) markPoolAccountLastError(failedLease.accountId)
-  releaseAgentCodexResources(taskId);
-  void evictTaskOutput(taskId);
+  if (transitioned) {
+    const failedLease = getCodexLeaseForOwner(taskId)
+    if (failedLease) markPoolAccountLastError(failedLease.accountId)
+    releaseAgentCodexResources(taskId);
+    void evictTaskOutput(taskId);
+  }
   // Note: Notification is sent by AgentTool via enqueueAgentNotification
 }
 
@@ -620,6 +1278,7 @@ export function registerAsyncAgent({
 
   // Create abort controller - if parent provided, create child that auto-aborts with parent
   const abortController = parentAbortController ? createChildAbortController(parentAbortController) : createAbortController();
+  const runId = randomUUID();
   const taskState: LocalAgentTaskState = {
     ...createTaskStateBase(agentId, 'local_agent', description, toolUseId),
     type: 'local_agent',
@@ -633,6 +1292,8 @@ export function registerAsyncAgent({
     retrieved: false,
     lastReportedToolCount: 0,
     lastReportedTokenCount: 0,
+    runId,
+    acceptingMessages: true,
     isBackgrounded: true,
     // registerAsyncAgent immediately backgrounds
     pendingMessages: [],
@@ -642,7 +1303,7 @@ export function registerAsyncAgent({
 
   // Register cleanup handler
   const unregisterCleanup = registerCleanup(async () => {
-    killAsyncAgent(agentId, setAppState);
+    killAsyncAgent(agentId, setAppState, runId);
   });
   taskState.unregisterCleanup = unregisterCleanup;
 
@@ -681,12 +1342,15 @@ export function registerAgentForeground({
 }): {
   taskId: string;
   backgroundSignal: Promise<void>;
+  abortController: AbortController;
+  runId: string;
   cancelAutoBackground?: () => void;
 } {
   void initTaskOutputAsSymlink(agentId, getAgentTranscriptPath(asAgentId(agentId)));
   const abortController = createAbortController();
+  const runId = randomUUID();
   const unregisterCleanup = registerCleanup(async () => {
-    killAsyncAgent(agentId, setAppState);
+    killAsyncAgent(agentId, setAppState, runId);
   });
   const taskState: LocalAgentTaskState = {
     ...createTaskStateBase(agentId, 'local_agent', description, toolUseId),
@@ -697,6 +1361,8 @@ export function registerAgentForeground({
     prompt,
     selectedAgent,
     agentType: selectedAgent.agentType ?? 'general-purpose',
+    runId,
+    acceptingMessages: true,
     abortController,
     unregisterCleanup,
     retrieved: false,
@@ -749,6 +1415,8 @@ export function registerAgentForeground({
   return {
     taskId: agentId,
     backgroundSignal,
+    abortController,
+    runId,
     cancelAutoBackground
   };
 }
@@ -792,9 +1460,9 @@ export function backgroundAgentTask(taskId: string, getAppState: () => AppState,
 }
 
 /**
- * Unregister a foreground agent task when the agent completes without being backgrounded.
- */
-/**
+ * Unregister a foreground agent task when the agent completes without being
+ * backgrounded.
+ *
  * Returns the Codex account this task was holding, when releasing it here is
  * what ended the lease. The value is handed back rather than left for the caller
  * to fetch because `releaseCodexLease` DELETES the entry: a caller that read it
@@ -802,7 +1470,11 @@ export function backgroundAgentTask(taskId: string, getAppState: () => AppState,
  * correct is invisible at the call site. Undefined when the task was
  * backgrounded (its lease outlives this call) or holds no lease at all.
  */
-export function unregisterAgentForeground(taskId: string, setAppState: SetAppState): CodexLeaseAccount | undefined {
+export function unregisterAgentForeground(
+  taskId: string,
+  setAppState: SetAppState,
+  terminalStatus: 'completed' | 'failed' | 'killed' = 'completed',
+): CodexLeaseAccount | undefined {
   // Clean up the background signal resolver
   backgroundSignalResolvers.delete(taskId);
   let cleanupFn: (() => void) | undefined;
@@ -817,6 +1489,60 @@ export function unregisterAgentForeground(taskId: string, setAppState: SetAppSta
     // Capture cleanup function to call outside of updater
     cleanupFn = task.unregisterCleanup;
     shouldReleaseLease = true;
+    const unresolved = getUnresolvedAgentMessageDeliveries(task);
+    if (unresolved.length > 0) {
+      const pendingMessages = normalizePendingMessages(task.pendingMessages).map(
+        message => {
+          if (
+            message.status === 'pending' ||
+            message.status === 'prepared'
+          ) {
+            return {
+              ...message,
+              status: 'undelivered' as const,
+              outcome:
+                terminalStatus === 'killed'
+                  ? 'Worker was stopped before the instruction was submitted.'
+                  : terminalStatus === 'failed'
+                    ? 'Worker failed before the instruction was submitted.'
+                    : 'Worker completed before the instruction was submitted.',
+            };
+          }
+          if (message.status === 'submitted') {
+            return {
+              ...message,
+              status: 'uncertain' as const,
+              outcome:
+                terminalStatus === 'killed'
+                  ? 'Worker was stopped while the instruction was in flight.'
+                  : terminalStatus === 'failed'
+                    ? 'Worker failed while the instruction was in flight.'
+                    : 'Worker completed while the instruction was in flight.',
+            };
+          }
+          return message;
+        },
+      );
+      return {
+        ...prev,
+        tasks: {
+          ...prev.tasks,
+          [taskId]: {
+            ...task,
+            status: terminalStatus,
+            acceptingMessages: false,
+            pendingMessages,
+            endTime: Date.now(),
+            evictAfter: task.retain
+              ? undefined
+              : Date.now() + PANEL_GRACE_MS,
+            abortController: undefined,
+            unregisterCleanup: undefined,
+            selectedAgent: undefined,
+          },
+        },
+      };
+    }
     const {
       [taskId]: removed,
       ...rest

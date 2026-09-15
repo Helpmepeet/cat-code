@@ -45,13 +45,6 @@ if (feature('ABLATION_BASELINE') && process.env.CLAUDE_CODE_ABLATION_BASELINE) {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
-  // --agent-mode: set early so downstream module eval / runtime code can gate
-  // on a process-wide latch, mirroring coordinator mode propagation.
-  if (args.includes('--agent-mode')) {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1';
-    void import('../utils/worktree.js').then(({ cleanupOrphanedAgentWorktrees }) => cleanupOrphanedAgentWorktrees()).catch(() => {});
-  }
-
   // Fast-path for --version/-v: zero module loading needed
   if (args.length === 1 && (args[0] === '--version' || args[0] === '-v' || args[0] === '-V')) {
     // MACRO.VERSION is inlined at build time
@@ -153,7 +146,19 @@ async function main(): Promise<void> {
     const {
       getSystemPrompt
     } = await import('../constants/prompts.js');
-    const prompt = await getSystemPrompt([], model);
+    // Pass the real built-in tool pool: several system-prompt rules are gated
+    // on the enabled tool set (the Agent tool rule, task tracking, the
+    // file-mutation and tool-routing rules, and whether routing names
+    // apply_patch or Edit), so an empty list dumps a prompt no session runs.
+    // MCP tools and any --allowedTools/--disallowedTools narrowing are not
+    // applied here; this is the default preset pool.
+    const {
+      getEmptyToolPermissionContext
+    } = await import('../Tool.js');
+    const {
+      getTools
+    } = await import('../tools.js');
+    const prompt = await getSystemPrompt(getTools(getEmptyToolPermissionContext()), model);
     // biome-ignore lint/suspicious/noConsole:: intentional console output
     console.log(prompt.join('\n'));
     return;

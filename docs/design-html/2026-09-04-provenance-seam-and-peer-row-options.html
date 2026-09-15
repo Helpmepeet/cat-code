@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en" data-appearance="dark" data-accent="pink" data-cardstyle="cards">
+<head>
+<meta charset="utf-8">
+<title>Provenance seam and peer row options</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+/* ───────── chrome ───────── */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#dcdce0;color:#57575c;font:400 12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+.x-bar{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:28px;
+  padding:10px 24px;background:#dcdce0;border-bottom:1px solid #bfbfc5}
+.x-bar-t{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8a8a90}
+.x-set{display:flex;align-items:center;gap:10px}
+.x-set-k{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#9a9aa0}
+.x-opt{font:inherit;font-size:9px;letter-spacing:.16em;text-transform:uppercase;
+  background:none;border:0;padding:2px 0;color:#8a8a90;cursor:pointer;border-bottom:1px solid transparent}
+.x-opt[aria-pressed="true"]{color:#2f2f33;border-bottom-color:#2f2f33}
+.x-sec{padding:34px 0 0}
+.x-hd{display:flex;align-items:baseline;gap:12px;padding:0 24px 14px}
+.x-key{font-size:11px;letter-spacing:.2em;color:#2f2f33}
+.x-nm{font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#8a8a90}
+.x-st{padding:0 24px 6px;font-size:9px;letter-spacing:.18em;text-transform:uppercase;color:#9a9aa0}
+.x-gap{height:14px}
+.x-end{height:60px}
+
+/* ───────── specimen tokens (app source) ───────── */
+.stage{
+  --sans:'DM Sans',ui-sans-serif,system-ui,sans-serif;
+  --mono:'DM Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --app-bg:#09090b;--surface-panel:#0a0a0c;
+  --shell-seam:rgba(255,255,255,.06);--shell-hover:rgba(255,255,255,.045);
+  --text-primary:#f4f4f5;--text-muted:#a1a1aa;--text-subtle:#98989f;
+  --text-faint:#838389;--text-ghost:#75757b;
+  --tone-good:#4ade80;--sb-title:#c4c4c8;
+  --accent:#f472b6;
+  color-scheme:dark;background:var(--app-bg);font-family:var(--sans)}
+html[data-appearance='light'] .stage{
+  --app-bg:#fcfcfd;--surface-panel:#f7f7f9;
+  --shell-seam:rgba(9,9,11,.1);--shell-hover:rgba(9,9,11,.04);
+  --text-primary:#18181b;--text-muted:#52525b;--text-subtle:#575761;
+  --text-faint:#6a6a74;--text-ghost:#767680;
+  --tone-good:#15803d;--sb-title:#52525b;
+  --accent:#bb3e84;
+  color-scheme:light}
+html[data-accent='blue'] .stage{--accent:#60a5fa}
+html[data-accent='green'] .stage{--accent:#4ade80}
+html[data-accent='purple'] .stage{--accent:#c084fc}
+html[data-accent='amber'] .stage{--accent:#fbbf24}
+html[data-appearance='light'][data-accent='blue'] .stage{--accent:#2563eb}
+html[data-appearance='light'][data-accent='green'] .stage{--accent:#15803d}
+html[data-appearance='light'][data-accent='purple'] .stage{--accent:#7c3aed}
+html[data-appearance='light'][data-accent='amber'] .stage{--accent:#a35f00}
+
+.col{max-width:900px;margin:0 auto;padding:24px 32px;display:flex;flex-direction:column;gap:10px}
+.prose{font-size:14px;line-height:1.625;font-weight:500;color:var(--text-primary)}
+.user{display:flex;justify-content:flex-end}
+.user-b{max-width:82%;border-radius:16px;border-bottom-right-radius:4px;
+  border:1px solid color-mix(in oklab,var(--accent) 20%,transparent);
+  background:color-mix(in oklab,var(--accent) 10%,transparent);
+  padding:10px 16px;font-size:14px;line-height:1.625;color:var(--text-primary);
+  white-space:pre-wrap;word-break:break-word}
+
+/* sidebar fragment */
+.sb{padding:10px 12px;background:var(--surface-panel)}
+.sb-row{display:flex;align-items:center;gap:8px;width:264px;
+  padding:6px 8px 6px 4px;border-radius:6px}
+.sb-lane{display:flex;align-items:center;flex:none;width:6px;height:16px;align-self:flex-start}
+.sb-dot{width:6px;height:6px;border-radius:999px;background:var(--tone-good)}
+.sb-main{min-width:0;flex:1}
+.sb-title{display:block;font-size:13px;font-weight:500;color:var(--sb-title);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-sub{display:flex;align-items:center;gap:5px;min-width:0;font-size:10px;color:var(--text-faint)}
+.sb-sub .mid{flex:none;color:var(--text-ghost)}
+.sb-sub .fix{flex:none}
+.sb-sub .cut{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sb-name-up{color:var(--text-muted)}
+
+/* ───────── current ───────── */
+.n-seam{display:flex;align-items:center;gap:12px;padding:4px 0}
+.n-rule{flex:1;height:1px;background:var(--shell-seam)}
+.n-seamtxt{display:flex;align-items:center;gap:6px;white-space:nowrap;font-size:11px}
+.n-seamlbl{color:var(--text-subtle)}
+.n-seamdet{color:color-mix(in oklab,var(--text-subtle) 70%,transparent)}
+.n-box{display:flex;align-items:flex-start;gap:8px;padding:6px 12px;border-radius:8px;
+  border:1px solid var(--shell-seam);background:color-mix(in oklab,var(--shell-hover) 40%,transparent)}
+.n-glyph{font-size:12px;line-height:20px;color:var(--text-ghost)}
+.n-main{min-width:0;flex:1}
+.n-name{font-size:12px;line-height:16px;font-weight:500;color:var(--text-primary)}
+.n-name.deg{color:var(--text-muted)}
+.n-body{margin-top:2px;font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+
+/* ───────── A gutter ───────── */
+.a-blk{display:flex;gap:16px}
+.a-seam{padding-bottom:10px;border-bottom:1px solid var(--shell-seam)}
+.a-gut{flex:none;width:104px;text-align:right;font-size:12px;line-height:16px;font-weight:500;color:var(--text-primary)}
+.a-gut.deg{font-size:11px;font-weight:400;color:var(--text-ghost)}
+.a-main{min-width:0;flex:1}
+.a-det{font-size:11px;line-height:16px;color:var(--text-subtle)}
+.a-body{font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+
+/* ───────── B mono ───────── */
+.b-seam{padding-top:8px;border-top:1px solid var(--shell-seam);display:flex;align-items:baseline;gap:7px}
+.b-row{padding-top:8px;border-top:1px solid var(--shell-seam)}
+.b-hd{display:flex;align-items:baseline;gap:8px}
+.b-nm{font-family:var(--mono);font-size:11px;line-height:16px;color:var(--text-muted)}
+.b-det{font-size:11px;line-height:16px;color:var(--text-subtle)}
+.b-glyph{font-size:12px;line-height:16px;color:var(--text-ghost)}
+.b-rnm{font-family:var(--mono);font-size:12px;line-height:16px;color:var(--text-muted)}
+.b-rnm.deg{font-family:var(--sans);color:var(--text-ghost)}
+.b-body{margin-top:2px;font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+
+/* ───────── C scale ───────── */
+.c-seam{padding-bottom:10px;border-bottom:1px solid var(--shell-seam)}
+.c-nm{font-size:15px;line-height:20px;font-weight:500;color:var(--text-primary)}
+.c-det{margin-top:1px;font-size:11px;line-height:16px;color:var(--text-subtle)}
+.c-rnm{font-size:14px;line-height:20px;font-weight:500;color:var(--text-primary)}
+.c-rnm.deg{font-size:12px;line-height:16px;font-weight:400;color:var(--text-muted)}
+.c-body{margin-top:1px;font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+
+/* ───────── D lane ───────── */
+.d-lane{padding:6px 12px;border-radius:8px;background:var(--shell-hover)}
+.d-hd{display:flex;align-items:baseline;gap:7px}
+.d-nm{font-size:12px;line-height:16px;font-weight:500;color:var(--text-primary)}
+.d-nm.deg{font-weight:400;color:var(--text-muted)}
+.d-det{font-size:11px;line-height:16px;color:var(--text-subtle)}
+.d-body{margin-top:2px;font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+
+/* ───────── tool-card shell (app source) ───────── */
+.tc{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);
+  background:rgba(255,255,255,.025);font-family:var(--sans)}
+html[data-cardstyle='lines'] .tc{overflow:visible;border-radius:0;border:0;background:none}
+.tc-hd{display:flex;align-items:center;gap:10px;padding:8px 12px;text-align:left}
+html[data-cardstyle='lines'] .tc-hd{padding:2px 0;border-radius:4px}
+.tc-mark{flex:none;width:16px;text-align:center;font-size:13px}
+.tc-word{flex:none;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.tc-tgt{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--mono);font-size:12px;color:var(--text-primary)}
+.tc-dot{flex:none;width:6px;height:6px;border-radius:999px}
+.tc-body{border-top:1px solid var(--shell-seam);padding:4px 12px 10px;
+  font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+html[data-cardstyle='lines'] .tc-body{border-top:0;border-left:1px solid var(--shell-seam);
+  margin-left:24px;padding:4px 0 8px 12px}
+.fam-read{color:#60a5fa}
+html[data-appearance='light'] .fam-read{color:#2563eb}
+.dot-done{background:var(--tone-good)}
+
+/* provenance inside the card idiom */
+.pv-mark,.pv-word{color:var(--text-muted)}
+.tc-tgt.absent{font-family:var(--sans);color:var(--text-subtle)}
+.tc-word.plain{font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-subtle)}
+
+/* F: header grammar, no frame, in either card style */
+.tf{width:100%;font-family:var(--sans)}
+.tf-hd{display:flex;align-items:center;gap:10px;padding:2px 0;text-align:left}
+.tf-body{margin-left:24px;border-left:1px solid var(--shell-seam);padding:4px 0 8px 12px;
+  font-size:12px;line-height:16px;color:var(--text-muted);white-space:pre-wrap;word-break:break-word}
+</style>
+</head>
+<body>
+
+<div class="x-bar">
+  <span class="x-bar-t">Creation seam &amp; peer row</span>
+  <span class="x-set"><span class="x-set-k">Appearance</span>
+    <button class="x-opt" data-k="appearance" data-v="dark" aria-pressed="true">Dark</button>
+    <button class="x-opt" data-k="appearance" data-v="light" aria-pressed="false">Light</button>
+  </span>
+  <span class="x-set"><span class="x-set-k">Accent</span>
+    <button class="x-opt" data-k="accent" data-v="pink" aria-pressed="true">Pink</button>
+    <button class="x-opt" data-k="accent" data-v="blue" aria-pressed="false">Blue</button>
+    <button class="x-opt" data-k="accent" data-v="green" aria-pressed="false">Green</button>
+    <button class="x-opt" data-k="accent" data-v="purple" aria-pressed="false">Purple</button>
+    <button class="x-opt" data-k="accent" data-v="amber" aria-pressed="false">Amber</button>
+  </span>
+  <span class="x-set"><span class="x-set-k">Card style</span>
+    <button class="x-opt" data-k="cardstyle" data-v="cards" aria-pressed="true">Cards</button>
+    <button class="x-opt" data-k="cardstyle" data-v="lines" aria-pressed="false">Lines</button>
+  </span>
+</div>
+
+<!-- ══════════════ NOW ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">NOW</span><span class="x-nm">Ships today</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="n-seam"><i class="n-rule"></i><div class="n-seamtxt"><span class="n-seamlbl">Quartz</span><span class="n-seamdet">· created by Alex</span></div><i class="n-rule"></i></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="n-box"><span class="n-glyph">←</span><div class="n-main"><div class="n-name">Alex</div><div class="n-body">Done on my side. Anything you want me to pick up next?</div></div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="n-seam"><i class="n-rule"></i><div class="n-seamtxt"><span class="n-seamlbl">Quartz</span><span class="n-seamdet">· created by a session that is gone</span></div><i class="n-rule"></i></div>
+    <div class="n-box"><span class="n-glyph">←</span><div class="n-main"><div class="n-name deg">Peer message</div><div class="n-body">Continuing from the earlier thread. Nothing else to hand over.</div></div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix">3m</span><span class="mid">·</span><span class="cut">Quartz</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ A ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">A</span><span class="x-nm">Gutter</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="a-blk a-seam"><div class="a-gut">Quartz</div><div class="a-main"><div class="a-det">created by Alex</div></div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="a-blk"><div class="a-gut">Alex</div><div class="a-main"><div class="a-body">Done on my side. Anything you want me to pick up next?</div></div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="a-blk a-seam"><div class="a-gut">Quartz</div><div class="a-main"><div class="a-det">created by a session that is gone</div></div></div>
+    <div class="a-blk"><div class="a-gut deg">Peer message</div><div class="a-main"><div class="a-body">Continuing from the earlier thread. Nothing else to hand over.</div></div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ B ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">B</span><span class="x-nm">Mono name</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="b-seam"><span class="b-nm">Quartz</span><span class="b-det">created by Alex</span></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="b-row"><div class="b-hd"><span class="b-glyph">←</span><span class="b-rnm">Alex</span></div><div class="b-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="b-seam"><span class="b-nm">Quartz</span><span class="b-det">created by a session that is gone</span></div>
+    <div class="b-row"><div class="b-hd"><span class="b-glyph">←</span><span class="b-rnm deg">Peer message</span></div><div class="b-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up" style="font-family:var(--mono)">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ C ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">C</span><span class="x-nm">Size step</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="c-seam"><div class="c-nm">Quartz</div><div class="c-det">created by Alex</div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div><div class="c-rnm">Alex</div><div class="c-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="c-seam"><div class="c-nm">Quartz</div><div class="c-det">created by a session that is gone</div></div>
+    <div><div class="c-rnm deg">Peer message</div><div class="c-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ D ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">D</span><span class="x-nm">Shared lane</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="d-lane"><div class="d-hd"><span class="d-nm">Quartz</span><span class="d-det">created by Alex</span></div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="d-lane"><div class="d-hd"><span class="d-nm">Alex</span></div><div class="d-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="d-lane"><div class="d-hd"><span class="d-nm">Quartz</span><span class="d-det">created by a session that is gone</span></div></div>
+    <div class="d-lane"><div class="d-hd"><span class="d-nm deg">Peer message</span></div><div class="d-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ E ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">E</span><span class="x-nm">Provenance family</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="tc"><div class="tc-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Created by</span><span class="tc-tgt">Alex</span></div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark fam-read">≡</span><span class="tc-word fam-read">Read</span><span class="tc-tgt">src/utils/parser.ts</span><span class="tc-dot dot-done"></span></div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Peer</span><span class="tc-tgt">Alex</span></div><div class="tc-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="tc"><div class="tc-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Created by</span><span class="tc-tgt absent">a session that is gone</span></div></div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Peer</span><span class="tc-tgt absent">no sender</span></div><div class="tc-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up" style="font-family:var(--mono)">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ F ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">F</span><span class="x-nm">Header only</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="tf"><div class="tf-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Created by</span><span class="tc-tgt">Alex</span></div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark fam-read">≡</span><span class="tc-word fam-read">Read</span><span class="tc-tgt">src/utils/parser.ts</span><span class="tc-dot dot-done"></span></div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="tf"><div class="tf-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Peer</span><span class="tc-tgt">Alex</span></div><div class="tf-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="tf"><div class="tf-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Created by</span><span class="tc-tgt absent">a session that is gone</span></div></div>
+    <div class="tf"><div class="tf-hd"><span class="tc-mark pv-mark">←</span><span class="tc-word pv-word">Peer</span><span class="tc-tgt absent">no sender</span></div><div class="tf-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up" style="font-family:var(--mono)">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<!-- ══════════════ G ══════════════ -->
+<section class="x-sec">
+  <div class="x-hd"><span class="x-key">G</span><span class="x-nm">Card, off register</span></div>
+
+  <div class="x-st">Session opens</div>
+  <div class="stage"><div class="col">
+    <div class="tc"><div class="tc-hd"><span class="tc-mark"></span><span class="tc-word plain">created by</span><span class="tc-tgt">Alex</span></div></div>
+    <div class="user"><div class="user-b">Pick up the parser branch and keep going.</div></div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark fam-read">≡</span><span class="tc-word fam-read">Read</span><span class="tc-tgt">src/utils/parser.ts</span><span class="tc-dot dot-done"></span></div></div>
+    <div class="prose">Ran the focused tests. All green.</div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark"></span><span class="tc-word plain">peer</span><span class="tc-tgt">Alex</span></div><div class="tc-body">Done on my side. Anything you want me to pick up next?</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Creator gone · sender missing</div>
+  <div class="stage"><div class="col">
+    <div class="tc"><div class="tc-hd"><span class="tc-mark"></span><span class="tc-word plain">created by</span><span class="tc-tgt absent">a session that is gone</span></div></div>
+    <div class="tc"><div class="tc-hd"><span class="tc-mark"></span><span class="tc-word plain">peer</span><span class="tc-tgt absent">no sender</span></div><div class="tc-body">Continuing from the earlier thread. Nothing else to hand over.</div></div>
+  </div></div>
+
+  <div class="x-gap"></div>
+  <div class="x-st">Sidebar row</div>
+  <div class="stage"><div class="sb">
+    <div class="sb-row"><span class="sb-lane"><i class="sb-dot"></i></span><span class="sb-main"><span class="sb-title">Parser rewrite</span><span class="sb-sub"><span class="fix sb-name-up" style="font-family:var(--mono)">Quartz</span><span class="mid">·</span><span class="cut">3m</span></span></span></div>
+  </div></div>
+</section>
+
+<div class="x-end"></div>
+
+<script>
+document.querySelectorAll('.x-opt').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var k = b.dataset.k, v = b.dataset.v;
+    document.documentElement.setAttribute('data-' + k, v);
+    document.querySelectorAll('.x-opt[data-k="' + k + '"]').forEach(function (o) {
+      o.setAttribute('aria-pressed', String(o === b));
+    });
+  });
+});
+</script>
+</body>
+</html>

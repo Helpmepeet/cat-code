@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Todo step readout</title>
+<style>
+@font-face{font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMSans-Variable.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Regular.woff2') format('woff2')}
+@font-face{font-family:'DM Mono';font-style:normal;font-weight:500;font-display:swap;src:url('../../app/renderer/src/assets/fonts/DMMono-Medium.woff2') format('woff2')}
+
+:root{
+  --accent:#f472b6;
+  --app-bg:#09090b;
+  --shell-chrome:#070709;
+  --text-primary:#f4f4f5;
+  --text-muted:#a1a1aa;
+  --text-subtle:#98989f;
+  --text-faint:#838389;
+  --text-ghost:#75757b;
+  --elev-popover:0 14px 38px rgba(0,0,0,.5);
+  --card-ring:rgba(0,0,0,.4);
+  --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+  --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:var(--app-bg)}
+
+/* ── chrome ─────────────────────────────────────────────── */
+.x-page{max-width:1000px;margin:0 auto;padding:34px 24px 90px}
+.x-title{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#6b6b70;margin:0 0 22px}
+.x-bar{display:flex;align-items:center;gap:8px;padding:0 0 20px;border-bottom:1px solid #1c1c20}
+.x-btn{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:#8a8a90;background:transparent;border:1px solid #2a2a2e;border-radius:0;padding:6px 12px;cursor:pointer}
+.x-btn:hover{color:#c8c8ce;border-color:#3a3a40}
+.x-lab{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:#6b6b70;padding:26px 0 9px;margin:0}
+.x-rule{height:1px;background:#161619}
+.x-clear{height:300px}
+</style>
+</head>
+<body>
+<div class="x-page">
+  <p class="x-title">Todo step readout</p>
+
+  <div class="x-bar">
+    <button class="x-btn" id="x-step" type="button">Step</button>
+    <button class="x-btn" id="x-finish" type="button">Finish plan</button>
+    <button class="x-btn" id="x-reset" type="button">Reset</button>
+  </div>
+
+  <p class="x-lab">A &nbsp; Current</p>
+  <div class="dock"><div class="byline" id="row-a"></div></div>
+  <div class="x-rule"></div>
+
+  <p class="x-lab">B &nbsp; Roll</p>
+  <div class="dock"><div class="byline" id="row-b"></div></div>
+  <div class="x-rule"></div>
+
+  <p class="x-lab">C &nbsp; Flash</p>
+  <div class="dock"><div class="byline" id="row-c"></div></div>
+  <div class="x-rule"></div>
+
+  <p class="x-lab">D &nbsp; Pop</p>
+  <div class="dock"><div class="byline" id="row-d"></div></div>
+  <div class="x-rule"></div>
+
+  <p class="x-lab">Plan panel, on hover</p>
+  <div class="x-clear"></div>
+  <div class="dock"><div class="byline" id="row-p"></div></div>
+</div>
+
+<style>
+/* ── specimen ───────────────────────────────────────────────
+   Values read from App.tsx ActivityIndicator, TodoPlanPanel.tsx and
+   theme.css. The only invented rules are the four marked PROPOSAL. */
+
+.dock{max-width:900px;margin:0 auto}
+.byline{display:flex;align-items:center;gap:10px;background:transparent;padding:6px 4px;font-size:12px;line-height:16px;font-family:var(--font-sans);color:var(--text-primary)}
+
+.dots{display:flex;align-items:center;gap:4px}
+.dot{height:6px;width:6px;border-radius:9999px;background:var(--accent);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.dot:nth-child(2){animation-delay:150ms}
+.dot:nth-child(3){animation-delay:300ms}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+
+.verb{font-weight:600;color:var(--accent)}
+.target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--font-mono);font-size:11.5px;color:var(--text-subtle)}
+.clock{flex-shrink:0;font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+
+.readout{position:relative;margin-left:auto;flex-shrink:0;display:inline-flex;align-items:center}
+.frac{cursor:default;font-family:var(--font-mono);font-size:11px;line-height:14px;font-variant-numeric:tabular-nums;color:var(--text-subtle);outline:none}
+
+/* panel */
+.panel{position:absolute;bottom:100%;right:0;z-index:40;margin-bottom:6px;width:380px;overflow:hidden;border-radius:10px;background:var(--shell-chrome);box-shadow:var(--elev-popover),0 0 0 1px var(--card-ring);display:none}
+.readout:hover .panel,.readout:focus-within .panel{display:block}
+.panel.open{display:block}
+.p-head{display:flex;align-items:center;justify-content:space-between;padding:7px 13px 6px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.03em}
+.p-head b{color:var(--accent);font-weight:600}
+.p-head i{font-family:var(--font-mono);font-size:10px;font-weight:400;font-style:normal;text-transform:none;letter-spacing:normal;font-variant-numeric:tabular-nums;color:var(--text-faint)}
+.p-body{max-height:300px;overflow-y:auto;padding:2px 13px 11px;scrollbar-width:none}
+.p-body::-webkit-scrollbar{display:none}
+.p-row{position:relative;display:flex;align-items:flex-start;gap:11px;padding:4px 0;font-size:12.5px;line-height:1.45}
+.p-row.completed{color:var(--text-ghost)}
+.p-row.in_progress{font-weight:500;color:var(--text-primary)}
+.p-row.pending{color:var(--text-muted)}
+.p-mark{position:relative;display:flex;height:19px;width:11px;flex-shrink:0;align-items:center;justify-content:center}
+.p-mark s{display:block;height:7px;width:7px;border-radius:9999px;text-decoration:none}
+.completed .p-mark s{background:var(--text-ghost)}
+.in_progress .p-mark s{background:var(--accent);animation:pulse 2s cubic-bezier(.4,0,.6,1) infinite}
+.pending .p-mark s{border:1px solid var(--text-ghost)}
+.p-line{position:absolute;left:50%;top:13px;bottom:-8px;transform:translateX(-50%);border-left:1px solid rgba(255,255,255,.14)}
+.pending .p-line{border-left:1px dashed rgba(255,255,255,.10)}
+
+/* ── PROPOSAL: what the step number does when it changes ──── */
+
+/* B roll: the old number leaves upward, the new one arrives from below. */
+.roll{display:inline-block;height:14px;overflow:hidden;vertical-align:top}
+.rs{display:block;transition:transform 280ms cubic-bezier(.2,0,0,1)}
+.rs>span{display:block;height:14px;line-height:14px}
+.rs.up{transform:translateY(-14px)}
+
+/* C flash: the number is set to the accent on the tick and decays back. */
+#row-c .frac{transition:color 800ms linear}
+#row-c .frac.hit{color:var(--accent);transition:none}
+
+/* D pop: the same decay, plus a brief size change. Origin is the right edge,
+   so the readout's own right alignment does not move. */
+#row-d .frac{display:inline-block;transform-origin:100% 50%;transition:transform 300ms cubic-bezier(.2,0,0,1),color 800ms linear}
+#row-d .frac.hit{transform:scale(1.5);color:var(--accent);transition:none}
+
+@media (prefers-reduced-motion:reduce){
+  .dot,.in_progress .p-mark s{animation:none}
+  .rs,#row-c .frac,#row-d .frac{transition:none}
+}
+</style>
+
+<script>
+const ITEMS = [
+  { content: 'Read the existing module' },
+  { content: 'Add the state field' },
+  { content: 'Wire the handler' },
+  { content: 'Update the projector' },
+  { content: 'Extend the fixtures' },
+  { content: 'Run the focused suite' },
+  { content: 'Sweep stale references' },
+]
+const TOTAL = ITEMS.length
+const ROLL_MS = 280
+const VARIANTS = ['a', 'b', 'c', 'd']
+
+let step = 1
+let finished = false
+const timers = []
+
+function statusOf(i) {
+  if (finished) return 'completed'
+  if (i + 1 < step) return 'completed'
+  if (i + 1 === step) return 'in_progress'
+  return 'pending'
+}
+
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;') }
+
+function shown() { return finished ? TOTAL : step }
+
+function panelHtml() {
+  const rows = ITEMS.map((item, i) => {
+    const st = statusOf(i)
+    const line = i === TOTAL - 1 ? '' : '<span class="p-line"></span>'
+    return '<div class="p-row ' + st + '"><span class="p-mark"><s></s>' + line +
+      '</span><span>' + esc(item.content) + '</span></div>'
+  }).join('')
+  return '<div class="p-head"><b>Todo</b><i>' + shown() + '/' + TOTAL +
+    '</i></div><div class="p-body">' + rows + '</div>'
+}
+
+function fracHtml(variant) {
+  if (variant === 'b') {
+    return '<span class="roll"><span class="rs"><span>' + step +
+      '</span></span></span>/' + TOTAL
+  }
+  return step + '/' + TOTAL
+}
+
+function bylineHtml(variant) {
+  return '<span class="dots" aria-hidden><span class="dot"></span><span class="dot"></span>' +
+    '<span class="dot"></span></span>' +
+    '<span class="verb">Running</span>' +
+    '<span class="target">bun test app/renderer/src/todoPlan.test.ts</span>' +
+    '<span class="clock">1m 24s &#183; &#8595; 3.2k tokens</span>' +
+    '<span class="readout"><span class="frac" tabindex="0">' + fracHtml(variant) +
+    '</span><span class="panel">' + panelHtml() + '</span></span>'
+}
+
+function build() {
+  for (const v of VARIANTS) {
+    document.getElementById('row-' + v).innerHTML = bylineHtml(v)
+  }
+  const p = document.getElementById('row-p')
+  p.innerHTML = bylineHtml('a')
+  p.querySelector('.panel').classList.add('open')
+}
+
+function refreshPanels() {
+  for (const panel of document.querySelectorAll('.panel')) {
+    const open = panel.classList.contains('open')
+    panel.innerHTML = panelHtml()
+    if (open) panel.classList.add('open')
+  }
+}
+
+function hit(variant) {
+  const frac = document.querySelector('#row-' + variant + ' .frac')
+  frac.classList.add('hit')
+  requestAnimationFrame(() => requestAnimationFrame(() => frac.classList.remove('hit')))
+}
+
+function roll(next) {
+  const rs = document.querySelector('#row-b .rs')
+  const cur = rs.lastElementChild.textContent
+  rs.classList.remove('up')
+  rs.innerHTML = '<span>' + cur + '</span><span>' + next + '</span>'
+  void rs.offsetHeight
+  rs.classList.add('up')
+  timers.push(setTimeout(() => {
+    rs.classList.remove('up')
+    rs.innerHTML = '<span>' + next + '</span>'
+  }, ROLL_MS))
+}
+
+function paint() {
+  const next = shown()
+  document.querySelector('#row-a .frac').textContent = next + '/' + TOTAL
+  roll(next)
+  document.querySelector('#row-c .frac').textContent = next + '/' + TOTAL
+  document.querySelector('#row-d .frac').textContent = next + '/' + TOTAL
+  hit('c')
+  hit('d')
+  document.querySelector('#row-p .frac').textContent = next + '/' + TOTAL
+  refreshPanels()
+}
+
+function clearTimers() { while (timers.length) clearTimeout(timers.pop()) }
+
+document.getElementById('x-step').addEventListener('click', () => {
+  if (finished) return
+  clearTimers()
+  if (step >= TOTAL) {
+    finished = true
+    paint()
+    // Current behaviour, unchanged: the readout is gone the moment the plan is.
+    timers.push(setTimeout(() => {
+      for (const v of VARIANTS) document.querySelector('#row-' + v + ' .readout').remove()
+    }, 900))
+    return
+  }
+  step += 1
+  paint()
+})
+
+document.getElementById('x-finish').addEventListener('click', () => {
+  clearTimers()
+  finished = true
+  paint()
+  timers.push(setTimeout(() => {
+    for (const v of VARIANTS) {
+      const r = document.querySelector('#row-' + v + ' .readout')
+      if (r !== null) r.remove()
+    }
+  }, 900))
+})
+
+document.getElementById('x-reset').addEventListener('click', () => {
+  clearTimers()
+  step = 1
+  finished = false
+  build()
+})
+
+build()
+</script>
+</body>
+</html>

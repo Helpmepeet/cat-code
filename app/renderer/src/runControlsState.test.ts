@@ -15,7 +15,14 @@ const SNAPSHOT: RunControlsSnapshot = {
     selected: 'gpt-5.6-terra',
     provider: 'openai',
     providerSwitchLocked: false,
-    options: [{ value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' }],
+    options: [
+      {
+        value: 'gpt-5.6-terra',
+        label: 'GPT-5.6 Terra',
+        provider: 'openai',
+        effortOptions: ['low', 'medium', 'high'],
+      },
+    ],
   },
   effort: {
     current: 'high',

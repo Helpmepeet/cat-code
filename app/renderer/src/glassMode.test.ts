@@ -19,14 +19,10 @@ import {
   readGlassFromStorage,
   writeGlassToStorage,
 } from './glassMode.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import {
+  memoryStorage as storage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 function fakeRoot() {
   const attributes = new Map<string, string>()
@@ -96,14 +92,7 @@ test('an empty, unavailable or corrupt store reads as no preference', () => {
 })
 
 test('a failing store never throws into the caller', () => {
-  const hostile = {
-    getItem: () => {
-      throw new Error('denied')
-    },
-    setItem: () => {
-      throw new Error('denied')
-    },
-  }
+  const hostile = throwingStorage()
   expect(readGlassFromStorage(hostile)).toBeNull()
   expect(() => writeGlassToStorage(hostile, true)).not.toThrow()
 })

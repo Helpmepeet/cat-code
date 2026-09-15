@@ -26,23 +26,12 @@ const createdFiles: string[] = []
 function getSessionStatePath(sessionId: string): string {
   return getTranscriptPathForSession(sessionId).replace(
     /\.jsonl$/,
-    '.agent-mode-state.json',
+    '.worker-state.json',
   )
 }
 
 function writeSessionState(sessionId: string, state: unknown): void {
   const path = getSessionStatePath(sessionId)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, JSON.stringify(state), 'utf-8')
-  createdFiles.push(path)
-}
-
-function writePriorSessionState(
-  projectDir: string,
-  sessionId: string,
-  state: unknown,
-): void {
-  const path = join(projectDir, `${sessionId}.agent-mode-state.json`)
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, JSON.stringify(state), 'utf-8')
   createdFiles.push(path)
@@ -109,76 +98,6 @@ function writeCurrentAgentTranscriptWithUsage({
       }),
       '',
     ].join('\n'),
-    'utf-8',
-  )
-  createdFiles.push(path)
-}
-
-function writePriorAgentTranscript(
-  projectDir: string,
-  sessionId: string,
-  agentId: string,
-): void {
-  const path = join(projectDir, sessionId, 'subagents', `agent-${agentId}.jsonl`)
-  mkdirSync(dirname(path), { recursive: true })
-  const userUuid = randomUUID()
-  const assistantUuid = randomUUID()
-  writeFileSync(
-    path,
-    [
-      JSON.stringify({
-        type: 'user',
-        uuid: userUuid,
-        parentUuid: null,
-        isSidechain: true,
-        sessionId,
-        agentId,
-        timestamp: '2026-05-01T00:00:00.000Z',
-        message: { role: 'user', content: 'continue' },
-      }),
-      JSON.stringify({
-        type: 'assistant',
-        uuid: assistantUuid,
-        parentUuid: userUuid,
-        isSidechain: true,
-        sessionId,
-        agentId,
-        timestamp: '2026-05-01T00:00:01.000Z',
-        message: {
-          id: `msg-${assistantUuid}`,
-          type: 'message',
-          role: 'assistant',
-          model: 'gpt-5.6-luna',
-          content: [{ type: 'text', text: 'prior result' }],
-          stop_reason: 'end_turn',
-          stop_sequence: null,
-          usage: {
-            input_tokens: 1,
-            output_tokens: 1,
-            cache_creation_input_tokens: 0,
-            cache_read_input_tokens: 0,
-          },
-        },
-      }),
-      '',
-    ].join('\n'),
-    'utf-8',
-  )
-  createdFiles.push(path)
-}
-
-function writePriorAgentMetadata(
-  projectDir: string,
-  sessionId: string,
-  agentId: string,
-  description: string,
-  agentName?: string,
-): void {
-  const path = join(projectDir, sessionId, 'subagents', `agent-${agentId}.meta.json`)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(
-    path,
-    JSON.stringify({ agentType: 'general-purpose', description, agentName }),
     'utf-8',
   )
   createdFiles.push(path)
@@ -293,8 +212,7 @@ describe('resolveAgentTarget', () => {
   test('resolves current-session durable worker handles', async () => {
     writeSessionState(sessionId, {
       sessionId,
-      mode: 'agent',
-      objective: 'Current target',
+      mode: 'coordinator',
       activeWorkers: {},
       knownWorkers: {
         'agent-current': {
@@ -302,7 +220,6 @@ describe('resolveAgentTarget', () => {
           role: 'explorer',
           description: 'Current durable worker',
           status: 'completed',
-          resumable: true,
           worktreePath: null,
           handle: 'explore-current',
         },
@@ -324,8 +241,7 @@ describe('resolveAgentTarget', () => {
   test('resolves displayed durable worker handles with a leading @', async () => {
     writeSessionState(sessionId, {
       sessionId,
-      mode: 'agent',
-      objective: 'Current target',
+      mode: 'coordinator',
       activeWorkers: {},
       knownWorkers: {
         'agent-current': {
@@ -333,7 +249,6 @@ describe('resolveAgentTarget', () => {
           role: 'explorer',
           description: 'Current durable worker',
           status: 'completed',
-          resumable: true,
           worktreePath: null,
           handle: 'explore-current',
         },
@@ -355,8 +270,7 @@ describe('resolveAgentTarget', () => {
   test('resolves durable worker handles case-insensitively without a live registry', async () => {
     writeSessionState(sessionId, {
       sessionId,
-      mode: 'agent',
-      objective: 'Current target',
+      mode: 'coordinator',
       activeWorkers: {},
       knownWorkers: {
         'agent-current': {
@@ -364,7 +278,6 @@ describe('resolveAgentTarget', () => {
           role: 'explorer',
           description: 'Current durable worker',
           status: 'completed',
-          resumable: true,
           worktreePath: null,
           handle: 'Turing',
         },
@@ -394,49 +307,6 @@ describe('resolveAgentTarget', () => {
     })
   })
 
-  test('resolves prior-session durable worker handles case-insensitively', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    switchSession(freshSessionId, tempDir)
-    sessionId = freshSessionId
-
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior target',
-      activeWorkers: {},
-      knownWorkers: {
-        'agent-prior': {
-          agentId: 'agent-prior',
-          role: 'explorer',
-          description: 'Prior durable worker',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'Turing',
-        },
-      },
-    })
-    writePriorAgentTranscript(tempDir, priorSessionId, 'agent-prior')
-    writePriorAgentMetadata(
-      tempDir,
-      priorSessionId,
-      'agent-prior',
-      'Prior metadata worker',
-    )
-
-    await expect(
-      resolveAgentTarget({
-        input: '@turing',
-        appState: appState(),
-        sessionId,
-      }),
-    ).resolves.toMatchObject({
-      agentId: 'agent-prior',
-      sourceSessionId: priorSessionId,
-    })
-  })
-
   test('resolves current-session metadata names case-insensitively', async () => {
     const agentId = createAgentId()
     writeCurrentAgentTranscript(agentId)
@@ -452,52 +322,6 @@ describe('resolveAgentTarget', () => {
       agentId,
       sourceSessionId: sessionId,
       displayName: '@Ada',
-    })
-  })
-
-  test('resolves prior-session durable worker handles with origin session', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    switchSession(freshSessionId, tempDir)
-    sessionId = freshSessionId
-
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior target',
-      activeWorkers: {},
-      knownWorkers: {
-        'agent-prior': {
-          agentId: 'agent-prior',
-          role: 'explorer',
-          description: 'Prior durable worker',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writePriorAgentTranscript(tempDir, priorSessionId, 'agent-prior')
-    writePriorAgentMetadata(
-      tempDir,
-      priorSessionId,
-      'agent-prior',
-      'Prior metadata worker',
-    )
-
-    await expect(
-      resolveAgentTarget({
-        input: 'explore-prior',
-        appState: appState(),
-        sessionId,
-      }),
-    ).resolves.toEqual({
-      agentId: 'agent-prior',
-      sourceSessionId: priorSessionId,
-      displayName: 'Prior metadata worker',
-      contextTokens: expect.any(Number),
-      contextWindowTokens: expect.any(Number),
     })
   })
 
@@ -521,7 +345,7 @@ describe('resolveAgentTarget', () => {
     ).resolves.toBeNull()
   })
 
-  test('resolves current-session metadata names outside Agent Mode state', async () => {
+  test('resolves current-session metadata names outside durable worker state', async () => {
     const agentId = createAgentId()
     writeCurrentAgentTranscript(agentId)
     await writeAgentMetadata(asAgentId(agentId), {
@@ -590,44 +414,6 @@ describe('resolveAgentTarget', () => {
     ).resolves.toMatchObject({
       agentId,
       sourceSessionId: sessionId,
-    })
-  })
-
-  test('resolves prior-session raw agent IDs through durable session state', async () => {
-    const freshSessionId = randomUUID()
-    const priorSessionId = randomUUID()
-    const priorAgentId = createAgentId()
-    switchSession(freshSessionId, tempDir)
-    sessionId = freshSessionId
-
-    writePriorSessionState(tempDir, priorSessionId, {
-      sessionId: priorSessionId,
-      mode: 'agent',
-      objective: 'Prior raw target',
-      activeWorkers: {},
-      knownWorkers: {
-        [priorAgentId]: {
-          agentId: priorAgentId,
-          role: 'explorer',
-          description: 'Prior raw worker',
-          status: 'completed',
-          resumable: true,
-          worktreePath: null,
-          handle: 'explore-prior',
-        },
-      },
-    })
-    writePriorAgentTranscript(tempDir, priorSessionId, priorAgentId)
-
-    await expect(
-      resolveAgentTarget({
-        input: priorAgentId,
-        appState: appState(),
-        sessionId,
-      }),
-    ).resolves.toMatchObject({
-      agentId: priorAgentId,
-      sourceSessionId: priorSessionId,
     })
   })
 

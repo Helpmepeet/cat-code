@@ -81,4 +81,23 @@ describe('workspace map lint', () => {
       'workspace-map index href mismatch: docs/maps/domain.md links to WORKSPACE_MAP.md',
     )
   })
+
+  test('validates source citations against an immutable source root', () => {
+    const root = fixture()
+    writeFileSync(join(root, 'docs', 'guide.md'), 'working-tree copy\n')
+    writeFileSync(join(root, 'AGENTS.md'), 'working-tree copy\n')
+    writeFileSync(
+      join(root, 'docs', 'maps', 'domain.md'),
+      '# Domain\n\nLast refreshed: 2026-07-14\n\n- `src/owner.ts`\n- `docs/guide.md`\n- `AGENTS.md`\n',
+    )
+    const sourceRoot = mkdtempSync(join(tmpdir(), 'workspace-map-source-'))
+    roots.push(sourceRoot)
+    mkdirSync(join(sourceRoot, 'src'), { recursive: true })
+    writeFileSync(join(sourceRoot, 'src', 'owner.ts'), 'export {}\n')
+
+    const result = validateWorkspaceMaps(root, { sourceRoot })
+
+    expect(result.errors).toContain('docs/maps/domain.md: cited path does not exist: docs/guide.md')
+    expect(result.errors).toContain('docs/maps/domain.md: cited path does not exist: AGENTS.md')
+  })
 })

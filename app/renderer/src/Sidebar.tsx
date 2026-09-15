@@ -19,11 +19,13 @@
  * id); a history row with no recorded workspace (MAJOR-1) is browse-only.
  *
  * §0 fidelity flags (divergences from the design source, by design):
- *  - ➕ KEPT, not in the design source: the `time · model` subtitle and the O1
- *    live dot. The design source's rows are title-only because its sample data
- *    carries no timestamps or models at all, not because the operator asked for
- *    the subtitle to go; dropping real, already-shipped information on that
- *    reading would be a silent cut. Both stay.
+ *  - ➕ KEPT, not in the design source: the recency subtitle and the O1 live
+ *    dot. The design source's rows are title-only because its sample data
+ *    carries no timestamps at all, not because the operator asked for the
+ *    subtitle to go; dropping real, already-shipped information on that reading
+ *    would be a silent cut. Both stay. Its trailing half is the session NAME
+ *    (PEER-SESSIONS R4); it carried the running model until 2026-09-03, and the
+ *    model now reads from the open session's run controls instead.
  *  - 🔁 adapted: the design source also drags SESSION rows to reorder them
  *    inside a project. That is not built. A manual per-project row order would
  *    fight the CC-2 float-to-top ruling (a row rises only when its session sends
@@ -54,13 +56,11 @@
  *    (`aria-hidden`): the state is already in the row's `aria-label`, and a
  *    second announcement would be a duplicate. It sits in a fixed leading lane
  *    that EVERY row reserves, centred on the title's line box, so its presence
- *    never reflows the title or the `time · model` line. Richer per-state status
+ *    never reflows the title or the subtitle line. Richer per-state status
  *    still surfaces on the TabBar.
- *  - All five nav destinations are wired: Chat, Sessions (P4-6a), Goals,
- *    Accounts (P4-5), and Settings. None are mocked. They now live behind the
- *    footer's unfold toggle (the design source's placement) rather than as a
- *    permanently-open list; the COLLAPSED rail still shows all five as icons, so
- *    no destination is ever more than one click away.
+ *  - Every nav destination is wired; none is mocked. The same destination set is
+ *    directly visible in both rail states so hover expansion cannot replace the
+ *    button a pointer is approaching with an intermediary toggle.
  *  - Per-row actions (#11): each session row raises the SAME P4-6b
  *    `SessionActionsMenu` as the TabBar — a hover-revealed ⋮ kebab and a
  *    right-click both call `onOpenRowActions(sessionId, anchor)`, which App routes
@@ -99,6 +99,7 @@
  */
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -127,6 +128,7 @@ import {
   deriveMergedRowVisual,
   isSidebarVisibleRow,
   normalizeSidebarGroupExpansion,
+  reorderDragHandlers,
   resolveNavSelection,
   selectSidebarNavFocusHandoff,
   selectSidebarOpen,
@@ -134,6 +136,7 @@ import {
   shouldShowSidebarGroupExpansionToggle,
   sidebarActivityKey,
   sortSidebarSessionRows,
+  type ReorderDrag,
 } from './sidebarState.js'
 import {
   createPinnedSessions,
@@ -169,6 +172,10 @@ import {
   writeSidebarWidthToStorage,
 } from './sidebarWidth.js'
 import {
+  defaultViewPreferenceStorage,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
+import {
   groupByWorkspace,
   type MergedSessionRow,
   type WorkspaceGroup,
@@ -189,23 +196,10 @@ const HIDE_DELAY = 200
  */
 const SIDEBAR_GROUP_ROW_LIMIT = 6
 
-type OrderStorage = Pick<Storage, 'getItem' | 'setItem'>
-
 /** The window's inner width, or 0 under SSR — the "no window to measure" input
  * `clampSidebarWidth` reads as "fixed bounds only". */
 function currentWindowWidth(): number {
   return typeof window === 'undefined' ? 0 : window.innerWidth
-}
-
-/** The renderer's own `localStorage`, or `null` under SSR / a locked-down
- * renderer — the `ReasoningLayoutProvider.tsx:26-33` helper, verbatim. */
-function defaultOrderStorage(): OrderStorage | null {
-  if (typeof window === 'undefined') return null
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -250,39 +244,20 @@ export type RowReorderHandlers = {
 }
 
 type NavItem = {
-  id: 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
+  id: 'sessions' | 'goals' | 'accounts' | 'settings'
   label: string
   /** Wired to a built view. Unbuilt destinations render disabled + flagged. */
   enabled: boolean
   icon: ReactNode
 }
 
-// The design source's destination list (Chat/Sessions/Goals/Accounts/Settings).
-// Orchestrator is a per-session chat mode, not a nav destination, so it has no
-// rail entry (the standalone Orchestrator page was removed 2026-07-14).
+// Chat is reached by opening a session from this roster, so repeating it as a
+// destination only spends vertical space and competes with the primary path.
 const NAV: NavItem[] = [
-  { id: 'chat', label: 'Chat', enabled: true, icon: <ChatIcon /> },
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
-]
-
-/**
- * Per-item entrance delay for the footer's unfold, by NAV index. The list
- * unfolds UPWARD out of the toggle, so the item nearest the toggle (last) leads
- * and the topmost trails — the design source's reverse `nth-child` delays.
- *
- * A static map, never an interpolated `delay-[${n}ms]`: an arbitrary-value class
- * built at runtime silently no-ops in this Tailwind v4 setup (CLAUDE.md), and a
- * headless test cannot see the difference.
- */
-const NAV_UNFOLD_DELAY = [
-  'delay-[150ms]',
-  'delay-[120ms]',
-  'delay-[90ms]',
-  'delay-[60ms]',
-  'delay-[30ms]',
 ]
 
 type SidebarView = 'chat' | 'sessions' | 'goals' | 'accounts' | 'settings'
@@ -301,7 +276,6 @@ export function Sidebar({
   onAddProject,
   accountAlias = null,
   accountsNeedingSignIn = 0,
-  modelForSession,
   menuActive = false,
   storage,
 }: {
@@ -359,11 +333,6 @@ export function Sidebar({
    * it rather than interrupting.
    */
   accountsNeedingSignIn?: number
-  /** The DISPLAY NAME of the model a session is running (the subtitle's
-   * "· model"), rendered verbatim: the engine's own marketing name for it, or the
-   * raw model id when it has none. null when unknown, e.g. a restorable row that
-   * never attached this run. */
-  modelForSession?: (id: SessionId) => string | null
   /**
    * P4-33 — true while an overlay ANCHORED TO A ROW HERE is open (the ⋮ actions
    * menu or the rename editor). Those render as App-level `fixed` overlays
@@ -379,24 +348,19 @@ export function Sidebar({
   /** Where the operator's workspace order and pins are persisted. Injectable for
    * tests (`ReasoningLayoutProvider`'s `storage` prop idiom); defaults to the
    * renderer's own `localStorage`, and `null` disables persistence entirely. */
-  storage?: OrderStorage | null
+  storage?: ViewPreferenceStorage | null
 }) {
   const [search, setSearch] = useState('')
   const [pinned, setPinned] = useState(false)
   const [hovering, setHovering] = useState(false)
   const [focusWithin, setFocusWithin] = useState(false)
-  const [navOpen, setNavOpen] = useState(false)
-  /** The sign-in mark while the destination list is shut, and only then: open, the
-   * Accounts row carries it and two marks for one fact would read as two. */
-  const foldedSignInLabel = navOpen
-    ? null
-    : formatAccountsNeedingSignIn(accountsNeedingSignIn)
   const [dismissed, setDismissed] = useState(false)
   const [resizing, setResizing] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>(
     {},
   )
-  const orderStore = storage === undefined ? defaultOrderStorage() : storage
+  const orderStore =
+    storage === undefined ? defaultViewPreferenceStorage() : storage
   const [sidebarWidth, setSidebarWidth] = useState(() =>
     clampSidebarWidth(
       readSidebarWidthFromStorage(orderStore) ?? SIDEBAR_DEFAULT_WIDTH,
@@ -419,16 +383,10 @@ export function Sidebar({
     name: string
     anchor: SessionActionsAnchor
   } | null>(null)
-  /** The in-flight header drag: the group being dragged and the one under the
-   * pointer. Only the indicator reads it; the order itself changes on drop. */
-  const [headerDrag, setHeaderDrag] = useState<{
-    from: string
-    over: string
-  } | null>(null)
-  /** The same, for a row being dragged within the Pinned section. */
-  const [pinDrag, setPinDrag] = useState<{ from: string; over: string } | null>(
-    null,
-  )
+  /** The in-flight header drag, and the same for a row being dragged within the
+   * Pinned section (`sidebarState.ts` `ReorderDrag`). */
+  const [headerDrag, setHeaderDrag] = useState<ReorderDrag>(null)
+  const [pinDrag, setPinDrag] = useState<ReorderDrag>(null)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The rail element, so the backdrop-close re-collapse can ask whether the
@@ -469,12 +427,18 @@ export function Sidebar({
     if (menuActive) return
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }
-  const collapseSidebar = () => {
+  const collapseSidebar = useCallback(() => {
     if (showTimer.current) clearTimeout(showTimer.current)
     if (hideTimer.current) clearTimeout(hideTimer.current)
     setPinned(false)
     setHovering(false)
     setDismissed(true)
+  }, [])
+  const selectView = (view: SidebarView) => {
+    onSelectView(view)
+    // A hover/focus-open overlay otherwise obscures the destination it just
+    // revealed. An explicit pin is the user's request to keep the rail open.
+    if (!pinned) collapseSidebar()
   }
   const resizeSidebar = (clientX: number) => {
     setSidebarWidth(clampSidebarWidth(clientX, currentWindowWidth()))
@@ -509,6 +473,24 @@ export function Sidebar({
     return () => window.removeEventListener('resize', onResize)
   }, [])
 
+  useEffect(() => {
+    if (
+      !open ||
+      activeView === 'chat' ||
+      menuActive ||
+      typeof document === 'undefined'
+    ) {
+      return
+    }
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || asideRef.current?.contains(target)) return
+      collapseSidebar()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [activeView, collapseSidebar, menuActive, open])
+
   // When that overlay CLOSES, its full-screen backdrop swallowed the click, so
   // the pointer is wherever the menu was with no `onMouseLeave` to follow and
   // `hovering` still true — the rail would stay expanded indefinitely. Re-collapse
@@ -522,12 +504,6 @@ export function Sidebar({
     if (hideTimer.current) clearTimeout(hideTimer.current)
     hideTimer.current = setTimeout(() => setHovering(false), HIDE_DELAY)
   }, [menuActive, pinned])
-
-  // The unfolded destination list is a rail-width overlay of the footer; leaving
-  // the rail collapses it, so it is never re-found mid-air on the next hover.
-  useEffect(() => {
-    if (!open) setNavOpen(false)
-  }, [open])
 
   const query = search.trim().toLowerCase()
   // Sort (CC-2 warp-free activity order) → partition pins → filter → group.
@@ -658,18 +634,7 @@ export function Sidebar({
   }
 
   const reorderHandlers: WorkspaceReorderHandlers = {
-    onDragStart: cwd => setHeaderDrag({ from: cwd, over: cwd }),
-    onDragOver: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over === cwd ? drag : { ...drag, over: cwd },
-      ),
-    // Park the indicator back on the dragged group itself (which draws none, a
-    // group cannot drop onto itself), so it is never left promising a landing
-    // spot the pointer has already left.
-    onDragLeave: cwd =>
-      setHeaderDrag(drag =>
-        drag == null || drag.over !== cwd ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setHeaderDrag),
     onDrop: cwd => {
       if (headerDrag) {
         commitWorkspaceOrder(
@@ -684,7 +649,6 @@ export function Sidebar({
       }
       setHeaderDrag(null)
     },
-    onDragEnd: () => setHeaderDrag(null),
     onStep: (cwd, direction) => {
       const next = reduceWorkspaceOrderStepped(
         workspaceOrder,
@@ -704,15 +668,7 @@ export function Sidebar({
 
   const pinnedReorderHandlers: RowReorderHandlers = {
     mime: PINNED_SESSION_DRAG_MIME,
-    onDragStart: id => setPinDrag({ from: id, over: id }),
-    onDragOver: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over === id ? drag : { ...drag, over: id },
-      ),
-    onDragLeave: id =>
-      setPinDrag(drag =>
-        drag == null || drag.over !== id ? drag : { ...drag, over: drag.from },
-      ),
+    ...reorderDragHandlers(setPinDrag),
     onDrop: id => {
       if (pinDrag) {
         commitPinnedSessions(
@@ -726,7 +682,6 @@ export function Sidebar({
       }
       setPinDrag(null)
     },
-    onDragEnd: () => setPinDrag(null),
     onStep: (id, direction) => {
       const next = reducePinnedSessionsStepped(
         pinnedSessions,
@@ -783,7 +738,6 @@ export function Sidebar({
     onOpenHistory,
     onOpenRowActions,
     onTogglePin: togglePin,
-    modelForSession,
   }
 
   return (
@@ -809,12 +763,6 @@ export function Sidebar({
             focusedNavId,
           )
           refocusNavId.current = handoffNavId
-          // The expanded nav list is `inert` while folded (`navOpen === false`),
-          // and `HTMLElement.focus()` on an inert element is a no-op — so a
-          // pending handoff must unfold it in this SAME update, before the
-          // re-focus layout effect below runs, or focus silently falls to
-          // <body> instead of landing on the button reverse-Tab targeted.
-          if (handoffNavId != null) setNavOpen(true)
           setFocusWithin(true)
         }}
         onBlurCapture={event => {
@@ -1082,130 +1030,76 @@ export function Sidebar({
               </section>
             </div>
 
-            {/* Footer: the active account, and the destinations unfolding
-             * upward out of the toggle (column-reverse puts the list above the
-             * row that owns it). */}
+            {/* Footer: direct destinations above the active account. Keeping
+             * them visible prevents hover expansion from moving a destination
+             * behind another click target. */}
             <nav
               aria-label="Views"
-              className="flex shrink-0 flex-col-reverse items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
+              className="flex shrink-0 flex-col items-stretch border-t border-shell-seam px-2 pb-2 pt-1.5"
             >
-              <div className="flex shrink-0 items-center gap-2">
-                {accountAlias ? (
-                  <button
-                    type="button"
-                    onClick={() => onSelectView('accounts')}
-                    title={`Active account: ${accountAlias}`}
-                    aria-label={`Active account: ${accountAlias}`}
-                    className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
-                  >
-                    <span
-                      aria-hidden="true"
-                      className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
-                    >
-                      {accountAlias.slice(0, 1).toUpperCase()}
-                    </span>
-                    <span className="min-w-0 truncate text-[11px] font-medium">
-                      {accountAlias}
-                    </span>
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => setNavOpen(value => !value)}
-                  aria-expanded={navOpen}
-                  aria-label={
-                    navOpen
-                      ? 'Hide destinations'
-                      : foldedSignInLabel
-                        ? `Show destinations, ${foldedSignInLabel}`
-                        : 'Show destinations'
-                  }
-                  title={
-                    navOpen
-                      ? 'Hide destinations'
-                      : foldedSignInLabel
-                        ? `Show destinations, ${foldedSignInLabel}`
-                        : 'Show destinations'
-                  }
-                  className={
-                    'relative ml-auto flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-md transition-[background-color,color,transform] duration-200 ' +
-                    (navOpen
-                      ? 'rotate-90 text-accent-soft'
-                      : 'text-text-faint hover:bg-shell-hover hover:text-text-muted')
-                  }
-                >
-                  <GridIcon />
-                  {/* The destination list this toggle opens is folded by default,
-                   * and folded it is `opacity-0` and `inert` — so the mark on the
-                   * Accounts row inside it is unreadable in the state the sidebar
-                   * spends most of its time in. Carry the signal out to the one
-                   * control that is always visible while the list is shut. */}
-                  {foldedSignInLabel ? (
-                    <span
-                      aria-hidden="true"
-                      data-sidebar-nav-badge="destinations"
-                      className="absolute right-[3px] top-[3px] h-[6px] w-[6px] rounded-full bg-tone-warn"
-                    />
-                  ) : null}
-                </button>
+              <div className="flex flex-col pb-1.5">
+                {NAV.map(item => (
+                  <NavItemExpanded
+                    activeView={activeView}
+                    buttonRef={element => {
+                      if (element) navRefs.current.set(item.id, element)
+                      else navRefs.current.delete(item.id)
+                    }}
+                    item={item}
+                    key={item.id}
+                    needsSignIn={
+                      item.id === 'accounts' ? accountsNeedingSignIn : 0
+                    }
+                    onSelectView={selectView}
+                  />
+                ))}
               </div>
 
-              <div
-                className={
-                  'grid w-full origin-bottom transition-[grid-template-rows,opacity] duration-300 ease-[cubic-bezier(0.22,0.9,0.32,1)] ' +
-                  (navOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')
-                }
-                // Folded away it is visually gone but still in flow, so without
-                // this Tab would walk five invisible destinations.
-                inert={!navOpen}
-              >
-                <div className="flex flex-col overflow-hidden pb-1.5">
-                  {NAV.map((item, index) => (
-                    <NavItemExpanded
-                      activeView={activeView}
-                      buttonRef={element => {
-                        if (element) navRefs.current.set(item.id, element)
-                        else navRefs.current.delete(item.id)
-                      }}
-                      item={item}
-                      key={item.id}
-                      navOpen={navOpen}
-                      needsSignIn={
-                        item.id === 'accounts' ? accountsNeedingSignIn : 0
-                      }
-                      unfoldDelay={NAV_UNFOLD_DELAY[index] ?? ''}
-                      onSelectView={onSelectView}
-                    />
-                  ))}
-                </div>
-              </div>
+              {accountAlias ? (
+                <button
+                  type="button"
+                  onClick={() => selectView('accounts')}
+                  title={`Active account: ${accountAlias}`}
+                  aria-label={`Active account: ${accountAlias}`}
+                  className="flex min-w-0 items-center gap-2 rounded-md px-1 py-0.5 text-text-subtle transition-colors hover:bg-shell-hover hover:text-text-muted"
+                >
+                  <span
+                    aria-hidden="true"
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+                  >
+                    {accountAlias.slice(0, 1).toUpperCase()}
+                  </span>
+                  <span className="min-w-0 truncate text-[11px] font-medium">
+                    {accountAlias}
+                  </span>
+                </button>
+              ) : null}
             </nav>
           </>
         ) : (
-          /* Collapsed rail: the account glyph over the nav icons, anchored to
-           * the bottom. Every destination stays one click away here, which is
-           * what lets the expanded footer keep them folded. */
+          /* Collapsed rail: destinations above the bottom-anchored account,
+           * matching the expanded footer so neither changes sides on hover. */
           <nav
             aria-label="Views"
             className="mt-auto flex flex-col items-center gap-1 pb-3 pt-2"
           >
-            {accountAlias ? (
-              <span
-                title={`Active account: ${accountAlias}`}
-                className="mb-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
-              >
-                {accountAlias.slice(0, 1).toUpperCase()}
-              </span>
-            ) : null}
             {NAV.map(item => (
               <NavItemRail
                 activeView={activeView}
                 item={item}
                 key={item.id}
                 needsSignIn={item.id === 'accounts' ? accountsNeedingSignIn : 0}
-                onSelectView={onSelectView}
+                onSelectView={selectView}
               />
             ))}
+            {accountAlias ? (
+              <span
+                title={`Active account: ${accountAlias}`}
+                className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent/[0.16] text-[10px] font-semibold tracking-[0.02em] text-accent-soft"
+              >
+                {accountAlias.slice(0, 1).toUpperCase()}
+              </span>
+            ) : null}
           </nav>
         )}
 
@@ -1363,7 +1257,6 @@ export function SessionGroup({
   onOpenWorkspaceActions,
   onTogglePin,
   pinnedSessions = [],
-  modelForSession,
   reorder,
   rowRef,
   headerRef,
@@ -1394,7 +1287,6 @@ export function SessionGroup({
    * normally lifted into the Pinned section, so this matters for the boundary
    * where a group still holds one. */
   pinnedSessions?: PinnedSessions
-  modelForSession?: (id: SessionId) => string | null
   /** ➕ workspace reordering (operator, 2026-07-26). Optional + additive: the
    * header is a plain, non-draggable header when this is absent. */
   reorder?: WorkspaceReorderHandlers
@@ -1625,7 +1517,6 @@ export function SessionGroup({
               onOpenHistory={onOpenHistory}
               onOpenRowActions={onOpenRowActions}
               onTogglePin={onTogglePin}
-              modelForSession={modelForSession}
               rowRef={
                 rowRef
                   ? element => rowRef(row.sessionId, element)
@@ -1667,7 +1558,6 @@ export function SidebarRowItem({
   rowRef,
   dragging = false,
   dropEdge = null,
-  modelForSession,
 }: {
   row: MergedSessionRow
   isActive: boolean
@@ -1695,7 +1585,6 @@ export function SidebarRowItem({
   dragging?: boolean
   /** This row is the drop target; which edge the dragged row would land on. */
   dropEdge?: RowDropEdge | null
-  modelForSession?: (id: SessionId) => string | null
 }) {
   const visual = deriveMergedRowVisual(row)
   const title = row.displayLabel
@@ -1704,11 +1593,13 @@ export function SidebarRowItem({
   // the transcript mtime for a history row — `sidebarActivityKey` folds both, and
   // never `lastAttachedAt` (open/attach bumps that; see `sidebarState.ts`).
   const recency = formatRecency(sidebarActivityKey(row))
-  // The subtitle is `time · model`. Only a registry row that attached this run
-  // has a known model; a history row shows none. Rendered verbatim: the caller
-  // hands over the engine's own display NAME for the model ("Opus 5"), so
-  // shortening it here would cut a real name apart ("GPT-5.6 Sol" → "5.6 Sol").
-  const model = appSessionId != null ? modelForSession?.(appSessionId) ?? null : null
+  // The subtitle is `time · name` (PEER-SESSIONS R4). The name replaced the
+  // model here: it is the session's identity rather than a run setting, it is a
+  // registry field so it renders the same live, parked or closed, and the model
+  // is still on screen in the open session's run controls. A row with no name (a
+  // history row, or a registry row that predates the field) keeps the time
+  // alone, exactly as a row with no model did.
+  const name = row.name
 
   const openable = visual.openable
   const showActions = openable && (onOpenRowActions != null || onTogglePin != null)
@@ -1891,7 +1782,7 @@ export function SidebarRowItem({
        * conditional, so a live row and a not-live row share one text edge and
        * neither reflows. `self-start` plus a lane exactly as tall as the title's
        * line box centres the dot on the TITLE; centring it on the row instead
-       * dropped it into the gap between the title and the `time · model` line
+       * dropped it into the gap between the title and the subtitle line
        * and read as floating (operator, 2026-07-31). Static classes: an
        * interpolated arbitrary value silently no-ops in this Tailwind v4 setup. */}
       <span
@@ -1922,17 +1813,17 @@ export function SidebarRowItem({
             {title}
           </span>
         </div>
-        {recency || model ? (
-          /* `min-w-0` so the model name's `truncate` can actually shrink: a flex
-           * child's automatic minimum size is its content, so without it a long
-           * name ("Opus 5 (with 1M context)") widens the row instead of
-           * ellipsing. Recency keeps its `shrink-0` and is never the part cut. */
+        {recency || name ? (
+          /* `min-w-0` so the trailing half's `truncate` can actually shrink: a
+           * flex child's automatic minimum size is its content, so without it a
+           * long value widens the row instead of ellipsing. Recency keeps its
+           * `shrink-0` and is never the part cut. */
           <div className="flex min-w-0 items-center gap-[5px] text-[10px] text-text-faint">
             {recency ? <span className="shrink-0">{recency}</span> : null}
-            {recency && model ? (
+            {recency && name ? (
               <span className="shrink-0 text-text-ghost">·</span>
             ) : null}
-            {model ? <span className="truncate">{model}</span> : null}
+            {name ? <span className="truncate">{name}</span> : null}
           </div>
         ) : null}
       </div>
@@ -2016,27 +1907,18 @@ function NavItemExpanded({
   item,
   activeView,
   buttonRef,
-  navOpen,
   needsSignIn = 0,
-  unfoldDelay,
   onSelectView,
 }: {
   item: NavItem
   activeView: SidebarView
   buttonRef: (element: HTMLButtonElement | null) => void
-  /** The footer is unfolded — items rise into place; folded, they drop back
-   * with no stagger (the delays are an entrance effect only). */
-  navOpen: boolean
   /** Accounts needing a fresh sign-in; 0 renders no mark. */
   needsSignIn?: number
-  unfoldDelay: string
   onSelectView: (view: SidebarView) => void
 }) {
   const active = item.enabled && item.id === activeView
   const signInLabel = formatAccountsNeedingSignIn(needsSignIn)
-  const motion = navOpen
-    ? `translate-y-0 scale-100 opacity-100 ${unfoldDelay}`
-    : 'translate-y-1.5 scale-95 opacity-0'
   if (!item.enabled) {
     return (
       <button
@@ -2046,10 +1928,7 @@ function NavItemExpanded({
         aria-disabled="true"
         data-sidebar-nav-id={item.id}
         title={`${item.label} is not available yet`}
-        className={
-          'flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55 transition-[opacity,transform] duration-200 ' +
-          motion
-        }
+        className="flex w-full cursor-not-allowed items-center gap-1 rounded-md py-1.5 text-text-subtle/55"
       >
         <span className="flex h-5 w-8 shrink-0 items-center justify-center">
           {item.icon}
@@ -2070,11 +1949,10 @@ function NavItemExpanded({
         if (view) onSelectView(view)
       }}
       className={
-        'flex w-full items-center gap-1 rounded-md py-1.5 transition-[opacity,transform] duration-200 ' +
-        motion +
+        'flex w-full items-center gap-1 rounded-md border py-1.5 transition-colors ' +
         (active
-          ? ' bg-accent/[0.09] text-accent-soft'
-          : ' text-text-subtle hover:text-[light-dark(#3f3f46,#d4d4d8)]')
+          ? ' border-accent/[0.18] bg-accent/[0.09] text-accent-soft'
+          : ' border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07] hover:text-[light-dark(#3f3f46,#d4d4d8)]')
       }
     >
       <span className="flex h-5 w-8 shrink-0 items-center justify-center">
@@ -2173,23 +2051,6 @@ function formatRecency(ms: number): string {
 
 /* ── Icons (ported from the design source's inline SVGs; attribute-only, no CSS) ── */
 
-function ChatIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-    </svg>
-  )
-}
-
 function SessionsIcon() {
   return (
     <svg
@@ -2265,27 +2126,6 @@ function SettingsIcon() {
     >
       <circle cx="12" cy="12" r="3" />
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-    </svg>
-  )
-}
-
-/** The footer's destination toggle — a 2×2 grid of apps. */
-function GridIcon() {
-  return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <rect x="3.5" y="3.5" width="7" height="7" rx="2" />
-      <rect x="13.5" y="3.5" width="7" height="7" rx="2" />
-      <rect x="3.5" y="13.5" width="7" height="7" rx="2" />
-      <rect x="13.5" y="13.5" width="7" height="7" rx="2" />
     </svg>
   )
 }

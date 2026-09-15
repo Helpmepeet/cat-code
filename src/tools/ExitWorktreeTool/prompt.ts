@@ -1,5 +1,5 @@
 export function getExitWorktreeToolPrompt(): string {
-  return `Exit an isolated worktree session created by EnterWorktree and return to the original working directory. In Agent Mode, the orchestrator owns worktree lifecycle.
+  return `Exit an isolated worktree session created by EnterWorktree and return to the original working directory. The parent session owns worktree lifecycle.
 
 ## Scope
 

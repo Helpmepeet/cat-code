@@ -18,16 +18,10 @@ import type {
   NestedToolUseRow,
   NestedTranscriptRow,
 } from './transcriptProjector.js'
-
-function memoryStorage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    removeItem: (key: string) => void store.delete(key),
-    store,
-  }
-}
+import {
+  memoryStorage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 const blockSource = {
   sessionId: 's' as const,
@@ -99,17 +93,7 @@ test('an absent, foreign, or wrong-version value reads as null (caller falls bac
 })
 
 test('a throwing storage never propagates (view persistence is best-effort)', () => {
-  const hostile = {
-    getItem: () => {
-      throw new Error('denied')
-    },
-    setItem: () => {
-      throw new Error('denied')
-    },
-    removeItem: () => {
-      throw new Error('denied')
-    },
-  }
+  const hostile = throwingStorage()
   expect(readReasoningLayoutFromStorage(hostile)).toBeNull()
   expect(() => writeReasoningLayoutToStorage(hostile, 'trail')).not.toThrow()
 })

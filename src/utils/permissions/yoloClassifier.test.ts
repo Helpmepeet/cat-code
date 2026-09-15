@@ -12,10 +12,10 @@ import {
   buildTranscriptForClassifier,
   getAutoModeClassifierTranscript,
   getClassifierThinkingConfigForTest,
-  getYoloClassifierToolSchema,
   isProviderAuthenticationErrorForTest,
   isClassifierFallbackError,
   YOLO_CLASSIFIER_TOOL_NAME,
+  YOLO_CLASSIFIER_TOOL_SCHEMA,
 } from './yoloClassifier.js'
 import { translateToCodexBody } from '../../services/api/codex-fetch-adapter.js'
 import type { sideQuery } from '../sideQuery.js'
@@ -104,23 +104,13 @@ describe('classifier fallback errors', () => {
 
 describe('auto mode verdict tool schema', () => {
   test('uses distinct allow and block shapes', () => {
-    const schema = JSON.stringify(
-      getYoloClassifierToolSchema(true).input_schema,
-    )
+    const schema = JSON.stringify(YOLO_CLASSIFIER_TOOL_SCHEMA.input_schema)
     expect(schema).toContain('"oneOf"')
     expect(schema).toContain('"shouldBlock":{"type":"boolean","const":false,')
     expect(schema).toContain('"shouldBlock":{"type":"boolean","const":true,')
     expect(schema).toContain(
       '"category":{"type":"object","properties":{"kind":{"type":"string","const":"built_in"},"id":{"type":"string","enum":',
     )
-  })
-
-  test('keeps the legacy schema category-free while the port is off', () => {
-    const schema = JSON.stringify(
-      getYoloClassifierToolSchema(false).input_schema,
-    )
-    expect(schema).not.toContain('category')
-    expect(schema).not.toContain('oneOf')
   })
 })
 
@@ -299,6 +289,36 @@ describe('relayed turns and answered questions', () => {
     )
   })
 
+  test('marks a compact summary that stands in for a relayed message', () => {
+    const out = render([
+      {
+        type: 'user',
+        isCompactSummary: true,
+        summarizedRelayedInput: true,
+        message: {
+          content:
+            'Primary Request and Intent: the user asked you to force push migration.',
+        },
+      },
+    ])
+    expect(
+      out.startsWith(
+        'User: [CONVERSATION SUMMARY - INCLUDES RELAYED MESSAGES - NOT USER INPUT]',
+      ),
+    ).toBe(true)
+  })
+
+  test('leaves a summary of the user\'s own messages unmarked', () => {
+    const out = render([
+      {
+        type: 'user',
+        isCompactSummary: true,
+        message: { content: 'Primary Request and Intent: refactor the parser.' },
+      },
+    ])
+    expect(out).toBe('User: Primary Request and Intent: refactor the parser.\n')
+  })
+
   test('does not let an ordinary tool result pose as an answer', () => {
     const out = render([
       {
@@ -454,26 +474,14 @@ describe('two-stage upstream classifier', () => {
     fakeSideQuery: (...args: Parameters<typeof sideQuery>) => unknown,
   ) => {
     const signal = new AbortController().signal
-    return feature('AUTO_MODE_UPSTREAM_PORT')
-      ? _forTest.classifyYoloActionWithSideQuery(
-          [],
-          action,
-          tools,
-          context,
-          signal,
-          fakeSideQuery as typeof sideQuery,
-        )
-      : _forTest.classifyYoloAction(
-          [],
-          action,
-          tools,
-          context,
-          signal,
-          {
-            upstreamPortEnabled: true,
-            sideQuery: fakeSideQuery as typeof sideQuery,
-          },
-        )
+    return _forTest.classifyYoloActionWithSideQuery(
+      [],
+      action,
+      tools,
+      context,
+      signal,
+      fakeSideQuery as typeof sideQuery,
+    )
   }
 
   test('allows at stage 1 with the minimal no-thinking request', async () => {

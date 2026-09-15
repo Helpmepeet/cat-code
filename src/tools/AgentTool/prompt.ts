@@ -4,8 +4,8 @@ import { isEnvDefinedFalsy, isEnvTruthy } from '../../utils/envUtils.js'
 import { isTeammate } from '../../utils/teammate.js'
 import { isInProcessTeammate } from '../../utils/teammateContext.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
-import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
+import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { TASK_OUTPUT_TOOL_NAME } from '../TaskOutputTool/constants.js'
@@ -18,7 +18,7 @@ import { type APIProvider } from '../../utils/model/providers.js'
 
 function getToolsDescription(agent: AgentDefinition): string {
   if (agent.agentType === 'verification') {
-    return 'Read-only async verification tools when available: Bash, Read, search, web, and MCP tools; excludes edit/write, orchestrator, recursive-agent, and worker-control tools'
+    return 'Read-only async verification tools when available: Bash, Read, search, web, and MCP tools; excludes edit/write, recursive-agent, and worker-control tools'
   }
 
   const { tools, disallowedTools } = agent
@@ -76,7 +76,6 @@ export async function getPrompt(
   isCoordinator?: boolean,
   allowedAgentTypes?: string[],
   provider?: APIProvider,
-  isAgentMode?: boolean,
   capabilities?: AgentContinuationCapabilities,
 ): Promise<string> {
   // Undefined capabilities means an older call site that hasn't been wired
@@ -96,6 +95,12 @@ export async function getPrompt(
   // (fork semantics, directive-style prompts) and swap in fork-aware examples.
   const forkEnabled = isForkSubagentEnabled()
 
+  const delegationGuidance = `DELEGATION BOUNDARIES:
+- Give the worker a bounded objective, relevant context, constraints, and acceptance criteria. Delegate only when permitted by the applicable instructions.
+- When the selected worker is in the same capability tier or stronger for the task, let it investigate, synthesize findings, and choose its approach within that scope. Supply exact implementation steps when the user requires them or they are already decided.
+- For a weaker worker, narrow the assignment and provide more concrete guidance where needed. Do not infer capability from price alone; if relative capability is unknown, state what is known and provide enough context without inventing a model ranking.
+- Freedom to choose a method does not expand permissions or the assigned scope. Assess the worker's findings, actual changes, and verification evidence before relying on its result.`
+
   const whenToForkSection = forkEnabled
     ? `
 
@@ -103,7 +108,7 @@ export async function getPrompt(
 
 Fork yourself (omit \`subagent_type\`) when the intermediate tool output isn't worth keeping in your context. The criterion is qualitative — "will I need this output again" — not task size.
 - **Research**: fork open-ended questions. If research can be broken into independent questions, launch parallel forks in one message. A fork beats a fresh subagent for this — it inherits context and shares your cache.
-- **Implementation**: prefer to fork implementation work that requires more than a couple of edits. Do research before jumping to implementation.
+- **Implementation**: prefer to fork implementation work that requires more than a couple of edits. A fork may investigate and implement within the assigned scope.
 
 Forks are cheap because they share your prompt cache. Don't set \`model\` on a fork — a different model can't reuse the parent's cache. Pass a short \`name\` (one or two words, lowercase) so the user can see the fork in the teams panel and steer it mid-run.
 
@@ -128,9 +133,7 @@ ${forkEnabled ? 'When spawning a fresh agent (with a `subagent_type`), it starts
 
 ${forkEnabled ? 'For fresh agents, terse' : 'Terse'} command-style prompts produce shallow, generic work.
 
-**Never delegate understanding.** Don't write "based on your findings, fix the bug" or "based on the research, implement it." Those phrases push synthesis onto the agent instead of doing it yourself. Write prompts that prove you understood: include file paths, line numbers, what specifically to change.
-
-**Handoff completeness.** When spawning an agent for implementation or review, the prompt must include: exact file paths, the current state (uncommitted changes, prior failed attempts, or dirty baseline the agent needs to know about), what "done" looks like, and any constraints the agent must follow. A prompt missing this context wastes a full agent cycle.
+**Handoff completeness.** Include known files and evidence, relevant current state (uncommitted changes, prior failed attempts, or a dirty baseline), what "done" looks like, and the constraints the agent must follow. Distinguish established facts from hypotheses. If the affected files or solution are not yet known, make finding them part of the bounded assignment; do not invent paths or require the parent to solve the task first.
 `
 
   const isGPTPromptStyle = provider === 'openai'
@@ -210,40 +213,6 @@ ${AGENT_TOOL_NAME}({
 
   const forkExamples = isGPTPromptStyle ? forkExamplesGPT : forkExamplesClaude
 
-  const currentExamples = `Example usage:
-
-<example_agent_descriptions>
-"test-runner": use this agent after you are done writing code to run tests
-"greeting-responder": use this agent to respond to user greetings with a friendly joke
-</example_agent_descriptions>
-
-<example>
-user: "Please write a function that checks if a number is prime"
-assistant: I'm going to use the ${FILE_WRITE_TOOL_NAME} tool to write the following code:
-<code>
-function isPrime(n) {
-  if (n <= 1) return false
-  for (let i = 2; i * i <= n; i++) {
-    if (n % i === 0) return false
-  }
-  return true
-}
-</code>
-<commentary>
-Since a significant piece of code was written and the task was completed, now use the test-runner agent to run the tests
-</commentary>
-assistant: Uses the ${AGENT_TOOL_NAME} tool to launch the test-runner agent
-</example>
-
-<example>
-user: "Hello"
-<commentary>
-Since the user is greeting, use the greeting-responder agent to respond with a friendly joke
-</commentary>
-assistant: "I'm going to use the ${AGENT_TOOL_NAME} tool to launch the greeting-responder agent"
-</example>
-`
-
   // When the gate is on, the agent list lives in an agent_listing_delta
   // attachment (see attachments.ts) instead of inline here. This keeps the
   // tool description static across MCP/plugin/permission changes so the
@@ -286,81 +255,8 @@ ${
     : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which agent type to use. If omitted, the general-purpose agent is used.`
 }`
 
-  const agentModeWorkerControlGuidance = [
-    canStopTask
-      ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.`
-      : null,
-    canResumeAgent
-      ? `- Use ${RESUME_AGENT_TOOL_NAME} to continue a stopped worker when its existing context is still the right context.`
-      : null,
-    canSendMessage
-      ? `- Use ${SEND_MESSAGE_TOOL_NAME} only to queue messages into a worker that is still running. ${SEND_MESSAGE_TOOL_NAME} does not cancel or interrupt the worker.`
-      : null,
-    '- Otherwise spawn a fresh worker with a cleaner brief.',
-  ]
-    .filter((line): line is string => line !== null)
-    .join('\n')
-
-  const agentModeShared = isGPTPromptStyle
-    ? [
-        `Launch a delegated worker for a bounded part of the run.
-
-TOOL PURPOSE:
-- Use the ${AGENT_TOOL_NAME} tool when delegation improves the run: broader codebase investigation via Explore, implementation passes, or independent verification.
-- Delegate selectively. The orchestrator owns synthesis, approval, recovery, and what the user sees.
-
-${agentListSection}
-
-AGENT SELECTION:`,
-        forkEnabled
-          ? '- Set `subagent_type` to use a specialized worker.\n- Omit `subagent_type` to fork yourself when inherited context is the cleanest fit.'
-          : '- Set `subagent_type` to select which worker role to use.\n- If you omit it, the general-purpose agent is used.',
-        `
-
-USAGE RULES:
-- Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
-- Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
-- In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
-- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
-- A real implementation phase should usually belong to a coding worker, not the orchestrator.
-- After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
-- After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
-- Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
-- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
-- Parallel work only when ownership is clear and the results will join cleanly.
-${agentModeWorkerControlGuidance}`,
-      ].join('\n')
-    : `Launch a delegated worker for a bounded part of the run.
-
-The ${AGENT_TOOL_NAME} tool launches workers that handle a scoped part of the run. Use it for broader codebase investigation via Explore, implementation passes, or independent verification — not as a substitute for your own planning or synthesis.
-
-${agentListSection}
-
-${forkEnabled
-  ? `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type to use a specialized worker, or omit it to fork yourself when inherited context is the cleanest fit.`
-  : `When using the ${AGENT_TOOL_NAME} tool, specify a subagent_type parameter to select which worker role to use. If omitted, the general-purpose agent is used.`}
-
-Usage notes:
-- Keep delegation explicit. Give each worker one clear job, only the context it needs, concrete files or surfaces when known, constraints, and a short done condition.
-- Do not delegate planning, trivial file reads, searches, or synthesis you should do yourself.
-- In Agent Mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files, require more than one edit/test cycle, or change user-visible behavior.
-- If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file.
-- A real implementation phase should usually belong to a coding worker, not the orchestrator.
-- After investigation, synthesize findings yourself before assigning follow-up work. Never say "based on your findings" or "implement from the research".
-- After launching Explore on a question, do not keep doing the same search on the main thread unless you need one narrow blocker fact to steer the next worker.
-- Use independent verification workers whenever a coding worker produced a non-trivial patch, or prompt, session-state, worker-control, or orchestration behavior changed, instead of treating implementor self-checks as completion proof.
-- If a coding worker changed more than one file, or changed prompt, session-state, worker-control, or orchestration behavior, use an independent verification worker by default.
-- Parallel work only when ownership is clear and the results will join cleanly.
-${agentModeWorkerControlGuidance}`
-
-  // Coordinator mode and Agent mode both get slim prompts because their
-  // system prompts already carry the main behavior contract.
-  if (isAgentMode) {
-    return agentModeShared
-  }
-
   if (isCoordinator) {
-    return shared
+    return `${shared}\n\n${delegationGuidance}`
   }
 
   // Ant-native builds alias find/grep to embedded bfs/ugrep and remove the
@@ -369,12 +265,12 @@ ${agentModeWorkerControlGuidance}`
   const fileSearchHint = embedded
     ? '`find` via the Bash tool'
     : `the ${GLOB_TOOL_NAME} tool`
-  // The "class Foo" example is about content search. Non-embedded stays Glob
-  // (original intent: find-the-file-containing). Embedded gets grep because
-  // find -name doesn't look at file contents.
+  // The "class Foo" example is a content search, so both paths point at a
+  // content searcher: embedded builds have no dedicated Grep tool and use grep
+  // via Bash; everywhere else uses the Grep tool. Glob matches file names only.
   const contentSearchHint = embedded
     ? '`grep` via the Bash tool'
-    : `the ${GLOB_TOOL_NAME} tool`
+    : `the ${GREP_TOOL_NAME} tool`
   const whenNotToUseSection = forkEnabled
     ? ''
     : isGPTPromptStyle
@@ -403,6 +299,8 @@ When NOT to use the ${AGENT_TOOL_NAME} tool:
 
   // Non-coordinator gets the full prompt with all sections
   return `${shared}
+
+${delegationGuidance}
 ${whenNotToUseSection}
 
 ${usageHeader}
@@ -414,18 +312,18 @@ ${usageHeader}
     !forkEnabled
       ? `
 - You can optionally run agents in the background using the run_in_background parameter. When an agent runs in the background, you will be automatically notified when it completes — do NOT sleep, poll, or proactively check on its progress. Continue with other work or respond to the user instead.
-- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.${isGPTPromptStyle ? ' **IMPORTANT: run_in_background: true is REQUIRED for true parallel execution — without it, the parent agent is fully blocked waiting for each subagent to finish, even if you emit multiple spawns in the same turn.**' : ''}`
+- **Foreground vs background**: Use foreground (default) when you need the agent's results before you can proceed — e.g., research agents whose findings inform your next steps. Use background when you have genuinely independent work to do in parallel.`
       : ''
   }
 ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME} with \`task_id\` set to the \`agentId\` returned by ${AGENT_TOOL_NAME}.${canSendMessage ? ` ${SEND_MESSAGE_TOOL_NAME} does not cancel it.` : ''}\n` : ''}- ${
     canResumeAgent
       ? `To continue a previously spawned stopped agent, use ${RESUME_AGENT_TOOL_NAME} with the agent's ID or name as the \`agentId\` field. The agent resumes from its prior transcript. `
       : `A completed or stopped agent cannot be resumed from this context — ${RESUME_AGENT_TOOL_NAME} is not available here; spawn a fresh ${AGENT_TOOL_NAME} instead. `
-  }${canSendMessage ? `Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered at the worker's next tool round and does not interrupt its current work. ` : ''}${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context — provide a complete task description.' : 'Each Agent invocation starts fresh — provide a complete task description.'}
-- The agent's outputs should generally be trusted.
+  }${canSendMessage ? `Use ${SEND_MESSAGE_TOOL_NAME} only for agents that are still running; a queued message is delivered in the worker's next model round and does not interrupt its current work. ` : ''}${forkEnabled ? 'Each fresh Agent invocation with a subagent_type starts without context; provide a complete task description.' : 'Each Agent invocation starts fresh; provide a complete task description.'}
+- Trust but verify: an agent's summary describes what it intended to do, not necessarily what it did. When an agent writes or edits code, check the actual changes before reporting the work as done.
 - Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.)${forkEnabled ? '' : ', since it is not aware of the user\'s intent'}.
 - If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
-- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks${isGPTPromptStyle ? ', each with run_in_background: true' : ''}. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls${isGPTPromptStyle ? ', each with run_in_background: true' : ''}.
+- If the user specifies that they want you to run agents "in parallel", you MUST send a single message with multiple ${AGENT_TOOL_NAME} tool use content blocks. For example, if you need to launch both a build-validator agent and a test-runner agent in parallel, send a single message with both tool calls.
 - You can optionally set \`isolation: "worktree"\` to run the agent in a temporary git worktree, giving it an isolated copy of the repository. The worktree is automatically cleaned up if the agent makes no changes; if changes are made, the worktree path and branch are returned in the result.${
     process.env.USER_TYPE === 'ant'
       ? `\n- You can set \`isolation: "remote"\` to run the agent in a remote CCR environment. This is always a background task; you'll be notified when it completes. Use for long-running tasks that need a fresh sandbox.`
@@ -438,7 +336,5 @@ ${canStopTask ? `- To stop a running background agent, use ${TASK_STOP_TOOL_NAME
         ? `
 - The name, team_name, and mode parameters are not available in this context — teammates cannot spawn other teammates. Omit them to spawn a subagent.`
         : ''
-  }${whenToForkSection}${writingThePromptSection}
-
-${forkEnabled ? forkExamples : currentExamples}`
+  }${whenToForkSection}${writingThePromptSection}${forkEnabled ? `\n\n${forkExamples}` : ''}`
 }

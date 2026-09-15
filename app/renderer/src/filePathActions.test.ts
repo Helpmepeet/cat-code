@@ -43,6 +43,32 @@ test('resolveFilePathParts preserves literal hash and question-mark characters',
   })
 })
 
+test('resolveFilePathParts preserves absolute URL targets for absolute copy', () => {
+  const url =
+    'https://commander-promote-mathematical-convenience.trycloudflare.com'
+  expect(
+    resolveFilePathParts({
+      rawPath: url,
+      cwd: '/Users/pt/cat-code',
+    }),
+  ).toMatchObject({
+    cleanPath: url,
+    absolutePath: url,
+    lineSuffix: null,
+  })
+
+  const urlWithPort = `${url}:8443`
+  expect(
+    resolveFilePathParts({
+      rawPath: urlWithPort,
+      cwd: '/Users/pt/cat-code',
+    }),
+  ).toMatchObject({
+    cleanPath: urlWithPort,
+    lineSuffix: null,
+  })
+})
+
 test('extractLineSuffix finds trailing line numbers', () => {
   expect(extractLineSuffix('src/foo.ts')).toBeNull()
   expect(extractLineSuffix('src/foo.ts:42')).toBe(':42')

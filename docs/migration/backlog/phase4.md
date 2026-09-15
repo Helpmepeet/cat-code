@@ -26,6 +26,13 @@ self-contained. Respect the dependency note. When done, flip the session's row i
 (✅ + date + one-line note) as the last step.
 
 ## Standing rules (apply to every session below)
+
+**2026-09-12 skill retirement:** older session blocks below refer to
+`verifying-cat-code-changes` and its report templates. That skill is retired.
+Use `CLAUDE.md` §3 for current checks and the retained migration skill for
+visual acceptance. Preserve the required evidence and acceptance outcomes;
+the retired skill invocation and literal report templates no longer apply.
+Include this amendment when dispatching an older session block.
 - **Step 0 — read your surface's row in `docs/migration/INVENTORY.md` (§W4 / §W4-Settings /
   §W5)**: disposition (`port`/`adapt`/`build-new`), ⚓ grounding, `Faked?` spec ID. The row is
   your marching orders; don't re-derive the approach. **⚓❌ / low-⚓ = do source-recon FIRST**

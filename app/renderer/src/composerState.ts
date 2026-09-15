@@ -37,6 +37,11 @@ import {
   ACCEPTED_IMAGE_TYPES,
   type AcceptedImageType,
 } from './imageAttachment.js'
+import {
+  reducePromptDrafts,
+  selectPromptDraft,
+  type PromptDraftState,
+} from './appModel.js'
 
 // ── @-mention ──────────────────────────────────────────────────────────────
 
@@ -120,6 +125,55 @@ export function createImageAttachmentState(): ImageAttachmentState {
   return {}
 }
 
+/**
+ * A native-picker file selection is an opaque main-issued token, not a path.
+ * Main resolves it into the engine's normal `@` attachment syntax immediately
+ * before forwarding the submit, so the renderer cannot name filesystem targets.
+ */
+export type FileAttachment = {
+  name: string
+  token: string
+}
+
+export type FileAttachmentState = Partial<Record<SessionId, FileAttachment>>
+
+export function createFileAttachmentState(): FileAttachmentState {
+  return {}
+}
+
+export function selectFileAttachment(
+  state: FileAttachmentState,
+  sessionId: SessionId | null,
+): FileAttachment | null {
+  return sessionId ? (state[sessionId] ?? null) : null
+}
+
+export function reduceFileAttachmentSelected(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+  attachment: FileAttachment,
+): FileAttachmentState {
+  return { ...state, [sessionId]: attachment }
+}
+
+export function reduceFileAttachmentRemoved(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+): FileAttachmentState {
+  if (!(sessionId in state)) return state
+  const next = { ...state }
+  delete next[sessionId]
+  return next
+}
+
+export function reduceSessionFileAttachmentRestored(
+  state: FileAttachmentState,
+  sessionId: SessionId,
+  attachment: FileAttachment | null | undefined,
+): FileAttachmentState {
+  return attachment ? reduceFileAttachmentSelected(state, sessionId, attachment) : state
+}
+
 export function selectImageAttachments(
   state: ImageAttachmentState,
   sessionId: SessionId | null,
@@ -134,7 +188,7 @@ export function reduceImageAttachmentAdded(
 ): ImageAttachmentState {
   const current = selectImageAttachments(state, sessionId)
   const id = (current.at(-1)?.id ?? 0) + 1
-  return { ...state, [sessionId]: [{ ...attachment, id }] }
+  return { ...state, [sessionId]: [...current, { ...attachment, id }] }
 }
 
 export function reduceImageAttachmentRemoved(
@@ -693,6 +747,61 @@ export function selectComposerGate(input: ComposerGateInput): ComposerGate {
 }
 
 /**
+ * The editable composer's prompt, addressed to the session by its own name
+ * (PEER-SESSIONS §6). One function rather than a ternary at the call site so the
+ * unnamed fallback is the ORIGINAL string byte for byte, and a test can hold it
+ * to that: a row with no name is every row that predates the field, so the
+ * fallback is the common case for existing installs, not an edge.
+ *
+ * The doc's example copy ("Message Bear", replacing "Message Cat Code") does not
+ * describe this app: `Message Cat Code` exists only in a test fixture. The shape
+ * below is the real one it replaces, with the name in place of the product.
+ */
+export function composerPromptPlaceholder(name: string | null): string {
+  const trimmed = name?.trim() ?? ''
+  return trimmed.length > 0
+    ? `Ask ${trimmed} anything or describe a task…`
+    : 'Ask Cat Code anything or describe a task…'
+}
+
+/**
+ * The same placeholder, split so the NAME can carry the peer colour (operator,
+ * 2026-09-05).
+ *
+ * Tinting this session's own name is deliberate and is what the colour means:
+ * it marks the PEER NAMESPACE, not "somebody else". Your session has a peer
+ * name as much as any other does, and this is the one place that name is
+ * addressed to you, so the colour says "this is the name peers reach you by".
+ *
+ * Null when there is no name to tint. The unnamed fallback stays the ORIGINAL
+ * string byte for byte and untinted, because "Cat Code" is the product, not a
+ * peer name; `composerPromptPlaceholder` remains the single owner of both
+ * strings, so the two can never drift apart.
+ */
+export type ComposerPlaceholderParts = {
+  lead: string
+  name: string
+  tail: string
+}
+
+export function composerPlaceholderParts(
+  name: string | null,
+): ComposerPlaceholderParts | null {
+  const trimmed = name?.trim() ?? ''
+  if (trimmed.length === 0) return null
+  const whole = composerPromptPlaceholder(trimmed)
+  const at = whole.indexOf(trimmed)
+  // Defensive: if the name is somehow not in the string the wording owns, the
+  // caller renders the plain string rather than a mis-split one.
+  if (at < 0) return null
+  return {
+    lead: whole.slice(0, at),
+    name: trimmed,
+    tail: whole.slice(at + trimmed.length),
+  }
+}
+
+/**
  * Whether a submit the user did not type can be sent right now: the donut's
  * Compact row, which puts `/compact` on the wire without going through the draft.
  *
@@ -779,6 +888,7 @@ export function planSessionSubmit(input: {
 export type PendingSubmit = {
   text: string
   images?: ImageAttachment[]
+  file?: FileAttachment | null
   showQueuedRow: boolean
 }
 export type PendingSubmitState = Record<SessionId, PendingSubmit>
@@ -933,6 +1043,9 @@ export type RetainedSubmit = {
   submitId: string
   text: string
   images: ImageAttachment[]
+  file?: FileAttachment | null
+  settlement?: 'refused'
+  restored?: true
 }
 
 /**
@@ -1051,7 +1164,7 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
 
 /**
  * Resolve a whole arrival batch against the retained copies: the state after it,
- * plus the messages that must go back into a composer, in arrival order.
+ * plus messages that can go back into a composer in original submit order.
  *
  * Batch-shaped rather than frame-shaped so the pairing is testable against a
  * REALISTIC stream. The defects this replaces were invisible to a test that
@@ -1059,8 +1172,13 @@ export function selectSubmitAnswer(frame: ServerFrame): SubmitAnswer | null {
  * result, a staged snapshot, a turn bracket) flowed past the retained copies
  * ahead of the frame that actually answered one.
  *
- * An answer for an id this page is not holding is a no-op, which is what makes a
- * replayed `submit.result` inert after a reload.
+ * Every newly known refusal is released immediately. Refused entries stay in
+ * the ordered queue (marked `restored`) until the other outstanding answers
+ * arrive, allowing a later batch to emit the complete refused sequence in
+ * submission order. App replaces its previously inserted prefix with that
+ * sequence instead of prepending it again. An answer for an id this page is not
+ * holding is a no-op, which makes a replayed `submit.result` inert after a
+ * reload.
  */
 export function reduceSubmitAnswers(
   state: RetainedSubmitState,
@@ -1071,15 +1189,124 @@ export function reduceSubmitAnswers(
 } {
   let next = state
   const restored: { sessionId: SessionId; retained: RetainedSubmit }[] = []
+  const touchedSessions = new Set<SessionId>()
   for (const frame of frames) {
     const answer = selectSubmitAnswer(frame)
     if (answer === null) continue
     const retained = selectRetainedSubmit(next, frame.sessionId, answer.submitId)
     if (retained === null) continue
-    next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
-    if (!answer.accepted) restored.push({ sessionId: frame.sessionId, retained })
+    if (retained.settlement !== undefined) continue
+    touchedSessions.add(frame.sessionId)
+    if (answer.accepted) {
+      next = reduceRetainedSubmitSettled(next, frame.sessionId, answer.submitId)
+      continue
+    }
+    next = {
+      ...next,
+      [frame.sessionId]: (next[frame.sessionId] ?? []).map(entry =>
+        entry.submitId === answer.submitId
+          ? { ...entry, settlement: 'refused' as const }
+          : entry,
+      ),
+    }
+  }
+  for (const sessionId of touchedSessions) {
+    const entries = next[sessionId] ?? []
+    if (!entries.some(entry => entry.settlement === 'refused' && !entry.restored)) {
+      if (
+        entries.length > 0 &&
+        entries.every(entry => entry.settlement === 'refused')
+      ) {
+        next = reduceRetainedSubmitCleared(next, sessionId)
+      }
+      continue
+    }
+    for (const entry of entries) {
+      if (entry.settlement !== 'refused') continue
+      const { settlement: _, restored: __, ...retained } = entry
+      restored.push({ sessionId, retained })
+    }
+    const marked = entries.map(entry =>
+      entry.settlement === 'refused' ? { ...entry, restored: true as const } : entry,
+    )
+    next = marked.every(entry => entry.settlement === 'refused')
+      ? reduceRetainedSubmitCleared(next, sessionId)
+      : { ...next, [sessionId]: marked }
   }
   return { state: next, restored }
+}
+
+/** Replace App's exact prior refusal prefix while preserving later live edits. */
+export type RefusedDraftRestoreState = {
+  prefix: string
+  representedIds: readonly string[]
+  submitIds: readonly string[]
+}
+
+export function restoreDraftWithRefusedSnapshot(
+  draft: string,
+  previous: RefusedDraftRestoreState | null,
+  refused: readonly RetainedSubmit[],
+): { draft: string; state: RefusedDraftRestoreState; retained: readonly RetainedSubmit[] } {
+  let liveDraft = draft
+  const previousIntact = previous !== null && (
+    draft === previous.prefix || draft.startsWith(`${previous.prefix}\n`)
+  )
+  if (previousIntact) {
+    liveDraft = draft === previous.prefix
+      ? ''
+      : draft.slice(previous.prefix.length + 1)
+  }
+  const previousIds = new Set(previous?.submitIds ?? [])
+  const newlyRefused = refused.filter(entry => !previousIds.has(entry.submitId))
+  const representedIds = new Set(
+    previousIntact ? previous?.representedIds : [],
+  )
+  for (const entry of newlyRefused) representedIds.add(entry.submitId)
+  const represented = refused.filter(entry => representedIds.has(entry.submitId))
+  const prefix = represented.map(entry => entry.text).filter(Boolean).join('\n')
+  return {
+    draft: restoreDraftWithPending(liveDraft, prefix),
+    state: {
+      prefix,
+      representedIds: represented.map(entry => entry.submitId),
+      submitIds: [...previousIds, ...newlyRefused.map(entry => entry.submitId)],
+    },
+    retained: newlyRefused,
+  }
+}
+
+export function applyRefusedSubmitRestoration(
+  drafts: PromptDraftState,
+  recovery: ReadonlyMap<SessionId, RefusedDraftRestoreState>,
+  sessionId: SessionId,
+  refused: readonly RetainedSubmit[],
+): {
+  drafts: PromptDraftState
+  recovery: Map<SessionId, RefusedDraftRestoreState>
+  images: readonly ImageAttachment[] | null
+  file: FileAttachment | null
+} {
+  const restored = restoreDraftWithRefusedSnapshot(
+    selectPromptDraft(drafts, sessionId),
+    recovery.get(sessionId) ?? null,
+    refused,
+  )
+  const nextRecovery = new Map(recovery)
+  nextRecovery.set(sessionId, restored.state)
+  const newlyRefusedIds = new Set(restored.retained.map(entry => entry.submitId))
+  const imageWinner = [...refused].reverse().find(entry => entry.images.length > 0)
+  const fileWinner = [...refused].reverse().find(entry => entry.file != null)
+  return {
+    drafts: reducePromptDrafts(drafts, sessionId, restored.draft),
+    recovery: nextRecovery,
+    images: imageWinner && newlyRefusedIds.has(imageWinner.submitId)
+      ? imageWinner.images
+      : null,
+    file: fileWinner && newlyRefusedIds.has(fileWinner.submitId)
+      ? (fileWinner.file ?? null)
+      : null,
+  }
 }
 
 // ── The messages a recall takes back (D1b) ───────────────────────────────────
@@ -1093,20 +1320,16 @@ export function reduceSubmitAnswers(
  * is a pure function so the outcome is testable without driving the composer,
  * which the SSR-only renderer harness cannot do.
  *
- * Text joins across every recalled message; images do NOT. The composer holds
- * exactly one image at a time (`reduceImageAttachmentAdded` replaces the whole
- * array with a single element) and the submit schema caps base64 as a TOTAL
- * across the prompt, so restoring one image per recalled message would build a
- * draft the sidecar then refuses, which the refusal path restores again: the
- * user cannot send and cannot easily clear. The most recent image wins, which
- * is what attaching them one after another would have produced anyway.
+ * Text joins across every recalled message. Every image is restored in
+ * prompt/message order with a fresh composer-local id, matching sequential
+ * attachments in the current composer.
  */
 export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
   text: string
   images: ImageAttachment[]
 } {
   const texts: string[] = []
-  let lastImage: ImageAttachment | null = null
+  const images: ImageAttachment[] = []
   for (const { prompt } of prompts) {
     if (typeof prompt === 'string') {
       if (prompt.length > 0) texts.push(prompt)
@@ -1118,13 +1341,13 @@ export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
         continue
       }
       if (block.type === 'image') {
-        lastImage = {
-          id: 1,
+        images.push({
+          id: images.length + 1,
           mediaType: block.source.media_type,
           data: block.source.data,
           // The sent message carries no filename; only the picker ever had one.
           name: 'image',
-        }
+        })
         continue
       }
       // Closed union tripwire: a third block kind must be handled here rather
@@ -1134,7 +1357,7 @@ export function foldRecalledPrompts(prompts: readonly RecalledPrompt[]): {
       void exhaustive
     }
   }
-  return { text: texts.join('\n'), images: lastImage ? [lastImage] : [] }
+  return { text: texts.join('\n'), images }
 }
 
 // ── Per-session transport error ──────────────────────────────────────────────

@@ -65,7 +65,7 @@ Raw tokens are available as CSS variables for cases a utility cannot express, in
 **Lifecycle and ownership are two independent axes, and they must not be merged.**
 
 `AgentPip` and `AgentStateLabel` say what a worker is *doing*. `Baton` says who must act
-*next*. A worker blocked on a question is neutral purple while an orchestrator can pick it up,
+*next*. A worker blocked on a question is neutral purple while the assistant can pick it up,
 and amber only when nobody but the human can. Do not colour a row amber just because it is
 blocked, and do not use the pip to signal that someone is needed.
 

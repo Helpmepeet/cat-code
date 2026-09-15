@@ -10,6 +10,7 @@ import {
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
+  deleteFileWithVerifiedIdentity,
   getFileIdentity,
   writeTextContentWithVerifiedIdentity,
 } from './file.js'
@@ -70,7 +71,7 @@ describe('verified whole-file writes', () => {
     const filePath = join(tmpDir, 'appeared-after-check.txt')
     writeFileSync(filePath, 'unread content\n')
 
-    expect(() =>
+    expect(
       writeTextContentWithVerifiedIdentity(
         filePath,
         'replacement\n',
@@ -78,7 +79,26 @@ describe('verified whole-file writes', () => {
         'LF',
         undefined,
       ),
-    ).toThrow(/EEXIST/)
+    ).toBe(false)
     expect(readFileSync(filePath, 'utf8')).toBe('unread content\n')
+  })
+
+  test('refuses to delete a replacement with the old identity', async () => {
+    const filePath = join(tmpDir, 'replacement-before-delete.txt')
+    writeFileSync(filePath, 'authorized original\n')
+    const identity = getFileIdentity(filePath)
+    writeFileSync(filePath, 'replacement\n')
+
+    expect(await deleteFileWithVerifiedIdentity(filePath, identity)).toBe(false)
+    expect(readFileSync(filePath, 'utf8')).toBe('replacement\n')
+  })
+
+  test('deletes the exact identity that was authorized', async () => {
+    const filePath = join(tmpDir, 'authorized-delete.txt')
+    writeFileSync(filePath, 'authorized original\n')
+    const identity = getFileIdentity(filePath)
+
+    expect(await deleteFileWithVerifiedIdentity(filePath, identity)).toBe(true)
+    expect(() => readFileSync(filePath, 'utf8')).toThrow()
   })
 })

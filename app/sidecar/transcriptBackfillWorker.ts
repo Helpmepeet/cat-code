@@ -35,10 +35,18 @@ import {
 import { checkJsonSafe, omitUndefinedObjectProperties } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
+import {
+  bootstrapWorkerEngine,
+  emitWorkerRecord,
+  errorText,
+  runDisposableWorker,
+} from './workerRuntime.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
 // imported. conversationRecovery always calls processSessionStartHooks('resume'),
 // whose first branch returns [] under this flag, before user/plugin hook loading.
+// `workerRuntime.js` above is engine-free by contract, so importing it does not
+// pre-empt this.
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
@@ -61,8 +69,6 @@ async function main(): Promise<void> {
     { loadDisplayTranscriptFromJsonlPath },
     { mergeDisplayHistoryWithSeed, projectResumedHistory },
     { createMessageEvent },
-    { ensureEngineMacro },
-    { enableConfigs },
     { getContextWindowForModel },
     { withRestoredSubagentHistory },
   ] = await Promise.all([
@@ -71,20 +77,10 @@ async function main(): Promise<void> {
     import('../../src/utils/sessionStorage.js'),
     import('./historyProjection.js'),
     import('../../src/app-runtime/sessionEvents.js'),
-    import('./initializeRuntime.js'),
-    import('../../src/utils/config.js'),
     import('../../src/utils/context.js'),
     import('./subagentHistory.js'),
   ])
-  // OBSERVATION-ONLY BOOTSTRAP, same reasoning as `accountsPoolWorker.ts`: the
-  // full `init()` this used to run fires `void initAccountPool()`
-  // (`src/entrypoints/init.ts:86-90`), which starts periodic token refresh, a
-  // 1-second quarantine probe, and a usage POST with real OAuth tokens — none of
-  // which a transcript read needs, and any of which the unconditional
-  // `process.exit(0)` below can hard-kill mid-write. Reading transcripts needs
-  // the MACRO shim plus config reads and nothing else.
-  ensureEngineMacro()
-  enableConfigs()
+  await bootstrapWorkerEngine()
 
   // The engine's OWN window lookup, the same call the live donut's number comes
   // from (`src/cost-tracker.ts:107`), rather than a second window table in the
@@ -289,16 +285,11 @@ function buildBoundedFrames(
 }
 
 function emit(result: TranscriptBackfillResult): Promise<void> {
-  const line = JSON.stringify(result)
-  if (Buffer.byteLength(line, 'utf8') > MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES) {
-    throw new Error('backfill result exceeds record limit')
-  }
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${line}\n`, error => {
-      if (error) reject(error)
-      else resolve()
-    })
-  })
+  return emitWorkerRecord(
+    result,
+    MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES,
+    'backfill result',
+  )
 }
 
 async function readBoundedStdin(): Promise<string> {
@@ -325,11 +316,4 @@ function failureIdentity(item: {
   }
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-void main().catch(error => {
-  process.stderr.write(`[backfill-worker] fatal: ${errorText(error)}\n`)
-  process.exit(1)
-})
+runDisposableWorker('backfill-worker', main)

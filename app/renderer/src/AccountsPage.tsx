@@ -21,11 +21,6 @@
  * usage-history data source/session. This page ships the real spine: pool table
  * + lifecycle verbs + active headroom, all from the redacted `AccountsSnapshot`.
  *
- * §0 DATA GAP (rendered faithfully, not faked): the prototype shows a per-window
- * reset under each headroom bar (`fiveHourReset`/`weeklyReset`). The wire carries
- * ONE `usageResetAt` (the primary/5h window), so the ↺-reset indicator is shown
- * only on the 5h bar and left blank on the weekly bar — never invented.
- *
  * Writes go ONLY through the `onVerb` prop. Session-local verbs use the HC3
  * `accountVerb` channel; destructive profile deletion uses the fixed
  * session-independent host sender and a one-shot engine worker. Both re-resolve
@@ -655,7 +650,12 @@ function PoolRow({
             resetAt={account.usageResetAt}
             showReset
           />
-          <HeadroomBar label="wk" pct={account.usageWeekly} resetAt={null} showReset />
+          <HeadroomBar
+            label="wk"
+            pct={account.usageWeekly}
+            resetAt={account.usageWeeklyResetAt}
+            showReset
+          />
         </div>
       ) : (
         <div className="flex-1 text-[11px] text-text-faint">
@@ -688,7 +688,7 @@ function ActiveHeadroom({ account }: { account: AccountStatus }) {
         {(
           [
             ['5h', account.usagePrimary, account.usageResetAt],
-            ['Weekly', account.usageWeekly, null],
+            ['Weekly', account.usageWeekly, account.usageWeeklyResetAt],
           ] as const
         ).map(([k, pct, resetAt]) => {
           const t = toneClasses(usageTone(pct))

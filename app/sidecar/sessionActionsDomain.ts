@@ -89,8 +89,9 @@ export type SessionActionsExecutor = {
   export(): Promise<string | null>
   /** Fork the whole conversation at HEAD; return the new session id + title. */
   branch(): Promise<{ engineSessionId: string; title: string; forkPath: string }>
-  /** Rewind before an engine-resolved user message. */
+  /** Look up an engine-resolved user message; does not change the transcript. */
   selectUserMessage(userMessageId: string): UserMessage
+  /** Rewind to before an engine-resolved user message. */
   editFromMessage(
     userMessageId: string,
   ): Promise<{ prompt: UserMessage; retainedMessages: Message[] }>
@@ -198,8 +199,9 @@ export type SidecarSessionActionsDomain = {
   export(): Promise<SessionActionResult>
   /** Fork the conversation at HEAD; report the new engine session id. */
   branch(): Promise<SessionActionResult>
-  /** Rewind before a selected user message and return its raw prompt. */
+  /** Look up a selected user message and return its raw prompt. */
   selectUserMessage(userMessageId: string): SessionActionResult
+  /** Rewind to before a selected user message. */
   editFromMessage(userMessageId: string): Promise<SessionActionResult>
   /** Fork before a selected user message and return its raw prompt. */
   branchFromMessage(userMessageId: string): Promise<SessionActionResult>

@@ -39,6 +39,10 @@ import {
   CodexWebSocketUsageLimitError,
   CodexWebSocketAuthError,
 } from './codex-websocket-transport.js'
+import {
+  CODEX_ACCOUNT_LIMIT_ERROR_CODES,
+  isCodexAuthErrorCode,
+} from './codexErrorCodes.js'
 import { notifyStaleResponseIdRetry } from './promptCacheBreakDetection.js'
 import {
   recordCodexRequestStart,
@@ -55,10 +59,9 @@ import {
   withSuppressedNormalizeSideEffects,
 } from '../../utils/api.js'
 import { getAllBaseTools } from '../../tools.js'
+import { isFilePatchToolName } from '../../tools/FilePatchTool/constants.js'
 import { findToolByName } from '../../Tool.js'
 import { safeParseJSON } from '../../utils/json.js'
-
-const APPLY_PATCH_TOOL_NAME = 'Apply_patch'
 
 // ── Session-level IDs for cache routing ───────────────────────────────
 // OpenAI's ChatGPT backend uses these headers to route requests to the
@@ -373,32 +376,28 @@ type CodexResponseFailure = {
 
 export class CodexResponseFailedError extends Error {
   constructor(public readonly failure: CodexResponseFailure) {
-    super(`Codex response.failed (${failure.code}): ${failure.message}`)
+    const responseEventType =
+      failure.type === 'response.incomplete'
+        ? 'response.incomplete'
+        : 'response.failed'
+    super(`Codex ${responseEventType} (${failure.code}): ${failure.message}`)
     this.name = 'CodexResponseFailedError'
   }
 }
 
-const CODEX_ACCOUNT_LIMIT_ERROR_CODES = new Set([
-  'usage_limit_reached',
-  'rate_limit_exceeded',
-  'quota_exceeded',
-  'insufficient_quota',
-  'usage_not_included',
-])
-
-// Structured auth-failure codes (mirrors CODEX_ACCOUNT_LIMIT_ERROR_CODES for the
-// revoked-auth path). Substring text matching (codexErrorTextIndicatesRevokedAuth)
-// missed `token_invalidated` — the server code emitted when a token is superseded
-// by a re-login — so a 401 bypassed CodexAccountAuthError and all of withRetry's
-// auth recovery. Structured-code match is authoritative; text stays as a fallback.
-// The WS transport keeps its own local mirror (isAuthTokenRejection) because it
-// cannot import this module (the adapter imports the transport). Keep in sync.
-const CODEX_ACCOUNT_AUTH_ERROR_CODES = new Set([
-  'token_invalidated',
-  'token_expired',
-  'token_revoked',
-  'invalid_token',
-])
+export class CodexResponseIncompleteError extends CodexResponseFailedError {
+  constructor(public readonly reason: string) {
+    super({
+      code: 'response_incomplete',
+      message:
+        reason === 'unknown'
+          ? 'Codex response did not complete'
+          : `Codex response did not complete: ${reason}`,
+      type: 'response.incomplete',
+    })
+    this.name = 'CodexResponseIncompleteError'
+  }
+}
 
 /**
  * Text of a Codex message content part, or undefined when the part carries none.
@@ -478,8 +477,8 @@ function codexHttpAuthStatus(
 }
 
 function codexHttpHeadersIndicateRevokedAuth(headers: Headers): boolean {
-  const code = headers.get('x-openai-ide-error-code')?.trim().toLowerCase()
-  return code !== undefined && CODEX_ACCOUNT_AUTH_ERROR_CODES.has(code)
+  const code = headers.get('x-openai-ide-error-code')?.trim()
+  return code !== undefined && isCodexAuthErrorCode(code)
 }
 
 function classifyCodexHttpAccountError(
@@ -543,7 +542,7 @@ function codexResponseFailureIndicatesAccountCap(
 function codexResponseFailureIndicatesRevokedAuth(
   failure: CodexResponseFailure,
 ): boolean {
-  return CODEX_ACCOUNT_AUTH_ERROR_CODES.has(failure.code.toLowerCase())
+  return isCodexAuthErrorCode(failure.code)
 }
 
 function createCodexResponseFailedError(
@@ -583,6 +582,18 @@ function createCodexResponseFailedError(
   return new CodexResponseFailedError(failure)
 }
 
+function createCodexResponseIncompleteError(
+  event: Record<string, unknown>,
+): CodexResponseIncompleteError {
+  const response = isRecord(event.response) ? event.response : undefined
+  const details = isRecord(response?.incomplete_details)
+    ? response.incomplete_details
+    : undefined
+  return new CodexResponseIncompleteError(
+    readNonEmptyString(details?.reason) ?? 'unknown',
+  )
+}
+
 function createRetryableCodexHttpError(status: number, body: string): APIConnectionError {
   return new APIConnectionError({
     message: `Codex API error (${status}): ${body}`,
@@ -591,6 +602,7 @@ function createRetryableCodexHttpError(status: number, body: string): APIConnect
 
 // ── Available Codex models ──────────────────────────────────────────
 export const CODEX_MODELS = [
+  { id: 'gpt-6-astra', label: 'GPT-6 Astra', description: 'GPT-6 Astra' },
   { id: 'gpt-5.6-sol', label: 'GPT-5.6 Sol', description: 'Frontier model for complex professional work' },
   { id: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', description: 'Balanced agentic coding model (preview)' },
   { id: 'gpt-5.6-luna', label: 'GPT-5.6 Luna', description: 'Fast and affordable agentic coding model (preview)' },
@@ -870,7 +882,7 @@ function canonicalizeToolArgumentsForRecord(
 }
 
 /**
- * Canonicalizes the structured JSON arm of Apply_patch custom-tool input.
+ * Canonicalizes the structured JSON arm of apply_patch custom-tool input.
  * Decode stores valid JSON objects structurally and replay compacts them with
  * JSON.stringify; doing the same at record time removes whitespace drift. Raw
  * non-JSON patch envelopes must remain byte-identical for executable handoff.
@@ -879,7 +891,7 @@ function canonicalizeCustomToolInputForRecord(
   toolName: unknown,
   rawInput: unknown,
 ): unknown {
-  if (toolName !== APPLY_PATCH_TOOL_NAME || typeof rawInput !== 'string') {
+  if (!isFilePatchToolName(toolName) || typeof rawInput !== 'string') {
     return rawInput
   }
 
@@ -959,7 +971,7 @@ export function canonicalizeCodexItem(
 registerOutputItemCanonicalizer(canonicalizeCodexItem)
 
 /**
- * Recovers the raw custom_tool_call `input` string for an Apply_patch tool_use
+ * Recovers the raw custom_tool_call `input` string for an apply_patch tool_use
  * so replay matches the server-recorded custom_tool_call baseline.
  *
  * The transcript stores Apply_patch input as a union (see FilePatchTool/types.ts
@@ -1282,8 +1294,8 @@ function translateMessages(
           if (typeof block.name === 'string' && block.name.length > 0) {
             toolNameByCallId.set(callId, block.name)
           }
-          if (block.name === APPLY_PATCH_TOOL_NAME) {
-            // The server ALWAYS records Apply_patch as a custom_tool_call (it is
+          if (typeof block.name === 'string' && isFilePatchToolName(block.name)) {
+            // The server ALWAYS records apply_patch as a custom_tool_call (it is
             // a custom lark-grammar tool). Emit custom_tool_call unconditionally
             // so replay matches the recorded baseline (previously this only fired
             // when block.input was still a string, causing type_mismatch since
@@ -1483,6 +1495,7 @@ export function mapEffortToCodex(
   if (e === 'low' || e === 'medium' || e === 'high' || e === 'xhigh') return e
   if (e === 'minimal') {
     const model = codexModel.toLowerCase()
+    if (model === 'gpt-6-astra') return 'low'
     // Cat Code's `minimal` means disabled thinking. GPT-5.6 models expose
     // `none`, which preserves the former GPT-5.4 Mini low-latency path.
     if (model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna') return 'none'
@@ -1490,7 +1503,12 @@ export function mapEffortToCodex(
   }
   if (e === 'max') {
     const model = codexModel.toLowerCase()
-    return model === 'gpt-5.6-sol' || model === 'gpt-5.6-terra' || model === 'gpt-5.6-luna'
+    return (
+      model === 'gpt-5.6-sol' ||
+      model === 'gpt-5.6-terra' ||
+      model === 'gpt-5.6-luna' ||
+      model === 'gpt-6-astra'
+    )
       ? 'max'
       : model.includes('codex')
         ? 'xhigh'
@@ -1589,9 +1607,16 @@ function formatSSE(event: string, data: string): string {
  */
 const CODEX_HTTP_IDLE_TIMEOUT_PREFIX = 'Codex stream idle timeout after '
 
+class CodexHttpStreamEndedBeforeCompletedError extends APIConnectionError {
+  constructor() {
+    super({ message: 'Codex HTTP stream ended before response.completed' })
+    this.name = 'CodexHttpStreamEndedBeforeCompletedError'
+  }
+}
+
 /**
  * Parses an HTTP SSE Response body into an async iterable of event objects.
- * Each yielded object is the parsed JSON from a `data: ...` SSE line.
+ * Each yielded object is the parsed JSON from one complete SSE event.
  */
 async function* httpSseToEvents(
   codexResponse: Response,
@@ -1601,7 +1626,7 @@ async function* httpSseToEvents(
     parseInt(process.env.CLAUDE_STREAM_IDLE_TIMEOUT_MS || '', 10) || 90_000
 
   const reader = codexResponse.body?.getReader()
-  if (!reader) return
+  if (!reader) throw new CodexHttpStreamEndedBeforeCompletedError()
 
   let idleTimer: ReturnType<typeof setTimeout> | null = null
   let streamError: Error | null = null
@@ -1633,6 +1658,8 @@ async function* httpSseToEvents(
 
   const decoder = new TextDecoder()
   let buffer = ''
+  let dataLines: string[] = []
+  let discardLeadingLf = false
 
   try {
     if (signal?.aborted) abortReader()
@@ -1641,28 +1668,76 @@ async function* httpSseToEvents(
     while (true) {
       const { done, value } = await reader.read()
       if (streamError) throw streamError
-      if (done) break
+      if (done) {
+        // A line-terminated final data field can still be parsed without a
+        // blank separator. Non-terminal EOF fails below.
+        if (buffer === '' && dataLines.length > 0) {
+          const dataStr = dataLines.join('\n')
+          if (dataStr !== '[DONE]') {
+            let event: Record<string, unknown> | undefined
+            try { event = JSON.parse(dataStr) } catch {}
+            if (event?.type === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
+            }
+            if (event) {
+              yield event
+              if (event.type === 'response.completed' || event.type === 'response.failed') return
+            }
+          }
+        }
+        throw new CodexHttpStreamEndedBeforeCompletedError()
+      }
       resetIdleTimer()
 
       buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
+      while (buffer.length > 0) {
+        if (discardLeadingLf) {
+          if (buffer.startsWith('\n')) buffer = buffer.slice(1)
+          discardLeadingLf = false
+          if (buffer.length === 0) break
+        }
 
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed || trimmed.startsWith('event: ')) continue
-        if (!trimmed.startsWith('data: ')) continue
-        const dataStr = trimmed.slice(6)
+        const lineEnd = buffer.search(/[\r\n]/)
+        if (lineEnd === -1) break
+
+        const delimiter = buffer[lineEnd]
+        const line = buffer.slice(0, lineEnd)
+        buffer = buffer.slice(lineEnd + 1)
+        discardLeadingLf = delimiter === '\r'
+
+        if (line !== '') {
+          if (line.startsWith(':')) continue
+          const colon = line.indexOf(':')
+          const field = colon === -1 ? line : line.slice(0, colon)
+          let fieldValue = colon === -1 ? '' : line.slice(colon + 1)
+          if (fieldValue.startsWith(' ')) fieldValue = fieldValue.slice(1)
+          if (field === 'data') dataLines.push(fieldValue)
+          continue
+        }
+
+        if (dataLines.length === 0) continue
+        const dataStr = dataLines.join('\n')
+        dataLines = []
         if (dataStr === '[DONE]') continue
 
         let event: Record<string, unknown>
         try { event = JSON.parse(dataStr) } catch { continue }
+        if (event.type === 'response.incomplete') {
+          throw createCodexResponseIncompleteError(event)
+        }
         yield event
+        // The protocol terminal event decides completion. Waiting for socket
+        // EOF can time out a response that has already completed successfully.
+        if (event.type === 'response.completed' || event.type === 'response.failed') return
       }
     }
   } finally {
     clearIdleTimer()
     signal?.removeEventListener('abort', abortReader)
+    // Closing a terminal or abandoned iterator must release its HTTP request,
+    // including a response.failed handled by the priming caller.
+    await reader.cancel().catch(() => {})
+    reader.releaseLock()
   }
 }
 
@@ -1799,6 +1874,25 @@ async function processCodexEvents(
   enqueueSse('ping', { type: 'ping' })
 
   let currentTextBlockStarted = false
+
+  /**
+   * Close the open text block, if there is one. Emitting the stop, advancing
+   * contentBlockIndex and clearing the flag have to happen together: seven
+   * paths close the text block, and one that skipped the index advance would
+   * misindex every content block emitted after it. Returns whether a block was
+   * actually closed, which is what the partial-stream seal reports.
+   */
+  const closeOpenTextBlock = (): boolean => {
+    if (!currentTextBlockStarted) return false
+    enqueueSse('content_block_stop', {
+      type: 'content_block_stop',
+      index: contentBlockIndex,
+    })
+    contentBlockIndex++
+    currentTextBlockStarted = false
+    return true
+  }
+
   let syntheticToolCallCounter = 0
   const openToolCallBlocks = new Map<string, OpenToolCallBlock>()
   const toolCallIdsByItemId = new Map<string, string>()
@@ -1888,18 +1982,7 @@ async function processCodexEvents(
   const openReasoningBlock = (kind: 'summary' | 'raw'): ReasoningBlockState => {
     // If a text block is open, close it so the thinking block slots in
     // at the correct ordinal position in content[].
-    if (currentTextBlockStarted) {
-      controller.enqueue(
-        encoder.encode(
-          formatSSE('content_block_stop', JSON.stringify({
-            type: 'content_block_stop',
-            index: contentBlockIndex,
-          })),
-        ),
-      )
-      contentBlockIndex++
-      currentTextBlockStarted = false
-    }
+    closeOpenTextBlock()
     const index = contentBlockIndex
     contentBlockIndex++
     const block: ReasoningBlockState = { index, kind, parts: 0, started: true }
@@ -2074,19 +2157,8 @@ async function processCodexEvents(
                 // Close any open reasoning blocks before tool blocks so
                 // ordinal positions in content[] line up.
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  emittedVisibleOutput = true
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) emittedVisibleOutput = true
+                closeOpenTextBlock()
 
                 const callId =
                   readString(item.call_id) ||
@@ -2293,19 +2365,8 @@ async function processCodexEvents(
                 }
               } else if (item?.type === 'web_search_call') {
                 closeAllOpenReasoningBlocks()
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
 
                 noteVisibleOutput()
                 hadHostedWebSearch = true
@@ -2353,19 +2414,8 @@ async function processCodexEvents(
                     { level: 'warn' },
                   )
                 }
-                if (currentTextBlockStarted) {
-                  noteVisibleOutput()
-                  controller.enqueue(
-                    encoder.encode(
-                      formatSSE('content_block_stop', JSON.stringify({
-                        type: 'content_block_stop',
-                        index: contentBlockIndex,
-                      })),
-                    ),
-                  )
-                  contentBlockIndex++
-                  currentTextBlockStarted = false
-                }
+                if (currentTextBlockStarted) noteVisibleOutput()
+                closeOpenTextBlock()
               } else if (item?.type === 'reasoning') {
                 if (firstReasoningDoneAtMs === null) {
                   firstReasoningDoneAtMs = eventObservedAtMs
@@ -2410,18 +2460,7 @@ async function processCodexEvents(
                 if (encrypted && !targetBlock) {
                   // No visible reasoning was emitted; synthesize a hidden
                   // thinking block to carry the signature for cache replay.
-                  if (currentTextBlockStarted) {
-                    controller.enqueue(
-                      encoder.encode(
-                        formatSSE('content_block_stop', JSON.stringify({
-                          type: 'content_block_stop',
-                          index: contentBlockIndex,
-                        })),
-                      ),
-                    )
-                    contentBlockIndex++
-                    currentTextBlockStarted = false
-                  }
+                  closeOpenTextBlock()
                   noteVisibleOutput({ userVisible: false })
                   controller.enqueue(
                     encoder.encode(
@@ -2468,6 +2507,9 @@ async function processCodexEvents(
                 requestCacheMetadata,
                 emittedVisibleOutput,
               )
+            }
+            else if (eventType === 'response.incomplete') {
+              throw createCodexResponseIncompleteError(event)
             }
             else if (
               eventType === 'response.web_search_call.in_progress' ||
@@ -2548,20 +2590,7 @@ async function processCodexEvents(
         const hadOpenReasoningBlock =
           openSummaryBlock !== null || openRawBlock !== null
         closeAllOpenReasoningBlocks()
-        let sealedPartialText = false
-        if (currentTextBlockStarted) {
-          controller.enqueue(
-            encoder.encode(
-              formatSSE('content_block_stop', JSON.stringify({
-                type: 'content_block_stop',
-                index: contentBlockIndex,
-              })),
-            ),
-          )
-          contentBlockIndex++
-          currentTextBlockStarted = false
-          sealedPartialText = true
-        }
+        const sealedPartialText = closeOpenTextBlock()
         // Drain BEFORE the payload is built. `controller.error()` resets the
         // queue, so until the reader has pulled it the seal is not delivered,
         // and a payload claiming `sealedPartialText` for a chunk that never
@@ -2638,16 +2667,7 @@ async function processCodexEvents(
   }
 
   // Close any remaining open blocks
-  if (currentTextBlockStarted) {
-    controller.enqueue(
-      encoder.encode(
-        formatSSE('content_block_stop', JSON.stringify({
-          type: 'content_block_stop',
-          index: contentBlockIndex,
-        })),
-      ),
-    )
-  }
+  closeOpenTextBlock()
   for (const toolCall of openToolCallBlocks.values()) {
     closeToolCallBlock(controller, encoder, toolCall.index)
   }
@@ -2873,13 +2893,21 @@ export async function translateCodexStreamToAnthropic(
   requestCacheMetadata?: CodexRequestCacheMetadata,
   transportContext?: CodexStreamTransportContext,
 ): Promise<Response> {
+  const abortController = new AbortController()
   return buildAnthropicStreamResponse(
-    httpSseToEvents(codexResponse),
+    httpSseToEvents(codexResponse, abortController.signal),
     codexModel,
     requestCacheMetadata,
     undefined,
     transportContext,
+    reason => abortController.abort(codexStreamCancellationReason(reason)),
   )
+}
+
+function codexStreamCancellationReason(reason: unknown): Error {
+  return reason instanceof Error
+    ? reason
+    : new DOMException('The operation was aborted.', 'AbortError')
 }
 
 function parseAnthropicSseBlocks(
@@ -3041,14 +3069,17 @@ async function* observeCodexResponseId(
   }
 }
 
-function responseFailedErrorForInitialEvent(
+function responseTerminalErrorForInitialEvent(
   event: Record<string, unknown>,
   requestCacheMetadata?: CodexRequestCacheMetadata,
 ): Error | null {
-  if (event.type !== 'response.failed') {
-    return null
+  if (event.type === 'response.failed') {
+    return createCodexResponseFailedError(event, requestCacheMetadata, false)
   }
-  return createCodexResponseFailedError(event, requestCacheMetadata, false)
+  if (event.type === 'response.incomplete') {
+    return createCodexResponseIncompleteError(event)
+  }
+  return null
 }
 
 function codexEventBeginsVisibleOutput(event: Record<string, unknown>): boolean {
@@ -3406,6 +3437,9 @@ function classifyPostVisibleCodexFailure(
   if (error instanceof CodexWebSocketClosedBeforeCompletedError) {
     return { transport: 'websocket', cause: 'closed', transient: true }
   }
+  if (error instanceof CodexHttpStreamEndedBeforeCompletedError) {
+    return { transport: 'http', cause: 'closed', transient: true }
+  }
   if (error instanceof CodexWebSocketServerError) {
     return {
       transport: 'websocket',
@@ -3517,17 +3551,17 @@ async function primeCodexEvents(
 
       lastEventType = typeof next.value.type === 'string' ? next.value.type : null
 
-      const responseFailedError = responseFailedErrorForInitialEvent(
+      const responseTerminalError = responseTerminalErrorForInitialEvent(
         next.value,
         requestCacheMetadata,
       )
-      if (responseFailedError) {
+      if (responseTerminalError) {
         try {
           await iterator.return?.()
         } catch {
-          // Preserve the response.failed error, matching the existing behavior.
+          // Preserve the terminal provider error.
         }
-        throw responseFailedError
+        throw responseTerminalError
       }
 
       bufferedEvents.push(next.value)
@@ -3554,15 +3588,19 @@ async function primeCodexEvents(
 
   return {
     async *[Symbol.asyncIterator]() {
-      for (const event of bufferedEvents) {
-        yield event
-      }
-      while (true) {
-        const next = await iterator.next()
-        if (next.done) {
-          return
+      try {
+        for (const event of bufferedEvents) {
+          yield event
         }
-        yield next.value
+        while (true) {
+          const next = await iterator.next()
+          if (next.done) {
+            return
+          }
+          yield next.value
+        }
+      } finally {
+        await iterator.return?.()
       }
     },
   }
@@ -3768,6 +3806,11 @@ export function createCodexFetch(
       'conversation-id': conversationId,
     }
 
+    const httpAbortController = new AbortController()
+    const httpRequestSignal = init?.signal
+      ? AbortSignal.any([init.signal, httpAbortController.signal])
+      : httpAbortController.signal
+
     const performHttpRequest = async (): Promise<{
       response: Response
       transportContext: CodexStreamTransportContext
@@ -3777,7 +3820,7 @@ export function createCodexFetch(
       try {
         codexResponse = await globalThis.fetch(CODEX_BASE_URL, {
           method: 'POST',
-          signal: init?.signal,
+          signal: httpRequestSignal,
           headers: {
             'Content-Type': 'application/json',
             Accept: 'text/event-stream',
@@ -3868,13 +3911,12 @@ export function createCodexFetch(
         }
         throw createRetryableCodexHttpError(codexResponse.status, errorText)
       }
-      const initialOutputAbortController = new AbortController()
       return {
         events: await primeCodexEvents(
-          httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+          httpSseToEvents(codexResponse, httpAbortController.signal),
           requestCacheMetadata,
           'http',
-          error => initialOutputAbortController.abort(error),
+          error => httpAbortController.abort(error),
         ),
         transportContext,
       }
@@ -3944,11 +3986,9 @@ export function createCodexFetch(
               requestStartedAtMs: wsRequestStartedAtMs,
             },
             reason => {
-              const abortReason =
-                reason instanceof Error
-                  ? reason
-                  : new DOMException('The operation was aborted.', 'AbortError')
+              const abortReason = codexStreamCancellationReason(reason)
               wsAbortController.abort(abortReason)
+              httpAbortController.abort(abortReason)
             },
           )
         } catch (wsError) {
@@ -4023,25 +4063,25 @@ export function createCodexFetch(
           throw accountError
         }
       }
-      // Model-not-found over HTTP is a transport-cohort limitation, not a terminal
-      // error: the ChatGPT/Codex HTTP channel refuses some models (e.g. gpt-5.6-luna)
-      // that the WebSocket channel serves. Only STREAMING requests have a WebSocket
-      // path in this adapter, so only they can recover — clear this
-      // (conversation, account) sticky flag and surface a retryable error so
-      // withRetry re-attempts over WebSocket. Non-streaming requests have no WS path
-      // here; throwing "retry over WS" for them would loop, so they fall through to
-      // the plain 404 response below (unchanged behavior).
+      // ANY 404 on the streaming HTTP path is treated as a transport-cohort
+      // problem and retried over WebSocket. The response body is deliberately
+      // not consulted because an outage can return 404 with an empty body.
+      // Only STREAMING requests have a WebSocket path in this adapter, so only
+      // they can recover: clear this (conversation, account) sticky flag and
+      // surface a retryable error so withRetry re-attempts over WebSocket.
+      // Non-streaming requests have no WS path here; throwing "retry over WS"
+      // for them would loop, so they fall through to the plain 404 response
+      // below (unchanged behavior).
       // See docs/codex/2026-07-12-bug-luna-sticky-http-fallback-404.md.
       if (
         isStreamingAnthropicRequest &&
-        codexResponse.status === 404 &&
-        /model not found/i.test(errorText)
+        codexResponse.status === 404
       ) {
         clearStickyHttpFallback(conversationId, currentAccountId)
         throw new APIConnectionError({
           message:
             `Codex HTTP channel does not serve model ${codexModel} ` +
-            `(404 Model not found); retrying over WebSocket`,
+            `(404); retrying over WebSocket`,
         })
       }
       const errorBody = {
@@ -4058,12 +4098,11 @@ export function createCodexFetch(
     }
 
     if (isStreamingAnthropicRequest) {
-      const initialOutputAbortController = new AbortController()
       const events = await primeCodexEvents(
-        httpSseToEvents(codexResponse, initialOutputAbortController.signal),
+        httpSseToEvents(codexResponse, httpAbortController.signal),
         requestCacheMetadata,
         'http',
-        error => initialOutputAbortController.abort(error),
+        error => httpAbortController.abort(error),
       )
       return buildAnthropicStreamResponse(
         events,
@@ -4071,6 +4110,7 @@ export function createCodexFetch(
         requestCacheMetadata,
         undefined,
         transportContext,
+        reason => httpAbortController.abort(codexStreamCancellationReason(reason)),
       )
     }
 

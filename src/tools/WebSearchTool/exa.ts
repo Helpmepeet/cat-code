@@ -183,6 +183,16 @@ function formatExaStatusError(status: number): string {
   return `Exa search failed with HTTP ${status}.`
 }
 
+/**
+ * Whether a search could actually be issued. The key is read at CALL time
+ * (`getExaApiKey`), so without this the tool advertises itself to the model,
+ * gets picked, and throws — a wasted turn instead of a tool that simply is not
+ * there. `WebSearchTool.isEnabled` gates on it.
+ */
+export function hasExaApiKey(): boolean {
+  return (process.env.EXA_API_KEY?.trim().length ?? 0) > 0
+}
+
 function getExaApiKey(): string {
   const apiKey = process.env.EXA_API_KEY?.trim()
   if (!apiKey) {

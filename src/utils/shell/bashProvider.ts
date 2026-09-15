@@ -80,6 +80,7 @@ export async function createBashShellProvider(
         id: number | string
         sandboxTmpDir?: string
         useSandbox: boolean
+        workerScoped?: boolean
       },
     ): Promise<{ commandString: string; cwdFilePath: string }> {
       let snapshotFilePath = await snapshotPromise
@@ -166,8 +167,23 @@ export async function createBashShellProvider(
         commandParts.push(`source ${quote([finalPath])} 2>/dev/null || true`)
       }
 
-      // Source session environment variables captured from session start hooks
-      const sessionEnvScript = await getSessionEnvironmentScript()
+      // Source session environment variables captured from session start hooks.
+      //
+      // Skipped entirely for a worker-scoped command rather than filtered. This
+      // script is sourced INSIDE the shell, after the spawn-time allowlist in
+      // workerSubprocessEnv.ts has already run, so a filter cannot see what it
+      // exports. getSessionEnvironmentScript reads CLAUDE_ENV_FILE and every
+      // hook-written file under the session-env directory, so a SessionStart
+      // hook exporting a credential would otherwise defeat the allowlist.
+      //
+      // The snapshot sourced above is not such a path: its generator writes
+      // PATH plus the user's functions and aliases, not the login shell's
+      // exported secrets. The login-shell fallback in getSpawnArgs IS such a
+      // path, and is not covered here: when no snapshot exists the shell starts
+      // with -l and runs the operator's own profile.
+      const sessionEnvScript = opts.workerScoped
+        ? null
+        : await getSessionEnvironmentScript()
       if (sessionEnvScript) {
         commandParts.push(sessionEnvScript)
       }

@@ -4,11 +4,17 @@
  * yielded, and the desktop projector test proves a well-formed frame renders.
  * Neither would notice the engine emitting the wrong shape in between.
  */
+import { APIError } from '@anthropic-ai/sdk'
 import { afterEach, beforeEach, expect, mock, test } from 'bun:test'
 
 import { getDefaultAppState, type AppState } from './state/AppStateStore.js'
 import { createFileStateCacheWithSizeLimit } from './utils/fileStateCache.js'
-import { createSystemTransportRecoveryMessage, createUserMessage } from './utils/messages.js'
+import {
+  createAssistantMessage,
+  createSystemAPIErrorMessage,
+  createSystemTransportRecoveryMessage,
+  createUserMessage,
+} from './utils/messages.js'
 import type { Message } from './types/message.js'
 
 let stubsActive = false
@@ -45,20 +51,10 @@ mock.module('./utils/queryContext.js', () => ({
     if (!stubsActive) return realFetchSystemPromptParts(...args)
     return {
       defaultSystemPrompt: [],
-      agentModePromptSections: [],
       userContext: {},
       systemContext: {},
     }
   },
-}))
-
-const actualAgentMode = await import('./agent-mode/agentMode.js')
-const realGetAgentModeUserContext = actualAgentMode.getAgentModeUserContext
-mock.module('./agent-mode/agentMode.js', () => ({
-  ...actualAgentMode,
-  getAgentModeUserContext: async (
-    ...args: Parameters<typeof realGetAgentModeUserContext>
-  ) => (stubsActive ? {} : realGetAgentModeUserContext(...args)),
 }))
 
 const actualQuery = await import('./query.js')
@@ -101,7 +97,9 @@ afterEach(() => {
   macroState.MACRO = originalMacro
 })
 
-async function collectFrames(): Promise<Record<string, unknown>[]> {
+async function collectFrames(
+  options: { interrupt?: { reason?: string } } = {},
+): Promise<Record<string, unknown>[]> {
   let state: AppState = getDefaultAppState()
   const engine = new QueryEngine({
     cwd: process.cwd(),
@@ -119,12 +117,33 @@ async function collectFrames(): Promise<Record<string, unknown>[]> {
     customSystemPrompt: '',
     recordTranscript: async () => null,
   })
+  if (options.interrupt) engine.interrupt(options.interrupt.reason)
   const frames: Record<string, unknown>[] = []
   for await (const message of engine.submitMessage('go')) {
     frames.push(message as unknown as Record<string, unknown>)
   }
   return frames
 }
+
+test('an interrupted result prefers its string abort reason over a stale assistant stop reason', async () => {
+  const staleAssistant = createAssistantMessage({ content: 'partial response' })
+  staleAssistant.message.stop_reason = 'tool_use'
+  queryMessages = [staleAssistant]
+
+  const submitInterruptFrames = await collectFrames({
+    interrupt: { reason: 'interrupt' },
+  })
+  expect(submitInterruptFrames.find(frame => frame.type === 'result')).toMatchObject({
+    subtype: 'interrupted',
+    stop_reason: 'interrupt',
+  })
+
+  const defaultAbortFrames = await collectFrames({ interrupt: {} })
+  expect(defaultAbortFrames.find(frame => frame.type === 'result')).toMatchObject({
+    subtype: 'interrupted',
+    stop_reason: 'tool_use',
+  })
+})
 
 test('a transport recovery message becomes an api_retry frame the desktop can read', async () => {
   queryMessages = [
@@ -154,6 +173,36 @@ test('a transport recovery message becomes an api_retry frame the desktop can re
     error: {
       type: 'assistant_error',
       message: 'Connection interrupted. Continuing automatically.',
+    },
+  })
+})
+
+test('an api error message becomes an api_retry frame the desktop can read', async () => {
+  queryMessages = [
+    createSystemAPIErrorMessage(
+      new APIError(429, undefined, 'Too Many Requests', new Headers()),
+      1500,
+      1,
+      3,
+    ),
+  ]
+
+  const frames = await collectFrames()
+  const retry = frames.find(
+    frame => frame.type === 'system' && frame.subtype === 'api_retry',
+  )
+
+  expect(retry).toBeDefined()
+  expect(retry).toMatchObject({
+    type: 'system',
+    subtype: 'api_retry',
+    attempt: 1,
+    max_retries: 3,
+    retry_delay_ms: 1500,
+    error_status: 429,
+    error: {
+      type: 'assistant_error',
+      error: 'rate_limit',
     },
   })
 })

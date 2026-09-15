@@ -78,6 +78,9 @@ test('only a model with a 1M window gets the reminder', async () => {
   expect(await reminderFor('gpt-5.6-sol')).toEqual([
     { type: 'compaction_reminder' },
   ])
+  expect(await reminderFor('gpt-6-astra')).toEqual([
+    { type: 'compaction_reminder' },
+  ])
   expect(await reminderFor('claude-opus-5')).toEqual([
     { type: 'compaction_reminder' },
   ])

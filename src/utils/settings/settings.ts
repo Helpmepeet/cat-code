@@ -1,8 +1,17 @@
 import { feature } from 'bun:bundle'
-import { closeSync, fsyncSync, openSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import {
+  closeSync,
+  fsyncSync,
+  openSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import mergeWith from 'lodash-es/mergeWith.js'
-import { basename, dirname, join, resolve } from 'path'
+import { basename, dirname, isAbsolute, join, parse, resolve, sep } from 'path'
 import { z } from 'zod/v4'
 import {
   getFlagSettingsInline,
@@ -53,6 +62,7 @@ import {
 } from './settingsCache.js'
 import { type SettingsJson, SettingsSchema } from './types.js'
 import {
+  dropInvalidSettingsSections,
   filterInvalidPermissionRules,
   formatZodError,
   type SettingsWithErrors,
@@ -226,6 +236,23 @@ function parseSettingsFileUncached(path: string): {
     const result = SettingsSchema().safeParse(data)
 
     if (!result.success) {
+      // Same idea one level up: drop only the top-level sections that failed
+      // so a bad `hooks` block doesn't discard a valid `model` alongside it.
+      // Bails to whole-file rejection when nothing narrower can be dropped.
+      const sectionWarnings = dropInvalidSettingsSections(
+        data,
+        path,
+        result.error,
+      )
+      if (sectionWarnings) {
+        const retry = SettingsSchema().safeParse(data)
+        if (retry.success) {
+          return {
+            settings: retry.data,
+            errors: [...ruleWarnings, ...sectionWarnings],
+          }
+        }
+      }
       const errors = formatZodError(result.error, path)
       return { settings: null, errors: [...ruleWarnings, ...errors] }
     }
@@ -468,6 +495,44 @@ export type SettingsUpdater = (
   current: SettingsJson | null,
 ) => SettingsJson | null
 
+function resolveSettingsWritePath(filePath: string): string {
+  try {
+    return realpathSync(filePath)
+  } catch (error) {
+    if (!isENOENT(error)) throw error
+  }
+
+  // realpath cannot resolve a dangling link. Follow it explicitly so a first
+  // save creates its target, while other resolution errors leave the link intact.
+  let linkTarget: string
+  try {
+    linkTarget = readlinkSync(filePath)
+  } catch (error) {
+    if (!isENOENT(error) && getErrnoCode(error) !== 'EINVAL') throw error
+    return join(realpathSync(dirname(filePath)), basename(filePath))
+  }
+  const root = isAbsolute(linkTarget) ? parse(linkTarget).root : ''
+  let directory = root || realpathSync(dirname(filePath))
+  const components = linkTarget.slice(root.length).split(sep === '\\' ? /[\\/]/ : /\//)
+  const name = components.pop()!
+  // Resolve directories before applying '..'. Bun's realpath normalizes '..'
+  // in its input before following symlinks, which can otherwise pick a different
+  // directory when resolving the parent of a missing target.
+  for (const component of components) {
+    if (component === '' || component === '.') continue
+    directory = component === '..'
+      ? dirname(directory)
+      : realpathSync(join(directory, component))
+  }
+  return resolveSettingsWritePath(join(directory, name))
+}
+
+function assertSettingsWriteTarget(filePath: string, targetPath: string): void {
+  if (resolveSettingsWritePath(filePath) !== targetPath) {
+    throw new Error('Settings file target changed while saving. Try again.')
+  }
+}
+
 /**
  * Replaces a settings file without exposing a truncate-then-write window.
  *
@@ -479,10 +544,20 @@ export function writeSettingsFileAtomically(
   filePath: string,
   content: string,
 ): void {
-  const directory = dirname(filePath)
+  const targetPath = resolveSettingsWritePath(filePath)
+  writeSettingsFileAtomicallyToTarget(filePath, targetPath, content)
+}
+
+function writeSettingsFileAtomicallyToTarget(
+  filePath: string,
+  targetPath: string,
+  content: string,
+): void {
+  assertSettingsWriteTarget(filePath, targetPath)
+  const directory = dirname(targetPath)
   const tempPath = join(
     directory,
-    `.${basename(filePath)}.${process.pid}.${randomUUID()}.tmp`,
+    `.${basename(targetPath)}.${process.pid}.${randomUUID()}.tmp`,
   )
   let fileDescriptor: number | undefined
   try {
@@ -491,7 +566,10 @@ export function writeSettingsFileAtomically(
     fsyncSync(fileDescriptor)
     closeSync(fileDescriptor)
     fileDescriptor = undefined
-    renameSync(tempPath, filePath)
+    // Keep the locked/read destination through publication. This check narrows
+    // the final syscall race; Node exposes no compare-and-swap rename.
+    assertSettingsWriteTarget(filePath, targetPath)
+    renameSync(tempPath, targetPath)
   } catch (error) {
     if (fileDescriptor !== undefined) {
       try {
@@ -550,13 +628,16 @@ export function updateSettingsForSource(
   let release: (() => void) | undefined
   try {
     getFsImplementation().mkdirSync(dirname(filePath))
+    const targetPath = resolveSettingsWritePath(filePath)
 
     // Cross-process lock: without it, two processes (e.g. two engine
     // instances in the N-process desktop-app model, migration Phase-3)
     // can both read-merge-write the same file and one's update is silently
     // lost — the read below and the write further down are otherwise two
     // unsynchronized syscalls. Mirrors saveConfigWithLock (config.ts).
-    release = acquireSettingsLockSync(filePath)
+    // Aliases of one settings file must share both a lock and the write target.
+    release = acquireSettingsLockSync(targetPath)
+    assertSettingsWriteTarget(filePath, targetPath)
 
     // The lock alone does not make the read below see a write made since
     // this process's cache was last populated: getSettingsForSourceUncached
@@ -568,18 +649,25 @@ export function updateSettingsForSource(
     // this same process's own post-write snapshot re-read re-arming the
     // cache, e.g. app/sidecar/settingsDomain.ts's readSettingsSnapshotOnce()).
     deleteCachedParsedFile(filePath)
+    deleteCachedParsedFile(targetPath)
 
     // Try to get existing settings with validation. Bypass the per-source
     // cache — mergeWith below mutates its target (including nested refs),
     // and mutating the cached object would leak unpersisted state if the
     // write fails before resetSettingsCache().
-    let existingSettings = getSettingsForSourceUncached(source)
+    // Every source that reaches here is editable (policySettings and
+    // flagSettings returned above), so this is exactly what
+    // getSettingsForSourceUncached would read — taken directly so the
+    // parse errors come with it.
+    const { settings: parsedSettings, errors: parseErrors } =
+      parseSettingsFile(targetPath)
+    let existingSettings = parsedSettings
 
     // If validation failed, check if file exists with a JSON syntax error
     if (!existingSettings) {
       let content: string | null = null
       try {
-        content = readFileSync(filePath)
+        content = readFileSync(targetPath)
       } catch (e) {
         if (!isENOENT(e)) {
           throw e
@@ -603,6 +691,29 @@ export function updateSettingsForSource(
             `Using raw settings from ${filePath} due to validation failure`,
           )
         }
+      }
+    }
+
+    // Widen the merge base with the sections dropInvalidSettingsSections
+    // removed. They are still the user's own text: without this the write
+    // erases a section it was never asked to touch, leaving nothing to fix.
+    // The value is carried on the warning rather than re-read from disk
+    // because safeParseJSON memoizes by content, so a second parse of the
+    // same file returns the object the drop already mutated. Rules that
+    // filterInvalidPermissionRules removed carry no marker and are left
+    // exactly as writes already treated them.
+    if (existingSettings) {
+      const target = existingSettings as Record<string, unknown>
+      const restored: string[] = []
+      for (const parseError of parseErrors) {
+        if (parseError.droppedSection === undefined) continue
+        target[parseError.droppedSection] = clone(parseError.invalidValue)
+        restored.push(parseError.droppedSection)
+      }
+      if (restored.length > 0) {
+        logForDebugging(
+          `Keeping unparsed settings sections from ${filePath}: ${restored.join(', ')}`,
+        )
       }
     }
 
@@ -645,8 +756,9 @@ export function updateSettingsForSource(
     // Mark this as an internal write before writing the file
     markInternalWrite(filePath)
 
-    writeSettingsFileAtomically(
+    writeSettingsFileAtomicallyToTarget(
       filePath,
+      targetPath,
       jsonStringify(updatedSettings, null, 2) + '\n',
     )
 

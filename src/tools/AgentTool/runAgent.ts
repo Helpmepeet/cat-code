@@ -5,13 +5,12 @@ import { randomUUID } from 'crypto'
 import uniqBy from 'lodash-es/uniqBy.js'
 import { logForDebugging } from 'src/utils/debug.js'
 import { getProjectRoot, getSessionId } from '../../bootstrap/state.js'
-import { loadRoleFilePrompt, loadContextIndex } from '../../agent-mode/roleFiles.js'
 import {
   readSessionState,
   readPersistedWorkerHandle,
   recordWorkerSessionSpawn,
-} from '../../agent-mode/sessionState.js'
-import { allocateWorkerName, releaseWorkerName } from '../../agent-mode/workerNames.js'
+} from '../../utils/workerState.js'
+import { allocateWorkerName, releaseWorkerName } from '../../utils/workerNames.js'
 import { getCommand, getSkillToolCommands, hasCommand } from '../../commands.js'
 import {
   getDefaultAgentPrompt,
@@ -32,13 +31,22 @@ import { getMcpConfigByName } from '../../services/mcp/config.js'
 import type {
   MCPServerConnection,
   ScopedMcpServerConfig,
+  ServerResource,
 } from '../../services/mcp/types.js'
-import type { Tool, Tools, ToolUseContext } from '../../Tool.js'
+import type {
+  McpRuntimeInputs,
+  McpRuntimeSnapshot,
+  Tool,
+  Tools,
+  ToolUseContext,
+} from '../../Tool.js'
 import { killShellTasksForAgent } from '../../tasks/LocalShellTask/killShellTasks.js'
+import { killDelegatedChildrenForAgent } from '../../utils/processTree.js'
 import type { Command } from '../../types/command.js'
 import type { AgentId } from '../../types/ids.js'
 import type {
   AssistantMessage,
+  AttachmentMessage,
   Message,
   ProgressMessage,
   RequestStartEvent,
@@ -48,7 +56,16 @@ import type {
   ToolUseSummaryMessage,
   UserMessage,
 } from '../../types/message.js'
-import { createAttachmentMessage } from '../../utils/attachments.js'
+import {
+  createAttachmentMessage,
+  getQueuedCommandAttachments,
+  type Attachment,
+} from '../../utils/attachments.js'
+import {
+  getCommandsByMaxPriority,
+  remove as removeFromQueue,
+} from '../../utils/messageQueueManager.js'
+import { getWorkerCapabilityPromptLine } from '../../utils/agentCapabilities.js'
 import { AbortError, errorMessage } from '../../utils/errors.js'
 import { getDisplayPath } from '../../utils/file.js'
 import {
@@ -63,7 +80,13 @@ import {
 import { registerFrontmatterHooks } from '../../utils/hooks/registerFrontmatterHooks.js'
 import { clearSessionHooks } from '../../utils/hooks/sessionHooks.js'
 import { executeSubagentStartHooks } from '../../utils/hooks.js'
-import { createUserMessage } from '../../utils/messages.js'
+import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
+import {
+  formatBlockedHandoff,
+  parseAskParentSessionEscalation,
+  type AskParentSessionToolResult,
+} from '../AskParentSessionTool/AskParentSessionTool.js'
+import { ASK_PARENT_SESSION_TOOL_NAME } from '../AskParentSessionTool/prompt.js'
 import { getAgentModel } from '../../utils/model/agent.js'
 import { resolveRequestProvider } from '../../utils/model/providers.js'
 import type { ModelAlias } from '../../utils/model/aliases.js'
@@ -74,7 +97,6 @@ import {
   setAgentTranscriptSubdir,
   writeAgentMetadata,
 } from '../../utils/sessionStorage.js'
-import { getAgentModePromptInjections } from '../../agent-mode/roleFiles.js'
 import {
   isRestrictedToPluginOnly,
   isSourceAdminTrusted,
@@ -110,6 +132,7 @@ async function initializeAgentMcpServers(
   agentDefinition: AgentDefinition,
   parentClients: MCPServerConnection[],
   registerCleanup?: (cleanup: () => Promise<void>) => void,
+  authorizedNamedServers?: ReadonlyMap<string, MCPServerConnection>,
 ): Promise<{
   clients: MCPServerConnection[]
   tools: Tools
@@ -180,6 +203,22 @@ async function initializeAgentMcpServers(
       // Reference by name - look up in existing MCP configs
       // This uses the memoized connectToServer, so we may get a shared client
       name = spec
+      if (authorizedNamedServers) {
+        const authorizedClient = authorizedNamedServers.get(name)
+        if (!authorizedClient) {
+          logForDebugging(
+            `[Agent: ${agentDefinition.agentType}] Skipping MCP server not present in the inherited authorized runtime: ${name}`,
+            { level: 'warn' },
+          )
+          continue
+        }
+        agentClients.push(authorizedClient)
+        if (authorizedClient.type === 'connected') {
+          const tools = await fetchToolsForClient(authorizedClient)
+          agentTools.push(...tools)
+        }
+        continue
+      }
       config = getMcpConfigByName(spec)
       if (!config) {
         logForDebugging(
@@ -266,6 +305,44 @@ function isRecordableMessage(
   )
 }
 
+/**
+ * Records the escalations a worker opened this run, keyed by the tool_use id
+ * that opened each one, so the matching tool_result can be recognised without
+ * re-reading the model's text.
+ */
+function collectAskParentSessionCalls(
+  message: AssistantMessage,
+  pending: Map<string, AskParentSessionToolResult>,
+): void {
+  for (const block of message.message.content) {
+    if (block.type !== 'tool_use' || block.name !== ASK_PARENT_SESSION_TOOL_NAME) {
+      continue
+    }
+    const escalation = parseAskParentSessionEscalation(block.input)
+    if (escalation) pending.set(block.id, escalation)
+  }
+}
+
+/**
+ * The escalation this user message completes, if any. A tool_result is the
+ * proof the call was allowed and ran: a denied or failed call carries
+ * `is_error`, and the worker should keep going rather than be stopped by a
+ * call the harness refused.
+ */
+function findCompletedAskParentSessionCall(
+  message: UserMessage,
+  pending: ReadonlyMap<string, AskParentSessionToolResult>,
+): AskParentSessionToolResult | undefined {
+  const content = message.message.content
+  if (!Array.isArray(content)) return undefined
+  for (const block of content) {
+    if (block.type !== 'tool_result' || block.is_error === true) continue
+    const escalation = pending.get(block.tool_use_id)
+    if (escalation) return escalation
+  }
+  return undefined
+}
+
 type SetupCleanup = () => void | Promise<void>
 
 /**
@@ -321,7 +398,11 @@ async function* runAgentInCleanupScope({
   contentReplacementState,
   useExactTools,
   agentToolEnvironment,
+  mcpRuntimeInputs,
+  mcpRuntimeSnapshot,
   worktreePath,
+  cwd,
+  seededMessagesForPersistence,
   description,
   agentName,
   transcriptSubdir,
@@ -344,6 +425,7 @@ async function* runAgentInCleanupScope({
     systemPrompt?: SystemPrompt
     abortController?: AbortController
     agentId?: AgentId
+    agentRunId?: string
   }
   model?: ModelAlias
   /** Effort level the caller selected for this spawn. Outranks the agent
@@ -385,9 +467,26 @@ async function* runAgentInCleanupScope({
    * ALS context exists) pass it explicitly so this per-turn resolution can't
    * disagree with that prior resolution. Defaults to 'default'. */
   agentToolEnvironment?: AgentToolEnvironment
+  /** A fully assembled MCP runtime read by the caller. This is used by launch
+   * paths that already consumed refreshMcpRuntime and must not perform a second
+   * snapshot read before handing tools, commands, clients, and resources to the
+   * subagent. */
+  mcpRuntimeInputs?: McpRuntimeInputs
+  /** The MCP generation this launch was authorized against. AgentTool reads it
+   * once after waiting for required servers and passes it here so the tool
+   * pool, clients, and resources the subagent starts with all come from that
+   * same read. Omit it and this run reads the parent context's current
+   * snapshot itself; with no live MCP source at all, the parent's static
+   * options are used as before. */
+  mcpRuntimeSnapshot?: McpRuntimeSnapshot
+  /** Explicit cwd override. Persisted to metadata for resume restoration. */
+  cwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree".
    * Persisted to metadata so resume can restore the correct cwd. */
   worktreePath?: string
+  /** Seeded messages already present in transcript persistence, used to avoid
+   * duplicate sidechain writes when resuming. */
+  seededMessagesForPersistence?: Message[]
   /** Original task description from AgentTool input. Persisted to metadata
    * so a resumed agent's notification can show the original description. */
   description?: string
@@ -396,14 +495,13 @@ async function* runAgentInCleanupScope({
   /** Optional subdirectory under subagents/ to group this agent's transcript
    * with related ones (e.g. workflows/<runId> for workflow subagents). */
   transcriptSubdir?: string
-  /** Optional Agent Mode durable-state context. When present, this run is the
+  /** Optional coordinator durable-state context. When present, this run is the
    * actual start/resume of a worker session and should update durable worker
    * state by default. Set recordSpawn: false for sync→background continuation
    * when the worker identity should be reused but not re-recorded as a spawn. */
   sessionStateTracking?: {
     sessionId: string
     mode: string
-    objective: string
     statePath?: string
     recordSpawn?: boolean
   }
@@ -444,14 +542,13 @@ async function* runAgentInCleanupScope({
         )
       : null
   const reservedWorkerHandles = sessionStateTracking
-    ? (
+    ? Object.values(
         (
           await readSessionState(
             sessionStateTracking.sessionId,
             sessionStateTracking.statePath,
           )
-        )?.knownWorkers ??
-        []
+        )?.knownWorkers ?? {},
       )
         .map(worker => worker.handle)
         .filter((handle): handle is string => Boolean(handle && handle.length > 0))
@@ -494,7 +591,24 @@ async function* runAgentInCleanupScope({
     ? filterIncompleteToolCalls(forkContextMessages)
     : []
   const initialMessages: Message[] = [...contextMessages, ...promptMessages]
-
+  const seededMessageUuids = new Set(
+    (seededMessagesForPersistence ?? []).map(message => message.uuid),
+  )
+  const findLastChainParticipantUuid = (
+    messages: Message[],
+  ): UUID | null => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i]
+      if (message?.type !== 'progress') {
+        return message.uuid
+      }
+    }
+    return null
+  }
+  const seededChainTailUuid =
+    seededMessageUuids.size > 0
+      ? findLastChainParticipantUuid(seededMessagesForPersistence)
+      : null
   const agentReadFileState =
     forkContextMessages !== undefined
       ? cloneFileStateCache(toolUseContext.readFileState)
@@ -635,28 +749,58 @@ async function* runAgentInCleanupScope({
     appState.toolPermissionContext.additionalWorkingDirectories.keys(),
   )
 
-  const agentSystemPrompt = override?.systemPrompt
-    ? override.systemPrompt
-    : asSystemPrompt(
-        await getAgentSystemPrompt(
-          agentDefinition,
-          toolUseContext,
-          resolvedAgentModel,
-          additionalWorkingDirectories,
-          resolvedTools,
-          workerName ?? undefined,
-        ),
-      )
+  // Appended here rather than inside getAgentSystemPrompt because that
+  // builder does not run on the ordinary spawn path: AgentTool assembles the
+  // whole prompt itself and hands it over as override.systemPrompt whenever
+  // there is no worktree or cwd override, so a line added only in the builder
+  // would miss exactly the general-purpose workers it exists for. This is the
+  // one place every worker's final prompt passes through.
+  //
+  // Fork children are the exception. They deliberately run on the parent's
+  // exact prompt and tool array so the request prefix stays cache-identical,
+  // and their capabilities are the parent's, so there is nothing to correct.
+  const workerCapabilityLine = useExactTools
+    ? null
+    : getWorkerCapabilityPromptLine(resolvedTools.map(tool => tool.name))
 
-  // Determine abortController:
-  // - Override takes precedence
-  // - Async agents get a new unlinked controller (runs independently)
-  // - Sync agents share parent's controller
+  const builtAgentSystemPrompt =
+    override?.systemPrompt ??
+    (await getAgentSystemPrompt(
+      agentDefinition,
+      toolUseContext,
+      resolvedAgentModel,
+      additionalWorkingDirectories,
+      resolvedTools,
+      workerName ?? undefined,
+    ))
+  const agentSystemPrompt = asSystemPrompt(
+    workerCapabilityLine
+      ? [...builtAgentSystemPrompt, workerCapabilityLine]
+      : builtAgentSystemPrompt,
+  )
+
+  // Every worker owns its controller. Synchronous workers additionally follow
+  // parent cancellation in one direction, so a terminal worker handoff cannot
+  // abort the parent query that must receive it.
   const agentAbortController = override?.abortController
     ? override.abortController
-    : isAsync
-      ? new AbortController()
-      : toolUseContext.abortController
+    : new AbortController()
+  let detachParentAbort = () => {}
+  if (!override?.abortController && !isAsync) {
+    const parentSignal = toolUseContext.abortController.signal
+    const forwardParentAbort = () => {
+      agentAbortController.abort(parentSignal.reason)
+    }
+    if (parentSignal.aborted) {
+      forwardParentAbort()
+    } else {
+      parentSignal.addEventListener('abort', forwardParentAbort, { once: true })
+      detachParentAbort = () => {
+        parentSignal.removeEventListener('abort', forwardParentAbort)
+      }
+      setupCleanups.push(detachParentAbort)
+    }
+  }
 
   // Execute SubagentStart hooks and collect additional context
   const additionalContexts: string[] = []
@@ -777,6 +921,47 @@ async function* runAgentInCleanupScope({
     }
   }
 
+  // The parent's MCP generation for this launch: the caller's snapshot when it
+  // took one, otherwise a single read of the live source, otherwise the static
+  // options. Clients and resources are taken from the same object so they can
+  // never straddle two generations.
+  const parentMcpRuntime = mcpRuntimeInputs
+    ? undefined
+    : (mcpRuntimeSnapshot ??
+      toolUseContext.options.getMcpRuntimeSnapshot?.())
+  const parentMcpClients = mcpRuntimeInputs
+    ? [...mcpRuntimeInputs.mcpClients]
+    : parentMcpRuntime
+      ? [...parentMcpRuntime.clients]
+      : toolUseContext.options.mcpClients
+  const parentMcpResources: Record<string, ServerResource[]> = mcpRuntimeInputs
+    ? Object.fromEntries(
+        Object.entries(mcpRuntimeInputs.mcpResources).map(
+          ([server, resources]) => [server, [...resources]],
+        ),
+      )
+    : parentMcpRuntime
+      ? Object.fromEntries(
+          Object.entries(parentMcpRuntime.resources).map(
+            ([server, resources]) => [server, [...resources]],
+          ),
+        )
+      : toolUseContext.options.mcpResources
+  const parentCommands = mcpRuntimeInputs
+    ? [...mcpRuntimeInputs.commands]
+    : parentMcpRuntime
+      ? [
+          ...toolUseContext.options.commands.filter(
+            command => !command.isMcp && command.loadedFrom !== 'mcp',
+          ),
+          ...parentMcpRuntime.commands,
+        ]
+      : []
+  const parentBaseTools = availableTools.filter(tool => !tool.mcpInfo)
+  const parentBaseCommands = toolUseContext.options.commands.filter(
+    command => !command.isMcp && command.loadedFrom !== 'mcp',
+  )
+
   // Initialize agent-specific MCP servers (additive to parent's servers)
   const {
     clients: mergedMcpClients,
@@ -784,8 +969,15 @@ async function* runAgentInCleanupScope({
     cleanup: mcpCleanup,
   } = await initializeAgentMcpServers(
     agentDefinition,
-    toolUseContext.options.mcpClients,
+    parentMcpClients,
     cleanup => setupCleanups.push(cleanup),
+    parentMcpRuntime || mcpRuntimeInputs
+      ? new Map(
+          parentMcpClients
+            .filter(client => client.type === 'connected')
+            .map(client => [client.name, client]),
+        )
+      : undefined,
   )
 
   // Merge agent MCP tools with resolved agent tools, deduplicating by name.
@@ -795,6 +987,39 @@ async function* runAgentInCleanupScope({
     agentMcpTools.length > 0
       ? uniqBy([...resolvedTools, ...agentMcpTools], 'name')
       : resolvedTools
+  const agentMcpClients = mergedMcpClients.slice(parentMcpClients.length)
+  const refreshMcpRuntime = () => {
+    const snapshot = toolUseContext.options.getMcpRuntimeSnapshot?.()
+    if (!snapshot) {
+      return {
+        tools: allTools,
+        commands: parentCommands,
+        mcpClients: mergedMcpClients,
+        mcpResources: parentMcpResources,
+      }
+    }
+    const refreshedTools = resolveAgentTools(
+      agentDefinition,
+      [...parentBaseTools, ...snapshot.tools],
+      isAsync,
+      agentToolEnvironment,
+    ).resolvedTools
+
+    return {
+      tools:
+        agentMcpTools.length > 0
+          ? uniqBy([...refreshedTools, ...agentMcpTools], 'name')
+          : refreshedTools,
+      commands: [...parentBaseCommands, ...snapshot.commands],
+      mcpClients: [...snapshot.clients, ...agentMcpClients],
+      mcpResources: Object.fromEntries(
+        Object.entries(snapshot.resources).map(([server, resources]) => [
+          server,
+          [...resources],
+        ]),
+      ),
+    }
+  }
 
   // Build agent-specific options
   const agentOptions: ToolUseContext['options'] = {
@@ -805,7 +1030,7 @@ async function* runAgentInCleanupScope({
         : (toolUseContext.options.isNonInteractiveSession ?? false),
     appendSystemPrompt: toolUseContext.options.appendSystemPrompt,
     tools: allTools,
-    commands: [],
+    commands: parentCommands,
     debug: toolUseContext.options.debug,
     verbose: toolUseContext.options.verbose,
     mainLoopModel: resolvedAgentModel,
@@ -820,7 +1045,9 @@ async function* runAgentInCleanupScope({
       ? toolUseContext.options.thinkingConfig
       : { type: 'disabled' as const },
     mcpClients: mergedMcpClients,
-    mcpResources: toolUseContext.options.mcpResources,
+    mcpResources: parentMcpResources,
+    getMcpRuntimeSnapshot: toolUseContext.options.getMcpRuntimeSnapshot,
+    refreshMcpRuntime,
     agentDefinitions: toolUseContext.options.agentDefinitions,
     // Fork children (useExactTools path) need querySource on context.options
     // for the recursive-fork guard at AgentTool.tsx call() — it checks
@@ -837,6 +1064,7 @@ async function* runAgentInCleanupScope({
   const agentToolUseContext = createSubagentContext(toolUseContext, {
     options: agentOptions,
     agentId,
+    agentRunId: override?.agentRunId,
     agentType: agentDefinition.agentType,
     messages: initialMessages,
     readFileState: agentReadFileState,
@@ -849,6 +1077,26 @@ async function* runAgentInCleanupScope({
       agentDefinition.criticalSystemReminder_EXPERIMENTAL,
     contentReplacementState,
   })
+
+  // A prior worker run can finish before a delivery outcome addressed to this
+  // worker is observed. Put those reports into the first resumed request so a
+  // no-tool completion cannot strand them in the process-global queue.
+  const startupNotifications = getCommandsByMaxPriority('later').filter(
+    command =>
+      command.mode === 'task-notification' && command.agentId === agentId,
+  )
+  if (startupNotifications.length > 0) {
+    const attachments = await getQueuedCommandAttachments(startupNotifications)
+    initialMessages.push(...attachments.map(createAttachmentMessage))
+    removeFromQueue(startupNotifications)
+  }
+
+  const persistedInitialMessages =
+    seededMessageUuids.size > 0
+      ? initialMessages.filter(
+          message => !seededMessageUuids.has(message.uuid),
+        )
+      : initialMessages
 
   // Preserve tool use results for subagents with viewable transcripts (in-process teammates)
   if (preserveToolUseResults) {
@@ -869,12 +1117,17 @@ async function* runAgentInCleanupScope({
   // Record initial messages before the query loop starts, plus the agentType
   // so resume can route correctly when subagent_type is omitted. Both writes
   // are fire-and-forget — persistence failure shouldn't block the agent.
-  void recordSidechainTranscript(initialMessages, agentId).catch(_err =>
+  void recordSidechainTranscript(
+    persistedInitialMessages,
+    agentId,
+    seededMessageUuids.size > 0 ? seededChainTailUuid : undefined,
+  ).catch(_err =>
     logForDebugging(`Failed to record sidechain transcript: ${_err}`),
   )
   void writeAgentMetadata(agentId, {
     agentType: agentDefinition.agentType,
     ...(workerName && { agentName: workerName }),
+    ...(cwd && { assignedCwd: cwd }),
     ...(worktreePath && { worktreePath }),
     ...(description && { description }),
     parentSessionId: getSessionId(),
@@ -886,7 +1139,6 @@ async function* runAgentInCleanupScope({
     void recordWorkerSessionSpawn({
       sessionId: sessionStateTracking.sessionId,
       mode: sessionStateTracking.mode,
-      objective: sessionStateTracking.objective,
       ...(sessionStateTracking.statePath
         ? { statePath: sessionStateTracking.statePath }
         : {}),
@@ -897,12 +1149,47 @@ async function* runAgentInCleanupScope({
       worktreePath: worktreePath ?? null,
       spawnedAt: new Date().toISOString(),
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker spawn: ${_err}`),
+      logForDebugging(`Failed to record worker spawn: ${_err}`),
     )
   }
 
   // Track the last recorded message UUID for parent chain continuity
-  let lastRecordedUuid: UUID | null = initialMessages.at(-1)?.uuid ?? null
+  let lastRecordedUuid: UUID | null = findLastChainParticipantUuid(
+    persistedInitialMessages,
+  )
+  if (lastRecordedUuid === null) {
+    lastRecordedUuid =
+      seededChainTailUuid ??
+      findLastChainParticipantUuid(initialMessages)
+  }
+  const submittedLocalMessages = new Map<string, AttachmentMessage>()
+  agentToolUseContext.onLocalAgentMessagesDelivered = async messageIds => {
+    for (const messageId of messageIds) {
+      const delivered = submittedLocalMessages.get(messageId)
+      if (!delivered) continue
+      await recordSidechainTranscript(
+        [delivered],
+        agentId,
+        lastRecordedUuid,
+      ).catch(err =>
+        logForDebugging(`Failed to record delivered worker instruction: ${err}`),
+      )
+      lastRecordedUuid = delivered.uuid as UUID
+      submittedLocalMessages.delete(messageId)
+    }
+  }
+
+  // Escalation is terminal, and the harness is what makes it so. There is no
+  // reply channel into a running worker, so the only thing a worker could do
+  // after ask_parent_session is guess; the prompts used to ask it to stop of its
+  // own accord, and the one worker that ever called the tool did not
+  // (docs/reports/2026-09-06-subagent-escalation-and-delegation-failures.md).
+  const pendingEscalations = new Map<string, AskParentSessionToolResult>()
+  // Usage for the handoff message below. finalizeAgentTool reads the run's
+  // token total off the LAST assistant message, so a synthetic terminal
+  // carrying the zeroed default would report the whole run as 0 tokens.
+  let lastAssistantUsage: AssistantMessage['message']['usage'] | undefined
+  let completedTerminalEscalation = false
 
   try {
     for await (const message of query({
@@ -953,6 +1240,43 @@ async function* runAgentInCleanupScope({
         // here made exhaustion look like a clean completion to every caller.
         yield message
         if (reachedMaxTurns) break
+        // Queue-backed commands carry the origin of whoever injected them.
+        // Local worker instructions use separate request-bound delivery records,
+        // so recording their prepared attachment here would overstate delivery.
+        // Other attachment kinds are re-derived from live state and are not
+        // transcript rows.
+        // AttachmentMessage.attachment is declared `unknown` in
+        // types/message.ts, so the union it always holds has to be named once
+        // to read it; naming the real union rather than an ad-hoc shape is
+        // what makes a rename of `origin` a compile error here instead of a
+        // silently dead diagnostic.
+        const deliveredAttachment = message.attachment as Attachment
+        if (
+          deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.commandMode === 'local-agent-message'
+        ) {
+          submittedLocalMessages.set(
+            deliveredAttachment.source_uuid,
+            message as AttachmentMessage,
+          )
+        }
+        if (
+          deliveredAttachment.type === 'queued_command' &&
+          deliveredAttachment.commandMode !== 'local-agent-message' &&
+          deliveredAttachment.origin
+        ) {
+          await recordSidechainTranscript(
+            // The compound stream_event guard above does not narrow
+            // StreamEvent out of `message`, so the attachment branch is still
+            // typed AttachmentMessage | StreamEvent here.
+            [message as Message],
+            agentId,
+            lastRecordedUuid,
+          ).catch(err =>
+            logForDebugging(`Failed to record sidechain transcript: ${err}`),
+          )
+          lastRecordedUuid = message.uuid as UUID
+        }
         continue
       }
 
@@ -969,10 +1293,52 @@ async function* runAgentInCleanupScope({
           lastRecordedUuid = message.uuid
         }
         yield message
+
+        if (message.type === 'assistant') {
+          lastAssistantUsage = message.message.usage
+          collectAskParentSessionCalls(message, pendingEscalations)
+          continue
+        }
+        const escalation =
+          message.type === 'user'
+            ? findCompletedAskParentSessionCall(message, pendingEscalations)
+            : undefined
+        if (escalation) {
+          // A terminal handoff owns the worker from this point onward. Cancel
+          // the query before publishing it so queued tools are rejected and a
+          // tool waiting on permission cannot cross into execution afterward.
+          // The blocked result remains authoritative below rather than being
+          // rewritten as a generic aborted worker outcome.
+          completedTerminalEscalation = true
+          agentAbortController.abort('terminal_handoff')
+          // The run's result is written here rather than left to the model,
+          // because the model has already stopped being asked for one: the
+          // loop ends on this message. finalizeAgentTool takes the last
+          // assistant text as the result, and LocalAgentTask's
+          // extractHandoffStatus reads the handoff out of that text, so a
+          // synthetic assistant message is what reaches both.
+          const handoff = createAssistantMessage({
+            content: formatBlockedHandoff(escalation),
+            ...(lastAssistantUsage ? { usage: lastAssistantUsage } : {}),
+          })
+          await recordSidechainTranscript(
+            [handoff],
+            agentId,
+            lastRecordedUuid,
+          ).catch(err =>
+            logForDebugging(`Failed to record sidechain transcript: ${err}`),
+          )
+          lastRecordedUuid = handoff.uuid
+          yield handoff
+          break
+        }
       }
     }
 
-    if (agentAbortController.signal.aborted) {
+    if (
+      agentAbortController.signal.aborted &&
+      !completedTerminalEscalation
+    ) {
       throw new AbortError()
     }
 
@@ -981,6 +1347,7 @@ async function* runAgentInCleanupScope({
       agentDefinition.callback()
     }
   } finally {
+    detachParentAbort()
     // Reaching here means setup completed, so this block owns every pre-loop
     // resource too. Disarm the setup scope first so the two never both release.
     setupCleanups.length = 0
@@ -1015,6 +1382,10 @@ async function* runAgentInCleanupScope({
     // `run_in_background` shell loop (e.g. test fixture fake-logs.sh) outlives
     // the agent as a PPID=1 zombie once the main session eventually exits.
     killShellTasksForAgent(agentId, toolUseContext.getAppState, rootSetAppState)
+    // Same reasoning as killShellTasksForAgent, for delegated Claude CLI runs
+    // instead of background shells: a worker's own child processes should not
+    // outlive the worker.
+    killDelegatedChildrenForAgent(agentId)
     if (workerName) releaseWorkerName(workerName)
     /* eslint-disable @typescript-eslint/no-require-imports */
     if (feature('MONITOR_TOOL')) {
@@ -1145,17 +1516,8 @@ async function getAgentSystemPrompt(
     )
   }
 
-  const promptInjections = isBuiltInAgent(agentDefinition)
-    ? await getAgentModePromptInjections(agentDefinition.agentType)
-    : []
-
-  const prompts = [
-    agentPrompt,
-    ...promptInjections,
-  ]
-
   return enhanceSystemPromptWithEnvDetails(
-    prompts,
+    [agentPrompt],
     resolvedAgentModel,
     additionalWorkingDirectories,
     enabledToolNames,

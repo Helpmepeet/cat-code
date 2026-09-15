@@ -14,7 +14,7 @@ WHEN TO USE:
 - Use ${AGENT_TOOL_NAME} for open-ended searches that are likely to require multiple rounds.
 
 SEARCH CONSTRAINTS:
-1. ALWAYS use ${GREP_TOOL_NAME} for search tasks. NEVER invoke \`grep\` or \`rg\` as a ${BASH_TOOL_NAME} command when this tool can do the search.
+1. Use ${GREP_TOOL_NAME} for structured codebase searches. Targeted \`rg\` commands through ${BASH_TOOL_NAME} are also permitted.
 2. The \`pattern\` parameter uses ripgrep regex syntax. Example patterns: "log.*Error", "function\\s+\\w+".
 3. Narrow the search with \`glob\` (for example, "*.js" or "**/*.tsx") or \`type\` (for example, "js", "py", "rust") when that improves precision.
 4. \`output_mode\` options:

@@ -1,0 +1,56 @@
+{
+  "manifestVersion": 2,
+  "date": "2026-09-13",
+  "model": "gpt-5.6-luna",
+  "effort": "medium",
+  "baseCommit": "ba056787ccd0807896f81180e360530711789a92",
+  "binaries": {
+    "currentSha256": "91c2111619c79e80add82918869bee4a43de6fcfea088e43064eafb0fd06a38a",
+    "candidateSha256": "ceb55775c47f6b11e28d6e13aa575612ce12673c4cec2430a74f319fe22de693"
+  },
+  "qualifying": {
+    "runs": 78,
+    "costUsd": 2.344468,
+    "current": {
+      "runs": 39,
+      "correct": 34,
+      "attempts": 63,
+      "rejectedAttempts": 21,
+      "costUsd": 1.355416,
+      "durationSeconds": 625.7,
+      "consequentialWrongRegions": 0,
+      "replacementCorruptions": 5
+    },
+    "candidate": {
+      "runs": 39,
+      "correct": 38,
+      "attempts": 45,
+      "rejectedAttempts": 6,
+      "costUsd": 0.989052,
+      "durationSeconds": 443.912,
+      "consequentialWrongRegions": 0,
+      "replacementCorruptions": 1
+    }
+  },
+  "perCase": {
+    "unique-exact": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "later-fence": { "currentCorrect": 2, "candidateCorrect": 3, "currentAttempts": 15, "candidateAttempts": 3, "currentRejected": 12, "candidateRejected": 0 },
+    "ambiguous-retry": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 7, "candidateAttempts": 6, "currentRejected": 3, "candidateRejected": 3 },
+    "hint-substring-collision": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 9, "candidateAttempts": 3, "currentRejected": 6, "candidateRejected": 0 },
+    "hint-outer-whitespace": { "currentCorrect": 0, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 5, "currentRejected": 0, "candidateRejected": 2 },
+    "five-ordered-hunks": { "currentCorrect": 3, "candidateCorrect": 2, "currentAttempts": 5, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "multi-file-envelope": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "bof-prepend": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "eof-no-final-newline": { "currentCorrect": 2, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "crlf-preservation": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "bom-preservation": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 4, "currentRejected": 0, "candidateRejected": 1 },
+    "trailing-whitespace": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 },
+    "unicode-punctuation": { "currentCorrect": 3, "candidateCorrect": 3, "currentAttempts": 3, "candidateAttempts": 3, "currentRejected": 0, "candidateRejected": 0 }
+  },
+  "excludedSpend": {
+    "sandboxPreModelRuns": { "runs": 78, "costUsd": 0 },
+    "invalidManifestProbe": { "runs": 9, "costUsd": 0.40436 },
+    "mismatchedControlBuild": { "runs": 78, "costUsd": 2.425818 }
+  },
+  "totalAuthorizedSpendUsd": 5.174646
+}

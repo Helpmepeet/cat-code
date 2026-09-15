@@ -1,11 +1,18 @@
 import { join } from 'path'
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import type { ToolPermissionContext, ToolUseContext } from '../../Tool.js'
 import { BashTool } from '../../tools/BashTool/BashTool.js'
+import { FilePatchTool } from '../../tools/FilePatchTool/FilePatchTool.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { FileWriteTool } from '../../tools/FileWriteTool/FileWriteTool.js'
 import { getCwd } from '../cwd.js'
+import { SandboxManager } from '../sandbox/sandbox-adapter.js'
 import { _resetForTesting } from './autoModeState.js'
-import { hasPermissionsToUseTool } from './permissions.js'
+import {
+  checkRuleBasedPermissions,
+  hasPermissionsToUseTool,
+} from './permissions.js'
+import { permissionRuleValueFromString } from './permissionRuleParser.js'
 
 // Auto mode is process-global state. Left active by another suite it routes
 // plan mode into the classifier's acceptEdits fast path, which allows in-cwd
@@ -37,6 +44,31 @@ function toolUseContext(tpc: ToolPermissionContext): ToolUseContext {
     messages: [],
   } as unknown as ToolUseContext
 }
+
+describe('apply_patch permission-name compatibility', () => {
+  test('normalizes historical bare and content rules without rewriting them', () => {
+    expect(permissionRuleValueFromString('Apply_patch')).toEqual({
+      toolName: FILE_PATCH_TOOL_NAME,
+    })
+    expect(permissionRuleValueFromString('Apply_patch(src/file.ts)')).toEqual({
+      toolName: FILE_PATCH_TOOL_NAME,
+      ruleContent: 'src/file.ts',
+    })
+  })
+
+  test('matches a historical bare rule against the canonical tool', () => {
+    const context = permissionContext({
+      alwaysAskRules: { session: ['Apply_patch'] },
+    })
+    expect(
+      checkRuleBasedPermissions(
+        FilePatchTool,
+        { input: '*** Begin Patch\n*** End Patch' },
+        toolUseContext(context),
+      ),
+    ).resolves.toMatchObject({ behavior: 'ask' })
+  })
+})
 
 async function decide(
   tool: unknown,
@@ -112,5 +144,67 @@ describe('hasPermissionsToUseTool tool-wide ask vs content deny', () => {
     )
     expect(decision.behavior).toBe('ask')
     expect(decision.decisionReason?.type).toBe('rule')
+  })
+})
+
+describe('checkRuleBasedPermissions tool-wide ask vs content deny', () => {
+  // The rule-only path a PreToolUse hook's allow is filtered through
+  // (resolveHookPermissionDecision). Step 1b returned the tool-wide ask
+  // before step 1c ran tool.checkPermissions, so the narrower deny never
+  // got a chance and a hook-approved curl reached the user as a prompt.
+  async function ruleCheck(
+    input: { [key: string]: unknown },
+    tpc: ToolPermissionContext,
+  ) {
+    return await checkRuleBasedPermissions(
+      BashTool as never,
+      input,
+      toolUseContext(tpc),
+    )
+  }
+
+  test('a content deny rule beats a tool-wide ask rule', async () => {
+    const decision = await ruleCheck(
+      { command: 'curl example.com' },
+      permissionContext({
+        alwaysAskRules: { session: ['Bash'] },
+        alwaysDenyRules: { session: ['Bash(curl:*)'] },
+      }),
+    )
+    expect(decision?.behavior).toBe('deny')
+  })
+
+  test('a tool-wide ask rule still asks when nothing denies', async () => {
+    const decision = await ruleCheck(
+      { command: 'echo hi' },
+      permissionContext({
+        alwaysAskRules: { session: ['Bash'] },
+      }),
+    )
+    expect(decision?.behavior).toBe('ask')
+    expect(decision?.decisionReason?.type).toBe('rule')
+  })
+
+  test('the sandbox auto-allow carve-out still skips the tool-wide ask rule', async () => {
+    const sandboxing = spyOn(
+      SandboxManager,
+      'isSandboxingEnabled',
+    ).mockReturnValue(true)
+    const autoAllow = spyOn(
+      SandboxManager,
+      'isAutoAllowBashIfSandboxedEnabled',
+    ).mockReturnValue(true)
+    try {
+      const decision = await ruleCheck(
+        { command: 'echo hi' },
+        permissionContext({
+          alwaysAskRules: { session: ['Bash'] },
+        }),
+      )
+      expect(decision).toBeNull()
+    } finally {
+      sandboxing.mockRestore()
+      autoAllow.mockRestore()
+    }
   })
 })

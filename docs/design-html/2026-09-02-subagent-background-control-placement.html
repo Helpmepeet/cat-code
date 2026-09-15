@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Background control placement</title>
+<style>
+  @font-face{font-family:"DM Sans";src:url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2");font-weight:100 1000;font-display:swap}
+  @font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2");font-weight:400;font-display:swap}
+  @font-face{font-family:"DM Mono";src:url("../../app/renderer/src/assets/fonts/DMMono-Medium.woff2") format("woff2");font-weight:500;font-display:swap}
+
+  :root{
+    --app-bg:#09090b;
+    --shell-seam:rgba(255,255,255,0.06);
+    --text-primary:#f4f4f5;
+    --text-muted:#a1a1aa;
+    --text-subtle:#98989f;
+    --text-faint:#838389;
+    --accent:#f472b6;
+    --blue-400:#60a5fa;
+    --teal-300:#5eead4;
+    --zinc-400:#a1a1aa;
+    --font-sans:"DM Sans",-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;
+    --font-mono:"DM Mono",ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+  }
+
+  html,body{margin:0;background:var(--app-bg)}
+  body{font-family:var(--font-sans);-webkit-font-smoothing:antialiased}
+
+  /* ---------- chrome (x- prefix; never matches inside a specimen) ---------- */
+  .x-page{max-width:760px;margin:0 auto;padding:40px 28px 90px}
+  .x-label{font-family:var(--font-mono);font-size:9.5px;font-weight:400;letter-spacing:.16em;
+           text-transform:uppercase;color:#808080;margin:0 0 9px}
+  .x-sub{margin:20px 0 9px}
+  .x-state{margin:0 0 6px;color:#5f5f5f}
+  .x-rule{height:1px;background:#2e2e2e;border:0;margin:40px 0 22px}
+  .x-stack{display:grid;grid-template-columns:1fr;gap:14px}
+
+  /* ---------- specimen: agent tool card (TranscriptView, `cards` style) ---------- */
+  .card{position:relative;width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);
+        background:rgba(255,255,255,0.025);font-family:var(--font-sans)}
+  .cardbtn{display:block;width:100%;text-align:left;background:none;border:0;padding:0;
+           color:inherit;font:inherit;cursor:default}
+  .idline{display:flex;align-items:center;gap:9px;padding:7px 12px}
+  .idline svg{flex-shrink:0}
+  .idnames{display:inline-flex;min-width:0;align-items:baseline;gap:6px}
+  .agentname{flex-shrink:0;font-family:var(--font-mono);font-size:13px;font-weight:600;
+             letter-spacing:.04em;color:var(--zinc-400)}
+  .agenttype{min-width:0;font-family:var(--font-mono);font-size:11px;text-transform:lowercase;color:var(--text-faint);
+             overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .slot{margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:var(--font-mono);font-size:11px;
+        font-variant-numeric:tabular-nums;color:var(--blue-400)}
+  .taskline{display:flex;align-items:center;gap:10px;border-top:1px solid var(--shell-seam);padding:7px 12px}
+  .tasktext{min-width:0;flex:1;font-size:13.5px;line-height:18px;color:var(--text-primary);
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .taskmeta{display:inline-flex;flex-shrink:0;align-items:center;gap:8px;white-space:nowrap}
+  .model{font-family:var(--font-mono);font-size:11px;color:var(--text-subtle)}
+
+  /* the action: a sibling of the collapse button, pinned to the identity line's
+     right edge. Bare text in the slot's own type — no border, radius or padding. */
+  .act{position:absolute;top:0;right:12px;height:33px;display:flex;align-items:center;
+       background:none;border:0;padding:0;margin:0;font-family:var(--font-mono);font-size:11px;
+       color:var(--text-subtle);cursor:pointer;white-space:nowrap}
+  .act:hover{color:var(--text-primary)}
+
+  /* A — the action takes the slot's place while the pointer is on the card */
+  .vA .act{visibility:hidden}
+  .vA:hover .act,.vA.on .act{visibility:visible}
+  .vA:hover .slot,.vA.on .slot{visibility:hidden}
+
+  /* B — both read at once; the action's width is reserved so nothing moves */
+  .vB .idline{padding-right:95px}
+  .vB .act{visibility:hidden}
+  .vB:hover .act,.vB.on .act{visibility:visible}
+
+  /* C — while the worker is foreground, the slot IS the action */
+  .vC .slot{visibility:hidden}
+
+  /* ---------- specimen: DelegateGroup (TranscriptView.tsx) ---------- */
+  .group{width:100%;overflow:hidden;border-radius:6px;border:1px solid var(--shell-seam);
+         background:rgba(255,255,255,0.02)}
+  .ghead{display:flex;align-items:center;gap:9px;border-bottom:1px solid var(--shell-seam);padding:6px 12px}
+  .gfaces{display:inline-flex;flex-shrink:0;align-items:center}
+  .gfaces span + span{margin-left:-3px}
+  .glabel{min-width:0;font-size:12.5px;font-weight:600;color:var(--text-primary);
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .gtail{margin-left:auto;flex-shrink:0;white-space:nowrap;font-family:var(--font-mono);font-size:11px;
+         font-variant-numeric:tabular-nums;color:var(--blue-400)}
+  .gbody{display:flex;flex-direction:column;gap:8px;padding:8px}
+
+  /* ---------- specimen: the pane's bottom dock, where the byline actually sits ---------- */
+  .dock{display:flex;flex-direction:column;gap:0}
+  .scroller{border-bottom:0;padding-bottom:14px;-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 30px);
+            mask-image:linear-gradient(to bottom,transparent 0,#000 30px)}
+  .scroller .card{margin-top:10px}
+  .msg{font-size:13.5px;line-height:20px;color:var(--text-primary);padding:2px 4px}
+  .byline{display:flex;align-items:center;gap:10px;background:transparent;padding:6px 4px;font-size:12px}
+  .dots{display:flex;align-items:center;gap:4px}
+  .dot{height:6px;width:6px;border-radius:9999px;background:var(--accent)}
+  .verb{font-weight:600;color:var(--accent)}
+  .target{min-width:0;font-family:var(--font-mono);font-size:11.5px;color:var(--text-subtle);
+          overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .clock{flex-shrink:0;font-family:var(--font-mono);font-size:11px;font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+  .fgpair{display:inline-flex;flex-shrink:0;align-items:center;gap:6px}
+  .fgpill{border-radius:9999px;border:1px solid rgba(244,114,182,0.25);padding:2px 8px;
+          font-size:10.5px;font-weight:500;color:var(--accent)}
+  .bgbtn{border-radius:9999px;border:1px solid rgba(255,255,255,0.08);padding:2px 8px;
+         font-size:10.5px;color:var(--text-subtle);background:transparent;font-family:var(--font-sans);cursor:pointer}
+  .readout{margin-left:auto;flex-shrink:0;font-family:var(--font-mono);font-size:11px;
+           font-variant-numeric:tabular-nums;color:var(--text-subtle)}
+  .composer{display:flex;flex-direction:column;padding-top:2px}
+  .field{padding:6px 0;font-size:15px;font-weight:500;line-height:normal;color:var(--text-faint)}
+  .composerrow{display:flex;align-items:center;gap:10px;padding:4px 0 0}
+  .cicon{height:20px;width:20px;border-radius:9999px;border:1px solid var(--shell-seam)}
+  .send{margin-left:auto;height:20px;width:20px;border-radius:9999px;background:var(--accent)}
+</style>
+</head>
+<body>
+<div class="x-page">
+
+  <p class="x-label">Today</p>
+  <div class="card">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+          <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+          <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+          <rect x="0" y="2" width="9" height="2"/>
+          <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+          <rect x="0" y="5" width="9" height="2"/>
+          <rect x="1" y="7" width="7" height="1"/>
+        </svg>
+        <span class="idnames">
+          <span class="agentname">Turing</span>
+          <span class="agenttype">general-purpose</span>
+        </span>
+        <span class="slot">Reading</span>
+      </span>
+      <span class="taskline">
+        <span class="tasktext">Port the roster</span>
+        <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+      </span>
+    </button>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">A</p>
+  <div class="x-stack">
+    <p class="x-label x-state">Resting</p>
+    <div class="card vA">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+            <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+            <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+            <rect x="0" y="2" width="9" height="2"/>
+            <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+            <rect x="0" y="5" width="9" height="2"/>
+            <rect x="1" y="7" width="7" height="1"/>
+          </svg>
+          <span class="idnames">
+            <span class="agentname">Turing</span>
+            <span class="agenttype">general-purpose</span>
+          </span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline">
+          <span class="tasktext">Port the roster</span>
+          <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+        </span>
+      </button>
+      <button class="act" type="button">Background</button>
+    </div>
+    <p class="x-label x-state">Hover</p>
+    <div class="card vA on">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+            <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+            <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+            <rect x="0" y="2" width="9" height="2"/>
+            <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+            <rect x="0" y="5" width="9" height="2"/>
+            <rect x="1" y="7" width="7" height="1"/>
+          </svg>
+          <span class="idnames">
+            <span class="agentname">Turing</span>
+            <span class="agenttype">general-purpose</span>
+          </span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline">
+          <span class="tasktext">Port the roster</span>
+          <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+        </span>
+      </button>
+      <button class="act" type="button">Background</button>
+    </div>
+  </div>
+
+  <p class="x-label x-sub">B</p>
+  <div class="x-stack">
+    <p class="x-label x-state">Resting</p>
+    <div class="card vB">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+            <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+            <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+            <rect x="0" y="2" width="9" height="2"/>
+            <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+            <rect x="0" y="5" width="9" height="2"/>
+            <rect x="1" y="7" width="7" height="1"/>
+          </svg>
+          <span class="idnames">
+            <span class="agentname">Turing</span>
+            <span class="agenttype">general-purpose</span>
+          </span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline">
+          <span class="tasktext">Port the roster</span>
+          <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+        </span>
+      </button>
+      <button class="act" type="button">Background</button>
+    </div>
+    <p class="x-label x-state">Hover</p>
+    <div class="card vB on">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+            <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+            <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+            <rect x="0" y="2" width="9" height="2"/>
+            <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+            <rect x="0" y="5" width="9" height="2"/>
+            <rect x="1" y="7" width="7" height="1"/>
+          </svg>
+          <span class="idnames">
+            <span class="agentname">Turing</span>
+            <span class="agenttype">general-purpose</span>
+          </span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline">
+          <span class="tasktext">Port the roster</span>
+          <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+        </span>
+      </button>
+      <button class="act" type="button">Background</button>
+    </div>
+  </div>
+
+  <p class="x-label x-sub">C</p>
+  <div class="x-stack">
+    <p class="x-label x-state">Resting and hover alike</p>
+    <div class="card vC">
+      <button class="cardbtn" type="button">
+        <span class="idline">
+          <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+            <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+            <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+            <rect x="0" y="2" width="9" height="2"/>
+            <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+            <rect x="0" y="5" width="9" height="2"/>
+            <rect x="1" y="7" width="7" height="1"/>
+          </svg>
+          <span class="idnames">
+            <span class="agentname">Turing</span>
+            <span class="agenttype">general-purpose</span>
+          </span>
+          <span class="slot">Reading</span>
+        </span>
+        <span class="taskline">
+          <span class="tasktext">Port the roster</span>
+          <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+        </span>
+      </button>
+      <button class="act" type="button">Background</button>
+    </div>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Three co-spawned workers</p>
+  <p class="x-label x-state">Hovering the second</p>
+  <div class="group">
+    <div class="ghead">
+      <span class="gfaces">
+        <span><svg width="17" height="17" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg></span>
+        <span><svg width="17" height="17" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#93c5fd" aria-hidden="true"><rect x="2" y="0" width="1" height="2"/><rect x="6" y="0" width="1" height="2"/><rect x="1" y="2" width="2" height="1"/><rect x="4" y="2" width="1" height="1"/><rect x="6" y="2" width="2" height="1"/><rect x="1" y="3" width="7" height="1"/><rect x="1" y="4" width="2" height="1"/><rect x="4" y="4" width="1" height="1"/><rect x="6" y="4" width="2" height="1"/><rect x="1" y="5" width="7" height="3"/></svg></span>
+        <span><svg width="17" height="17" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#c4b5fd" aria-hidden="true"><rect x="1" y="0" width="1" height="2"/><rect x="7" y="0" width="1" height="2"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/><rect x="2" y="8" width="5" height="1"/></svg></span>
+      </span>
+      <span class="glabel">3 explore workers</span>
+      <span class="gtail">3 still running</span>
+    </div>
+    <div class="gbody">
+      <div class="card vA">
+        <button class="cardbtn" type="button">
+          <span class="idline">
+            <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+            <span class="idnames">
+              <span class="agentname">Turing</span>
+              <span class="agenttype">explore</span>
+            </span>
+            <span class="slot">Reading</span>
+          </span>
+          <span class="taskline">
+            <span class="tasktext">map the seam</span>
+            <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+          </span>
+        </button>
+        <button class="act" type="button">Background</button>
+      </div>
+      <div class="card vA on">
+        <button class="cardbtn" type="button">
+          <span class="idline">
+            <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#93c5fd" aria-hidden="true"><rect x="2" y="0" width="1" height="2"/><rect x="6" y="0" width="1" height="2"/><rect x="1" y="2" width="2" height="1"/><rect x="4" y="2" width="1" height="1"/><rect x="6" y="2" width="2" height="1"/><rect x="1" y="3" width="7" height="1"/><rect x="1" y="4" width="2" height="1"/><rect x="4" y="4" width="1" height="1"/><rect x="6" y="4" width="2" height="1"/><rect x="1" y="5" width="7" height="3"/></svg>
+            <span class="idnames">
+              <span class="agentname">Hopper</span>
+              <span class="agenttype">explore</span>
+            </span>
+            <span class="slot">Reading</span>
+          </span>
+          <span class="taskline">
+            <span class="tasktext">audit the gate</span>
+            <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+          </span>
+        </button>
+        <button class="act" type="button">Background</button>
+      </div>
+      <div class="card vA">
+        <button class="cardbtn" type="button">
+          <span class="idline">
+            <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#c4b5fd" aria-hidden="true"><rect x="1" y="0" width="1" height="2"/><rect x="7" y="0" width="1" height="2"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/><rect x="2" y="8" width="5" height="1"/></svg>
+            <span class="idnames">
+              <span class="agentname">Lovelace</span>
+              <span class="agenttype">explore</span>
+            </span>
+            <span class="slot">Reading</span>
+          </span>
+          <span class="taskline">
+            <span class="tasktext">read the ledger</span>
+            <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+          </span>
+        </button>
+        <button class="act" type="button">Background</button>
+      </div>
+    </div>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Where the button is</p>
+  <p class="x-label x-state">Hover the card</p>
+  <div class="dock">
+    <div class="scroller">
+      <p class="msg">I'll delegate that and report back.</p>
+      <div class="card vA">
+        <button class="cardbtn" type="button">
+          <span class="idline">
+            <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true"><rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/><rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/><rect x="0" y="2" width="9" height="2"/><rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/><rect x="0" y="5" width="9" height="2"/><rect x="1" y="7" width="7" height="1"/></svg>
+            <span class="idnames">
+              <span class="agentname">Turing</span>
+              <span class="agenttype">general-purpose</span>
+            </span>
+            <span class="slot">Reading</span>
+          </span>
+          <span class="taskline">
+            <span class="tasktext">map the seam</span>
+            <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+          </span>
+        </button>
+        <button class="act" type="button">Background</button>
+      </div>
+    </div>
+    <div class="byline">
+      <span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
+      <span class="verb">Running</span>
+      <span class="target">Agent</span>
+      <span class="clock">1m 04s &middot; &darr; 2.4k tokens</span>
+      <span class="readout">3/7</span>
+    </div>
+    <div class="composer">
+      <div class="field">Ask Cat Code anything or describe a task&hellip;</div>
+      <div class="composerrow">
+        <span class="cicon"></span>
+        <span class="cicon"></span>
+        <span class="send"></span>
+      </div>
+    </div>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Where the removed pair sat</p>
+  <div class="dock">
+    <div class="scroller">
+      <p class="msg">I'll delegate that and report back.</p>
+    </div>
+    <div class="byline">
+      <span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>
+      <span class="verb">Running</span>
+      <span class="target">Agent</span>
+      <span class="clock">1m 04s &middot; &darr; 2.4k tokens</span>
+      <span class="fgpair">
+        <span class="fgpill">Foreground</span>
+        <button class="bgbtn" type="button" title="Keep running work in the background">Background</button>
+      </span>
+      <span class="readout">3/7</span>
+    </div>
+    <div class="composer">
+      <div class="field">Ask Cat Code anything or describe a task&hellip;</div>
+      <div class="composerrow">
+        <span class="cicon"></span>
+        <span class="cicon"></span>
+        <span class="send"></span>
+      </div>
+    </div>
+  </div>
+
+  <hr class="x-rule">
+
+  <p class="x-label">Settled</p>
+  <div class="card">
+    <button class="cardbtn" type="button">
+      <span class="idline">
+        <svg width="19" height="19" viewBox="0 0 9 9" shape-rendering="crispEdges" fill="#5eead4" aria-hidden="true">
+          <rect x="0" y="0" width="2" height="1"/><rect x="7" y="0" width="2" height="1"/>
+          <rect x="0" y="1" width="3" height="1"/><rect x="6" y="1" width="3" height="1"/>
+          <rect x="0" y="2" width="9" height="2"/>
+          <rect x="0" y="4" width="2" height="1"/><rect x="3" y="4" width="3" height="1"/><rect x="7" y="4" width="2" height="1"/>
+          <rect x="0" y="5" width="9" height="2"/>
+          <rect x="1" y="7" width="7" height="1"/>
+        </svg>
+        <span class="idnames">
+          <span class="agentname">Turing</span>
+          <span class="agenttype">general-purpose</span>
+        </span>
+        <span class="slot">backgrounded</span>
+      </span>
+      <span class="taskline">
+        <span class="tasktext">Port the roster</span>
+        <span class="taskmeta"><span class="model">gpt-5.6-luna</span></span>
+      </span>
+    </button>
+  </div>
+
+</div>
+</body>
+</html>

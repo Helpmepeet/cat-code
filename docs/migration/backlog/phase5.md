@@ -63,8 +63,8 @@ only its own row in `docs/migration/STATUS.md` as its final bookkeeping step.
 - Use isolated temporary config homes for anything touching persisted state.
   Never test destructive behavior against the operator's live `~/.cat-code`.
   Fixtures must contain no credentials or private transcript content.
-- For every changed area, invoke `verifying-cat-code-changes` and run its current
-  battery. Desktop changes require `bun test app/`, app typecheck, scoped sidecar
+- For every changed area, use `CLAUDE.md` §3 for the current verification
+  commands. Desktop changes require `bun test app/`, app typecheck, scoped sidecar
   typecheck, hardening when the boundary is touched, and renderer build when
   renderer inputs change. Never use raw known-red root or sidecar typecheck as a
   false gate.
@@ -73,6 +73,11 @@ only its own row in `docs/migration/STATUS.md` as its final bookkeeping step.
   does not launch or drive the GUI without per-run authorization.
 - Any process a test starts must be accounted for and reaped by exact PID. Never
   use sweep kills.
+- A session created by a peer treats that peer's instruction as its session block
+  and still updates only its own STATUS row, which stays the record. If the
+  creator asked to hear back, send it one message when you finish or stop, saying
+  so if you could not finish. The operator may talk to you in your tab; their word
+  outranks the instruction.
 
 ## Verified starting point
 

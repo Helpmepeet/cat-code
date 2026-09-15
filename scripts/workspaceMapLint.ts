@@ -1,11 +1,20 @@
 #!/usr/bin/env bun
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
-import { dirname, join, relative, resolve } from 'node:path'
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 
 export type MapLintResult = {
   errors: string[]
   mapCount: number
   warnings: string[]
+}
+
+export type WorkspaceMapValidationOptions = {
+  /**
+   * Optional immutable source tree used for source-owner citations. Map files
+   * and their local links remain read from `repoRoot`, so uncommitted map work
+   * can be checked against a committed source snapshot without hiding it.
+   */
+  sourceRoot?: string
 }
 
 const REQUIRED_FOCUSED_SECTIONS = [
@@ -84,11 +93,33 @@ function citedRepoPaths(markdown: string): string[] {
   return [...paths]
 }
 
-export function validateWorkspaceMaps(repoRoot: string): MapLintResult {
+function pathExistsWithinRoot(root: string, relativePath: string): boolean {
+  const canonicalRoot = realpathSync(root)
+  const candidate = resolve(canonicalRoot, relativePath)
+  const relativePathToRoot = relative(canonicalRoot, candidate)
+  if (relativePathToRoot === '..' || relativePathToRoot.startsWith(`..${sep}`) || isAbsolute(relativePathToRoot)) {
+    return false
+  }
+  if (!existsSync(candidate)) return false
+  try {
+    const canonicalCandidate = realpathSync(candidate)
+    const canonicalRelative = relative(canonicalRoot, canonicalCandidate)
+    return canonicalRelative === '' || (!canonicalRelative.startsWith(`..${sep}`) && canonicalRelative !== '..' && !isAbsolute(canonicalRelative))
+  } catch {
+    return false
+  }
+}
+
+export function validateWorkspaceMaps(
+  repoRoot: string,
+  options: WorkspaceMapValidationOptions = {},
+): MapLintResult {
   const errors: string[] = []
   const warnings: string[] = []
-  const mapsDir = join(repoRoot, 'docs', 'maps')
+  const canonicalRepoRoot = realpathSync(repoRoot)
+  const mapsDir = join(canonicalRepoRoot, 'docs', 'maps')
   const workspacePath = join(mapsDir, 'WORKSPACE_MAP.md')
+  const sourceRoot = options.sourceRoot ? resolve(options.sourceRoot) : repoRoot
 
   if (!existsSync(workspacePath)) {
     return { errors: ['missing docs/maps/WORKSPACE_MAP.md'], mapCount: 0, warnings }
@@ -114,11 +145,11 @@ export function validateWorkspaceMaps(repoRoot: string): MapLintResult {
     if (!indexedSet.has(repoPath)) errors.push(`focused map is not indexed: ${repoPath}`)
   }
   for (const entry of indexEntries) {
-    if (!existsSync(join(repoRoot, entry.path))) {
+    if (!existsSync(join(canonicalRepoRoot, entry.path))) {
       errors.push(`workspace-map index target does not exist: ${entry.path}`)
     }
     const hrefTarget = resolve(mapsDir, entry.href.split('#', 1)[0]!)
-    const labelTarget = resolve(repoRoot, entry.path)
+    const labelTarget = resolve(canonicalRepoRoot, entry.path)
     if (hrefTarget !== labelTarget) {
       errors.push(`workspace-map index href mismatch: ${entry.path} links to ${entry.href}`)
     }
@@ -126,16 +157,19 @@ export function validateWorkspaceMaps(repoRoot: string): MapLintResult {
 
   for (const file of mapFiles) {
     const absolutePath = join(mapsDir, file)
-    const repoPath = relative(repoRoot, absolutePath)
+    const repoPath = relative(canonicalRepoRoot, absolutePath)
     const markdown = readFileSync(absolutePath, 'utf8')
 
     for (const link of localMarkdownLinks(markdown)) {
       const target = resolve(dirname(absolutePath), link)
-      if (!existsSync(target)) errors.push(`${repoPath}: broken link target ${link}`)
+      if (!pathExistsWithinRoot(canonicalRepoRoot, relative(canonicalRepoRoot, target))) {
+        errors.push(`${repoPath}: broken link target ${link}`)
+      }
     }
 
     for (const citedPath of citedRepoPaths(markdown)) {
-      if (!existsSync(join(repoRoot, citedPath))) {
+      const citationRoot = citedPath.startsWith('docs/maps/') ? repoRoot : sourceRoot
+      if (!pathExistsWithinRoot(citationRoot, citedPath)) {
         errors.push(`${repoPath}: cited path does not exist: ${citedPath}`)
       }
     }

@@ -1,6 +1,6 @@
 # ACCOUNTS-OWNERSHIP — who reads the account pool (RATIFIED: host-plane worker)
 
-Status: **RATIFIED 2026-07-28**, implemented in the same change.
+Status: **RATIFIED 2026-07-28**, implemented in the same change. Engine observation sharing amended 2026-09-12 below.
 Sibling of `CATALOG-OWNERSHIP.md`; it is the SAME defect class with the same
 resolution, so this doc is deliberately short and defers every shared argument
 to that one.
@@ -117,6 +117,48 @@ before a delayed notice is preserved.
 The per-session `accounts.snapshot` frame and session-local `account.*` route
 remain for composer account switching and the long-lived OAuth flow. This
 amendment moves only destructive global profile deletion off the session plane.
+
+### Observation-cache amendment (2026-09-12)
+
+Ordinary Codex usage reads now share a private, disposable engine-owned
+observation through `src/services/api/codexUsageSharedCache.ts`. The existing
+`fetchPoolUsage` entry point checks a 60-second TTL and coalesces overlapping
+unforced requests across processes using the existing lock helper. Inventory,
+credential fingerprints, backend, durable credential-file revisions, and an
+invalidation epoch scope the record. Credentials themselves are never persisted
+in this cache. The normalized usage record retains account identity fields
+needed by the existing engine Reset flow; it is private data, not the redacted
+host-plane payload. The directory is 0700, the bounded validated file is 0600,
+and failed reads/error strings are not persisted.
+
+This supersedes the 2026-08-22 correction's statement that every disposable
+worker necessarily performs a usage HTTP request. Worker startup and account
+inventory loading still happen at each run. A recent compatible observation can
+avoid its usage GETs; a miss or failed cache/lock falls back to the live read.
+Main remains engine-free, and the same disposable worker and redacted host
+boundary continue to own publication. No session-routing authority moves.
+
+Forced refreshes bypass cached observations and older in-flight network reads.
+The existing post-request refresh path still invalidates and force-fetches in
+each process; it is not deduplicated by this change. Normal invalidation fences
+old publications across processes. If writing the epoch fails, the engine
+attempts to evict the old observation and disables sharing locally. If storage
+also prevents eviction, another process may reuse the old record until its TTL
+expires. Usage remains advisory; authenticated request results still govern
+actual account availability.
+
+A shared observation is less than 60 seconds old when accepted. The existing
+60-second host polling interval can then leave that displayed observation
+approaching two minutes old before the next successful run, plus execution
+delay; offline last-good display can be older as before. Explicit fresh reads
+continue to bypass this tradeoff. No model-generation request is saved by this
+cache: its savings are usage-status HTTP reads.
+
+Analytics in the same worker now compute the 7-day and 30-day ranges from one
+discovery/read pass. Independent range accumulators retain the existing counting
+rules. The five-run analytics cadence and failed-read last-good display policy
+remain unchanged. See the
+[implementation evidence](../../reports/2026-09-12-multi-session-compute-implementation.md).
 
 ## 3. Security posture (SECURITY-MINIMUM conformance)
 

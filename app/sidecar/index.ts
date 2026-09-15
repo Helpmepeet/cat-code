@@ -45,6 +45,7 @@ import { initializeSidecarRuntime } from './initializeRuntime.js'
 import {
   createSidecarSessionController,
   loadAgentDefinitionsForRuntime,
+  readSpawnModel,
 } from './sessionController.js'
 import { withRestoredSubagentHistory } from './subagentHistory.js'
 import {
@@ -53,9 +54,12 @@ import {
   SidecarResumeError,
 } from './sessionResume.js'
 import { SidecarServer } from './sidecarServer.js'
+import { setPeerHostRequester } from './peerHostRequester.js'
 import { createBackpressuredSocket } from './backpressuredSocket.js'
+import { createSidecarMcpLifecycleStartGate } from './mcpLifecycleStartGate.js'
 import { createSidecarOperationalLogger } from './operationalLogger.js'
 import type { SidecarOperationalLogger } from './operationalLogger.js'
+import { createSidecarCleanup, type SidecarCleanup } from './sidecarCleanup.js'
 
 /**
  * CC-3 — idle self-exit TTL (docs O1 / SESSION-LIFETIME §2). A sidecar whose
@@ -75,6 +79,7 @@ const DEFAULT_SIDECAR_IDLE_TTL_MS = 15 * 60 * 1000
 let activeOperationalLogger: SidecarOperationalLogger | null = null
 let activeAppSessionId: string | undefined
 let activeEngineSessionId: string | undefined
+let activeSidecarCleanup: SidecarCleanup | null = null
 let fatalExitStarted = false
 
 /** Persist only a closed fatal category before the sidecar terminates. */
@@ -104,9 +109,18 @@ function exitAfterFatal(error: unknown): void {
         error instanceof Error ? error.message : 'unknown'
       }\n`,
     )
-    process.exit(isResumeBusy ? RESUME_BUSY_EXIT_CODE : RESUME_FAILED_EXIT_CODE)
+    const code = isResumeBusy ? RESUME_BUSY_EXIT_CODE : RESUME_FAILED_EXIT_CODE
+    if (activeSidecarCleanup) {
+      void activeSidecarCleanup.exit(code)
+      return
+    }
+    process.exit(code)
   }
   process.stderr.write(`[sidecar] fatal: ${error instanceof Error ? error.stack ?? error.message : String(error)}\n`)
+  if (activeSidecarCleanup) {
+    void activeSidecarCleanup.exit(1)
+    return
+  }
   process.exit(1)
 }
 
@@ -215,6 +229,32 @@ async function main(): Promise<void> {
     appSessionId: args.sessionId,
     fields: { role: 'sidecar', pid: process.pid },
   })
+  let closeSocket = () => {}
+  let disposeMcpLifecycle: (() => Promise<void>) | null = null
+  const sidecarCleanup = createSidecarCleanup({
+    disposeMcpLifecycle: () => disposeMcpLifecycle?.() ?? Promise.resolve(),
+    closeSocket: () => closeSocket(),
+    releaseTranscriptLease: releaseActiveTranscriptLease,
+    onDiagnostic: diagnostic => {
+      operational.write({
+        level: 'warn',
+        event: 'diagnostic',
+        appSessionId: args.sessionId,
+        ...(activeEngineSessionId
+          ? { engineSessionId: activeEngineSessionId }
+          : {}),
+        fields: {
+          source: 'sidecar_cleanup',
+          reason: diagnostic.reason,
+          ...(diagnostic.count !== undefined
+            ? { count: diagnostic.count }
+            : {}),
+        },
+      })
+    },
+    exit: code => process.exit(code),
+  })
+  activeSidecarCleanup = sidecarCleanup
   if (!args.probeOnAttach) {
     await initializeSidecarRuntime()
   }
@@ -293,11 +333,13 @@ async function main(): Promise<void> {
   let startupHookMessages: Message[] | undefined
   if (!args.probeOnAttach && resumed === undefined) {
     // The exact value this session's model resolution selects moments from now:
-    // `initializeSidecarModelProvider` reads `getUserSpecifiedModelSetting()`
-    // for a non-resumed session (`app/sidecar/sessionController.ts:231`). It
-    // deliberately does not resolve a default, so when the user has chosen no
-    // model there is none to report and the field stays absent.
-    const specifiedModel = getUserSpecifiedModelSetting()
+    // `initializeSidecarModelProvider` takes the spawn model first and falls
+    // back to `getUserSpecifiedModelSetting()` for a non-resumed session, so a
+    // created peer reports the model it will actually run on rather than the
+    // saved default (PEER-SESSIONS R7). It deliberately does not resolve a
+    // default, so when the user has chosen no model there is none to report and
+    // the field stays absent.
+    const specifiedModel = readSpawnModel() ?? getUserSpecifiedModelSetting()
     const hookMessages = await processSessionStartHooks('startup', {
       ...(typeof specifiedModel === 'string' ? { model: specifiedModel } : {}),
     })
@@ -319,13 +361,14 @@ async function main(): Promise<void> {
     diagnostics,
     extensions,
     remoteSettings,
-    agentMode,
+    workers,
     leases,
     taskControl,
     panelTaskReaper,
     runControls,
     sessionActions,
     contextBreakdown,
+    startMcpLifecycle,
     slashCatalog,
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
@@ -340,7 +383,17 @@ async function main(): Promise<void> {
         : {}),
     ...(agentDefinitions !== undefined ? { agentDefinitions } : {}),
     ...(resumed !== undefined ? { resumedInitialState: resumed.initialState } : {}),
+    onMcpLifecycleCreated: dispose => {
+      disposeMcpLifecycle = dispose
+    },
   })
+  const mcpLifecycleStartGate = startMcpLifecycle
+    ? createSidecarMcpLifecycleStartGate({
+        isWorkspaceTrusted:
+          workspaceTrust?.getSnapshot()?.trusted === true,
+        start: startMcpLifecycle,
+      })
+    : null
 
   // F2 (decisions/RESTORE-HISTORY.md): display history is an archival prefix
   // plus the exact visible model-seed tail. The compacted seed itself stays
@@ -358,6 +411,7 @@ async function main(): Promise<void> {
   }
 
   const idleTtlMs = parseIdleTtlMs(process.env.CATCODE_SIDECAR_IDLE_TTL_MS)
+  const exitCleanly = sidecarCleanup.exit
 
   const server = new SidecarServer({
     sessionId: args.sessionId,
@@ -371,10 +425,13 @@ async function main(): Promise<void> {
     ...(tasks ? { tasks } : {}),
     ...(accounts ? { accounts } : {}),
     ...(workspaceTrust ? { workspaceTrust } : {}),
+    ...(mcpLifecycleStartGate
+      ? { onWorkspaceTrusted: mcpLifecycleStartGate.onWorkspaceTrusted }
+      : {}),
     ...(diagnostics ? { diagnostics } : {}),
     ...(extensions ? { extensions } : {}),
     ...(remoteSettings ? { remoteSettings } : {}),
-    ...(agentMode ? { agentMode } : {}),
+    ...(workers ? { workers } : {}),
     ...(leases ? { leases } : {}),
     ...(taskControl ? { taskControl } : {}),
     ...(panelTaskReaper ? { panelTaskReaper } : {}),
@@ -471,6 +528,20 @@ async function main(): Promise<void> {
       void exitCleanly(PARKED_EXIT_CODE)
     },
   })
+  closeSocket = () => {
+    server.close()
+    try {
+      require('fs').unlinkSync(args.socketPath)
+    } catch {
+      // best-effort
+    }
+  }
+
+  // HOST-REQUEST-PLANE — point the peer tools at the live request client. The
+  // tools were built with the session controller above, before this server
+  // existed, so they resolve a requester per call rather than holding one; this
+  // is where the one that exists is published.
+  setPeerHostRequester((verb, args) => server.requestHost(verb, args))
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a
   // socket FILE, not a listening TCP port — no network surface added).
@@ -586,32 +657,8 @@ async function main(): Promise<void> {
     engineSessionId,
     fields: { pid: process.pid },
   })
+  mcpLifecycleStartGate?.onSocketReady()
 
-  // Clean the socket file on exit so a restart can re-bind the path.
-  const cleanup = () => {
-    server.close()
-    try {
-      require('fs').unlinkSync(args.socketPath)
-    } catch {
-      // best-effort
-    }
-  }
-  let cleanExitStarted = false
-  const exitCleanly = async (code: number): Promise<void> => {
-    if (cleanExitStarted) return
-    cleanExitStarted = true
-    cleanup()
-    await releaseActiveTranscriptLease().catch(error => {
-      const detail = (error instanceof Error ? error.message : String(error)).slice(
-        0,
-        512,
-      )
-      process.stderr.write(
-        `[sidecar] transcript lease release failed during clean exit: ${detail}\n`,
-      )
-    })
-    process.exit(code)
-  }
   process.on('SIGTERM', () => {
     void exitCleanly(0)
   })

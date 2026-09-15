@@ -18,6 +18,8 @@ import {
   WORKSPACE_ORDER_DRAG_MIME,
   type WorkspaceDropEdge,
 } from './sidebarWorkspaceOrder.js'
+/** A seeded storage stub, so a pin exists before the first render. */
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 // The Sidebar renders the MERGED roster (desktop registry ∪ terminal history —
 // SESSIONS-UNIFICATION). It collapses to the rail by default under
@@ -36,6 +38,7 @@ function registryRow(
     cwdExists: true,
     title: 'Alpha',
     displayLabel: 'Alpha',
+    name: null,
     live: true,
     restorable: false,
     parked: false,
@@ -62,6 +65,8 @@ function historyRow(
 ): MergedSessionRow {
   return registryRow(id, {
     appSessionId: null,
+    // A transcript the registry never tracked was never allocated a name.
+    name: null,
     inRegistry: false,
     live: false,
     restorable: false,
@@ -86,7 +91,6 @@ function renderRow(
     sessionId: SessionId,
     anchor: { top: number; left: number },
   ) => void,
-  modelForSession?: (id: SessionId) => string | null,
 ): string {
   return renderToStaticMarkup(
     <SidebarRowItem
@@ -96,7 +100,6 @@ function renderRow(
       onRestore={noop}
       onOpenHistory={noop}
       onOpenRowActions={onOpenRowActions}
-      modelForSession={modelForSession}
     />,
   )
 }
@@ -198,39 +201,52 @@ test('CC-2: registry-row recency derives from lastMessageSentAt (createdAt fallb
 })
 
 /**
- * The `time · model` subtitle. `modelForSession` is asked for the LIVE model
- * (App reads the re-broadcast run-controls seam, not the spawn-frozen
- * diagnostics snapshot), and only a row with an `appSessionId` can be asked at
- * all — a history row has no session to resolve.
+ * The `time · name` subtitle (PEER-SESSIONS R4). The name replaced the running
+ * model here on 2026-09-03: it is a registry field carried on the merged row
+ * itself, so it needs no per-row resolver callback and it renders identically
+ * whether the row is live, parked or closed.
  */
-test('the subtitle renders the model name verbatim, and asks only for rows that have a session', () => {
-  const asked: (SessionId | null)[] = []
-  const model = (id: SessionId) => {
-    asked.push(id)
-    return 'GPT-5.6 Sol'
-  }
+test('the subtitle renders the session name, for a live row and a closed one alike', () => {
+  const live = renderRow(registryRow('a', { displayLabel: 'Alpha', name: 'Bear' }))
+  expect(live).toContain('<span class="truncate">Bear</span>')
 
-  // Verbatim: a display name carries its own spaces and dots, and the row used
-  // to cut it at the last hyphen (leaving "5.6 Sol", and a bare "5" for Opus 5).
-  const live = renderRow(registryRow('a', { displayLabel: 'Alpha' }), undefined, model)
-  expect(live).toContain('<span class="truncate">GPT-5.6 Sol</span>')
-  expect(asked).toEqual(['a'])
+  // Registry field, not a live-process one: a closed row still shows its name.
+  const closed = renderRow(
+    registryRow('b', {
+      displayLabel: 'Beta',
+      name: 'Quartz',
+      live: false,
+      restorable: true,
+      status: 'exited',
+    }),
+  )
+  expect(closed).toContain('<span class="truncate">Quartz</span>')
 
-  // A model the engine has no marketing name for arrives as its raw id, and is
-  // shown as-is rather than trimmed to a meaningless fragment.
-  const raw = renderRow(registryRow('b'), undefined, () => 'claude-opus-5')
-  expect(raw).toContain('<span class="truncate">claude-opus-5</span>')
+  // Parked is the third state R4 names.
+  const parked = renderRow(
+    registryRow('c', { displayLabel: 'Gamma', name: 'Cinnabar', parked: true }),
+  )
+  expect(parked).toContain('<span class="truncate">Cinnabar</span>')
+})
 
-  // A history row carries no appSessionId, so the resolver is never called and
-  // the subtitle is recency alone — never a borrowed model from another row.
-  asked.length = 0
-  const history = renderRow(historyRow('h'), undefined, model)
-  expect(history).not.toContain('terra')
-  expect(asked).toEqual([])
+/**
+ * R4: an unnamed row keeps `time` alone. That is every history row, plus any
+ * registry row written before the field existed — the common case for an
+ * existing install, not an edge.
+ */
+test('an unnamed row shows the time alone, with no separator and no placeholder', () => {
+  const now = Date.now()
+  const unnamed = renderRow(
+    registryRow('a', { displayLabel: 'Alpha', name: null, lastMessageSentAt: now }),
+  )
+  expect(unnamed).toContain('<span class="shrink-0">now</span>')
+  // No trailing half at all: neither a value nor the middot that joins one.
+  expect(unnamed).not.toContain('class="truncate"')
+  expect(unnamed).not.toContain('text-text-ghost">·<')
 
-  // An unknown model is omitted rather than printed as a placeholder.
-  const unknown = renderRow(registryRow('c'), undefined, () => null)
-  expect(unknown).not.toContain('class="truncate"')
+  // A history row is unnamed by construction and behaves the same way.
+  const history = renderRow(historyRow('h', { lastMessageSentAt: now }))
+  expect(history).not.toContain('class="truncate"')
 })
 
 test('every registry row in a group gets its own action kebab (target-session-bound)', () => {
@@ -522,7 +538,6 @@ test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff i
   const collapsed = renderSidebar()
   const expanded = renderSidebar({ menuActive: true })
   for (const id of [
-    'chat',
     'sessions',
     'goals',
     'accounts',
@@ -532,6 +547,8 @@ test('P4-53 — collapsed and expanded nav buttons share generic focus-handoff i
     expect(collapsed.match(new RegExp(marker, 'g'))).toHaveLength(1)
     expect(expanded.match(new RegExp(marker, 'g'))).toHaveLength(1)
   }
+  expect(collapsed).not.toContain('data-sidebar-nav-id="chat"')
+  expect(expanded).not.toContain('data-sidebar-nav-id="chat"')
   // The shared id pins the generic ref handoff for reverse entry, including
   // Settings. SSR cannot press Shift+Tab or observe the layout-effect focus.
 })
@@ -568,15 +585,6 @@ test('the expanded sidebar exposes separate collapse and resize controls', () =>
  * `renderToStaticMarkup`). Ordering/pin LOGIC is proven in
  * `sidebarPinnedSessions.test.ts`; what follows is the DOM wiring over it.
  * --------------------------------------------------------------------------- */
-
-/** A seeded storage stub, so a pin exists before the first render. */
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
 
 function pinning(...sessionIds: string[]) {
   return storage({
@@ -855,41 +863,49 @@ test('the footer names the active account, and links it to the Accounts page', (
   expect(html).toContain('>P<')
 })
 
-test('no account resolved yet leaves the footer with just the destinations toggle', () => {
+test('no account resolved yet leaves the expanded footer with direct destinations', () => {
   const html = renderSidebar({ menuActive: true, accountAlias: null })
   expect(html).not.toContain('Active account')
-  expect(html).toContain('aria-label="Show destinations"')
-})
-
-test('the destinations start folded, inert, and out of the tab order', () => {
-  const html = renderSidebar({ menuActive: true })
-  expect(html).toContain('aria-expanded="false"')
-  // Folded it is visually gone but still in flow; without `inert` Tab would walk
-  // five invisible destinations.
-  expect(html).toContain('inert=""')
-  expect(html).toContain('grid-rows-[0fr] opacity-0')
-  // Every destination is still MOUNTED (the focus-handoff ref map depends on it).
+  expect(html).toContain('data-sidebar-nav-id="sessions"')
+  expect(html).not.toContain('data-sidebar-nav-id="chat"')
   expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
-test('the unfold stagger uses static delay classes, never an interpolated one', () => {
-  // An arbitrary-value class built at runtime silently no-ops in this Tailwind
-  // v4 setup and a headless test cannot see the difference — so the folded state
-  // must carry no delay class at all, and the source must hold literals.
-  const folded = renderSidebar({ menuActive: true })
-  expect(folded).not.toContain('delay-[')
-  expect(folded).toContain('translate-y-1.5 scale-95 opacity-0')
+test('expanded destinations are directly available without an intermediary toggle', () => {
+  const html = renderSidebar({ menuActive: true })
+  expect(html).not.toContain('Show destinations')
+  expect(html).not.toContain('Hide destinations')
+  expect(html).not.toContain('inert=""')
+  expect(html).toContain('data-sidebar-nav-id="sessions"')
+  expect(html).not.toContain('data-sidebar-nav-id="chat"')
+  expect(html).toContain('data-sidebar-nav-id="settings"')
 })
 
-test('the collapsed rail keeps the account glyph above the destination icons', () => {
+test('expanded destinations use the session-row hover treatment', () => {
+  const html = renderSidebar({ menuActive: true, activeView: 'goals' })
+  expect(html).toContain(
+    'border-transparent text-text-subtle hover:border-accent/[0.22] hover:bg-accent/[0.07]',
+  )
+  expect(html).toContain(
+    'border-accent/[0.18] bg-accent/[0.09] text-accent-soft',
+  )
+})
+
+test('the collapsed rail keeps the account glyph below the destinations like the expanded footer', () => {
   const html = renderSidebar({ accountAlias: 'pubmtaki' })
   expect(html).toContain('title="Active account: pubmtaki"')
   expect(html).toContain('>P<')
-  // The rail is the reason the expanded footer may keep its list folded: every
-  // destination stays one click away here.
-  for (const id of ['chat', 'sessions', 'goals', 'accounts', 'settings']) {
+  for (const id of [
+    'sessions',
+    'goals',
+    'accounts',
+    'settings',
+  ]) {
     expect(html).toContain(`data-sidebar-nav-id="${id}"`)
   }
+  expect(html.indexOf('title="Active account: pubmtaki"')).toBeGreaterThan(
+    html.indexOf('data-sidebar-nav-id="settings"'),
+  )
 })
 
 test('an account needing sign-in is marked on the Accounts destination, in both nav variants', () => {
@@ -909,11 +925,9 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // A dead account among healthy ones must not raise a bar over the transcript
   // (STARTUP-GATES, the P4-24 revision and #12). This passive count is what
   // replaces that, so it must not grow into a second alert surface.
-  // Two marks while the list is folded: the Accounts row inside the fold, and the
-  // toggle that opens it. Never more, and never a mark on another destination.
   const marked = renderSidebar({ accountsNeedingSignIn: 3, menuActive: true })
   expect(marked.match(/data-sidebar-nav-badge="accounts"/g)).toHaveLength(1)
-  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(2)
+  expect(marked.match(/data-sidebar-nav-badge/g)).toHaveLength(1)
 
   const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
   expect(healthy).not.toContain('data-sidebar-nav-badge')
@@ -921,21 +935,6 @@ test('the mark is the WHOLE treatment: no destination other than Accounts carrie
   // Unmarked, the expanded row keeps its visible label as its accessible name
   // rather than carrying an aria-label that would have to be kept in sync.
   expect(healthy).toContain('>Accounts</span>')
-})
-
-test('the folded destination list carries its mark out to the toggle that opens it', () => {
-  // The expanded fold is `inert` + `opacity-0` and starts shut, so a mark only
-  // inside it is unreadable in the sidebar's default state: the signal has to
-  // reach a control that is actually on screen.
-  const folded = renderSidebar({ accountsNeedingSignIn: 1, menuActive: true })
-  expect(folded).toContain('data-sidebar-nav-badge="destinations"')
-  expect(folded).toContain(
-    'aria-label="Show destinations, 1 Codex account needs sign-in"',
-  )
-
-  const healthy = renderSidebar({ accountsNeedingSignIn: 0, menuActive: true })
-  expect(healthy).not.toContain('data-sidebar-nav-badge="destinations"')
-  expect(healthy).toContain('aria-label="Show destinations"')
 })
 
 test('the rail starts below the tab bar so the traffic lights are never covered', () => {

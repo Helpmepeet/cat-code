@@ -17,6 +17,12 @@ import type {
   TranscriptRow,
 } from './transcriptProjector.js'
 
+/** Message text for anything thrown or rejected — shared by the shell and the
+ * pane, so neither has to import the other. */
+export function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 export function hostErrorMessage(error: HostError): string {
   return `${error.code}: ${error.message}`
 }

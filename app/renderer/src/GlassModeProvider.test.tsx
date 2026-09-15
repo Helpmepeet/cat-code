@@ -15,14 +15,7 @@ import {
   GlassModeContext,
   GLASS_STORAGE_KEY,
 } from './glassMode.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 /** Reads the published value the Settings row will read. */
 function Probe() {

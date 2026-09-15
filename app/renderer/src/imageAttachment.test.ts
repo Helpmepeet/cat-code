@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from 'bun:test'
-import { prepareImageAttachment } from './imageAttachment.js'
+import {
+  prepareImageAttachment,
+  selectAttachableImageFile,
+} from './imageAttachment.js'
 
 const originalFileReader = Object.getOwnPropertyDescriptor(globalThis, 'FileReader')
 const originalCreateImageBitmap = Object.getOwnPropertyDescriptor(
@@ -106,4 +109,42 @@ test('compresses an accepted image whose original base64 exceeds the submit budg
   expect(canvas.height).toBe(800)
   expect(closed).toBe(true)
   expect(reads).toBe(0)
+})
+
+// CC-84 — a Finder drag exposes its payload on `dataTransfer.files`, never on
+// `text/plain`, so the composer's text-only drop handler returned early and the
+// drop did nothing at all. This is the selection half of the fix.
+test('picks the accepted image out of a dropped file list', () => {
+  const png = new File(['x'], 'shot.png', { type: 'image/png' })
+  const notes = new File(['x'], 'notes.txt', { type: 'text/plain' })
+
+  expect(selectAttachableImageFile([notes, png])).toBe(png)
+})
+
+test('prefers an accepted type over an unsupported image', () => {
+  const heic = new File(['x'], 'shot.heic', { type: 'image/heic' })
+  const webp = new File(['x'], 'shot.webp', { type: 'image/webp' })
+
+  expect(selectAttachableImageFile([heic, webp])).toBe(webp)
+})
+
+// Handed on rather than dropped, so `prepareImageAttachment` answers with the
+// same "Choose a PNG, JPEG, GIF, or WebP image." the picker path gives.
+test('still surfaces an unsupported image so the user gets told why', () => {
+  const heic = new File(['x'], 'shot.heic', { type: 'image/heic' })
+
+  expect(selectAttachableImageFile([heic])).toBe(heic)
+})
+
+// Scope is strictly images: making a dropped file into a path the engine reads
+// would put the renderer in charge of authoring a filesystem path (HC1).
+test('ignores non-image files entirely', () => {
+  expect(
+    selectAttachableImageFile([
+      new File(['x'], 'notes.txt', { type: 'text/plain' }),
+      new File(['x'], 'report.pdf', { type: 'application/pdf' }),
+      new File(['x'], 'unknown', { type: '' }),
+    ]),
+  ).toBeNull()
+  expect(selectAttachableImageFile([])).toBeNull()
 })

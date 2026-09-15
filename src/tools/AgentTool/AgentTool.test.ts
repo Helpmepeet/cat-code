@@ -1,32 +1,26 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 
 import { randomUUID } from 'crypto'
 import { mkdtempSync } from 'fs'
-import { rm } from 'fs/promises'
+import { mkdir, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { PassThrough } from 'stream'
 import stripAnsi from 'strip-ansi'
 import * as React from 'react'
 import { resetStateForTests, switchSession } from '../../bootstrap/state.js'
-import { readSessionState } from '../../agent-mode/sessionState.js'
+import { getCwd } from '../../utils/cwd.js'
+import { readSessionState } from '../../utils/workerState.js'
+import { asSessionId } from '../../types/ids.js'
 import {
   allocateWorkerName,
   resetWorkerNamesForTests,
-} from '../../agent-mode/workerNames.js'
+} from '../../utils/workerNames.js'
 import { render, ThemeProvider } from '../../ink.js'
 import { AppStateProvider, getDefaultAppState } from '../../state/AppState.js'
+import type { McpRuntimeSnapshot, Tool, ToolUseContext } from '../../Tool.js'
 import { getBuiltInAgents } from './builtInAgents.js'
-import {
-  AgentTool,
-  buildAgentSessionStateTracking,
-  deriveSessionStateTrackingObjective,
-  finalizeFailedAgentLaunch,
-  inputSchema,
-  registerWorkerCodexLease,
-  reportableAccount,
-  resolveSystemSubagentName,
-} from './AgentTool.js'
+import type { Message } from '../../types/message.js'
 import {
   getCodexLeaseForOwner,
   resetCodexLeaseManagerForTest,
@@ -36,7 +30,74 @@ import {
   seedCodexAccountPoolForTest,
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
+import {
+  createAssistantMessage,
+  createUserMessage,
+} from '../../utils/messages.js'
+import {
+  clearSessionMessagesCache,
+  flushSessionStorage,
+  readAgentMetadata,
+  recordTranscript,
+  resetProjectForTesting,
+} from '../../utils/sessionStorage.js'
+import { releaseActiveTranscriptLease } from '../../utils/transcriptLease.js'
 import { renderGroupedAgentToolUse, renderToolResultMessage } from './UI.js'
+import type { AgentDefinition } from './loadAgentsDir.js'
+import type { ScopedMcpServerConfig } from '../../services/mcp/types.js'
+
+const realQueryModule = await import('../../query.js')
+let queryScript: () => AsyncGenerator<Message> = async function* () {}
+mock.module('../../query.js', () => ({
+  ...realQueryModule,
+  query: () => queryScript(),
+}))
+
+const realRunAgentModule = await import('./runAgent.js')
+const realRunAgent = realRunAgentModule.runAgent
+let capturedRunAgentParams:
+  | Parameters<typeof realRunAgentModule.runAgent>[0]
+  | undefined
+let useRealRunAgent = false
+mock.module('./runAgent.js', () => ({
+  ...realRunAgentModule,
+  runAgent: (params: Parameters<typeof realRunAgentModule.runAgent>[0]) => {
+    capturedRunAgentParams = params
+    if (useRealRunAgent) {
+      return realRunAgent(params)
+    }
+    return (async function* () {
+      yield createAssistantMessage({ content: 'fixture complete' })
+    })()
+  },
+}))
+
+const realSleepModule = await import('../../utils/sleep.js')
+let resolvePendingMcpPoll: (() => void) | undefined
+mock.module('../../utils/sleep.js', () => ({
+  ...realSleepModule,
+  sleep: async (...args: Parameters<typeof realSleepModule.sleep>) => {
+    const resolve = resolvePendingMcpPoll
+    if (resolve) {
+      resolvePendingMcpPoll = undefined
+      resolve()
+      return
+    }
+    await realSleepModule.sleep(...args)
+  },
+}))
+
+const {
+  AgentTool,
+  buildAgentSessionStateTracking,
+  continueAgentIterator,
+  deriveSessionStateTrackingObjective,
+  finalizeFailedAgentLaunch,
+  inputSchema,
+  registerWorkerCodexLease,
+  reportableAccount,
+  resolveSystemSubagentName,
+} = await import('./AgentTool.js')
 
 async function renderToPlainText(node: React.ReactNode): Promise<string> {
   const stdout = new PassThrough() as unknown as NodeJS.WriteStream & {
@@ -83,20 +144,70 @@ async function renderToPlainText(node: React.ReactNode): Promise<string> {
   return stripAnsi(output)
 }
 
+const baseInput = {
+  description: 'do a thing',
+  prompt: 'go',
+}
+
+function createToolContextForCwd(additionalWorkingDirectories: string[] = []) {
+  const appState = getDefaultAppState()
+  const permissionContext = {
+    ...appState.toolPermissionContext,
+    mode: 'acceptEdits',
+    additionalWorkingDirectories: new Map(
+      additionalWorkingDirectories.map(dir => [
+        dir,
+        {
+          path: dir,
+          source: 'session',
+        },
+      ]),
+    ),
+  }
+
+  return {
+    options: {
+      agentDefinitions: {
+        allAgents: getBuiltInAgents(),
+        activeAgents: getBuiltInAgents(),
+      },
+      tools: [],
+      commands: [],
+      mcpClients: [],
+      mcpResources: {},
+      mainLoopModel: 'gpt-5.6-luna',
+      debug: false,
+      verbose: false,
+      thinkingConfig: { type: 'disabled' as const },
+      isNonInteractiveSession: true,
+      customSystemPrompt: undefined,
+      appendSystemPrompt: undefined,
+    },
+    abortController: new AbortController(),
+    readFileState: new Map(),
+    toolUseId: 'agent-cwd',
+    contentReplacementState: {},
+    renderedSystemPrompt: undefined,
+    getAppState: () => ({
+      ...appState,
+      toolPermissionContext: permissionContext,
+    }),
+    setAppState: () => undefined,
+  } as never
+}
+
 const originalRandom = Math.random
-const originalAgentMode = process.env.CLAUDE_CODE_AGENT_MODE
 const originalCoordinatorMode = process.env.CLAUDE_CODE_COORDINATOR_MODE
 const originalSdkDisableBuiltins =
   process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
 
 afterEach(() => {
   Math.random = originalRandom
+  capturedRunAgentParams = undefined
+  useRealRunAgent = false
+  queryScript = async function* () {}
+  resolvePendingMcpPoll = undefined
   resetWorkerNamesForTests()
-  if (originalAgentMode === undefined) {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
-  } else {
-    process.env.CLAUDE_CODE_AGENT_MODE = originalAgentMode
-  }
   if (originalCoordinatorMode === undefined) {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
   } else {
@@ -112,7 +223,14 @@ afterEach(() => {
 })
 
 describe('AgentTool effort input', () => {
-  const baseInput = { description: 'do a thing', prompt: 'go' }
+  test('accepts Astra as an explicit model override', () => {
+    const parsed = inputSchema().safeParse({
+      ...baseInput,
+      model: 'gpt-6-astra',
+    })
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.model).toBe('gpt-6-astra')
+  })
 
   test('accepts a named effort level from the calling agent', () => {
     const parsed = inputSchema().safeParse({ ...baseInput, effort: 'max' })
@@ -136,6 +254,404 @@ describe('AgentTool effort input', () => {
       inputSchema().safeParse({ ...baseInput, effort: 'turbo' }).success,
     ).toBe(false)
   })
+})
+
+describe('AgentTool cwd input', () => {
+  test('schema accepts cwd', () => {
+    const parsed = inputSchema().safeParse({
+      ...baseInput,
+      cwd: '/tmp',
+    })
+
+    expect(parsed.success).toBe(true)
+    expect(parsed.success && parsed.data.cwd).toBe('/tmp')
+  })
+
+  test('rejects relative cwd', async () => {
+    capturedRunAgentParams = undefined
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: 'agent-dir',
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow('Custom cwd must be an absolute path.')
+    expect(capturedRunAgentParams).toBeUndefined()
+  })
+
+  test('rejects missing cwd directory', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const missingDir = join(tempDir, 'missing')
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: missingDir,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(`Cannot use cwd ${missingDir}: directory does not exist.`)
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects cwd that is not a directory', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const fileCwd = join(tempDir, 'not-dir')
+    await writeFile(fileCwd, 'nope')
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: fileCwd,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(`Cannot use cwd ${fileCwd}: not a directory.`)
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects cwd outside allowed working directories', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const outsideDir = join(tempDir, 'outside')
+    await mkdir(outsideDir, { recursive: true })
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd: outsideDir,
+        },
+        createToolContextForCwd(),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow(
+      `Cannot use cwd ${outsideDir}: it is outside allowed working directories.`,
+    )
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('rejects explicit cwd with worktree isolation', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const cwd = join(tempDir, 'cwd')
+    await mkdir(cwd, { recursive: true })
+
+    await expect(
+      AgentTool.call(
+        {
+          ...baseInput,
+          cwd,
+          isolation: 'worktree',
+        },
+        createToolContextForCwd([cwd]),
+        undefined as never,
+        undefined as never,
+      ),
+    ).rejects.toThrow('Cannot set a custom cwd with worktree isolation.')
+    expect(capturedRunAgentParams).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('passes explicit cwd and forwards it to agent launch params', async () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-'))
+    const cwd = join(tempDir, 'cwd')
+    await mkdir(cwd, { recursive: true })
+
+    await AgentTool.call(
+      {
+        ...baseInput,
+        cwd,
+      },
+      createToolContextForCwd([cwd]),
+      undefined as never,
+      undefined as never,
+    )
+
+    expect(capturedRunAgentParams?.cwd).toBe(cwd)
+    expect(capturedRunAgentParams?.worktreePath).toBeUndefined()
+    await rm(tempDir, { recursive: true, force: true })
+  })
+
+  test('executes the child under explicit cwd and persists that assignment', async () => {
+    const configDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-cfg-'))
+    const projectDir = mkdtempSync(join(tmpdir(), 'agent-tool-cwd-project-'))
+    const cwd = join(projectDir, 'assigned')
+    const previousConfigDir = process.env.CLAUDE_CONFIG_DIR
+    const previousPersistence = process.env.TEST_ENABLE_SESSION_PERSISTENCE
+    let observedChildCwd: string | undefined
+    await mkdir(cwd, { recursive: true })
+
+    try {
+      process.env.CLAUDE_CONFIG_DIR = configDir
+      process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+      resetProjectForTesting()
+      switchSession(asSessionId(randomUUID()), projectDir)
+      clearSessionMessagesCache()
+      useRealRunAgent = true
+      await recordTranscript([
+        createUserMessage({ content: 'parent setup' }),
+      ])
+      await flushSessionStorage()
+      queryScript = async function* () {
+        observedChildCwd = getCwd()
+        yield createAssistantMessage({ content: 'child completed' })
+      }
+
+      await AgentTool.call(
+        {
+          ...baseInput,
+          subagent_type: 'general-purpose',
+          cwd,
+        },
+        createToolContextForCwd([cwd]),
+        undefined as never,
+        undefined as never,
+      )
+
+      await flushSessionStorage()
+      expect(observedChildCwd).toBe(cwd)
+      const agentId = capturedRunAgentParams?.override?.agentId
+      expect(agentId).toBeDefined()
+      const metadata = await readAgentMetadata(agentId!)
+      expect(metadata?.assignedCwd).toBe(cwd)
+      expect(metadata?.worktreePath).toBeUndefined()
+    } finally {
+      clearSessionMessagesCache()
+      await releaseActiveTranscriptLease()
+      resetProjectForTesting()
+      if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR
+      else process.env.CLAUDE_CONFIG_DIR = previousConfigDir
+      if (previousPersistence === undefined) {
+        delete process.env.TEST_ENABLE_SESSION_PERSISTENCE
+      } else {
+        process.env.TEST_ENABLE_SESSION_PERSISTENCE = previousPersistence
+      }
+      await rm(configDir, { recursive: true, force: true }).catch(() => {})
+      await rm(projectDir, { recursive: true, force: true }).catch(() => {})
+    }
+  })
+})
+
+test('required MCP availability rejects an authentication pseudo-tool', async () => {
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = {
+    agentType: 'mcp-agent',
+    source: 'userSettings',
+    whenToUse: 'Use MCP',
+    requiredMcpServers: ['linear'],
+    getSystemPrompt: () => 'Use MCP',
+  } as AgentDefinition
+  const authTool = {
+    name: 'mcp__linear__authenticate',
+    mcpInfo: { serverName: 'linear', toolName: 'authenticate' },
+  } as Tool
+  const appState = {
+    ...getDefaultAppState(),
+    mcp: {
+      ...getDefaultAppState().mcp,
+      clients: [{ name: 'linear', type: 'needs-auth', config }],
+      tools: [authTool],
+    },
+  }
+  const mcpRuntimeSnapshot = {
+    clients: appState.mcp.clients,
+    tools: appState.mcp.tools,
+    commands: [],
+    resources: {},
+  }
+  const context = {
+    options: {
+      agentDefinitions: {
+        allAgents: [agent],
+        activeAgents: [agent],
+      },
+      getMcpRuntimeSnapshot: () => mcpRuntimeSnapshot,
+    },
+    getAppState: () => appState,
+  } as unknown as ToolUseContext
+
+  await expect(
+    AgentTool.call(
+      {
+        prompt: 'Use the integration',
+        description: 'Use MCP',
+        subagent_type: 'mcp-agent',
+      },
+      context,
+      undefined as never,
+      undefined as never,
+    ),
+  ).rejects.toThrow(
+    "Agent 'mcp-agent' requires MCP servers matching: linear. MCP servers with tools: none.",
+  )
+})
+
+test('waits for a required MCP server then launches the agent with its fresh snapshot', async () => {
+  const config = {
+    type: 'stdio',
+    command: 'fixture',
+    args: [],
+    scope: 'user',
+  } as ScopedMcpServerConfig
+  const agent = {
+    agentType: 'mcp-agent',
+    source: 'userSettings',
+    whenToUse: 'Use MCP',
+    requiredMcpServers: ['fixture'],
+    getSystemPrompt: () => 'Use MCP',
+  } as AgentDefinition
+  const freshTool = {
+    name: 'mcp__fixture__lookup',
+    mcpInfo: { serverName: 'fixture', toolName: 'lookup' },
+  } as Tool
+  const staleTurnStartTool = {
+    name: 'mcp__stale__lookup',
+    mcpInfo: { serverName: 'stale', toolName: 'lookup' },
+  } as Tool
+  const freshSnapshot = {
+    clients: [
+      {
+        name: 'fixture',
+        type: 'connected',
+        config,
+        capabilities: {},
+        cleanup: async () => {},
+        client: { onclose: undefined },
+      },
+    ],
+    tools: [freshTool],
+    commands: [{ name: 'mcp__fixture__command' }],
+    resources: {
+      fixture: [{ server: 'fixture', uri: 'fixture://resource', name: 'resource' }],
+    },
+  } as unknown as McpRuntimeSnapshot
+  const turnStartClients = [{ name: 'stale', type: 'pending', config }]
+  const turnStartCommands = [{ name: 'mcp__stale__command' }]
+  const turnStartResources = {
+    stale: [{ server: 'stale', uri: 'stale://resource', name: 'stale resource' }],
+  }
+  const initialState = getDefaultAppState()
+  let appState = {
+    ...initialState,
+    mcp: {
+      ...initialState.mcp,
+      clients: [{ name: 'fixture', type: 'pending', config }],
+      tools: [],
+    },
+  }
+  let snapshotReads = 0
+  let snapshotReadAfterConnection = false
+  resolvePendingMcpPoll = () => {
+    appState = {
+      ...appState,
+      mcp: {
+        ...appState.mcp,
+        clients: freshSnapshot.clients,
+        tools: freshSnapshot.tools,
+      },
+    }
+  }
+  const context = {
+    toolUseId: 'agent-mcp-handoff',
+    abortController: new AbortController(),
+    getAppState: () => appState,
+    setAppState: (update: (previous: typeof appState) => typeof appState) => {
+      appState = update(appState)
+    },
+    options: {
+      agentDefinitions: {
+        allAgents: [agent],
+        activeAgents: [agent],
+      },
+      commands: turnStartCommands,
+      debug: false,
+      mainLoopModel: 'claude-sonnet-4-5',
+      tools: [staleTurnStartTool],
+      verbose: false,
+      thinkingConfig: { type: 'disabled' },
+      mcpClients: turnStartClients,
+      mcpResources: turnStartResources,
+      isNonInteractiveSession: true,
+      getMcpRuntimeSnapshot: () => {
+        snapshotReads += 1
+        snapshotReadAfterConnection =
+          appState.mcp.clients[0]?.type === 'connected'
+        if (!snapshotReadAfterConnection) {
+          throw new Error('AgentTool read the MCP snapshot before the required server connected')
+        }
+        return freshSnapshot
+      },
+    },
+  } as unknown as ToolUseContext
+
+  await AgentTool.call(
+    {
+      prompt: 'Use the fixture integration',
+      description: 'Use MCP',
+      subagent_type: 'mcp-agent',
+    },
+    context,
+    undefined as never,
+    undefined as never,
+  )
+
+  const invocation = capturedRunAgentParams
+  expect(snapshotReads).toBe(1)
+  expect(snapshotReadAfterConnection).toBe(true)
+  expect(invocation).toBeDefined()
+  expect(invocation?.mcpRuntimeSnapshot).toBe(freshSnapshot)
+  expect(invocation?.mcpRuntimeSnapshot?.clients).toBe(freshSnapshot.clients)
+  expect(invocation?.mcpRuntimeSnapshot?.tools).toBe(freshSnapshot.tools)
+  expect(invocation?.mcpRuntimeSnapshot?.commands).toBe(freshSnapshot.commands)
+  expect(invocation?.mcpRuntimeSnapshot?.resources).toBe(freshSnapshot.resources)
+  expect(invocation?.mcpRuntimeSnapshot?.clients).not.toBe(turnStartClients)
+  expect(invocation?.mcpRuntimeSnapshot?.commands).not.toBe(turnStartCommands)
+  expect(invocation?.mcpRuntimeSnapshot?.resources).not.toBe(turnStartResources)
+  expect(invocation?.availableTools).toContain(freshTool)
+  expect(invocation?.availableTools).not.toContain(staleTurnStartTool)
+})
+
+test('background transfer continues the same live iterator from its in-flight next result', async () => {
+  const first = { type: 'progress', toolUseID: 'one' } as unknown as Message
+  const second = { type: 'progress', toolUseID: 'two' } as unknown as Message
+  let nextCalls = 0
+  const iterator: AsyncIterator<Message, void> = {
+    async next() {
+      nextCalls += 1
+      return nextCalls === 1
+        ? { done: false, value: second }
+        : { done: true, value: undefined }
+    },
+  }
+  const received: Message[] = []
+
+  await continueAgentIterator(
+    iterator,
+    Promise.resolve({ done: false, value: first }),
+    message => received.push(message),
+  )
+
+  expect(received).toEqual([first, second])
+  expect(nextCalls).toBe(2)
 })
 
 describe('AgentTool UI', () => {
@@ -283,8 +799,7 @@ describe('AgentTool UI', () => {
 })
 
 describe('getBuiltInAgents in normal mode', () => {
-  test('registers normal implementor and verification agents without Agent Mode gates', () => {
-    delete process.env.CLAUDE_CODE_AGENT_MODE
+  test('registers normal implementor and verification agents without coordinator gates', () => {
     delete process.env.CLAUDE_CODE_COORDINATOR_MODE
     delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
 
@@ -292,22 +807,8 @@ describe('getBuiltInAgents in normal mode', () => {
 
     expect(agentTypes).toContain('implementor')
     expect(agentTypes).toContain('verification')
-    expect(agentTypes).not.toContain('agent-mode-coding-worker')
-    expect(agentTypes).not.toContain('agent-mode-verifier')
   })
 
-  test('keeps Agent Mode worker roles separate from normal-mode roles', () => {
-    process.env.CLAUDE_CODE_AGENT_MODE = '1'
-    delete process.env.CLAUDE_CODE_COORDINATOR_MODE
-    delete process.env.CLAUDE_AGENT_SDK_DISABLE_BUILTIN_AGENTS
-
-    const agentTypes = getBuiltInAgents().map(agent => agent.agentType)
-
-    expect(agentTypes).toContain('agent-mode-coding-worker')
-    expect(agentTypes).toContain('agent-mode-verifier')
-    expect(agentTypes).not.toContain('implementor')
-    expect(agentTypes).not.toContain('verification')
-  })
 })
 
 describe('resolveSystemSubagentName', () => {
@@ -419,53 +920,25 @@ describe('resolveSystemSubagentName', () => {
   })
 })
 
-describe('deriveSessionStateTrackingObjective', () => {
-  test('prefers the thread goal objective over worker description', () => {
-    expect(
-      deriveSessionStateTrackingObjective({
-        threadGoalObjective: 'Finish the real goal',
-        description: 'Implement a narrow worker task',
-      }),
-    ).toBe('Finish the real goal')
-  })
-
-  test('falls back to worker description and default text', () => {
-    expect(
-      deriveSessionStateTrackingObjective({
-        description: 'Implement a narrow worker task',
-      }),
-    ).toBe('Implement a narrow worker task')
-
-    expect(deriveSessionStateTrackingObjective({})).toBe(
-      'Continue current objective',
-    )
-  })
-})
-
 describe('buildAgentSessionStateTracking', () => {
-  test('uses thread goal state from app state inputs for agent mode', () => {
+  test('tracks coordinator worker state without goal-specific fields', () => {
     expect(
       buildAgentSessionStateTracking({
-        sessionMode: 'agent',
+        sessionMode: 'coordinator',
         sessionId: 'session-123',
-        threadGoalObjective: 'Deliver the report',
-        description: 'Map workspace',
       }),
     ).toEqual({
       sessionId: 'session-123',
-      mode: 'agent',
-      objective: 'Deliver the report',
+      mode: 'coordinator',
       statePath: expect.any(String),
     })
   })
 
-  test('returns undefined outside agent and coordinator modes', () => {
+  test('returns undefined outside coordinator mode', () => {
     expect(
       buildAgentSessionStateTracking({
         sessionMode: 'normal',
         sessionId: 'session-123',
-        threadGoalObjective: 'Deliver the report',
-        description: 'Map workspace',
       }),
     ).toBeUndefined()
   })
@@ -476,7 +949,7 @@ describe('finalizeFailedAgentLaunch', () => {
     const spawnCalls: Array<Record<string, unknown>> = []
     const terminalCalls: Array<Record<string, unknown>> = []
     const sessionId = randomUUID()
-    const statePath = join(tmpdir(), `${sessionId}.agent-mode-state.json`)
+    const statePath = join(tmpdir(), `${sessionId}.worker-state.json`)
     Math.random = () => 0
 
     const result = await finalizeFailedAgentLaunch(
@@ -492,8 +965,7 @@ describe('finalizeFailedAgentLaunch', () => {
         worktreePath: null,
         sessionStateTracking: {
           sessionId,
-          mode: 'agent',
-          objective: 'Deliver the report',
+          mode: 'coordinator',
           statePath,
         },
       },
@@ -510,8 +982,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(spawnCalls).toEqual([
       {
         sessionId,
-        mode: 'agent',
-        objective: 'Deliver the report',
+        mode: 'coordinator',
         statePath,
         handle: 'Ada',
         agentId: 'agent-123',
@@ -526,12 +997,9 @@ describe('finalizeFailedAgentLaunch', () => {
         sessionId,
         agentId: 'agent-123',
         status: 'failed',
-        error: 'store is not defined',
-        outputSummary: 'Map workspace for report flow',
         createStateIfMissing: {
           sessionId,
-          mode: 'agent',
-          objective: 'Deliver the report',
+          mode: 'coordinator',
           statePath,
         },
       },
@@ -801,7 +1269,7 @@ describe('finalizeFailedAgentLaunch', () => {
         error: new Error('worktree setup failed'),
         durationMs: 42,
         sessionStateTracking: buildAgentSessionStateTracking({
-          sessionMode: 'agent',
+          sessionMode: 'coordinator',
           sessionId: 'session-123',
           threadGoalObjective: 'Deliver the report',
           description: 'Map workspace for report flow',
@@ -821,7 +1289,7 @@ describe('finalizeFailedAgentLaunch', () => {
     expect(terminalCalls).toHaveLength(1)
   })
 
-  test('persists generic handles for tracked Agent Mode launch failures and advances allocation', async () => {
+  test('persists generic handles for tracked launch failures and advances allocation', async () => {
     const tempProjectDir = mkdtempSync(join(tmpdir(), 'agent-tool-failed-launch-'))
     const sessionId = 'session-123'
     Math.random = () => 0
@@ -837,7 +1305,7 @@ describe('finalizeFailedAgentLaunch', () => {
         error: new Error('worktree setup failed'),
         durationMs: 42,
         sessionStateTracking: buildAgentSessionStateTracking({
-          sessionMode: 'agent',
+          sessionMode: 'coordinator',
           sessionId,
           threadGoalObjective: 'Deliver the report',
           description: 'Map workspace for report flow',
@@ -845,15 +1313,11 @@ describe('finalizeFailedAgentLaunch', () => {
       })
 
       const state = await readSessionState(sessionId)
-      const failedWorker = state?.knownWorkers.find(
-        worker => worker.agentId === 'agent-123',
-      )
+      const failedWorker = state?.knownWorkers['agent-123']
 
       expect(failedWorker?.handle).toBe('Ada')
       expect(failedWorker?.handle).not.toBe('agent-123')
-      expect(allocateWorkerName('Explore', [], { allowGeneric: true })).toBe(
-        'Katherine',
-      )
+      expect(allocateWorkerName('Explore')).toBe('Katherine')
     } finally {
       await rm(tempProjectDir, { recursive: true, force: true })
     }

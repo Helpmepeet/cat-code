@@ -1,4 +1,5 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
+import { getAntModels } from './antModels.js'
 import {
   getInitialMainLoopModel,
   getTotalInputTokens,
@@ -276,6 +277,15 @@ function getGpt56LunaOption(): ModelOption {
   }
 }
 
+function getGpt6AstraOption(): ModelOption {
+  return {
+    value: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    description: 'GPT-6 Astra',
+    descriptionForModel: 'GPT-6 Astra',
+  }
+}
+
 function getMaxOpusOption(fastMode = false): ModelOption {
   return {
     value: 'opus',
@@ -351,6 +361,7 @@ function getModelOptionsBase(fastMode = false): ModelOption[] {
   if (isCodexSubscriber()) {
     const codexOptions: ModelOption[] = [
       getDefaultOptionForUser(),
+      getGpt6AstraOption(),
       getGpt56SolOption(),
       getGpt56TerraOption(),
       getGpt56LunaOption(),
@@ -603,6 +614,7 @@ export function getModelOptions(fastMode = false): ModelOption[] {
     hasCodexTokens()
   ) {
     const gptModels = [
+      getGpt6AstraOption(),
       getGpt56SolOption(),
       getGpt56TerraOption(),
       getGpt56LunaOption(),

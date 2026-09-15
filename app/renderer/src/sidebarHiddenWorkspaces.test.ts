@@ -11,6 +11,10 @@ import {
   selectVisibleWorkspaceGroups,
   writeHiddenWorkspacesToStorage,
 } from './sidebarHiddenWorkspaces.js'
+import {
+  memoryStorage as storage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 // Hiding a project is a pure module by necessity: the renderer suite is SSR-only
 // (`renderToStaticMarkup`), so the menu click that calls these reducers cannot
@@ -24,15 +28,6 @@ const activityOf = (g: { activityAtMs: number }) => g.activityAtMs
 
 function cwdsOf(list: readonly { cwd: string }[]): string[] {
   return list.map(g => g.cwd)
-}
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    raw: store,
-  }
 }
 
 // ── hide membership ──────────────────────────────────────────────────────────
@@ -278,14 +273,7 @@ test('the written list is capped at the oldest-hidden end', () => {
 })
 
 test('a storage that throws never breaks the rail', () => {
-  const throwing = {
-    getItem: () => {
-      throw new Error('nope')
-    },
-    setItem: () => {
-      throw new Error('nope')
-    },
-  }
+  const throwing = throwingStorage('nope')
   expect(readHiddenWorkspacesFromStorage(throwing)).toBeNull()
   expect(() =>
     writeHiddenWorkspacesToStorage(throwing, [{ cwd: '/w/a', hiddenAt: 1 }]),

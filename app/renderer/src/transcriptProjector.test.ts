@@ -1,6 +1,11 @@
 import { expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/session-events'
-import type { ServerFrame } from '../../shared/protocol.js'
+import type { ServerFrame, SessionId } from '../../shared/protocol.js'
+import {
+  createQueuedPromptsState,
+  reduceQueuedPromptsState,
+  selectQueuedPrompts,
+} from './queuedPromptsState.js'
 import {
   createTranscriptState,
   groupAgentDelegates,
@@ -16,6 +21,7 @@ import {
   type NestedTranscriptRow,
 } from './transcriptProjector.js'
 import { reduceLiveTranscriptState } from './previewTranscriptState.js'
+import { FrameReplayBuffer } from '../../main/replayBuffer.js'
 import {
   AGENT_WITH_NESTED_SUBAGENT_TURN,
   allSdkMessageSamples,
@@ -224,7 +230,7 @@ test('marks a persisted cancelled tool result separately from a failure', () => 
   ])
 })
 
-test('suppresses typed provider error text before the curated result seam', () => {
+test('projects typed provider error text before the curated result seam', () => {
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
   const play = (message: SDKMessage) => {
@@ -260,6 +266,11 @@ test('suppresses typed provider error text before the curated result seam', () =
   })
 
   expect(selectTranscriptRows(state, 'session-1')).toEqual([
+    expect.objectContaining({
+      kind: 'system-notice',
+      noticeType: 'provider_error',
+      content: 'OAuth access token has been revoked',
+    }),
     expect.objectContaining({ kind: 'result', subtype: 'error_auth_required' }),
   ])
 })
@@ -529,7 +540,7 @@ test('reconciles concurrent raw and summary reasoning against their own block in
       messageFrame('session-1', message),
     ),
   ]
-  const state = projectSequential(frames)
+  const state = projectPerFrame(frames)
   const reasoning = selectTranscriptRows(state, 'session-1').filter(
     row => row.kind === 'thinking',
   )
@@ -902,6 +913,7 @@ test('projects result with subtype: interrupted as a non-error result row', () =
     messageFrame('session-1', {
       type: 'result',
       subtype: 'interrupted',
+      stop_reason: 'interrupted',
       is_error: false,
       duration_ms: 1800,
       total_cost_usd: 0,
@@ -918,6 +930,22 @@ test('projects result with subtype: interrupted as a non-error result row', () =
     durationMs: 1800,
     totalCostUsd: 0,
   })
+})
+
+test('suppresses and deduplicates a submit-interrupt result', () => {
+  let state = createTranscriptState()
+  state = projectServerFrame(state, ready('session-1'))
+  const frame = messageFrame('session-1', {
+    type: 'result',
+    subtype: 'interrupted',
+    stop_reason: 'interrupt',
+    is_error: false,
+    uuid: 'result-submit-interrupt-1',
+  })
+
+  state = projectServerFrame(state, frame)
+  expect(selectTranscriptRows(state, 'session-1')).toEqual([])
+  expect(projectServerFrame(state, frame)).toBe(state)
 })
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -1254,10 +1282,11 @@ test('a task-notification with no summary yields a row the view declines to draw
 })
 
 /**
- * The four kinds that had NO desktop handling at all: `coordinator`, `channel`,
- * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10).
- * Each carries `role:'user'` but was written by the engine, and each rendered as
- * the operator's own right-aligned bubble before `origin` crossed the wire.
+ * The kinds that had NO desktop handling at all: `coordinator`, `channel`,
+ * `teammate`, `deferred-continuation` (`MessageOrigin`, src/types/message.ts:10),
+ * joined 2026-09-03 by `peer`. Each carries `role:'user'` but was written by the
+ * engine, and each rendered as the operator's own right-aligned bubble before
+ * `origin` crossed the wire.
  */
 test.each([
   [{ kind: 'coordinator' }, 'coordinator', null],
@@ -1266,6 +1295,14 @@ test.each([
   [{ kind: 'teammate', from: 'scout' }, 'teammate', 'scout'],
   [{ kind: 'teammate' }, 'teammate', null],
   [{ kind: 'deferred-continuation' }, 'deferred-continuation', null],
+  // PEER-SESSIONS §6 / HOST-REQUEST-PLANE §6: the sender is the peer's NAME,
+  // the one sender fact `SDKMessageOrigin`'s `peer` member carries.
+  [{ kind: 'peer', name: 'Bear' }, 'peer', 'Bear'],
+  // A peer claim off the socket with no usable name still reads as injected —
+  // unlabelled, never re-attributed to the operator.
+  [{ kind: 'peer' }, 'peer', null],
+  [{ kind: 'peer', name: '' }, 'peer', null],
+  [{ kind: 'peer', name: 42 }, 'peer', null],
 ])(
   'projects origin %j as an injected-turn row, never a user bubble',
   (origin, injectedKind, label) => {
@@ -1281,6 +1318,108 @@ test.each([
     expect(rows[0]?.kind).not.toBe('user-text')
   },
 )
+
+/**
+ * The PROJECTOR half of the peer-rendering rule in HOST-REQUEST-PLANE §6: a
+ * peer-origin user frame mints a transcript row and stages nothing in the
+ * queued-prompts store, so the same frame is never held by both. The strip is
+ * fed by the `queued-prompts.snapshot` read seam, a different frame on a
+ * different store, and it has nothing to draw here.
+ *
+ * This is only half the guarantee, and the name says so on purpose. The way
+ * the rule actually breaks is upstream, in the sidecar, by routing a peer
+ * message through the mid-turn prompt path instead of the task-notification
+ * path. That routing is covered by the queue test in
+ * `app/sidecar/sidecarServer.test.ts`, not here: this suite stays green
+ * through it. A test whose name claims more than its assertions is worse than
+ * no test, because the next person to change the routing reads the name,
+ * believes they are covered, and ships.
+ *
+ * Why the rule exists: a message from a peer has already reached the model.
+ * Showing it as "waiting to be sent", in the user's own dashed bubble, would
+ * attribute the peer's text to the operator on the one surface that draws it
+ * as their unsent draft.
+ */
+test('a peer-origin user frame mints a transcript row and stages nothing in the queued store', () => {
+  const frame = messageFrame(
+    'session-1',
+    JSON.parse(
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: 'ran the migration, all green' },
+        parent_tool_use_id: null,
+        uuid: '00000000-0000-4000-8000-000000000401',
+        origin: { kind: 'peer', name: 'Bear' },
+      }),
+    ) as SDKMessage,
+  )
+
+  let transcript = createTranscriptState()
+  transcript = projectServerFrame(transcript, ready('session-1'))
+  transcript = projectServerFrame(transcript, frame)
+  expect(selectTranscriptRows(transcript, 'session-1')).toHaveLength(1)
+
+  // The same frame through the queued store: nothing staged, no session key.
+  let queued = createQueuedPromptsState()
+  queued = reduceQueuedPromptsState(queued, { type: 'frame', frame })
+  expect(selectQueuedPrompts(queued, 'session-1' as SessionId)).toHaveLength(0)
+})
+
+/**
+ * The envelope the sidecar wraps a delivered peer message in
+ * (`wrapCrossSessionMessage`, `app/sidecar/sidecarServer.ts`) is model-facing:
+ * it tells the recipient the text came from another session. It reached the
+ * screen verbatim, tag and `from` attribute included, beside a row that already
+ * names the sender in its label (operator sitting, 2026-09-04). Stripping is
+ * display-only; the engine-facing wrapping is untouched.
+ */
+test('a peer row shows the message, never the envelope the model was handed', () => {
+  const rows = rowsForUserOrigin(
+    { kind: 'peer', name: 'Stope' },
+    '<cross-session-message from="Stope">\nthere are exactly 102 files.\nI counted them with: find …\n</cross-session-message>',
+  )
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'injected-turn',
+    injectedKind: 'peer',
+    label: 'Stope',
+    content: 'there are exactly 102 files.\nI counted them with: find …',
+  })
+  expect(JSON.stringify(rows[0])).not.toContain('cross-session-message')
+  // The creation prompt is delivered untagged and was never wrapped; it must
+  // still arrive whole.
+  expect(rowsForUserOrigin({ kind: 'peer', name: 'Stope' }, 'count the files')[0]).toMatchObject(
+    { kind: 'injected-turn', content: 'count the files' },
+  )
+})
+
+test('a peer body that is not the envelope renders as-is rather than half-parsed', () => {
+  // Anchored at both ends: a body that merely quotes or opens the tag is text,
+  // and display degrades by leaving it alone.
+  for (const body of [
+    'the shape is <cross-session-message from="a">b</cross-session-message>, roughly',
+    '<cross-session-message from="Stope">\nno closing tag',
+    '<cross-session-message>\nno from attribute\n</cross-session-message>',
+  ]) {
+    expect(rowsForUserOrigin({ kind: 'peer', name: 'Stope' }, body)[0]).toMatchObject({
+      kind: 'injected-turn',
+      content: body,
+    })
+  }
+  // The wrapper neutralizes the envelope's own tag inside the body; the escape
+  // stays visible on purpose. Nothing here can tell an escape the wrapper
+  // introduced from one the sender typed, so reversing it would mangle the
+  // second kind.
+  expect(
+    rowsForUserOrigin(
+      { kind: 'peer', name: 'Stope' },
+      '<cross-session-message from="Stope">\nwatch out for &lt;cross-session-message in a body\n</cross-session-message>',
+    )[0],
+  ).toMatchObject({
+    kind: 'injected-turn',
+    content: 'watch out for &lt;cross-session-message in a body',
+  })
+})
 
 test('an operator turn still renders as a user bubble — with or without a human origin', () => {
   for (const origin of [undefined, { kind: 'human' }]) {
@@ -2961,7 +3100,7 @@ test('FileEditTool tool_use_result narrows to a DiffView/MultiDiffCard hunk shap
   })
 })
 
-test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
+test('apply_patch tool_use_result (files[] envelope) narrows to a diff — primary file when many', () => {
   // Current FilePatchTool output shape: `{ files: [{ path, type, firstLine,
   // structuredPatch }] }` (src/tools/FilePatchTool/types.ts, emitted
   // FilePatchTool.tsx) — a MULTI-file envelope, unlike FileEditTool's
@@ -2983,7 +3122,7 @@ test('Apply_patch tool_use_result (files[] envelope) narrows to a diff — prima
           {
             type: 'tool_use',
             id: 'toolu_patch_1',
-            name: 'Apply_patch',
+            name: 'apply_patch',
             // FilePatchToolInput `{ input: string }` envelope
             // (src/tools/FilePatchTool/types.ts:125-136), NOT Edit's
             // old_string/new_string.
@@ -3582,7 +3721,7 @@ test('D2/C4: subagent tool_use + tool_result nest under the owning agent card, n
   let state = createTranscriptState()
   state = projectServerFrame(state, ready('session-1'))
 
-  // Top-level: the orchestrator's own Agent/Task tool_use — the owning card.
+  // Top-level: the parent's own Agent/Task tool_use — the owning card.
   state = projectServerFrame(
     state,
     messageFrame('session-1', {
@@ -4284,7 +4423,7 @@ test('hidden tier: a synthetic frame correlates its tool_result EXACTLY ONCE', (
   })
 
   // ONE frame that is BOTH hidden AND a result carrier: exactly the shape the
-  // ordering comment above `correlateToolResults` protects.
+  // fold-before-any-early-return ordering in `projectUserFrame` protects.
   const hiddenCarrier = messageFrame('session-1', {
     type: 'user',
     message: {
@@ -4943,6 +5082,11 @@ test('a live frame appends even when the closing result never arrived', () => {
   state = projectServerFrame(state, assistantFrame('session-1', 2))
 
   expect(bodies(state)).toEqual(['old-a', 'body 1', 'body 2'])
+
+  // The live frame also CLOSED the cursor, so the next recovery opens a fresh
+  // batch at the head instead of continuing the abandoned one beneath 'old-a'.
+  state = projectServerFrame(state, recoveredFrame('session-1', 'old-b'))
+  expect(bodies(state)).toEqual(['old-b', 'old-a', 'body 1', 'body 2'])
 })
 
 /**
@@ -5057,22 +5201,14 @@ test('a refused result never clears the boundary row', () => {
   ).toContain('history-boundary')
 })
 
-function projectSequential(
+/** The finest partition: one frame per delivery, which is what live delivery does. */
+function projectPerFrame(
   frames: readonly ServerFrame[],
 ): ReturnType<typeof createTranscriptState> {
   return frames.reduce(projectServerFrame, createTranscriptState())
 }
 
-function projectSequentialDeliveries(
-  deliveries: readonly (readonly ServerFrame[])[],
-): ReturnType<typeof createTranscriptState> {
-  return deliveries.reduce(
-    (state, delivery) => delivery.reduce(projectServerFrame, state),
-    createTranscriptState(),
-  )
-}
-
-function projectBatchDeliveries(
+function projectDeliveries(
   deliveries: readonly (readonly ServerFrame[])[],
 ): ReturnType<typeof createTranscriptState> {
   return deliveries.reduce(projectServerFrames, createTranscriptState())
@@ -5087,13 +5223,21 @@ function deepFreeze<T>(value: T): T {
 }
 
 /**
- * Baseline oracle for the batched projector. It deliberately uses only the
- * established single-frame reducer: the optimization is added after this
- * corpus is committed, so its expected state cannot inherit transaction
- * assumptions. Whole-state equality covers every TranscriptSessionState
- * collection, rather than only the visible row projection.
+ * The property replay depends on: how frames are CUT INTO DELIVERIES cannot
+ * change the state they project to. One projection transaction runs per
+ * delivery — fresh drafts, a fresh row index, fresh copy-on-write flags — so a
+ * fault in draft creation or publication shows up here as a partition-dependent
+ * result. The expected state is the finest partition (one frame per delivery,
+ * i.e. live delivery); every coarser partition is compared against it. Whole-
+ * state equality covers every TranscriptSessionState collection, rather than
+ * only the visible row projection.
+ *
+ * The corpus below is the adversarial one this test was committed with: the
+ * whole SDKMessage fixture set, plus a hidden-tier frame, an image preview, a
+ * truncation latch, an open recovery batch and its closing result, a second
+ * session, and a frame for a session that was never opened.
  */
-test('sequential transcript projection is invariant across replay delivery partitions', () => {
+test('transcript projection is invariant across replay delivery partitions', () => {
   const sessionId = 'session-1'
   const secondSessionId = 'session-2'
   const fixtureFrames = allSdkMessageSamples().map(sample =>
@@ -5137,29 +5281,15 @@ test('sequential transcript projection is invariant across replay delivery parti
       uuid: '00000000-0000-4000-8000-00000000d002',
     }),
   ]
-  const expected = projectSequential(frames)
+  const expected = projectPerFrame(frames)
 
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
-  expect(projectBatchDeliveries(frames.map(frame => [frame]))).toEqual(expected)
-  expect(projectSequentialDeliveries([frames])).toEqual(expected)
-  expect(projectSequentialDeliveries(frames.map(frame => [frame]))).toEqual(
-    expected,
-  )
 
   // Every boundary in this bounded adversarial corpus, plus partitions shaped
   // like frame caps, byte caps, and the lazy replay timer's partial flush.
   for (let splitAt = 1; splitAt < frames.length; splitAt += 1) {
     expect(
-      projectSequentialDeliveries([
-        frames.slice(0, splitAt),
-        frames.slice(splitAt),
-      ]),
-    ).toEqual(expected)
-    expect(
-      projectBatchDeliveries([
-        frames.slice(0, splitAt),
-        frames.slice(splitAt),
-      ]),
+      projectDeliveries([frames.slice(0, splitAt), frames.slice(splitAt)]),
     ).toEqual(expected)
   }
   for (const partition of [
@@ -5174,12 +5304,11 @@ test('sequential transcript projection is invariant across replay delivery parti
       cursor += size
     }
     deliveries.push(frames.slice(cursor))
-    expect(projectSequentialDeliveries(deliveries)).toEqual(expected)
-    expect(projectBatchDeliveries(deliveries)).toEqual(expected)
+    expect(projectDeliveries(deliveries)).toEqual(expected)
   }
 })
 
-test('batch projection matches the single-frame projector at every streaming reasoning prefix', () => {
+test('one-delivery projection matches per-frame delivery at every streaming reasoning prefix', () => {
   for (const fixture of [
     S1_STREAMING_REASONING_TURN,
     S1_CONCURRENT_REASONING_TURN,
@@ -5191,13 +5320,13 @@ test('batch projection matches the single-frame projector at every streaming rea
     for (let count = 1; count <= frames.length; count += 1) {
       const prefix = frames.slice(0, count)
       expect(projectServerFrames(createTranscriptState(), prefix)).toEqual(
-        projectSequential(prefix),
+        projectPerFrame(prefix),
       )
     }
   }
 })
 
-test('batch projection preserves sequential semantics for interleaved sessions and adversarial frames', () => {
+test('delivery partitioning is preserved for interleaved sessions and adversarial frames', () => {
   const primary = 'batch-primary'
   const secondary = 'batch-secondary'
   const streamedFinal = messageFrame(primary, {
@@ -5299,17 +5428,17 @@ test('batch projection preserves sequential semantics for interleaved sessions a
     assistantFrame(primary, 8),
   ]
 
-  const expected = projectSequential(frames)
+  const expected = projectPerFrame(frames)
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(expected)
-  expect(projectBatchDeliveries([
+  expect(projectDeliveries([
     frames.slice(0, 3),
     frames.slice(3, 8),
     frames.slice(8),
   ])).toEqual(expected)
 })
 
-test('batch projection preserves source identities and publishes no-op batches', () => {
-  const initial = projectSequential([
+test('projection preserves source identities and publishes no-op deliveries', () => {
+  const initial = projectPerFrame([
     ready('session-1'),
     assistantFrame('session-1', 1),
     ready('session-2'),
@@ -5341,14 +5470,14 @@ test('batch projection preserves source identities and publishes no-op batches',
 })
 
 test('single live reducer projection remains the single-frame projector path', () => {
-  const state = projectSequential([ready('session-1')])
+  const state = projectPerFrame([ready('session-1')])
   const frame = assistantFrame('session-1', 1)
   expect(reduceLiveTranscriptState(state, frame)).toEqual(
     projectServerFrame(state, frame),
   )
 })
 
-test('batch projection retains a recovered typed assistant error without a frame id', () => {
+test('a recovered typed assistant error without a frame id is retained', () => {
   const frame = {
     ...messageFrame('session-1', {
       type: 'assistant',
@@ -5361,6 +5490,132 @@ test('batch projection retains a recovered typed assistant error without a frame
   const frames = [ready('session-1'), frame]
 
   expect(projectServerFrames(createTranscriptState(), frames)).toEqual(
-    projectSequential(frames),
+    projectPerFrame(frames),
   )
+})
+
+/**
+ * The compaction boundary in main's replay ring, seen from the renderer
+ * (2026-09-02 assessment §5 item 2). Main drops a stream's `stream_event`
+ * partials at its `message_stop`, never at a finished `assistant` frame — the
+ * provider yields one `assistant` per content block and only reaches
+ * `message_stop` after the last of them, so an earlier boundary would strip the
+ * `message_start` that a SECOND block's deltas need to find their stream after a
+ * reload. This drives the real `FrameReplayBuffer` so the two sides cannot drift.
+ */
+test('a mid-turn reload replays the open stream, so the turn’s second block still streams', () => {
+  const sessionId = 'session-two-block'
+  const buffer = new FrameReplayBuffer()
+  const record = (frame: ServerFrame) => {
+    buffer.record(sessionId, frame)
+    return frame
+  }
+  const partial = (event: Record<string, unknown>, seq: number) =>
+    record(
+      messageFrame(sessionId, {
+        type: 'stream_event',
+        event,
+        parent_tool_use_id: null,
+        session_id: `engine-${sessionId}`,
+        uuid: `00000000-0000-4000-8000-9${String(seq).padStart(11, '0')}`,
+      } as SDKMessage),
+    )
+  const assistantBlock = (text: string, seq: number) =>
+    record(
+      messageFrame(sessionId, {
+        type: 'assistant',
+        message: {
+          id: 'msg-two-block',
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          stop_reason: null,
+        },
+        parent_tool_use_id: null,
+        session_id: `engine-${sessionId}`,
+        uuid: `00000000-0000-4000-8000-8${String(seq).padStart(11, '0')}`,
+      } as SDKMessage),
+    )
+
+  record(ready(sessionId) as ServerFrame)
+  partial({ type: 'message_start', message: { id: 'msg-two-block' } }, 1)
+  partial({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }, 2)
+  partial({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'first' } }, 3)
+  partial({ type: 'content_block_stop', index: 0 }, 4)
+  assistantBlock('first block.', 1)
+
+  // The reload: a fresh renderer state catches up from main's ring alone.
+  let state = projectServerFrames(createTranscriptState(), buffer.snapshot())
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject([
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+  ])
+
+  // Block 1 arrives live into the reloaded pane. Its delta can only find a
+  // stream because the replay carried the `message_start`.
+  state = projectServerFrame(
+    state,
+    partial({ type: 'content_block_start', index: 1, content_block: { type: 'text', text: '' } }, 5),
+  )
+  state = projectServerFrame(
+    state,
+    partial({ type: 'content_block_delta', index: 1, delta: { type: 'text_delta', text: 'second' } }, 6),
+  )
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject([
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+    { blockIndex: 1, kind: 'assistant-text', content: 'second', isStreaming: true },
+  ])
+
+  state = projectServerFrame(state, partial({ type: 'content_block_stop', index: 1 }, 7))
+  state = projectServerFrame(state, assistantBlock('second block.', 2))
+  state = projectServerFrame(state, partial({ type: 'message_stop' }, 8))
+
+  const finished = [
+    { blockIndex: 0, kind: 'assistant-text', content: 'first block.' },
+    { blockIndex: 1, kind: 'assistant-text', content: 'second block.' },
+  ]
+  expect(selectTranscriptRows(state, sessionId)).toMatchObject(finished)
+
+  // A reload AFTER the stream stopped replays a ring with no partials left in
+  // it, and projects the identical finished rows.
+  const compacted = buffer.snapshot()
+  expect(
+    compacted.filter(
+      frame =>
+        frame.kind === 'event' &&
+        frame.event.type === 'message' &&
+        frame.event.message.type === 'stream_event',
+    ),
+  ).toEqual([])
+  expect(
+    selectTranscriptRows(
+      projectServerFrames(createTranscriptState(), compacted),
+      sessionId,
+    ),
+  ).toMatchObject(finished)
+})
+
+test('assistant frame with error produces a provider_error system notice', () => {
+  const frame = messageFrame('session-1', {
+    type: 'assistant',
+    error: 'invalid_request',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: "There's an issue with the selected model" },
+      ],
+    },
+    parent_tool_use_id: null,
+    uuid: '00000000-0000-4000-8000-000000000001',
+  } as unknown as SDKMessage)
+
+  const state = projectPerFrame([ready('session-1'), frame])
+  const rows = selectTranscriptRows(state, 'session-1')
+  expect(rows).toHaveLength(1)
+  expect(rows[0]).toMatchObject({
+    kind: 'system-notice',
+    noticeType: 'provider_error',
+    content: "There's an issue with the selected model",
+  })
+  expect(
+    projectServerFrames(createTranscriptState(), [ready('session-1'), frame]),
+  ).toEqual(state)
 })

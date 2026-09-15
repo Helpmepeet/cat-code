@@ -102,16 +102,20 @@ function assertHermeticHome(fakeHome: string): void {
 async function runWorker(
   env: Record<string, string | undefined>,
   extraArgs: string[] = [],
+  prepare?: (configDir: string) => string,
 ) {
   const cwd = temp('catcode-accounts-worker-cwd-')
   const fakeHome = temp('catcode-accounts-worker-home-')
   assertHermeticHome(fakeHome)
-  const proc = Bun.spawn(['bun', 'run', worker, '--bare', ...extraArgs], {
+  const configDir = temp('catcode-accounts-worker-config-')
+  const preload = prepare?.(configDir)
+  const proc = Bun.spawn(['bun', 'run', ...(preload ? ['--preload', preload] : []), worker, '--bare', ...extraArgs], {
     cwd,
     env: {
       ...process.env,
       NODE_ENV: 'development',
-      CLAUDE_CONFIG_DIR: temp('catcode-accounts-worker-config-'),
+      CLAUDE_CONFIG_DIR: configDir,
+      CLAUDE_CODE_SIMPLE: '1',
       // The Codex + Anthropic vault paths are `homedir()`-derived, not
       // `CLAUDE_CONFIG_DIR`-derived (see the file header) — without this the
       // worker would resolve to the operator's REAL `~/codex-vault` /
@@ -134,16 +138,17 @@ async function runWorker(
     stderr: 'pipe',
   })
   proc.stdin.end()
-  const [code, stdout] = await Promise.all([
+  const [code, stdout, stderr] = await Promise.all([
     proc.exited,
     new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
   ])
   const records = stdout
     .trim()
     .split('\n')
     .filter(line => line.length > 0)
     .map(line => parseAccountsPoolWorkerResult(JSON.parse(line)))
-  return { code, records }
+  return { code, records, stderr }
 }
 
 test('the accounts worker reports the Anthropic route it can actually see, not the hermetic-auth answer', async () => {
@@ -201,6 +206,48 @@ test('--usage-stats makes the worker carry both ranges', async () => {
   expect(pool.usageStats).toBeDefined()
   expect(pool.usageStats?.['7d'].range).toBe('7d')
   expect(pool.usageStats?.['30d'].range).toBe('30d')
+}, 180_000)
+
+test('the worker computes both usage ranges with one read of each eligible transcript', async () => {
+  const { code, records, stderr } = await runWorker({}, ['--usage-stats'], configDir => {
+    const project = join(configDir, 'projects', 'synthetic-project')
+    mkdirSync(project, { recursive: true })
+    for (const [name, daysAgo, input] of [['recent', 1, 100], ['month', 15, 200]] as const) {
+      const timestamp = new Date()
+      timestamp.setDate(timestamp.getDate() - daysAgo)
+      writeFileSync(join(project, `${name}.jsonl`), JSON.stringify({
+        type: 'assistant', uuid: name, parentUuid: null, isSidechain: false,
+        sessionId: name, cwd: '/synthetic', userType: 'external', version: '1.0.0',
+        timestamp: timestamp.toISOString(),
+        message: {
+          id: name, type: 'message', role: 'assistant', model: 'synthetic-fixture-model',
+          content: [{ type: 'text', text: 'generated fixture' }],
+          usage: { input_tokens: input, output_tokens: 10 },
+        },
+      }) + '\n')
+    }
+    const preload = join(configDir, 'observe-reads.ts')
+    // The observer delegates to the real JSONL reader; fixture bodies and
+    // account data never leave the child, only an operation marker does.
+    writeFileSync(preload, `
+      import { spyOn } from 'bun:test'
+      import * as json from ${JSON.stringify(join(here, '../../src/utils/json.ts'))}
+      const original = json.readJSONLFile
+      spyOn(json, 'readJSONLFile').mockImplementation(async file => {
+        const entries = await original(file)
+        process.stderr.write('usage-fixture-jsonl-read\\n')
+        return entries
+      })
+    `)
+    return preload
+  })
+  expect(code).toBe(0)
+  const pool = records.find(record => record?.type === 'pool')
+  expect(pool?.type).toBe('pool')
+  if (pool?.type !== 'pool') return
+  expect(pool.usageStats?.['7d'].totalTokens).toBe(110)
+  expect(pool.usageStats?.['30d'].totalTokens).toBe(320)
+  expect(stderr.match(/usage-fixture-jsonl-read/g)).toHaveLength(2)
 }, 180_000)
 
 test('the one-shot worker deletes a vault profile without any session process', async () => {

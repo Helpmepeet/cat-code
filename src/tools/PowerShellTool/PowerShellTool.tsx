@@ -11,6 +11,7 @@ import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEve
 import type { SetToolJSXFn, Tool, ToolCallProgress, ValidationResult } from '../../Tool.js';
 import { buildTool, type ToolDef } from '../../Tool.js';
 import { backgroundExistingForegroundTask, markTaskNotified, registerForeground, spawnShellTask, unregisterForeground } from '../../tasks/LocalShellTask/LocalShellTask.js';
+import { shouldRegisterForegroundShellTask } from '../../tasks/LocalShellTask/guards.js';
 import type { AgentId } from '../../types/ids.js';
 import type { AssistantMessage } from '../../types/message.js';
 import { extractClaudeCodeHints } from '../../utils/claudeCodeHints.js';
@@ -20,6 +21,7 @@ import { truncate } from '../../utils/format.js';
 import { lazySchema } from '../../utils/lazySchema.js';
 import { logError } from '../../utils/log.js';
 import type { PermissionResult } from '../../utils/permissions/PermissionResult.js';
+import type { APIProvider } from '../../utils/model/providers.js';
 import { getPlatform } from '../../utils/platform.js';
 import { maybeRecordPluginHint } from '../../utils/plugins/hintRecommendation.js';
 import { exec } from '../../utils/Shell.js';
@@ -279,8 +281,8 @@ export const PowerShellTool = buildTool({
   }: Partial<PowerShellToolInput>): Promise<string> {
     return description || 'Run PowerShell command';
   },
-  async prompt(): Promise<string> {
-    return getPrompt();
+  async prompt({ provider }: { provider?: APIProvider } = {}): Promise<string> {
+    return getPrompt(provider);
   },
   isConcurrencySafe(input: PowerShellToolInput): boolean {
     return this.isReadOnly?.(input) ?? false;
@@ -954,8 +956,12 @@ async function* runPowerShellCommand({
       const elapsed = Date.now() - startTime;
       const elapsedSeconds = Math.floor(elapsed / 1000);
 
-      // Show backgrounding UI hint after threshold
-      if (!isBackgroundTasksDisabled && backgroundShellId === undefined && elapsedSeconds >= PROGRESS_THRESHOLD_MS / 1000 && setToolJSX) {
+      if (shouldRegisterForegroundShellTask({
+        backgroundTasksDisabled: isBackgroundTasksDisabled,
+        backgroundShellId,
+        elapsedSeconds,
+        progressThresholdMs: PROGRESS_THRESHOLD_MS,
+      })) {
         if (!foregroundTaskId) {
           foregroundTaskId = registerForeground({
             command,
@@ -964,12 +970,14 @@ async function* runPowerShellCommand({
             agentId
           }, setAppState, toolUseId);
         }
-        setToolJSX({
-          jsx: <BackgroundHint />,
-          shouldHidePromptInput: false,
-          shouldContinueAnimation: true,
-          showSpinner: true
-        });
+        if (setToolJSX) {
+          setToolJSX({
+            jsx: <BackgroundHint />,
+            shouldHidePromptInput: false,
+            shouldContinueAnimation: true,
+            showSpinner: true
+          });
+        }
       }
       yield {
         type: 'progress',

@@ -84,6 +84,7 @@ export type ClaudeCodeStats = {
   // Shot stats (ant-only, gated by SHOT_STATS feature flag)
   shotDistribution?: { [shotCount: number]: number }
   oneShotRate?: number
+  dataQualityNotice?: string
 }
 
 /**
@@ -98,6 +99,7 @@ type ProcessedStats = {
   totalMessages: number
   totalSpeculationTimeSavedMs: number
   shotDistribution?: { [shotCount: number]: number }
+  recordCountsBySessionKey: { [sessionKey: string]: number }
 }
 
 /**
@@ -108,19 +110,19 @@ type ProcessOptions = {
   fromDate?: string
   // Only include data from dates <= this date (YYYY-MM-DD format)
   toDate?: string
+  // Count only records appended after an aggregate-only legacy checkpoint.
+  afterRecordBySession?: ReadonlyMap<
+    string,
+    { observedMessageCount: number }
+  >
 }
 
 /**
- * Process session files and extract stats.
- * Can filter by date range.
+ * Keep each range's accumulator independent: session-start/mtime filtering and
+ * sidechain/shot attribution are range-local, not derivable from daily totals.
  */
-async function processSessionFiles(
-  sessionFiles: string[],
-  options: ProcessOptions = {},
-): Promise<ProcessedStats> {
-  const { fromDate, toDate } = options
-  const fs = getFsImplementation()
-
+function createStatsAccumulator(options: ProcessOptions) {
+  const { fromDate, toDate, afterRecordBySession } = options
   const dailyActivityMap = new Map<string, DailyActivity>()
   const dailyModelTokensMap = new Map<string, { [modelName: string]: number }>()
   const sessions: SessionStats[] = []
@@ -133,271 +135,305 @@ async function processSessionFiles(
     : undefined
   // Track parent sessions that already recorded a shot count (dedup across subagents)
   const sessionsWithShotCount = new Set<string>()
+  const recordCountsBySessionKey = new Map<string, number>()
 
-  // Process session files in parallel batches for better performance
-  const BATCH_SIZE = 20
-  for (let i = 0; i < sessionFiles.length; i += BATCH_SIZE) {
-    const batch = sessionFiles.slice(i, i + BATCH_SIZE)
-    const results = await Promise.all(
-      batch.map(async sessionFile => {
-        try {
-          // If we have a fromDate filter, skip files that haven't been modified since then
-          if (fromDate) {
-            let fileSize = 0
-            try {
-              const fileStat = await fs.stat(sessionFile)
-              const fileModifiedDate = toDateString(fileStat.mtime)
-              if (isDateBefore(fileModifiedDate, fromDate)) {
-                return {
-                  sessionFile,
-                  entries: null,
-                  error: null,
-                  skipped: true,
-                }
-              }
-              fileSize = fileStat.size
-            } catch {
-              // If we can't stat the file, try to read it anyway
-            }
-            // For large files, peek at the session start date before reading everything.
-            // Sessions that pass the mtime filter but started before fromDate are skipped
-            // (e.g. a month-old session resumed today gets a new mtime write but old start date).
-            if (fileSize > 65536) {
-              const startDate = await readSessionStartDate(sessionFile)
-              if (startDate && isDateBefore(startDate, fromDate)) {
-                return {
-                  sessionFile,
-                  entries: null,
-                  error: null,
-                  skipped: true,
-                }
-              }
-            }
-          }
-          const entries = await readJSONLFile<Entry>(sessionFile)
-          return { sessionFile, entries, error: null, skipped: false }
-        } catch (error) {
-          return { sessionFile, entries: null, error, skipped: false }
+  function add(sessionFile: string, entries: Entry[]): void {
+    const sessionId = basename(sessionFile, '.jsonl')
+    const isSubagentFile = sessionFile.includes(`${sep}subagents${sep}`)
+    const parentSessionId = isSubagentFile
+      ? basename(dirname(dirname(sessionFile)))
+      : sessionId
+    const sessionKey = isSubagentFile
+      ? `${parentSessionId}/subagents/${sessionId}`
+      : sessionId
+    const checkpoint = afterRecordBySession?.get(sessionKey)
+    const messages: TranscriptMessage[] = []
+
+    for (const entry of entries) {
+      if (isTranscriptMessage(entry)) {
+        messages.push(entry)
+      } else if (entry.type === 'speculation-accept') {
+        totalSpeculationTimeSavedMs += entry.timeSavedMs
+      }
+    }
+
+    if (messages.length === 0) return
+
+    // Subagent transcripts mark all messages as sidechain. We still want
+    // their token usage counted, but not as separate sessions.
+    // Extract shot count from PR attribution in gh pr create calls (ant-only)
+    // This must run before the sidechain filter since subagent transcripts
+    // mark all messages as sidechain
+    if (feature('SHOT_STATS') && shotDistributionMap) {
+      if (!sessionsWithShotCount.has(parentSessionId)) {
+        const shotCount = extractShotCountFromMessages(messages)
+        if (shotCount !== null) {
+          sessionsWithShotCount.add(parentSessionId)
+          shotDistributionMap.set(
+            shotCount,
+            (shotDistributionMap.get(shotCount) || 0) + 1,
+          )
         }
-      }),
-    )
+      }
+    }
 
-    for (const { sessionFile, entries, error, skipped } of results) {
-      if (skipped) continue
-      if (error || !entries) {
-        logForDebugging(
-          `Failed to read session file ${sessionFile}: ${errorMessage(error)}`,
-        )
+    // Filter out sidechain messages for session metadata (duration, counts).
+    // For subagent files, use all messages since they're all sidechain.
+    const mainMessages = isSubagentFile
+      ? messages
+      : messages.filter(m => !m.isSidechain)
+    if (mainMessages.length === 0) return
+    recordCountsBySessionKey.set(sessionKey, mainMessages.length)
+
+    // Streaming splits one API response into several persisted records that
+    // share one API message.id. Every split carries the message_start
+    // input/cache seed, so summing them multiplies the input side by the
+    // split count. Track every usage dimension already credited per id so a
+    // later increase is counted once without multiplying repeated snapshots.
+    const creditedUsageByMessageId = new Map<
+      string,
+      {
+        inputTokens: number
+        outputTokens: number
+        cacheReadTokens: number
+        cacheCreationTokens: number
+      }
+    >()
+    const activeDates = new Set<string>()
+    const eligibleMainMessages: Array<{
+      message: TranscriptMessage
+      timestamp: Date
+    }> = []
+    const observedRecordIds = new Set<string>()
+    let messageIndex = 0
+
+    // Process messages for tool usage and model stats
+    for (const message of mainMessages) {
+      const beforeCheckpoint =
+        checkpoint !== undefined &&
+        messageIndex < checkpoint.observedMessageCount
+      messageIndex++
+      if (beforeCheckpoint) {
+        observedRecordIds.add(message.uuid)
+      } else if (checkpoint && observedRecordIds.has(message.uuid)) {
         continue
       }
-
-      const sessionId = basename(sessionFile, '.jsonl')
-      const messages: TranscriptMessage[] = []
-
-      for (const entry of entries) {
-        if (isTranscriptMessage(entry)) {
-          messages.push(entry)
-        } else if (entry.type === 'speculation-accept') {
-          totalSpeculationTimeSavedMs += entry.timeSavedMs
-        }
-      }
-
-      if (messages.length === 0) continue
-
-      // Subagent transcripts mark all messages as sidechain. We still want
-      // their token usage counted, but not as separate sessions.
-      const isSubagentFile = sessionFile.includes(`${sep}subagents${sep}`)
-
-      // Extract shot count from PR attribution in gh pr create calls (ant-only)
-      // This must run before the sidechain filter since subagent transcripts
-      // mark all messages as sidechain
-      if (feature('SHOT_STATS') && shotDistributionMap) {
-        const parentSessionId = isSubagentFile
-          ? basename(dirname(dirname(sessionFile)))
-          : sessionId
-
-        if (!sessionsWithShotCount.has(parentSessionId)) {
-          const shotCount = extractShotCountFromMessages(messages)
-          if (shotCount !== null) {
-            sessionsWithShotCount.add(parentSessionId)
-            shotDistributionMap.set(
-              shotCount,
-              (shotDistributionMap.get(shotCount) || 0) + 1,
-            )
-          }
-        }
-      }
-
-      // Filter out sidechain messages for session metadata (duration, counts).
-      // For subagent files, use all messages since they're all sidechain.
-      const mainMessages = isSubagentFile
-        ? messages
-        : messages.filter(m => !m.isSidechain)
-      if (mainMessages.length === 0) continue
-
-      const firstMessage = mainMessages[0]!
-      const lastMessage = mainMessages.at(-1)!
-
-      const firstTimestamp = new Date(firstMessage.timestamp)
-      const lastTimestamp = new Date(lastMessage.timestamp)
-
-      // Skip sessions with malformed timestamps — some transcripts on disk
-      // have entries missing the timestamp field (e.g. partial/remote writes).
-      // new Date(undefined) produces an Invalid Date, and toDateString() would
-      // throw RangeError: Invalid Date on .toISOString().
-      if (isNaN(firstTimestamp.getTime()) || isNaN(lastTimestamp.getTime())) {
-        logForDebugging(
-          `Skipping session with invalid timestamp: ${sessionFile}`,
-        )
+      const timestamp = new Date(message.timestamp)
+      if (isNaN(timestamp.getTime())) {
+        logForDebugging(`Skipping message with invalid timestamp: ${sessionFile}`)
         continue
       }
+      const dateKey = toDateString(timestamp)
+      const inRange =
+        (!fromDate || !isDateBefore(dateKey, fromDate)) &&
+        (!toDate || !isDateBefore(toDate, dateKey)) &&
+        !beforeCheckpoint
 
-      const dateKey = toDateString(firstTimestamp)
-
-      // Apply date filters
-      if (fromDate && isDateBefore(dateKey, fromDate)) continue
-      if (toDate && isDateBefore(toDate, dateKey)) continue
-
-      // Track daily activity (use first message date as session date)
-      const existing = dailyActivityMap.get(dateKey) || {
-        date: dateKey,
-        messageCount: 0,
-        sessionCount: 0,
-        toolCallCount: 0,
+      if (inRange) {
+        eligibleMainMessages.push({ message, timestamp })
+        activeDates.add(dateKey)
+        const activity = dailyActivityMap.get(dateKey) || {
+          date: dateKey,
+          messageCount: 0,
+          sessionCount: 0,
+          toolCallCount: 0,
+        }
+        if (!isSubagentFile) {
+          activity.messageCount++
+          totalMessages++
+        }
+        dailyActivityMap.set(dateKey, activity)
       }
 
-      // Subagent files contribute tokens and tool calls, but aren't sessions.
-      if (!isSubagentFile) {
-        const duration = lastTimestamp.getTime() - firstTimestamp.getTime()
-
-        sessions.push({
-          sessionId,
-          duration,
-          messageCount: mainMessages.length,
-          timestamp: firstMessage.timestamp,
-        })
-
-        totalMessages += mainMessages.length
-
-        existing.sessionCount++
-        existing.messageCount += mainMessages.length
-
-        const hour = firstTimestamp.getHours()
-        hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
-      }
-
-      if (!isSubagentFile || dailyActivityMap.has(dateKey)) {
-        dailyActivityMap.set(dateKey, existing)
-      }
-
-      // Streaming splits one API response into several persisted records that
-      // share one API message.id. Every split carries the message_start
-      // input/cache seed, so summing them multiplies the input side by the
-      // split count. Tracks the output already credited per id so input-side
-      // tokens are counted once and output is counted as the max across splits.
-      const creditedOutputByMessageId = new Map<string, number>()
-
-      // Process messages for tool usage and model stats
-      for (const message of mainMessages) {
-        if (message.type === 'assistant') {
-          const content = message.message?.content
-          if (Array.isArray(content)) {
-            for (const block of content) {
-              if (block.type === 'tool_use') {
-                const activity = dailyActivityMap.get(dateKey)
-                if (activity) {
-                  activity.toolCallCount++
-                }
+      if (message.type === 'assistant') {
+        const content = message.message?.content
+        if (inRange && Array.isArray(content)) {
+          for (const block of content) {
+            if (block.type === 'tool_use') {
+              const activity = dailyActivityMap.get(dateKey)
+              if (activity) {
+                activity.toolCallCount++
               }
             }
           }
+        }
 
-          // Track model usage if available (skip synthetic messages)
-          if (message.message?.usage) {
-            const usage = message.message.usage
-            const model = message.message.model || 'unknown'
+        // Track model usage if available (skip synthetic messages)
+        if (message.message?.usage) {
+          const usage = message.message.usage
+          const model = message.message.model || 'unknown'
 
-            // Skip synthetic messages - they are internal and shouldn't appear in stats
-            if (model === SYNTHETIC_MODEL) {
-              continue
+          // Skip synthetic messages - they are internal and shouldn't appear in stats
+          if (model === SYNTHETIC_MODEL) {
+            continue
+          }
+
+          // Dedup splits of one API response (see creditedUsageByMessageId).
+          // Records without an id keep the plain summing behavior.
+          const messageId = message.message.id
+          const credited = messageId
+            ? creditedUsageByMessageId.get(messageId)
+            : undefined
+          const inputTokens = Math.max(
+            0,
+            (usage.input_tokens || 0) - (credited?.inputTokens || 0),
+          )
+          const outputTokens = Math.max(
+            0,
+            (usage.output_tokens || 0) - (credited?.outputTokens || 0),
+          )
+          const cacheReadTokens = Math.max(
+            0,
+            (usage.cache_read_input_tokens || 0) -
+              (credited?.cacheReadTokens || 0),
+          )
+          const cacheCreationTokens = Math.max(
+            0,
+            (usage.cache_creation_input_tokens || 0) -
+              (credited?.cacheCreationTokens || 0),
+          )
+
+          if (messageId) {
+            creditedUsageByMessageId.set(messageId, {
+              inputTokens: Math.max(credited?.inputTokens || 0, usage.input_tokens || 0),
+              outputTokens: Math.max(credited?.outputTokens || 0, usage.output_tokens || 0),
+              cacheReadTokens: Math.max(credited?.cacheReadTokens || 0, usage.cache_read_input_tokens || 0),
+              cacheCreationTokens: Math.max(credited?.cacheCreationTokens || 0, usage.cache_creation_input_tokens || 0),
+            })
+          }
+
+          if (!inRange) continue
+
+          if (!modelUsageAgg[model]) {
+            modelUsageAgg[model] = {
+              inputTokens: 0,
+              outputTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
+              webSearchRequests: 0,
+              costUSD: 0,
+              contextWindow: 0,
+              maxOutputTokens: 0,
             }
+          }
 
-            // Dedup splits of one API response (see creditedOutputByMessageId).
-            // Records without an id keep the plain summing behavior.
-            const messageId = message.message.id
-            const creditedOutput = messageId
-              ? creditedOutputByMessageId.get(messageId)
-              : undefined
-            const isRepeatedMessageId = creditedOutput !== undefined
+          modelUsageAgg[model]!.inputTokens += inputTokens
+          modelUsageAgg[model]!.outputTokens += outputTokens
+          modelUsageAgg[model]!.cacheReadInputTokens += cacheReadTokens
+          modelUsageAgg[model]!.cacheCreationInputTokens += cacheCreationTokens
 
-            const inputTokens = isRepeatedMessageId ? 0 : usage.input_tokens || 0
-            const cacheReadTokens = isRepeatedMessageId
-              ? 0
-              : usage.cache_read_input_tokens || 0
-            const cacheCreationTokens = isRepeatedMessageId
-              ? 0
-              : usage.cache_creation_input_tokens || 0
-            // Credit only the increase, so the aggregate equals the max output
-            // seen for this id rather than the sum of every split's output.
-            const outputTokens = Math.max(
-              0,
-              (usage.output_tokens || 0) - (creditedOutput || 0),
-            )
-
-            if (messageId) {
-              creditedOutputByMessageId.set(
-                messageId,
-                Math.max(creditedOutput || 0, usage.output_tokens || 0),
-              )
-            }
-
-            if (!modelUsageAgg[model]) {
-              modelUsageAgg[model] = {
-                inputTokens: 0,
-                outputTokens: 0,
-                cacheReadInputTokens: 0,
-                cacheCreationInputTokens: 0,
-                webSearchRequests: 0,
-                costUSD: 0,
-                contextWindow: 0,
-                maxOutputTokens: 0,
-              }
-            }
-
-            modelUsageAgg[model]!.inputTokens += inputTokens
-            modelUsageAgg[model]!.outputTokens += outputTokens
-            modelUsageAgg[model]!.cacheReadInputTokens += cacheReadTokens
-            modelUsageAgg[model]!.cacheCreationInputTokens += cacheCreationTokens
-
-            // Track daily tokens per model
-            const totalTokens = inputTokens + outputTokens
-            if (totalTokens > 0) {
-              const dayTokens = dailyModelTokensMap.get(dateKey) || {}
-              dayTokens[model] = (dayTokens[model] || 0) + totalTokens
-              dailyModelTokensMap.set(dateKey, dayTokens)
-            }
+          // Track daily tokens per model
+          const totalTokens = inputTokens + outputTokens
+          if (totalTokens > 0) {
+            const dayTokens = dailyModelTokensMap.get(dateKey) || {}
+            dayTokens[model] = (dayTokens[model] || 0) + totalTokens
+            dailyModelTokensMap.set(dateKey, dayTokens)
           }
         }
       }
     }
+
+    if (!isSubagentFile && eligibleMainMessages.length > 0) {
+      const first = eligibleMainMessages[0]!
+      const last = eligibleMainMessages.at(-1)!
+      sessions.push({
+        sessionId,
+        duration: last.timestamp.getTime() - first.timestamp.getTime(),
+        messageCount: eligibleMainMessages.length,
+        timestamp: first.message.timestamp,
+      })
+      for (const dateKey of activeDates) {
+        dailyActivityMap.get(dateKey)!.sessionCount++
+      }
+      const hour = first.timestamp.getHours()
+      hourCounts.set(hour, (hourCounts.get(hour) || 0) + 1)
+    }
   }
 
-  return {
-    dailyActivity: Array.from(dailyActivityMap.values()).sort((a, b) =>
-      a.date.localeCompare(b.date),
-    ),
-    dailyModelTokens: Array.from(dailyModelTokensMap.entries())
-      .map(([date, tokensByModel]) => ({ date, tokensByModel }))
-      .sort((a, b) => a.date.localeCompare(b.date)),
-    modelUsage: modelUsageAgg,
-    sessionStats: sessions,
-    hourCounts: Object.fromEntries(hourCounts),
-    totalMessages,
-    totalSpeculationTimeSavedMs,
-    ...(feature('SHOT_STATS') && shotDistributionMap
-      ? { shotDistribution: Object.fromEntries(shotDistributionMap) }
-      : {}),
+  function finish(): ProcessedStats {
+    return {
+      dailyActivity: Array.from(dailyActivityMap.values()).sort((a, b) =>
+        a.date.localeCompare(b.date),
+      ),
+      dailyModelTokens: Array.from(dailyModelTokensMap.entries())
+        .map(([date, tokensByModel]) => ({ date, tokensByModel }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+      modelUsage: modelUsageAgg,
+      sessionStats: sessions,
+      hourCounts: Object.fromEntries(hourCounts),
+      totalMessages,
+      totalSpeculationTimeSavedMs,
+      ...(feature('SHOT_STATS') && shotDistributionMap
+        ? { shotDistribution: Object.fromEntries(shotDistributionMap) }
+        : {}),
+      recordCountsBySessionKey: Object.fromEntries(recordCountsBySessionKey),
+    }
   }
+
+  return { add, finish }
+}
+
+/** Share disk work in bounded batches, without retaining a transcript cache. */
+async function processSessionFilesForRanges(
+  sessionFiles: string[],
+  options: ProcessOptions[],
+): Promise<ProcessedStats[]> {
+  const fs = getFsImplementation()
+  const accumulators = options.map(createStatsAccumulator)
+  const BATCH_SIZE = 20
+  for (let i = 0; i < sessionFiles.length; i += BATCH_SIZE) {
+    const results = await Promise.all(
+      sessionFiles.slice(i, i + BATCH_SIZE).map(async sessionFile => {
+        const eligible = options.map(() => true)
+        try {
+          if (options.some(option => option.fromDate)) {
+            try {
+              const fileStat = await fs.stat(sessionFile)
+              const modifiedDate = toDateString(fileStat.mtime)
+              for (const [index, option] of options.entries()) {
+                if (
+                  option.fromDate &&
+                  isDateBefore(modifiedDate, option.fromDate)
+                ) {
+                  eligible[index] = false
+                }
+              }
+            } catch {
+              // Preserve the read attempt when stat fails.
+            }
+            // A file's first event cannot exclude a resumed session from a
+            // rolling window; modification time remains the safe fast path.
+          }
+          const entries = eligible.some(Boolean)
+            ? await readJSONLFile<Entry>(sessionFile)
+            : null
+          return { sessionFile, entries, eligible, error: null }
+        } catch (error) {
+          return { sessionFile, entries: null, eligible, error }
+        }
+      }),
+    )
+    for (const { sessionFile, entries, eligible, error } of results) {
+      if (!eligible.some(Boolean)) continue
+      if (error || !entries) {
+        logForDebugging(
+          `Failed to read session file ${sessionFile}: ${errorMessage(error)}`,
+        )
+        throw error ?? new Error(`Failed to read session file ${sessionFile}`)
+      }
+      for (const [index, accumulator] of accumulators.entries()) {
+        if (eligible[index]) accumulator.add(sessionFile, entries)
+      }
+    }
+  }
+  return accumulators.map(accumulator => accumulator.finish())
+}
+
+async function processSessionFiles(
+  sessionFiles: string[],
+  options: ProcessOptions = {},
+): Promise<ProcessedStats> {
+  return (await processSessionFilesForRanges(sessionFiles, [options]))[0]!
 }
 
 export const _forTest = {
@@ -451,9 +487,9 @@ async function getAllSessionFiles(): Promise<string[]> {
                     dirent.name.startsWith('agent-'),
                 )
                 .map(dirent => join(subagentsDir, dirent.name))
-            } catch {
-              // subagents directory doesn't exist for this session, skip
-              return []
+            } catch (error) {
+              if (isENOENT(error)) return []
+              throw error
             }
           }),
         )
@@ -463,7 +499,7 @@ async function getAllSessionFiles(): Promise<string[]> {
         logForDebugging(
           `Failed to read project directory ${projectDir}: ${errorMessage(error)}`,
         )
-        return []
+        throw error
       }
     }),
   )
@@ -568,14 +604,36 @@ function cacheToStats(
     .sort((a, b) => a.date.localeCompare(b.date))
 
   // Compute session aggregates: combine cache aggregates with today's stats
-  const totalSessions =
-    cache.totalSessions + (todayStats?.sessionStats.length || 0)
+  const sessionIndex = { ...cache.sessionIndex }
+  let liveNewSessions = 0
+  if (todayStats) {
+    for (const session of todayStats.sessionStats) {
+      const previous = sessionIndex[session.sessionId]
+      if (!previous) {
+        sessionIndex[session.sessionId] = session
+        liveNewSessions++
+      } else {
+        const start = previous.timestamp < session.timestamp ? previous.timestamp : session.timestamp
+        const end = Math.max(
+          new Date(previous.timestamp).getTime() + previous.duration,
+          new Date(session.timestamp).getTime() + session.duration,
+        )
+        sessionIndex[session.sessionId] = {
+          sessionId: session.sessionId,
+          timestamp: start,
+          duration: end - new Date(start).getTime(),
+          messageCount: previous.messageCount + session.messageCount,
+        }
+      }
+    }
+  }
+  const totalSessions = cache.totalSessions + liveNewSessions
   const totalMessages = cache.totalMessages + (todayStats?.totalMessages || 0)
 
   // Find longest session (compare cache's longest with today's sessions)
   let longestSession = cache.longestSession
   if (todayStats) {
-    for (const session of todayStats.sessionStats) {
+    for (const session of Object.values(sessionIndex)) {
       if (!longestSession || session.duration > longestSession.duration) {
         longestSession = session
       }
@@ -642,6 +700,9 @@ function cacheToStats(
     peakActivityDay,
     peakActivityHour,
     totalSpeculationTimeSavedMs,
+    ...(cache.legacyMigration
+      ? { dataQualityNotice: cache.legacyMigration.notice }
+      : {}),
   }
 
   if (feature('SHOT_STATS')) {
@@ -677,10 +738,6 @@ function cacheToStats(
 export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   const allSessionFiles = await getAllSessionFiles()
 
-  if (allSessionFiles.length === 0) {
-    return getEmptyStats()
-  }
-
   // Use lock to prevent race conditions with background cache updates
   const updatedCache = await withStatsCacheLock(async () => {
     // Load the cache
@@ -692,7 +749,51 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
     // - If cache exists: process from day after lastComputedDate to yesterday, then today
     let result = cache
 
-    if (!cache.lastComputedDate) {
+    // A v1-v3 cache has durable aggregate history but no identities. Preserve
+    // its totals exactly and seed identity/span metadata from retained files;
+    // their events are not added again on the migration day.
+    if (cache.legacyMigration && Object.keys(result.sessionIndex).length === 0) {
+      const retained = await processSessionFiles(allSessionFiles)
+      const legacyBoundary = cache.lastComputedDate
+      const legacySessions = retained.sessionStats
+        .filter(
+          session =>
+            legacyBoundary &&
+            !isDateBefore(legacyBoundary, toDateString(new Date(session.timestamp))),
+        )
+      const legacySessionCheckpoints = Object.fromEntries(
+        Object.entries(retained.recordCountsBySessionKey)
+          .filter(([sessionKey]) =>
+            legacySessions.some(
+              session =>
+                sessionKey === session.sessionId ||
+                sessionKey.startsWith(`${session.sessionId}/subagents/`),
+            ),
+          )
+          .map(([sessionKey, observedMessageCount]) => [
+            sessionKey,
+            { observedMessageCount },
+          ]),
+      )
+      result = {
+        ...cache,
+        sessionIndex: Object.fromEntries(
+          legacySessions.map(session => [session.sessionId, session]),
+        ),
+        legacyMigration: {
+          ...cache.legacyMigration,
+          legacySessionCheckpoints,
+        },
+      }
+      await saveStatsCache(result)
+    }
+
+    const legacyCheckpoints = new Map(
+      Object.entries(
+        result.legacyMigration?.legacySessionCheckpoints ?? {},
+      ),
+    )
+    if (!result.lastComputedDate) {
       // No cache - process all historical data (everything before today)
       logForDebugging('Stats cache empty, processing all historical data')
       const historicalStats = await processSessionFiles(allSessionFiles, {
@@ -703,30 +804,31 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
         historicalStats.sessionStats.length > 0 ||
         historicalStats.dailyActivity.length > 0
       ) {
-        result = mergeCacheWithNewStats(cache, historicalStats, yesterday)
+        result = mergeCacheWithNewStats(result, historicalStats, yesterday)
         await saveStatsCache(result)
       }
-    } else if (isDateBefore(cache.lastComputedDate, yesterday)) {
+    } else if (isDateBefore(result.lastComputedDate, yesterday)) {
       // Cache is stale - process new days
       // Process from day after lastComputedDate to yesterday
-      const nextDay = getNextDay(cache.lastComputedDate)
+      const nextDay = getNextDay(result.lastComputedDate)
       logForDebugging(
-        `Stats cache stale (${cache.lastComputedDate}), processing ${nextDay} to ${yesterday}`,
+        `Stats cache stale (${result.lastComputedDate}), processing ${nextDay} to ${yesterday}`,
       )
       const newStats = await processSessionFiles(allSessionFiles, {
         fromDate: nextDay,
         toDate: yesterday,
+        afterRecordBySession: legacyCheckpoints,
       })
 
       if (
         newStats.sessionStats.length > 0 ||
         newStats.dailyActivity.length > 0
       ) {
-        result = mergeCacheWithNewStats(cache, newStats, yesterday)
+        result = mergeCacheWithNewStats(result, newStats, yesterday)
         await saveStatsCache(result)
       } else {
         // No new data, but update lastComputedDate
-        result = { ...cache, lastComputedDate: yesterday }
+        result = { ...result, lastComputedDate: yesterday }
         await saveStatsCache(result)
       }
     }
@@ -737,10 +839,16 @@ export async function aggregateClaudeCodeStats(): Promise<ClaudeCodeStats> {
   // Always process today's data live (it's incomplete)
   // This doesn't need to be in the lock since it doesn't modify the cache
   const today = getTodayDateString()
-  const todayStats = await processSessionFiles(allSessionFiles, {
-    fromDate: today,
-    toDate: today,
-  })
+  const todayStats =
+    await processSessionFiles(allSessionFiles, {
+      fromDate: today,
+      toDate: today,
+      afterRecordBySession: new Map(
+        Object.entries(
+          updatedCache.legacyMigration?.legacySessionCheckpoints ?? {},
+        ),
+      ),
+    })
 
   // Combine cache with today's stats
   return cacheToStats(updatedCache, todayStats)
@@ -759,24 +867,31 @@ export async function aggregateClaudeCodeStatsForRange(
     return aggregateClaudeCodeStats()
   }
 
+  return (await aggregateClaudeCodeStatsForRanges([range]))[range]!
+}
+
+/** Aggregate rolling ranges with one discovery and one read per eligible file. */
+export async function aggregateClaudeCodeStatsForRanges<
+  R extends Exclude<StatsDateRange, 'all'>,
+>(ranges: readonly R[]): Promise<Record<R, ClaudeCodeStats>> {
+  const uniqueRanges = [...new Set(ranges)]
+  if (uniqueRanges.length === 0) return {} as Record<R, ClaudeCodeStats>
   const allSessionFiles = await getAllSessionFiles()
-  if (allSessionFiles.length === 0) {
-    return getEmptyStats()
-  }
-
-  // Calculate fromDate based on range
   const today = new Date()
-  const daysBack = range === '7d' ? 7 : 30
-  const fromDate = new Date(today)
-  fromDate.setDate(today.getDate() - daysBack + 1) // +1 to include today
-  const fromDateStr = toDateString(fromDate)
-
-  // Process session files for the date range
-  const stats = await processSessionFiles(allSessionFiles, {
-    fromDate: fromDateStr,
+  const options = uniqueRanges.map(range => {
+    const fromDate = new Date(today)
+    fromDate.setDate(today.getDate() - (range === '7d' ? 7 : 30) + 1)
+    return { fromDate: toDateString(fromDate) }
   })
-
-  return processedStatsToClaudeCodeStats(stats)
+  const processed = await processSessionFilesForRanges(allSessionFiles, options)
+  return Object.fromEntries(
+    uniqueRanges.map((range, index) => [
+      range,
+      allSessionFiles.length === 0
+        ? getEmptyStats()
+        : processedStatsToClaudeCodeStats(processed[index]!),
+    ]),
+  ) as Record<R, ClaudeCodeStats>
 }
 
 /**

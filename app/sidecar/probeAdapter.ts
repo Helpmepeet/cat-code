@@ -66,7 +66,13 @@ export function buildProbeToolUseMessage(): SDKMessage {
 
 export function createProbeAdapter(): AppSessionControllerAdapter {
   return {
-    async *runTurn() {
+    async *runTurn({ options }) {
+      // The real adapter answers this the moment the engine has taken and
+      // persisted the input, and callers key durable-acceptance decisions on it
+      // — a peer message's consumption ack among them. A fixture that never
+      // answers is not a smaller engine, it is a stuck one, and it made the
+      // transport probe unable to observe a path production takes every turn.
+      options?.onInputPersisted?.()
       yield buildProbeToolUseMessage()
     },
   }

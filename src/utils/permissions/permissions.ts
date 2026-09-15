@@ -580,8 +580,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // POWERSHELL_AUTO_MODE (ant-only build flag) is on. When disabled, this
       // guard keeps PS out of the classifier and skips the acceptEdits
       // fast-path below. When enabled, PS flows through to the classifier like
-      // Bash — the classifier prompt gets POWERSHELL_DENY_GUIDANCE appended so
-      // it recognizes `iex (iwr ...)` as download-and-execute, etc.
+      // Bash, judged by the same vendored rule inventory.
       // Note: this runs inside the behavior === 'ask' branch, so allow rules
       // that fire earlier (step 2b toolAlwaysAllowedRule, PS prefix allow)
       // return before reaching here. Allow-rule protection is handled by
@@ -1114,7 +1113,11 @@ export async function checkRuleBasedPermissions(
     }
   }
 
-  // 1b. Entire tool has an ask rule
+  // 1b. Entire tool has an ask rule. The decision is held back until after
+  // step 1d: content-specific denies (e.g. Bash(curl:*)) only surface from
+  // tool.checkPermissions, and deny must outrank a tool-wide ask the same way
+  // step 1a outranks it.
+  let toolWideAskDecision: PermissionAskDecision | null = null
   const askRule = getAskRuleForTool(appState.toolPermissionContext, tool)
   if (askRule) {
     const canSandboxAutoAllow =
@@ -1124,7 +1127,7 @@ export async function checkRuleBasedPermissions(
       shouldUseSandbox(input)
 
     if (!canSandboxAutoAllow) {
-      return {
+      toolWideAskDecision = {
         behavior: 'ask',
         decisionReason: {
           type: 'rule',
@@ -1133,7 +1136,7 @@ export async function checkRuleBasedPermissions(
         message: createPermissionRequestMessage(tool.name),
       }
     }
-    // Fall through to let tool.checkPermissions handle command-specific rules
+    // Otherwise let tool.checkPermissions handle command-specific rules
   }
 
   // 1c. Tool-specific permission check (e.g. bash subcommand rules)
@@ -1155,6 +1158,11 @@ export async function checkRuleBasedPermissions(
   // in subcommandResults — no need to inspect decisionReason.type)
   if (toolPermissionResult?.behavior === 'deny') {
     return toolPermissionResult
+  }
+
+  // Tool-wide ask rule from step 1b, now that content denies are ruled out
+  if (toolWideAskDecision) {
+    return toolWideAskDecision
   }
 
   // 1f. Content-specific ask rules from tool.checkPermissions

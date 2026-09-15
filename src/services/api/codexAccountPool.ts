@@ -24,10 +24,9 @@ import {
 import { logForDebugging } from '../../utils/debug.js'
 import { clearCodexOAuthTokens, getCodexOAuthTokens, saveCodexOAuthTokens } from '../../utils/auth.js'
 import { getGlobalConfig, saveGlobalConfig } from '../../utils/config.js'
-import { getErrnoCode } from '../../utils/errors.js'
 import { resetUserCache } from '../../utils/user.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
-import { lockSync } from '../../utils/lockfile.js'
+import { acquireMutationLockSync } from '../../utils/lockfile.js'
 import { writeFileAtomicDurableSync } from '../../utils/atomicFile.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -46,12 +45,16 @@ export interface PoolAccount {
   vaultFilePath?: string        // absolute path to the vault JSON file (vault accounts only)
   alias?: string                // human-readable name, e.g. "main", "backup1"
   // Soft usage hints from wham/usage (best-effort, may be stale)
-  usagePrimary?: number         // 5h window used_percent (0-100)
-  usageWeekly?: number          // weekly window used_percent (0-100)
+  usagePrimary?: number         // upstream primary-position used_percent (0-100)
+  usageWeekly?: number          // upstream secondary-position used_percent (0-100)
+  // Upstream positions carry these durations when reported; neither is guaranteed.
+  usagePrimaryWindowSeconds?: number
+  usageSecondaryWindowSeconds?: number
   usageAllowed?: boolean
   usageLimitReached?: boolean
   usageFetchedAt?: number       // when usage was last fetched
-  usageResetAt?: number
+  usageResetAt?: number         // upstream primary-position reset (Unix seconds)
+  usageWeeklyResetAt?: number   // upstream secondary-position reset (Unix seconds)
   cappedAt?: number             // when a hard 429 capped this account; uncap only from usage data fetched after this
   redeemedAt?: number           // when applyRedeemedUsageReset last healed this account; lag guard in updateAccountUsageHints
   // Saved id_token plan metadata. May be stale — warning only, never a blocker.
@@ -96,42 +99,10 @@ const CODEX_NOOTP_CONFIG = join(homedir(), '.codex-nootp', 'config.toml')
 const VAULT_LOCK_WAIT_MS = 10_000
 
 function acquireVaultMutationLockSync(filePath: string): () => void {
-  const deadline = Date.now() + VAULT_LOCK_WAIT_MS
-  for (;;) {
-    try {
-      const release = lockSync(filePath, {
-        realpath: false,
-        stale: 120_000,
-        update: 30_000,
-        onCompromised: error => {
-          logForDebugging(
-            `[codex-pool] Vault lock compromised: ${error.message}`,
-            { level: 'error' },
-          )
-        },
-      })
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        try {
-          release()
-        } catch (error) {
-          if (getErrnoCode(error) !== 'ERELEASED') throw error
-        }
-      }
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !('code' in error) ||
-        error.code !== 'ELOCKED' ||
-        Date.now() >= deadline
-      ) {
-        throw error
-      }
-      Bun.sleepSync(20)
-    }
-  }
+  return acquireMutationLockSync(filePath, {
+    label: '[codex-pool] Vault',
+    waitMs: VAULT_LOCK_WAIT_MS,
+  })
 }
 
 // ── Singleton state ────────────────────────────────────────────────────────
@@ -340,6 +311,17 @@ export function poolManagesCredentials(): boolean {
 /** True when there are at least two currently selectable accounts to rotate between. */
 export function canFailover(): boolean {
   return pool.initialized && pool.accounts.filter((account) => isCodexAccountSwitchable(account)).length >= 2
+}
+
+/** True when a failed request account has a different selectable replacement. */
+export function hasSelectableAccountOtherThan(accountId: string): boolean {
+  return (
+    pool.initialized &&
+    pool.accounts.some(
+      account =>
+        account.accountId !== accountId && isCodexAccountSwitchable(account),
+    )
+  )
 }
 
 /**
@@ -1376,9 +1358,12 @@ export function updateAccountUsageHints(
     accountId: string
     primaryPercent: number
     weeklyPercent: number
+    primaryWindowSeconds?: number
+    secondaryWindowSeconds?: number
     allowed?: boolean
     limitReached?: boolean
     resetAt?: number
+    weeklyResetAt?: number
     fetchedAt?: number
   }>,
 ): void {
@@ -1394,6 +1379,9 @@ export function updateAccountUsageHints(
         // Still update the non-blocking fields so scoring stays current.
         acct.usagePrimary = hint.primaryPercent
         acct.usageWeekly = hint.weeklyPercent
+        acct.usagePrimaryWindowSeconds = hint.primaryWindowSeconds
+        acct.usageSecondaryWindowSeconds = hint.secondaryWindowSeconds
+        acct.usageWeeklyResetAt = hint.weeklyResetAt
         // Don't update usageFetchedAt/usageAllowed/usageLimitReached/usageResetAt:
         // applying them would re-block the account via getCodexAccountAvailability.
         continue
@@ -1408,12 +1396,15 @@ export function updateAccountUsageHints(
 
       acct.usagePrimary = hint.primaryPercent
       acct.usageWeekly = hint.weeklyPercent
+      acct.usagePrimaryWindowSeconds = hint.primaryWindowSeconds
+      acct.usageSecondaryWindowSeconds = hint.secondaryWindowSeconds
       acct.usageFetchedAt = now
       acct.usageAllowed = hint.allowed
       acct.usageLimitReached = hint.limitReached
       if (!hintReportsUncapped || hintUncapsHard429 || acct.status !== 'capped' || acct.statusReason !== 'usage_cap') {
         acct.usageResetAt = hint.resetAt
       }
+      acct.usageWeeklyResetAt = hint.weeklyResetAt
 
       if (hintUncapsHard429) {
         const previousLastError = acct.lastError
@@ -1780,7 +1771,7 @@ export function isCodexAccountSwitchable(
 /**
  * Find the best healthy account, excluding `skipIndex`.
  * When fresh usage data is available, prefers the account with the lowest
- * 5h usage percent. Falls back to LRU when usage data is stale or absent.
+ * Primary-position usage percent. Falls back to LRU when usage data is stale or absent.
  */
 function findLRUHealthy(skipIndex: number): number {
   const now = Date.now()
@@ -1807,7 +1798,7 @@ function findLRUHealthy(skipIndex: number): number {
   )
 
   if (hasFreshUsage) {
-    // Sort by usage score: 5h window * 3 + weekly (lower = better)
+    // Sort by usage score: primary position * 3 + secondary position (lower = better)
     // Accounts without fresh usage data get a neutral score of 150
     rankable.sort((a, b) => {
       const scoreA = getPoolAccountUsageScore(a.acct, now)
@@ -1815,7 +1806,7 @@ function findLRUHealthy(skipIndex: number): number {
       return scoreA - scoreB
     })
     logForDebugging(
-      `[codex-pool] Usage-aware selection: ${truncId(rankable[0]!.acct.accountId)} (5h: ${rankable[0]!.acct.usagePrimary}%, wk: ${rankable[0]!.acct.usageWeekly}%)`,
+      `[codex-pool] Usage-aware selection: ${truncId(rankable[0]!.acct.accountId)} (primary: ${rankable[0]!.acct.usagePrimary}%, secondary: ${rankable[0]!.acct.usageWeekly}%)`,
     )
     return rankable[0]!.idx
   }
@@ -1901,6 +1892,7 @@ export function applyRedeemedUsageReset(accountId: string): void {
   acct.usageLimitReached = false
   acct.usageFetchedAt = undefined
   acct.usageResetAt = undefined
+  acct.usageWeeklyResetAt = undefined
 
   // Stamp for the REDEEM_HINT_LAG_GRACE_MS guard in updateAccountUsageHints.
   acct.redeemedAt = Date.now()

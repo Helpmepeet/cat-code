@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from './api/codexUsageSharedCache.js'
 import { readFileSync } from 'node:fs'
 import { mkdtemp, open, readFile, rm } from 'node:fs/promises'
 import {
@@ -93,6 +94,7 @@ function pendingJob(): DeferredContinuationJobV1 {
 }
 
 const cleanup: string[] = []
+beforeEach(() => setSharedUsageCacheDirectoryForTest(null))
 
 afterEach(async () => {
   _forTest.clearForegroundRegistrations()

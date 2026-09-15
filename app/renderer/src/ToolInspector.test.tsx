@@ -25,16 +25,14 @@ function mkToolRow(overrides: Partial<ToolUseRow>): ToolUseRow {
   }
 }
 
-test('derives a summary from the real input and maps pending → running/accent', () => {
+test('derives a summary from the real input', () => {
   const model = describeToolForInspector(
     mkToolRow({ input: { file_path: '/etc/hosts' } }),
   )
   expect(model.summary).toBe('/etc/hosts')
-  expect(model.statusLabel).toBe('running')
-  expect(model.statusTone).toBe('accent')
 })
 
-test('a resolved Bash card surfaces success + output', () => {
+test('a resolved Bash card surfaces its summary + output', () => {
   const model = describeToolForInspector(
     mkToolRow({
       toolName: 'Bash',
@@ -45,8 +43,6 @@ test('a resolved Bash card surfaces success + output', () => {
     }),
   )
   expect(model.summary).toBe('echo hi')
-  expect(model.statusLabel).toBe('success')
-  expect(model.statusTone).toBe('good')
   expect(model.output).toBe('hi\n')
 })
 
@@ -81,11 +77,10 @@ test('a FileEdit result exposes the narrowed diff', () => {
 
 test('narrows tolerantly: empty input has no summary, a non-record input degrades to {}', () => {
   expect(describeToolForInspector(mkToolRow({ input: {} })).summary).toBe('none')
-  // A junk input shape (defensive — the wire is unknown) must not crash.
+  // A junk input shape (defensive — the wire is unknown) must not crash: it
+  // degrades to `{}`, which is what the `none` summary reports.
   const junk = mkToolRow({ input: 42 as unknown as Record<string, unknown> })
-  const model = describeToolForInspector(junk)
-  expect(model.input).toEqual({})
-  expect(model.summary).toBe('none')
+  expect(describeToolForInspector(junk).summary).toBe('none')
 })
 
 test('falls back to the first string value when no priority key is present', () => {
@@ -411,10 +406,9 @@ test('a write drawer opens on the file that was written, not the ack', () => {
     ),
   )
 
+  // Since 2026-08-13 the drawer no longer renders the raw input, so this
+  // selection is the whole of what a write shows.
   expect(model.output).toBe('const x = 1\nconst y = 2')
-  // The model still carries the input verbatim, but since 2026-08-13 the drawer
-  // no longer renders it, so this selection is the whole of what a write shows.
-  expect(model.input.content).toBe('const x = 1\nconst y = 2')
 })
 
 test('a failed write keeps its error in the drawer, since no file was written', () => {

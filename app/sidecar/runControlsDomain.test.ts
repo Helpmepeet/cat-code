@@ -1,7 +1,9 @@
 import { expect, test } from 'bun:test'
 import {
   getMainLoopModel,
+  parseUserSpecifiedModel,
 } from '../../src/utils/model/model.js'
+import { getSupportedEffortLevels } from '../../src/utils/effort.js'
 import {
   getMainLoopModelOverride,
   getSdkBetas,
@@ -18,6 +20,7 @@ import { createStore, type Store } from '../../src/state/store.js'
 import {
   buildRunControlsSnapshot,
   createSidecarRunControlsDomain,
+  effortOptionsForSelection,
   type RunControlExecutor,
 } from './runControlsDomain.js'
 
@@ -35,7 +38,12 @@ function snapshotWithTerra(state: AppState) {
       ...snapshot.model,
       options: [
         ...snapshot.model.options,
-        { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' as const },
+        {
+          value: 'gpt-5.6-terra',
+          label: 'GPT-5.6 Terra',
+          provider: 'openai' as const,
+          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        },
       ],
     },
   }
@@ -48,7 +56,12 @@ function snapshotWithDefault(state: AppState) {
     model: {
       ...snapshot.model,
       options: [
-        { value: null, label: 'Default', provider: snapshot.model.provider },
+        {
+          value: null,
+          label: 'Default',
+          provider: snapshot.model.provider,
+          effortOptions: ['low', 'medium', 'high'],
+        },
         ...snapshot.model.options,
       ],
     },
@@ -76,7 +89,12 @@ function snapshotWithTerraAndOpus(state: AppState) {
       ...snapshot.model,
       options: [
         ...snapshot.model.options,
-        { value: 'opus', label: 'Opus', provider: 'anthropic' as const },
+        {
+          value: 'opus',
+          label: 'Opus',
+          provider: 'anthropic' as const,
+          effortOptions: ['low', 'medium', 'high', 'max'],
+        },
       ],
     },
   }
@@ -90,7 +108,12 @@ function snapshotWithTerraAndSonnet(state: AppState) {
       ...snapshot.model,
       options: [
         ...snapshot.model.options,
-        { value: 'sonnet', label: 'Sonnet', provider: 'anthropic' as const },
+        {
+          value: 'sonnet',
+          label: 'Sonnet',
+          provider: 'anthropic' as const,
+          effortOptions: ['low', 'medium', 'high'],
+        },
       ],
     },
   }
@@ -315,6 +338,58 @@ test('buildRunControlsSnapshot degrades gracefully and reports effective plus se
       option => option.provider === 'openai' || option.provider === 'anthropic',
     ),
   ).toBe(true)
+})
+
+/**
+ * The picker row's own effort ladder (`RunControlModelOption.effortOptions`),
+ * which the composer's model card reads to know whether a row leads to a second
+ * face and what that face contains.
+ *
+ * Tested at the helper rather than through `buildRunControlsSnapshot`, because
+ * `getModelOptions()` is tier-dependent and returns [] in this harness (the test
+ * above says so), so the mapping has no rows to carry. The defect this guards
+ * lives entirely in the helper anyway: a row's `value` is a SELECTION, and the
+ * effort helpers answer for model IDS. Drop the resolution step and every Claude
+ * alias reports "no effort levels" — `modelSupportsEffort('opus')` is false
+ * while `modelSupportsEffort('claude-opus-5')` is true — which silently deletes
+ * the second face for the whole Anthropic half of the picker.
+ */
+test('a row resolves its selection to a model id before reading its effort levels', () => {
+  // The load-bearing one: an ALIAS, whose ladder is empty unless it was resolved.
+  expect(effortOptionsForSelection('opus')).not.toEqual([])
+  expect(effortOptionsForSelection('opus')).toEqual([
+    ...getSupportedEffortLevels(parseUserSpecifiedModel('opus')),
+  ])
+
+  // A canonical id needs no resolution and pins the engine's own table, which is
+  // keyed on this exact string (`getSupportedEffortLevels`, src/utils/effort.ts).
+  expect(effortOptionsForSelection('gpt-5.6-sol')).toEqual([
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+    'ultra',
+  ])
+})
+
+test('a model with no effort knob reports no levels, which is what closes the card', () => {
+  // Haiku takes no effort parameter at all (`modelSupportsEffort`), so its row
+  // has no second face to open — the card applies the pick and dismisses.
+  expect(effortOptionsForSelection('haiku')).toEqual([])
+})
+
+test('the Default row degrades to no ladder instead of throwing', () => {
+  // `null` is the provider-local Default, so its ladder is the DEFAULT model's —
+  // and resolving that reads subscription state, which THROWS outright without
+  // credentials (`getDefaultMainLoopModelSetting` → `isMaxSubscriber` →
+  // `getAnthropicApiKeyWithSource`). One picker row must not be able to take the
+  // whole snapshot down with it, so the row degrades to "no second face" the way
+  // every other engine read in this builder degrades. Asserted as the throw-free
+  // contract rather than a level list, because the list is what differs between
+  // a machine with credentials and one without.
+  expect(() => effortOptionsForSelection(null)).not.toThrow()
+  expect(Array.isArray(effortOptionsForSelection(null))).toBe(true)
 })
 
 test('selected always names one of the offered options, so a row is always highlighted', () => {

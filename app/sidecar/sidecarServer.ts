@@ -51,6 +51,7 @@ import {
   reserveTaskNotification,
   subscribeToCommandQueue,
 } from '../../src/utils/messageQueueManager.js'
+import { CROSS_SESSION_MESSAGE_TAG } from '../../src/constants/xml.js'
 import { setCommandLifecycleListener } from '../../src/utils/commandLifecycle.js'
 import { queuedCommandOrigin } from '../../src/utils/taskNotification.js'
 import { toSDKMessageOriginProp } from '../../src/utils/messages/mappers.js'
@@ -76,6 +77,7 @@ import {
 } from '../shared/jsonSafe.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import {
+  HOST_REQUEST_TIMEOUT_MS,
   MAX_ANSWER_QUESTIONS,
   MAX_FRAME_BYTES,
   MAX_FRAMES_PER_WINDOW,
@@ -83,6 +85,7 @@ import {
   MAX_HISTORY_REPLAY_BYTES,
   MAX_HISTORY_REPLAY_FRAMES,
   MAX_OUTBOUND_FRAME_BYTES,
+  MAX_PEER_TEXT_BYTES,
   MAX_PROMPT_BYTES,
   MAX_QUEUED_PROMPT_PREVIEW_CHARS,
   MAX_QUEUED_PROMPTS,
@@ -92,19 +95,33 @@ import {
   RATE_WINDOW_MS,
 } from '../shared/limits.js'
 import {
+  ACCOUNT_VERB_TYPES,
   HISTORY_REPLAY_TRUNCATION_REQUEST_ID,
   PERMISSION_SET_MODE_MODES,
+  PROMPT_FORCE_VERB_TYPES,
   PROMPT_RECALL_VERB_TYPES,
   PROTOCOL_VERSION,
+  REMOTE_VERB_TYPES,
   RUN_CONTROL_VERB_TYPES,
   SESSION_ACTION_VERB_TYPES,
+  SETTINGS_VERB_TYPES,
+  WORKSPACE_TRUST_VERB_TYPES,
   CONTEXT_BREAKDOWN_VERB_TYPES,
   HISTORY_LOAD_EARLIER_VERB_TYPES,
   TASK_CONTROL_VERB_TYPES,
+  ACTIVITY_PRESENCES,
+  HOST_REQUEST_ERROR_CODES,
+  PEER_DELIVER_REFUSAL_REASONS,
   type AccountVerbMessage,
+  type ActivityPresence,
   type AskUserQuestionAnswerMessage,
   type ClientFrame,
   type ErrorFrame,
+  type HostRequestArgs,
+  type HostRequestError,
+  type HostRequestErrorCode,
+  type HostRequestValues,
+  type HostRequestVerb,
   type OAuthLoginProgress,
   type PermissionContextSnapshot,
   type QueuedPromptItem,
@@ -133,12 +150,11 @@ import type { SidecarAgentConfigDomain } from './agentConfigDomain.js'
 import type { SidecarGoalDomain } from './goalDomain.js'
 import type { SidecarMemoryDomain } from './memoryDomain.js'
 import type { SidecarTasksDomain } from './tasksDomain.js'
-import type { SidecarAgentModeDomain } from './agentModeDomain.js'
+import type { SidecarWorkersDomain } from './workersDomain.js'
 import type { SidecarLeaseDomain } from './leaseDomain.js'
 import type { SidecarPanelTaskReaper } from './panelTaskReaper.js'
 import type {
   SidecarTaskControlDomain,
-  TaskDismissResult,
 } from './taskControlDomain.js'
 import type { SidecarRunControlsDomain } from './runControlsDomain.js'
 import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
@@ -196,6 +212,11 @@ type Connection = {
    * leave the next one asking for a prefix it was never sent, and recovering
    * nothing. Null means this reader was sent no identifiable restored history,
    * so there is no anchor to diff a deeper read against.
+   *
+   * SUPERSEDED, when present, by the main-authored `viewAnchorUuid` on the
+   * request frame: this field is what the socket SENT, which stops being what
+   * the pane HOLDS once main's replay ring evicts or a renderer reload rebuilds
+   * from it (HISTORY-LOAD-EARLIER.md §The view anchor).
    */
   loadEarlierAnchorUuid: string | null
   /** True once `sendHistoryReplay` put at least one frame on this socket. */
@@ -299,14 +320,13 @@ export type SidecarServerOptions = {
    */
   tasks?: SidecarTasksDomain
   /**
-   * Agent-mode / Orchestrator read-seam (P4-8). When present, an
-   * `agent-mode.snapshot` frame is emitted on attach and re-broadcast on store
-   * change; when absent, no orchestrator frame is emitted.
+   * Live worker read-seam. When present, a `workers.snapshot` frame is emitted
+   * on attach and re-broadcast on task changes.
    */
-  agentMode?: SidecarAgentModeDomain
+  workers?: SidecarWorkersDomain
   /**
    * Codex lease read-seam (P4-32b, L1). When present, a `lease.snapshot` frame is
-   * emitted on attach and re-broadcast on the same store change as agent-mode;
+   * emitted on attach and re-broadcast on the same store change as workers;
    * when absent, no lease frame is emitted. Outbound only, no lease verb.
    */
   leases?: SidecarLeaseDomain
@@ -314,7 +334,7 @@ export type SidecarServerOptions = {
    * Task-control write-seam (P4-8b) — the deferred worker Stop/kill verb. When
    * present, a `task.stop` verb dispatches the engine's own `stopTask`; when
    * absent, the verb fails closed (`internal_error`). Read-only, no snapshot of its
-   * own — the kill's store mutation drives the `tasks`/`agent-mode` re-broadcasts.
+   * own — the kill's store mutation drives the `tasks`/`workers` re-broadcasts.
    */
   taskControl?: SidecarTaskControlDomain
   /**
@@ -356,6 +376,11 @@ export type SidecarServerOptions = {
    * frame is emitted.
    */
   workspaceTrust?: SidecarWorkspaceTrustDomain
+  /**
+   * Sidecar-local continuation after the workspace-trust domain persisted and
+   * re-read a trusted state. It carries no renderer-provided value.
+   */
+  onWorkspaceTrusted?: () => void
   /**
    * Diagnostics read-seam (P4-14). Optional because the P1-0 probe fixture has
    * no cwd-configured engine; when absent, no `diagnostics.snapshot` frame is
@@ -480,6 +505,14 @@ let commandLifecycleOwner: SidecarServer | null = null
 const EMPTY_QUEUED_PROMPTS_KEY = JSON.stringify([])
 
 /**
+ * What `crypto.randomUUID` produces, and therefore what the engine's queue uuid
+ * type admits. Used only to decide whether main's peer message id can BE the
+ * queue uuid (`peerQueueUuid`); nothing is refused on it.
+ */
+const UUID_SHAPE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
  * Wires a controller to a connection-handling façade. The transport (Bun's
  * `Bun.listen({ unix })`) is created by the caller and delivers raw byte chunks
  * to `handleData`; this class owns framing, validation, and forwarding. Keeping
@@ -496,7 +529,7 @@ export class SidecarServer {
   private readonly goals: SidecarGoalDomain | null
   private readonly memory: SidecarMemoryDomain | null
   private readonly tasks: SidecarTasksDomain | null
-  private readonly agentMode: SidecarAgentModeDomain | null
+  private readonly workers: SidecarWorkersDomain | null
   private readonly leases: SidecarLeaseDomain | null
   private readonly taskControl: SidecarTaskControlDomain | null
   private readonly panelTaskReaper: SidecarPanelTaskReaper | null
@@ -513,6 +546,7 @@ export class SidecarServer {
   private contextBreakdownLast: ContextBreakdownSnapshot | null = null
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
+  private readonly onWorkspaceTrusted: (() => void) | null
   private readonly diagnostics: SidecarDiagnosticsDomain | null
   private readonly extensions: SidecarExtensionsDomain | null
   private readonly remoteSettings: SidecarRemoteSettingsDomain | null
@@ -562,10 +596,11 @@ export class SidecarServer {
   private readonly connections = new Set<Connection>()
   private unsubscribe: (() => void) | null = null
   private unsubscribePermissionContext: (() => void) | null = null
+  private unsubscribeAgentConfigSnapshot: (() => void) | null = null
   private unsubscribeGoalSnapshot: (() => void) | null = null
   private unsubscribeMemorySnapshot: (() => void) | null = null
   private unsubscribeTasksSnapshot: (() => void) | null = null
-  private unsubscribeAgentModeSnapshot: (() => void) | null = null
+  private unsubscribeWorkersSnapshot: (() => void) | null = null
   private unsubscribeLeaseSnapshot: (() => void) | null = null
   private unsubscribeRunControlsSnapshot: (() => void) | null = null
   private unsubscribeTaskNotificationQueue: (() => void) | null = null
@@ -577,6 +612,29 @@ export class SidecarServer {
   private closed = false
   /** A non-QueryEngine adapter completed without durable-input acknowledgement. */
   private taskNotificationAwaitingDurableAcceptance = false
+  /**
+   * HOST-REQUEST-PLANE §5 — the request client's in-flight table. One entry per
+   * `host.request` this sidecar has sent and not yet had answered, keyed by the
+   * `requestId` IT minted. A `host.result` whose id matches nothing here is
+   * dropped and logged (§2); a request that times out is settled with a typed
+   * failure and its entry removed, so nothing here can grow without bound and no
+   * caller can hang.
+   */
+  private readonly pendingHostRequests = new Map<
+    string,
+    {
+      settle: (result: HostRequestOutcome<HostRequestVerb>) => void
+      timer: ReturnType<typeof setTimeout>
+      /** The verb's own value schema, so the result is validated per verb (HR5). */
+      valueSchema: z.ZodType
+    }
+  >()
+  /**
+   * The last `activity` presence published, so a recomputation that lands on the
+   * same answer costs no frame. `null` means nothing has been published yet,
+   * which is only true before the first attach.
+   */
+  private lastPublishedPresence: ActivityPresence | null = null
   /**
    * Queued prompts already requeued once after a turn refused them. Bounds the
    * boundary-drain retry to one attempt per prompt; entries are removed as soon
@@ -641,6 +699,50 @@ export class SidecarServer {
   private readonly lateRecallDeliveries = new Map<string, number>()
   private lateRecallFlushScheduled = false
   /**
+   * A peer message sitting on the engine queue that still owes a transcript row.
+   *
+   * Deliberately NOT `stagedPrompts`: that map is the user's waiting-messages
+   * strip (`queuedPromptItems` reads it) and the vocabulary a recall takes
+   * messages back from. A peer message is not the user's draft, so it must
+   * neither appear there nor be recallable into the composer. It needs only the
+   * one thing staging also buys, a row written when the engine actually takes
+   * the message, so it gets its own map and nothing else.
+   *
+   * Emptied by whichever path delivers the message, never both: the lifecycle
+   * signal below when a BUSY session's running turn drains it at a tool
+   * boundary, or `drainOneTaskNotification` when an idle session starts a turn
+   * for it and `startTurn` announces it there. `dequeue` fires no lifecycle
+   * signal, so the idle path cannot reach the announcement below.
+   */
+  private readonly pendingPeerAnnouncements = new Map<
+    string,
+    { prompt: string; origin: MessageOrigin }
+  >()
+  /**
+   * Peer messages this process put on the engine queue and has not yet acked:
+   * engine queue uuid → main's `messageId`.
+   *
+   * Main holds its copy until the ack and the ack now goes at CONSUMPTION, so
+   * every entry is a message main is still responsible for. It dies with the
+   * process deliberately — that is exactly the set main must redeliver, and main
+   * already holds it. Bounded by `MAX_PENDING_PEER_MESSAGES`, which is what
+   * makes the reverse lookup below a scan rather than a third map.
+   */
+  private readonly unconsumedPeerMessages = new Map<string, string>()
+  /**
+   * Peer message ids this session has already consumed — the effectively-once
+   * half of at-least-once delivery.
+   *
+   * The duplicate this suppresses is the one a late ack buys: the model read the
+   * message, the process died before main heard the ack, and main redelivers
+   * after the next ready. So the recognition has to outlive the process, and the
+   * store that already does is the transcript — a consumed peer message persists
+   * as a peer-origin row keyed by the message id (`seedConsumedPeerMessages`).
+   * The dedupe state therefore lasts exactly as long as the row a duplicate
+   * would double: lose the row and the duplicate is no longer a duplicate.
+   */
+  private readonly consumedPeerMessages = new Set<string>()
+  /**
    * IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — the parking latch. Set
    * synchronously in `handlePark` once the gate passes; a submit arriving AFTER
    * the latch is rejected `session_disconnected` before `activeTurn` is touched,
@@ -661,10 +763,6 @@ export class SidecarServer {
   private inFlightDurableWrites = 0
   /** One-shot guard for the wham/usage populate (accounts snapshot). */
   private usageRefreshStarted = false
-  /** Latest agent snapshot publication requested for each attached connection. */
-  private agentModeSnapshotGeneration = 0
-  private readonly agentModeSnapshotGenerationByConnection =
-    new WeakMap<Connection, number>()
   /** Armed while zero connections are open; cleared on connect/close (CC-3). */
   private idleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -678,7 +776,7 @@ export class SidecarServer {
     this.goals = options.goals ?? null
     this.memory = options.memory ?? null
     this.tasks = options.tasks ?? null
-    this.agentMode = options.agentMode ?? null
+    this.workers = options.workers ?? null
     this.leases = options.leases ?? null
     this.taskControl = options.taskControl ?? null
     this.panelTaskReaper = options.panelTaskReaper ?? null
@@ -695,11 +793,13 @@ export class SidecarServer {
       this.broadcastOAuthLoginProgress(progress),
     )
     this.workspaceTrust = options.workspaceTrust ?? null
+    this.onWorkspaceTrusted = options.onWorkspaceTrusted ?? null
     this.diagnostics = options.diagnostics ?? null
     this.extensions = options.extensions ?? null
     this.remoteSettings = options.remoteSettings ?? null
     this.slashCatalog = options.slashCatalog ?? []
     this.history = options.history ?? []
+    this.seedConsumedPeerMessages()
     this.historySourceTruncated = options.historySourceTruncated ?? false
     this.projectHistory = options.projectHistory ?? null
     this.loadEarlierHistory =
@@ -734,6 +834,17 @@ export class SidecarServer {
       this.observeTurnEvent(event)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
+      // HOST-REQUEST-PLANE §4 step 4a — the three events that can move presence,
+      // and only those: turn boundaries and permission open/close. Deliberately
+      // NOT every event: `message` fires many times a second during streaming
+      // and cannot change either input, so recomputing on it would be pure cost.
+      if (
+        event.type === 'turn.status' ||
+        event.type === 'permission.requested' ||
+        event.type === 'permission.resolved'
+      ) {
+        this.publishActivity()
+      }
       // NO per-turn context-breakdown refresh. The analysis is not cheap enough
       // to be automatic: `analyzeContextUsage` fans out to ~10
       // `countTokensWithFallback` calls (system prompt, tool schemas, each memory
@@ -796,6 +907,7 @@ export class SidecarServer {
     }
     setCommandLifecycleListener((uuid, state) => {
       if (state !== 'started') return
+      this.announcePeerDelivery(uuid)
       this.commitStagedPrompt(uuid)
     })
     commandLifecycleOwner = this
@@ -810,6 +922,11 @@ export class SidecarServer {
         this.permissions.subscribeToolPermissionContext(context => {
           this.broadcastPermissionContext(context)
         })
+    }
+    if (this.agentConfig) {
+      this.unsubscribeAgentConfigSnapshot = this.agentConfig.subscribe(() => {
+        this.broadcastAgentConfigSnapshot()
+      })
     }
     if (this.goals) {
       this.unsubscribeGoalSnapshot = this.goals.subscribe(() => {
@@ -826,14 +943,15 @@ export class SidecarServer {
         this.broadcastTasksSnapshot()
       })
     }
-    if (this.agentMode) {
-      this.unsubscribeAgentModeSnapshot = this.agentMode.subscribe(() => {
-        void this.broadcastAgentModeSnapshot()
+    if (this.workers) {
+      this.unsubscribeWorkersSnapshot = this.workers.subscribe(() => {
+        void this.broadcastWorkersSnapshot()
       })
     }
-    // P4-32b — leases move on the SAME events that move the worker roster (a
-    // spawn registers a lease, a finish releases one), so the lease seam rides
-    // the same store subscription rather than polling the lease manager.
+    // P4-32b — the lease seam fans its own subscription out over the app-state
+    // store (a spawn registers a lease, a finish releases one) AND the lease
+    // manager's emitter (a failover or an account switch moves a lease with no
+    // task mutation at all). Still no polling; see `leaseDomain.ts` §4.
     if (this.leases) {
       this.unsubscribeLeaseSnapshot = this.leases.subscribe(() => {
         this.broadcastLeaseSnapshot()
@@ -962,11 +1080,9 @@ export class SidecarServer {
     // snapshots and before replay; no new inbound vocabulary or renderer-
     // authored task state.
     this.sendTasksSnapshot(connection)
-    // P4-8 — read-only orchestrator worker snapshot (persisted agent-mode state ∪
-    // live local_agent workers), alongside the P4-9 tasks snapshot. Async + best-
-    // effort (a non-agent-mode session degrades to an empty roster); fire-and-forget
-    // since a read-only snapshot has no ordering dependency on history replay.
-    void this.sendAgentModeSnapshot(connection)
+    // Live worker snapshot, alongside the P4-9 tasks snapshot. It is read-only
+    // and has no ordering dependency on history replay.
+    this.sendWorkersSnapshot(connection)
     // P4-32b — read-only Codex lease snapshot (which account each agent in this
     // session's swarm is leasing), right after the worker roster it joins to.
     // Outbound only: there is no lease verb and no new inbound vocabulary.
@@ -1032,6 +1148,25 @@ export class SidecarServer {
       this.sendQueuedPrompts(connection, stagedForAttach)
       this.lastQueuedPromptsKey = JSON.stringify(stagedForAttach)
     }
+    // HOST-REQUEST-PLANE §4 step 4a — presence, last in the attach burst and
+    // before history replay.
+    //
+    // Its VALUE is derived at ready: `currentPresence()` reads the same two
+    // sources the `app.ready` payload above was built from, and nothing between
+    // here and there can start a turn or open a permission prompt, so a freshly
+    // ready idle session reports `idle` at once and is never simply absent from
+    // `peers.list`. It is sent UNCONDITIONALLY, unlike the conditional snapshots
+    // above it, because "no presence" and "idle" are different answers and only
+    // one of them is true.
+    //
+    // Last rather than first because C3 pins `permission.context` immediately
+    // after `ready` and that adjacency is a renderer contract; presence is not,
+    // and it is `sticky` in main's retention table for the same reason as the
+    // snapshots it joins — nothing re-sends it on a renderer reload, so an
+    // evicted one would blank the very window `peers.list` exists to answer for.
+    const attachPresence = this.currentPresence()
+    this.lastPublishedPresence = attachPresence
+    this.sendActivity(connection, attachPresence)
     // F2 — restored-history replay, after ready + C3 and before any live event
     // (single-socket ordering guarantees the renderer sees history first).
     this.sendHistoryReplay(connection)
@@ -1180,6 +1315,18 @@ export class SidecarServer {
       }
 
       this.handleFrame(connection, result.payload)
+      // Parking/closure may happen synchronously inside dispatch. Stop only
+      // the already-decoded tail of this batch; a separately delivered frame
+      // still reaches the ordinary handler so correlated refusal semantics are
+      // preserved while the socket remains present.
+      if (
+        this.closed ||
+        this.parking ||
+        connection.closed ||
+        !this.connections.has(connection)
+      ) {
+        return
+      }
     }
   }
 
@@ -1192,14 +1339,16 @@ export class SidecarServer {
     this.unsubscribe = null
     this.unsubscribePermissionContext?.()
     this.unsubscribePermissionContext = null
+    this.unsubscribeAgentConfigSnapshot?.()
+    this.unsubscribeAgentConfigSnapshot = null
     this.unsubscribeGoalSnapshot?.()
     this.unsubscribeGoalSnapshot = null
     this.unsubscribeMemorySnapshot?.()
     this.unsubscribeMemorySnapshot = null
     this.unsubscribeTasksSnapshot?.()
     this.unsubscribeTasksSnapshot = null
-    this.unsubscribeAgentModeSnapshot?.()
-    this.unsubscribeAgentModeSnapshot = null
+    this.unsubscribeWorkersSnapshot?.()
+    this.unsubscribeWorkersSnapshot = null
     this.unsubscribeLeaseSnapshot?.()
     this.unsubscribeLeaseSnapshot = null
     this.unsubscribeRunControlsSnapshot?.()
@@ -1216,6 +1365,18 @@ export class SidecarServer {
     this.stagedPrompts.clear()
     this.recalledPrompts.clear()
     this.lateRecallDeliveries.clear()
+    this.pendingPeerAnnouncements.clear()
+    // Settle every in-flight host request rather than leaving its caller waiting
+    // on a socket that is about to close, and clear the timers so a closed
+    // server holds nothing (the boundary tests build several per process).
+    for (const [requestId, pending] of this.pendingHostRequests) {
+      clearTimeout(pending.timer)
+      this.pendingHostRequests.delete(requestId)
+      pending.settle({
+        ok: false,
+        error: { code: 'unavailable', message: 'the session is closing' },
+      })
+    }
     this.stopPanelTaskReaper?.()
     this.stopPanelTaskReaper = null
     for (const connection of this.connections) {
@@ -1227,6 +1388,146 @@ export class SidecarServer {
   /* --------------------------------------------------------------------- *
    * Inbound (client → engine): validate, then apply. Trust boundary here.
    * --------------------------------------------------------------------- */
+
+  /**
+   * Every app-owned inbound type → the handler that owns it. These are all
+   * app-owned vocabulary validated by sidecar-LOCAL schemas: the engine's shared
+   * `appClientMessageSchema` is deliberately NOT extended for any of them,
+   * because the WS server shares that schema and must not silently start
+   * accepting a frame it has no handler for (Phase-3 F3 owns any consolidation).
+   * The four kinds NOT listed here — `app.submit`, `app.abort`,
+   * `permission.response`, `app.ping` — are the engine-owned ones, and they
+   * reach `appClientMessageSchema` by falling off the end of this table.
+   *
+   * Keyed by EXACT type, and that is not a tightening: `checkStrictKeys` runs
+   * first and rejects any type outside its `allowedByType` map, so a
+   * `settings.somethingElse` never reached a handler under the prefix tests this
+   * replaced either. The verb arrays below are the same ones `protocol.ts`
+   * exports and the ladder already tested against, so the table cannot drift
+   * from the wire contract on its own.
+   *
+   * Order-independent by construction: `buildVerbRoutes` refuses a type claimed
+   * twice, so `account.profileDeleted` no longer has to be tested BEFORE the
+   * rest of the account family to keep its own handler.
+   */
+  private static readonly VERB_ROUTES: ReadonlyMap<string, VerbRoute> =
+    buildVerbRoutes([
+      // C2 — PERMISSION-BOUNDARY.md §3.
+      [
+        ['permission.setMode'],
+        (server, connection, message) => server.handleSetMode(connection, message),
+      ],
+      // IDLE-PARK (decisions/IDLE-PARK.md §2/§3). The gate + latch live in the
+      // handler because only the sidecar knows the true turn/permission/task
+      // state at the instant of park (main's frame-derived view can be stale by
+      // one in-flight submit). Originated ONLY by main's policy driver — no
+      // preload channel forwards it — but validated at the trust boundary
+      // regardless.
+      [['app.park'], (server, _connection, message) => server.handlePark(message)],
+      // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds.
+      // `host.result` settles one request this sidecar minted an id for;
+      // `peer.deliver` is a message another session sent, routed by main. Both
+      // are inbound at the trust boundary and are treated as such.
+      [
+        ['host.result'],
+        (server, _connection, message) => server.handleHostResult(message),
+      ],
+      [
+        ['peer.deliver'],
+        (server, _connection, message) => server.handlePeerDeliver(message),
+      ],
+      // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — resolved through the engine's
+      // OWN `respondToPermissionRequest` allow path.
+      [
+        ['askUserQuestion.answer'],
+        (server, connection, message) =>
+          server.handleAskUserQuestionAnswer(connection, message),
+      ],
+      // Usage stats query — real engine-backed aggregation.
+      [
+        ['stats.query'],
+        (server, connection, message) => server.handleStatsQuery(connection, message),
+      ],
+      // P4-5 account lifecycle verbs, dispatched to the engine's own account
+      // machinery. `account.profileDeleted` is deliberately NOT in
+      // `ACCOUNT_VERB_TYPES` and has its own handler.
+      [
+        ['account.profileDeleted'],
+        (server, connection, message) =>
+          server.handleAccountProfileDeleted(connection, message),
+      ],
+      [
+        ACCOUNT_VERB_TYPES,
+        (server, connection, message) => server.handleAccountVerb(connection, message),
+      ],
+      // P4-13 RemoteSettings verbs, dispatched to the engine's own
+      // bridge/direct-connect primitives.
+      [
+        REMOTE_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleRemoteSettingsVerb(connection, message),
+      ],
+      // P4-19 settings WRITE verb, validated by the closed EDITABLE_SETTINGS
+      // allowlist and applied through the engine's SettingsUpdater-under-lock.
+      [
+        SETTINGS_VERB_TYPES,
+        (server, connection, message) => server.handleSettingsVerb(connection, message),
+      ],
+      // P4-15 workspace-trust accept verb, dispatched to the engine's OWN trust
+      // persistence (`saveCurrentProjectConfig`).
+      [
+        WORKSPACE_TRUST_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleWorkspaceTrustVerb(connection, message),
+      ],
+      // P4-8b task-control verbs, dispatched to the engine's own stop, dismiss,
+      // or background machinery.
+      [
+        TASK_CONTROL_VERB_TYPES,
+        (server, connection, message) => {
+          void server.handleTaskControlVerb(connection, message)
+        },
+      ],
+      // P4-24c composer run-control set verbs, dispatched to the engine's OWN
+      // per-session setters (a live change, no respawn).
+      [
+        RUN_CONTROL_VERB_TYPES,
+        (server, connection, message) => server.handleRunControlVerb(connection, message),
+      ],
+      // Queue controls, served from the engine's own command queue. Force-send
+      // carries an engine-minted queued-prompt id; recall carries no target.
+      [
+        PROMPT_FORCE_VERB_TYPES,
+        (server, connection, message) => server.handlePromptForce(connection, message),
+      ],
+      [
+        PROMPT_RECALL_VERB_TYPES,
+        (server, connection, message) => server.handlePromptRecall(connection, message),
+      ],
+      // The context-breakdown request takes no renderer input, so acceptance
+      // decides only WHETHER to spend the analysis, never what it computes over.
+      [
+        CONTEXT_BREAKDOWN_VERB_TYPES,
+        (server, _connection, message) => server.handleContextBreakdownRequest(message),
+      ],
+      // The load-earlier read verb (decisions/HISTORY-LOAD-EARLIER.md) carries
+      // NO renderer-authored state beyond a correlation id, so acceptance
+      // decides only WHETHER to spend a deeper read of THIS session's own
+      // transcript, never which file is read or how much of it.
+      [
+        HISTORY_LOAD_EARLIER_VERB_TYPES,
+        (server, connection, message) => {
+          void server.handleHistoryLoadEarlier(connection, message)
+        },
+      ],
+      // P4-6b session-action WRITE verbs, dispatched to the engine's own domain
+      // operations. Membership rather than a broad `session.` prefix.
+      [
+        SESSION_ACTION_VERB_TYPES,
+        (server, connection, message) =>
+          server.handleSessionActionVerb(connection, message),
+      ],
+    ])
 
   private handleFrame(connection: Connection, payload: unknown): void {
     // A renderer-minted request id is safe to echo back on a boundary refusal,
@@ -1272,189 +1573,34 @@ export class SidecarServer {
     const strictError = checkStrictKeys(frame.message)
     if (strictError) {
       this.log(`[sidecar] rejected frame with unexpected keys: ${strictError}`)
-      this.rejectFrameWithSubmitAnswer(
-        connection,
-        payload,
-        requestId,
-        'bad_request',
-        strictError,
-        false,
-      )
+      // F20 — the rejection is total either way; only its REPORT differs. See
+      // `isMainOriginatedMessage`: an internal frame's failure is answered to
+      // main through the log, never to a reader through an error frame.
+      if (!isMainOriginatedMessage(frame.message)) {
+        this.rejectFrameWithSubmitAnswer(
+          connection,
+          payload,
+          requestId,
+          'bad_request',
+          strictError,
+          false,
+        )
+      }
       return
     }
 
-    // C2 — `permission.setMode` is app-owned vocabulary validated by a
-    // sidecar-LOCAL schema (PERMISSION-BOUNDARY.md §3). The engine's shared
-    // `appClientMessageSchema` is deliberately NOT extended: the WS server
-    // shares it and must not silently start accepting a frame it has no
-    // handler for (Phase-3 F3 owns any consolidation).
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type ===
-      'permission.setMode'
-    ) {
-      this.handleSetMode(connection, frame.message)
-      return
-    }
-
-    // IDLE-PARK (decisions/IDLE-PARK.md §2/§3) — host-initiated park is app-owned
-    // vocabulary validated by a sidecar-LOCAL schema (like C2). The engine's
-    // shared `appClientMessageSchema` is deliberately NOT extended. The gate +
-    // latch live HERE because only the sidecar knows the true turn/permission/
-    // task state at the instant of park (main's frame-derived view can be stale
-    // by one in-flight submit). Originated ONLY by main's policy driver — no
-    // preload channel forwards it — but validated at the trust boundary regardless.
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type === 'app.park'
-    ) {
-      this.handlePark(connection, frame.message)
-      return
-    }
-
-    // C5 (P4-20, ASK-USER-QUESTION-ANSWER.md) — the AskUserQuestion answer is
-    // app-owned vocabulary validated by a sidecar-LOCAL schema (like C2), then
-    // resolved through the engine's OWN `respondToPermissionRequest` allow path.
-    // The engine's shared `appClientMessageSchema` is deliberately NOT extended.
-    if (
-      (frame.message as { type?: unknown } | null | undefined)?.type ===
-      'askUserQuestion.answer'
-    ) {
-      this.handleAskUserQuestionAnswer(connection, frame.message)
-      return
-    }
-
-    // P4-5 — account lifecycle verbs are app-owned vocabulary (like C2), each
-    // validated by a sidecar-LOCAL schema and dispatched to the engine's own
-    // account machinery. The engine's shared schema is deliberately not extended.
+    // App-owned inbound vocabulary routes through `VERB_ROUTES` (see its
+    // declaration). `checkStrictKeys` above has already closed the vocabulary to
+    // exact types, so an unrouted type here is one of the four engine-owned
+    // kinds and falls through to the shared schema below.
     const messageType = (frame.message as { type?: unknown } | null | undefined)
       ?.type
-    if (typeof messageType === 'string' && messageType === 'stats.query') {
-      this.handleStatsQuery(connection, frame.message)
-      return
-    }
-
-    if (messageType === 'account.profileDeleted') {
-      this.handleAccountProfileDeleted(connection, frame.message)
-      return
-    }
-
-    if (typeof messageType === 'string' && messageType.startsWith('account.')) {
-      this.handleAccountVerb(connection, frame.message)
-      return
-    }
-
-    // P4-13 — RemoteSettings verbs are app-owned vocabulary (like C2 and the
-    // P4-5 account verbs), validated by a sidecar-LOCAL schema and dispatched
-    // to the engine's own bridge/direct-connect primitives.
-    if (
-      typeof messageType === 'string' &&
-      messageType.startsWith('remoteSettings.')
-    ) {
-      this.handleRemoteSettingsVerb(connection, frame.message)
-      return
-    }
-
-    // P4-19 — the settings WRITE verb is app-owned vocabulary (like C2 and the
-    // account/RemoteSettings verbs), validated by a sidecar-LOCAL schema + the
-    // closed EDITABLE_SETTINGS allowlist and applied through the engine's
-    // SettingsUpdater-under-lock form. NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('settings.')) {
-      this.handleSettingsVerb(connection, frame.message)
-      return
-    }
-
-    // P4-15 — the workspace-trust accept verb is app-owned vocabulary (like C2
-    // and the account/RemoteSettings/settings verbs), validated by a sidecar-
-    // LOCAL schema and dispatched to the engine's OWN trust persistence
-    // (`saveCurrentProjectConfig`). NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('workspace.')) {
-      this.handleWorkspaceTrustVerb(connection, frame.message)
-      return
-    }
-
-    // P4-8b — the agent-mode set verb is app-owned vocabulary (like C2 and the
-    // account/RemoteSettings/settings/workspace verbs), validated by a sidecar-
-    // LOCAL schema and dispatched to the engine's OWN `matchSessionMode` (a live
-    // env switch, no respawn). NOT part of the engine's shared schema.
-    if (typeof messageType === 'string' && messageType.startsWith('agent-mode.')) {
-      this.handleAgentModeSet(connection, frame.message)
-      return
-    }
-
-    // P4-8b — the task-control STOP verb (the deferred worker Stop/kill action) is
-    // app-owned vocabulary (like the account/agent-mode/run-control verbs),
-    // validated by a sidecar-LOCAL schema and dispatched to the engine's OWN
-    // `stopTask` (a live per-session kill, no respawn). NOT in the shared schema.
-    if (
-      typeof messageType === 'string' &&
-      (TASK_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      void this.handleTaskControlVerb(connection, frame.message)
-      return
-    }
-
-    // P4-24c — the composer run-control set verbs (model.set / effort.set /
-    // fast.set) are app-owned vocabulary (like C2 and the account/RemoteSettings/
-    // settings/workspace/agent-mode verbs), validated by a sidecar-LOCAL schema and
-    // dispatched to the engine's OWN per-session setters (a live change, no
-    // respawn). NOT part of the engine's shared schema. Membership test (three
-    // distinct prefixes) rather than a single startsWith.
-    if (
-      typeof messageType === 'string' &&
-      (RUN_CONTROL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleRunControlVerb(connection, frame.message)
-      return
-    }
-
-    // D1b — taking a waiting message back is app-owned vocabulary (like C2 and
-    // the account/settings/workspace/agent-mode/run-control verbs), validated by
-    // a sidecar-LOCAL schema and served from the engine's OWN command queue.
-    // NOT part of the engine's shared schema. It carries no target, so the only
-    // renderer-authored byte is the correlation id.
-    if (
-      typeof messageType === 'string' &&
-      (PROMPT_RECALL_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handlePromptRecall(connection, frame.message)
-      return
-    }
-
-    // The context-breakdown request — app-owned vocabulary, validated by a
-    // sidecar-LOCAL schema. It takes no renderer input, so acceptance decides
-    // only WHETHER to spend the analysis, never what it computes over.
-    if (
-      typeof messageType === 'string' &&
-      (CONTEXT_BREAKDOWN_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleContextBreakdownRequest(frame.message)
-      return
-    }
-
-    // The load-earlier read verb (decisions/HISTORY-LOAD-EARLIER.md) is
-    // app-owned vocabulary validated by a sidecar-LOCAL schema, like C2 and the
-    // context-breakdown request. It carries NO renderer-authored state beyond a
-    // correlation id, so acceptance decides only WHETHER to spend a deeper read
-    // of THIS session's own transcript, never which file is read or how much of
-    // it. The engine's shared `appClientMessageSchema` is deliberately NOT
-    // extended.
-    if (
-      typeof messageType === 'string' &&
-      (HISTORY_LOAD_EARLIER_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      void this.handleHistoryLoadEarlier(connection, frame.message)
-      return
-    }
-
-    // P4-6b — the session-action WRITE verbs are app-owned vocabulary (like the
-    // account/settings/workspace/
-    // agent-mode/run-control verbs), validated by a sidecar-LOCAL schema and
-    // dispatched to the engine's own domain operations. NOT part of the engine's
-    // shared schema. Membership test rather than a broad `session.` prefix.
-    if (
-      typeof messageType === 'string' &&
-      (SESSION_ACTION_VERB_TYPES as readonly string[]).includes(messageType)
-    ) {
-      this.handleSessionActionVerb(connection, frame.message)
+    const route =
+      typeof messageType === 'string'
+        ? SidecarServer.VERB_ROUTES.get(messageType)
+        : undefined
+    if (route) {
+      route(this, connection, frame.message)
       return
     }
 
@@ -1690,10 +1836,36 @@ export class SidecarServer {
     const started = this.startTurn({
       prompt: command.value,
       origin,
-      generateTitle: false,
+      // A peer message keeps main's message id as its transcript identity, so
+      // the row this turn persists is the durable record of WHICH peer message
+      // was consumed — the same identity the busy path's `queued_command`
+      // attachment already carried, and the one `seedConsumedPeerMessages`
+      // reads back after a restart. Peer only: a worker result's transcript
+      // identity is nobody's dedupe key and is left as it was.
+      ...(origin.kind === 'peer' && command.uuid !== undefined
+        ? { uuid: command.uuid }
+        : {}),
+      // HOST-REQUEST-PLANE §4 step 4 — `false` is right for a worker RESULT,
+      // which is why this drain has always passed it, and wrong for a peer
+      // message: a session created by a peer would otherwise carry the cwd
+      // basename forever, because its first prompt arrives here rather than
+      // through `handleSubmit`. Turning it on for a `peer` origin is safe
+      // without a second title check here: the generator is already run-once,
+      // fresh-only, resumed-never and no-clobber (`sessionTitleGen.ts`), so on
+      // a session that HAS a title this is a no-op, which is exactly the
+      // decision's "on a session whose title is unset".
+      generateTitle: origin.kind === 'peer',
       onInputPersisted: () => {
         persisted = true
         releaseTaskNotificationReservation(reservationTaskId)
+        // The IDLE path's consumption point, and deliberately not the line
+        // above where `started` came back true. A turn that never reaches
+        // durable acceptance puts the command back on the queue below, so a
+        // message acked at `started` could still be sitting unconsumed with
+        // main's copy already gone. Past `onInputPersisted` the engine has taken
+        // and persisted the input, which is both the consumption main is
+        // waiting for and the transcript row the dedupe reads back.
+        if (origin.kind === 'peer') this.ackPeerConsumption(command.uuid)
       },
       onSettled: error => {
         if (!persisted) {
@@ -1717,6 +1889,12 @@ export class SidecarServer {
         }
       },
     })
+    if (started && command.uuid !== undefined) {
+      // `startTurn` announced it a moment ago, so the row is owed no longer.
+      // A turn that did NOT start leaves the entry alone: the command goes back
+      // on the queue below, and whichever path takes it next still owes the row.
+      this.pendingPeerAnnouncements.delete(command.uuid)
+    }
     if (!started) {
       releaseTaskNotificationReservation(reservationTaskId)
       enqueuePendingNotification(command)
@@ -1964,6 +2142,119 @@ export class SidecarServer {
       uuid,
       ...(isMeta ? { isMeta: true } : {}),
     })
+  }
+
+  /**
+   * The BUSY half of a peer message's transcript row.
+   *
+   * An idle recipient gets its row from `startTurn`, which is why a creation
+   * prompt has always rendered. A busy one never did: its running turn drains
+   * the queue itself and folds the message into a `queued_command` attachment,
+   * which reaches the model and nothing else. Writing the row from the same
+   * consumption signal keeps the two paths saying the same thing, and keeps the
+   * row honest about WHEN — the message appears where the model received it,
+   * not where the peer sent it.
+   *
+   * `broadcastPromptMessage` is the same emitter both other paths use, so the
+   * frame is byte-identical to the one the idle path sends and needs no new
+   * frame kind, no protocol change, and nothing new in the renderer.
+   */
+  private announcePeerDelivery(uuid: string): void {
+    const pending = this.pendingPeerAnnouncements.get(uuid)
+    if (!pending) return
+    this.pendingPeerAnnouncements.delete(uuid)
+    this.broadcastPromptMessage(pending.prompt, uuid, undefined, pending.origin)
+    // The BUSY path's consumption point. `notifyCommandLifecycle(uuid,
+    // 'started')` fires on the drain that takes the command INTO the running
+    // turn, immediately before `removeFromQueue` (`src/query.ts`), so past this
+    // line the message is the model's and nothing can put it back. That is what
+    // main's hold was waiting for; the idle path reaches the same conclusion
+    // through `onInputPersisted` instead, because `dequeue` fires no lifecycle
+    // signal.
+    this.ackPeerConsumption(uuid)
+  }
+
+  /**
+   * The consumption ack, and the dedupe record that makes redelivery safe.
+   *
+   * Ordering is load-bearing: the id joins `consumedPeerMessages` BEFORE the ack
+   * leaves, so a redelivery that crosses the ack in flight is still recognised.
+   * Idempotent — only a message this process is actually holding acks, so the
+   * two drain paths can both call it without racing to double-ack.
+   */
+  private ackPeerConsumption(queueUuid: string | undefined): void {
+    if (queueUuid === undefined) return
+    const messageId = this.unconsumedPeerMessages.get(queueUuid)
+    if (messageId === undefined) return
+    this.unconsumedPeerMessages.delete(queueUuid)
+    this.consumedPeerMessages.add(messageId)
+    this.sendPeerAck(messageId)
+  }
+
+  /** Is this message already on the queue, waiting for its consumption ack? */
+  private hasUnconsumedPeerMessage(messageId: string): boolean {
+    for (const held of this.unconsumedPeerMessages.values()) {
+      if (held === messageId) return true
+    }
+    return false
+  }
+
+  /**
+   * Main's message id, reused as the engine queue uuid: that is what makes the
+   * transcript row a durable record of WHICH peer message the model consumed
+   * (`seedConsumedPeerMessages`), with no store of its own.
+   *
+   * The shape is checked rather than assumed — main mints these with
+   * `crypto.randomUUID`, but on the wire the field is a plain bounded string. A
+   * malformed one gets a fresh uuid instead of a refusal: refusing the frame
+   * would lose the message, which is the exact failure this change exists to
+   * end, and all that goes with the fallback is the cross-restart half of the
+   * dedupe.
+   */
+  private peerQueueUuid(messageId: string): ReturnType<typeof randomUUID> {
+    return UUID_SHAPE.test(messageId)
+      ? (messageId as ReturnType<typeof randomUUID>)
+      : randomUUID()
+  }
+
+  /**
+   * Fire-and-forget by necessity: both callers are synchronous and the ack's
+   * result carries nothing either acts on. Never silent, though — a failed ack
+   * leaves main holding the message, which is now the correct outcome rather
+   * than a lost one: main redelivers after the next ready and the dedupe above
+   * turns that redelivery into a re-ack instead of a second row.
+   */
+  private sendPeerAck(messageId: string): void {
+    void this.requestHost('peer.ack', { messageId }).then(outcome => {
+      if (!outcome.ok) {
+        this.log(`[sidecar] peer message ack failed: ${outcome.error.code}`)
+      }
+    })
+  }
+
+  /**
+   * Rebuild "what has this session already consumed" from the restored
+   * transcript, at construction, before any connection can deliver anything.
+   *
+   * Both drain paths persist a consumed peer message as a peer-origin user row
+   * keyed by the queue uuid — the idle path writes one directly, and the busy
+   * path's `queued_command` attachment is projected back into one by
+   * `historyProjection.restorePeerMessageRow`. Since the queue uuid IS main's
+   * message id (`peerQueueUuid`), that row is already the durable record of
+   * consumption and needs no store of its own.
+   *
+   * What it cannot cover: a row compaction has dropped, and a consumption whose
+   * transcript write did not reach disk before the process died. Both degrade to
+   * one duplicate row, which is the direction §4 step 6 already accepts.
+   */
+  private seedConsumedPeerMessages(): void {
+    for (const message of this.history) {
+      if (message.type !== 'user') continue
+      if (message.origin?.kind !== 'peer') continue
+      if (typeof message.uuid === 'string') {
+        this.consumedPeerMessages.add(message.uuid)
+      }
+    }
   }
 
   /**
@@ -2228,6 +2519,71 @@ export class SidecarServer {
   }
 
   /**
+   * Interrupt only while the renderer-named engine prompt is still the live queue
+   * head. This identity check is what makes delayed and duplicate clicks safe:
+   * once the boundary drain starts that prompt, it leaves `queuedPromptItems`
+   * before another force frame can reach the new turn.
+   */
+  private handlePromptForce(connection: Connection, rawMessage: unknown): void {
+    const raw = rawMessage as { requestId?: unknown }
+    const requestId =
+      typeof raw.requestId === 'string' ? raw.requestId : undefined
+    const parsed = promptForceMessageSchema.safeParse(rawMessage)
+    if (!parsed.success) {
+      this.sendError(
+        connection,
+        requestId,
+        'bad_request',
+        parsed.error.issues[0]?.message ?? 'invalid prompt-force verb',
+        false,
+      )
+      return
+    }
+
+    const { promptId } = parsed.data
+    if (this.parking) {
+      this.send(connection, {
+        kind: 'prompt-force.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: parsed.data.requestId,
+        promptId,
+        ok: false,
+        message: 'The session is parking.',
+      })
+      return
+    }
+    const head = this.queuedPromptItems()[0]
+    if (head?.id !== promptId) {
+      this.send(connection, {
+        kind: 'prompt-force.result',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+        requestId: parsed.data.requestId,
+        promptId,
+        ok: false,
+        message: 'That message is no longer waiting.',
+      })
+      return
+    }
+
+    if (this.activeTurn) {
+      this.controller.abort('force-send', 'interrupt')
+    } else {
+      this.scheduleBoundaryDrain()
+    }
+    this.send(connection, {
+      kind: 'prompt-force.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId: parsed.data.requestId,
+      promptId,
+      ok: true,
+      message: 'Sending the queued message now.',
+    })
+  }
+
+  /**
    * ONE SUBMIT, ONE ANSWER. Every exit from this method either accepts the
    * prompt or refuses it, and each one answers `submitId` exactly once
    * (`refuseSubmit` / `answerSubmit`), from the same synchronous dispatch that
@@ -2431,17 +2787,18 @@ export class SidecarServer {
    * is already visible to the gate here and aborts the park (not the turn); a
    * submit in a LATER dispatch sees `parking` and is rejected (handleSubmit).
    */
-  private handlePark(connection: Connection, rawMessage: unknown): void {
+  private handlePark(rawMessage: unknown): void {
     const parsed = appParkMessageSchema.safeParse(rawMessage)
     if (!parsed.success) {
-      // A malformed park is a boundary rejection like any other frame. Use
-      // `undefined` requestId — the field it carries is not trustworthy here.
-      this.sendError(
-        connection,
-        undefined,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid app.park',
-        false,
+      // F20 — a boundary rejection like any other frame, but reported to the
+      // side that sent it. Park is main's policy driver alone, so an error
+      // frame here would have carried `undefined` requestId to the renderer and
+      // banner-ed a reader for traffic they never caused. See
+      // `isMainOriginatedMessage`.
+      this.log(
+        `[sidecar] rejected app.park: ${
+          parsed.error.issues[0]?.message ?? 'invalid app.park'
+        }`,
       )
       return
     }
@@ -2476,7 +2833,7 @@ export class SidecarServer {
    *   3. no running/pending task, read from the SAME tasks domain the server
    *      already holds. `hasLiveWork()` reads the RAW task store, FOREGROUND-
    *      inclusive — NOT the display snapshot, which filters out a foregrounded
-   *      local_agent (parking over a running foregrounded agent-mode worker would
+   *      local_agent (parking over a running foregrounded worker would
    *      kill a live turn — a no-turn-loss breach). Covers background + foreground
    *      workers alike. Do not re-derive.
    *
@@ -2547,16 +2904,8 @@ export class SidecarServer {
       return
     }
 
-    if (!this.permissions) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'permission domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const permissions = this.requireDomain(connection, parsed.data.requestId, this.permissions, 'permission')
+    if (!permissions) return
 
     // `bypassPermissions` is an escalation beyond the renderer-mediated
     // permission flow. The renderer may request it only when the trusted
@@ -2564,7 +2913,7 @@ export class SidecarServer {
     // able to grant that capability by sending this frame.
     if (
       parsed.data.mode === 'bypassPermissions' &&
-      this.permissions.getToolPermissionContext().isBypassPermissionsModeAvailable !== true
+      permissions.getToolPermissionContext().isBypassPermissionsModeAvailable !== true
     ) {
       this.sendError(
         connection,
@@ -2577,7 +2926,7 @@ export class SidecarServer {
     }
 
     try {
-      this.permissions.setMode(parsed.data.mode)
+      permissions.setMode(parsed.data.mode)
     } catch (error) {
       this.sendError(
         connection,
@@ -2589,24 +2938,61 @@ export class SidecarServer {
     }
   }
 
-  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
+  /**
+   * The parse half every verb handler shares. The correlation id is read off the
+   * UNVALIDATED message first, so a rejection can still be addressed back to the
+   * request that caused it; only then does the verb's OWN schema run. Each kind
+   * keeps its own schema and its own rejection wording - what is shared here is
+   * the reporting, not the validation.
+   */
+  private parseVerbMessage<S extends z.ZodTypeAny>(
+    connection: Connection,
+    rawMessage: unknown,
+    schema: S,
+    invalidMessage: string,
+  ): z.infer<S> | null {
     const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = statsQueryMessageSchema.safeParse(rawMessage)
+    const requestId = typeof raw.requestId === 'string' ? raw.requestId : undefined
+    const parsed = schema.safeParse(rawMessage)
     if (!parsed.success) {
       this.sendError(
         connection,
         requestId,
         'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid stats query',
+        parsed.error.issues[0]?.message ?? invalidMessage,
         false,
       )
+      return null
+    }
+    return parsed.data
+  }
+
+  /**
+   * The domain-presence half the same handlers share, run AFTER the verb's own
+   * schema. A null domain is one the engine did not construct for this session,
+   * so the frame was valid and there is simply nothing behind it: that is an
+   * internal_error, never a bad_request. Each caller passes its OWN domain and
+   * names it - what is shared here is the reporting, not the check.
+   */
+  private requireDomain<D>(
+    connection: Connection,
+    requestId: string | undefined,
+    domain: D | null,
+    name: string,
+  ): D | null {
+    if (domain !== null) return domain
+    const unavailable = `${name} domain unavailable for this session`
+    this.sendError(connection, requestId, 'internal_error', unavailable, false)
+    return null
+  }
+
+  private handleStatsQuery(connection: Connection, rawMessage: unknown): void {
+    const parsed = this.parseVerbMessage(connection, rawMessage, statsQueryMessageSchema, 'invalid stats query')
+    if (!parsed) {
       return
     }
 
-    void this.sendUsageStatsSnapshot(connection, parsed.data.range)
+    void this.sendUsageStatsSnapshot(connection, parsed.range)
   }
 
   /**
@@ -2620,39 +3006,20 @@ export class SidecarServer {
    * crosses either direction.
    */
   private handleAccountVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = accountVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid account verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, accountVerbMessageSchema, 'invalid account verb')
+    if (!parsed) {
       return
     }
-    if (!this.accounts) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'accounts domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const accounts = this.requireDomain(connection, parsed.requestId, this.accounts, 'accounts')
+    if (!accounts) return
 
     // The verb is now structurally valid; the domain owns the pool-resolved
     // business rules + dispatch. Errors there degrade to an ok:false result
     // frame (a business failure), never a thrown internal error to the client.
-    const verb = parsed.data as AccountVerbMessage
+    const verb = parsed as AccountVerbMessage
     // IDLE-PARK gate 4: hold the park off until this settles (see isParkGateOpen).
     this.inFlightDurableWrites += 1
-    void this.accounts
+    void accounts
       .runVerb(verb)
       .then(({ verb: verbType, result, poolChanged }) => {
         this.send(connection, {
@@ -2740,41 +3107,37 @@ export class SidecarServer {
    * crosses either direction (trust is a boolean).
    */
   private handleWorkspaceTrustVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = workspaceTrustMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid workspace-trust verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, workspaceTrustMessageSchema, 'invalid workspace-trust verb')
+    if (!parsed) {
       return
     }
-    if (!this.workspaceTrust) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'workspace-trust domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const workspaceTrust = this.requireDomain(connection, parsed.requestId, this.workspaceTrust, 'workspace-trust')
+    if (!workspaceTrust) return
 
-    const result = this.workspaceTrust.acceptTrust()
+    const result = workspaceTrust.acceptTrust()
     this.send(connection, {
       kind: 'workspace.trust.result',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      requestId: parsed.data.requestId,
+      requestId: parsed.requestId,
       ok: result.ok,
       message: result.message,
     })
+    if (
+      result.ok &&
+      result.changed &&
+      workspaceTrust.getSnapshot()?.trusted === true
+    ) {
+      try {
+        this.onWorkspaceTrusted?.()
+      } catch (error) {
+        this.log(
+          `[sidecar] workspace-trust MCP start skipped (${
+            error instanceof Error ? error.message : String(error)
+          })`,
+        )
+      }
+    }
     if (result.changed) {
       this.broadcastWorkspaceTrustSnapshot()
       this.scheduleBoundaryDrain()
@@ -2782,65 +3145,12 @@ export class SidecarServer {
   }
 
   /**
-   * P4-8b — the agent-mode set verb (protocol.ts: AGENT_MODE_VERB_TYPES;
-   * `decisions/AGENT-MODE-TOGGLE.md`). Same fail-closed order as
-   * `handleWorkspaceTrustVerb`: sidecar-LOCAL structural schema → domain presence
-   * → dispatch to the domain (which switches mode through the engine's OWN
-   * `matchSessionMode` — a live env switch, no respawn) → `agent-mode.set.result`
-   * frame → re-broadcast the `agent-mode.snapshot` when the mode changed. The
-   * renderer authors only the boolean intent; no path, no token crosses.
-   */
-  private handleAgentModeSet(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = agentModeSetMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid agent-mode verb',
-        false,
-      )
-      return
-    }
-    if (!this.agentMode) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'agent-mode domain unavailable for this session',
-        false,
-      )
-      return
-    }
-
-    const result = this.agentMode.setActive(parsed.data.active)
-    this.send(connection, {
-      kind: 'agent-mode.set.result',
-      protocolVersion: PROTOCOL_VERSION,
-      sessionId: this.sessionId,
-      requestId: parsed.data.requestId,
-      ok: result.ok,
-      message: result.message,
-    })
-    // The snapshot broadcast is async (the session plane is a file-backed engine
-    // read); fire-and-forget after the synchronous result ack, mirroring the
-    // subscribe-driven re-broadcast path.
-    if (result.changed) {
-      void this.broadcastAgentModeSnapshot()
-    }
-  }
-
-  /**
    * P4-8b — the task-control STOP verb (protocol.ts: TASK_CONTROL_VERB_TYPES;
-   * `decisions/AGENT-CHROME.md` §2 / PARITY-LEDGER §20 "WorkerDetail Stop"). Same
+   * PARITY-LEDGER §20 "WorkerDetail Stop"). Same
    * fail-closed order as the other verbs: sidecar-LOCAL structural schema → domain
    * presence → dispatch to the domain (which runs the engine's OWN `stopTask`
    * against THIS session's store — a live kill, no respawn) → `task-control.result`
-   * frame. The `tasks.snapshot` / `agent-mode.snapshot` re-broadcast is NOT emitted
+   * frame. The `tasks.snapshot` / `workers.snapshot` re-broadcast is NOT emitted
    * here: `stopTask` mutates the app-state store, whose subscription (constructor)
    * re-broadcasts the fresh snapshots to every connection — the SAME live path any
    * engine-side kill takes, not an action-driven synthetic one. Async because
@@ -2856,37 +3166,22 @@ export class SidecarServer {
     connection: Connection,
     rawMessage: unknown,
   ): Promise<void> {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = taskControlVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid task-control verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, taskControlVerbMessageSchema, 'invalid task-control verb')
+    if (!parsed) {
       return
     }
-    if (!this.taskControl) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'task-control domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const taskControl = this.requireDomain(connection, parsed.requestId, this.taskControl, 'task-control')
+    if (!taskControl) return
 
-    const verb = parsed.data as TaskControlVerbMessage
+    const verb = parsed as TaskControlVerbMessage
     const result =
-      verb.type === 'task.dismiss'
-        ? await this.dismissWorker(verb.taskId)
-        : await this.taskControl.stop(verb.taskId)
+      verb.type === 'task.background'
+        ? await taskControl.background()
+        : verb.type === 'task.background.one'
+          ? await taskControl.backgroundOne(verb.toolUseId)
+          : verb.type === 'task.dismiss'
+              ? await taskControl.dismiss(verb.taskId)
+            : await taskControl.stop(verb.taskId)
     this.send(connection, {
       kind: 'task-control.result',
       protocolVersion: PROTOCOL_VERSION,
@@ -2897,44 +3192,8 @@ export class SidecarServer {
       message: result.message,
     })
     // No explicit snapshot re-broadcast here — on a successful stop, `stopTask`
-    // mutated the store, and the tasks/agent-mode store-subscriptions (constructor)
-    // re-emit `tasks.snapshot` / `agent-mode.snapshot` with the task now `killed`.
-    // A dismiss needs one more step, which `dismissWorker` owns.
-  }
-
-  /**
-   * The two-plane half of a dismiss (CC-32 follow-up). `taskControl` can only see
-   * the LIVE `AppState.tasks`, but a worker's roster row has a second source: the
-   * persisted agent-mode plane, which `agentModeSnapshot` unions in whenever no
-   * live worker MASKS it by handle (`agentModeDomain.ts` union policy). Retiring
-   * the row therefore takes both planes, and only this layer sees both.
-   *
-   * `not_found` is consequently NOT a failed dismiss. It means nothing live holds
-   * the row, which leaves the persisted twin as the only thing still rendering it
-   * — exactly what the suppression below retires. Treating it as a refusal made
-   * the control dead on the commonest shape there is: `readSessionState` stamps
-   * `origin: worker.origin ?? 'current'` (`src/agent-mode/sessionState.ts:672`), so
-   * every worker the reaper has already evicted comes back as a persisted row that
-   * looks current, offers Dismiss, and refused it. `still_running` and
-   * `unsupported_type` stay refusals: there the engine holds real state, and
-   * hiding a row it still owns would be a display lie.
-   *
-   * The explicit re-broadcast is required rather than redundant: on this path no
-   * store mutation happens at all, so no subscription fires and nothing else would
-   * carry the suppression to the renderer.
-   */
-  private async dismissWorker(taskId: string): Promise<TaskDismissResult> {
-    if (!this.taskControl) {
-      return { ok: false, message: 'Could not dismiss the worker.' }
-    }
-    const result = await this.taskControl.dismiss(taskId)
-    const retiresRow = result.ok || result.refusal === 'not_found'
-    if (!retiresRow || !this.agentMode) {
-      return result
-    }
-    this.agentMode.noteWorkerDismissed(taskId)
-    void this.broadcastAgentModeSnapshot()
-    return result.ok ? result : { ok: true, message: 'Dismissed worker.' }
+    // Mutations to the live task store drive the tasks/workers subscriptions in
+    // the constructor, so no action-driven snapshot is synthesized here.
   }
 
   /**
@@ -2950,43 +3209,24 @@ export class SidecarServer {
    * authors ONLY the value/selection; no engine object, no path, no token crosses.
    */
   private handleRunControlVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = runControlVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid run-control verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, runControlVerbMessageSchema, 'invalid run-control verb')
+    if (!parsed) {
       return
     }
-    if (!this.runControls) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'run-controls domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const runControls = this.requireDomain(connection, parsed.requestId, this.runControls, 'run-controls')
+    if (!runControls) return
 
-    const verb = parsed.data as RunControlVerbMessage
+    const verb = parsed as RunControlVerbMessage
     let result: { ok: boolean; message: string; changed: boolean }
     switch (verb.type) {
       case 'model.set':
-        result = this.runControls.setModel(verb.model)
+        result = runControls.setModel(verb.model)
         break
       case 'effort.set':
-        result = this.runControls.setEffort(verb.effort)
+        result = runControls.setEffort(verb.effort)
         break
       case 'fast.set':
-        result = this.runControls.setFast(verb.active)
+        result = runControls.setFast(verb.active)
         break
     }
 
@@ -3021,34 +3261,14 @@ export class SidecarServer {
     connection: Connection,
     rawMessage: unknown,
   ): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = sessionActionVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid session-action verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, sessionActionVerbMessageSchema, 'invalid session-action verb')
+    if (!parsed) {
       return
     }
-    if (!this.sessionActions) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'session-actions domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const domain = this.requireDomain(connection, parsed.requestId, this.sessionActions, 'session-actions')
+    if (!domain) return
 
-    const verb: SessionActionVerbMessage = parsed.data
-    const domain = this.sessionActions
+    const verb: SessionActionVerbMessage = parsed
     if (
       verb.type === 'session.editFromMessage' ||
       verb.type === 'session.branchFromMessage'
@@ -3351,34 +3571,15 @@ export class SidecarServer {
    * frame → re-broadcast the snapshot when the bridge flag changed.
    */
   private handleRemoteSettingsVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = remoteVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid remote settings verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, remoteVerbMessageSchema, 'invalid remote settings verb')
+    if (!parsed) {
       return
     }
-    if (!this.remoteSettings) {
-      this.sendError(
-        connection,
-        parsed.data.requestId,
-        'internal_error',
-        'remote settings domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const remoteSettings = this.requireDomain(connection, parsed.requestId, this.remoteSettings, 'remote settings')
+    if (!remoteSettings) return
 
-    const verb = parsed.data as RemoteVerbMessage
-    void this.remoteSettings
+    const verb = parsed as RemoteVerbMessage
+    void remoteSettings
       .runVerb(verb)
       .then(({ verb: verbType, result, flagChanged }) => {
         this.send(connection, {
@@ -3419,22 +3620,11 @@ export class SidecarServer {
    * re-validated here at the trust boundary before disk is touched.
    */
   private handleSettingsVerb(connection: Connection, rawMessage: unknown): void {
-    const raw = rawMessage as { requestId?: unknown }
-    const requestId =
-      typeof raw.requestId === 'string' ? raw.requestId : undefined
-
-    const parsed = settingsVerbMessageSchema.safeParse(rawMessage)
-    if (!parsed.success) {
-      this.sendError(
-        connection,
-        requestId,
-        'bad_request',
-        parsed.error.issues[0]?.message ?? 'invalid settings verb',
-        false,
-      )
+    const parsed = this.parseVerbMessage(connection, rawMessage, settingsVerbMessageSchema, 'invalid settings verb')
+    if (!parsed) {
       return
     }
-    const verb = parsed.data as SettingsVerbMessage
+    const verb = parsed as SettingsVerbMessage
 
     // Per-key gate (the strict-key allowlist for the VALUE): the key must be in
     // the closed allowlist, and then either the request is a CLEAR (`value ===
@@ -3448,20 +3638,12 @@ export class SidecarServer {
       return
     }
 
-    if (!this.settings) {
-      this.sendError(
-        connection,
-        verb.requestId,
-        'internal_error',
-        'settings domain unavailable for this session',
-        false,
-      )
-      return
-    }
+    const settings = this.requireDomain(connection, verb.requestId, this.settings, 'settings')
+    if (!settings) return
 
     let result: { ok: boolean; message: string; changed: boolean }
     try {
-      result = this.settings.runVerb(verb)
+      result = settings.runVerb(verb)
     } catch (error) {
       this.sendError(
         connection,
@@ -3650,7 +3832,7 @@ export class SidecarServer {
     // The requestId is read BEFORE schema validation so a rejected answer still
     // correlates back to its request — without it the renderer cannot clear its
     // in-flight guard and an honest over-long answer strands the pending
-    // request forever. Same shape as handleAgentModeSet / handleRunControlVerb.
+    // request forever. Same shape as the other request handlers.
     const raw = rawMessage as { requestId?: unknown }
     const requestId =
       typeof raw.requestId === 'string' ? raw.requestId : undefined
@@ -3884,32 +4066,48 @@ export class SidecarServer {
    * broadcast set or skip the subsequent history replay (review MED#2): on any
    * failure we simply skip the snapshot and let attach continue.
    */
-  private sendSettingsSnapshot(connection: Connection): void {
-    if (!this.settings) {
+  /**
+   * The shape every read-seam snapshot send shares: skip when the domain is
+   * absent or has nothing yet, clone + JSON-check through
+   * `prepareOutboundPayload`, and log-and-swallow a read that throws. The
+   * caller builds its own frame, so each kind still typechecks against the
+   * `ServerFrame` union instead of being assembled from a computed key.
+   */
+  private sendDomainSnapshot<T>(
+    connection: Connection,
+    domain: { getSnapshot: () => T } | null | undefined,
+    kind: ServerFrame['kind'],
+    build: (snapshot: NonNullable<T>) => ServerFrame,
+  ): void {
+    if (!domain) {
       return
     }
     try {
-      const raw = this.settings.getSnapshot()
+      const raw = domain.getSnapshot()
       if (!raw) {
         return
       }
-      const snapshot = this.prepareOutboundPayload(raw, 'settings.snapshot')
+      const snapshot = this.prepareOutboundPayload(raw, kind)
       if (!snapshot) {
         return
       }
-      this.send(connection, {
-        kind: 'settings.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        settings: snapshot,
-      })
+      this.send(connection, build(snapshot))
     } catch (error) {
       this.log(
-        `[sidecar] settings.snapshot send skipped (${
+        `[sidecar] ${kind} send skipped (${
           error instanceof Error ? error.message : String(error)
         })`,
       )
     }
+  }
+
+  private sendSettingsSnapshot(connection: Connection): void {
+    this.sendDomainSnapshot(connection, this.settings, 'settings.snapshot', settings => ({
+      kind: 'settings.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      settings,
+    }))
   }
 
   /** Re-publish settings only after the domain has refreshed engine-owned options. */
@@ -3935,30 +4133,20 @@ export class SidecarServer {
    * so this frame carries definition/status metadata without credential material.
    */
   private sendAgentConfigSnapshot(connection: Connection): void {
-    if (!this.agentConfig) {
+    this.sendDomainSnapshot(connection, this.agentConfig, 'agent-config.snapshot', agents => ({
+      kind: 'agent-config.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      agents,
+    }))
+  }
+
+  private broadcastAgentConfigSnapshot(): void {
+    if (this.connections.size === 0) {
       return
     }
-    try {
-      const raw = this.agentConfig.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'agent-config.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'agent-config.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        agents: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-config.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
+    for (const connection of this.connections) {
+      this.sendAgentConfigSnapshot(connection)
     }
   }
 
@@ -3970,31 +4158,12 @@ export class SidecarServer {
    * can never strand the connection or skip the subsequent history replay.
    */
   private sendExtensionsSnapshot(connection: Connection): void {
-    if (!this.extensions) {
-      return
-    }
-    try {
-      const raw = this.extensions.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'extensions.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'extensions.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        extensions: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] extensions.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.extensions, 'extensions.snapshot', extensions => ({
+      kind: 'extensions.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      extensions,
+    }))
   }
 
   /**
@@ -4027,13 +4196,18 @@ export class SidecarServer {
     }
   }
 
-  private broadcastThreadGoalSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
+  /**
+   * Send one snapshot to every attached connection. An empty connection set is
+   * simply an empty loop, so no caller needs its own size guard.
+   */
+  private broadcastToConnections(send: (connection: Connection) => void): void {
     for (const connection of this.connections) {
-      this.sendThreadGoalSnapshot(connection)
+      send(connection)
     }
+  }
+
+  private broadcastThreadGoalSnapshot(): void {
+    this.broadcastToConnections(connection => this.sendThreadGoalSnapshot(connection))
   }
 
   /**
@@ -4041,40 +4215,16 @@ export class SidecarServer {
    * this shared path still applies clone/JSON checks, secretGuard, and size caps.
    */
   private sendMemorySnapshot(connection: Connection): void {
-    if (!this.memory) {
-      return
-    }
-    try {
-      const raw = this.memory.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'memory.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'memory.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        memory: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] memory.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.memory, 'memory.snapshot', memory => ({
+      kind: 'memory.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      memory,
+    }))
   }
 
   private broadcastMemorySnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendMemorySnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendMemorySnapshot(connection))
   }
 
   /**
@@ -4083,155 +4233,52 @@ export class SidecarServer {
    * the desktop receives display state only.
    */
   private sendTasksSnapshot(connection: Connection): void {
-    if (!this.tasks) {
-      return
-    }
-    try {
-      const raw = this.tasks.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'tasks.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'tasks.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        tasks: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] tasks.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.tasks, 'tasks.snapshot', tasks => ({
+      kind: 'tasks.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      tasks,
+    }))
   }
 
   private broadcastTasksSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendTasksSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendTasksSnapshot(connection))
   }
 
   /**
-   * P4-8 — read-only orchestrator worker snapshot (D2 `decisions/AGENT-CHROME.md`).
-   * Async because the session plane is a file-backed engine read
-   * (`readSessionState`); the shared send path still applies
-   * clone/JSON checks, secretGuard, and size caps.
+   * Live worker snapshot over the engine's current task store. The shared send
+   * path applies clone/JSON checks, secretGuard, and the outbound size cap.
    */
-  private async sendAgentModeSnapshot(connection: Connection): Promise<void> {
-    if (!this.agentMode) {
-      return
-    }
-    const generation = ++this.agentModeSnapshotGeneration
-    this.agentModeSnapshotGenerationByConnection.set(connection, generation)
-    try {
-      const raw = await this.agentMode.getSnapshot()
-      if (
-        this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
-      ) {
-        return
-      }
-      this.sendAgentModeSnapshotPayload(connection, raw)
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-mode.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
-  }
-
-  private sendAgentModeSnapshotPayload(
-    connection: Connection,
-    raw: Awaited<ReturnType<SidecarAgentModeDomain['getSnapshot']>>,
-  ): void {
-    const snapshot = this.prepareOutboundPayload(raw, 'agent-mode.snapshot')
-    if (!snapshot) {
-      return
-    }
-    this.send(connection, {
-      kind: 'agent-mode.snapshot',
+  private sendWorkersSnapshot(connection: Connection): void {
+    this.sendDomainSnapshot(connection, this.workers, 'workers.snapshot', workers => ({
+      kind: 'workers.snapshot',
       protocolVersion: PROTOCOL_VERSION,
       sessionId: this.sessionId,
-      agentMode: snapshot,
-    })
+      workers,
+    }))
   }
 
-  private async broadcastAgentModeSnapshot(): Promise<void> {
-    if (!this.agentMode || this.connections.size === 0) {
-      return
-    }
-    const generation = ++this.agentModeSnapshotGeneration
-    const connections = [...this.connections]
-    for (const connection of connections) {
-      this.agentModeSnapshotGenerationByConnection.set(connection, generation)
-    }
-    try {
-      const raw = await this.agentMode.getSnapshot()
-      for (const connection of connections) {
-        if (
-          !this.connections.has(connection) ||
-          this.agentModeSnapshotGenerationByConnection.get(connection) !== generation
-        ) {
-          continue
-        }
-        this.sendAgentModeSnapshotPayload(connection, raw)
-      }
-    } catch (error) {
-      this.log(
-        `[sidecar] agent-mode.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+  private broadcastWorkersSnapshot(): void {
+    this.broadcastToConnections(connection => this.sendWorkersSnapshot(connection))
   }
 
   /**
-   * P4-32b — read-only Codex lease snapshot (L1,
-   * `decisions/ORCHESTRATOR-IN-SESSION.md` §7). Sync: the lease map and the pool
+   * P4-32b — read-only Codex lease snapshot (L1). Sync: the lease map and the pool
    * are in-memory engine singletons. The shared `send` path applies clone/JSON
    * checks, the outbound secret guard and the size cap; the whole read is wrapped
    * so a failure can never strand the attaching connection.
    */
   private sendLeaseSnapshot(connection: Connection): void {
-    if (!this.leases) {
-      return
-    }
-    try {
-      const raw = this.leases.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'lease.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'lease.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        leases: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] lease.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.leases, 'lease.snapshot', leases => ({
+      kind: 'lease.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      leases,
+    }))
   }
 
   private broadcastLeaseSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendLeaseSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendLeaseSnapshot(connection))
   }
 
   /**
@@ -4242,37 +4289,16 @@ export class SidecarServer {
    * never strand the attaching connection.
    */
   private sendRunControlsSnapshot(connection: Connection): void {
-    if (!this.runControls) {
-      return
-    }
-    try {
-      const raw = this.runControls.getSnapshot()
-      const snapshot = this.prepareOutboundPayload(raw, 'run-controls.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'run-controls.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        runControls: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] run-controls.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.runControls, 'run-controls.snapshot', runControls => ({
+      kind: 'run-controls.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      runControls,
+    }))
   }
 
   private broadcastRunControlsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendRunControlsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendRunControlsSnapshot(connection))
   }
 
   /**
@@ -4329,6 +4355,13 @@ export class SidecarServer {
    * one re-reads the whole transcript and two interleaved prefixes on one socket
    * would be indistinguishable from a gap).
    *
+   * WHERE the diff starts is the one thing this side cannot decide alone, and
+   * the frame's main-authored `viewAnchorUuid` is why (protocol.ts, and
+   * HISTORY-LOAD-EARLIER.md §The view anchor). This connection knows what it
+   * SENT; only Electron main knows what the pane currently HOLDS, because a
+   * reloaded renderer is rebuilt from main's replay ring and that ring evicts.
+   * When the two disagree, main's wins — see the anchor selection below.
+   *
    * The answer is unicast to the asking connection: it settles a click that
    * reader made, and a second reader's own view is already whole or has its own
    * control to press.
@@ -4366,7 +4399,7 @@ export class SidecarServer {
       )
       return
     }
-    const { requestId } = parsed.data
+    const { requestId, viewAnchorUuid } = parsed.data
 
     if (this.loadEarlierInFlight) {
       this.sendLoadEarlierResult(connection, requestId, {
@@ -4381,7 +4414,7 @@ export class SidecarServer {
     // Already whole for this reader: a previous read reached the head, so there
     // is provably nothing above it. Answered from the latch, because the read
     // that would confirm it costs the full ceiling plus every subagent file.
-    if (connection.loadEarlierComplete) {
+    if (connection.loadEarlierComplete && viewAnchorUuid === undefined) {
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
         message: loadEarlierMessage(0, true),
@@ -4391,9 +4424,23 @@ export class SidecarServer {
       return
     }
 
-    // Nothing was restored from disk for this session, so there is no earlier
-    // to reach for: a fresh session's whole conversation is already on screen.
-    if (this.history.length === 0 && !this.historySourceTruncated) {
+    // Nothing was restored from disk for this session, so THIS SIDECAR has no
+    // earlier to reach for: a fresh session's whole conversation was emitted
+    // live, not replayed.
+    //
+    // Conditional on main having stamped no view anchor, and that condition is
+    // the whole of the fix. "The sidecar replayed nothing" is not the same fact
+    // as "the reader is holding everything": a session started in the app is
+    // rebuilt after a renderer reload from main's ring alone, and that ring can
+    // have evicted its head. Answering `complete: true` from this side's empty
+    // `history` then cleared the boundary row over a truncated transcript and
+    // left no route back to the missing prefix, which is the defect this branch
+    // used to cause (2026-09-02 idle-park assessment §6).
+    if (
+      viewAnchorUuid === undefined &&
+      this.history.length === 0 &&
+      !this.historySourceTruncated
+    ) {
       connection.loadEarlierComplete = true
       this.sendLoadEarlierResult(connection, requestId, {
         ok: true,
@@ -4404,7 +4451,16 @@ export class SidecarServer {
       return
     }
 
-    const anchorUuid = connection.loadEarlierAnchorUuid
+    // What the READER is holding, which is not always what this CONNECTION was
+    // sent. Main's anchor wins outright whenever it exists, because it is the
+    // only one of the two derived from the pane's actual contents: main hands a
+    // reloaded renderer its ring and nothing else, and it stamps the anchor only
+    // when that ring is lossy. It is also never OLDER than this connection's own
+    // anchor for the reader's live view, since every frame this socket sent went
+    // through that ring — so preferring it can at worst re-send messages the
+    // renderer already has (which its uuid dedupe absorbs), and can never leave
+    // a gap, which the connection anchor alone can and did.
+    const anchorUuid = viewAnchorUuid ?? connection.loadEarlierAnchorUuid
     // History WAS restored, yet none of what reached this reader carries an
     // identity to diff a deeper read against. Everything read would look
     // missing and the reader would see the conversation twice, so refuse rather
@@ -4623,40 +4679,16 @@ export class SidecarServer {
    * strand the attaching connection.
    */
   private sendAccountsSnapshot(connection: Connection): void {
-    if (!this.accounts) {
-      return
-    }
-    try {
-      const raw = this.accounts.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'accounts.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'accounts.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        accounts: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] accounts.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.accounts, 'accounts.snapshot', accounts => ({
+      kind: 'accounts.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      accounts,
+    }))
   }
 
   private broadcastAccountsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendAccountsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendAccountsSnapshot(connection))
   }
 
   private async sendUsageStatsSnapshot(
@@ -4760,12 +4792,7 @@ export class SidecarServer {
    * re-broadcast after a pool-changing verb).
    */
   private broadcastWorkspaceTrustSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendWorkspaceTrustSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendWorkspaceTrustSnapshot(connection))
   }
 
   /**
@@ -4774,31 +4801,12 @@ export class SidecarServer {
    * re-broadcast (a workspace switch spawns a new sidecar at the new cwd).
    */
   private sendWorkspaceTrustSnapshot(connection: Connection): void {
-    if (!this.workspaceTrust) {
-      return
-    }
-    try {
-      const raw = this.workspaceTrust.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'workspace-trust.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'workspace-trust.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        workspaceTrust: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] workspace-trust.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.workspaceTrust, 'workspace-trust.snapshot', workspaceTrust => ({
+      kind: 'workspace-trust.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      workspaceTrust,
+    }))
   }
 
   /**
@@ -4807,31 +4815,12 @@ export class SidecarServer {
    * re-broadcast (the doctor/install checks run once at spawn).
    */
   private sendDiagnosticsSnapshot(connection: Connection): void {
-    if (!this.diagnostics) {
-      return
-    }
-    try {
-      const raw = this.diagnostics.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'diagnostics.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'diagnostics.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        diagnostics: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] diagnostics.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.diagnostics, 'diagnostics.snapshot', diagnostics => ({
+      kind: 'diagnostics.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      diagnostics,
+    }))
   }
 
   /**
@@ -4841,40 +4830,16 @@ export class SidecarServer {
    * clone/JSON checks, the outbound secret guard, and the size cap.
    */
   private sendRemoteSettingsSnapshot(connection: Connection): void {
-    if (!this.remoteSettings) {
-      return
-    }
-    try {
-      const raw = this.remoteSettings.getSnapshot()
-      if (!raw) {
-        return
-      }
-      const snapshot = this.prepareOutboundPayload(raw, 'remoteSettings.snapshot')
-      if (!snapshot) {
-        return
-      }
-      this.send(connection, {
-        kind: 'remoteSettings.snapshot',
-        protocolVersion: PROTOCOL_VERSION,
-        sessionId: this.sessionId,
-        remoteSettings: snapshot,
-      })
-    } catch (error) {
-      this.log(
-        `[sidecar] remoteSettings.snapshot send skipped (${
-          error instanceof Error ? error.message : String(error)
-        })`,
-      )
-    }
+    this.sendDomainSnapshot(connection, this.remoteSettings, 'remoteSettings.snapshot', remoteSettings => ({
+      kind: 'remoteSettings.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      remoteSettings,
+    }))
   }
 
   private broadcastRemoteSettingsSnapshot(): void {
-    if (this.connections.size === 0) {
-      return
-    }
-    for (const connection of this.connections) {
-      this.sendRemoteSettingsSnapshot(connection)
-    }
+    this.broadcastToConnections(connection => this.sendRemoteSettingsSnapshot(connection))
   }
 
   /**
@@ -4883,11 +4848,314 @@ export class SidecarServer {
    * reflect the persisted change without a reconnect.
    */
   private broadcastSettingsSnapshot(): void {
-    if (this.connections.size === 0) {
+    this.broadcastToConnections(connection => this.sendSettingsSnapshot(connection))
+  }
+
+  /* --------------------------------------------------------------------- *
+   * HOST-REQUEST-PLANE (decisions/HOST-REQUEST-PLANE.md) — this sidecar's half.
+   *
+   * The one direction where this process is the CLIENT: it mints a request id,
+   * emits `host.request` outbound, and waits for main's `host.result` on the
+   * same id. Outbound rides the ordinary `send`, so `secretGuard` runs on the
+   * request like every other frame (HR7); inbound is validated here at the trust
+   * boundary like every other inbound kind (HR5).
+   * --------------------------------------------------------------------- */
+
+  /**
+   * Ask main to do one bounded thing. Resolves with main's typed answer, or with
+   * a typed local failure — NEVER hangs, and never throws at the caller.
+   *
+   * `requestId` is minted HERE and echoed on the result (the T5a analog
+   * `history.loadEarlier.result` already uses). Nothing about the id authorizes
+   * anything: it correlates one pending call and is forgotten on settle.
+   */
+  async requestHost<V extends HostRequestVerb>(
+    verb: V,
+    args: HostRequestArgs[V],
+  ): Promise<HostRequestOutcome<V>> {
+    if (this.connections.size === 0 || this.closed) {
+      return {
+        ok: false,
+        error: { code: 'unavailable', message: 'not connected to the host' },
+      }
+    }
+    const requestId = randomUUID()
+    const frame: ServerFrame = {
+      kind: 'host.request',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      requestId,
+      verb,
+      args,
+    }
+    return new Promise<HostRequestOutcome<V>>(resolve => {
+      const timer = setTimeout(() => {
+        // Settle, then forget: a late result for this id then matches nothing
+        // and is dropped and logged, which is the designed behaviour (§2) rather
+        // than a second resolution of a settled promise.
+        this.pendingHostRequests.delete(requestId)
+        resolve({
+          ok: false,
+          error: { code: 'timeout', message: 'the host did not answer in time' },
+        })
+      }, HOST_REQUEST_TIMEOUT_MS)
+      timer.unref?.()
+      this.pendingHostRequests.set(requestId, {
+        // Narrowing is safe and checked: the entry carries the schema for the
+        // verb it was minted for, and `handleHostResult` parses `value` against
+        // it before settling, so a result whose shape does not match the verb
+        // that asked for it never reaches this resolve.
+        settle: outcome => resolve(outcome as HostRequestOutcome<V>),
+        timer,
+        valueSchema: HOST_RESULT_VALUE_SCHEMAS[verb],
+      })
+      let sent = false
+      for (const connection of this.connections) {
+        this.send(connection, frame)
+        sent = true
+      }
+      if (!sent) {
+        clearTimeout(timer)
+        this.pendingHostRequests.delete(requestId)
+        resolve({
+          ok: false,
+          error: { code: 'unavailable', message: 'not connected to the host' },
+        })
+      }
+    })
+  }
+
+  /** HR5 — main's answer to one request this sidecar minted an id for. */
+  private handleHostResult(message: unknown): void {
+    const parsed = hostResultEnvelopeSchema.safeParse(message)
+    if (!parsed.success) {
+      // No `sendError`: this frame answers a request, so there is no renderer
+      // click to retire, and the only honest record is the log line. The pending
+      // entry stays until its own timeout settles it.
+      this.log(
+        `[sidecar] rejected host.result: ${
+          parsed.error.issues[0]?.message ?? 'invalid message'
+        }`,
+      )
       return
     }
+    const pending = this.pendingHostRequests.get(parsed.data.requestId)
+    if (!pending) {
+      // §2 — "a result whose id matches no pending request is dropped and logged
+      // at the sidecar". This is also where a result that arrives after its own
+      // timeout lands, which is why it is a log line and not an error.
+      this.log('[sidecar] dropped host.result for an unknown request id')
+      return
+    }
+    this.pendingHostRequests.delete(parsed.data.requestId)
+    clearTimeout(pending.timer)
+    if (parsed.data.ok) {
+      // HR5 — the value is validated against the schema for the verb THIS
+      // request asked for. A well-formed envelope carrying the wrong shape is a
+      // failure the caller is told about, not something handed on for a tool to
+      // discover by reading a field that is not there.
+      const value = pending.valueSchema.safeParse(parsed.data.value)
+      if (!value.success) {
+        this.log(
+          `[sidecar] rejected host.result value: ${
+            value.error.issues[0]?.message ?? 'invalid value'
+          }`,
+        )
+        pending.settle({
+          ok: false,
+          error: {
+            code: 'internal_error',
+            message: 'the host answered with an unexpected shape',
+          },
+        })
+        return
+      }
+      pending.settle({
+        ok: true,
+        value: value.data as HostRequestValues[HostRequestVerb],
+      })
+      return
+    }
+    pending.settle({
+      ok: false,
+      error: {
+        code: hostRequestErrorCode(parsed.data.error?.code),
+        message: parsed.data.error?.message ?? 'the host refused the request',
+      },
+    })
+  }
+
+  
+
+  /**
+   * HR5 / §4 step 4 — one peer message, routed by main.
+   *
+   * It enters the engine command queue at `next` priority ON THE
+   * TASK-NOTIFICATION PATH, never the prompt path: `enqueueMidTurnPrompt` stages
+   * a `mode:'prompt'` command into the renderer's waiting-messages strip, which
+   * would show a peer message as something the USER typed and hand it to the
+   * user's own recall controls. A busy recipient reads this at the next tool
+   * boundary (`src/query.ts`), an idle one starts a turn from
+   * `drainOneTaskNotification`.
+   *
+   * `MessageOrigin` kind `peer` is the engine's own (`src/types/message.ts`), so
+   * the provenance the transcript records is structural rather than sniffed out
+   * of the text — the same discriminant `toSDKMessageOriginProp` carries to the
+   * renderer for every other injected turn.
+   *
+   * Ack = CONSUMED, not enqueued (§4 step 6, reruled 2026-09-04). Acking at
+   * enqueue was acking a promise this process could not keep: main spliced its
+   * only copy out on that ack, the queue does not survive the process, and the
+   * durable queue log is no help either — a task-notification enqueue rides the
+   * ordinary batch with no flush (`src/utils/messageQueueManager.ts`) and
+   * restore accepts only `mode:'prompt'` (`sessionResume.selectUndeliveredPrompts`).
+   * So a recipient killed between the ack and the model reading the message lost
+   * it outright, while its sender had already been told `queued_live` — widest
+   * exactly when the recipient is BUSY, since a busy session does not drain
+   * until its next tool boundary. The ack now goes from the two consumption
+   * points instead (`announcePeerDelivery`, `drainOneTaskNotification`), which
+   * makes `queued_live` true rather than changing what it says. The cost is
+   * at-least-once delivery, paid for by the id recognition below.
+   */
+  private handlePeerDeliver(message: unknown): void {
+    // IDLE-PARK (decisions/IDLE-PARK.md §3, R2-F2) — same first line as
+    // `handleSubmit`/`handlePromptRecall`/`handleHistoryLoadEarlier`, and here it
+    // is the difference between main holding the message and nobody holding it.
+    // A latched sidecar is exiting, but the exit is not synchronous: `index.ts`
+    // `exitCleanly` closes the server, then awaits the transcript-lease release,
+    // and the established connection carries frames the whole time. Enqueuing
+    // here would put the message on a queue this process is about to drop, and
+    // the ack below is precisely what tells main to forget its only copy — a
+    // sender already answered `queued_live` for a message that then exists
+    // nowhere. Refusing costs nothing instead: main keeps holding it and
+    // redelivers on this row's next `ready` (§4 step 6), the same path it takes
+    // for a delivery that arrives one moment later, after the exit. Silence is
+    // the refusal — `peer.deliver` carries no requestId to answer, and main's
+    // hold is released by the ack alone.
+    if (this.parking) {
+      this.log('[sidecar] peer message refused: session parking')
+      return
+    }
+    const parsed = peerDeliverMessageSchema.safeParse(message)
+    if (!parsed.success) {
+      // F20 — logged, not `sendError`d, for the same reason the park refusal
+      // above is silent: this frame answers main, and an error frame here
+      // reaches the reader as a session error for something nobody in front of
+      // the app did. See `isMainOriginatedMessage`. The rejection itself is
+      // unchanged: nothing is queued, no ack is owed, so main keeps its copy.
+      this.log(
+        `[sidecar] rejected peer.deliver: ${
+          parsed.error.issues[0]?.message ?? 'invalid peer message'
+        }`,
+      )
+      return
+    }
+    const delivered = parsed.data
+    // At-least-once transport, effectively-once processing. A redelivery is
+    // ordinary now, not exceptional: main re-sends anything unacked after this
+    // row's next `ready`, and "unacked" covers a message the model already read
+    // whose ack died with the process. Recognising the id is what keeps that
+    // from showing the same message twice, and the re-ack is what finally
+    // releases main's copy — without it main would hold a consumed message until
+    // the delivery bound gave up on it.
+    if (this.consumedPeerMessages.has(delivered.messageId)) {
+      this.log('[sidecar] peer message already consumed: re-acking')
+      this.sendPeerAck(delivered.messageId)
+      return
+    }
+    // Already on THIS process's queue and not consumed yet. The ack it owes is
+    // still owed, so there is nothing to say to main; enqueuing a second copy
+    // would hand the model the same message twice inside one process.
+    if (this.hasUnconsumedPeerMessage(delivered.messageId)) {
+      this.log('[sidecar] peer message already queued: ignoring the duplicate')
+      return
+    }
+    // `untagged` decides BOTH halves of "not framed as peer-sent" (§5): the
+    // missing XML wrapper below, and the engine's own prose framing, which
+    // `wrapCommandText` derives from the origin alone.
+    //
+    // That prose framing exists for the BUSY path only. It is applied when a
+    // queued command becomes a mid-turn attachment (`src/utils/messages.ts`),
+    // and an idle recipient's turn is started with the raw value instead (the
+    // drain below submits `command.value`). A creation prompt always lands on a
+    // fresh, idle session, so the framing never applies to it, and the flag
+    // carried here is what keeps the `creationPrompt` shape correct wherever
+    // the framing IS reached.
+    const origin: MessageOrigin = {
+      kind: 'peer',
+      name: delivered.from,
+      appSessionId: delivered.fromSessionId,
+      ...(delivered.untagged === true ? { creationPrompt: true as const } : {}),
+    }
+    const value = delivered.untagged === true
+      ? delivered.text
+      : wrapCrossSessionMessage(delivered.from, delivered.text)
+    // The uuid is what makes a BUSY recipient announceable at all. A running
+    // turn drains this itself at a tool boundary and converts it into a
+    // `queued_command` attachment, and the only thing it tells anyone about
+    // that is `notifyCommandLifecycle`, which it fires ONLY for a command that
+    // carries a uuid (`src/query.ts:2010`). Without one, a message the model
+    // received and acted on had no transcript row anywhere.
+    //
+    // It is main's `messageId` rather than a fresh one, and that identity is the
+    // whole dedupe store: the row this uuid ends up on — a real user entry on
+    // the idle path, a `queued_command` attachment projected back into one on
+    // the busy path — is what `seedConsumedPeerMessages` reads after a restart.
+    // Minting a second id here would leave the transcript unable to say WHICH
+    // peer message it recorded, and dedupe would need a store of its own.
+    const uuid = this.peerQueueUuid(delivered.messageId)
+    this.pendingPeerAnnouncements.set(uuid, { prompt: value, origin })
+    this.unconsumedPeerMessages.set(uuid, delivered.messageId)
+    enqueuePendingNotification({
+      value,
+      mode: 'task-notification',
+      // §4 step 4 — `next`, ahead of worker results, behind a human prompt.
+      priority: 'next',
+      uuid,
+      origin,
+    })
+  }
+
+  /**
+   * §4 step 4a's surviving half — publish this session's presence when it
+   * CHANGES, so main can answer "is Bear busy, stuck, or done" without ever
+   * reading engine event vocabulary.
+   *
+   * Both inputs are read from the SAME two sources the `ready` payload is built
+   * from (`controller.getPendingPermissionRequests()` and the turn flags), which
+   * is what makes the value at attach and the value on change the same fact
+   * rather than two derivations that can disagree.
+   *
+   * `needs_user` outranks `running` because a peer waiting on a permission
+   * prompt is the case a creator most needs to see, and it is not "busy". It
+   * holds while the pending set is NON-EMPTY rather than flipping on the first
+   * resolve, so two prompts answered out of order cannot report the session free
+   * while one is still open — the engine keeps them in a map, and this reads its
+   * size.
+   */
+  private currentPresence(): ActivityPresence {
+    if (this.controller.getPendingPermissionRequests().length > 0) return 'needs_user'
+    if (this.activeTurn || this.controller.isTurnActive()) return 'running'
+    return 'idle'
+  }
+
+  private sendActivity(connection: Connection, presence: ActivityPresence): void {
+    this.send(connection, {
+      kind: 'activity',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: this.sessionId,
+      presence,
+    })
+  }
+
+  /** Broadcast presence if, and only if, it moved. */
+  private publishActivity(): void {
+    if (this.connections.size === 0) return
+    const presence = this.currentPresence()
+    if (presence === this.lastPublishedPresence) return
+    this.lastPublishedPresence = presence
     for (const connection of this.connections) {
-      this.sendSettingsSnapshot(connection)
+      this.sendActivity(connection, presence)
     }
   }
 
@@ -5087,6 +5355,45 @@ export class SidecarServer {
     connection.rateCount += 1
     return connection.rateCount <= MAX_FRAMES_PER_WINDOW
   }
+}
+
+/**
+ * F20 — the inbound kinds MAIN authors, and the reason it matters which side an
+ * inbound rejection is reported to.
+ *
+ * `host.result` and `peer.deliver` are HOST-REQUEST-PLANE HR5's two; `app.park`
+ * is IDLE-PARK §2's. No preload channel forwards any of them and no renderer
+ * can author one, so a rejection of one answers MAIN. `sendError`, though, is
+ * how the sidecar answers a READER: main forwards every error frame it does not
+ * itself consume, through the attachment gate and into `replayBuffer`'s
+ * retained class, which replays it on every reattach, and the renderer's
+ * `rawMessageLog` latches it into the pane's error banner until a `ready` or a
+ * transcript reset. Nothing downstream can tell the two apart, because these
+ * kinds carry no renderer correlation id and the frame therefore leaves with
+ * `requestId: undefined` — the same shape a genuine failure of something the
+ * user just did has. So the recipient of a peer message saw a red banner for
+ * internal traffic they never initiated.
+ *
+ * Correlating it back downstream would mean minting a marker on the wire and
+ * teaching every reader of an error frame to ignore it; the provenance is
+ * already known HERE, one line before `sendError` would erase it. So the
+ * rejection is recorded where it is known: a sidecar log line, which is what
+ * `handleHostResult` has always done and what the park latch already does for a
+ * `peer.deliver` it refuses.
+ *
+ * This softens nothing. The frame is still rejected in full, still enqueues
+ * nothing, and still owes no ack, so main keeps its copy, redelivers on the
+ * row's next `ready`, and its own bound (`MAX_PEER_DELIVERY_ATTEMPTS`,
+ * `app/main/peerRequestPlane.ts`) reports the refusal to the SENDING model,
+ * which is the sender's typed answer rather than a stranger's banner. Every
+ * renderer-authored kind keeps its error frame unchanged.
+ */
+const MAIN_ORIGINATED_MESSAGE_TYPES = new Set(['host.result', 'peer.deliver', 'app.park'])
+
+function isMainOriginatedMessage(message: unknown): boolean {
+  if (typeof message !== 'object' || message === null) return false
+  const type = (message as { type?: unknown }).type
+  return typeof type === 'string' && MAIN_ORIGINATED_MESSAGE_TYPES.has(type)
 }
 
 /**
@@ -5326,6 +5633,90 @@ function generatedImageResult(event: AppSessionEvent): {
 }
 
 /**
+ * Narrow a host-minted error code to the closed union, so a caller matching on
+ * `error.code` is matching a value the union actually contains. An unrecognised
+ * code degrades to `internal_error` rather than being cast through.
+ */
+function hostRequestErrorCode(value: unknown): HostRequestErrorCode {
+  return typeof value === 'string' &&
+    (HOST_REQUEST_ERROR_CODES as readonly string[]).includes(value)
+    ? (value as HostRequestErrorCode)
+    : 'internal_error'
+}
+
+/**
+ * What one `host.request` resolves to. Typed per verb so a caller narrows
+ * against the verb it asked for; a local failure (`timeout`, `unavailable`)
+ * arrives in the same closed shape as one main minted, so a caller has exactly
+ * one thing to pattern-match and can never be left waiting.
+ */
+export type HostRequestOutcome<V extends HostRequestVerb> =
+  | { ok: true; value: HostRequestValues[V] }
+  | { ok: false; error: HostRequestError }
+
+/**
+ * PEER-SESSIONS §5 — the wrapping the decision records as WORK OWED: the tag
+ * constant has existed in the engine with zero call sites, and this is its first
+ * one. The auto-mode classifier's rule 8 treats anything so tagged as never user
+ * intent, which is the whole point: a peer's request must not be able to lift a
+ * boundary the peer could not lift itself (R6's permission-laundering rule).
+ *
+ * The ATTRIBUTE is escaped. The sender name is a pool word main stamped, so it
+ * cannot contain a quote today, and escaping it is cheap insurance against that
+ * ever changing.
+ *
+ * The BODY is not escaped, but the ENVELOPE'S OWN TAG in it is neutralized,
+ * opening and closing. Verbatim, a body containing `</cross-session-message>`
+ * closed the envelope early and put everything after it OUTSIDE the one marker
+ * the auto-mode classifier keys on, so a peer could hand this session text the
+ * classifier reads as the session's own — which is the permission laundering
+ * R6 forbids, done from inside the thing built to prevent it. Escaping every
+ * `<` instead would wreck the code and markup peers legitimately send, so only
+ * this tag's name is touched and all other content stays readable. The same
+ * situation on the other untrusted-content path is handled the same way, by
+ * `quoteAsData` in `readPeerTool.ts`.
+ */
+const ENVELOPE_TAG_IN_BODY = new RegExp(`<(/?)(${CROSS_SESSION_MESSAGE_TAG})\\b`, 'gi')
+
+function wrapCrossSessionMessage(from: string, text: string): string {
+  const attribute = from
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+  const body = text.replace(ENVELOPE_TAG_IN_BODY, '&lt;$1$2')
+  return `<${CROSS_SESSION_MESSAGE_TAG} from="${attribute}">\n${body}\n</${CROSS_SESSION_MESSAGE_TAG}>`
+}
+
+/** One app-owned inbound type's handler, as `SidecarServer.VERB_ROUTES` holds it. */
+type VerbRoute = (
+  server: SidecarServer,
+  connection: Connection,
+  message: unknown,
+) => void
+
+/**
+ * Flatten `[types, handler]` families into one exact-key route map. A type
+ * claimed by two families throws at module load rather than resolving by
+ * declaration order: routing at the trust boundary must not depend on the order
+ * the table happens to be written in.
+ */
+function buildVerbRoutes(
+  families: ReadonlyArray<readonly [readonly string[], VerbRoute]>,
+): ReadonlyMap<string, VerbRoute> {
+  const routes = new Map<string, VerbRoute>()
+  for (const [types, route] of families) {
+    for (const type of types) {
+      if (routes.has(type)) {
+        throw new Error(`duplicate inbound route for message type ${type}`)
+      }
+      routes.set(type, route)
+    }
+  }
+  return routes
+}
+
+/**
  * F10 — strict per-type key allowlist. The reused Zod schemas strip unknown
  * keys; this rejects a frame that carries any key not in the renderer-facing
  * contract, at every renderer-controlled level: the message itself,
@@ -5373,20 +5764,28 @@ function checkStrictKeys(message: unknown): string | null {
     // P4-15 workspace-trust accept verb (app-owned; see WORKSPACE_TRUST_VERB_TYPES).
     // HC1: no path key — the sidecar trusts only its own spawn cwd.
     ['workspace.trust', new Set(['type', 'requestId'])],
-    // P4-8b agent-mode set verb (app-owned; see AGENT_MODE_VERB_TYPES). The
-    // renderer authors ONLY the boolean intent — any other key is rejected.
-    ['agent-mode.set', new Set(['type', 'requestId', 'active'])],
     // P4-8b task-control STOP verb (app-owned; see TASK_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the target taskId — any other key is rejected.
     ['task.stop', new Set(['type', 'requestId', 'taskId'])],
     // The terminal counterpart (CC-32 follow-up): same single renderer-authored
     // key, so a forged `evictAfter`/`retain` never reaches the engine's guards.
     ['task.dismiss', new Set(['type', 'requestId', 'taskId'])],
+    // Terminal Ctrl+B parity. The sidecar chooses from its own live store, so
+    // the renderer supplies no task id or task-state fields.
+    ['task.background', new Set(['type', 'requestId'])],
+    // The per-worker counterpart. One renderer-authored key, and it is a
+    // `toolUseId` rather than a task id — see `TaskBackgroundOneMessage`. A
+    // forged `taskId`/`isBackgrounded` key is rejected here before the Zod parse,
+    // so the renderer can never name engine task state.
+    ['task.background.one', new Set(['type', 'requestId', 'toolUseId'])],
     // D1b prompt recall (app-owned; see PROMPT_RECALL_VERB_TYPES). It takes back
     // everything of the user's that is still waiting, so it has no target and
     // the renderer authors NOTHING but the correlation id. A forged `id`,
     // `agentId`, or `all` key is rejected here before the Zod parse.
     ['prompt.recall', new Set(['type', 'requestId'])],
+    // Force-send is bound to an engine-minted queued prompt id. Any attempt to
+    // name a task, inject prompt content, or author queue priority is rejected.
+    ['prompt.force', new Set(['type', 'requestId', 'promptId'])],
     // P4-24c composer run-control verbs (app-owned; see RUN_CONTROL_VERB_TYPES). The
     // renderer authors ONLY the value/selection — any other key is rejected.
     ['model.set', new Set(['type', 'requestId', 'model'])],
@@ -5418,11 +5817,35 @@ function checkStrictKeys(message: unknown): string | null {
     // The renderer authors NOTHING but a correlation id: the analysis reads
     // engine-side session state only. Any other key is rejected fail-closed.
     ['context-breakdown.request', new Set(['type', 'requestId'])],
-    // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md). Parameterless
-    // by decision: the renderer authors NOTHING but a correlation id, so there
-    // is no cursor, offset, count or path to forge. A frame carrying any other
-    // key is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
-    ['history.loadEarlier', new Set(['type', 'requestId'])],
+    // Load earlier messages (decisions/HISTORY-LOAD-EARLIER.md).
+    // Renderer-parameterless by decision: the renderer authors NOTHING but a
+    // correlation id, so there is no cursor, offset, count or path to forge.
+    // `viewAnchorUuid` is the one exception and is not renderer-authored: main
+    // stamps it at `forward` from its OWN replay ring, dropping whatever the
+    // renderer sent, so a forged one cannot reach here. It is allowlisted and
+    // uuid-shape-checked all the same, because the sidecar is the trust
+    // boundary and a main-side check is never sufficient on its own
+    // (SECURITY-MINIMUM §2 R2). It authorizes nothing: it is compared for
+    // equality against uuids from this sidecar's own disk read. Any OTHER key
+    // is rejected fail-closed here, BEFORE the sidecar-local Zod parse.
+    ['history.loadEarlier', new Set(['type', 'requestId', 'viewAnchorUuid'])],
+    // HOST-REQUEST-PLANE HR5 — the two MAIN-originated inbound kinds. No preload
+    // channel forwards either one and no renderer can author one, but they are
+    // on the closed allowlist all the same, because the sidecar is the trust
+    // boundary and a main-side check is never sufficient on its own
+    // (SECURITY-MINIMUM §2 R2). These are the ONLY two the amended Addendum
+    // admits; a third is a re-opened ruling, not an addition.
+    //
+    // `host.result` answers a request THIS sidecar minted the id for, so an
+    // unmatched id settles nothing and is dropped downstream. `peer.deliver`
+    // carries main-stamped identity (`from`, `fromSessionId`) and a
+    // main-derived hop chain, all of which the sidecar treats as DATA: it is
+    // never read as authority, and the chain is never authored on this side.
+    ['host.result', new Set(['type', 'requestId', 'ok', 'value', 'error'])],
+    [
+      'peer.deliver',
+      new Set(['type', 'messageId', 'from', 'fromSessionId', 'text', 'untagged']),
+    ],
     ['app.ping', new Set(['type', 'nonce'])],
   ])
   // `submitId` is admitted (SubmitOptions.submitId): the renderer's own
@@ -5521,13 +5944,133 @@ const appParkMessageSchema = z.object({
  * engine's shared `appClientMessageSchema`. The frame carries no
  * renderer-authored state beyond a length-bounded `requestId`, and
  * `checkStrictKeys` has already REJECTED (not stripped) any key beyond
- * `{type, requestId}`, so this parse only enforces the value types. Everything
- * the read is bounded by — which file, how many bytes, whether one is already
- * running — is decided on this side of the boundary and appears nowhere here.
+ * `{type, requestId, viewAnchorUuid}`, so this parse only enforces the value
+ * types. Everything the read is bounded by — which file, how many bytes,
+ * whether one is already running — is decided on this side of the boundary and
+ * appears nowhere here.
+ *
+ * `viewAnchorUuid` is main-authored (see the allowlist comment above) and
+ * optional: absent means main had nothing to add, which is the pre-existing
+ * behaviour. Shape-checked with the same uuid regex the edit-from-message verbs
+ * use, because it is only ever equality-compared against `randomUUID()` values
+ * this sidecar read off its own transcript — anything else could never match,
+ * so admitting it would buy nothing.
  */
 const historyLoadEarlierMessageSchema = z.object({
   type: z.literal('history.loadEarlier'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  viewAnchorUuid: z
+    .string()
+    .regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{0,12}$/i)
+    .optional(),
+})
+
+/**
+ * HOST-REQUEST-PLANE HR5 — sidecar-LOCAL schemas for the two main-originated
+ * inbound kinds. App-owned, NOT part of the engine's shared
+ * `appClientMessageSchema` (the WS server shares that schema and has no handler
+ * for either), and `checkStrictKeys` has already REJECTED any key outside the
+ * closed sets above, so these parses enforce the VALUE types.
+ *
+ * `value` is validated PER VERB. The sidecar knows which verb each pending
+ * request asked for, so the right schema is always available at the moment the
+ * result lands; leaving it `z.unknown()` and telling callers to narrow was the
+ * one inbound field on this plane with no schema behind it, and it handed every
+ * tool the same runtime-narrowing chore plus a cast that hid the gap. HR5 says
+ * an inbound kind gets a sidecar-local schema, and this is the rest of that.
+ *
+ * The shapes are structural only. `peers.list` in particular carries an
+ * `engineSessionId` a reader joins into a transcript path, so it is checked to
+ * be a string or null here rather than trusted from a frame; nothing downstream
+ * has to re-derive that.
+ */
+const hostResultEnvelopeSchema = z.object({
+  type: z.literal('host.result'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  ok: z.boolean(),
+  value: z.unknown().optional(),
+  error: z
+    .object({
+      code: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+      message: z.string().max(MAX_TEXT_FIELD_CHARS),
+    })
+    .strict()
+    .optional(),
+})
+
+const peerNameSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+const peerIdSchema = z.string().min(1).max(MAX_TEXT_FIELD_CHARS)
+
+const peerDescriptorSchema = z
+  .object({
+    name: peerNameSchema,
+    appSessionId: peerIdSchema,
+    engineSessionId: peerIdSchema.nullable(),
+    status: z.enum(['live', 'parked', 'closed']),
+    presence: z.enum(ACTIVITY_PRESENCES).optional(),
+    // Main-stamped from the row's own run-controls snapshot. Bounded like every
+    // other string on this plane and deliberately NOT checked against a known
+    // model set: the engine passes unrecognised ids through so a new model works
+    // the day it ships, and a check here would reject the next one the user
+    // adopts while telling a reader nothing it cannot see for itself.
+    model: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).optional(),
+    effort: z.string().min(1).max(MAX_TEXT_FIELD_CHARS).optional(),
+    createdBy: z
+      .object({ appSessionId: peerIdSchema, name: peerNameSchema.nullable() })
+      .strict()
+      .optional(),
+    title: z.string().max(MAX_TEXT_FIELD_CHARS).nullable(),
+    lastActivity: z.number().finite(),
+  })
+  .strict()
+
+const peerDeliverOutcomeSchema = z.union([
+  z.literal('queued_live'),
+  z.literal('queued_wake'),
+  ...PEER_DELIVER_REFUSAL_REASONS.map(reason => z.literal(`refused:${reason}` as const)),
+])
+
+/** One schema per verb, keyed so the pending request selects its own. */
+const HOST_RESULT_VALUE_SCHEMAS = {
+  'peers.list': z.object({ peers: z.array(peerDescriptorSchema) }).strict(),
+  'peer.create': z
+    .object({
+      name: peerNameSchema,
+      appSessionId: peerIdSchema,
+      failedStep: z.enum(['ready', 'prompt']).optional(),
+    })
+    .strict(),
+  'peer.deliver': z
+    .object({ messageId: peerIdSchema, outcome: peerDeliverOutcomeSchema })
+    .strict(),
+  'peer.ack': z.object({ messageId: peerIdSchema }).strict(),
+} as const satisfies Record<HostRequestVerb, z.ZodType>
+
+/**
+ * `peer.deliver` — one routed peer message. Every field is main-stamped except
+ * `text`, which is the only model-authored content that crosses; it is bounded
+ * at main by `MAX_PEER_TEXT_BYTES` and re-bounded here because the sidecar does
+ * not take main's word for a size any more than for anything else.
+ *
+ * There is no hop chain here: it had no consumer on this side, and an inbound
+ * field nothing reads is boundary surface bought for nothing. The loop stop is
+ * entirely main's (§4 step 2).
+ *
+ * `untagged` is the creation-prompt flag (PEER-SESSIONS §5). Optional, and
+ * absent means TAGGED, which is the fail-closed direction: a message that
+ * forgets the flag is wrapped and therefore judged by the auto-mode classifier
+ * as never user intent, which is the conservative half of that rule.
+ */
+const peerDeliverMessageSchema = z.object({
+  type: z.literal('peer.deliver'),
+  messageId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  from: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  fromSessionId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  text: z.string().min(1).refine(
+    value => new TextEncoder().encode(value).byteLength <= MAX_PEER_TEXT_BYTES,
+    { message: 'text is too long' },
+  ),
+  untagged: z.boolean().optional(),
 })
 
 /**
@@ -5656,19 +6199,6 @@ const contextBreakdownMessageSchema = z.object({
 })
 
 /**
- * P4-8b — sidecar-LOCAL schema for the agent-mode set verb (protocol.ts:
- * AGENT_MODE_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
- * Structural only: shape + a bounded `requestId` + a strict boolean `active`.
- * A non-boolean `active` is rejected here fail-closed before the domain switches
- * mode; the renderer never authors anything but the boolean intent.
- */
-const agentModeSetMessageSchema = z.object({
-  type: z.literal('agent-mode.set'),
-  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
-  active: z.boolean(),
-})
-
-/**
  * P4-8b — sidecar-LOCAL schema for the task-control STOP verb (protocol.ts:
  * TASK_CONTROL_VERB_TYPES). App-owned, NOT part of the engine's shared schema.
  * Structural only: shape + a bounded `requestId` + a bounded `taskId`. The
@@ -5691,6 +6221,15 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
     requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
     taskId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
   }),
+  z.object({
+    type: z.literal('task.background'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
+  z.object({
+    type: z.literal('task.background.one'),
+    requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+    toolUseId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  }),
 ])
 
 /**
@@ -5703,6 +6242,12 @@ const taskControlVerbMessageSchema = z.discriminatedUnion('type', [
 const promptRecallMessageSchema = z.object({
   type: z.literal('prompt.recall'),
   requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+})
+
+const promptForceMessageSchema = z.object({
+  type: z.literal('prompt.force'),
+  requestId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
+  promptId: z.string().min(1).max(MAX_TEXT_FIELD_CHARS),
 })
 
 /**

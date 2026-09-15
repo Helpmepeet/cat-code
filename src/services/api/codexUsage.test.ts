@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from './codexUsageSharedCache.js'
 
 import {
   getPoolStatus,
@@ -50,6 +51,8 @@ function buildPoolAccount(
     usageAllowed: overrides.usageAllowed,
     usageLimitReached: overrides.usageLimitReached,
     usageResetAt: overrides.usageResetAt,
+    usagePrimaryWindowSeconds: overrides.usagePrimaryWindowSeconds,
+    usageSecondaryWindowSeconds: overrides.usageSecondaryWindowSeconds,
     statusReason: overrides.statusReason,
   }
 }
@@ -173,6 +176,9 @@ function stalledBodyResponse(signal: AbortSignal | null | undefined): Response {
 
 describe('codexUsage display helpers', () => {
   beforeEach(() => {
+    // These tests exercise local cache/timer behavior with a fake fetch. The
+    // cross-process suite separately covers disk sharing in temporary homes.
+    setSharedUsageCacheDirectoryForTest(null)
     resetCodexAccountPoolForTest()
     resetCodexLeaseManagerForTest()
     _resetAccountDiagnosticStreamJsonHookForTesting()
@@ -358,6 +364,58 @@ describe('codexUsage display helpers', () => {
     // Gating on the primary reset (not max across windows) lets the account
     // route again now that the 5h window has reset.
     expect(account ? isCodexAccountSwitchable(account) : false).toBe(true)
+    expect(account?.usageResetAt).toBe(nowSeconds - 60)
+    expect(account?.usageWeeklyResetAt).toBe(nowSeconds + 300_000)
+    expect(account?.usagePrimaryWindowSeconds).toBe(18_000)
+    expect(account?.usageSecondaryWindowSeconds).toBe(604_800)
+  })
+
+  test('routing hints preserve a weekly-only primary window without inventing a secondary', async () => {
+    seedCodexAccountPoolForTest({
+      activeAccountId: 'weekly-only',
+      accounts: [
+        buildPoolAccount({ accountId: 'weekly-only', alias: 'weekly' }),
+      ],
+    })
+
+    const resetAt = Math.floor(Date.now() / 1000) + 86_400
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          user_id: 'u1',
+          email: 'weekly@example.com',
+          plan_type: 'plus',
+          rate_limit: {
+            allowed: true,
+            limit_reached: false,
+            primary_window: {
+              used_percent: 37,
+              limit_window_seconds: 604800,
+              reset_after_seconds: 86_400,
+              reset_at: resetAt,
+            },
+            secondary_window: null,
+          },
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      )) as unknown as typeof globalThis.fetch
+
+    invalidateUsageCache()
+    try {
+      await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
+    } finally {
+      globalThis.fetch = originalFetch
+      invalidateUsageCache()
+    }
+
+    const account = getPoolStatus().accounts.find(
+      candidate => candidate.accountId === 'weekly-only',
+    )
+    expect(account?.usagePrimary).toBe(37)
+    expect(account?.usageResetAt).toBe(resetAt)
+    expect(account?.usagePrimaryWindowSeconds).toBe(604_800)
+    expect(account?.usageSecondaryWindowSeconds).toBeUndefined()
   })
 
   test('fetchPoolUsage parses a free/capped account with a null secondary window', async () => {
@@ -411,6 +469,8 @@ describe('codexUsage display helpers', () => {
 
     const account = getPoolStatus().accounts.find((a) => a.accountId === 'free-account')
     expect(account ? isCodexAccountSwitchable(account) : true).toBe(false)
+    expect(account?.usagePrimaryWindowSeconds).toBe(2_592_000)
+    expect(account?.usageSecondaryWindowSeconds).toBeUndefined()
   })
 
   test('fetchPoolUsage treats a response without rate_limit as an error', async () => {
@@ -491,9 +551,12 @@ describe('codexUsage display helpers', () => {
 
     invalidateUsageCache()
     try {
-      const snapshot = await fetchPoolUsage(true)
+      const snapshot = await fetchPoolUsage({ forceRefresh: true, updateRoutingHints: true })
       expect(snapshot.errors).toEqual([])
       expect(snapshot.accounts).toHaveLength(1)
+      const account = getPoolStatus().accounts[0]
+      expect(account?.usagePrimaryWindowSeconds).toBe(18_000)
+      expect(account?.usageSecondaryWindowSeconds).toBe(604_800)
     } finally {
       globalThis.fetch = originalFetch
       invalidateUsageCache()

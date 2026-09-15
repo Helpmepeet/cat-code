@@ -19,7 +19,7 @@ export function InFlight() {
   )
 }
 
-/** Handoff states. Purple means the orchestrator owns the next action; amber means you do. */
+/** Handoff states. Purple means the assistant owns the next action. */
 export function Handoff() {
   return (
     <Frame>

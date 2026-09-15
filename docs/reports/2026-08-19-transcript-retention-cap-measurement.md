@@ -6,6 +6,21 @@ read; no transcript content left the analysis.
 This is evidence for the message-visibility fixes. Nothing in this run changed
 retention behavior.
 
+> **§3's verdict is VOID as of 2026-09-02.** It concluded that the two ring caps
+> "bind at essentially the same point" and that `DEFAULT_MAX_BUFFERED_BYTES`
+> needed no change. Both conclusions rested on treating every retained frame as
+> a message; §4 of this report flags that the trace could not separate a finished
+> message from a streamed partial. The 179 at-rest caches can, and they say the
+> 8,000-frame cap was binding alone, at roughly 210 finished messages, with
+> megabytes of the byte budget unspent
+> (`docs/migration/reviews/2026-09-02-idle-park-disconnect-truncation-assessment.md`
+> §4, §10.2). The ring now compacts a stopped stream's partials out
+> (`app/main/replayBuffer.ts` `record`) and `DEFAULT_MAX_BUFFERED_BYTES` is
+> 16 MiB. Re-measured through the real buffer over the same 179 caches, the mean
+> retained message is 4,267 B against a 2,097 B crossover, so the BYTE cap is what
+> binds for 160 of 179 sessions and the frame count is a backstop. §1, §2 and §4
+> stand; §3 and its verdict do not.
+
 ## 1. Corpora
 
 | Corpus | What it is | Size |

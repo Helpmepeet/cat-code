@@ -149,12 +149,17 @@ const FALLBACK_PALETTE = [
   '#64748b', // slate-500
 ]
 
-export function getModelColor(modelName: string, index = 0): string {
+export function getModelColor(modelName: string): string {
   const normalized = modelName.toLowerCase()
   for (const [key, color] of Object.entries(MODEL_COLORS)) {
     if (normalized.includes(key)) return color
   }
-  return FALLBACK_PALETTE[index % FALLBACK_PALETTE.length] ?? '#64748b'
+  let hash = 2166136261
+  for (const char of normalized) {
+    hash ^= char.charCodeAt(0)
+    hash = Math.imul(hash, 16777619)
+  }
+  return FALLBACK_PALETTE[(hash >>> 0) % FALLBACK_PALETTE.length] ?? '#64748b'
 }
 
 /**
@@ -265,14 +270,14 @@ export function computeChartSeries(
     totalWindowTokens += dayTotal
   }
 
-  const series: ModelSeriesData[] = sortedModels.map((modelName, idx) => {
+  const series: ModelSeriesData[] = sortedModels.map(modelName => {
     const values = dailyModelTokens.map(
       entry => entry.tokensByModel[modelName] ?? 0,
     )
     return {
       name: modelName,
       displayName: formatModelDisplayName(modelName),
-      color: getModelColor(modelName, idx),
+      color: getModelColor(modelName),
       totalTokens: modelTotals[modelName] ?? 0,
       values,
     }
@@ -507,14 +512,13 @@ export function computeModelBreakdown(
     grandTotal += total
   }
 
-  let idx = 0
   for (const [name, usage] of Object.entries(modelUsage)) {
     const total = (usage.inputTokens ?? 0) + (usage.outputTokens ?? 0)
     const percentage = grandTotal > 0 ? Math.round((total / grandTotal) * 100) : 0
     items.push({
       modelName: name,
       displayName: formatModelDisplayName(name),
-      color: getModelColor(name, idx++),
+      color: getModelColor(name),
       inputTokens: usage.inputTokens ?? 0,
       outputTokens: usage.outputTokens ?? 0,
       totalTokens: total,

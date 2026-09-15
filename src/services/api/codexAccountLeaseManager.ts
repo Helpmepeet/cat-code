@@ -81,12 +81,53 @@ const codexLeasesByOwnerId = new Map<string, CodexLease>()
 const NO_HEALTHY_ACCOUNTS_ERROR = 'All Codex accounts are capped or unavailable'
 const codexLeaseOwnerContext = new AsyncLocalStorage<string | undefined>()
 
+type CodexLeaseChangeListener = () => void
+
+const codexLeaseChangeListeners = new Set<CodexLeaseChangeListener>()
+
+/**
+ * Observe lease movement. The lease map is a module singleton that mutates on
+ * the request path (failover, reassignment after a manual switch, repair after
+ * an account deletion), and until this existed no consumer could learn that a
+ * lease had moved without polling `getCodexLeaseSnapshot`.
+ *
+ * The listener receives no payload on purpose: it is a "something changed"
+ * edge, and the current state is always `getCodexLeaseSnapshot()`. It runs
+ * synchronously inside the mutation, so keep it cheap. A listener that throws
+ * is logged and skipped: notification must never break the request path, and in
+ * particular must never swallow a failover's original error.
+ *
+ * Returns an idempotent unsubscribe.
+ */
+export function subscribeToCodexLeaseChanges(listener: () => void): () => void {
+  codexLeaseChangeListeners.add(listener)
+  let unsubscribed = false
+  return () => {
+    if (unsubscribed) return
+    unsubscribed = true
+    codexLeaseChangeListeners.delete(listener)
+  }
+}
+
+function notifyCodexLeaseChange(): void {
+  for (const listener of codexLeaseChangeListeners) {
+    try {
+      listener()
+    } catch (error) {
+      logForDebugging(
+        `[codex-pool] Codex lease change listener threw: ${error instanceof Error ? error.message : String(error)}`,
+      )
+    }
+  }
+}
+
 export function getCodexLeaseExhaustedMessage(): string {
   return NO_HEALTHY_ACCOUNTS_ERROR
 }
 
 export function resetCodexLeaseManagerForTest(): void {
   codexLeasesByOwnerId.clear()
+  codexLeaseChangeListeners.clear()
 }
 
 export function seedCodexLeaseForTest({
@@ -188,6 +229,7 @@ export function registerCodexLease({
 
   codexLeasesByOwnerId.set(ownerId, lease)
   touchPoolAccountUsage(selection.account.accountId)
+  notifyCodexLeaseChange()
   return lease
 }
 
@@ -296,6 +338,7 @@ export function repairCodexLeaseIfNonSelectable(
   if (repairedLease.ownerType === 'main') {
     setActiveAccountPersisted(repairedLease.accountId)
   }
+  notifyCodexLeaseChange()
   return repairedLease
 }
 
@@ -314,14 +357,21 @@ export function runWithCodexLeaseOwner<T>(
  * No-op if the lease doesn't exist or the pool has no active account.
  */
 export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
+  if (applyReassignToActiveAccount(ownerId)) {
+    notifyCodexLeaseChange()
+  }
+}
+
+/** Returns true when the lease map actually changed. */
+function applyReassignToActiveAccount(ownerId: string): boolean {
   const existing = codexLeasesByOwnerId.get(ownerId)
-  if (!existing) return
+  if (!existing) return false
   const pool = getPoolStatus()
-  if (pool.activeIndex < 0) return
+  if (pool.activeIndex < 0) return false
   const account = pool.accounts[pool.activeIndex]
-  if (!account) return
+  if (!account) return false
   if (existing.accountId === account.accountId && existing.state === 'active') {
-    return
+    return false
   }
   codexLeasesByOwnerId.set(ownerId, {
     ...existing,
@@ -333,6 +383,7 @@ export function reassignCodexLeaseToActiveAccount(ownerId: string): void {
     updatedAt: Date.now(),
   })
   touchPoolAccountUsage(account.accountId)
+  return true
 }
 
 export function reassignCodexLeasesToActiveAccount(): void {
@@ -341,7 +392,9 @@ export function reassignCodexLeasesToActiveAccount(): void {
   const account = pool.accounts[pool.activeIndex]
   if (!account) return
 
-  reassignCodexLeaseToActiveAccount('main-thread')
+  // One batch notification for the whole reassignment: per-owner notification
+  // would fire once per follow-main subagent for a single user-visible switch.
+  let changed = applyReassignToActiveAccount('main-thread')
   for (const lease of codexLeasesByOwnerId.values()) {
     if (
       lease.ownerType !== 'subagent' ||
@@ -350,12 +403,17 @@ export function reassignCodexLeasesToActiveAccount(): void {
     ) {
       continue
     }
-    reassignCodexLeaseToActiveAccount(lease.ownerId)
+    changed = applyReassignToActiveAccount(lease.ownerId) || changed
+  }
+  if (changed) {
+    notifyCodexLeaseChange()
   }
 }
 
 export function releaseCodexLease(ownerId: string): void {
-  codexLeasesByOwnerId.delete(ownerId)
+  if (codexLeasesByOwnerId.delete(ownerId)) {
+    notifyCodexLeaseChange()
+  }
 }
 
 export function failoverCodexLease(
@@ -402,6 +460,7 @@ export function failoverCodexLease(
 
     codexLeasesByOwnerId.set(ownerId, replacementLease)
     touchPoolAccountUsage(selection.account.accountId)
+    notifyCodexLeaseChange()
     emitAccountDiagnostic({
       code: 'account.lease.failover',
       severity: 'info',
@@ -427,6 +486,9 @@ export function failoverCodexLease(
     }
 
     codexLeasesByOwnerId.set(ownerId, failedLease)
+    // Guarded per listener, so a throwing subscriber cannot replace the
+    // original failover error with its own.
+    notifyCodexLeaseChange()
     throw error
   }
 }
@@ -443,6 +505,7 @@ export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
     (lease) => lease.accountId === deletedAccountId,
   ).sort((left, right) => leaseRepairRank(left) - leaseRepairRank(right))
 
+  let changed = false
   for (const lease of affected) {
     try {
       const selection =
@@ -460,12 +523,17 @@ export function repairLeasesForDeletedAccount(deletedAccountId: string): void {
         updatedAt: now,
       })
       touchPoolAccountUsage(selection.account.accountId)
+      changed = true
     } catch (error) {
-      codexLeasesByOwnerId.delete(lease.ownerId)
+      changed = codexLeasesByOwnerId.delete(lease.ownerId) || changed
       logForDebugging(
         `[codex-pool] Dropping lease ${lease.ownerId} after deletion of ${deletedAccountId}: ${error instanceof Error ? error.message : String(error)}`,
       )
     }
+  }
+  // One notification for the whole repair sweep.
+  if (changed) {
+    notifyCodexLeaseChange()
   }
 }
 

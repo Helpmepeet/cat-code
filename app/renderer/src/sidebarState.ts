@@ -331,3 +331,46 @@ export function sortSidebarSessionRows(
 ): MergedSessionRow[] {
   return [...rows].sort(compareSidebarActivity)
 }
+
+/**
+ * The in-flight reorder drag in one of the rail's two reorderable lists: the
+ * item being dragged, and the one under the pointer. Only the drop indicator
+ * reads it; the order itself changes on drop.
+ */
+export type ReorderDrag = { from: string; over: string } | null
+
+/** The state setter shape React hands back, spelled out so this module stays
+ * React-free. */
+type SetReorderDrag = (
+  next: ReorderDrag | ((drag: ReorderDrag) => ReorderDrag),
+) => void
+
+/**
+ * The four drag handlers both reorderable lists share — workspace headers keyed
+ * on cwd, pinned rows keyed on the merge id. Only the DROP and the keyboard step
+ * differ between them, because only those reach a reducer; picking an item up
+ * and following the pointer is the same gesture either way.
+ *
+ * `onDragLeave` parks the indicator back on the dragged item itself (which draws
+ * none, an item cannot drop onto itself), so it is never left promising a
+ * landing spot the pointer has already left.
+ */
+export function reorderDragHandlers(setDrag: SetReorderDrag): {
+  onDragStart: (id: string) => void
+  onDragOver: (id: string) => void
+  onDragLeave: (id: string) => void
+  onDragEnd: () => void
+} {
+  return {
+    onDragStart: id => setDrag({ from: id, over: id }),
+    onDragOver: id =>
+      setDrag(drag =>
+        drag == null || drag.over === id ? drag : { ...drag, over: id },
+      ),
+    onDragLeave: id =>
+      setDrag(drag =>
+        drag == null || drag.over !== id ? drag : { ...drag, over: drag.from },
+      ),
+    onDragEnd: () => setDrag(null),
+  }
+}

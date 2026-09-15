@@ -1,32 +1,74 @@
 import type { LineEndingType } from '../../utils/fileRead.js'
-import { END_OF_FILE_MARKER } from './constants.js'
+import { END_OF_FILE_MARKER, FILE_PATCH_TOOL_NAME } from './constants.js'
+import { plannerFailureAsFilePatchError } from './diagnostics.js'
+import {
+  planUpdateHunks,
+  type UpdatePlacementPlan,
+} from './planner.js'
 import {
   FilePatchError,
   type ApplyPatchFileState,
   type ApplyPatchResult,
   type FilePatchBuffer,
+  type FilePatchFailureDetail,
   type FilePatchHunk,
   type FilePatchLine,
   type FilePatchOperation,
+  type FilePatchPlacement,
+  MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH,
+  MAX_FILE_PATCH_FAILURE_DETAILS,
+  MAX_FILE_PATCH_PLACEMENTS,
 } from './types.js'
 
+/** Legacy sequential matcher retained for replay and regression comparison. */
 export function applyPatchToBuffers(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
-  cachedFiles?: Map<string, string>,
 ): ApplyPatchResult {
-  // Every failure below is raised while the result is still being built in
-  // memory, before the caller writes anything (FilePatchTool.tsx keeps that
-  // ordering deliberately). State it in the message: a multi-file patch that
-  // aborts partway through the operation list otherwise reads as partially
-  // applied, and the model re-reads every earlier target to find out.
+  return applyPatchToBuffersWith(operations, currentFiles, applyUpdateHunks)
+}
+
+/** Exact complete-envelope planner used by the production tool. */
+export function applyPatchToBuffersPlanned(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+): ApplyPatchResult {
+  const result = applyPatchToBuffersWith(
+    operations,
+    currentFiles,
+    applyUpdateHunksPlanned,
+  )
+  return { contractVersion: 2, files: result.files }
+}
+
+type UpdateApplier = (
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+) => { buffer: FilePatchBuffer; plan?: UpdatePlacementPlan }
+
+function applyPatchToBuffersWith(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+  updateApplier: UpdateApplier,
+): ApplyPatchResult {
   try {
-    return applyOperations(operations, currentFiles, cachedFiles)
+    return applyOperations(operations, currentFiles, updateApplier)
   } catch (error) {
     if (error instanceof FilePatchError) {
       throw new FilePatchError(
         `${error.message} No files were changed by this patch.`,
-        { code: error.code, path: error.path },
+        {
+          code: error.code,
+          path: error.path,
+          operation: error.operation,
+          moveTo: error.moveTo,
+          hunkIndex: error.hunkIndex,
+          hunkCount: error.hunkCount,
+          details: error.details,
+          diagnostics: error.diagnostics,
+          mutationOutcome: 'no-mutation',
+        },
       )
     }
     throw error
@@ -36,131 +78,261 @@ export function applyPatchToBuffers(
 function applyOperations(
   operations: FilePatchOperation[],
   currentFiles: Map<string, ApplyPatchFileState>,
-  cachedFiles?: Map<string, string>,
+  updateApplier: UpdateApplier,
 ): ApplyPatchResult {
-  const workingFiles = new Map<string, ApplyPatchFileState>()
   const results: ApplyPatchResult['files'] = []
+  const failures: FilePatchFailureDetail[] = []
 
   for (const operation of operations) {
-    const current = getExistingOrDefaultState(currentFiles, workingFiles, operation.path)
+    try {
+      results.push(
+        ...applyOperation(
+          operation,
+          currentFiles,
+          updateApplier,
+        ),
+      )
+    } catch (error) {
+      failures.push(toFailureDetail(error, operation))
+    }
+  }
 
-    switch (operation.type) {
-      case 'update': {
-        if (!current.exists) {
+  if (failures.length > 0) {
+    const displayedFailures = failures.slice(0, MAX_FILE_PATCH_FAILURE_DETAILS)
+    const omittedFailureCount = failures.length - displayedFailures.length
+    const operationWord = failures.length === 1 ? 'operation' : 'operations'
+    const omitted =
+      omittedFailureCount > 0
+        ? ` ${omittedFailureCount} additional failure${omittedFailureCount === 1 ? '' : 's'} omitted.`
+        : ''
+    const detailText = displayedFailures
+      .map(formatFailureDetail)
+      .join('\n')
+    const first = displayedFailures[0]!
+    throw new FilePatchError(
+      `${FILE_PATCH_TOOL_NAME} preflight failed for ${failures.length} independent ${operationWord}.${omitted}\n${detailText}`,
+      {
+        code: failures.length === 1 ? first.code : 'PATCH_PREFLIGHT_FAILED',
+        path: first.path,
+        operation: first.operation,
+        moveTo: first.moveTo,
+        hunkIndex: first.hunkIndex,
+        hunkCount: first.hunkCount,
+        details: displayedFailures,
+        diagnostics: first.diagnostics,
+      },
+    )
+  }
+
+  return { files: results }
+}
+
+function applyOperation(
+  operation: FilePatchOperation,
+  currentFiles: Map<string, ApplyPatchFileState>,
+  updateApplier: UpdateApplier,
+): ApplyPatchResult['files'] {
+  const current = getExistingOrDefaultState(currentFiles, operation.path)
+
+  switch (operation.type) {
+    case 'update': {
+      if (!current.exists) {
+        throw new FilePatchError(
+          `Cannot update ${operation.path} because it does not exist.`,
+          {
+            code: 'PATCH_TARGET_MISSING',
+            path: operation.path,
+            operation: 'update',
+            hunkCount: operation.hunks.length,
+          },
+        )
+      }
+
+      if (operation.moveTo) {
+        const moveTarget = getExistingOrDefaultState(currentFiles, operation.moveTo)
+        if (moveTarget.exists) {
           throw new FilePatchError(
-            `Cannot update ${operation.path} because it does not exist.`,
-            { code: 'PATCH_TARGET_MISSING', path: operation.path },
+            `Cannot move ${operation.path} to ${operation.moveTo} because the target already exists.`,
+            {
+              code: 'PATCH_TARGET_EXISTS',
+              path: operation.moveTo,
+              operation: 'update',
+              moveTo: operation.moveTo,
+              hunkCount: operation.hunks.length,
+            },
           )
         }
+      }
 
-        const cachedContent = cachedFiles?.get(operation.path)
-        const { buffer: nextBuffer, notes } = applyUpdateHunks(
-          current.buffer,
-          operation.hunks,
-          operation.path,
-          cachedContent,
-        )
+      const update = updateApplier(
+        current.buffer,
+        operation.hunks,
+        operation.path,
+      )
+      const nextBuffer = update.buffer
+      const placementEvidence = update.plan
+        ? boundedPlacementEvidence(update.plan)
+        : undefined
 
-        if (operation.moveTo) {
-          const moveTarget = getExistingOrDefaultState(currentFiles, workingFiles, operation.moveTo)
-          if (moveTarget.exists) {
-            throw new FilePatchError(
-              `Cannot move ${operation.path} to ${operation.moveTo} because the target already exists.`,
-              { code: 'PATCH_TARGET_EXISTS', path: operation.moveTo },
-            )
-          }
-          // Mark original as deleted, new path as added
-          workingFiles.set(operation.path, { path: operation.path, exists: false, buffer: current.buffer })
-          workingFiles.set(operation.moveTo, { path: operation.moveTo, exists: true, buffer: nextBuffer })
-          results.push({ path: operation.path, type: 'delete', before: current.buffer.content, after: null })
-          // The hunks landed in the moved-to file, so any placement disclosure
-          // belongs on the entry that carries the patched content.
-          results.push({
+      if (operation.moveTo) {
+        return [
+          {
+            path: operation.path,
+            type: 'delete',
+            before: current.buffer.content,
+            after: null,
+          },
+          {
             path: operation.moveTo,
             type: 'add',
             before: null,
             after: nextBuffer.content,
-            ...(notes.length > 0 ? { notes } : {}),
-          })
-        } else {
-          workingFiles.set(operation.path, { path: operation.path, exists: true, buffer: nextBuffer })
-          results.push({
-            path: operation.path,
-            type: 'update',
-            before: current.buffer.content,
-            after: nextBuffer.content,
-            ...(notes.length > 0 ? { notes } : {}),
-          })
-        }
-        break
+            ...placementEvidence,
+          },
+        ]
       }
 
-      case 'add': {
-        if (current.exists) {
-          throw new FilePatchError(
-            `Cannot add ${operation.path} because it already exists.`,
-            { code: 'PATCH_TARGET_EXISTS', path: operation.path },
-          )
-        }
-
-        const content = joinLines(operation.lines, operation.noNewlineAtEndOfFile)
-        const nextState: ApplyPatchFileState = {
+      return [
+        {
           path: operation.path,
-          exists: true,
-          buffer: {
-            content,
-            encoding: current.buffer.encoding ?? 'utf8',
-            lineEndings: current.buffer.lineEndings ?? 'LF',
-            noNewlineAtEndOfFile: operation.noNewlineAtEndOfFile,
-          },
-        }
-        workingFiles.set(operation.path, nextState)
-        results.push({
+          type: 'update',
+          before: current.buffer.content,
+          after: nextBuffer.content,
+          ...placementEvidence,
+        },
+      ]
+    }
+
+    case 'add': {
+      if (current.exists) {
+        throw new FilePatchError(
+          `Cannot add ${operation.path} because it already exists.`,
+          { code: 'PATCH_TARGET_EXISTS', path: operation.path },
+        )
+      }
+
+      const content = joinLines(operation.lines, operation.noNewlineAtEndOfFile)
+      return [
+        {
           path: operation.path,
           type: 'add',
           before: null,
           after: content,
-        })
-        break
+        },
+      ]
+    }
+
+    case 'delete': {
+      if (!current.exists) {
+        throw new FilePatchError(
+          `Cannot delete ${operation.path} because it does not exist.`,
+          { code: 'PATCH_TARGET_MISSING', path: operation.path },
+        )
       }
 
-      case 'delete': {
-        if (!current.exists) {
-          throw new FilePatchError(
-            `Cannot delete ${operation.path} because it does not exist.`,
-            { code: 'PATCH_TARGET_MISSING', path: operation.path },
-          )
-        }
-
-        workingFiles.set(operation.path, {
-          path: operation.path,
-          exists: false,
-          buffer: current.buffer,
-        })
-        results.push({
+      return [
+        {
           path: operation.path,
           type: 'delete',
           before: current.buffer.content,
           after: null,
-        })
-        break
-      }
+        },
+      ]
     }
   }
+}
 
-  return { files: results }
+function boundedPlacementEvidence(
+  plan: UpdatePlacementPlan,
+): { placements: FilePatchPlacement[]; placementOmittedCount?: number } {
+  const placements = plan.hunks
+    .slice(0, MAX_FILE_PATCH_PLACEMENTS)
+    .map(candidate => ({
+      hunk: candidate.hunkIndex + 1,
+      oldStart: candidate.sourceStart,
+      oldEnd: candidate.sourceEnd,
+      reason:
+        candidate.boundary === 'bof'
+          ? 'bof'
+          : candidate.boundary === 'eof'
+            ? 'eof'
+            : candidate.diagnosticHintLines?.length
+              ? 'exact+hint'
+              : 'exact',
+    }) satisfies FilePatchPlacement)
+  const omitted = plan.hunks.length - placements.length
+  return {
+    placements,
+    ...(omitted > 0 ? { placementOmittedCount: omitted } : {}),
+  }
+}
+
+function toFailureDetail(
+  error: unknown,
+  operation: FilePatchOperation,
+): FilePatchFailureDetail {
+  const patchError =
+    error instanceof FilePatchError
+      ? error
+      : new FilePatchError(error instanceof Error ? error.message : String(error))
+  return {
+    code: patchError.code,
+    operation: operation.type,
+    path: patchError.path ?? operation.path,
+    ...(operation.type === 'update' && operation.moveTo
+      ? { moveTo: operation.moveTo }
+      : {}),
+    ...(patchError.hunkIndex !== undefined
+      ? { hunkIndex: patchError.hunkIndex }
+      : {}),
+    ...(patchError.hunkCount !== undefined
+      ? { hunkCount: patchError.hunkCount }
+      : {}),
+    message: boundFailureMessage(patchError.message),
+    ...(patchError.diagnostics !== undefined
+      ? { diagnostics: patchError.diagnostics }
+      : {}),
+  }
+}
+
+function boundFailureMessage(message: string): string {
+  if (message.length <= MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH) {
+    return message
+  }
+  return `${message.slice(0, MAX_FILE_PATCH_FAILURE_DETAIL_MESSAGE_LENGTH - 20)}… [truncated]`
+}
+
+function formatFailureDetail(detail: FilePatchFailureDetail): string {
+  const hunk =
+    detail.hunkIndex !== undefined
+      ? `, hunk ${detail.hunkIndex}${detail.hunkCount !== undefined ? ` of ${detail.hunkCount}` : ''}`
+      : ''
+  const move = detail.moveTo === undefined ? '' : ` to ${detail.moveTo}`
+  return `[${detail.code}] ${detail.operation} ${detail.path}${move}${hunk}: ${detail.message}`
+}
+
+function hunkHints(hunk: FilePatchHunk): string[] {
+  return hunk.hints ?? hunk.scopeHints ?? []
+}
+
+function hunkRequestsNoFinalNewline(hunk: FilePatchHunk): boolean {
+  if (hunk.newline?.kind === 'legacy-output') {
+    return hunk.newline.outputAtEof === 'absent'
+  }
+  if (hunk.newline?.kind === 'canonical') {
+    return hunk.newline.markers.some(
+      marker => marker.appliesTo === 'new' || marker.appliesTo === 'both',
+    )
+  }
+  return hunk.noNewlineAtEndOfFile === true
 }
 
 export function applyUpdateHunks(
   buffer: FilePatchBuffer,
   hunks: FilePatchHunk[],
   path: string,
-  cachedContent?: string,
-): { buffer: FilePatchBuffer; notes: string[] } {
+): { buffer: FilePatchBuffer } {
   let lines = splitPreservingTerminalNewline(buffer.content)
-  const cachedLines = cachedContent !== undefined
-    ? splitPreservingTerminalNewline(cachedContent)
-    : undefined
   let noNewlineAtEndOfFile =
     buffer.noNewlineAtEndOfFile ?? !buffer.content.endsWith('\n')
 
@@ -170,22 +342,19 @@ export function applyUpdateHunks(
   // which is what lets the canonical Codex idiom work: an early hunk anchors
   // uniquely and a later one uses a tiny fingerprint meaning "the next one".
   let cursor = 0
-  // Running (added − deleted) line count of the hunks already applied, so a
-  // disclosure can name the line the model itself read rather than the line of
-  // the intermediate buffer this loop is mutating.
-  let lineDelta = 0
-  const notes: string[] = []
-
   for (let i = 0; i < hunks.length; i++) {
-    const next = applySingleHunk(lines, hunks[i], path, i, cursor, lineDelta, cachedLines)
+    const next = applySingleHunk(
+      lines,
+      hunks[i],
+      path,
+      i,
+      hunks.length,
+      cursor,
+    )
     lines = next.lines
     cursor = next.cursor
-    lineDelta = next.lineDelta
-    if (next.note !== undefined) {
-      notes.push(next.note)
-    }
     if (next.touchesEndOfFile) {
-      noNewlineAtEndOfFile = hunks[i].noNewlineAtEndOfFile
+      noNewlineAtEndOfFile = hunkRequestsNoFinalNewline(hunks[i])
     }
   }
 
@@ -196,7 +365,145 @@ export function applyUpdateHunks(
       lineEndings: buffer.lineEndings,
       noNewlineAtEndOfFile,
     },
-    notes,
+  }
+}
+
+/**
+ * Candidate contract implementation used by replay until the release gates
+ * authorize replacing the production matcher above.
+ */
+export function applyUpdateHunksPlanned(
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+): { buffer: FilePatchBuffer; plan: UpdatePlacementPlan } {
+  const planned = planUpdateHunks({
+    path,
+    source: buffer.content,
+    hunks,
+    diagnostics: true,
+  })
+  if ('failure' in planned) {
+    const failedHunk =
+      planned.failure.hunkIndex === undefined
+        ? undefined
+        : hunks[planned.failure.hunkIndex]
+    throw plannerFailureAsFilePatchError({
+      failure: planned.failure,
+      operation: 'update',
+      source: {
+        sourceLines: splitPreservingTerminalNewline(buffer.content),
+        fingerprint: failedHunk?.lines
+          .filter(line => line.kind !== 'add')
+          .map(line => line.text),
+      },
+    })
+  }
+
+  return applyUpdatePlan(buffer, hunks, path, planned.plan)
+}
+
+/** Apply an already-authorized immutable-source plan without searching again. */
+export function applyUpdatePlan(
+  buffer: FilePatchBuffer,
+  hunks: FilePatchHunk[],
+  path: string,
+  plan: UpdatePlacementPlan,
+): { buffer: FilePatchBuffer; plan: UpdatePlacementPlan } {
+
+  const sourceLines = splitPreservingTerminalNewline(buffer.content)
+  const outputLines: string[] = []
+  let sourceCursor = 0
+
+  if (plan.path !== path || plan.hunks.length !== hunks.length) {
+    throw new FilePatchError(
+      `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+      {
+        code: 'PATCH_PLAN_INVALID',
+        path,
+        operation: 'update',
+        hunkCount: hunks.length,
+      },
+    )
+  }
+
+  for (let planIndex = 0; planIndex < plan.hunks.length; planIndex += 1) {
+    const candidate = plan.hunks[planIndex]!
+    const hunk = hunks[planIndex]!
+    const expectedSourceLines = hunk.lines
+      .filter(line => line.kind !== 'add')
+      .map(line => line.text)
+    if (
+      candidate.hunkIndex !== planIndex ||
+      candidate.sourceStart < sourceCursor ||
+      candidate.sourceEnd < candidate.sourceStart ||
+      candidate.sourceEnd > sourceLines.length ||
+      candidate.sourceEnd - candidate.sourceStart !== expectedSourceLines.length ||
+      expectedSourceLines.some(
+        (line, offset) => sourceLines[candidate.sourceStart + offset] !== line,
+      )
+    ) {
+      throw new FilePatchError(
+        `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+        {
+          code: 'PATCH_PLAN_INVALID',
+          path,
+          operation: 'update',
+          hunkIndex: candidate.hunkIndex + 1,
+          hunkCount: hunks.length,
+        },
+      )
+    }
+    outputLines.push(...sourceLines.slice(sourceCursor, candidate.sourceStart))
+    let hunkSourceCursor = candidate.sourceStart
+    for (const line of hunk.lines) {
+      if (line.kind === 'add') {
+        outputLines.push(line.text)
+        continue
+      }
+      if (line.kind === 'context') {
+        outputLines.push(sourceLines[hunkSourceCursor]!)
+      }
+      hunkSourceCursor += 1
+    }
+    if (hunkSourceCursor !== candidate.sourceEnd) {
+      throw new FilePatchError(
+        `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+        {
+          code: 'PATCH_PLAN_INVALID',
+          path,
+          operation: 'update',
+          hunkIndex: candidate.hunkIndex + 1,
+          hunkCount: hunks.length,
+        },
+      )
+    }
+    sourceCursor = candidate.sourceEnd
+  }
+  outputLines.push(...sourceLines.slice(sourceCursor))
+
+  if (outputLines.length !== plan.output.lineCount) {
+    throw new FilePatchError(
+      `Internal apply_patch plan invariant failed for ${path}; no mutation is authorized.`,
+      {
+        code: 'PATCH_PLAN_INVALID',
+        path,
+        operation: 'update',
+        hunkCount: hunks.length,
+      },
+    )
+  }
+
+  const noNewlineAtEndOfFile =
+    outputLines.length > 0 && !plan.output.hasFinalNewline
+  return {
+    buffer: {
+      content: joinLines(outputLines, noNewlineAtEndOfFile),
+      encoding: buffer.encoding,
+      lineEndings: buffer.lineEndings,
+      noNewlineAtEndOfFile,
+    },
+    plan,
   }
 }
 
@@ -205,31 +512,26 @@ function applySingleHunk(
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  hunkCount: number,
   cursor: number,
-  lineDelta: number,
-  cachedLines?: string[],
 ): {
   lines: string[]
   touchesEndOfFile: boolean
   cursor: number
-  lineDelta: number
-  note?: string
 } {
   const position = findHunkPosition(
     lines,
     hunk,
     path,
     hunkIndex,
+    hunkCount,
     cursor,
-    lineDelta,
-    cachedLines,
   )
   const matchIndex = position.index
 
   let sourceIndex = matchIndex
   const nextLines = lines.slice(0, matchIndex)
   const addedLines: string[] = []
-  let deletedCount = 0
 
   for (const line of hunk.lines) {
     switch (line.kind) {
@@ -238,7 +540,12 @@ function applySingleHunk(
         if (actual === undefined) {
           throw new FilePatchError(
             `Context line out of bounds in ${path} at position ${sourceIndex} — re-read the file and verify context.`,
-            { code: 'PATCH_CONFLICT', path },
+            {
+              code: 'PATCH_CONFLICT',
+              path,
+              hunkIndex: hunkIndex + 1,
+              hunkCount,
+            },
           )
         }
         // Write back the original file bytes (fuzzy match accepted them as equivalent)
@@ -251,11 +558,15 @@ function applySingleHunk(
         if (actual === undefined) {
           throw new FilePatchError(
             `Delete line out of bounds in ${path} at position ${sourceIndex} — re-read the file and verify the delete target.`,
-            { code: 'PATCH_CONFLICT', path },
+            {
+              code: 'PATCH_CONFLICT',
+              path,
+              hunkIndex: hunkIndex + 1,
+              hunkCount,
+            },
           )
         }
         sourceIndex += 1
-        deletedCount += 1
         break
       }
       case 'add': {
@@ -276,8 +587,6 @@ function applySingleHunk(
     lines: nextLines,
     touchesEndOfFile: isTouchingEndOfFile(lines, hunk.lines, matchIndex, addedLines),
     cursor: nextCursor,
-    lineDelta: lineDelta + addedLines.length - deletedCount,
-    ...(position.note !== undefined ? { note: position.note } : {}),
   }
 }
 
@@ -296,19 +605,78 @@ function isTouchingEndOfFile(
   return addedLines.length > 0 || hunkLines.some(line => line.kind === 'delete')
 }
 
+// The fuzzy ladder ported from Codex seek_sequence, widest tolerance last.
+// Anything asking "would the matcher have accepted this line?" — placement and
+// the failure diagnostics alike — has to ask it of the same ladder, or the
+// diagnosis contradicts the decision it is explaining.
+const MATCH_TIERS: Array<(a: string, b: string) => boolean> = [
+  (a, b) => a === b,
+  (a, b) => a.trimEnd() === b.trimEnd(),
+  (a, b) => a.trim() === b.trim(),
+  (a, b) => unicodeNormalize(a) === unicodeNormalize(b),
+]
+
+function describeFingerprintMiss(
+  fileLines: string[],
+  fingerprint: string[],
+  path: string,
+): { kind: 'absent' | 'nonconsecutive'; clause: string } {
+  const absent = fingerprint.filter(
+    text =>
+      !MATCH_TIERS.some(
+        matchFn => findAllMatches(fileLines, [text], 0, matchFn).length > 0,
+      ),
+  )
+
+  if (absent.length === 0) {
+    return {
+      kind: 'nonconsecutive',
+      clause: `Every fingerprint line appears in ${path}, but the lines are not one consecutive ordered run in the current file.`,
+    }
+  }
+
+  const remaining = absent.length - 1
+  const others =
+    remaining > 0
+      ? ` ${remaining} other line${remaining > 1 ? 's' : ''} in this hunk ${remaining > 1 ? 'are' : 'is'} missing from the file too.`
+      : ''
+  return {
+    kind: 'absent',
+    clause: `The line ${JSON.stringify(absent[0])} does not appear anywhere in ${path}.${others}`,
+  }
+}
+
 function findHunkPosition(
   fileLines: string[],
   hunk: FilePatchHunk,
   path: string,
   hunkIndex: number,
+  hunkCount: number,
   cursor: number,
-  lineDelta: number,
-  cachedLines?: string[],
-): { index: number; note?: string } {
+): { index: number } {
   const fingerprint = hunk.lines.filter(l => l.kind !== 'add').map(l => l.text)
+  // A section with one hunk needs no ordinal. Naming one of many is what lets
+  // the model correct the hunk that failed instead of re-checking all of them
+  // against the file, which is the whole cost of a placement failure.
+  const hunkLabel = hunkCount > 1 ? ` (hunk ${hunkIndex + 1} of ${hunkCount})` : ''
 
   // Pure-insert hunk (no context, no delete lines)
   if (fingerprint.length === 0) {
+    const effectiveHints = hunkHints(hunk).filter(h => h.trim().length > 0)
+    if (
+      effectiveHints.length > 0 &&
+      !scopeHintsAppearInOrder(fileLines, effectiveHints)
+    ) {
+      throw new FilePatchError(
+        `Patch hunk scope does not appear in ${path}${hunkLabel}. Use scope text that exists in the current file.`,
+        {
+          code: 'PATCH_SCOPE_NOT_FOUND',
+          path,
+          hunkIndex: hunkIndex + 1,
+          hunkCount,
+        },
+      )
+    }
     if (hunk.isEndOfFile) {
       return { index: fileLines.length }
     }
@@ -317,17 +685,15 @@ function findHunkPosition(
       return { index: 0 }
     }
     throw new FilePatchError(
-      `Patch hunk for ${path} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
-      { code: 'INVALID_PATCH_FORMAT', path },
+      `Patch hunk for ${path}${hunkLabel} has no context or delete lines — pure-insert hunks only work as the first hunk (BOF) or with "*** End of File". Add context lines to locate this hunk.`,
+      {
+        code: 'INVALID_PATCH_FORMAT',
+        path,
+        hunkIndex: hunkIndex + 1,
+        hunkCount,
+      },
     )
   }
-
-  const matchFns: Array<(a: string, b: string) => boolean> = [
-    (a, b) => a === b,
-    (a, b) => a.trimEnd() === b.trimEnd(),
-    (a, b) => a.trim() === b.trim(),
-    (a, b) => unicodeNormalize(a) === unicodeNormalize(b),
-  ]
 
   // EOF-anchored: try all tiers tail-first, then fall back to a full scan if
   // nothing matched at the tail (mirrors Codex seek_sequence eof behavior).
@@ -335,51 +701,54 @@ function findHunkPosition(
     ? [Math.max(0, fileLines.length - fingerprint.length), 0]
     : [0]
 
+  const effectiveHints = hunkHints(hunk).filter(h => h.trim().length > 0)
+  let sawFingerprintMatch = false
+  let sawScopedMatch = false
+
   for (const searchStart of searchPasses) {
-    for (const matchFn of matchFns) {
+    for (const matchFn of MATCH_TIERS) {
       const matches = findAllMatches(fileLines, fingerprint, searchStart, matchFn)
-      if (matches.length === 1) {
-        return { index: matches[0] }
+      if (matches.length === 0) continue
+      sawFingerprintMatch = true
+
+      // A supplied hint is a constraint. An unqualified match never
+      // substitutes for a hunk whose scope was not satisfied.
+      const scopedMatches =
+        effectiveHints.length === 0
+          ? matches
+          : disambiguateWithScopeHints(fileLines, matches, effectiveHints)
+      if (scopedMatches.length === 0) continue
+      sawScopedMatch = true
+
+      const eligibleMatches =
+        hunkIndex === 0
+          ? scopedMatches
+          : scopedMatches.filter(match => match >= cursor)
+
+      if (eligibleMatches.length === 1) {
+        return { index: eligibleMatches[0]! }
       }
-      if (matches.length > 1) {
-        // Hints that narrow to 2+ still have to constrain the cursor rule
-        // below, so the subset — not the raw match list — is what carries
-        // forward. Hints satisfied by nothing are most likely mis-transcribed;
-        // fall back to the unhinted set rather than failing on the hint alone.
-        const hinted = disambiguateWithScopeHints(fileLines, matches, hunk.scopeHints)
-        const satisfied = hinted.length > 0 ? hinted : matches
-        if (satisfied.length === 1) {
-          return { index: satisfied[0] }
-        }
-        if (hunkIndex > 0) {
-          // A later hunk's fingerprint is routinely tiny (`})` alone) because
-          // the model means "the next one after the previous hunk". Only a
-          // hunk with nothing before it has to be globally unique.
-          const forward = satisfied.filter(match => match >= cursor)
-          if (forward.length > 0) {
-            const scope =
-              satisfied.length < matches.length
-                ? ` (${satisfied.length} within the hinted scope)`
-                : ''
-            // Report the line in the coordinates of the file the model read:
-            // exact when the earlier hunks landed in file order (the normal
-            // case), approximate if a uniquely-matched earlier hunk landed
-            // later in the file. The structuredPatch in the tool result carries
-            // the authoritative final coordinates either way.
-            const line = forward[0] + 1 - lineDelta
-            return {
-              index: forward[0],
-              note: `hunk ${hunkIndex + 1} matched ${matches.length} locations${scope}; applied at the first match after the previous hunk (line ${line})`,
-            }
-          }
-          throw new FilePatchError(
-            `Patch hunk body is ambiguous in ${path}: all ${matches.length} matches for hunk ${hunkIndex + 1} (lines ${matches.map(i => i + 1).join(', ')}) sit before the position established by the previous hunk — reorder the hunks to match the file, or add more context lines.`,
-            { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
-          )
-        }
+      if (eligibleMatches.length > 1) {
         throw new FilePatchError(
-          `Patch hunk body is ambiguous in ${path}: the context+delete lines match at ${matches.length} locations (lines ${matches.map(i => i + 1).join(', ')}) — the first hunk of an update must locate itself uniquely; add more surrounding context lines or @@ scope hints until only one location matches.`,
-          { code: 'PATCH_ANCHOR_AMBIGUOUS', path },
+          `Patch hunk placement is ambiguous in ${path}${hunkLabel}: there are multiple eligible placements at lines ${formatLinePositions(eligibleMatches)}. Add more consecutive context or scope text until exactly one eligible placement remains.`,
+          {
+            code: 'PATCH_ANCHOR_AMBIGUOUS',
+            path,
+            hunkIndex: hunkIndex + 1,
+            hunkCount,
+          },
+        )
+      }
+
+      if (hunkIndex > 0) {
+        throw new FilePatchError(
+          `Patch hunk has no eligible placement after the previous hunk in ${path}${hunkLabel}: the current matching lines ${formatLinePositions(scopedMatches)} are before the required file-order cursor. Reorder the hunks to match the file.`,
+          {
+            code: 'PATCH_ANCHOR_OUT_OF_ORDER',
+            path,
+            hunkIndex: hunkIndex + 1,
+            hunkCount,
+          },
         )
       }
     }
@@ -388,41 +757,30 @@ function findHunkPosition(
     if (searchPasses.length > 1 && searchStart === 0) break
   }
 
-  // Check whether the cached (previously-read) version of the file would have matched.
-  // If so, the file changed on disk after the last read — say that explicitly.
-  if (cachedLines !== undefined) {
-    for (const matchFn of [
-      (a: string, b: string) => a === b,
-      (a: string, b: string) => a.trimEnd() === b.trimEnd(),
-      (a: string, b: string) => a.trim() === b.trim(),
-      (a: string, b: string) => unicodeNormalize(a) === unicodeNormalize(b),
-    ]) {
-      const cacheMatches = findAllMatches(cachedLines, fingerprint, 0, matchFn)
-      if (cacheMatches.length > 0) {
-        throw new FilePatchError(
-          `Patch anchor not found in ${path} — the context matched the previously-read version of the file, but the file has since changed on disk. Re-read the file and rebuild the patch with fresh context.`,
-          { code: 'PATCH_ANCHOR_NOT_FOUND', path },
-        )
-      }
-    }
-  }
-
-  // Staleness is only a live possibility when we have nothing to compare
-  // against. With a cached read in hand the loop above already proved the
-  // fingerprint matches neither the file nor what was last read from it, so
-  // naming staleness here sends the model hunting a concurrent editor that
-  // does not exist — a costly wrong turn on a shared tree.
-  if (cachedLines !== undefined) {
-    throw new FilePatchError(
-      `Patch anchor not found in ${path} — the hunk's context and delete lines match neither the current file nor the content you last read from it, so they were most likely transcribed inaccurately. Compare them against the file line for line: wording, whitespace, and where each line wraps must all match. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
-      { code: 'PATCH_ANCHOR_NOT_FOUND', path },
-    )
-  }
-
+  const miss = describeFingerprintMiss(fileLines, fingerprint, path)
+  const repair =
+    miss.kind === 'absent'
+      ? 'Fix that line first, then check the rest against the file: wording, whitespace, and where each line wraps must all match.'
+      : 'Use the complete consecutive ordered run from the current file, with blank lines included.'
+  const scopeClause =
+    effectiveHints.length > 0 && sawFingerprintMatch && !sawScopedMatch
+      ? ` The fingerprint appears in ${path}, but no placement satisfies the supplied scope constraints.`
+      : ''
   throw new FilePatchError(
-    `Patch anchor not found in ${path} — re-read the file; the context may be stale. To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
-    { code: 'PATCH_ANCHOR_NOT_FOUND', path },
+    `Patch anchor not found in ${path}${hunkLabel}.${scopeClause} ${miss.clause} ${repair} To append to the end of the file, use "${END_OF_FILE_MARKER}" after the hunk body.`,
+    {
+      code: 'PATCH_ANCHOR_NOT_FOUND',
+      path,
+      hunkIndex: hunkIndex + 1,
+      hunkCount,
+    },
   )
+}
+
+function formatLinePositions(positions: number[]): string {
+  const shown = positions.slice(0, 20).map(position => position + 1)
+  const omitted = positions.length - shown.length
+  return `${shown.join(', ')}${omitted > 0 ? `, and ${omitted} more` : ''}`
 }
 
 function findAllMatches(
@@ -475,6 +833,26 @@ function disambiguateWithScopeHints(
   return matches.filter(satisfies)
 }
 
+function scopeHintsAppearInOrder(
+  fileLines: string[],
+  scopeHints: string[],
+): boolean {
+  let searchFrom = 0
+  for (const hint of scopeHints) {
+    const needle = hint.trim()
+    let found = false
+    for (let i = searchFrom; i < fileLines.length; i++) {
+      if (fileLines[i].trim().includes(needle)) {
+        searchFrom = i + 1
+        found = true
+        break
+      }
+    }
+    if (!found) return false
+  }
+  return true
+}
+
 function unicodeNormalize(s: string): string {
   return s
     .trim()
@@ -505,15 +883,15 @@ function unicodeNormalize(s: string): string {
 
 function getExistingOrDefaultState(
   currentFiles: Map<string, ApplyPatchFileState>,
-  workingFiles: Map<string, ApplyPatchFileState>,
   path: string,
 ): ApplyPatchFileState {
-  const current = workingFiles.get(path) ?? currentFiles.get(path)
+  const current = currentFiles.get(path)
   if (current) {
     return {
       path,
       exists: current.exists,
       buffer: { ...current.buffer },
+      ...(current.identity !== undefined ? { identity: current.identity } : {}),
     }
   }
 

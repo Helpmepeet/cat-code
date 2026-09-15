@@ -31,6 +31,7 @@ import {
   MAX_FRAME_BYTES,
   MAX_OUTBOUND_FRAME_BYTES,
   MAX_PROMPT_BYTES,
+  PARKED_EXIT_CODE,
 } from '../shared/limits.js'
 import {
   isServerFrameKind,
@@ -147,6 +148,35 @@ export type SpawnConfig = {
    * sidecar's ready frame then echoes this id as `engineSessionId`.
    */
   resumeEngineSessionId?: string
+  /**
+   * PEER-SESSIONS §2 / HOST-REQUEST-PLANE §5 — the peer identity and run
+   * defaults for this session, carried as five additive env keys beside the cwd.
+   *
+   * The spawn environment is the ONLY contact main has with a sidecar before its
+   * socket is up, and the sidecar needs all of this at construction: its own name
+   * and its creator go into the system prompt, which is fixed when the controller
+   * is built. So these ride here rather than as a frame. They are the same trust
+   * class as `cwd` — main/host-owned input, never renderer-authored — which is
+   * what the amended SECURITY-MINIMUM addendum names.
+   *
+   * **THE ABSENT VALUE IS THE EMPTY STRING, NOT AN UNSET KEY.** Every one of the
+   * five is written on every spawn, empty when the field below is undefined,
+   * because the spawn env inherits main's own environment and a key left unset
+   * would be inherited from it — letting a process outside main name a session
+   * (the `CATCODE_SIDECAR_RESUME_SESSION_ID` precedent, same object, same
+   * reason). So a READER must test for `''`, not for presence: a sidecar that
+   * treats `''` as a real value boots believing it is called the empty string,
+   * was created by the empty string, and should run the empty-string model.
+   */
+  /** This session's own name, allocated by the host against the registry. */
+  name?: string
+  /** The creating session's `appSessionId`. An id, never a name. */
+  createdBy?: string
+  /** The creating session's name — a LABEL for prompt text, not an address. */
+  createdByName?: string
+  /** Model and reasoning effort the created session starts on (PEER-SESSIONS R7). */
+  model?: string
+  effort?: string
 }
 
 export type SendFailureCode =
@@ -359,6 +389,20 @@ export class SidecarSupervisor {
         ...(config?.resumeEngineSessionId !== undefined
           ? { CATCODE_SIDECAR_RESUME_SESSION_ID: config.resumeEngineSessionId }
           : { CATCODE_SIDECAR_RESUME_SESSION_ID: '' }),
+        // PEER-SESSIONS §2/§5 — same host-owned trust class as the cwd above.
+        // Each key is written UNCONDITIONALLY, empty when the host had no value,
+        // exactly as the resume id above is. The env spread at the top of this
+        // object inherits main's own environment, so a key merely left unset
+        // would be inherited: a `CATCODE_SIDECAR_NAME` in the parent process
+        // would silently name every session that was not given one, which is a
+        // process outside main authoring identity the amended SECURITY-MINIMUM
+        // addendum says only main may author. Empty means unset, and a reader
+        // must treat it that way.
+        CATCODE_SIDECAR_NAME: config?.name ?? '',
+        CATCODE_SIDECAR_CREATED_BY: config?.createdBy ?? '',
+        CATCODE_SIDECAR_CREATED_BY_NAME: config?.createdByName ?? '',
+        CATCODE_SIDECAR_MODEL: config?.model ?? '',
+        CATCODE_SIDECAR_EFFORT: config?.effort ?? '',
         CATCODE_OPERATIONAL_FD: '3',
         CATCODE_OPERATIONAL_LAUNCH_ID: process.env.CATCODE_OPERATIONAL_LAUNCH_ID ?? '',
       },
@@ -407,19 +451,30 @@ export class SidecarSupervisor {
         return
       }
       this.emit({ type: 'exit', sessionId, code, signal })
-      this.operational('sidecar.exit', code === 0 ? 'info' : 'error', sessionId, {
+      // A host-initiated idle park is a DESIGNED exit that happens to be
+      // non-zero: the sidecar self-exits with `PARKED_EXIT_CODE` precisely so
+      // the host can classify it without a socket frame (`app/host/host.ts`
+      // `markParked`, IDLE-PARK.md §2). Judging expectedness on `code === 0`
+      // alone therefore filed every park as an unexplained failure, which is
+      // what made "did an engine ever actually crash" unanswerable from a log
+      // window in which all 11 abnormal exits were parks.
+      const parked = code === PARKED_EXIT_CODE
+      const cleanExit = code === 0 || parked
+      this.operational('sidecar.exit', cleanExit ? 'info' : 'error', sessionId, {
         ...(code === null ? {} : { exitCode: code }),
         ...(signal === null ? {} : { signal }),
-        expected: code === 0,
+        expected: cleanExit,
       })
       // Only claim lost coverage when there is evidence of it. A leftover buffer
-      // means a partial NDJSON record was cut off mid-write; a non-zero exit means
+      // means a partial NDJSON record was cut off mid-write; an abnormal exit means
       // the stream ended abnormally. A clean exit with an empty buffer lost
       // nothing, and reporting it anyway pinned the export's coverage verdict to
-      // "incomplete" for every ordinary session close.
+      // "incomplete" for every ordinary session close. A park closes its stream
+      // as deliberately as a zero exit does, so it belongs on the same side of
+      // this test: it was reporting one false `log.coverage.incomplete` per park.
       const truncatedRecord = record.operationalBuffer.length > 0
-      if (truncatedRecord || code !== 0) {
-        this.operational('log.coverage.incomplete', code === 0 ? 'warn' : 'error', sessionId, {
+      if (truncatedRecord || !cleanExit) {
+        this.operational('log.coverage.incomplete', cleanExit ? 'warn' : 'error', sessionId, {
           source: 'sidecar',
           reason: truncatedRecord ? 'stream_closed_mid_record' : 'stream_closed_on_abnormal_exit',
           expected: false,

@@ -9,7 +9,6 @@ import {
 import { createQueryEngineSessionController } from './createQueryEngineSessionController.js'
 import { attachThreadGoalScheduler } from './attachThreadGoalScheduler.js'
 import { saveThreadGoal } from '../utils/sessionStorage.js'
-import { isAgentMode } from '../agent-mode/agentMode.js'
 
 export type RuntimeBackedAppSessionOptions = {
   queryEngineConfig: QueryEngineAppSessionConfig
@@ -68,7 +67,6 @@ export function createRuntimeBackedAppSession({
           : prev,
       )
     },
-    isAgentMode: () => isAgentMode(),
     ...(hasExternalScheduler ? { hasExternalScheduler } : {}),
   })
 

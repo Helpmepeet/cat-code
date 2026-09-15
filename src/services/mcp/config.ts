@@ -54,7 +54,10 @@ import {
   type McpWebSocketServerConfig,
   type ScopedMcpServerConfig,
 } from './types.js'
-import { getProjectMcpServerStatus } from './utils.js'
+import {
+  getExplicitProjectMcpServerStatus,
+  getProjectMcpServerStatus,
+} from './utils.js'
 
 /**
  * Get the path to the managed MCP configuration file
@@ -1066,13 +1069,19 @@ export function getMcpConfigByName(name: string): ScopedMcpServerConfig | null {
  * critical path. The optional extraDedupTargets promise (e.g. the in-flight
  * claude.ai connector fetch) is awaited only after loadAllPluginsCacheOnly() completes,
  * so the two overlap rather than serialize.
+ * @param options Optional approval policy for project-scoped servers
  * @returns Cat Code server configurations with appropriate scopes
  */
+export type ClaudeCodeMcpConfigOptions = {
+  projectMcpApproval?: 'explicit-only'
+}
+
 export async function getClaudeCodeMcpConfigs(
   dynamicServers: Record<string, ScopedMcpServerConfig> = {},
   extraDedupTargets: Promise<
     Record<string, ScopedMcpServerConfig>
   > = Promise.resolve({}),
+  options: ClaudeCodeMcpConfigOptions = {},
 ): Promise<{
   servers: Record<string, ScopedMcpServerConfig>
   errors: PluginError[]
@@ -1163,8 +1172,12 @@ export async function getClaudeCodeMcpConfigs(
 
   // Filter project servers to only include approved ones
   const approvedProjectServers: Record<string, ScopedMcpServerConfig> = {}
+  const getProjectServerStatus =
+    options.projectMcpApproval === 'explicit-only'
+      ? getExplicitProjectMcpServerStatus
+      : getProjectMcpServerStatus
   for (const [name, config] of Object.entries(projectServers)) {
-    if (getProjectMcpServerStatus(name) === 'approved') {
+    if (getProjectServerStatus(name) === 'approved') {
       approvedProjectServers[name] = config
     }
   }

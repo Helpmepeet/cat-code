@@ -5,6 +5,7 @@ import { logEvent } from '../services/analytics/index.js'
 import { CACHE_PATHS } from './cachePaths.js'
 import { logForDebugging } from './debug.js'
 import { getClaudeConfigHomeDir } from './envUtils.js'
+import { getErrnoCode } from './errors.js'
 import { type FsOperations, getFsImplementation } from './fsOperations.js'
 import { cleanupOldImageCaches } from './imageStore.js'
 import * as lockfile from './lockfile.js'
@@ -165,6 +166,87 @@ async function tryRmdir(dirPath: string, fsImpl: FsOperations): Promise<void> {
   }
 }
 
+type SubtreeSummary = {
+  /** Regular entries found beneath the root, at any depth. */
+  files: number
+  /** Newest mtime of those entries, or null when the subtree holds no files. */
+  newestMtimeMs: number | null
+  /** True when any readdir/stat failed, so the summary understates the tree. */
+  incomplete: boolean
+}
+
+/**
+ * Walk a directory and report how many files it holds and how recently any of
+ * them was written. A directory's OWN mtime is not an age signal: on some
+ * filesystems it tracks the last entry added to that one level, and on others
+ * it is stale, so neither answers "is anything under here still fresh". Only
+ * the newest file mtime in the whole subtree does. `incomplete` fails the
+ * caller closed: a subtree we could not fully read is never deletable.
+ */
+async function summarizeSubtree(
+  dirPath: string,
+  fsImpl: FsOperations,
+): Promise<SubtreeSummary> {
+  const summary: SubtreeSummary = {
+    files: 0,
+    newestMtimeMs: null,
+    incomplete: false,
+  }
+  let entries
+  try {
+    entries = await fsImpl.readdir(dirPath)
+  } catch {
+    summary.incomplete = true
+    return summary
+  }
+  for (const entry of entries) {
+    const childPath = join(dirPath, entry.name)
+    if (entry.isDirectory()) {
+      const nested = await summarizeSubtree(childPath, fsImpl)
+      summary.files += nested.files
+      if (nested.incomplete) summary.incomplete = true
+      if (
+        nested.newestMtimeMs !== null &&
+        (summary.newestMtimeMs === null ||
+          nested.newestMtimeMs > summary.newestMtimeMs)
+      ) {
+        summary.newestMtimeMs = nested.newestMtimeMs
+      }
+      continue
+    }
+    try {
+      const stats = await fsImpl.stat(childPath)
+      summary.files++
+      if (
+        summary.newestMtimeMs === null ||
+        stats.mtimeMs > summary.newestMtimeMs
+      ) {
+        summary.newestMtimeMs = stats.mtimeMs
+      }
+    } catch {
+      summary.incomplete = true
+    }
+  }
+  return summary
+}
+
+/**
+ * Only a definitive "not there" makes a session directory an orphan. Any other
+ * stat failure keeps the directory on the conservative path.
+ */
+async function transcriptStillExists(
+  transcriptPath: string,
+  fsImpl: FsOperations,
+): Promise<boolean> {
+  try {
+    await fsImpl.stat(transcriptPath)
+    return true
+  } catch (error) {
+    const code = getErrnoCode(error)
+    return code !== 'ENOENT' && code !== 'ENOTDIR'
+  }
+}
+
 export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
   const cutoffDate = getCutoffDate()
   const result: CleanupResult = { messages: 0, errors: 0 }
@@ -228,6 +310,28 @@ export async function cleanupOldSessionFiles(): Promise<CleanupResult> {
           const cleanup = await withUnownedTranscriptLease(
             sessionId,
             async () => {
+              // Orphan case: the sibling transcript is gone, so nothing under
+              // here is reachable from a session any more. This is the only
+              // path that can remove `subagents/` and anything else outside
+              // tool-results/ — the sweep below walks tool-results/ only, and
+              // the trailing rmdir is non-recursive, so an orphan otherwise
+              // survives forever.
+              if (
+                !(await transcriptStillExists(
+                  join(projectDir, `${entry.name}.jsonl`),
+                  fsImpl,
+                ))
+              ) {
+                const subtree = await summarizeSubtree(sessionDir, fsImpl)
+                if (
+                  !subtree.incomplete &&
+                  (subtree.newestMtimeMs === null ||
+                    subtree.newestMtimeMs < cutoffDate.getTime())
+                ) {
+                  await fsImpl.rm(sessionDir, { recursive: true, force: true })
+                  return subtree.files
+                }
+              }
               const toolResultsDir = join(sessionDir, TOOL_RESULTS_SUBDIR)
               let toolDirs
               try {

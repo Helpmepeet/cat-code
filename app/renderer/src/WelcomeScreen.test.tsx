@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { OrchestratorReflect, RecentItem, WelcomeScreen } from './WelcomeScreen.js'
+import { RecentItem, WelcomeScreen } from './WelcomeScreen.js'
 import type { RecentWorkspace } from './sessionsCatalogState.js'
 import type { AccountsSnapshot, AccountStatus } from '../../shared/protocol.js'
 
@@ -18,9 +18,10 @@ function recent(over: Partial<RecentWorkspace> & { cwd: string }): RecentWorkspa
   }
 }
 
-function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
+function account(over: Partial<AccountStatus>): AccountStatus {
   return {
-    alias: over.id,
+    id: over.id ?? 'fixture',
+    alias: over.alias ?? over.id ?? 'fixture',
     status: 'healthy',
     statusReason: null,
     availability: 'available',
@@ -30,6 +31,8 @@ function account(over: Partial<AccountStatus> & { id: string }): AccountStatus {
     source: 'vault',
     usagePrimary: 0,
     usageWeekly: 0,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,
@@ -63,7 +66,7 @@ test('renders the hero wordmark, greeting and meta strip labels', () => {
     <WelcomeScreen
       recents={[recent({ cwd: '/w/cat-code', appSessionId: 'a', live: true })]}
       accounts={pool([account({ id: 'main', alias: 'main', isDefault: true })])}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -73,7 +76,6 @@ test('renders the hero wordmark, greeting and meta strip labels', () => {
   expect(html).toContain('Welcome back')
   expect(html).toContain('Project')
   expect(html).toContain('Start in')
-  expect(html).toContain('Orchestrator')
   expect(html).toContain('Locally')
   expect(html).toContain('<img')
   expect(html).toContain('alt=""')
@@ -96,13 +98,13 @@ test('the branch chooser + worktree option are CUT (absent)', () => {
     <WelcomeScreen
       recents={[]}
       accounts={null}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
   )
   expect(html).not.toContain('Worktree')
-  expect(html).not.toContain('worktree')
+  expect(html).not.toContain('New worktree')
   expect(html).not.toContain('Branch')
   expect(html).not.toContain('feat/cat-launcher')
   // With no recents the trigger invites a first project instead of a mock path.
@@ -143,7 +145,7 @@ test('P4-55 renders a truthful retry in place of the false empty roster', () => 
     <WelcomeScreen
       recents={[]}
       accounts={null}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
       rosterFailure={{ retrying: false, onRetry: noop }}
@@ -163,7 +165,7 @@ test('P4-55 keeps the failure visible and disables duplicate retries while readi
     <WelcomeScreen
       recents={[]}
       accounts={null}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
       rosterFailure={{ retrying: true, onRetry: noop }}
@@ -184,7 +186,7 @@ test('P4-48 — with no account anywhere, the launcher states the order of the f
     <WelcomeScreen
       recents={[]}
       accounts={pool([])}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -201,7 +203,7 @@ test('P4-48 — an account already in the pool silences the line', () => {
     <WelcomeScreen
       recents={[recent({ cwd: '/w/cat-code', appSessionId: 'a' })]}
       accounts={pool([account({ id: 'main', isDefault: true })])}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -217,7 +219,7 @@ test('P4-48 — a configured Anthropic route silences the line even with an empt
     <WelcomeScreen
       recents={[]}
       accounts={{ ...pool([]), anthropicRouteAvailable: true }}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -232,7 +234,7 @@ test('P4-48 — an unreported pool claims nothing', () => {
     <WelcomeScreen
       recents={[]}
       accounts={null}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -244,42 +246,183 @@ test("P4-48 — the 'session' variant never carries the line", () => {
   // A session exists, so the real sign-in card is reachable and the launcher's
   // ordering advice is neither true nor needed.
   const html = renderToStaticMarkup(
-    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={pool([])} orchestratorActive={false} />,
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={pool([])} />,
   )
   expect(html).not.toContain(FIRST_RUN_ORDER)
 })
 
 test('the Codex table renders real pool rows (alias, capped badge, usage %)', () => {
+  const now = Math.floor(Date.now() / 1000)
   const html = renderToStaticMarkup(
     <WelcomeScreen
       recents={[]}
       accounts={pool([
-        account({ id: 'main', alias: 'main', isDefault: true, usagePrimary: 20, usageWeekly: 40 }),
-        account({ id: 'b', alias: 'backup', status: 'capped', usageLimitReached: true, usagePrimary: 100 }),
+        account({
+          id: 'main',
+          alias: 'main',
+          isDefault: true,
+          usagePrimary: 20,
+          usageWeekly: 40,
+          usageResetAt: now + 3 * 3600,
+          usageWeeklyResetAt: now + 4 * 3600,
+        }),
+        account({
+          id: 'b',
+          alias: 'backup',
+          status: 'capped',
+          availability: 'blocked',
+          usageLimitReached: true,
+          usagePrimary: 100,
+        }),
       ])}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
   )
   expect(html).toContain('Codex')
-  expect(html).toContain('>2</span> accounts')
+  expect(html).toContain('>1</span> account')
   // Prototype header: status-`healthy` count labelled "healthy" (main is healthy,
   // backup is capped → 1).
   expect(html).toContain('>1</span> healthy')
   expect(html).toContain('main')
-  expect(html).toContain('backup')
-  expect(html).toContain('capped')
+  expect(html).not.toContain('backup')
+  expect(html).not.toContain('capped')
   expect(html).toContain('20%')
-  expect(html).toContain('100%')
+  expect(html).toContain('aria-label="5-hour reset: 3h"')
+  expect(html).toContain('aria-label="Weekly reset: 4h"')
   // Flat accent-gradient bars, not tone-coded green/amber/red.
   expect(html).toContain('from-accent-soft to-accent')
   expect(html).toContain('aria-label="5-hour usage: 20%"')
   expect(html).toContain('aria-label="Weekly usage: 40%"')
   expect(html).toContain('role="progressbar"')
-  // No "5h"/"wk" text labels in the prototype rows.
+  expect(html).toContain('>5h<')
+  expect(html).toContain('>7d<')
+  expect(html).toContain('grid-cols-2')
+})
+
+test('the Welcome table filters blocked rows locally and counts visible rows', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([
+        account({ id: 'active', alias: 'active', isDefault: true }),
+        account({ id: 'warned', alias: 'warned', availability: 'warned' }),
+        account({ id: 'blocked', alias: 'blocked', availability: 'blocked' }),
+      ])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('>2</span> accounts')
+  expect(html).toContain('active')
+  expect(html).toContain('warned')
+  expect(html).not.toContain('blocked')
+})
+
+test('a loaded snapshot with no usable accounts has a distinct empty state', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({ id: 'blocked', availability: 'blocked' })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('>0</span> accounts')
+  expect(html).toContain('No usable Codex accounts.')
+  expect(html).not.toContain('No Codex account data for this view yet.')
+})
+
+test('weekly-only usage expands across the full usage track', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 37,
+        usagePrimaryWindowSeconds: 604_800,
+        usageResetAt: 1_700_000_000,
+        usageSecondaryWindowSeconds: null,
+        usageWeeklyResetAt: null,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).not.toContain('5-hour usage:')
+  expect(html).toContain('Weekly usage: 37%')
   expect(html).not.toContain('>5h<')
-  expect(html).not.toContain('>wk<')
+  expect(html).toContain('>7d<')
+  expect(html).toContain('grid-cols-1')
+  expect(html).not.toContain('max-w-[220px]')
+})
+
+test('reversed dual windows render values and resets in duration slots', () => {
+  const now = Math.floor(Date.now() / 1000)
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 37,
+        usagePrimaryWindowSeconds: 604_800,
+        usageResetAt: now + 3 * 3600,
+        usageWeekly: 12,
+        usageSecondaryWindowSeconds: 18_000,
+        usageWeeklyResetAt: now + 4 * 3600,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="Weekly usage: 37%"')
+  expect(html).toContain('aria-label="5-hour usage: 12%"')
+  expect(html).toContain('aria-label="Weekly reset: 3h"')
+  expect(html).toContain('aria-label="5-hour reset: 4h"')
+  expect(html).toContain('grid-cols-2')
+})
+
+test('recognized duration with null percent keeps a known reset without fabricating usage', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: null,
+        usagePrimaryWindowSeconds: 18_000,
+        usageResetAt: Math.floor(Date.now() / 1000) + 3 * 3600,
+        usageWeekly: null,
+        usageSecondaryWindowSeconds: null,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="5-hour reset: 3h"')
+  expect(html).not.toContain('5-hour usage:')
+  expect(html).not.toContain('>0%<')
+  expect(html).not.toContain('aria-valuenow="0"')
+})
+
+test('a genuine zero percent renders as zero usage', () => {
+  const html = renderToStaticMarkup(
+    <WelcomeScreen
+      recents={[]}
+      accounts={pool([account({
+        usagePrimary: 0,
+        usagePrimaryWindowSeconds: 18_000,
+      })])}
+      onOpenRecent={noop}
+      onOpenFolder={noop}
+    />,
+  )
+
+  expect(html).toContain('aria-label="5-hour usage: 0%"')
+  expect(html).toContain('aria-valuenow="0"')
+  expect(html).toContain('>0%<')
 })
 
 test('the Codex table degrades honestly when no pool snapshot exists', () => {
@@ -287,7 +430,7 @@ test('the Codex table degrades honestly when no pool snapshot exists', () => {
     <WelcomeScreen
       recents={[]}
       accounts={null}
-      orchestratorActive={false}
+
       onOpenRecent={noop}
       onOpenFolder={noop}
     />,
@@ -305,7 +448,7 @@ test("the 'session' variant shows a read-only cwd project (no picker) + the real
       cwd="/Users/me/cat-code"
       branch="feature/login"
       accounts={pool([account({ id: 'main', alias: 'main', isDefault: true, usagePrimary: 15 })])}
-      orchestratorActive={false}
+
     />,
   )
   // Same hero + Codex table body as the launcher (zero duplication).
@@ -331,7 +474,7 @@ test("'Start in' reports the one thing about a session's start that varies", () 
   // was all this column ever said. Sandboxing is a real per-session fact already
   // on `diagnostics.snapshot`.
   const plain = renderToStaticMarkup(
-    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} orchestratorActive={false} />,
+    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} />,
   )
   expect(plain).toContain('Locally')
   expect(plain).not.toContain('Sandboxed')
@@ -343,25 +486,23 @@ test("'Start in' reports the one thing about a session's start that varies", () 
       branch={null}
       sandboxed
       accounts={null}
-      orchestratorActive={false}
+
     />,
   )
   expect(sandboxed).toContain('Sandboxed')
 
   // The launcher has no session to ask, so it keeps the plain default.
   const launcher = renderToStaticMarkup(
-    <WelcomeScreen recents={[]} accounts={null} orchestratorActive={false} onOpenRecent={noop} onOpenFolder={noop} />,
+    <WelcomeScreen recents={[]} accounts={null} onOpenRecent={noop} onOpenFolder={noop} />,
   )
   expect(launcher).toContain('Locally')
   expect(launcher).not.toContain('Sandboxed')
 })
 
-test("the 'session' variant reflects orchestrator read-only and degrades a null pool + null cwd honestly", () => {
+test("the 'session' variant degrades a null pool + null cwd honestly", () => {
   const html = renderToStaticMarkup(
-    <WelcomeScreen variant="session" cwd={null} branch={null} accounts={null} orchestratorActive />,
+    <WelcomeScreen variant="session" cwd={null} branch={null} accounts={null} />,
   )
-  expect(html).toContain('aria-readonly="true"')
-  expect(html).toContain('>On<')
   // No wire cwd → an honest placeholder, never a fabricated path.
   expect(html).toContain('This workspace')
   expect(html).toContain('No Codex account data')
@@ -391,70 +532,4 @@ test('P4-40 — a project whose folder is gone stays unopenable, and says what t
   expect(html).not.toContain('The desktop cannot restore it yet')
   // User-visible text rule (CLAUDE.md §7): no em dash on any read surface.
   expect(html).not.toContain('—')
-})
-
-test('the orchestrator toggle is a read-only reflection of agent-mode', () => {
-  const on = renderToStaticMarkup(
-    <WelcomeScreen recents={[]} accounts={null} orchestratorActive onOpenRecent={noop} onOpenFolder={noop} />,
-  )
-  expect(on).toContain('aria-checked="true"')
-  expect(on).toContain('aria-readonly="true"')
-  expect(on).toContain('>On<')
-
-  const off = renderToStaticMarkup(
-    <WelcomeScreen recents={[]} accounts={null} orchestratorActive={false} onOpenRecent={noop} onOpenFolder={noop} />,
-  )
-  expect(off).toContain('aria-checked="false"')
-  expect(off).toContain('>Off<')
-})
-
-test("P4-8b — the 'session' variant Orchestrator is INTERACTIVE when a toggle callback is present", () => {
-  // With `onToggleOrchestrator` (the in-session case, App wires it per panel) the
-  // reflect becomes a real <button role="switch"> — no longer aria-readonly.
-  const html = renderToStaticMarkup(
-    <WelcomeScreen
-      variant="session"
-      cwd="/w"
-      branch={null}
-      accounts={null}
-      orchestratorActive={false}
-      onToggleOrchestrator={() => {}}
-    />,
-  )
-  expect(html).toContain('role="switch"')
-  expect(html).toContain('aria-checked="false"')
-  expect(html).toContain('<button')
-  // Interactive → NOT the read-only reflect.
-  expect(html).not.toContain('aria-readonly="true"')
-})
-
-test("P4-8b — the 'session' variant stays READ-ONLY when no toggle callback is present", () => {
-  // No callback (defensive / launcher-parity) → the honest read-only span, no button.
-  const html = renderToStaticMarkup(
-    <WelcomeScreen variant="session" cwd="/w" branch={null} accounts={null} orchestratorActive />,
-  )
-  expect(html).toContain('aria-readonly="true"')
-  expect(html).not.toContain('<button')
-})
-
-test('P4-8b — clicking the interactive Orchestrator calls the callback with the NEGATED active', () => {
-  // This package has no DOM click harness (AccountsPage.test.tsx convention), so
-  // the handler is exercised by invoking the hook-free component directly and
-  // reading its onClick off the returned element — the exact code path a click runs.
-  const calls: boolean[] = []
-  const onEl = OrchestratorReflect({ active: true, onToggle: next => calls.push(next) })
-  expect(onEl.props.role).toBe('switch')
-  expect(onEl.props['aria-checked']).toBe(true)
-  onEl.props.onClick()
-  expect(calls).toEqual([false]) // true → toggles OFF
-
-  const offEl = OrchestratorReflect({ active: false, onToggle: next => calls.push(next) })
-  offEl.props.onClick()
-  expect(calls).toEqual([false, true]) // false → toggles ON
-})
-
-test('P4-8b — without a callback OrchestratorReflect is a non-interactive read-only span', () => {
-  const el = OrchestratorReflect({ active: true })
-  expect(el.props['aria-readonly']).toBe('true')
-  expect(el.props.onClick).toBeUndefined()
 })

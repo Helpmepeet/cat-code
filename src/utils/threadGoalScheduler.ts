@@ -83,9 +83,6 @@ export type ThreadGoalSchedulerHost = {
     attemptId: string
   }): boolean | Promise<boolean>
 
-  /** Agent Mode changes the continuation prompt's guidance. */
-  isAgentMode?(): boolean
-
   /**
    * Work this goal is waiting on that has not finished.
    *
@@ -400,9 +397,7 @@ export function createThreadGoalScheduler(
     const prompt =
       kind === 'budget-wrap-up'
         ? renderThreadGoalBudgetLimitPrompt(goal)
-        : renderThreadGoalContinuationPrompt(goal, {
-            agentMode: host.isAgentMode?.() ?? false,
-          })
+        : renderThreadGoalContinuationPrompt(goal)
 
     let accepted = false
     try {

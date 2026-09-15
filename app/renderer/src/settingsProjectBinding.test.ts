@@ -14,6 +14,7 @@ function row(
     cwdExists: true,
     title: null,
     displayLabel: partial.appSessionId,
+    name: null,
     live: true,
     restorable: false,
     parked: false,

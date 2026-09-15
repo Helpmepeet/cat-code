@@ -75,7 +75,7 @@ const getTeammateModeSnapshot = () => require('./utils/swarm/backends/teammateMo
 // Dead code elimination: conditional import for COORDINATOR_MODE
 /* eslint-disable @typescript-eslint/no-require-imports */
 const coordinatorModeModule = feature('COORDINATOR_MODE') ? require('./coordinator/coordinatorMode.js') as typeof import('./coordinator/coordinatorMode.js') : null;
-const agentModeModule = feature('COORDINATOR_MODE') ? require('./agent-mode/agentMode.js') as typeof import('./agent-mode/agentMode.js') : null;
+const sessionModeModule = feature('COORDINATOR_MODE') ? require('./coordinator/coordinatorMode.js') as typeof import('./coordinator/coordinatorMode.js') : null;
 /* eslint-enable @typescript-eslint/no-require-imports */
 // Dead code elimination: conditional import for KAIROS (assistant mode)
 /* eslint-disable @typescript-eslint/no-require-imports */
@@ -87,7 +87,7 @@ import { getFeatureValue_CACHED_MAY_BE_STALE } from 'src/services/analytics/grow
 import { type AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS, logEvent } from 'src/services/analytics/index.js';
 import { initializeAnalyticsGates } from 'src/services/analytics/sink.js';
 import { getOriginalCwd, setAdditionalDirectoriesForClaudeMd, setIsRemoteMode, setMainLoopModelOverride, setMainThreadAgentType, setSessionProvider, setTeleportedSessionInfo } from './bootstrap/state.js';
-import { filterCommandsForRemoteMode, getCommands } from './commands.js';
+import { filterCommandsForRemoteMode, getCommands, isHeadlessSafeCommand } from './commands.js';
 import type { StatsStore } from './context/stats.js';
 import { launchAssistantInstallWizard, launchAssistantSessionChooser, launchInvalidSettingsDialog, launchResumeChooser, launchSnapshotUpdateDialog, launchTeleportRepoMismatchDialog, launchTeleportResumeWrapper } from './dialogLaunchers.js';
 import { SHOW_CURSOR } from './ink/termio/dec.js';
@@ -99,7 +99,7 @@ import { getMcpToolsCommandsAndResources, prefetchAllMcpResources } from './serv
 import { VALID_INSTALLABLE_SCOPES, VALID_UPDATE_SCOPES } from './services/plugins/pluginCliCommands.js';
 import { initBundledSkills } from './skills/bundled/index.js';
 import type { AgentColorName } from './tools/AgentTool/agentColorManager.js';
-import { getActiveAgentsFromList, getAgentDefinitionsWithOverrides, isBuiltInAgent, isCustomAgent, parseAgentsFromJson } from './tools/AgentTool/loadAgentsDir.js';
+import { getActiveAgentsFromList, getAgentDefinitionsWithOverrides, isBuiltInAgent, isCustomAgent, parseAgentsFlag } from './tools/AgentTool/loadAgentsDir.js';
 import type { LogOption } from './types/logs.js';
 import type { Message as MessageType } from './types/message.js';
 import { assertMinVersion } from './utils/autoUpdater.js';
@@ -149,7 +149,8 @@ import { registerMcpXaaIdpCommand } from 'src/commands/mcp/xaaIdpCommand.js';
 import { logPermissionContextForAnts } from 'src/services/internalLogging.js';
 import { fetchClaudeAIMcpConfigsIfEligible } from 'src/services/mcp/claudeai.js';
 import { clearServerCache } from 'src/services/mcp/client.js';
-import { areMcpConfigsAllowedWithEnterpriseMcpConfig, dedupClaudeAiMcpServers, doesEnterpriseMcpConfigExist, filterMcpServersByPolicy, getClaudeCodeMcpConfigs, getMcpServerSignature, parseMcpConfig, parseMcpConfigFromFilePath } from 'src/services/mcp/config.js';
+import { areMcpConfigsAllowedWithEnterpriseMcpConfig, dedupClaudeAiMcpServers, doesEnterpriseMcpConfigExist, filterMcpServersByPolicy, getClaudeCodeMcpConfigs, getMcpServerSignature, isMcpServerDisabled, parseMcpConfig, parseMcpConfigFromFilePath } from 'src/services/mcp/config.js';
+import { applyMcpServerStateUpdate, seedMcpServerStates } from 'src/services/mcp/mcpState.js';
 import { excludeCommandsByServer, excludeResourcesByServer } from 'src/services/mcp/utils.js';
 import { isXaaEnabled } from 'src/services/mcp/xaaIdpLogin.js';
 import { getRelevantTips } from 'src/services/tips/tipRegistry.js';
@@ -166,7 +167,7 @@ import { getFsImplementation, safeResolvePath } from 'src/utils/fsOperations.js'
 import { gracefulShutdown, gracefulShutdownSync } from 'src/utils/gracefulShutdown.js';
 import { setAllHookEventsEnabled } from 'src/utils/hooks/hookEvents.js';
 import { refreshModelCapabilities } from 'src/utils/model/modelCapabilities.js';
-import { peekForStdinData, writeToStderr } from 'src/utils/process.js';
+import { peekForStdinData, stdinPeekBudgetMs, writeToStderr } from 'src/utils/process.js';
 import { setCwd } from 'src/utils/Shell.js';
 import { DeferredContinuationBusyError, type ProcessedResume, processResumedConversation } from 'src/utils/sessionRestore.js';
 import { TranscriptInUseError } from './utils/transcriptLease.js';
@@ -506,7 +507,7 @@ function initializeEntrypoint(isNonInteractive: boolean): void {
     return;
   }
 
-  // Note: 'local-agent' entrypoint is set by the local agent mode launcher
+  // Note: the 'local-agent' entrypoint is set by the local-agent launcher
   // via CLAUDE_CODE_ENTRYPOINT env var (handled by early return above)
 
   // Set based on interactive status
@@ -835,6 +836,11 @@ async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json
     if (inputFormat === 'stream-json') {
       return process.stdin;
     }
+    // Budget depends on whether a positional prompt was supplied: stdin is the
+    // only input source without one, and merely supplementary with one. Never
+    // skipped outright, or `cat notes.txt | cat-code -p "summarize"` would
+    // silently drop the file.
+    const stdinBudgetMs = stdinPeekBudgetMs(prompt);
     process.stdin.setEncoding('utf8');
     let data = '';
     const onData = (chunk: string) => {
@@ -846,9 +852,12 @@ async function getInputPrompt(prompt: string, inputFormat: 'text' | 'stream-json
     // without explicit stdin handling). 3s covers slow producers like curl,
     // jq on large files, python with import overhead. The warning makes
     // silent data loss visible for the rare producer that's slower still.
-    const timedOut = await peekForStdinData(process.stdin, 3000);
+    const timedOut = await peekForStdinData(process.stdin, stdinBudgetMs);
     process.stdin.off('data', onData);
-    if (timedOut) {
+    // Only worth saying when stdin was the only possible input. With a
+    // positional prompt in hand, proceeding without stdin is the normal case,
+    // not a degraded one, so warning on it is the noise this path removes.
+    if (timedOut && prompt.length === 0) {
       process.stderr.write('Warning: no stdin data received in 3s, proceeding without it. ' + 'If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\n');
     }
     return [prompt, data].filter(Boolean).join('\n');
@@ -986,7 +995,7 @@ async function run(): Promise<CommanderCommand> {
       throw new InvalidArgumentError(`It must be one of: ${allowed.join(', ')}`);
     }
     return value;
-  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--agent-mode', 'Start the session with agent mode enabled.', () => true).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
+  })).option('--agent <agent>', `Agent for the current session. Overrides the 'agent' setting.`).option('--betas <betas...>', 'Beta headers to include in API requests (API key users only)').option('--fallback-model <model>', 'Enable automatic fallback to specified model when default model is overloaded (only works with --print)').addOption(new Option('--workload <tag>', 'Workload tag for billing-header attribution (cc_workload). Process-scoped; set by SDK daemon callers that spawn subprocesses for cron work. (only works with --print)').hideHelp()).option('--settings <file-or-json>', 'Path to a settings JSON file or a JSON string to load additional settings from').option('--add-dir <directories...>', 'Additional directories to allow tool access to').option('--ide', 'Automatically connect to IDE on startup if exactly one valid IDE is available', () => true).option('--strict-mcp-config', 'Only use MCP servers from --mcp-config, ignoring all other MCP configurations', () => true).option('--session-id <uuid>', 'Use a specific session ID for the conversation (must be a valid UUID)').option('-n, --name <name>', 'Set a display name for this session (shown in /resume and terminal title)').option('--agents <json>', 'JSON object defining custom agents (e.g. \'{"reviewer": {"description": "Reviews code", "prompt": "You are a code reviewer"}}\')').option('--setting-sources <sources>', 'Comma-separated list of setting sources to load (user, project, local).')
   // gh-33508: <paths...> (variadic) consumed everything until the next
   // --flag. `claude --plugin-dir /path mcp add --transport http` swallowed
   // `mcp` and `add` as paths, then choked on --transport as an unknown
@@ -1989,14 +1998,18 @@ async function run(): Promise<CommanderCommand> {
     // Parse CLI agents if provided via --agents flag
     let cliAgents: typeof agentDefinitionsResult.activeAgents = [];
     if (agentsJson) {
-      try {
-        const parsedAgents = safeParseJSON(agentsJson);
-        if (parsedAgents) {
-          cliAgents = parseAgentsFromJson(parsedAgents, 'flagSettings');
-        }
-      } catch (error) {
-        logError(error);
+      // Fail closed like --mcp-config above: a rejected payload must not start
+      // a session that silently has none of the agents the user asked for.
+      const parseResult = parseAgentsFlag(agentsJson, 'flagSettings');
+      if (parseResult.errors.length > 0) {
+        const details = parseResult.errors.join('\n');
+        logForDebugging(`--agents validation failed: ${details}`, {
+          level: 'error'
+        });
+        process.stderr.write(`Error: Invalid agent configuration:\n${details}\n`);
+        process.exit(1);
       }
+      cliAgents = parseResult.agents;
     }
 
     // Merge CLI agents with existing ones
@@ -2101,9 +2114,9 @@ async function run(): Promise<CommanderCommand> {
     resolvedInitialModel = parseUserSpecifiedModel(initialMainLoopModel ?? defaultStartupModel);
 
     // Provider-sensitive tools must be selected only after the startup model has
-    // resolved the session provider. In particular, OpenAI uses Apply_patch's
+    // resolved the session provider. In particular, OpenAI uses apply_patch's
     // custom grammar while Anthropic uses the normal Edit object schema.
-    // Selecting tools earlier can send Apply_patch to Anthropic and make the
+    // Selecting tools earlier can send apply_patch to Anthropic and make the
     // entire request fail schema validation before inference begins.
     maybeActivateProactive(options);
     let tools = getTools(toolPermissionContext);
@@ -2281,7 +2294,7 @@ async function run(): Promise<CommanderCommand> {
         }
       }
 
-      // Check for pending agent memory snapshot updates (only for --agent mode, ant-only)
+      // Check for pending agent memory snapshot updates for custom agents.
       if (feature('AGENT_MEMORY_SNAPSHOT') && mainThreadAgentDefinition && isCustomAgent(mainThreadAgentDefinition) && mainThreadAgentDefinition.memory && mainThreadAgentDefinition.pendingSnapshotUpdate) {
         const agentDef = mainThreadAgentDefinition;
         const choice = await launchSnapshotUpdateDialog(root, {
@@ -2654,7 +2667,7 @@ async function run(): Promise<CommanderCommand> {
 
       // Headless mode supports all prompt commands and some local commands
       // If disableSlashCommands is true, return empty array
-      const commandsHeadless = disableSlashCommands ? [] : commands.filter(command => command.type === 'prompt' && !command.disableNonInteractive || command.type === 'local' && command.supportsNonInteractive);
+      const commandsHeadless = disableSlashCommands ? [] : commands.filter(isHeadlessSafeCommand);
       const defaultState = getDefaultAppState();
       const headlessInitialState: AppState = {
         ...defaultState,
@@ -2719,36 +2732,23 @@ async function run(): Promise<CommanderCommand> {
       // Only store allowed betas (filters by allowlist and subscriber status)
       setSdkBetas(filterAllowedSdkBetas(betas));
 
-      // Print-mode MCP: per-server incremental push into headlessStore.
-      // Mirrors useManageMCPConnections — push pending first (so ToolSearch's
+      // Print-mode MCP: per-server incremental push through the shared state transition.
+      // Push pending first (so ToolSearch's
       // pending-check at ToolSearchTool.ts:334 sees them), then replace with
       // connected/failed as each server settles.
       const connectMcpBatch = (configs: Record<string, ScopedMcpServerConfig>, label: string): Promise<void> => {
         if (Object.keys(configs).length === 0) return Promise.resolve();
-        headlessStore.setState(prev => ({
-          ...prev,
-          mcp: {
-            ...prev.mcp,
-            clients: [...prev.mcp.clients, ...Object.entries(configs).map(([name, config]) => ({
-              name,
-              type: 'pending' as const,
-              config
-            }))]
-          }
-        }));
-        return getMcpToolsCommandsAndResources(({
-          client,
-          tools,
-          commands
-        }) => {
+        headlessStore.setState(prev => {
+          const mcp = seedMcpServerStates(prev.mcp, configs, isMcpServerDisabled);
+          return mcp === prev.mcp ? prev : {
+            ...prev,
+            mcp
+          };
+        });
+        return getMcpToolsCommandsAndResources(result => {
           headlessStore.setState(prev => ({
             ...prev,
-            mcp: {
-              ...prev.mcp,
-              clients: prev.mcp.clients.some(c => c.name === client.name) ? prev.mcp.clients.map(c => c.name === client.name ? client : c) : [...prev.mcp.clients, client],
-              tools: uniqBy([...prev.mcp.tools, ...tools], 'name'),
-              commands: uniqBy([...prev.mcp.commands, ...commands], 'name')
-            }
+            mcp: applyMcpServerStateUpdate(prev.mcp, result)
           }));
         }, configs).catch(err => logForDebugging(`[MCP] ${label} connect error: ${err}`));
       };
@@ -2786,10 +2786,7 @@ async function run(): Promise<CommanderCommand> {
           }
           if (suppressed.size > 0) {
             logForDebugging(`[MCP] Lazy dedup: suppressing ${suppressed.size} plugin server(s) that duplicate claude.ai connectors: ${[...suppressed].join(', ')}`);
-            // Disconnect before filtering from state. Only connected
-            // servers need cleanup — clearServerCache on a never-connected
-            // server triggers a real connect just to kill it (memoize
-            // cache-miss path, see useManageMCPConnections.ts:870).
+            // Disconnect connected clients before filtering them from state.
             for (const c of headlessStore.getState().mcp.clients) {
               if (!suppressed.has(c.name) || c.type !== 'connected') continue;
               c.client.onclose = undefined;
@@ -3159,7 +3156,7 @@ async function run(): Promise<CommanderCommand> {
 
     // Shared context for processResumedConversation calls
     const resumeContext = {
-      modeApi: agentModeModule,
+      modeApi: sessionModeModule,
       mainThreadAgentDefinition,
       agentDefinitions,
       currentCwd,
@@ -3845,7 +3842,7 @@ async function run(): Promise<CommanderCommand> {
       maybeActivateBrief(options);
       // Persist the current mode for fresh sessions so future resumes know what mode was used
       if (feature('COORDINATOR_MODE')) {
-        saveMode(agentModeModule?.getCurrentSessionMode() ?? 'normal');
+        saveMode(sessionModeModule?.getCurrentSessionMode() ?? 'normal');
       }
 
       // If launched via a deep link, show a provenance banner so the user

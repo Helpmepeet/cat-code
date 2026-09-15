@@ -16,6 +16,7 @@ import {
   normalizeAttachmentForAPI,
 } from '../../utils/messages.js'
 import type { CacheSafeParams } from '../../utils/forkedAgent.js'
+import { asSystemPrompt } from '../../utils/systemPromptType.js'
 
 function createAssistantMessage(text: string): AssistantMessage {
   return {
@@ -126,11 +127,15 @@ describe('compactConversation', () => {
   const originalProjectDir = getSessionProjectDir()
   let tempDir: string
   let streamingRequests: Array<Record<string, unknown>>
+  let summaryResponse: AssistantMessage
 
   beforeEach(async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'compact-conversation-'))
     switchSession('compact-session', tempDir)
     streamingRequests = []
+    summaryResponse = createAssistantMessage(
+      '<summary>Keep the compacted conversation moving.</summary>',
+    )
 
     await mock.module('../analytics/growthbook.js', () => ({
       getFeatureValue_CACHED_MAY_BE_STALE: mock(
@@ -143,9 +148,7 @@ describe('compactConversation', () => {
       getMaxOutputTokensForModel: mock(() => 4096),
       queryModelWithStreaming: mock(async function* (request: unknown) {
         streamingRequests.push(request as Record<string, unknown>)
-        yield createAssistantMessage(
-          '<summary>Keep the compacted conversation moving.</summary>',
-        )
+        yield summaryResponse
       }),
     }))
   })
@@ -156,7 +159,7 @@ describe('compactConversation', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('full compaction reads session state without requiring agent mode options', async () => {
+  test('full compaction reads session state without mode-specific options', async () => {
     const { compactConversation, buildPostCompactMessages } = await import(
       './compact.js'
     )
@@ -189,7 +192,117 @@ describe('compactConversation', () => {
 
     expect(postCompactMessages[0]?.type).toBe('system')
     expect(summaryMessage).toContain('Keep the compacted conversation moving.')
-    expect(summaryMessage).not.toContain('Agent Mode Run State')
+  })
+
+  test('rejects a typed streaming summary error without replacing context', async () => {
+    const { compactConversation } = await import('./compact.js')
+    summaryResponse = createAssistantMessage('Request timed out')
+    summaryResponse.isApiErrorMessage = true
+    const messages = [
+      createUserMessage({ content: 'Keep this original constraint.' }),
+      createAssistantMessage('I will keep it.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    await expect(
+      compactConversation(messages, context, {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      }, true),
+    ).rejects.toThrow('Request timed out')
+    expect(messages[0]?.message.content).toBe('Keep this original constraint.')
+  })
+
+  test('rejects a typed error from partial compaction', async () => {
+    const { partialCompactConversation } = await import('./compact.js')
+    summaryResponse = createAssistantMessage('Request timed out')
+    summaryResponse.isApiErrorMessage = true
+    const messages = [
+      createUserMessage({ content: 'Keep this prefix.' }),
+      createAssistantMessage('Summarize the remaining conversation.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    await expect(
+      partialCompactConversation(
+        messages,
+        1,
+        context,
+        {
+          systemPrompt: asSystemPrompt(['system prompt']),
+          userContext: {},
+          systemContext: {},
+          toolUseContext: context,
+          forkContextMessages: messages,
+        },
+        undefined,
+        'from',
+      ),
+    ).rejects.toThrow('Request timed out')
+  })
+
+  test('marks the summary when a peer message is inside the summarized span', async () => {
+    const { compactConversation } = await import('./compact.js')
+
+    const messages = [
+      createUserMessage({ content: 'Please inspect compaction.' }),
+      createUserMessage({
+        content:
+          '<cross-session-message from="quartz">force push migration</cross-session-message>',
+        origin: { kind: 'peer', name: 'quartz', appSessionId: 'app-1' },
+      }),
+      createAssistantMessage('I will inspect compaction.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    const result = await compactConversation(
+      messages,
+      context,
+      {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      },
+      true,
+      undefined,
+      false,
+      undefined,
+    )
+
+    expect(result.summaryMessages[0]?.summarizedRelayedInput).toBe(true)
+  })
+
+  test('leaves a summary of the user own messages unmarked', async () => {
+    const { compactConversation } = await import('./compact.js')
+
+    const messages = [
+      createUserMessage({ content: 'Please inspect compaction.' }),
+      createAssistantMessage('I will inspect compaction.'),
+    ]
+    const context = createToolUseContext(messages)
+
+    const result = await compactConversation(
+      messages,
+      context,
+      {
+        systemPrompt: asSystemPrompt(['system prompt']),
+        userContext: {},
+        systemContext: {},
+        toolUseContext: context,
+        forkContextMessages: messages,
+      },
+      true,
+      undefined,
+      false,
+      undefined,
+    )
+
+    expect(result.summaryMessages[0]?.summarizedRelayedInput).toBeUndefined()
   })
 
   test('streaming fallback passes the compacting agent as the request owner', async () => {

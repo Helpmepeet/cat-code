@@ -68,6 +68,18 @@ export type SessionActionKind =
    */
   | 'reveal-hidden'
   | 'hide-hidden'
+  /**
+   * PEER-SESSIONS §6 — the user's standing "don't let peers reopen this session"
+   * decision, and the ONE user-side control over the ruling that a peer message
+   * may wake a closed session.
+   *
+   * ONE kind, not the `reveal-hidden`/`hide-hidden` pair: that pair exists
+   * because its two states are two different verbs with two different glyphs
+   * (show vs hide), while this row is a single standing decision whose state is
+   * rendered as a check, not as a relabelled verb. The label must stay constant
+   * for that to read as a setting rather than as an action.
+   */
+  | 'peer-wake-blocked'
 
 /** Menu grouping (dividers between non-empty sections), mirroring the prototype. */
 export type SessionActionSection = 'primary' | 'view' | 'transfer'
@@ -82,6 +94,17 @@ export type SessionActionItem = {
   reason?: string
   /** Destructive styling. No destructive verb survives recon today (all CUT). */
   danger?: boolean
+  /**
+   * Present iff this row is a TOGGLE that carries its own persisted state, and
+   * it is the state itself, never a request. A row without it is an ordinary
+   * verb; a row with it renders as a checkable menu item and dispatches the SAME
+   * kind either way, so the parent sends the opposite of what it sees here.
+   *
+   * It exists because a durable decision the user alone can clear
+   * (PEER-SESSIONS §6) cannot be a fire-and-forget action: a control that writes
+   * persisted state and then cannot show it is a lie about that state.
+   */
+  checked?: boolean
   /**
    * P4-30 — this row HOSTS a side submenu instead of acting (the prototype's
    * `hasFlyout` Copy row, `SessionActions.jsx:172-182`). A hosting row is never
@@ -125,6 +148,11 @@ const DEFER = {
     'Open or restore this session first. Rename and Export run in its live engine, which a closed session has stopped.',
   notOpen:
     'Open this session first. Its transcript is only readable while it is the attached tab.',
+  // PEER-SESSIONS §6 — a transcript the app has never opened has nothing to hold
+  // this decision, and no peer can name it either, so there is nothing to block.
+  // Says the surprising half (why it is moot here), not the obvious half.
+  notTracked:
+    'Open this session here first. Peers can only reopen sessions opened in this app.',
   exporting:
     'Wait for this response to finish before exporting. The saved transcript is still being updated.',
 } as const
@@ -146,6 +174,11 @@ export function resolveSessionActions(
   // an undeliverable result.
   const live = row.live === true && ctx.hasEngine !== false
   const exportable = live && ctx.hasActiveTurn !== true
+  // PEER-SESSIONS §6 — is there a row for the user's peer-reopen decision to be
+  // written on? `appSessionId` rather than `inRegistry` because the id IS what
+  // the write names, so this gates on the argument the dispatch actually needs;
+  // the merge sets the two together, so they never disagree.
+  const tracked = row.appSessionId != null
   // P4-36 — the reveal changes what the TRANSCRIPT PANE draws, so it is offered
   // only for the row that IS the attached tab (the same reason Copy and
   // Inspect-metadata are active-open gated), and only when that transcript
@@ -192,6 +225,24 @@ export function resolveSessionActions(
       section: 'primary',
       enabled: live,
       ...(live ? {} : { reason: DEFER.notLive }),
+    },
+    {
+      // PEER-SESSIONS §6 — a per-session STANDING DECISION, so it sits in
+      // `primary` beside the other things that are true of the session itself,
+      // not in `view` (what this window draws) or `transfer` (what leaves it).
+      //
+      // Deliberately NOT gated on `live`, unlike Rename and Export. Those two
+      // dispatch a verb into the session's own running engine and are impossible
+      // without one; this writes host-side state about the row and reaches no
+      // engine at all. Gating it on live would disable it for exactly the rows it
+      // exists for — the parked and closed ones a peer can wake — which is the
+      // whole reason §6 asked for it.
+      kind: 'peer-wake-blocked',
+      label: 'Don’t let peers reopen',
+      section: 'primary',
+      enabled: tracked,
+      checked: row.peerWakeBlocked === true,
+      ...(tracked ? {} : { reason: DEFER.notTracked }),
     },
     ...hiddenTier,
     {

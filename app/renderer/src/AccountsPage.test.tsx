@@ -444,9 +444,8 @@ test('a capped account that is ALSO the default renders a pink dot (precedence) 
   expect(html).toContain('text-tone-danger">Usage limit hit')
 })
 
-test('the weekly headroom bar is blank while the 5h bar shows the ↺ reset (single usageResetAt)', () => {
-  // §0 DATA GAP: the wire carries ONE usageResetAt (the 5h window), so the ↺-reset
-  // indicator shows on the 5h bar and is left blank on the weekly bar — never faked.
+test('the weekly and 5h headroom bars each show their own reset', () => {
+  const now = Math.floor(Date.now() / 1000)
   const snap = snapshot([
     account({
       id: 'acc-1',
@@ -455,16 +454,17 @@ test('the weekly headroom bar is blank while the 5h bar shows the ↺ reset (sin
       isDefault: false,
       usagePrimary: 42,
       usageWeekly: 70,
-      usageResetAt: Math.floor(Date.now() / 1000) + 3 * 3600,
+      usageResetAt: now + 3 * 3600,
+      usageWeeklyResetAt: now + 4 * 3600,
       availabilityLabel: 'Ready',
     }),
   ])
   const html = renderToStaticMarkup(
     <AccountsPage snapshot={snap} lastResult={null} onVerb={noop} />,
   )
-  // Exactly one ↺: the 5h bar. The weekly bar's reset slot is blank.
-  expect((html.match(/↺/g) ?? []).length).toBe(1)
-  expect(html).toContain('↺ in')
+  expect((html.match(/↺/g) ?? []).length).toBe(2)
+  expect(html).toContain('↺ in 3h')
+  expect(html).toContain('↺ in 4h')
 })
 
 test('usageTone thresholds: ≥90 danger, ≥65 warn, else good', () => {

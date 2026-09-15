@@ -10,7 +10,7 @@
  */
 
 import type { ComponentProps } from 'react'
-import type { SessionPane } from './App.js'
+import type { SessionPane } from './SessionPane.js'
 import { createTranscriptState } from './transcriptProjector.js'
 
 /** A minimal live, idle session pane. Spread and override the one field a test
@@ -19,7 +19,6 @@ export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
   return {
     accountsSnapshot: null,
     accountsLastResult: null,
-    orchestratorActive: false,
     activeConnection: { status: 'ready', inputEnabled: true },
     activeDescriptor: undefined,
     activeLog: {
@@ -46,7 +45,6 @@ export function idleSessionPaneProps(): ComponentProps<typeof SessionPane> {
     onPaste: () => {},
     onRemovePaste: () => {},
     onRevisePlan: () => {},
-    partialCount: 0,
     pastes: [],
     permissionContext: null,
     permissionQueue: [],

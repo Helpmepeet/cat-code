@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
+import { sessionDescriptorFixture } from '../shared/sessionDescriptor.fixture.js'
 import { PROTOCOL_VERSION, type ServerFrame } from '../shared/protocol.js'
 import type { TranscriptBackfillSessionResult } from '../shared/transcriptBackfill.js'
 import { readTranscriptRunFacts } from '../shared/transcriptRunFacts.js'
@@ -46,20 +47,15 @@ afterEach(() => {
 test('PL-B cache is admitted by PL-A and the later click stays store-first', async () => {
   const cacheDir = mkdtempSync(join(tmpdir(), 'catcode-plab-compose-'))
   dirs.push(cacheDir)
-  const descriptor: SessionDescriptor = {
+  const descriptor: SessionDescriptor = sessionDescriptorFixture({
     appSessionId: APP_ID,
     engineSessionId: ENGINE_ID,
     cwd: '/tmp',
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
     status: 'exited',
     restorable: true,
-    parked: false,
     createdAt: 1,
     lastAttachedAt: 2,
-    lastMessageSentAt: null,
-  }
+  })
   const result: TranscriptBackfillSessionResult = {
     type: 'session',
     appSessionId: APP_ID,

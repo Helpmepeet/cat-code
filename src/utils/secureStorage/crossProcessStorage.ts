@@ -1,8 +1,7 @@
 import { mkdirSync } from 'fs'
 import { join } from 'path'
 import { getClaudeConfigHomeDir } from '../envUtils.js'
-import { getErrnoCode } from '../errors.js'
-import { lockSync } from '../lockfile.js'
+import { acquireMutationLockSync } from '../lockfile.js'
 import { logForDebugging } from '../debug.js'
 import { clearKeychainCache } from './macOsKeychainHelpers.js'
 import type { SecureStorage, SecureStorageData } from './types.js'
@@ -72,37 +71,10 @@ function attachReadBase(data: SecureStorageData | null): SecureStorageData | nul
 function acquireStorageLock(): () => void {
   const configHome = getClaudeConfigHomeDir()
   mkdirSync(configHome, { recursive: true, mode: 0o700 })
-  const target = join(configHome, '.secure-storage-mutation')
-  const deadline = Date.now() + LOCK_WAIT_MS
-  for (;;) {
-    try {
-      const release = lockSync(target, {
-        realpath: false,
-        stale: 120_000,
-        update: 30_000,
-        onCompromised(error) {
-          logForDebugging(`Secure storage lock compromised: ${error.message}`, {
-            level: 'error',
-          })
-        },
-      })
-      let released = false
-      return () => {
-        if (released) return
-        released = true
-        try {
-          release()
-        } catch (error) {
-          if (getErrnoCode(error) !== 'ERELEASED') throw error
-        }
-      }
-    } catch (error) {
-      if (getErrnoCode(error) !== 'ELOCKED' || Date.now() >= deadline) {
-        throw error
-      }
-      Bun.sleepSync(20)
-    }
-  }
+  return acquireMutationLockSync(join(configHome, '.secure-storage-mutation'), {
+    label: 'Secure storage',
+    waitMs: LOCK_WAIT_MS,
+  })
 }
 
 export function createCrossProcessSafeStorage(

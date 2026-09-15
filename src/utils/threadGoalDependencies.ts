@@ -1,5 +1,5 @@
 import { getSessionId } from '../bootstrap/state.js'
-import { readSessionState } from '../agent-mode/sessionState.js'
+import { readSessionState } from './workerState.js'
 import type { ThreadGoalDependency } from './threadGoalWait.js'
 
 type KnownWorker = {
@@ -17,7 +17,7 @@ type KnownWorker = {
  * expensive one: a goal that thinks it is unblocked spends its whole turn
  * ceiling asking a worker whether it has finished.
  *
- * Agent Mode workers are the source today because they are the dependency the
+ * Worker sessions are the source today because they are the dependency the
  * engine already tracks durably and already blocks completion on. Processes,
  * approvals, and child sessions use the same wait vocabulary and can be added
  * here without touching the scheduler.
@@ -26,11 +26,10 @@ function toUnresolvedDependencies(
   workers: readonly KnownWorker[],
 ): ThreadGoalDependency[] {
   return workers
-    // ONLY genuinely running work. `synthesisStatus === 'pending'` is set when
-    // a worker COMPLETES and is cleared by the orchestrator reading its
-    // result, i.e. by this goal's own next turn. Parking on it deadlocked the
-    // goal against itself: it waited for something only the turn it refused to
-    // take could clear.
+    // ONLY genuinely running work. A completed worker's result is delivered to
+    // the parent session on its next turn. Parking on completed work deadlocked
+    // the goal against itself: it waited for something only the turn it refused
+    // to take could clear.
     .filter(worker => worker.status === 'running')
     .map(worker => ({
       kind: 'worker' as const,
@@ -65,7 +64,7 @@ export function createThreadGoalDependencyCache(): {
     async refresh() {
       try {
         const sessionState = await readSessionState(getSessionId())
-        const workers = sessionState?.knownWorkers ?? []
+        const workers = Object.values(sessionState?.knownWorkers ?? {})
         // Expansion counts EVERY worker the goal produced, not just the ones
         // still running: a goal that spawns and resolves one worker per turn
         // is still fanning out without bound.

@@ -15,7 +15,6 @@ export type AgentTypeKey =
   | 'implementor'
   | 'Explore'
   | 'coding-worker'
-  | 'agent-mode-coding-worker'
 
 export type AgentTypeMeta = {
   key: string
@@ -113,15 +112,6 @@ export const AGENT_TYPE_META = {
     color: '#a78bfa',
     soft: 'rgba(167,139,250,0.10)',
     line: 'rgba(167,139,250,0.24)',
-  },
-  'agent-mode-coding-worker': {
-    key: 'agent-mode-coding-worker',
-    label: 'Coding worker',
-    tone: 'purple',
-    color: '#a78bfa',
-    soft: 'rgba(167,139,250,0.10)',
-    line: 'rgba(167,139,250,0.24)',
-    compressedFrom: 'agent-mode-coding-worker',
   },
 } satisfies Record<AgentTypeKey, AgentTypeMeta>
 
@@ -268,7 +258,7 @@ export function agentStateMeta(state: AgentStateKey): AgentStateMeta {
 /**
  * Compressed lifecycle word for tight list/card contexts (P4-32b — the
  * prototype's `agentTranscriptStateWord`, `AgentIdentity.jsx:146`, and the same
- * compression `WStatusText`'s list mode applies, `OrchestratorMode.jsx:46`).
+ * compression `WStatusText`'s list mode applies, `worker prototype`).
  *
  * A row in a list has no room for "Result ready" or "In background", and the
  * distinctions those labels draw are not the ones a scanning reader needs: every
@@ -360,13 +350,13 @@ export function resolveAgentIdentity(data: AgentIdentitySource = {}): AgentIdent
   }
 }
 
-export function deriveAgentModeWorkerState(
-  worker: AgentModeWorkerSource,
+export function deriveWorkerState(
+  worker: WorkerSource,
 ): AgentStateKey {
-  if (worker.origin === 'prior' && worker.resumable === true) return 'resumable'
-  if (worker.origin === 'prior' && worker.resumable === false) return 'stale'
-  if (worker.synthesisStatus === 'pending') return 'result-ready'
-  if (worker.synthesisStatus === 'synthesized') return 'reviewed'
+  if (worker.handoffStatus === 'blocked') return 'waiting'
+  if (worker.status === 'running' && worker.isBackgrounded === true) {
+    return 'background'
+  }
   if (worker.status === 'failed') return 'failed'
   if (worker.status === 'killed') return 'stopped'
   if (worker.status === 'completed') return 'completed'
@@ -376,15 +366,9 @@ export function deriveAgentModeWorkerState(
 export function deriveTaskAgentState(task: TaskAgentSource): AgentStateKey {
   if (task.type === 'local_agent') {
     if (task.handoffStatus === 'blocked') {
-      // A local_agent's blocked handoff (D2 `decisions/AGENT-CHROME.md`,
-      // prototype OrchestratorMode.jsx `workerStateKey`:163) waits on the
-      // assistant that delegated it, never on the user. The subagent's own
-      // result text carries the blocker back to the parent conversation, which
-      // is drained into a fresh turn with no human action
-      // (`src/tasks/LocalAgentTask/LocalAgentTask.tsx:273` →
-      // `app/sidecar/sidecarServer.ts:1209` / `src/hooks/useQueueProcessor.ts:48`).
-      // This used to return the amber 'needs-you' unconditionally, which told
-      // the user to act on a handoff already addressed to the model.
+      // A blocked handoff waits on the assistant that delegated it, never on
+      // the user. The worker's result carries the blocker back to the parent
+      // conversation, which queues a fresh turn without human action.
       return 'waiting'
     }
     if (task.status === 'running' && task.isBackgrounded === true) {
@@ -436,7 +420,7 @@ export function deriveAgentToolState(tool: AgentToolSource): AgentStateKey {
 export function deriveAgentState(source: AgentDisplaySource): AgentStateKey {
   if (isAgentToolSource(source)) return deriveAgentToolState(source)
   if (isTaskAgentSource(source)) return deriveTaskAgentState(source)
-  return deriveAgentModeWorkerState(source)
+  return deriveWorkerState(source)
 }
 
 export function deriveAgentDisplayVocabulary(
@@ -490,14 +474,12 @@ type AgentIdentitySource = StringFields & {
   identity?: unknown
 }
 
-export type AgentModeWorkerSource = AgentIdentitySource & {
+export type WorkerSource = AgentIdentitySource & {
   status: 'running' | 'completed' | 'failed' | 'killed'
-  synthesisStatus?: 'pending' | 'synthesized'
-  origin?: 'current' | 'prior'
-  resumable?: boolean
   role: string
   description: string
-  worktreePath?: string | null
+  isBackgrounded?: boolean
+  handoffStatus?: 'done' | 'blocked'
 }
 
 export type TaskAgentSource = AgentIdentitySource & {
@@ -530,7 +512,7 @@ export type AgentToolSource = AgentIdentitySource & {
 }
 
 export type AgentDisplaySource =
-  | AgentModeWorkerSource
+  | WorkerSource
   | TaskAgentSource
   | AgentToolSource
 

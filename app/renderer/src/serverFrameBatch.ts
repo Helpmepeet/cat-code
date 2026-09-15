@@ -3,8 +3,8 @@
  *
  * A restore replays its history as one batched `ServerFrame[]` delivery (main
  * `deliver` → preload `subscribe`). This module folds that batch into ONE
- * dispatch per store, so a 400-frame restore is 9 dispatches (one per reducer),
- * not 400×9 — the "one dispatch per reducer" the strategy called for. React then
+ * dispatch per store, so a restore costs one dispatch per reducer rather than
+ * one per frame — the "one dispatch per reducer" the strategy called for. React then
  * commits once. Extracted as a pure function so the batching is unit-tested on
  * the real path (see replayBatchRender.test.tsx), not left implicit in a React
  * callback that only works by automatic-batching happenstance.
@@ -55,7 +55,7 @@ export type ServerFrameBatchHandlers = {
   dispatchExtensions: (action: BatchAction<FrameReducerAction>) => void
   dispatchGoalMemory: (action: BatchAction<FrameReducerAction>) => void
   dispatchTasks: (action: BatchAction<FrameReducerAction>) => void
-  dispatchOrchestrator: (action: BatchAction<FrameReducerAction>) => void
+  dispatchWorkers: (action: BatchAction<FrameReducerAction>) => void
   dispatchLease: (action: BatchAction<FrameReducerAction>) => void
   dispatchAccounts: (action: BatchAction<FrameReducerAction>) => void
   dispatchWorkspaceTrust: (action: BatchAction<FrameReducerAction>) => void
@@ -103,7 +103,7 @@ export function applyServerFrameBatch(
   h.dispatchExtensions(batch(frameActions))
   h.dispatchGoalMemory(batch(frameActions))
   h.dispatchTasks(batch(frameActions))
-  h.dispatchOrchestrator(batch(frameActions))
+  h.dispatchWorkers(batch(frameActions))
   h.dispatchLease(batch(frameActions))
   h.dispatchAccounts(batch(frameActions))
   h.dispatchWorkspaceTrust(batch(frameActions))

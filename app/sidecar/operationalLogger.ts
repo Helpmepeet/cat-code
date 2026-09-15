@@ -40,6 +40,13 @@ const LIFECYCLE_EVENTS: ReadonlySet<string> = new Set([
   'sidecar.spawn.started', 'sidecar.spawn.failed', 'sidecar.socket.connected',
   'sidecar.ready', 'sidecar.disconnected', 'sidecar.exit',
   'session.restore.started', 'session.restore.completed', 'session.restore.failed',
+  // Turn lifecycle is bounded by real turns, not by failure repetition, so it
+  // cannot be the thing a stuck reader pins memory with: 28h of real use held
+  // 176 turns. It was classified `sample` and therefore shed first, which lost
+  // exactly the records that explain a turn — while six of the entries above it
+  // here have no emitter in the tree at all. `stalled` is `warn` and was already
+  // `anomaly`; it is named for symmetry so the three move together.
+  'session.turn.started', 'session.turn.completed', 'session.turn.stalled',
   'worker.started', 'worker.completed', 'worker.failed',
   'log.suppressed', 'log.coverage.incomplete',
 ])

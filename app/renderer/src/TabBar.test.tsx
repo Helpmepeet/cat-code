@@ -4,27 +4,7 @@ import type { SessionDescriptor } from '../../shared/hostApi.js'
 import { TabBar, type TabModel } from './TabBar.js'
 import { tabLabel } from './tabBarModel.js'
 import type { TabVisualState } from './tabStatus.js'
-
-function descriptor(
-  id: string,
-  overrides: Partial<SessionDescriptor> = {},
-): SessionDescriptor {
-  return {
-    appSessionId: id,
-    engineSessionId: `engine-${id}`,
-    cwd: `/tmp/${id}`,
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
-    ...overrides,
-  }
-}
+import { sessionDescriptor as descriptor } from './sessionDescriptorFixture.js'
 
 function tab(
   id: string,
@@ -193,12 +173,10 @@ test('no session-actions ⋯ renders when the TabBar is not wired for it', () =>
   expect(html).not.toContain('Session actions for')
 })
 
-test('no tab carries Orchestrator-mode chrome', () => {
-  // The mode switch was removed from the tab: a tab names a session, and the
-  // mode belongs to the surfaces that own it (the empty-state reflect and the
-  // footer strip), not to every tab in the bar.
+test('no tab carries worker chrome', () => {
+  // A tab names a session. Worker surfaces belong to the session body, not to
+  // every tab in the bar.
   const html = render([tab('a'), tab('b')], 'a')
-  expect(html).not.toContain('Orchestrator')
   expect(html).not.toContain('aria-pressed=')
 })
 

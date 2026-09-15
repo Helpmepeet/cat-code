@@ -1,6 +1,6 @@
 /**
- * Codex lease state (P4-32b, L1 — `decisions/ORCHESTRATOR-IN-SESSION.md` §7,
- * ruled 2026-07-30 §10): the renderer half of the read-only `lease.snapshot`
+ * Codex lease state (P4-32b, L1, ruled 2026-07-30): the renderer half of the
+ * read-only `lease.snapshot`
  * seam. Per-session snapshots plus read-time selectors; nothing is stored derived
  * and nothing is ever renderer-authored (there is no lease verb).
  *
@@ -9,7 +9,9 @@
  * than on the global Accounts page.
  */
 import type {
-  AgentModeWorkerItem,
+  AccountsSnapshot,
+  AccountStatus,
+  LiveWorkerItem,
   LeaseOwnerRow,
   LeaseSelectionKind,
   LeaseSnapshot,
@@ -19,10 +21,16 @@ import type {
   SessionId,
 } from '../../shared/protocol.js'
 import { createContext } from 'react'
-import { selectWorkerDisplayName } from './orchestratorState.js'
+import {
+  selectActiveAccount,
+  selectLastAccountsSnapshot,
+  type AccountsState,
+} from './accountsState.js'
+import { selectWorkerDisplayName } from './workersState.js'
 
 export type LeaseStateStore = {
   bySession: Record<SessionId, LeaseSnapshot | undefined>
+  lastMainFailoverAccountIds: Record<SessionId, string | undefined>
 }
 
 export type LeaseAction =
@@ -30,7 +38,7 @@ export type LeaseAction =
   | { type: 'session-removed'; sessionId: SessionId }
 
 export function createLeaseState(): LeaseStateStore {
-  return { bySession: {} }
+  return { bySession: {}, lastMainFailoverAccountIds: {} }
 }
 
 export function reduceLeaseState(
@@ -38,17 +46,56 @@ export function reduceLeaseState(
   action: LeaseAction,
 ): LeaseStateStore {
   if (action.type === 'session-removed') {
-    if (!(action.sessionId in state.bySession)) return state
+    if (
+      !(action.sessionId in state.bySession) &&
+      !(action.sessionId in state.lastMainFailoverAccountIds)
+    ) {
+      return state
+    }
     const bySession = { ...state.bySession }
+    const lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
     delete bySession[action.sessionId]
-    return { ...state, bySession }
+    delete lastMainFailoverAccountIds[action.sessionId]
+    return { ...state, bySession, lastMainFailoverAccountIds }
   }
   const { frame } = action
 
   if (frame.kind === 'lease.snapshot') {
+    const mainLease = selectLeaseForOwner(frame.leases, MAIN_LEASE_OWNER_ID)
+    const holdingMainLease =
+      mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding' ? mainLease : null
+    const previousFailoverAccountId = state.lastMainFailoverAccountIds[frame.sessionId]
+    let lastMainFailoverAccountIds = state.lastMainFailoverAccountIds
+
+    if (holdingMainLease?.selectionKind === 'failover') {
+      lastMainFailoverAccountIds = {
+        ...state.lastMainFailoverAccountIds,
+        [frame.sessionId]: holdingMainLease.accountId,
+      }
+    } else if (
+      previousFailoverAccountId &&
+      holdingMainLease &&
+      holdingMainLease.accountId !== previousFailoverAccountId
+    ) {
+      lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
+      delete lastMainFailoverAccountIds[frame.sessionId]
+    }
+
     return {
       bySession: { ...state.bySession, [frame.sessionId]: frame.leases },
+      lastMainFailoverAccountIds,
     }
+  }
+
+  if (
+    frame.kind === 'account.result' &&
+    frame.verb === 'account.switch' &&
+    frame.ok &&
+    frame.sessionId in state.lastMainFailoverAccountIds
+  ) {
+    const lastMainFailoverAccountIds = { ...state.lastMainFailoverAccountIds }
+    delete lastMainFailoverAccountIds[frame.sessionId]
+    return { ...state, lastMainFailoverAccountIds }
   }
 
   // A dead session's leases are gone with its engine process (the lease map is
@@ -56,6 +103,7 @@ export function reduceLeaseState(
   if (frame.kind === 'lifecycle') {
     return {
       bySession: { ...state.bySession, [frame.sessionId]: undefined },
+      lastMainFailoverAccountIds: state.lastMainFailoverAccountIds,
     }
   }
 
@@ -70,11 +118,19 @@ export function selectLeaseSnapshot(
   return snapshot ?? null
 }
 
+export function selectLastMainFailoverAccountId(
+  state: LeaseStateStore,
+  sessionId: SessionId | null,
+): string | null {
+  if (!sessionId) return null
+  return state.lastMainFailoverAccountIds?.[sessionId] ?? null
+}
+
 /* ── read-time derivations ─────────────────────────────────────────────────── */
 
 /**
  * The lease held by one owner, or null. `ownerId` is the subagent's `agentId`
- * (the roster's `AgentModeWorkerItem.agentId`) or `'main-thread'`; see the
+ * (the roster's `LiveWorkerItem.agentId`) or `'main-thread'`; see the
  * protocol JOIN KEY note. Null is the ordinary case for an Anthropic-path
  * session or a worker that has not made a Codex request yet.
  */
@@ -84,6 +140,90 @@ export function selectLeaseForOwner(
 ): LeaseOwnerRow | null {
   if (!snapshot || !ownerId) return null
   return snapshot.owners.find(owner => owner.ownerId === ownerId) ?? null
+}
+
+/** The engine's owner id for the main lease (`src/query.ts`, protocol JOIN KEY note). */
+const MAIN_LEASE_OWNER_ID = 'main-thread'
+
+export type SessionCodexAccountSources = {
+  /**
+   * The roster the pane is already rendering — the host-global pool whenever one
+   * exists (`composerRailModel.ts` `railAccounts`). It stays the source of every
+   * displayed FIELD (usage, health, alias); only which row is active is resolved
+   * here.
+   */
+  roster: AccountsSnapshot | null
+  /** This session's own lease snapshot (`selectLeaseSnapshot`). */
+  leases: LeaseSnapshot | null
+  /** The last account reached by this session's successful main-thread failover. */
+  lastMainFailoverAccountId?: string | null
+  accounts: AccountsState
+  sessionId: SessionId | null
+}
+
+/**
+ * Which Codex account a session is actually ROUTING through, as a row of the
+ * roster already on screen.
+ *
+ * The roster's own `isDefault` cannot answer this. It flags the PERSISTED active
+ * account, read off disk by the disposable accounts-pool worker, while a session
+ * is its own engine process holding its own in-memory `activeIndex`. Two ways
+ * that drifts, both real:
+ *  - another pane switches accounts, persisting B, and every pane's face starts
+ *    saying B while this one still runs on C;
+ *  - a failover moves a session's lease mid-turn. A MAIN-thread failover does
+ *    converge on its own, because `withRetry` follows it with
+ *    `persistMainLeaseActiveAccount` (`src/services/api/withRetry.ts:39,634`) and
+ *    the pool catches up; but the global roster is republished by a worker on a
+ *    60s timer, so until then the face still names the account the requests left.
+ *    A SUBAGENT failover is not persisted at all — only main is.
+ *
+ * Order, freshest identity first:
+ *  1. this session's ACTIVE main-thread lease — the routing identity of a live
+ *     turn. A failed lease keeps the account id it could NOT use, so only a
+ *     holding one names an account (the `selectLeaseForLabel` refusal, reused).
+ *  2. this session's last successful main-thread failover, retained after the
+ *     per-turn lease release because that release does not refresh accounts.
+ *  3. this session's OWN accounts snapshot, built from its in-memory pool —
+ *     `selectLastAccountsSnapshot`, so a parked or crashed session keeps naming
+ *     what it actually ran on instead of falling back to a persisted account it
+ *     never used. That selector exists for this face and is display-only; the
+ *     switcher's arming is decided separately by `canSwitchAccount`.
+ *  4. the roster's persisted active account, i.e. the previous behaviour.
+ *
+ * Between turns there is legitimately no main lease: the engine registers it per
+ * turn and releases it in a `finally`, and the sidecar drops synthesised leases.
+ * So step 1 coming up empty is the ORDINARY case and step 2 carries it.
+ *
+ * An id the roster does not contain falls through to the next step rather than
+ * rendering an invented or empty row: a wrong account is worse than a stale one.
+ */
+export function selectSessionCodexAccount(
+  sources: SessionCodexAccountSources,
+): AccountStatus | null {
+  const { accounts, lastMainFailoverAccountId, leases, roster, sessionId } = sources
+  const rows = roster?.accounts ?? []
+  const rosterRow = (accountId: string): AccountStatus | null =>
+    rows.find(row => row.id === accountId) ?? null
+
+  const mainLease = selectLeaseForOwner(leases, MAIN_LEASE_OWNER_ID)
+  if (mainLease && LEASE_STATE_ROLE[mainLease.state] === 'holding') {
+    const leased = rosterRow(mainLease.accountId)
+    if (leased) return leased
+  }
+
+  if (lastMainFailoverAccountId) {
+    const failedOver = rosterRow(lastMainFailoverAccountId)
+    if (failedOver) return failedOver
+  }
+
+  const own = selectActiveAccount(selectLastAccountsSnapshot(accounts, sessionId))
+  if (own) {
+    const owned = rosterRow(own.id)
+    if (owned) return owned
+  }
+
+  return selectActiveAccount(roster)
 }
 
 /**
@@ -327,7 +467,7 @@ function leaseGroupLabel(owner: LeaseOwnerRow): string {
 
 function toLeaseAgentRow(
   owner: LeaseOwnerRow,
-  workersById: ReadonlyMap<string, AgentModeWorkerItem>,
+  workersById: ReadonlyMap<string, LiveWorkerItem>,
   nowMs: number,
 ): LeaseAgentRow {
   const isMain = owner.ownerType === 'main'
@@ -362,7 +502,7 @@ function toLeaseAgentRow(
  */
 export function selectLeaseGroups(
   snapshot: LeaseSnapshot | null,
-  workers: readonly AgentModeWorkerItem[],
+  workers: readonly LiveWorkerItem[],
   nowMs: number,
 ): LeaseAccountGroup[] {
   if (!snapshot) return []

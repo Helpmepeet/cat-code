@@ -23,7 +23,7 @@ import {
   getCommandSubcommandPrefix,
   splitCommand_DEPRECATED,
 } from '../../utils/bash/commands.js'
-import { parseCommandRaw } from '../../utils/bash/parser.js'
+import { parseCommandRaw, type Node } from '../../utils/bash/parser.js'
 import { tryParseShellCommand } from '../../utils/bash/shellQuote.js'
 import { getCwd } from '../../utils/cwd.js'
 import { logForDebugging } from '../../utils/debug.js'
@@ -706,6 +706,94 @@ export function stripWrappersFromArgv(argv: string[]): string[] {
  * security boundary anyway.
  */
 export const BINARY_HIJACK_VARS = /^(LD_|DYLD_|PATH$)/
+
+const LOOKUP_ALTERING_ASSIGNMENT_NAME_RE =
+  /^(?:PATH|path|BASH_ENV|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*)$/
+
+function isLookupAlteringAssignmentName(name: string | undefined): boolean {
+  return name !== undefined && LOOKUP_ALTERING_ASSIGNMENT_NAME_RE.test(name)
+}
+
+function getVariableAssignmentName(node: Node): string | undefined {
+  if (node.type !== 'variable_assignment') return undefined
+  return (
+    node.children.find(child => child.type === 'variable_name')?.text ??
+    /^([A-Za-z_][A-Za-z0-9_]*)\+?=/.exec(node.text)?.[1]
+  )
+}
+
+function getDeclarationAssignmentName(text: string): string | undefined {
+  return /^(['"]?)([A-Za-z_][A-Za-z0-9_]*)\1\+?=/.exec(text)?.[2]
+}
+
+function hasLookupAlteringAssignmentInAst(root: Node): boolean {
+  const visit = (node: Node): boolean => {
+    if (isLookupAlteringAssignmentName(getVariableAssignmentName(node))) {
+      return true
+    }
+
+    if (node.type === 'for_statement') {
+      const loopVariable = node.children.find(
+        child => child.type === 'variable_name',
+      )?.text
+      if (isLookupAlteringAssignmentName(loopVariable)) return true
+    }
+
+    if (node.type === 'declaration_command') {
+      for (const child of node.children) {
+        if (
+          child.type === 'word' ||
+          child.type === 'string' ||
+          child.type === 'raw_string' ||
+          child.type === 'concatenation'
+        ) {
+          if (
+            isLookupAlteringAssignmentName(
+              getDeclarationAssignmentName(child.text),
+            )
+          ) {
+            return true
+          }
+        }
+      }
+    }
+
+    return node.children.some(visit)
+  }
+
+  return visit(root)
+}
+
+const LOOKUP_ALTERING_ASSIGNMENT_SOURCE_RE =
+  /(?:^|[;&|\n])[ \t]*(?:(?:export|declare|typeset|readonly|local)[ \t]+)?["']?(?:PATH|path|BASH_ENV|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*)["']?\+?=/
+const LOOKUP_ALTERING_LOOP_SOURCE_RE =
+  /\bfor[ \t]+(?:PATH|path|BASH_ENV|LD_[A-Za-z0-9_]*|DYLD_[A-Za-z0-9_]*)[ \t]+in\b/
+
+function hasLookupAlteringAssignment(
+  command: string,
+  root: Node | null | symbol,
+): boolean {
+  if (root !== null && typeof root !== 'symbol') {
+    if (hasLookupAlteringAssignmentInAst(root)) return true
+  }
+  return (
+    LOOKUP_ALTERING_ASSIGNMENT_SOURCE_RE.test(command) ||
+    LOOKUP_ALTERING_LOOP_SOURCE_RE.test(command)
+  )
+}
+
+function lookupAlteringAssignmentPermissionResult(): PermissionResult {
+  const decisionReason: PermissionDecisionReason = {
+    type: 'other',
+    reason: 'Lookup-altering environment assignments require approval',
+  }
+  return {
+    behavior: 'ask',
+    message: createPermissionRequestMessage(BashTool.name, decisionReason),
+    decisionReason,
+    suggestions: [],
+  }
+}
 
 /**
  * Strip ALL leading env var prefixes from a command, regardless of whether the
@@ -1690,6 +1778,7 @@ export async function bashToolHasPermission(
     : feature('TREE_SITTER_BASH_SHADOW') && !shadowEnabled
       ? null
       : await parseCommandRaw(input.command)
+  const lookupAssignmentAstRoot = astRoot
   let astResult: ParseForSecurityResult = astRoot
     ? parseForSecurityFromAst(input.command, astRoot)
     : { kind: 'parse-unavailable' }
@@ -1805,12 +1894,19 @@ export async function bashToolHasPermission(
     astCommands = astResult.commands
   }
 
-  // Legacy shell-quote pre-check. Only reached on 'parse-unavailable'
-  // (tree-sitter not loaded OR TREE_SITTER_BASH feature gated off). Falls
+  // Legacy shell-quote pre-check. Reached on 'parse-unavailable', which has
+  // THREE causes, not two: tree-sitter not loaded, TREE_SITTER_BASH gated off,
+  // or shadow mode forcing it above so legacy stays authoritative. Falls
   // through to the full legacy path below.
   if (astResult.kind === 'parse-unavailable') {
+    // Shadow mode is the common case in a dev build, and reporting it as
+    // "unavailable" was a false claim about a permission-path component:
+    // 9,025 such lines across 126 sessions asserted the parser was missing
+    // while it was loaded and working exactly as designed.
     logForDebugging(
-      'bashToolHasPermission: tree-sitter unavailable, using legacy shell-quote path',
+      shadowEnabled
+        ? 'bashToolHasPermission: tree-sitter in shadow mode, legacy shell-quote path is authoritative'
+        : 'bashToolHasPermission: tree-sitter unavailable, using legacy shell-quote path',
     )
     const parseResult = tryParseShellCommand(input.command)
     if (!parseResult.success) {
@@ -1826,9 +1922,24 @@ export async function bashToolHasPermission(
     }
   }
 
+  const lookupAssignmentDetected = hasLookupAlteringAssignment(
+    input.command,
+    lookupAssignmentAstRoot,
+  )
+  const earlyExactMatchResult = lookupAssignmentDetected
+    ? bashToolCheckExactMatchPermission(input, appState.toolPermissionContext)
+    : null
+  if (
+    earlyExactMatchResult?.behavior === 'deny' ||
+    earlyExactMatchResult?.behavior === 'ask'
+  ) {
+    return earlyExactMatchResult
+  }
+
   // Check sandbox auto-allow (which respects explicit deny/ask rules)
   // Only call this if sandboxing and auto-allow are both enabled
   if (
+    !lookupAssignmentDetected &&
     SandboxManager.isSandboxingEnabled() &&
     SandboxManager.isAutoAllowBashIfSandboxedEnabled() &&
     shouldUseSandbox(input)
@@ -1968,6 +2079,13 @@ export async function bashToolHasPermission(
         }
       }
     }
+  }
+
+  if (
+    lookupAssignmentDetected &&
+    earlyExactMatchResult?.behavior !== 'allow'
+  ) {
+    return lookupAlteringAssignmentPermissionResult()
   }
 
   // Check for non-subcommand Bash operators like `>`, `|`, etc.
@@ -2335,6 +2453,27 @@ export async function bashToolHasPermission(
     return exactMatchResult
   }
 
+  // SECURITY: Decide the empty case explicitly, before either `.every()`
+  // below can decide it by accident. A command that is only variable
+  // assignments (`FOO=bar`) parses to zero commands, so both `.every(...)`
+  // checks are vacuously true AND the injection re-check maps over the same
+  // empty array and finds nothing — the command was reaching 'allow' because
+  // nothing was examined, not because anything passed. It is still an allow:
+  // an assignment stores a value, and every assignment in the command was
+  // validated by walkVariableAssignment (integer-attribute arithmetic
+  // evaluation, IFS, PS4, tilde, and command substitution all reject there).
+  // Deny and ask rules have already had their say above.
+  if (subcommands.length === 0) {
+    return {
+      behavior: 'allow',
+      updatedInput: input,
+      decisionReason: {
+        type: 'other',
+        reason: 'Command contains no executable commands, only assignments',
+      },
+    }
+  }
+
   // If all subcommands are allowed via exact or prefix match, allow the
   // command — but only if no command injection is possible. When the AST
   // parse succeeded, each subcommand is already known-safe (no hidden
@@ -2365,7 +2504,11 @@ export async function bashToolHasPermission(
       })
     }
   }
+  // The length guard is a tripwire, not the decision: the empty case returns
+  // above. `.every()` on an empty array is true, so without it any future
+  // path that reaches here with nothing to check would allow silently.
   if (
+    subcommandPermissionDecisions.length > 0 &&
     subcommandPermissionDecisions.every(_ => _.behavior === 'allow') &&
     !hasPossibleCommandInjection
   ) {
@@ -2452,7 +2595,9 @@ export async function bashToolHasPermission(
 
   // Allow if all subcommands are allowed
   // Note that this is different than 6b because we are checking the command injection results.
+  // Same empty-array tripwire as the check above.
   if (
+    subcommands.length > 0 &&
     subcommands.every(subcommand => {
       const permissionResult = subcommandResults.get(subcommand)
       return permissionResult?.behavior === 'allow'

@@ -16,27 +16,7 @@ import {
   sortSidebarSessionRows,
 } from './sidebarState.js'
 import type { MergedSessionRow } from './sessionsCatalogState.js'
-
-function descriptor(
-  id: string,
-  overrides: Partial<SessionDescriptor> = {},
-): SessionDescriptor {
-  return {
-    appSessionId: id,
-    engineSessionId: `engine-${id}`,
-    cwd: `/tmp/${id}`,
-    title: null,
-    forked: false,
-    titleUpdatedAt: null,
-    status: 'ready',
-    restorable: false,
-    parked: false,
-    createdAt: 0,
-    lastAttachedAt: 0,
-    lastMessageSentAt: null,
-    ...overrides,
-  }
-}
+import { sessionDescriptor as descriptor } from './sessionDescriptorFixture.js'
 
 function added(session: SessionDescriptor) {
   return { type: 'session-added', session } as const
@@ -332,6 +312,7 @@ function mergedRow(over: Partial<MergedSessionRow> = {}): MergedSessionRow {
     cwdExists: true,
     title: null,
     displayLabel: 'X',
+    name: null,
     live: true,
     restorable: false,
     parked: false,

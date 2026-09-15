@@ -8,15 +8,10 @@ import {
   SIDEBAR_WIDTH_STORAGE_KEY,
   writeSidebarWidthToStorage,
 } from './sidebarWidth.js'
-
-function memoryStorage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    store,
-  }
-}
+import {
+  memoryStorage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 const WIDE = 2560
 
@@ -115,14 +110,7 @@ test('a null storage disables persistence without throwing', () => {
 })
 
 test('a throwing storage is survived on both sides', () => {
-  const hostile = {
-    getItem: () => {
-      throw new Error('blocked')
-    },
-    setItem: () => {
-      throw new Error('blocked')
-    },
-  }
+  const hostile = throwingStorage('blocked')
   expect(readSidebarWidthFromStorage(hostile)).toBe(null)
   expect(() => writeSidebarWidthToStorage(hostile, 320)).not.toThrow()
 })

@@ -100,7 +100,7 @@ export function TodoPlanPanel({ plan }: { plan: TodoPlan }) {
  * The byline readout plus its panel. `group` is the hover/focus host, and the
  * span is focusable so the panel is reachable without a pointer — the roster's
  * popover took the same `group-hover:/group-focus-within:` pair for the same
- * reason (`OrchestratorRoster.tsx:86-88`).
+ * reason (`WorkerRoster.tsx:86-88`).
  *
  * `title` carries what the bare fraction cannot say on its own, the way the
  * context gauge and the token byline already do.

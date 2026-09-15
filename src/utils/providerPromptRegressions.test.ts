@@ -8,7 +8,6 @@ import {
 } from '../bootstrap/state.js'
 import { getTools } from '../tools.js'
 import {
-  getAgentModeSystemPromptSections,
   getDefaultAgentPrompt,
   getSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
@@ -18,15 +17,31 @@ import {
   getGPTUsingToolsSection,
 } from '../constants/promptStyles/gpt.js'
 import { FILE_PATCH_TOOL_NAME } from '../tools/FilePatchTool/constants.js'
+import { FILE_PATCH_LARK_GRAMMAR } from '../tools/FilePatchTool/grammar.js'
+
+// Command availability is filtered by auth, so an assembly built with no
+// credential anywhere throws before it reaches the prompt under test. The
+// value is never sent: nothing here makes a request.
+process.env.ANTHROPIC_API_KEY ??= 'test-key'
+process.env.OPENAI_API_KEY ??= 'test-key'
 import { buildProviderInstructionAssembly } from '../services/api/instructionAssembly.js'
 import { getEditToolDescription } from '../tools/FileEditTool/prompt.js'
 import { FilePatchTool } from '../tools/FilePatchTool/FilePatchTool.js'
 import { getFilePatchToolDescription } from '../tools/FilePatchTool/prompt.js'
 import { getWriteToolDescription } from '../tools/FileWriteTool/prompt.js'
 import { GrepTool } from '../tools/GrepTool/GrepTool.js'
-import { normalizeToolInput, splitSysPromptPrefix, toolToAPISchema } from './api.js'
+import { getDescription as getGrepDescription } from '../tools/GrepTool/prompt.js'
+import { getPrompt as getPowerShellPrompt } from '../tools/PowerShellTool/prompt.js'
+import { getImplementorSystemPrompt } from '../tools/AgentTool/built-in/implementorAgent.js'
+import {
+  normalizeToolInput,
+  prependUserContext,
+  splitSysPromptPrefix,
+  toolToAPISchema,
+} from './api.js'
 import { createUserMessage, normalizeMessagesForAPI } from './messages.js'
 import {
+  OPENAI_PROPERTY_RENAMES,
   renameOpenAIInputKeysToOriginal,
   renameSchemaPropertiesForOpenAI,
 } from './openaiSchemaCompat.js'
@@ -140,40 +155,6 @@ describe('provider and prompt regressions', () => {
     expect(prompt).not.toContain('powered by Claude')
   })
 
-  test('OpenAI agent-mode instructions retain the non-interactive identity prefix', async () => {
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      setSessionProvider('openai')
-      setIsInteractive(false)
-
-      const systemPrompt = await getAgentModeSystemPromptSections(
-        [],
-        'gpt-5.6-luna',
-        [],
-        [],
-      )
-      const assembly = buildProviderInstructionAssembly({
-        provider: 'openai',
-        messages: [],
-        systemPrompt,
-        userContext: {},
-        systemContext: {},
-      })
-
-      expect(assembly.openAIInstructionAssembly?.instructions).toStartWith(
-        'You are an agent for Cat Code.',
-      )
-    } finally {
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
-  })
-
   test('an OpenAI worker on an ambiguous model gets the OpenAI prompt style', async () => {
     setSessionProvider('firstParty')
 
@@ -192,7 +173,7 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('OpenAI exports Apply_patch as a custom tool schema', async () => {
+  test('OpenAI exports apply_patch with the canonical custom grammar', async () => {
     setSessionProvider('openai')
 
     const schema = await toolToAPISchema(FilePatchTool, {
@@ -203,20 +184,26 @@ describe('provider and prompt regressions', () => {
     })
 
     expect(schema).toMatchObject({
-      name: 'Apply_patch',
+      name: 'apply_patch',
       openai_tool_type: 'custom',
       openai_tool_format: {
         type: 'grammar',
         syntax: 'lark',
-        definition: 'start: /(.|\\n)*/',
+        definition: FILE_PATCH_LARK_GRAMMAR,
       },
     })
+    expect(FILE_PATCH_LARK_GRAMMAR).toContain('*** Begin Patch')
+    expect(FILE_PATCH_LARK_GRAMMAR).toContain('*** End Patch')
+    expect(FILE_PATCH_LARK_GRAMMAR).not.toBe('start: /(.|\\n)*/')
   })
 
-  test('FileWrite prompt variants keep the same underlying rules', () => {
-    expect(
-      normalizeConstraintLines(getWriteToolDescription('firstParty')),
-    ).toEqual(normalizeConstraintLines(getWriteToolDescription('openai')))
+  test('FileWrite prompt names the provider-specific edit tool', () => {
+    expect(getWriteToolDescription('firstParty')).toContain(
+      'check whether Edit is the better tool. Prefer Edit',
+    )
+    expect(getWriteToolDescription('openai')).toContain(
+      'check whether apply_patch is the better tool. Prefer apply_patch',
+    )
   })
 
   test('FileWrite requires a complete Read before whole-file replacement', () => {
@@ -227,7 +214,7 @@ describe('provider and prompt regressions', () => {
     expect(prompt).toContain('targeted edit tool instead of Write')
   })
 
-  test('OpenAI uses Apply_patch prompt instead of FileEdit prompt', () => {
+  test('OpenAI uses apply_patch prompt instead of FileEdit prompt', () => {
     expect(getFilePatchToolDescription()).toContain('*** Begin Patch')
     expect(getFilePatchToolDescription()).toContain('*** Update File')
     expect(getFilePatchToolDescription()).toContain('*** End of File')
@@ -236,11 +223,17 @@ describe('provider and prompt regressions', () => {
     )
   })
 
-  test('GPT doing-tasks guidance references Apply_patch when available', () => {
-    const section = getGPTDoingTasksSection(new Set(['Read', 'Apply_patch']))
-
-    expect(section).toContain('prior Read tool result before emitting an Apply_patch')
-    expect(section).not.toContain('prior Read tool result before emitting an Edit')
+  test('GPT doing-tasks carries read-before-modify only when an edit tool is present', () => {
+    // The rule names no tool any more, so what is testable is the gate: it
+    // needs both an edit tool and a way to read the file first.
+    for (const editTool of ['apply_patch', 'Edit']) {
+      expect(getGPTDoingTasksSection(new Set(['Read', editTool]), 'gpt-5.6')).toContain(
+        'Read before modifying:',
+      )
+    }
+    expect(getGPTDoingTasksSection(new Set(['Read']), 'gpt-5.6')).not.toContain(
+      'Read before modifying:',
+    )
   })
 
   test('normalizeMessagesForAPI preserves raw Apply_patch tool_use input for executable handoff', () => {
@@ -379,34 +372,34 @@ describe('provider and prompt regressions', () => {
     ])
   })
 
-  test('tool registry switches Edit vs Apply_patch by provider, including simple mode', () => {
+  test('tool registry switches Edit vs apply_patch by provider, including simple mode', () => {
     const originalSimple = process.env.CLAUDE_CODE_SIMPLE
 
     try {
       setSessionProvider('openai')
       const openaiTools = getTools(getEmptyToolPermissionContext()).map(tool => tool.name)
-      expect(openaiTools).toContain('Apply_patch')
+      expect(openaiTools).toContain('apply_patch')
       expect(openaiTools).not.toContain('Edit')
 
       process.env.CLAUDE_CODE_SIMPLE = '1'
       const openaiSimpleTools = getTools(getEmptyToolPermissionContext()).map(
         tool => tool.name,
       )
-      expect(openaiSimpleTools).toContain('Apply_patch')
+      expect(openaiSimpleTools).toContain('apply_patch')
       expect(openaiSimpleTools).not.toContain('Edit')
 
       setSessionProvider('firstParty')
       delete process.env.CLAUDE_CODE_SIMPLE
       const claudeTools = getTools(getEmptyToolPermissionContext()).map(tool => tool.name)
       expect(claudeTools).toContain('Edit')
-      expect(claudeTools).not.toContain('Apply_patch')
+      expect(claudeTools).not.toContain('apply_patch')
 
       process.env.CLAUDE_CODE_SIMPLE = '1'
       const claudeSimpleTools = getTools(getEmptyToolPermissionContext()).map(
         tool => tool.name,
       )
       expect(claudeSimpleTools).toContain('Edit')
-      expect(claudeSimpleTools).not.toContain('Apply_patch')
+      expect(claudeSimpleTools).not.toContain('apply_patch')
     } finally {
       if (originalSimple === undefined) {
         delete process.env.CLAUDE_CODE_SIMPLE
@@ -415,13 +408,197 @@ describe('provider and prompt regressions', () => {
       }
     }
   })
-  // The patch format mandates relative paths without naming the base, so a
-  // session rooted below the project root resolves them one level too deep.
-  test('GPT tool rules state where patch paths resolve, only when that tool is live', () => {
+  // The exposed tool description owns the path base. Keep that contract while
+  // removing its duplicate from the main prompt.
+  test('apply_patch description owns path resolution without a duplicate system rule', async () => {
     const withPatchTool = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
-    expect(withPatchTool).toContain('resolved against the session working directory')
+    const description = (await FilePatchTool.prompt()).replace(/\s+/g, ' ')
+    expect(description).toContain('current session working directory')
+    expect(withPatchTool).not.toContain('PATHS:')
+  })
 
-    const withoutPatchTool = getGPTUsingToolsSection(new Set())
-    expect(withoutPatchTool).not.toContain('resolved against the session working directory')
+  test('GPT tool rules carry the apply_patch mutation rule and the diff check', () => {
+    const section = getGPTUsingToolsSection(new Set([FILE_PATCH_TOOL_NAME]))
+
+    expect(section).toContain('Use apply_patch for local file edits.')
+    expect(section).toContain(
+      'Do not create or edit files with cat, heredocs, or other shell write tricks.',
+    )
+    expect(section).toContain(
+      'Formatting commands and bulk mechanical rewrites do not need apply_patch.',
+    )
+    expect(section).toContain(
+      'Do not use Python to read or write files when a simple shell command or apply_patch is enough.',
+    )
+    expect(section).toContain(
+      'After any file mutation performed by a command rather than by apply_patch, Write, or NotebookEdit',
+    )
+    expect(section).toContain('show the resulting git diff before moving on')
+    expect(section).toContain(
+      'show git diff --stat and git status --short instead',
+    )
+    expect(section).toContain('Never skip the check.')
+
+    expect(section).not.toContain('no dedicated tool')
+  })
+
+  test('GPT read discipline permits shell reads and states why Read is the default', () => {
+    const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
+
+    expect(guidance).toContain('`rg`')
+    expect(guidance).toContain('`sed -n` line ranges')
+    expect(guidance).toContain('`git blame`')
+    expect(guidance).toContain('bounded (offset/limit) and numbered')
+  })
+
+  test('the Claude system prompt keeps its own dedicated-tool wording', async () => {
+    setSessionProvider('firstParty')
+
+    const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+
+    expect(prompt).toContain('To edit files use Edit instead of sed or awk')
+    expect(prompt).toContain(
+      'To read files use Read instead of cat, head, tail, or sed',
+    )
+    expect(prompt).not.toContain('Use apply_patch for local file edits')
+    expect(prompt).not.toContain('show the resulting git diff before moving on')
+  })
+
+  test('GrepTool prompt on GPT allows rg in Bash while Claude strictly forbids it', () => {
+    const gptPrompt = getGrepDescription('openai')
+    expect(gptPrompt).toContain('Targeted `rg` commands through Bash are also permitted')
+    expect(gptPrompt).not.toContain('NEVER invoke `grep` or `rg` as a Bash command')
+
+    const claudePrompt = getGrepDescription('firstParty')
+    expect(claudePrompt).toContain('NEVER invoke `grep` or `rg` as a Bash command')
+  })
+
+  test('FilePatchTool prompt refers to apply_patch as a tool, not a shell command', () => {
+    const desc = getFilePatchToolDescription()
+    expect(desc).toContain('Use the `apply_patch` tool to edit files')
+    expect(desc).not.toContain('shell command')
+    expect(desc).toContain(
+      'Patch paths resolve relative to the current session working directory.',
+    )
+    expect(desc).toContain(
+      'Later tools, including `apply_patch`, use the updated directory',
+    )
+  })
+
+  test('PowerShellTool prompt distinguishes GPT hybrid policy from Claude strict policy', async () => {
+    const gptPsPrompt = await getPowerShellPrompt('openai')
+    expect(gptPsPrompt).toContain('FILE MUTATIONS: Use apply_patch for local file edits')
+    expect(gptPsPrompt).toContain('READS AND SEARCH: `rg`, `rg --files`')
+    expect(gptPsPrompt).toContain('Edit files: Use apply_patch')
+
+    const claudePsPrompt = await getPowerShellPrompt('firstParty')
+    expect(claudePsPrompt).toContain('DO NOT use it for file operations')
+    expect(claudePsPrompt).toContain('Edit files: Use Edit')
+    expect(claudePsPrompt).not.toContain('apply_patch')
+  })
+
+  test('Implementor prompt names the session edit tool rather than both aliases simultaneously', () => {
+    setSessionProvider('openai')
+    const openaiPrompt = getImplementorSystemPrompt('openai')
+    expect(openaiPrompt).toContain('Use apply_patch and Write for code changes')
+    expect(openaiPrompt).not.toContain('Use Edit, apply_patch, and Write')
+
+    setSessionProvider('firstParty')
+    const claudePrompt = getImplementorSystemPrompt('firstParty')
+    expect(claudePrompt).toContain('Use Edit and Write for code changes')
+    expect(claudePrompt).not.toContain('apply_patch')
+  })
+
+  test('the user-context wrapper does not deny authority to claudeMd', () => {
+    // The wrapper called everything inside it metadata, while the claudeMd
+    // block carries MEMORY_INSTRUCTION_PROMPT saying those instructions
+    // OVERRIDE default behavior. Claude-path only; GPT appends claudeMd
+    // straight into `instructions`.
+    const originalNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'development'
+    try {
+      const [contextMessage] = prependUserContext([], {
+        claudeMd: 'Never run bare `bun test`.',
+      })
+      const text = JSON.stringify(contextMessage?.message.content ?? '')
+
+      expect(text).toContain('# claudeMd')
+      expect(text).not.toContain('not as a user instruction')
+      expect(text).toContain('a block whose own header states its authority')
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv
+    }
+  })
+
+  test('Grep output_mode does not name properties the OpenAI export renames', () => {
+    const outputMode = GrepTool.inputSchema.shape.output_mode
+    const description = outputMode.description ?? ''
+
+    // OPENAI_PROPERTY_RENAMES maps -A/-B/-C/-n/-i to identifier-safe names on
+    // the OpenAI schema, so naming the dash form pointed at keys that model
+    // never sees. The per-property "(rg -A)" notes are semantics, not keys.
+    for (const dashKey of Object.keys(OPENAI_PROPERTY_RENAMES)) {
+      expect(description).not.toContain(dashKey)
+    }
+    expect(description).toContain(
+      'supports context lines, line numbers, head_limit',
+    )
+  })
+
+  test('--dump-system-prompt renders the tool-gated rules a session gets', async () => {
+    setSessionProvider('openai')
+
+    const withTools = (
+      await getSystemPrompt(
+        getTools(getEmptyToolPermissionContext()),
+        'gpt-5.6-sol',
+      )
+    ).join('\n')
+    const withoutTools = (await getSystemPrompt([], 'gpt-5.6-sol')).join('\n')
+
+    // The dump used to pass an empty tool list, so these gated rules were
+    // missing and file routing named Edit instead of Apply_patch — evals built
+    // on the dump measured a prompt no session runs.
+    expect(withTools).toContain('AGENT TOOL:')
+    expect(withTools).toContain('TASK TRACKING:')
+    expect(withTools).toContain(`Use ${FILE_PATCH_TOOL_NAME} for local file edits.`)
+    expect(withoutTools).not.toContain('AGENT TOOL:')
+    expect(withoutTools).not.toContain(
+      `Use ${FILE_PATCH_TOOL_NAME} for local file edits.`,
+    )
+
+    // Guard the call site itself: the dump path is an entrypoint fast path
+    // with no other coverage.
+    const cliSource = await Bun.file(
+      new URL('../entrypoints/cli.tsx', import.meta.url).pathname,
+    ).text()
+    expect(cliSource).not.toContain('getSystemPrompt([], model)')
+    expect(cliSource).toContain(
+      'getSystemPrompt(getTools(getEmptyToolPermissionContext()), model)',
+    )
+  })
+
+  test('restricted GPT tool sets only emit rules for the tools they hold', () => {
+    const restrictedSection = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
+    // Every rule keyed on a tool this set does not hold stays out: no edit
+    // tool, no Agent tool, no task-tracking tool.
+    expect(restrictedSection).not.toContain('RULE — File mutations')
+    expect(restrictedSection).not.toContain('PATHS:')
+    expect(restrictedSection).not.toContain('AGENT TOOL:')
+    expect(restrictedSection).not.toContain('AGENT FORK:')
+    expect(restrictedSection).not.toContain('AGENT TYPES:')
+    expect(restrictedSection).not.toContain('EXPLORE RULE:')
+    expect(restrictedSection).not.toContain('TASK TRACKING:')
+    // Deliberate tripwire: the `RULE — Tool routing` block that named a tool
+    // per file operation was deleted, so no arrow routing line may return.
+    expect(restrictedSection).not.toContain('File editing →')
+    // The rules that hold for any tool set still ship.
+    expect(restrictedSection).toContain('READ DISCIPLINE:')
+    expect(restrictedSection).toContain('through the Bash tool')
+    expect(restrictedSection).toContain('RULE — Show the diff:')
+    expect(restrictedSection).toContain('PARALLELISM:')
+    expect(restrictedSection).toContain(
+      'Never run file mutations concurrently when their paths overlap or may alias',
+    )
   })
 })

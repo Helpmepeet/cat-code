@@ -516,23 +516,70 @@ export function parseAgentFromJson(
 }
 
 /**
+ * Result of parsing an agents payload. `errors` is non-empty when the payload
+ * was rejected: callers must surface it rather than starting with the agents
+ * silently dropped. Each entry is already user-readable ("name.field: reason").
+ */
+export type ParsedAgentsFromJson = {
+  agents: AgentDefinition[]
+  errors: string[]
+}
+
+/**
  * Parses multiple agents from a JSON object
  */
 export function parseAgentsFromJson(
   agentsJson: unknown,
   source: SettingSource = 'flagSettings',
-): AgentDefinition[] {
-  try {
-    const parsed = AgentsJsonSchema().parse(agentsJson)
-    return Object.entries(parsed)
-      .map(([name, def]) => parseAgentFromJson(name, def, source))
-      .filter((agent): agent is CustomAgentDefinition => agent !== null)
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
-    logForDebugging(`Error parsing agents from JSON: ${errorMessage}`)
-    logError(error)
-    return []
+): ParsedAgentsFromJson {
+  const parsed = AgentsJsonSchema().safeParse(agentsJson)
+  if (!parsed.success) {
+    const errors = parsed.error.issues.map(issue =>
+      issue.path.length > 0
+        ? `${issue.path.join('.')}: ${issue.message}`
+        : issue.message,
+    )
+    logForDebugging(`Error parsing agents from JSON: ${errors.join('; ')}`)
+    return { agents: [], errors }
   }
+
+  const agents: AgentDefinition[] = []
+  const errors: string[] = []
+  for (const [name, def] of Object.entries(parsed.data)) {
+    const agent = parseAgentFromJson(name, def, source)
+    if (agent) {
+      agents.push(agent)
+    } else {
+      // The record schema above already validated every definition, so this
+      // only fires when building the agent itself failed (bad tool list, bad
+      // hook shape). parseAgentFromJson logged the detail.
+      errors.push(
+        `${name}: this agent could not be loaded. Check its tools, hooks, and model.`,
+      )
+    }
+  }
+  return { agents, errors }
+}
+
+/**
+ * Parses the --agents payload, which arrives as a raw JSON string. Malformed
+ * JSON is reported through the same `errors` list as an invalid definition so
+ * the caller has one thing to surface instead of two failure shapes.
+ */
+export function parseAgentsFlag(
+  agentsJson: string,
+  source: SettingSource = 'flagSettings',
+): ParsedAgentsFromJson {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(agentsJson)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    const message = `--agents is not valid JSON: ${detail}`
+    logForDebugging(message)
+    return { agents: [], errors: [message] }
+  }
+  return parseAgentsFromJson(parsed, source)
 }
 
 /**

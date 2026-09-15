@@ -39,7 +39,7 @@ const validSnapshot: SessionsCatalogSnapshot = {
       messageCount: 3,
       gitBranch: 'main',
       tag: null,
-      mode: 'agent',
+      mode: 'normal',
       agentSetting: null,
       prNumber: null,
       prRepository: null,
@@ -58,6 +58,18 @@ describe('readSessionsCatalogCache', () => {
     const dir = tempDir()
     writeRaw(dir, JSON.stringify(validSnapshot))
     expect(readSessionsCatalogCache(dir)).toEqual(validSnapshot)
+  })
+
+  test('a legacy `agent` mode in the cache is normalized before reaching the app', () => {
+    const dir = tempDir()
+    writeRaw(
+      dir,
+      JSON.stringify({
+        ...validSnapshot,
+        entries: [{ ...validSnapshot.entries[0], mode: 'agent' }],
+      }),
+    )
+    expect(readSessionsCatalogCache(dir)?.entries[0]?.mode).toBe('normal')
   })
 
   // `notes` was dropped from the snapshot (nothing rendered it). A cache file

@@ -7,6 +7,7 @@ import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { createUserMessage } from '../../utils/messages.js'
 import { asSystemPrompt } from '../../utils/systemPromptType.js'
 import { queryModelWithStreaming } from './claude.js'
+import { translateCodexWsStreamToAnthropic } from './codex-fetch-adapter.js'
 import {
   CodexPartialStreamReplaySkippedError,
   parseCodexPartialStreamFailure,
@@ -14,6 +15,12 @@ import {
 } from './errorUtils.js'
 
 const encoder = new TextEncoder()
+
+function withFetchPreconnect(
+  implementation: (...args: Parameters<typeof fetch>) => ReturnType<typeof fetch>,
+): typeof fetch {
+  return Object.assign(implementation, { preconnect: fetch.preconnect })
+}
 
 function sseEvent(event: Record<string, unknown>): Uint8Array {
   return encoder.encode(
@@ -87,7 +94,7 @@ describe('Codex partial-stream recovery', () => {
       },
     ]
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       dispatchCount++
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
 
@@ -143,7 +150,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const consume = async () => {
       const events: unknown[] = []
@@ -209,7 +216,7 @@ describe('Codex partial-stream recovery', () => {
     macroState.MACRO = { VERSION: 'test-version' }
     const dispatchedStreamFlags: boolean[] = []
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
       dispatchedStreamFlags.push(body.stream === true)
       if (body.stream === true) {
@@ -254,7 +261,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const events: unknown[] = []
     for await (const event of queryModelWithStreaming({
@@ -282,6 +289,92 @@ describe('Codex partial-stream recovery', () => {
     expect(dispatchedStreamFlags).toEqual([true, false])
     expect(JSON.stringify(events)).toContain('answered by the fallback')
   })
+
+  test.each(['response.failed', 'response.incomplete'])(
+    '%s after an encrypted reasoning carrier does not dispatch a fallback',
+    async terminalType => {
+      process.env.ANTHROPIC_API_KEY = 'test-api-key'
+      fixturesRoot = mkdtempSync(join(tmpdir(), 'cat-code-vcr-'))
+      process.env.CLAUDE_CODE_TEST_FIXTURES_ROOT = fixturesRoot
+      macroState.MACRO = { VERSION: 'test-version' }
+      const dispatchedStreamFlags: boolean[] = []
+
+      const fetchOverride = withFetchPreconnect(async (_input, init) => {
+        const body = JSON.parse(String(init?.body)) as { stream?: boolean }
+        dispatchedStreamFlags.push(body.stream === true)
+        if (body.stream === true) {
+          return translateCodexWsStreamToAnthropic(
+            (async function* () {
+              yield {
+                type: 'response.output_item.done',
+                output_index: 0,
+                item: {
+                  type: 'reasoning',
+                  encrypted_content: 'synthetic-reasoning',
+                  summary: [],
+                },
+              }
+              yield {
+                type: terminalType,
+                response: {
+                  incomplete_details: { reason: 'max_output_tokens' },
+                  error: {
+                    code: 'invalid_request_error',
+                    message: 'Synthetic terminal provider failure',
+                  },
+                },
+              }
+            })(),
+            'gpt-5.6-luna',
+          )
+        }
+
+        return new Response(JSON.stringify({
+          id: 'msg_unexpected_fallback',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-sonnet-4-6',
+          content: [{ type: 'text', text: 'unexpected replay' }],
+          stop_reason: 'end_turn',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        }), {
+          headers: { 'content-type': 'application/json' },
+        })
+      })
+
+      const events: unknown[] = []
+      for await (const event of queryModelWithStreaming({
+        messages: [createUserMessage({ content: 'hello' })],
+        systemPrompt: asSystemPrompt(['You are a test assistant.']),
+        thinkingConfig: { type: 'disabled' },
+        tools: [],
+        signal: new AbortController().signal,
+        options: {
+          getToolPermissionContext: async () => getEmptyToolPermissionContext(),
+          model: 'claude-sonnet-4-6',
+          provider: 'firstParty',
+          isNonInteractiveSession: true,
+          querySource: 'compact',
+          agents: [],
+          hasAppendSystemPrompt: false,
+          fetchOverride,
+          mcpTools: [],
+        },
+      })) {
+        events.push(event)
+      }
+
+      expect(dispatchedStreamFlags).toEqual([true])
+      expect(JSON.stringify(events)).not.toContain('unexpected replay')
+      expect(events.some(event => (
+        event !== null &&
+        typeof event === 'object' &&
+        'isApiErrorMessage' in event &&
+        event.isApiErrorMessage === true
+      ))).toBe(true)
+    },
+  )
 
   test('a typed interruption keeps its structured marker and its sealed text', async () => {
     process.env.ANTHROPIC_API_KEY = 'test-api-key'
@@ -338,7 +431,7 @@ describe('Codex partial-stream recovery', () => {
       automaticContinuationEligible: true,
     }
 
-    const fetchOverride: typeof fetch = async (_input, init) => {
+    const fetchOverride = withFetchPreconnect(async (_input, init) => {
       dispatchCount++
       const body = JSON.parse(String(init?.body)) as { stream?: boolean }
       if (body.stream !== true) {
@@ -367,7 +460,7 @@ describe('Codex partial-stream recovery', () => {
           },
         },
       )
-    }
+    })
 
     const events: unknown[] = []
     for await (const event of queryModelWithStreaming({

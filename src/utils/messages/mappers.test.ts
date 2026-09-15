@@ -19,7 +19,7 @@ import {
 } from '../messages.js'
 
 /**
- * `MessageOrigin` (src/types/message.ts:10) has six kinds; five are engine
+ * `MessageOrigin` (src/types/message.ts:10) has eight kinds; seven are engine
  * INJECTED turns that still carry `role: 'user'`. Until this projection existed
  * the discriminant never left the engine process, so every out-of-process
  * consumer rendered those five as the operator's own message.
@@ -101,6 +101,19 @@ describe('toSDKMessageOrigin', () => {
     expect(toSDKMessageOrigin({ kind: 'teammate', messages: [] })).toEqual({
       kind: 'teammate',
     })
+  })
+
+  test('peer keeps the sender name and DROPS the app-side address', () => {
+    // The name is the row's label. `appSessionId` is app-side addressing with
+    // no display meaning, so it stays engine-side like task-notification's
+    // `taskId`.
+    const projected = toSDKMessageOrigin({
+      kind: 'peer',
+      name: 'Cinnabar',
+      appSessionId: 'app-session-7f3c',
+    })
+    expect(projected).toEqual({ kind: 'peer', name: 'Cinnabar' })
+    expect(JSON.stringify(projected)).not.toContain('app-session-7f3c')
   })
 })
 

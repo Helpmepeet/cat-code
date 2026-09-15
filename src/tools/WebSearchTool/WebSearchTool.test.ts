@@ -508,15 +508,34 @@ describe('WebSearchTool Exa integration', () => {
 
   test('keeps WebSearch disabled under essential-traffic-only mode', async () => {
     process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
+    process.env.EXA_API_KEY = 'exa-test-key'
     const { WebSearchTool } = await import('./WebSearchTool.js')
 
     expect(WebSearchTool.isEnabled()).toBe(false)
   })
 
-  test('keeps WebSearch enabled by default', async () => {
+  test('keeps WebSearch enabled when the Exa key is present', async () => {
+    process.env.EXA_API_KEY = 'exa-test-key'
     const { WebSearchTool } = await import('./WebSearchTool.js')
 
     expect(WebSearchTool.isEnabled()).toBe(true)
+  })
+
+  // The key is only read at call time (`exa.ts` `getExaApiKey`), so an
+  // unkeyed install used to advertise the tool and then throw on the model's
+  // first use of it. Disabled is the honest state.
+  test('disables WebSearch when no Exa key is set', async () => {
+    delete process.env.EXA_API_KEY
+    const { WebSearchTool } = await import('./WebSearchTool.js')
+
+    expect(WebSearchTool.isEnabled()).toBe(false)
+  })
+
+  test('treats a blank Exa key as absent', async () => {
+    process.env.EXA_API_KEY = '   '
+    const { WebSearchTool } = await import('./WebSearchTool.js')
+
+    expect(WebSearchTool.isEnabled()).toBe(false)
   })
 
   test('keeps WebSearch out of the auto-mode safe allowlist', async () => {

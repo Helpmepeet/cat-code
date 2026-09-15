@@ -40,6 +40,26 @@ export function getEnvAPIProvider(): APIProvider {
             : 'firstParty'
 }
 
+/**
+ * The Anthropic cloud resellers. Their catalogs lag the first-party API at
+ * every model launch, so model *defaults* deliberately hold a version back
+ * for them.
+ *
+ * `'openai'` is deliberately NOT one of these. It is the Codex session
+ * provider, and it carries no Anthropic catalog of its own: an Anthropic
+ * default resolved inside a Codex session is the first-party one. Writing
+ * this as `getAPIProvider() !== 'firstParty'` silently swept `'openai'` into
+ * the lagging branch and pinned every Codex-session subagent asking for
+ * `opus` to Opus 4.6.
+ */
+export function isAnthropicCloudProvider(
+  provider: APIProvider = getAPIProvider(),
+): boolean {
+  return (
+    provider === 'bedrock' || provider === 'vertex' || provider === 'foundry'
+  )
+}
+
 export function getStartupProviderPreference(): StartupProviderPreference {
   try {
     return getGlobalConfig().lastUsedProvider ?? 'anthropic'

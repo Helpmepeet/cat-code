@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent delegation rule</title>
+<style>
+  :root { --ground:#faf9f7; --ink:#16150f; --chrome:#8a877e; --rule:#ddd9d1; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 400 15px/1.62 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .x-top { padding: 26px 32px 16px; border-bottom: 1px solid var(--rule); }
+  .x-title, .x-hd, .x-path, .x-sub {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--chrome); text-transform: uppercase;
+    letter-spacing: .13em; font-size: 9.5px; font-weight: 500;
+  }
+  .x-sec { padding: 30px 32px 8px; }
+  .x-sec + .x-sec { border-top: 1px solid var(--rule); }
+  .x-meta { display: flex; gap: 14px; flex-wrap: wrap; align-items: baseline; margin-bottom: 16px; }
+  .x-path { text-transform: none; letter-spacing: .04em; font-size: 11px; color: #5f5c55; }
+  .x-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 30px; }
+  .x-hd { padding-bottom: 7px; margin-bottom: 14px; border-bottom: 1px solid var(--rule); }
+
+  .spec { max-width: 52ch; }
+  .spec p { margin: 0 0 1.05em; }
+  .spec p:last-child { margin-bottom: 0; }
+  .spec pre {
+    margin: 0;
+    font: 400 12.5px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  @media (max-width: 1000px) { .x-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="x-top"><span class="x-title">Agent delegation rule &middot; 2026-08-17 239 chars &middot; 24b4027c 1009 chars &middot; 70f4de0c 289 chars</span></div>
+  <section class="x-sec">
+    <div class="x-meta"><span class="x-path">src/constants/prompts.ts &middot; src/constants/promptStyles/gpt.ts</span><span class="x-sub">Every turn</span></div>
+    <div class="x-grid"><div><div class="x-hd">2026-08-17</div><div class="spec"><p>Do not spawn a subagent solely to review, verify, critique, or double-check your own work. Routine self-review should be done directly in the main thread. Use a subagent for an independent review only when the user explicitly requests one.</p></div></div><div><div class="x-hd">24b4027c</div><div class="spec"><p>Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is yours or someone else's. Do that directly in the main thread. A task the user assigns to you stays yours: never hand the whole request to one subagent so it does the work in your place.</p><p>"Adversarial review", "cold review", "audit", "verify" and "critique" name the method the user wants you to apply. They are not a request for another agent. Use a review subagent only when the user explicitly asks for a subagent, another model, a second reviewer, or an independent agent. Delegating a bounded supporting investigation is fine, but it never transfers responsibility for inspecting the evidence and reaching every finding yourself.</p></div></div><div><div class="x-hd">70f4de0c</div><div class="spec"><p>Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent.</p></div></div></div>
+  </section>
+  <section class="x-sec">
+    <div class="x-meta"><span class="x-path">src/tools/AgentTool/prompt.ts</span><span class="x-sub">Every turn</span></div>
+    <div class="x-grid"><div><div class="x-hd">2026-08-17</div><div class="spec"></div></div><div><div class="x-hd">24b4027c</div><div class="spec"><pre>- Do not delegate the user's own request in full. "Adversarial review", "cold review", "audit" and "verify" name the method to apply, not a request for another agent; perform such a review yourself unless the user explicitly asks for a subagent, another model, or a second reviewer.</pre></div></div><div><div class="x-hd">70f4de0c</div><div class="spec"></div></div></div>
+  </section>
+  <section class="x-sec">
+    <div class="x-meta"><span class="x-path">src/constants/prompts.ts &middot; src/constants/promptStyles/gpt.ts</span><span class="x-sub">Fork branch &middot; not in build list</span></div>
+    <div class="x-grid"><div><div class="x-hd">2026-08-17</div><div class="spec"></div></div><div><div class="x-hd">24b4027c</div><div class="spec"><p>A task the user assigns to you stays yours: never fork the whole request so the child does the work in your place, and words like "adversarial review", "audit" or "verify" name a method to apply, not a request for another agent.</p></div></div><div><div class="x-hd">70f4de0c</div><div class="spec"></div></div></div>
+  </section>
+  <section class="x-sec">
+    <div class="x-meta"><span class="x-path">.agents/skills/cat-code-cold-review/SKILL.md</span><span class="x-sub">Cold reviews only</span></div>
+    <div class="x-grid"><div><div class="x-hd">2026-08-17</div><div class="spec"></div></div><div><div class="x-hd">24b4027c</div><div class="spec"><pre>## Execution ownership
+
+"Cold" and "adversarial" describe how YOU review, not who reviews. A review the
+user asks for is your task: do it in this thread, from your own reads and
+commands. Handing the whole audit to one subagent is not a cold review, it is a
+relay, and it does not transfer responsibility for the findings. Spawn a review
+agent only when the user explicitly asks for a subagent, another model, or a
+second reviewer. A bounded supporting lane (one parallel dimension, one large
+corpus sweep) is fine; the verdict stays yours.</pre></div></div><div><div class="x-hd">70f4de0c</div><div class="spec"><pre>## Execution ownership
+
+"Cold" and "adversarial" describe how YOU review, not who reviews. Do the review
+in this thread; spawn an agent only if the user asks for one.</pre></div></div></div>
+  </section>
+</body>
+</html>

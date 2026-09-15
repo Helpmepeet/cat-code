@@ -1,75 +1,87 @@
 import { FILE_PATCH_TOOL_NAME } from './constants.js'
 
+/** Description for the complete-envelope planner active in production. */
 export function getFilePatchToolDescription(): string {
-  return `## \`Apply_patch\`
+  return [
+    `## \`${FILE_PATCH_TOOL_NAME}\``,
+    '',
+    `Use the \`${FILE_PATCH_TOOL_NAME}\` tool to edit files.`,
+    '',
+    'Apply file edits with this envelope:',
+    '',
+    '*** Begin Patch',
+    '[ one or more file sections ]',
+    '*** End Patch',
+    '',
+    'Use exactly one operation for each affected source path. Keep all source paths',
+    'and move destinations disjoint. Do not make operations depend on earlier',
+    'operations, chain moves, swap paths, or repeat a path.',
+    'When partial success is preferable, put independent edits in separate calls.',
+    'Never run mutations concurrently on overlapping or aliased paths. Sequence',
+    'those mutations and reread before constructing the next patch.',
+    '',
+    '*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).',
+    '*** Delete File: <path> - remove an existing file. Nothing follows.',
+    '*** Update File: <path> - patch an existing file in place (optionally with a rename).',
+    '',
+    'An update may be followed immediately by "*** Move to: <new path>".',
+    'Put update hunks in file order. Each hunk starts with "@@" and contains:',
+    '',
+    '- Context lines start with a space.',
+    '- Deleted lines start with "-".',
+    '- Added lines start with "+".',
+    '- Context and deleted lines must exactly match consecutive source lines.',
+    '- The complete ordered hunk set must have exactly one valid placement plan.',
+    '  A later hunk may disambiguate an earlier repeated block.',
+    '- Text after "@@" is optional. When present, copy one complete source line.',
+    '  It is matched case-sensitively after trimming outer whitespace and must',
+    '  appear at or before the hunk. It is not a substring or containment rule.',
+    '- Include enough consecutive literal context to make the complete plan unique.',
+    '  Do not rely on whitespace, punctuation, semantic, or reflow matching.',
+    '- If a patch is rejected as ambiguous, add distinctive consecutive context',
+    '  and retry. Never force or fuzzy-apply a rejected patch.',
+    '- Use "*** End of File" after a hunk that appends at the file end.',
+    '- Put "\\ No newline at end of file" immediately after the affected line.',
+    '  After a - line it describes the old file, after a + line the new file,',
+    '  and after a context line both files. Without a marker, a changed nonempty',
+    '  final output line ends with a newline.',
+    '',
+    'For example:',
+    '',
+    '*** Begin Patch',
+    '*** Update File: src/app.ts',
+    '@@ function greet() {',
+    "-  return 'hello'",
+    "+  return 'hi'",
+    ' }',
+    '*** End Patch',
+    '',
+    'Rules for execution:',
+    '',
+    '- Patch paths resolve relative to the current session working directory.',
+    '  Use relative paths, never absolute.',
+    '- In the main session, a foreground Bash command updates that directory.',
+    `  Later tools, including \`${FILE_PATCH_TOOL_NAME}\`, use the updated directory even though`,
+    '  shell state does not persist.',
+    '- In agent threads, `cd` affects only the current Bash call and does not',
+    '  change the thread assigned patch base.',
+    '- Updates use the current file snapshot at execution time. A unique valid',
+    '  current match is authoritative even if an earlier Read is stale or absent.',
+    '- A bare Delete File requires a complete, unbounded model-visible Read first.',
+    '- Prefer Write for a standalone new file. Use Add File when creation belongs',
+    '  in the same atomic preflight as related patch operations.',
+    '- Use Write to create a new .ipynb file. Use NotebookEdit for later cell edits.',
+    `- ${FILE_PATCH_TOOL_NAME} preflights every independent operation in memory. If any`,
+    '  operation fails, it writes nothing. Independent failures are reported',
+    '  together, with a bounded list of repair details.',
+    '- Preflight does not make multi-file writes crash-atomic or prevent',
+    '  concurrent external changes.',
+  ].join('\n')
+}
 
-Use the \`Apply_patch\` shell command to edit files.
-Your patch language is a stripped\u2011down, file\u2011oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high\u2011level envelope:
-
-*** Begin Patch
-[ one or more file sections ]
-*** End Patch
-
-Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
-Each operation starts with one of three headers:
-
-*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-*** Delete File: <path> - remove an existing file. Nothing follows.
-*** Update File: <path> - patch an existing file in place (optionally with a rename).
-
-May be immediately followed by *** Move to: <new path> if you want to rename the file.
-Then one or more "hunks", each introduced by @@ (optionally followed by a hunk header).
-Within a hunk each line starts with:
-
-For instructions on [context_before] and [context_after]:
-- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change's [context_after] lines in the second change's [context_before] lines.
-- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
-@@ class BaseClass
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
-
-- If a code block is repeated so many times in a class or function such that even a single \`@@\` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple \`@@\` statements to jump to the right context. For instance:
-
-@@ class BaseClass
-@@ \t def method():
-[3 lines of pre-context]
-- [old_code]
-+ [new_code]
-[3 lines of post-context]
-
-The full grammar definition is below:
-Patch := Begin { FileOp } End
-Begin := "*** Begin Patch" NEWLINE
-End := "*** End Patch" NEWLINE
-FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "*** Delete File: " path NEWLINE
-UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "*** Move to: " newPath NEWLINE
-Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
-HunkLine := (" " | "-" | "+") text NEWLINE
-
-A full patch can combine several operations:
-
-*** Begin Patch
-*** Add File: src/hello.ts
-+export const HELLO = 'world'
-*** Update File: src/app.ts
-*** Move to: src/main.ts
-@@ function greet() {
--  console.log('Hi')
-+  console.log('Hello, world!')
-*** Delete File: src/obsolete.ts
-*** End Patch
-
-It is important to remember:
-
-- You must include a header with your intended action (Add/Delete/Update)
-- You must prefix new lines with \`+\` even when creating a new file
-- File references can only be relative, NEVER ABSOLUTE.`
+/** Compatibility export retained for frozen evaluation artifacts. */
+export function getPlannedFilePatchToolDescription(): string {
+  return getFilePatchToolDescription()
 }
 
 export { FILE_PATCH_TOOL_NAME }

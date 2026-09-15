@@ -24,6 +24,7 @@ import { UserBashOutputMessage } from './UserBashOutputMessage.js'
 import { UserCommandMessage } from './UserCommandMessage.js'
 import { UserLocalCommandOutputMessage } from './UserLocalCommandOutputMessage.js'
 import { UserMemoryInputMessage } from './UserMemoryInputMessage.js'
+import { getPeerDisplay, UserPeerMessage } from './UserPeerMessage.js'
 import { UserPlanMessage } from './UserPlanMessage.js'
 import { UserPromptMessage } from './UserPromptMessage.js'
 import { UserResourceUpdateMessage } from './UserResourceUpdateMessage.js'
@@ -91,6 +92,18 @@ export function UserTextMessage({
     )
   }
 
+  // Provenance decides this row, and it is decided before the body-shape
+  // branches below because a peer body may quote any of the tags they match on.
+  // Until this existed the only peer-aware branch sat behind
+  // feature('UDS_INBOX'), which is in neither list in scripts/build.ts and so
+  // is false in every build: every peer message fell through to
+  // UserPromptMessage, and an exported transcript showed one as the operator's
+  // own prompt with the model-facing envelope printed verbatim.
+  const peer = getPeerDisplay(param.text, origin)
+  if (peer) {
+    return <UserPeerMessage addMargin={addMargin} peer={peer} />
+  }
+
   if (feature('KAIROS_GITHUB_WEBHOOKS')) {
     if (param.text.startsWith('<github-webhook-activity>')) {
       const { UserGitHubWebhookMessage } =
@@ -138,14 +151,6 @@ export function UserTextMessage({
       const { UserForkBoilerplateMessage } =
         require('./UserForkBoilerplateMessage.js') as typeof import('./UserForkBoilerplateMessage.js')
       return <UserForkBoilerplateMessage addMargin={addMargin} param={param} />
-    }
-  }
-
-  if (feature('UDS_INBOX')) {
-    if (param.text.includes('<cross-session-message')) {
-      const { UserCrossSessionMessage } =
-        require('./UserCrossSessionMessage.js') as typeof import('./UserCrossSessionMessage.js')
-      return <UserCrossSessionMessage addMargin={addMargin} param={param} />
     }
   }
 

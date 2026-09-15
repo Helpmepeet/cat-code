@@ -1,18 +1,30 @@
+import { basename, dirname, join, normalize, sep } from 'path'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
 import { logError } from '../../utils/log.js'
 import type { ToolUseContext } from '../../Tool.js'
-import { buildTool, type ToolDef, type ValidationResult } from '../../Tool.js'
+import { buildTool, type ToolDef } from '../../Tool.js'
+import { acquireFileMutationLocks } from '../../utils/atomicFile.js'
 import {
   boundPatchLinesForPersistence,
   firstLineForLanguageDetection,
   getPatchFromContents,
 } from '../../utils/diff.js'
+import { getCwd } from '../../utils/cwd.js'
+import {
+  fileIdentitiesEqual,
+  getFileIdentity,
+} from '../../utils/file.js'
+import { isCompleteUnboundedRead } from '../../utils/fileStateCache.js'
+import {
+  getFsImplementation,
+  resolveDeepestExistingAncestorSync,
+} from '../../utils/fsOperations.js'
+import { isENOENT } from '../../utils/errors.js'
 import { expandPath } from '../../utils/path.js'
 import { validateInputForSettingsFileEdit } from '../../utils/settings/validateEditTool.js'
 import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { FILE_UNEXPECTEDLY_MODIFIED_ERROR } from '../FileEditTool/constants.js'
 import {
-  assertFileUnchangedSinceRead,
   checkSingleFileWritePermissions,
   deleteFileWithSideEffects,
   isUncPath,
@@ -22,17 +34,24 @@ import {
   readFileForEdit,
   validateEditableFileSize,
   validateEditDenyRule,
-  validateFileNotModifiedSinceRead,
   validateTeamMemorySecrets,
+  applyFileMutationSideEffects,
+  type FileMutationPublication,
+  restoreFileMutation,
   writeFileWithSideEffects,
 } from '../FileEditTool/shared.js'
-import { applyPatchToBuffers } from './applier.js'
-import { FILE_PATCH_TOOL_NAME } from './constants.js'
-import { parseFilePatch } from './parser.js'
+import { applyPatchToBuffersPlanned } from './applier.js'
+import {
+  FILE_PATCH_TOOL_NAME,
+  LEGACY_FILE_PATCH_TOOL_NAME,
+} from './constants.js'
+import { parseFilePatch, parseFilePatchInput } from './parser.js'
 import { getFilePatchToolDescription } from './prompt.js'
 import {
   type ApplyPatchFileState,
+  type ApplyPatchSuccess,
   FilePatchError,
+  type FilePatchMutationOutcome,
   type FilePatchOperation,
   type FilePatchToolInput,
   type FilePatchToolOutput,
@@ -49,6 +68,7 @@ import {
 
 export const FilePatchTool = buildTool({
   name: FILE_PATCH_TOOL_NAME,
+  aliases: [LEGACY_FILE_PATCH_TOOL_NAME],
   searchHint: 'apply unified diff patches',
   maxResultSizeChars: 100_000,
   strict: false,
@@ -95,6 +115,7 @@ export const FilePatchTool = buildTool({
   async checkPermissions(input, context) {
     const operations = normalizeOperations(input)
     const appState = context.getAppState()
+    let firstDenied: ReturnType<typeof checkSingleFileWritePermissions> | undefined
     for (const operation of operations) {
       const pathsToCheck = [operation.path]
       if (operation.type === 'update' && operation.moveTo) {
@@ -106,10 +127,13 @@ export const FilePatchTool = buildTool({
           { file_path: filePath },
           context,
         )
-        if (decision.behavior !== 'allow') {
-          return decision
+        if (decision.behavior !== 'allow' && firstDenied === undefined) {
+          firstDenied = decision
         }
       }
+    }
+    if (firstDenied !== undefined) {
+      return firstDenied
     }
     return {
       behavior: 'allow',
@@ -123,25 +147,31 @@ export const FilePatchTool = buildTool({
   async validateInput(input: FilePatchToolInput, toolUseContext: ToolUseContext) {
     try {
       const operations = normalizeOperations(input)
-      for (const operation of operations) {
-        const fullFilePath = operation.path
 
+      for (const operation of operations) {
         if (operation.type !== 'delete') {
           const nextContent = getOperationContentPreview(operation)
-          const secretValidation = validateTeamMemorySecrets(fullFilePath, nextContent)
-          if (secretValidation) {
-            return secretValidation
+          for (const { path } of operationPathRefs([operation])) {
+            const secretValidation = validateTeamMemorySecrets(path, nextContent)
+            if (secretValidation) {
+              return secretValidation
+            }
           }
         }
+      }
 
-        const denyValidation = validateEditDenyRule(fullFilePath, toolUseContext, 2)
+      for (const { path } of operationPathRefs(operations)) {
+        const denyValidation = validateEditDenyRule(path, toolUseContext, 2)
         if (denyValidation) {
           return denyValidation
         }
+      }
 
-        if (isUncPath(fullFilePath)) {
-          continue
-        }
+      validateOperationIndependence(operations)
+
+      for (const operation of operations) {
+        const fullFilePath = operation.path
+        if (isUncPath(fullFilePath)) continue
 
         const sizeValidation = await validateEditableFileSize(fullFilePath)
         if (sizeValidation) {
@@ -149,13 +179,31 @@ export const FilePatchTool = buildTool({
         }
 
         if (operation.type === 'add') {
+          if (fullFilePath.endsWith('.ipynb')) {
+            return {
+              result: false,
+              behavior: 'ask',
+              message: `Cannot create a Jupyter Notebook with ${FILE_PATCH_TOOL_NAME}. Use the Write tool to create a new .ipynb file, then use ${NOTEBOOK_EDIT_TOOL_NAME} for cell edits.`,
+              errorCode: 5,
+              meta: {
+                code: 'PATCH_NOTEBOOK_REQUIRES_NOTEBOOK_TOOL',
+                operation: 'add',
+                path: fullFilePath,
+              },
+            }
+          }
           const fileContent = await readFileContentForValidation(fullFilePath)
           if (fileContent !== null) {
             return {
               result: false,
               behavior: 'ask',
-              message: `Cannot add ${fullFilePath} because it already exists — use "*** Update File:" to modify it, or choose a different path.`,
+              message: `Cannot add ${fullFilePath} because it already exists. Use "*** Update File:" to modify it, or choose a different path.`,
               errorCode: 3,
+              meta: {
+                code: 'PATCH_TARGET_EXISTS',
+                operation: 'add',
+                path: fullFilePath,
+              },
             }
           }
           continue
@@ -166,8 +214,13 @@ export const FilePatchTool = buildTool({
           return {
             result: false,
             behavior: 'ask',
-            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist — check the path, or use "*** Add File:" to create a new file.`,
+            message: `Cannot ${operation.type} ${fullFilePath} because it does not exist. ${FILE_PATCH_TOOL_NAME} resolved it relative to the current session working directory ${getCwd()}. Check the path, or use "*** Add File:" to create a new file.`,
             errorCode: 4,
+            meta: {
+              code: 'PATCH_TARGET_MISSING',
+              operation: operation.type,
+              path: fullFilePath,
+            },
           }
         }
 
@@ -180,50 +233,74 @@ export const FilePatchTool = buildTool({
           }
         }
 
-        const staleValidation = validateFileNotModifiedSinceRead(
-          fullFilePath,
-          fileContent,
-          toolUseContext,
-          7,
-        )
-        if (staleValidation) {
-          return staleValidation
+        if (operation.type === 'delete') {
+          const readState = toolUseContext.readFileState.get(fullFilePath)
+          if (
+            !isCompleteUnboundedRead(readState) ||
+            readState.fileIdentity === undefined
+          ) {
+            return {
+              result: false,
+              behavior: 'ask',
+              message: `Cannot delete ${fullFilePath} without a complete, unbounded model-visible Read from the beginning that recorded its file identity. Read it completely before deleting it.`,
+              errorCode: 7,
+              meta: {
+                code: 'PATCH_DELETE_REQUIRES_FULL_READ',
+                operation: 'delete',
+                path: fullFilePath,
+              },
+            }
+          }
+          const currentIdentity = getFileIdentity(fullFilePath)
+          if (!fileIdentitiesEqual(readState.fileIdentity, currentIdentity)) {
+            return {
+              result: false,
+              behavior: 'ask',
+              message: `${FILE_UNEXPECTEDLY_MODIFIED_ERROR} The delete target snapshot for ${fullFilePath} no longer matches the stored Read identity.`,
+              errorCode: 7,
+              meta: {
+                code: 'PATCH_SNAPSHOT_CONFLICT',
+                operation: 'delete',
+                path: fullFilePath,
+              },
+            }
+          }
+          continue
         }
 
         if (operation.type === 'update') {
           const settingsValidationResult = validateInputForSettingsFileEdit(
-            fullFilePath,
-            fileContent,
-            () => applyPatchToSingleFile(operation, currentFileState(fullFilePath, fileContent)),
+            operation.moveTo ?? fullFilePath,
+            operation.moveTo ? '{}' : fileContent,
+            () =>
+              applyPatchToSingleFile(
+                operation,
+                currentFileState(fullFilePath, fileContent),
+              ),
           )
           if (settingsValidationResult !== null) {
-            return settingsValidationResult
+            return {
+              ...settingsValidationResult,
+              meta: {
+                code: 'SETTINGS_VALIDATION_FAILED',
+                operation: 'update',
+                path: operation.moveTo ?? fullFilePath,
+                ...(operation.moveTo
+                  ? { moveTo: operation.moveTo }
+                  : {}),
+                hunkCount: operation.hunks.length,
+              },
+            }
           }
         }
       }
 
-      // Move destinations get their own pass so destination-type invariants key
-      // to where the content lands, not the source, and are not short-circuited
-      // by a source-path early exit above (e.g. a UNC source). The moved content
-      // is the full patched source file, which is what will exist at the
-      // destination. (No settings-schema check here: a move requires an absent
-      // destination — errorCode 6 — so the target is always a new file, and
-      // validateInputForSettingsFileEdit is a no-op when the before-content is
-      // empty; a settings-path destination is gated by the dangerous-path
-      // safety check in checkPermissions instead.)
       for (const operation of operations) {
         if (operation.type !== 'update' || !operation.moveTo) {
           continue
         }
         const destPath = operation.moveTo
 
-        const moveDenyValidation = validateEditDenyRule(destPath, toolUseContext, 2)
-        if (moveDenyValidation) {
-          return moveDenyValidation
-        }
-
-        // Pure suffix check — no filesystem access, so it applies to UNC
-        // destinations too (which skip the fs-dependent checks below).
         if (destPath.endsWith('.ipynb')) {
           return {
             result: false,
@@ -233,9 +310,7 @@ export const FilePatchTool = buildTool({
           }
         }
 
-        if (isUncPath(destPath)) {
-          continue
-        }
+        if (isUncPath(destPath)) continue
 
         const destContent = await readFileContentForValidation(destPath)
         if (destContent !== null) {
@@ -244,17 +319,45 @@ export const FilePatchTool = buildTool({
             behavior: 'ask',
             message: `Cannot move ${operation.path} to ${destPath} because the target already exists.`,
             errorCode: 6,
+            meta: {
+              code: 'PATCH_TARGET_EXISTS',
+              operation: 'update',
+              path: destPath,
+              moveTo: destPath,
+              hunkCount: operation.hunks.length,
+            },
           }
         }
-        // The team-memory secret scan for a move destination runs in call() on
-        // the actual moved content: it needs the source content, which for a
-        // UNC source must NOT be read here (a speculative read of a UNC path
-        // during validation risks an NTLM credential leak) but IS read at
-        // execution. See the guard in call().
       }
 
       return { result: true }
     } catch (error) {
+      if (error instanceof FilePatchError) {
+        return {
+          result: false,
+          behavior: 'ask',
+          message: error.message,
+          errorCode: 1,
+          meta: {
+            code: error.code,
+            ...(error.operation !== undefined
+              ? { operation: error.operation }
+              : {}),
+            ...(error.path !== undefined ? { path: error.path } : {}),
+            ...(error.moveTo !== undefined ? { moveTo: error.moveTo } : {}),
+            ...(error.hunkIndex !== undefined
+              ? { hunkIndex: error.hunkIndex }
+              : {}),
+            ...(error.hunkCount !== undefined
+              ? { hunkCount: error.hunkCount }
+              : {}),
+            ...(error.details !== undefined ? { details: error.details } : {}),
+            ...(error.diagnostics !== undefined
+              ? { diagnostics: error.diagnostics }
+              : {}),
+          },
+        }
+      }
       if (error instanceof Error) {
         return {
           result: false,
@@ -266,66 +369,88 @@ export const FilePatchTool = buildTool({
     }
   },
   async call(input, { readFileState, updateFileHistoryState }, _, parentMessage) {
-    const operations = normalizeOperations(input)
+    let operations: FilePatchOperation[]
+    try {
+      operations = normalizeOperations(input)
+    } catch (error) {
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    }
+
+    try {
+      validateOperationIndependence(operations)
+    } catch (error) {
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    }
+
+    let releaseMutationLocks: () => Promise<void>
+    try {
+      releaseMutationLocks = await acquireFileMutationLocks(
+        mutationPathsForOperations(operations),
+      )
+    } catch (error) {
+      throw errorWithMutationOutcome(error, 'no-mutation')
+    }
+
+    try {
     const currentFiles = new Map<string, ApplyPatchFileState>()
 
-    // Read-only phase: gather every file's current state before mutating disk.
-    // No prepareFileMutation here — that mkdir + file-history side effect must
-    // not fire until the in-memory apply below has proven the patch applies.
-    for (const operation of operations) {
+    // Read-only phase: gather every affected path before mutating disk.
+    for (const path of mutationPathsForOperations(operations)) {
       const {
-        content: originalFileContents,
+        content,
         fileExists,
         encoding,
         lineEndings,
-      } = readFileForEdit(operation.path)
-
-      if (fileExists) {
-        assertFileUnchangedSinceRead(
-          operation.path,
-          originalFileContents,
-          readFileState,
-        )
-      }
-
-      currentFiles.set(operation.path, {
-        path: operation.path,
+        identity,
+      } = readFileForEdit(path)
+      currentFiles.set(path, {
+        path,
         exists: fileExists,
+        identity,
         buffer: {
-          content: originalFileContents,
+          content,
           encoding,
           lineEndings,
-          noNewlineAtEndOfFile:
-            originalFileContents.length > 0 && !originalFileContents.endsWith('\n'),
+          noNewlineAtEndOfFile: content.length > 0 && !content.endsWith('\n'),
         },
       })
+    }
 
-      if (operation.type === 'update' && operation.moveTo) {
-        // Re-read the destination at call time. validateInput checked it was
-        // absent, but it may have appeared since (TOCTOU). Only seed
-        // currentFiles when it now exists — that trips the applier's
-        // target-exists guard instead of silently overwriting; when it's still
-        // absent we leave it out so moveTargetMeta keeps carrying the source's
-        // encoding/line-endings forward.
-        const moveTarget = readFileForEdit(operation.moveTo)
-        if (moveTarget.fileExists) {
-          currentFiles.set(operation.moveTo, {
-            path: operation.moveTo,
-            exists: true,
-            buffer: {
-              content: moveTarget.content,
-              encoding: moveTarget.encoding,
-              lineEndings: moveTarget.lineEndings,
-              noNewlineAtEndOfFile:
-                moveTarget.content.length > 0 && !moveTarget.content.endsWith('\n'),
-            },
-          })
-        }
+    validateOperationIndependence(operations, currentFiles)
+
+    for (const operation of operations) {
+      if (operation.type !== 'delete') continue
+      const readState = readFileState.get(operation.path)
+      const current = currentFiles.get(operation.path)
+      if (
+        !isCompleteUnboundedRead(readState) ||
+        readState.fileIdentity === undefined
+      ) {
+        throw new FilePatchError(
+          `Cannot delete ${operation.path} without a complete, unbounded model-visible Read from the beginning that recorded its file identity. Read it completely before deleting it.`,
+          {
+            code: 'PATCH_DELETE_REQUIRES_FULL_READ',
+            path: operation.path,
+            operation: 'delete',
+          },
+        )
+      }
+      if (
+        current?.exists === true &&
+        (current.identity === undefined ||
+          !fileIdentitiesEqual(readState.fileIdentity, current.identity))
+      ) {
+        throw new FilePatchError(
+          `${FILE_UNEXPECTEDLY_MODIFIED_ERROR} The delete target snapshot for ${operation.path} no longer matches the stored Read identity.`,
+          {
+            code: 'PATCH_SNAPSHOT_CONFLICT',
+            path: operation.path,
+            operation: 'delete',
+          },
+        )
       }
     }
 
-    // For move operations: the applier emits delete(src) + add(dst).
-    // currentFiles has no entry for dst, so we carry source metadata forward.
     const moveTargetMeta = new Map<string, { encoding: BufferEncoding; lineEndings: 'LF' | 'CRLF' }>()
     for (const op of operations) {
       if (op.type === 'update' && op.moveTo) {
@@ -339,24 +464,23 @@ export const FilePatchTool = buildTool({
       }
     }
 
-    // Build a cache map so the applier can detect "file changed since last read" on anchor failures.
-    const cachedFiles = new Map<string, string>()
-    for (const operation of operations) {
-      const cached = readFileState.get(operation.path)
-      if (cached && !cached.isPartialView) {
-        cachedFiles.set(operation.path, cached.content)
+    const applied = applyPatchToBuffersPlanned(operations, currentFiles)
+
+    for (const file of applied.files) {
+      if (file.after === null) continue
+      const operation = operationForResultFile(file, operations)
+      const secretFailure = validateTeamMemorySecrets(file.path, file.after)
+      if (secretFailure) {
+        throw new FilePatchError(secretFailure.message, {
+          code: 'TEAM_MEMORY_SECRET',
+          path: file.path,
+          ...(operation === undefined ? {} : { operation: operation.type }),
+        })
       }
     }
 
-    const applied = applyPatchToBuffers(operations, currentFiles, cachedFiles)
+    validateAppliedSettings(operations, currentFiles, applied.files)
 
-    // Team-memory secret guard on the actual content being written to a move
-    // destination, keyed to the real destination path. validateInput cannot
-    // scan a UNC source's content (a speculative read of a UNC path during
-    // validation risks an NTLM credential leak), but the move reads the source
-    // here — so scan the moved buffer now, before any disk mutation, so a
-    // secret can't be moved into team memory unscanned. Runs only for move
-    // destinations (the moved buffer is entirely new content at that path).
     const moveDestinations = new Set(
       operations
         .filter(
@@ -365,38 +489,43 @@ export const FilePatchTool = buildTool({
         )
         .map(op => op.moveTo as string),
     )
-    for (const file of applied.files) {
-      if (file.after === null || !moveDestinations.has(file.path)) {
-        continue
-      }
-      const secretFailure = validateTeamMemorySecrets(file.path, file.after)
-      if (secretFailure) {
-        throw new FilePatchError(secretFailure.message, {
-          code: 'TEAM_MEMORY_SECRET',
-          path: file.path,
-        })
-      }
-    }
-
-    const writtenFiles: Array<{
-      path: string
-      before: string | null
-      after: string | null
-      encoding: BufferEncoding
-      lineEndings: 'LF' | 'CRLF'
-      existedBefore: boolean
-    }> = []
+    const moveSourcePaths = new Set(
+      operations
+        .filter(
+          (op): op is Extract<FilePatchOperation, { type: 'update' }> =>
+            op.type === 'update' && op.moveTo !== undefined,
+        )
+        .map(op => op.path),
+    )
+    const filesForMutation = [
+      ...applied.files.filter(file => moveDestinations.has(file.path)),
+      ...applied.files.filter(
+        file =>
+          !moveDestinations.has(file.path) && !moveSourcePaths.has(file.path),
+      ),
+      ...applied.files.filter(file => moveSourcePaths.has(file.path)),
+    ]
+    const writtenFiles: FileMutationPublication[] = []
+    let mutatingFile: ApplyPatchSuccess | undefined
 
     try {
-      for (const file of applied.files) {
+      for (const file of filesForMutation) {
+        mutatingFile = file
         const originalState = currentFiles.get(file.path)
+        const fileOperation = operationForResultFile(file, operations)
         const moveMeta = moveTargetMeta.get(file.path)
         if (!originalState && !moveMeta) {
           continue
         }
 
-        const encoding = originalState?.buffer.encoding ?? moveMeta?.encoding ?? 'utf8'
-        const lineEndings = originalState?.buffer.lineEndings ?? moveMeta?.lineEndings ?? 'LF'
+        const encoding =
+          (originalState?.exists ? originalState.buffer.encoding : undefined) ??
+          moveMeta?.encoding ??
+          'utf8'
+        const lineEndings =
+          (originalState?.exists ? originalState.buffer.lineEndings : undefined) ??
+          moveMeta?.lineEndings ??
+          'LF'
 
         // Deferred until the in-memory apply succeeded (above): create the
         // parent dir (covers a move into a not-yet-existing directory) and
@@ -417,83 +546,146 @@ export const FilePatchTool = buildTool({
         const onDisk = readFileForEdit(file.path)
         if (
           onDisk.fileExists !== (originalState?.exists ?? false) ||
-          onDisk.content !== (originalState?.buffer.content ?? '')
+          onDisk.content !== (originalState?.buffer.content ?? '') ||
+          (originalState?.exists === true &&
+            (originalState.identity === undefined ||
+              onDisk.identity === undefined ||
+              !fileIdentitiesEqual(originalState.identity, onDisk.identity)))
         ) {
-          throw new Error(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+          throw new FilePatchError(
+            `${FILE_UNEXPECTEDLY_MODIFIED_ERROR} The execution snapshot for ${file.path} no longer matches.`,
+            {
+              code: 'PATCH_SNAPSHOT_CONFLICT',
+              path: file.path,
+              ...(fileOperation === undefined
+                ? {}
+                : { operation: fileOperation.type }),
+              ...(fileOperation?.type === 'update'
+                ? {
+                    hunkCount: fileOperation.hunks.length,
+                  }
+                : {}),
+            },
+          )
         }
 
         if (file.type === 'delete') {
+          if (originalState?.identity === undefined) {
+            throw new FilePatchError(
+              `${FILE_UNEXPECTEDLY_MODIFIED_ERROR} The execution snapshot for ${file.path} has no file identity.`,
+              {
+                code: 'PATCH_SNAPSHOT_CONFLICT',
+                path: file.path,
+                ...(fileOperation === undefined
+                  ? {}
+                  : { operation: fileOperation.type }),
+                ...(fileOperation?.type === 'update'
+                  ? {
+                      hunkCount: fileOperation.hunks.length,
+                    }
+                  : {}),
+              },
+            )
+          }
           await deleteFileWithSideEffects({
             absoluteFilePath: file.path,
             originalFileContents: file.before ?? '',
-            readFileState,
-          })
-          writtenFiles.push({
-            path: file.path,
-            before: file.before,
-            after: file.after,
             encoding,
             lineEndings,
-            existedBefore: true,
+            readFileState,
+            expectedIdentity: originalState.identity,
+            onPublished: publication => writtenFiles.push(publication),
           })
           continue
         }
 
         writeFileWithSideEffects({
           absoluteFilePath: file.path,
-          originalFileContents: file.before ?? '',
+          originalFileContents: file.before,
           updatedFile: file.after ?? '',
           encoding,
           lineEndings,
           readFileState,
-        })
-        writtenFiles.push({
-          path: file.path,
-          before: file.before,
-          after: file.after,
-          encoding,
-          lineEndings,
-          existedBefore: originalState?.exists ?? false,
+          expectedIdentity: originalState?.identity,
+          onPublished: publication => writtenFiles.push(publication),
         })
       }
     } catch (error) {
-      await rollbackAppliedFiles(writtenFiles, readFileState)
-      throw error
+      const rollback = await rollbackAppliedFiles(writtenFiles, readFileState)
+      throw errorWithMutationOutcome(
+        addMutationContext(
+          error,
+          operationForResultFile(mutatingFile, operations),
+        ),
+        writtenFiles.length === 0
+          ? 'no-mutation'
+          : rollback === 'complete-rollback'
+            ? 'complete-rollback'
+            : 'incomplete-recovery',
+      )
     }
 
-    for (const file of applied.files) {
-      const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
-      if (op) {
-        logFileOperation({ operation: op, tool: 'FilePatchTool', filePath: file.path })
+    try {
+      for (const file of applied.files) {
+        const op = file.type === 'add' ? 'write' : file.type === 'update' ? 'edit' : null
+        if (op) {
+          logFileOperation({ operation: op, tool: 'FilePatchTool', filePath: file.path })
+        }
       }
-    }
 
-    // Built field by field, never spread from the applier result: `before`/
-    // `after` hold the whole file twice and this object is serialized verbatim
-    // onto the transcript. structuredPatch plus a bounded firstLine is
-    // everything any reader uses.
-    const output: FilePatchToolOutput = {
-      files: applied.files.map(file => {
-        const entry: FilePatchToolOutput['files'][number] = {
-          path: file.path,
-          type: file.type,
-          firstLine: firstLineForLanguageDetection(file.before ?? file.after),
-          structuredPatch: boundPatchLinesForPersistence(
-            getPatchFromContents({
-              filePath: file.path,
-              oldContent: file.before ?? '',
-              newContent: file.after ?? '',
-            }),
-          ),
-        }
-        if (file.notes && file.notes.length > 0) {
-          entry.notes = file.notes
-        }
-        return entry
-      }),
-    }
+      // Built field by field, never spread from the applier result: `before`/
+      // `after` hold the whole file twice and this object is serialized verbatim
+      // onto the transcript. structuredPatch plus a bounded firstLine is
+      // everything any reader uses.
+      const output: FilePatchToolOutput = {
+        ...(applied.contractVersion === 2 ? { contractVersion: 2 as const } : {}),
+        files: applied.files.map(file => {
+          const entry: FilePatchToolOutput['files'][number] = {
+            path: file.path,
+            type: file.type,
+            firstLine: firstLineForLanguageDetection(file.before ?? file.after),
+            structuredPatch: boundPatchLinesForPersistence(
+              getPatchFromContents({
+                filePath: file.path,
+                oldContent: file.before ?? '',
+                newContent: file.after ?? '',
+              }),
+            ),
+            ...(file.placements === undefined
+              ? {}
+              : { placements: file.placements }),
+            ...(file.placementOmittedCount === undefined
+              ? {}
+              : { placementOmittedCount: file.placementOmittedCount }),
+          }
+          return entry
+        }),
+      }
 
-    return { data: output }
+      return { data: output }
+    } catch (error) {
+      const rollback = await rollbackAppliedFiles(writtenFiles, readFileState)
+      throw errorWithMutationOutcome(
+        addMutationContext(
+          error,
+          operationForResultFile(mutatingFile, operations),
+          mutatingFile,
+        ),
+        writtenFiles.length === 0
+          ? 'no-mutation'
+          : rollback === 'complete-rollback'
+            ? 'complete-rollback'
+            : 'incomplete-recovery',
+      )
+    }
+    } catch (error) {
+      throw errorWithMutationOutcome(
+        error,
+        error instanceof FilePatchError ? error.mutationOutcome : 'no-mutation',
+      )
+    } finally {
+      await releaseMutationLocks()
+    }
   },
   mapToolResultToToolResultBlockParam(output, toolUseID) {
     const count = output.files.length
@@ -509,10 +701,15 @@ export const FilePatchTool = buildTool({
           : file.type === 'delete'
             ? 'Deleted'
             : 'Updated'
-      // Placement disclosures ride on their own file's line: a multi-file
-      // patch otherwise leaves the model guessing which target moved.
-      const notes = file.notes?.length ? `: ${file.notes.join('; ')}` : ''
-      return `${verb} ${file.path}${notes}`
+      const placements = file.placements
+        ?.map(placement =>
+          `hunk ${placement.hunk} at old source coordinates [${placement.oldStart}, ${placement.oldEnd})`,
+        )
+        .join(', ')
+      const omitted = file.placementOmittedCount
+        ? `; ${file.placementOmittedCount} more omitted`
+        : ''
+      return `${verb} ${file.path}${placements ? ` (${placements}${omitted})` : ''}`
     })
     const detail = lines.length > 0 ? `:\n${lines.join('\n')}` : '.'
     return {
@@ -552,15 +749,10 @@ function firstOperationPath(input: unknown): string | undefined {
 }
 
 function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
-  const parsed = 'input' in input ? parseFilePatch(input.input).ops : input.ops
+  const parsed = parseFilePatchInput(input).ops
 
-  const seen = new Set<string>()
-  return parsed.map(operation => {
+  const operations = parsed.map(operation => {
     const path = expandPath(operation.path)
-    if (seen.has(path)) {
-      throw new Error(`Patch contains duplicate file path: ${path}`)
-    }
-    seen.add(path)
 
     return {
       ...operation,
@@ -570,6 +762,195 @@ function normalizeOperations(input: FilePatchToolInput): FilePatchOperation[] {
         : {}),
     }
   })
+
+  const seen = new Set<string>()
+  for (const operation of operations) {
+    const paths = [
+      operation.path,
+      ...(operation.type === 'update' && operation.moveTo
+        ? [operation.moveTo]
+        : []),
+    ]
+    for (const path of paths) {
+      if (seen.has(path)) {
+        throw new FilePatchError(
+          `Patch contains overlapping mutation paths: ${path}.`,
+          {
+            code: 'PATCH_OVERLAPPING_PATHS',
+            path,
+            operation: operation.type,
+            ...(operation.type === 'update' && operation.moveTo
+              ? { moveTo: operation.moveTo }
+              : {}),
+          },
+        )
+      }
+      seen.add(path)
+    }
+  }
+
+  return operations
+}
+
+type OperationPathRef = {
+  path: string
+  operation: FilePatchOperation
+}
+
+function operationPathRefs(
+  operations: FilePatchOperation[],
+): OperationPathRef[] {
+  return operations.flatMap(operation => [
+    { path: operation.path, operation },
+    ...(operation.type === 'update' && operation.moveTo
+      ? [{ path: operation.moveTo, operation }]
+      : []),
+  ])
+}
+
+function validateOperationIndependence(
+  operations: FilePatchOperation[],
+  currentFiles?: Map<string, ApplyPatchFileState>,
+): void {
+  const refs = operationPathRefs(operations)
+  const routes: Array<{ key: string; ref: OperationPathRef }> = []
+
+  for (const ref of refs) {
+    const key = pathRouteKey(ref.path)
+    const collision = routes.find(previous => pathsOverlap(previous.key, key))
+    if (collision) {
+      throw new FilePatchError(
+        `Patch operations use overlapping paths ${collision.ref.path} and ${ref.path}. Keep every source and move destination disjoint.`,
+        {
+          code: 'PATCH_OVERLAPPING_PATHS',
+          path: ref.path,
+          operation: ref.operation.type,
+          ...(ref.operation.type === 'update' && ref.operation.moveTo
+            ? { moveTo: ref.operation.moveTo }
+            : {}),
+        },
+      )
+    }
+    routes.push({ key, ref })
+  }
+
+  const objects = new Map<string, OperationPathRef>()
+  for (const ref of refs) {
+    if (isUncPath(ref.path)) continue
+    const state = currentFiles?.get(ref.path)
+    let identity = state?.exists ? state.identity : undefined
+    if (currentFiles === undefined) {
+      try {
+        identity = getFileIdentity(ref.path)
+      } catch (error) {
+        if (isENOENT(error)) continue
+        throw error
+      }
+    }
+    if (identity === undefined) continue
+
+    const identityKey =
+      identity.inode === 0
+        ? `path:${identity.canonicalPath}`
+        : `object:${identity.device}:${identity.inode}`
+    const previous = objects.get(identityKey)
+    if (previous) {
+      throw new FilePatchError(
+        `Patch paths ${previous.path} and ${ref.path} name the same filesystem object. Keep every source and move destination independent.`,
+        {
+          code: 'PATCH_ALIASED_PATHS',
+          path: ref.path,
+          operation: ref.operation.type,
+          ...(ref.operation.type === 'update' && ref.operation.moveTo
+            ? { moveTo: ref.operation.moveTo }
+            : {}),
+        },
+      )
+    }
+    objects.set(identityKey, ref)
+  }
+}
+
+function pathRouteKey(path: string): string {
+  if (isUncPath(path)) return path
+
+  const fs = getFsImplementation()
+  const normalizedPath = normalize(path).normalize('NFC')
+  const route =
+    resolveDeepestExistingAncestorSync(fs, normalizedPath) ?? normalizedPath
+  return isCaseInsensitiveDirectory(dirname(route))
+    ? route.toLocaleLowerCase()
+    : route
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  if (first === second) return true
+  return (
+    first.startsWith(`${second}${sep}`) ||
+    second.startsWith(`${first}${sep}`)
+  )
+}
+
+function isCaseInsensitiveDirectory(directory: string): boolean {
+  if (isUncPath(directory)) return false
+  const fs = getFsImplementation()
+  let current = directory
+
+  while (true) {
+    try {
+      const parent = dirname(current)
+      const currentName = basename(current)
+      const variant = toggleAsciiCase(currentName)
+      if (variant !== currentName) {
+        const entries = fs.readdirStringSync(parent)
+        if (entries.includes(variant)) return false
+        try {
+          fs.lstatSync(join(parent, variant))
+          return true
+        } catch {
+          // The current directory did not reveal its case rule.
+        }
+      }
+
+      const entries = fs.readdirStringSync(current)
+      for (const entry of entries) {
+        const entryVariant = toggleAsciiCase(entry)
+        if (entryVariant === entry) continue
+        if (entries.includes(entryVariant)) return false
+        try {
+          fs.lstatSync(join(current, entryVariant))
+          return true
+        } catch {
+          // Try an ancestor when this directory does not reveal its case rule.
+        }
+      }
+    } catch {
+      // Continue with the nearest readable ancestor.
+    }
+
+    const parent = dirname(current)
+    if (parent === current) return false
+    current = parent
+  }
+}
+
+function toggleAsciiCase(value: string): string {
+  return value.replace(/[A-Za-z]/g, character =>
+    character === character.toLowerCase()
+      ? character.toUpperCase()
+      : character.toLowerCase(),
+  )
+}
+
+function mutationPathsForOperations(
+  operations: FilePatchOperation[],
+): string[] {
+  return Array.from(new Set(operations.flatMap(operation => [
+    operation.path,
+    ...(operation.type === 'update' && operation.moveTo
+      ? [operation.moveTo]
+      : []),
+  ])))
 }
 
 function currentFileState(path: string, content: string): ApplyPatchFileState {
@@ -589,44 +970,166 @@ function applyPatchToSingleFile(
   operation: Extract<FilePatchOperation, { type: 'update' }>,
   fileState: ApplyPatchFileState,
 ): string {
-  return applyPatchToBuffers([operation], new Map([[fileState.path, fileState]])).files[0]
-    ?.after ?? fileState.buffer.content
+  const result = applyPatchToBuffersPlanned(
+    [operation],
+    new Map([[fileState.path, fileState]]),
+  )
+  return (
+    result.files.find(
+      file => file.path === (operation.moveTo ?? operation.path) && file.after !== null,
+    )?.after ?? fileState.buffer.content
+  )
+}
+
+function operationForResultFile(
+  file: ApplyPatchSuccess | undefined,
+  operations: FilePatchOperation[],
+): FilePatchOperation | undefined {
+  if (file === undefined) return undefined
+
+  if (file.type === 'delete') {
+    return operations.find(
+      operation =>
+        operation.path === file.path &&
+        (operation.type === 'delete' ||
+          (operation.type === 'update' && operation.moveTo === undefined)),
+    ) ??
+      operations.find(
+        operation =>
+          operation.type === 'update' && operation.path === file.path,
+      )
+  }
+
+  if (file.type === 'add') {
+    return (
+      operations.find(
+        operation => operation.type === 'add' && operation.path === file.path,
+      ) ??
+      operations.find(
+        operation =>
+          operation.type === 'update' && operation.moveTo === file.path,
+      )
+    )
+  }
+
+  return operations.find(
+    operation => operation.type === 'update' && operation.path === file.path,
+  )
+}
+
+function validateAppliedSettings(
+  operations: FilePatchOperation[],
+  currentFiles: Map<string, ApplyPatchFileState>,
+  files: ApplyPatchSuccess[],
+): void {
+  for (const file of files) {
+    if (file.after === null) continue
+    const operation = operationForResultFile(file, operations)
+    if (operation === undefined) continue
+    const before = currentFiles.get(file.path)
+    const validation = validateInputForSettingsFileEdit(
+      file.path,
+      before?.exists === true ? before.buffer.content : '{}',
+      () => file.after ?? '',
+    )
+    if (validation !== null) {
+      throw new FilePatchError(validation.message, {
+        code: 'SETTINGS_VALIDATION_FAILED',
+        path: file.path,
+        operation: operation.type,
+        ...(operation.type === 'update' && operation.moveTo
+          ? { moveTo: operation.moveTo }
+          : {}),
+        ...(operation.type === 'update'
+          ? { hunkCount: operation.hunks.length }
+          : {}),
+      })
+    }
+  }
+}
+
+function addMutationContext(
+  error: unknown,
+  operation: FilePatchOperation | undefined,
+  file?: ApplyPatchSuccess,
+): unknown {
+  if (error instanceof FilePatchError && error.operation !== undefined) {
+    return error
+  }
+
+  const message = error instanceof Error ? error.message : String(error)
+  if (operation === undefined) {
+    return error instanceof FilePatchError
+      ? error
+      : new FilePatchError(message, { code: 'PATCH_MUTATION_FAILED' })
+  }
+
+  return new FilePatchError(message, {
+    code:
+      message.includes(FILE_UNEXPECTEDLY_MODIFIED_ERROR)
+        ? 'PATCH_SNAPSHOT_CONFLICT'
+        : error instanceof FilePatchError
+          ? error.code
+          : 'PATCH_MUTATION_FAILED',
+    path: error instanceof FilePatchError ? error.path : file?.path ?? operation.path,
+    operation: operation.type,
+    ...(operation.type === 'update' && operation.moveTo
+      ? { moveTo: operation.moveTo }
+      : {}),
+    ...(operation.type === 'update'
+      ? {
+          hunkIndex: error instanceof FilePatchError ? error.hunkIndex : undefined,
+          hunkCount: operation.hunks.length,
+        }
+      : {}),
+    ...(error instanceof FilePatchError && error.details !== undefined
+      ? { details: error.details }
+      : {}),
+    ...(error instanceof FilePatchError && error.diagnostics !== undefined
+      ? { diagnostics: error.diagnostics }
+      : {}),
+  })
 }
 
 async function rollbackAppliedFiles(
-  writtenFiles: Array<{
-    path: string
-    before: string | null
-    after: string | null
-    encoding: BufferEncoding
-    lineEndings: 'LF' | 'CRLF'
-    existedBefore: boolean
-  }>,
+  writtenFiles: FileMutationPublication[],
   readFileState: ToolUseContext['readFileState'],
-): Promise<void> {
+): Promise<Extract<FilePatchMutationOutcome, 'complete-rollback' | 'incomplete-recovery'>> {
+  let recoveryComplete = true
+
   for (const file of [...writtenFiles].reverse()) {
-    // Best-effort: isolate each file so one rollback failure neither aborts
-    // recovery of the rest nor propagates out to mask the original write error
-    // that triggered the rollback (the caller rethrows that error).
     try {
-      if (!file.existedBefore) {
-        await deleteFileWithSideEffects({
-          absoluteFilePath: file.path,
-          originalFileContents: file.after ?? '',
-          readFileState,
-        })
+      const result = await restoreFileMutation(file)
+      if (result === 'conflict') {
+        recoveryComplete = false
         continue
       }
 
-      writeFileWithSideEffects({
-        absoluteFilePath: file.path,
-        originalFileContents: file.after ?? '',
-        updatedFile: file.before ?? '',
-        encoding: file.encoding,
-        lineEndings: file.lineEndings,
-        readFileState,
-      })
+      try {
+        const restoredIdentity = file.existedBefore
+          ? getFileIdentity(file.absoluteFilePath)
+          : undefined
+        applyFileMutationSideEffects({
+          publication: {
+            absoluteFilePath: file.absoluteFilePath,
+            beforeContent: file.afterContent,
+            afterContent: file.existedBefore ? file.beforeContent : null,
+            encoding: file.encoding,
+            lineEndings: file.lineEndings,
+            existedBefore: true,
+            publishedIdentity: restoredIdentity,
+          },
+          readFileState,
+        })
+      } catch (sideEffectError) {
+        logError(
+          sideEffectError instanceof Error
+            ? sideEffectError
+            : new Error(String(sideEffectError)),
+        )
+      }
     } catch (rollbackError) {
+      recoveryComplete = false
       logError(
         rollbackError instanceof Error
           ? rollbackError
@@ -634,6 +1137,44 @@ async function rollbackAppliedFiles(
       )
     }
   }
+
+  return recoveryComplete ? 'complete-rollback' : 'incomplete-recovery'
+}
+
+function errorWithMutationOutcome(
+  error: unknown,
+  mutationOutcome: FilePatchMutationOutcome,
+): FilePatchError {
+  const originalMessage = error instanceof Error ? error.message : String(error)
+  const message =
+    mutationOutcome === 'no-mutation'
+      ? originalMessage.includes('No files were changed by this patch.')
+        ? originalMessage
+        : `${originalMessage} No files were changed by this patch.`
+      : mutationOutcome === 'complete-rollback'
+        ? originalMessage.includes('Patch changes were rolled back completely.')
+          ? originalMessage
+          : `${originalMessage} Patch changes were rolled back completely.`
+        : originalMessage.includes(
+              'Patch failed after changing files. Recovery was incomplete; some published changes may remain.',
+            )
+          ? originalMessage
+          : `${originalMessage} Patch failed after changing files. Recovery was incomplete; some published changes may remain.`
+
+  if (error instanceof FilePatchError) {
+    return new FilePatchError(message, {
+      code: error.code,
+      path: error.path,
+      operation: error.operation,
+      moveTo: error.moveTo,
+      hunkIndex: error.hunkIndex,
+      hunkCount: error.hunkCount,
+      details: error.details,
+      diagnostics: error.diagnostics,
+      mutationOutcome,
+    })
+  }
+  return new FilePatchError(message, { mutationOutcome })
 }
 
 function getOperationContentPreview(operation: FilePatchOperation): string {

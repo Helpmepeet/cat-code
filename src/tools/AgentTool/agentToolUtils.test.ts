@@ -7,6 +7,7 @@ import {
 } from '../../bootstrap/state.js'
 import { FORK_WORKER_RESULT_TAG } from '../../constants/xml.js'
 import { AGENT_TOOL_NAME } from '../../tools/AgentTool/constants.js'
+import { CLAUDE_CLI_TOOL_NAME } from '../ClaudeCliTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
 import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { SKILL_TOOL_NAME } from '../SkillTool/constants.js'
@@ -22,7 +23,7 @@ import { getEmptyToolPermissionContext } from '../../Tool.js'
 import { VERIFICATION_AGENT } from './built-in/verificationAgent.js'
 import { IMPLEMENTOR_AGENT } from './built-in/implementorAgent.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
-import { createAssistantMessage } from '../../utils/messages.js'
+import { createAssistantMessage, createUserMessage } from '../../utils/messages.js'
 import {
   filterToolsForAgent,
   finalizeAgentTool,
@@ -108,7 +109,7 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     resetStateForTests()
   })
 
-  test('resolves implementor tools without recursive or orchestrator routing tools', () => {
+  test('resolves implementor tools without recursive or parent-session routing tools', () => {
     const availableTools = getTools(getEmptyToolPermissionContext())
     const resolved = resolveAgentTools(IMPLEMENTOR_AGENT, availableTools, true)
     const toolNames = resolved.resolvedTools.map(tool => tool.name)
@@ -116,18 +117,14 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).toContain('Bash')
     expect(toolNames).toContain('Read')
     expect(toolNames).toContain('Write')
-    expect(toolNames.some(name => name === 'Edit' || name === 'Apply_patch')).toBe(
+    expect(toolNames.some(name => name === 'Edit' || name === FILE_PATCH_TOOL_NAME)).toBe(
       true,
     )
     expect(toolNames).not.toContain('Agent')
-    expect(toolNames).not.toContain('ask_orchestrator')
+    expect(toolNames).not.toContain('ask_parent_session')
     expect(toolNames).not.toContain('SendMessage')
     expect(toolNames).not.toContain('TeamCreate')
     expect(toolNames).not.toContain('TeamDelete')
-    expect(toolNames).not.toContain('ListWorkers')
-    expect(toolNames).not.toContain('WaitWorkers')
-    expect(toolNames).not.toContain('GetWorkerResult')
-    expect(toolNames).not.toContain('CancelWorker')
   })
 
   test('resolves verification tools as read-only and caller-oriented', () => {
@@ -139,14 +136,10 @@ describe('resolveAgentTools built-in normal-mode agents', () => {
     expect(toolNames).toContain('Read')
     expect(toolNames).not.toContain('Agent')
     expect(toolNames).not.toContain('Edit')
-    expect(toolNames).not.toContain('Apply_patch')
+    expect(toolNames).not.toContain(FILE_PATCH_TOOL_NAME)
     expect(toolNames).not.toContain('Write')
     expect(toolNames).not.toContain('NotebookEdit')
-    expect(toolNames).not.toContain('ask_orchestrator')
-    expect(toolNames).not.toContain('ListWorkers')
-    expect(toolNames).not.toContain('WaitWorkers')
-    expect(toolNames).not.toContain('GetWorkerResult')
-    expect(toolNames).not.toContain('CancelWorker')
+    expect(toolNames).not.toContain('ask_parent_session')
   })
 })
 
@@ -162,7 +155,7 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
   // The pool carries exactly one file-edit tool per provider
   // (getProviderFileEditTool, tools.ts). The async allowlist used to name only
   // Edit, so an async worker on the OpenAI path got NO edit tool at all.
-  test('gets Apply_patch and only Apply_patch on the OpenAI path', () => {
+  test('gets apply_patch and only apply_patch on the OpenAI path', () => {
     setSessionProvider('openai')
 
     expect(fileEditToolsIn(getAsyncWorkerToolNames())).toEqual([
@@ -176,38 +169,6 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
     expect(fileEditToolsIn(getAsyncWorkerToolNames())).toEqual([
       FILE_EDIT_TOOL_NAME,
     ])
-  })
-
-  test('keeps Agent Mode roles read-only or editing regardless of the alias', async () => {
-    // Dynamic import: the role definitions live behind the same tool-constant
-    // graph getTools() primes above, so import them after it has loaded.
-    const { AGENT_MODE_CODING_WORKER, AGENT_MODE_VERIFIER } = await import(
-      '../../agent-mode/rolePrompts.js'
-    )
-    const availableTools = getTools(getEmptyToolPermissionContext())
-
-    for (const provider of ['firstParty', 'openai'] as const) {
-      resetStateForTests()
-      setSessionProvider(provider)
-      const expectedEditTool =
-        provider === 'openai' ? FILE_PATCH_TOOL_NAME : FILE_EDIT_TOOL_NAME
-
-      const verifierNames = resolveAgentTools(
-        AGENT_MODE_VERIFIER,
-        availableTools,
-        true,
-      ).resolvedTools.map(tool => tool.name)
-      expect(verifierNames).toContain('Read')
-      expect(fileEditToolsIn(verifierNames)).toEqual([])
-      expect(verifierNames).not.toContain('Write')
-
-      const workerNames = resolveAgentTools(
-        AGENT_MODE_CODING_WORKER,
-        getTools(getEmptyToolPermissionContext()),
-        true,
-      ).resolvedTools.map(tool => tool.name)
-      expect(fileEditToolsIn(workerNames)).toEqual([expectedEditTool])
-    }
   })
 
   // A role that disallows one alias must not receive the other when the pool
@@ -232,14 +193,6 @@ describe('resolveAgentTools provider-aliased edit capability for async workers',
     }
   })
 
-  test('names both edit aliases in the verifier disallow list', async () => {
-    const { AGENT_MODE_VERIFIER } = await import(
-      '../../agent-mode/rolePrompts.js'
-    )
-
-    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_EDIT_TOOL_NAME)
-    expect(AGENT_MODE_VERIFIER.disallowedTools).toContain(FILE_PATCH_TOOL_NAME)
-  })
 })
 
 describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () => {
@@ -266,7 +219,7 @@ describe('resolveAgentTools Skill policy is symmetric across spawn shapes', () =
 
   // Foreground vs background must not change a role's logical capabilities
   // (owner decision 2026-07-30). The async allowlist alone left Skill on every
-  // sync subagent, which made the orchestrator doctrine false for foreground
+  // sync subagent, which made the worker tool policy false for foreground
   // spawns.
   test.each([
     ['sync', false],
@@ -328,6 +281,90 @@ describe('resolveAgentTools Skill policy for async workers', () => {
     ])
 
     expect(toolNames).toEqual(['Read'])
+  })
+})
+
+describe('resolveAgentTools ClaudeCli explicit-grant policy', () => {
+  beforeEach(() => {
+    resetStateForTests()
+  })
+
+  afterEach(() => {
+    resetStateForTests()
+  })
+
+  function resolveNames(tools: string[], isAsync: boolean): string[] {
+    return resolveAgentTools(
+      {
+        tools,
+        disallowedTools: [],
+        source: 'built-in',
+        permissionMode: 'default',
+      },
+      getTools(getEmptyToolPermissionContext()),
+      isAsync,
+    ).resolvedTools.map(tool => tool.name)
+  }
+
+  test('ClaudeCli is present in the base tool pool', () => {
+    expect(
+      getTools(getEmptyToolPermissionContext()).map(tool => tool.name),
+    ).toContain(CLAUDE_CLI_TOOL_NAME)
+  })
+
+  // ClaudeCli launches a nested external Claude CLI agent loop. A wildcard
+  // `tools: ['*']` definition must not count as naming it, for either spawn
+  // shape: the incident this guards against was a foreground (isAsync=false)
+  // general-purpose worker that used a wildcard grant to launch nested
+  // engines instead of doing its own assigned work.
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'withholds ClaudeCli from a wildcard %s worker',
+    (_shape, isAsync) => {
+      expect(resolveNames(['*'], isAsync)).not.toContain(CLAUDE_CLI_TOOL_NAME)
+    },
+  )
+
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'grants ClaudeCli to a %s worker whose definition names it',
+    (_shape, isAsync) => {
+      expect(resolveNames(['Read', CLAUDE_CLI_TOOL_NAME], isAsync)).toContain(
+        CLAUDE_CLI_TOOL_NAME,
+      )
+    },
+  )
+
+  test.each([
+    ['sync', false],
+    ['async', true],
+  ] as const)(
+    'withholds ClaudeCli from the general-purpose agent, a wildcard definition, for %s spawns',
+    async (_shape, isAsync) => {
+      const { GENERAL_PURPOSE_AGENT } = await import(
+        './built-in/generalPurposeAgent.js'
+      )
+      const toolNames = resolveAgentTools(
+        GENERAL_PURPOSE_AGENT,
+        getTools(getEmptyToolPermissionContext()),
+        isAsync,
+      ).resolvedTools.map(tool => tool.name)
+
+      expect(toolNames).not.toContain(CLAUDE_CLI_TOOL_NAME)
+    },
+  )
+
+  test('does not let an explicit request reopen the recursion boundary', () => {
+    const toolNames = resolveNames(
+      ['Read', CLAUDE_CLI_TOOL_NAME, AGENT_TOOL_NAME],
+      true,
+    )
+
+    expect(toolNames).toEqual(['Read', CLAUDE_CLI_TOOL_NAME])
   })
 })
 
@@ -528,5 +565,45 @@ describe('finalizeAgentTool max-turn exhaustion', () => {
     )
 
     expect(result.content).toEqual([{ type: 'text', text: 'partial work' }])
+  })
+
+  test('includes files changed by a historical Apply_patch call', () => {
+    const result = finalizeAgentTool(
+      [
+        createAssistantMessage({
+          content: [
+            {
+              type: 'tool_use',
+              id: 'legacy-patch',
+              name: 'Apply_patch',
+              input: {
+                input:
+                  '*** Begin Patch\n*** Update File: src/legacy.ts\n@@\n-old\n+new\n*** End Patch',
+              },
+            },
+          ],
+        }),
+        createUserMessage({
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'legacy-patch',
+              content: 'Applied patch',
+            },
+          ],
+        }),
+        createAssistantMessage({ content: 'done' }),
+      ],
+      'agent-legacy-patch',
+      metadata,
+    )
+
+    expect(result.changedFiles).toEqual([
+      {
+        path: 'src/legacy.ts',
+        op: 'Apply_patch',
+        ok: true,
+      },
+    ])
   })
 })

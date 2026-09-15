@@ -36,9 +36,10 @@ export type SetAppState = (f: (prev: AppState) => AppState) => void
  * acted on — a retraction that records no uuid is indistinguishable from no
  * retraction at all, and its enqueue then looks undelivered forever.
  *
- * Content and `mode` ride on `enqueue` alone; a retraction carries the uuid and
- * nothing else. The uuid is all a reader matches on, `mode` is only consulted
- * where the enqueue recorded it, and the retraction copies of `content` used to
+ * Content and `mode` ride on `enqueue` alone; a retraction carries only the
+ * uuid and the agent the notification was addressed to. The uuid is all a
+ * reader matches on, `mode` is only consulted where the enqueue recorded it,
+ * and the retraction copies of `content` used to
  * duplicate whole `ContentBlockParam[]` values with inline image data. The
  * enqueue records the value because a text prompt that survives a crash while
  * its image-bearing twin vanishes is the harder behavior to explain. It records
@@ -63,6 +64,7 @@ function logOperation(operation: QueueOperation, command?: QueuedCommand): void 
     timestamp: new Date().toISOString(),
     sessionId,
     ...(command?.uuid !== undefined && { uuid: command.uuid }),
+    ...(command?.agentId !== undefined && { agentId: command.agentId }),
     ...(!isRetraction && command?.mode !== undefined && { mode: command.mode }),
     ...(!isRetraction &&
       command?.value !== undefined && { content: command.value }),

@@ -13,7 +13,7 @@ export function getPrompt(): string {
 `
     : ''
 
-  return `Use this tool to create a structured task list for your current coding session. This helps you track progress, organize complex tasks, and demonstrate thoroughness to the user.
+  return `Use this tool to create a structured task list for your current coding session. This helps you track progress and organize complex tasks.
 It also helps the user understand the progress of the task and overall progress of their requests.
 
 ## When to Use This Tool

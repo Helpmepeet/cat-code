@@ -9,14 +9,7 @@ import {
   readAccentFromStorage,
   writeAccentToStorage,
 } from './accentTheme.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 function render(store: Parameters<typeof AccentThemeProvider>[0]['storage']) {
   return renderToStaticMarkup(

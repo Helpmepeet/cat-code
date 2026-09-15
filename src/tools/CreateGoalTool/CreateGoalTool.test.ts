@@ -12,7 +12,7 @@ import {
   createSessionState,
   readSessionState,
   updateSessionState,
-} from '../../agent-mode/sessionState.js'
+} from '../../utils/workerState.js'
 import { asSessionId } from '../../types/ids.js'
 import { getCurrentThreadGoal } from '../../utils/sessionStorage.js'
 import {
@@ -66,8 +66,7 @@ describe('CreateGoalTool', () => {
       () =>
         createSessionState({
           sessionId,
-          mode: 'agent',
-          objective: '',
+          mode: 'coordinator',
         }),
       () => {},
     )
@@ -84,9 +83,6 @@ describe('CreateGoalTool', () => {
     })
     expect(getState().threadGoal?.objective).toBe('finish goal parity')
     expect(getCurrentThreadGoal(sessionId)?.objective).toBe('finish goal parity')
-    expect((await readSessionState(sessionId))?.objective).toBe(
-      'finish goal parity',
-    )
   })
 
   test('creates a budgeted goal and returns remaining tokens', async () => {

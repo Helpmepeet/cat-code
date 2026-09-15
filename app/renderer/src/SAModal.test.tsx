@@ -4,7 +4,7 @@
  * The dismissal rows (scrim-click, card `stopPropagation`) are behavioural, and
  * this package has no DOM click harness, so they are exercised by invoking the
  * hook-free `SAModalFrame` and calling the handler off its element — the
- * `WelcomeScreen.test.tsx` / `OrchestratorReflect` convention, i.e. the exact
+ * `WelcomeScreen.test.tsx` hook-free component convention, i.e. the exact
  * code path a click runs. Escape/defaultPrevented precedence and modifier
  * ownership are covered by `overlayFocus.test.ts`; this suite pins the shared
  * focus container emitted by `SAModal`.

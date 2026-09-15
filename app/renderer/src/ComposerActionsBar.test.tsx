@@ -34,8 +34,18 @@ function runControls(
       provider: 'openai',
       providerSwitchLocked: false,
       options: [
-        { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra', provider: 'openai' },
-        { value: 'opus', label: 'Opus', provider: 'anthropic' },
+        {
+          value: 'gpt-5.6-terra',
+          label: 'GPT-5.6 Terra',
+          provider: 'openai',
+          effortOptions: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
+        },
+        {
+          value: 'opus',
+          label: 'Opus',
+          provider: 'anthropic',
+          effortOptions: ['low', 'medium', 'high', 'max'],
+        },
       ],
       ...over.model,
     },
@@ -81,6 +91,8 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
     source: 'vault',
     usagePrimary: 10,
     usageWeekly: 20,
+    usagePrimaryWindowSeconds: 18_000,
+    usageSecondaryWindowSeconds: 604_800,
     usageLimitReached: false,
     usageResetAt: null,
     lastRefreshIso: null,
@@ -287,7 +299,14 @@ test('the MODEL face shows the engine display name, never the resolved model id'
         contextWindow: 200_000,
         selected: 'haiku',
         provider: 'anthropic',
-        options: [{ value: 'haiku', label: 'Haiku 4.5', provider: 'anthropic' }],
+        options: [
+          {
+            value: 'haiku',
+            label: 'Haiku 4.5',
+            provider: 'anthropic',
+            effortOptions: [],
+          },
+        ],
       },
     }),
     onSetModel: () => {},
@@ -311,7 +330,12 @@ test('a model with no engine display name falls back to its id, not to nothing',
         contextWindow: null,
         selected: 'my-foundry-deployment',
         options: [
-          { value: 'my-foundry-deployment', label: 'Custom', provider: 'foundry' },
+          {
+            value: 'my-foundry-deployment',
+            label: 'Custom',
+            provider: 'foundry',
+            effortOptions: [],
+          },
         ],
       },
     }),
@@ -484,7 +508,7 @@ function pool(): AccountStatus[] {
   ]
 }
 
-test('AccountSwitcherPanel lists the real pool with a healthy count', () => {
+test('AccountSwitcherPanel lists the real pool under the column headers, with no title row', () => {
   const rows = pool()
   const html = renderToStaticMarkup(
     <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
@@ -492,9 +516,13 @@ test('AccountSwitcherPanel lists the real pool with a healthy count', () => {
   expect(html).toContain('hiby')
   expect(html).toContain('yoxrent')
   expect(html).toContain('oldcap')
-  // 2 of 3 healthy (hiby + yoxrent; oldcap is capped).
-  expect(html).toContain('/3 healthy')
-  expect(html).toContain('>2</span>/3 healthy')
+  // The panel opens straight on the column headers; the old title row (an
+  // "Accounts" label plus an "N/M healthy" tally) is gone, and "Account" as a
+  // column header carries the naming on its own.
+  expect(html).not.toContain('healthy')
+  expect(html).toContain('Account<')
+  expect(html).toContain('5h<')
+  expect(html).toContain('Weekly<')
 })
 
 test('AccountSwitcherPanel: only a switchable non-active row is an enabled switch target', () => {
@@ -528,6 +556,88 @@ test('AccountSwitcherPanel: a capped account shows its real availability label, 
   expect(html).toContain('20%')
 })
 
+test('AccountSwitcherPanel: weekly-only account (like main) expands the weekly bar across the full slot', () => {
+  const rows = [
+    account({
+      id: 'a-main',
+      alias: 'main',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 73,
+      usagePrimaryWindowSeconds: 604_800,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('73%')
+  expect(html).not.toContain('0%')
+  // Expanded weekly bar spans full slot width (156px) in the button row
+  expect(html).toContain('class="flex items-center gap-1.5 w-[156px]"')
+})
+
+test('AccountSwitcherPanel: five-hour-only account expands across the full slot', () => {
+  const rows = [
+    account({
+      id: 'a-five',
+      alias: 'five-only',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 45,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('45%')
+  expect(html).toContain('class="flex items-center gap-1.5 w-[156px]"')
+})
+
+test('AccountSwitcherPanel: dual-window account renders both 72px bars', () => {
+  const rows = [
+    account({
+      id: 'a-dual',
+      alias: 'bluesky',
+      isDefault: false,
+      switchable: true,
+      usagePrimary: 100,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: 55,
+      usageSecondaryWindowSeconds: 604_800,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('100%')
+  expect(html).toContain('55%')
+  expect(html).toContain('w-[72px]')
+})
+
+test('AccountSwitcherPanel: genuine 0% usage renders as 0%', () => {
+  const rows = [
+    account({
+      id: 'a-zero',
+      alias: 'fresh',
+      isDefault: true,
+      switchable: false,
+      usagePrimary: 0,
+      usagePrimaryWindowSeconds: 18_000,
+      usageWeekly: null,
+      usageSecondaryWindowSeconds: null,
+    }),
+  ]
+  const html = renderToStaticMarkup(
+    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
+  )
+  expect(html).toContain('0%')
+})
+
 test('AccountSwitcherPanel: dead and quarantined rows show their real label, never "Capped" (ACCT-1)', () => {
   const rows = [
     account({
@@ -555,19 +665,6 @@ test('AccountSwitcherPanel: dead and quarantined rows show their real label, nev
   expect(html).not.toContain('>Capped<')
   // Neither dead nor quarantined implies a reset timer.
   expect(html).not.toContain('↺')
-})
-
-test('AccountSwitcherPanel: the header count excludes a healthy account that hit its usage limit (ACCT-4)', () => {
-  const rows = [
-    account({ id: 'a-1', alias: 'one', status: 'healthy', usageLimitReached: false }),
-    account({ id: 'a-2', alias: 'two', status: 'healthy', usageLimitReached: true }),
-  ]
-  const html = renderToStaticMarkup(
-    <AccountSwitcherPanel active={rows[0]!} pool={rows} onSwitch={() => {}} />,
-  )
-  // Only 1 of 2 is truly ready, even though both report status 'healthy' —
-  // matches the sidecar's readyCount predicate, not a bare status check.
-  expect(html).toContain('>1</span>/2 healthy')
 })
 
 test('AccountSwitcherPanel: clicking a switchable row invokes onSwitch with its real id (ACCT-9)', () => {

@@ -216,9 +216,9 @@ export function ResumeConversation({
       }
       if (feature('COORDINATOR_MODE')) {
         /* eslint-disable @typescript-eslint/no-require-imports */
-        const agentModeModule = require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js');
+        const sessionModeModule = require('../coordinator/coordinatorMode.js') as typeof import('../coordinator/coordinatorMode.js');
         /* eslint-enable @typescript-eslint/no-require-imports */
-        const warning = agentModeModule.matchSessionMode(result_3.mode);
+        const warning = sessionModeModule.matchSessionMode(result_3.mode);
         if (warning) {
           /* eslint-disable @typescript-eslint/no-require-imports */
           const {
@@ -262,7 +262,7 @@ export function ResumeConversation({
         } = require('../utils/sessionStorage.js');
         const {
           getCurrentSessionMode
-        } = require('../agent-mode/agentMode.js') as typeof import('../agent-mode/agentMode.js');
+        } = require('../coordinator/coordinatorMode.js') as typeof import('../coordinator/coordinatorMode.js');
         /* eslint-enable @typescript-eslint/no-require-imports */
         saveMode(getCurrentSessionMode());
       }

@@ -1,3 +1,8 @@
+import {
+  MAX_ATTACHMENT_SOURCE_IMAGE_BYTES,
+  type AttachmentImageMediaType,
+} from '../../shared/hostApi.js'
+
 export const ACCEPTED_IMAGE_TYPES = [
   'image/jpeg',
   'image/png',
@@ -5,7 +10,7 @@ export const ACCEPTED_IMAGE_TYPES = [
   'image/webp',
 ] as const
 
-export type AcceptedImageType = (typeof ACCEPTED_IMAGE_TYPES)[number]
+export type AcceptedImageType = AttachmentImageMediaType
 
 export type PreparedImageAttachment = {
   mediaType: AcceptedImageType
@@ -14,7 +19,6 @@ export type PreparedImageAttachment = {
 }
 
 const MAX_IMAGE_BASE64_CHARS = 90_000
-const MAX_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024
 const MAX_IMAGE_EDGE = 1_600
 
 export async function prepareImageAttachment(
@@ -23,7 +27,7 @@ export async function prepareImageAttachment(
   if (!isAcceptedImageType(file.type)) {
     throw new Error('Choose a PNG, JPEG, GIF, or WebP image.')
   }
-  if (file.size > MAX_SOURCE_IMAGE_BYTES) {
+  if (file.size > MAX_ATTACHMENT_SOURCE_IMAGE_BYTES) {
     throw new Error('This image is too large to attach.')
   }
 
@@ -65,6 +69,28 @@ export async function prepareImageAttachment(
   }
 
   throw new Error('This image is too large to attach.')
+}
+
+/**
+ * The one image to attach out of a transfer's file list, or null when it carries
+ * none. Used by the composer's drop path, and shaped like the ⌘V path it shares
+ * `prepareImageAttachment` with: an accepted type wins, otherwise ANY `image/*`
+ * is still handed on so `prepareImageAttachment` can answer with its own
+ * "Choose a PNG, JPEG, GIF, or WebP image." rather than the drop silently doing
+ * nothing.
+ *
+ * Non-image files return null on purpose. Turning a dropped file into a path the
+ * engine reads would make the renderer the author of a filesystem path, which is
+ * exactly what HC1 forbids; that is a separate decision, not this fix.
+ */
+export function selectAttachableImageFile(
+  files: readonly File[],
+): File | null {
+  return (
+    files.find(file => isAcceptedImageType(file.type)) ??
+    files.find(file => file.type.startsWith('image/')) ??
+    null
+  )
 }
 
 function isAcceptedImageType(value: string): value is AcceptedImageType {

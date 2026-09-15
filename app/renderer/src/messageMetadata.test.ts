@@ -110,6 +110,7 @@ describe('selectMessageMetadata', () => {
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      isBackgrounded: false,
     }])
     expect(meta!.subagent).toEqual({
       toolUseId: 'toolu_parent',
@@ -118,6 +119,7 @@ describe('selectMessageMetadata', () => {
       agentType: 'verification',
       isSidechain: true,
       spawnedAt: 100,
+      isBackgrounded: false,
     })
   })
 
@@ -158,6 +160,7 @@ describe('buildSessionMetadataView', () => {
     cwdExists: true,
     title: 't',
     displayLabel: 't',
+    name: null,
     live: true,
     restorable: false,
     parked: false,
@@ -169,7 +172,7 @@ describe('buildSessionMetadataView', () => {
     transcriptActivityAtMs: null,
     gitBranch: null,
     tag: 'auth',
-    mode: 'agent',
+    mode: 'normal',
     agentSetting: null,
     prNumber: null,
     prRepository: null,
@@ -184,7 +187,7 @@ describe('buildSessionMetadataView', () => {
     })
     expect(view).toEqual({
       sessionId: 'engine-1',
-      mode: 'agent',
+      mode: 'normal',
       permissionMode: 'acceptEdits',
       tag: 'auth',
       threadGoal: goal,

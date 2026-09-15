@@ -410,19 +410,23 @@ export function validatePath(
     }
   }
 
-  // SECURITY: Reject paths containing ANY shell expansion syntax ($ or % characters,
-  // or paths starting with = which triggers Zsh equals expansion)
+  // SECURITY: Reject paths containing ANY shell expansion syntax.
   // - $VAR (Unix/Linux environment variables like $HOME, $PWD)
   // - ${VAR} (brace expansion)
   // - $(cmd) (command substitution)
+  // - `cmd` (backtick command substitution)
   // - %VAR% (Windows environment variables like %TEMP%, %USERPROFILE%)
   // - Nested combinations like $(echo $HOME)
   // - =cmd (Zsh equals expansion, e.g. =rg expands to /usr/bin/rg)
   // All of these are preserved as literal strings during validation but expanded
-  // by the shell during execution, creating a TOCTOU vulnerability
+  // by the shell during execution, creating a TOCTOU vulnerability.
+  // `%` is gated to Windows: %VAR% is a cmd.exe construct with no meaning to a
+  // POSIX shell, so on Unix it is an ordinary filename character (a percent
+  // encoded name like 'report%20.txt' must not require approval).
   if (
     cleanPath.includes('$') ||
-    cleanPath.includes('%') ||
+    (getPlatform() === 'windows' && cleanPath.includes('%')) ||
+    cleanPath.includes('`') ||
     cleanPath.startsWith('=')
   ) {
     return {

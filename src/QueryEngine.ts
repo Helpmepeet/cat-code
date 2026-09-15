@@ -34,9 +34,19 @@ import { loadMemoryPrompt } from './memdir/memdir.js'
 import { hasAutoMemPathOverride } from './memdir/paths.js'
 import { query } from './query.js'
 import { categorizeRetryableAPIError } from './services/api/errors.js'
-import type { MCPServerConnection } from './services/mcp/types.js'
+import type {
+  MCPServerConnection,
+  ServerResource,
+} from './services/mcp/types.js'
 import type { AppState } from './state/AppState.js'
-import { type Tools, type ToolUseContext, toolMatchesName } from './Tool.js'
+import {
+  type McpRuntimeInputs,
+  type McpRuntimeSnapshot,
+  type Tools,
+  type ToolUseContext,
+  toolMatchesName,
+} from './Tool.js'
+import { assembleToolPool } from './tools.js'
 import type { AgentDefinition } from './tools/AgentTool/loadAgentsDir.js'
 import { SYNTHETIC_OUTPUT_TOOL_NAME } from './tools/SyntheticOutputTool/SyntheticOutputTool.js'
 import type { Message, MessageOrigin, UserMessage } from './types/message.js'
@@ -102,6 +112,7 @@ import {
   localCommandOutputToSDKAssistantMessage,
   toSDKCompactMetadata,
   toSDKMessageOriginProp,
+  toSDKRetryError,
 } from './utils/messages/mappers.js'
 import { queuedCommandOrigin } from './utils/taskNotification.js'
 import {
@@ -127,11 +138,6 @@ const getCoordinatorUserContext: (
 ) => { [k: string]: string } = feature('COORDINATOR_MODE')
   ? require('./coordinator/coordinatorMode.js').getCoordinatorUserContext
   : () => ({})
-const getAgentModeUserContext: (
-  mcpClients: ReadonlyArray<{ name: string }>,
-  scratchpadDir?: string,
-) => Promise<{ [k: string]: string }> =
-  require('./agent-mode/agentMode.js').getAgentModeUserContext
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 // Dead code elimination: conditional import for snip compaction
@@ -149,6 +155,17 @@ export type QueryEngineConfig = {
   tools: Tools
   commands: Command[]
   mcpClients: MCPServerConnection[]
+  mcpResources?: Record<string, ServerResource[]>
+  /**
+   * Optional live MCP source. When supplied, `tools`, `commands`, and
+   * `mcpClients` above stop being the runtime values, while `tools` and
+   * `commands` become the static base the snapshot is layered onto: each turn
+   * reads one snapshot and assembles the tool pool, command catalog, clients,
+   * and resources from that single generation, and the query loop refreshes
+   * all four together between iterations. Callers without this keep their
+   * static values verbatim.
+   */
+  getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
   agents: AgentDefinition[]
   canUseTool: CanUseToolFn
   getAppState: () => AppState
@@ -217,6 +234,62 @@ export type ConversationRewindResult = {
  * turn within the same conversation. State (messages, file cache, usage, etc.)
  * persists across turns.
  */
+/**
+ * Resolve the MCP-dependent runtime inputs for one use.
+ *
+ * Static callers get their construction-time values back unchanged. Live
+ * callers get exactly one snapshot read, and every returned field is derived
+ * from that read — never from a second one — so the tools the model sees can
+ * never describe a server whose client or resources came from a different
+ * generation.
+ */
+export function resolveMcpRuntimeInputs(
+  config: Pick<
+    QueryEngineConfig,
+    | 'tools'
+    | 'commands'
+    | 'mcpClients'
+    | 'mcpResources'
+    | 'getMcpRuntimeSnapshot'
+    | 'getAppState'
+  >,
+): McpRuntimeInputs {
+  const {
+    tools,
+    commands,
+    mcpClients,
+    mcpResources,
+    getMcpRuntimeSnapshot,
+    getAppState,
+  } = config
+  if (!getMcpRuntimeSnapshot) {
+    return {
+      tools,
+      commands,
+      mcpClients,
+      mcpResources: mcpResources ?? {},
+    }
+  }
+  const snapshot = getMcpRuntimeSnapshot()
+  const liveMcpResources: Record<string, ServerResource[]> = {}
+  for (const [server, resources] of Object.entries(snapshot.resources)) {
+    liveMcpResources[server] = [...resources]
+  }
+  return {
+    // config.tools is the base pool, not a discardable default: SDK harnesses
+    // and tests inject tool sets that getTools() would not reproduce. Deny-rule
+    // filtering and name dedup still apply to the MCP half.
+    tools: assembleToolPool(
+      getAppState().toolPermissionContext,
+      snapshot.tools,
+      tools,
+    ),
+    commands: [...commands, ...snapshot.commands],
+    mcpClients: [...snapshot.clients],
+    mcpResources: liveMcpResources,
+  }
+}
+
 export class QueryEngine {
   private config: QueryEngineConfig
   private mutableMessages: Message[]
@@ -253,9 +326,7 @@ export class QueryEngine {
   ): AsyncGenerator<SDKMessage, void, unknown> {
     const {
       cwd,
-      commands,
-      tools,
-      mcpClients,
+      getMcpRuntimeSnapshot,
       verbose = false,
       thinkingConfig,
       maxTurns,
@@ -280,6 +351,21 @@ export class QueryEngine {
       flushCurrentTranscriptDurably:
         flushCurrentTranscriptDurablyFn = flushCurrentTranscriptDurably,
     } = this.config
+
+    // One snapshot read for the whole turn. The query loop re-reads it
+    // between iterations through refreshMcpRuntime below; nothing inside a
+    // single iteration reads it twice.
+    const turnRuntime = resolveMcpRuntimeInputs(this.config)
+    const { tools, commands, mcpClients, mcpResources } = turnRuntime
+    const mcpRuntimeOptions: Pick<
+      ToolUseContext['options'],
+      'refreshMcpRuntime' | 'getMcpRuntimeSnapshot'
+    > = getMcpRuntimeSnapshot
+      ? {
+          refreshMcpRuntime: () => resolveMcpRuntimeInputs(this.config),
+          getMcpRuntimeSnapshot,
+        }
+      : {}
 
     this.discoveredSkillNames.clear()
     setCwd(cwd)
@@ -334,7 +420,6 @@ export class QueryEngine {
       typeof customSystemPrompt === 'string' ? customSystemPrompt : undefined
     let {
       defaultSystemPrompt,
-      agentModePromptSections,
       userContext: baseUserContext,
       systemContext,
     } = await fetchSystemPromptParts({
@@ -353,10 +438,6 @@ export class QueryEngine {
         mcpClients,
         isScratchpadEnabled() ? getScratchpadDir() : undefined,
       ),
-      ...(await getAgentModeUserContext(
-        mcpClients,
-        isScratchpadEnabled() ? getScratchpadDir() : undefined,
-      )),
     }
 
     // When an SDK caller provides a custom system prompt AND has set
@@ -397,7 +478,8 @@ export class QueryEngine {
         mainLoopModel: initialMainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
-        mcpResources: {},
+        mcpResources,
+        ...mcpRuntimeOptions,
         ideInstallationStatus: null,
         isNonInteractiveSession: true,
         customSystemPrompt,
@@ -443,7 +525,6 @@ export class QueryEngine {
       customSystemPrompt: customPrompt,
       defaultSystemPrompt,
       appendSystemPrompt: effectiveAppendSystemPrompt,
-      agentModePromptSections,
     })
 
     // Register function hook for structured output enforcement
@@ -561,7 +642,7 @@ export class QueryEngine {
         (msg.type === 'user' &&
           !msg.isMeta && // Skip synthetic caveat messages
           !msg.toolUseResult && // Skip tool results (they'll be acked from query)
-          messageSelector().selectableUserMessagesFilter(msg)) || // Skip non-user-authored messages (task notifications, etc.)
+          messageSelector().replayableUserMessagesFilter(msg)) || // Skip engine output wearing a user role (task notifications, teammate relays)
         (msg.type === 'system' && msg.subtype === 'compact_boundary'), // Always ack compact boundaries
     )
     const messagesToAck = replayUserMessages ? replayableMessages : []
@@ -595,7 +676,6 @@ export class QueryEngine {
       })
 
       defaultSystemPrompt = refreshedPromptParts.defaultSystemPrompt
-      agentModePromptSections = refreshedPromptParts.agentModePromptSections
       systemContext = refreshedPromptParts.systemContext
       userContext = {
         ...refreshedPromptParts.userContext,
@@ -603,10 +683,6 @@ export class QueryEngine {
           mcpClients,
           isScratchpadEnabled() ? getScratchpadDir() : undefined,
         ),
-        ...(await getAgentModeUserContext(
-          mcpClients,
-          isScratchpadEnabled() ? getScratchpadDir() : undefined,
-        )),
       }
       systemPrompt = buildEffectiveSystemPrompt({
         mainThreadAgentDefinition: undefined,
@@ -614,7 +690,6 @@ export class QueryEngine {
         customSystemPrompt: customPrompt,
         defaultSystemPrompt,
         appendSystemPrompt: effectiveAppendSystemPrompt,
-        agentModePromptSections,
       })
     }
 
@@ -633,7 +708,8 @@ export class QueryEngine {
         mainLoopModel,
         thinkingConfig: initialThinkingConfig,
         mcpClients,
-        mcpResources: {},
+        mcpResources,
+        ...mcpRuntimeOptions,
         ideInstallationStatus: null,
         isNonInteractiveSession: true,
         customSystemPrompt,
@@ -687,7 +763,7 @@ export class QueryEngine {
     if (!shouldQuery) {
       // Return the results of local slash commands.
       // Use messagesFromUserInput (not replayableMessages) for command output
-      // because selectableUserMessagesFilter excludes local-command-stdout tags.
+      // because replayableUserMessagesFilter excludes local-command-stdout tags.
       for (const msg of messagesFromUserInput) {
         if (
           msg.type === 'user' &&
@@ -771,7 +847,7 @@ export class QueryEngine {
 
     if (fileHistoryEnabled() && persistSession) {
       messagesFromUserInput
-        .filter(messageSelector().selectableUserMessagesFilter)
+        .filter(messageSelector().replayableUserMessagesFilter)
         .forEach(message => {
           void fileHistoryMakeSnapshot(
             (updater: (prev: FileHistoryState) => FileHistoryState) => {
@@ -1261,6 +1337,11 @@ export class QueryEngine {
           result.message.content[0]?.text === INTERRUPT_MESSAGE_FOR_TOOL_USE))
 
     if (isInterrupted) {
+      const abortReason = this.abortController.signal.reason
+      const stopReason =
+        typeof abortReason === 'string' && abortReason.length > 0
+          ? abortReason
+          : lastStopReason ?? 'interrupted'
       yield {
         type: 'result',
         subtype: 'interrupted',
@@ -1268,7 +1349,7 @@ export class QueryEngine {
         duration_api_ms: getTotalAPIDuration(),
         is_error: false,
         num_turns: turnCount,
-        stop_reason: lastStopReason ?? 'interrupted',
+        stop_reason: stopReason,
         session_id: getSessionId(),
         total_cost_usd: getTotalCost(),
         usage: this.totalUsage,
@@ -1367,8 +1448,8 @@ export class QueryEngine {
     }
   }
 
-  interrupt(): void {
-    this.abortController.abort()
+  interrupt(reason?: string): void {
+    this.abortController.abort(reason)
   }
 
   refreshAbortController(): AbortController {

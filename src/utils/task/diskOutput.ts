@@ -10,7 +10,7 @@ import {
 import { join } from 'path'
 import { getSessionId } from '../../bootstrap/state.js'
 import { getErrnoCode } from '../errors.js'
-import { readFileRange, tailFile } from '../fsOperations.js'
+import { tailFile } from '../fsOperations.js'
 import { logError } from '../log.js'
 import { getProjectTempDir } from '../permissions/filesystem.js'
 
@@ -295,38 +295,6 @@ export function evictTaskOutput(taskId: string): Promise<void> {
       }
     })(),
   )
-}
-
-/**
- * Get delta (new content) since last read.
- * Reads only from the byte offset, up to maxBytes — never loads the full file.
- */
-export async function getTaskOutputDelta(
-  taskId: string,
-  fromOffset: number,
-  maxBytes: number = DEFAULT_MAX_READ_BYTES,
-): Promise<{ content: string; newOffset: number }> {
-  try {
-    const result = await readFileRange(
-      getTaskOutputPath(taskId),
-      fromOffset,
-      maxBytes,
-    )
-    if (!result) {
-      return { content: '', newOffset: fromOffset }
-    }
-    return {
-      content: result.content,
-      newOffset: fromOffset + result.bytesRead,
-    }
-  } catch (e) {
-    const code = getErrnoCode(e)
-    if (code === 'ENOENT') {
-      return { content: '', newOffset: fromOffset }
-    }
-    logError(e)
-    return { content: '', newOffset: fromOffset }
-  }
 }
 
 /**

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test'
 import type { Message } from '../types/message.js'
 import type { QueuedCommand } from '../types/textInputTypes.js'

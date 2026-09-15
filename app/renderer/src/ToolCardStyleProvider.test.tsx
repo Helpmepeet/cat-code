@@ -3,14 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ToolCardStyleProvider } from './ToolCardStyleProvider.js'
 import { ToolCardStylePreview } from './ToolCardStylePreview.js'
 import { TOOL_CARD_STYLE_STORAGE_KEY } from './toolCardStyle.js'
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-  }
-}
+import { memoryStorage as storage } from './viewPreferenceStorageFixture.js'
 
 /**
  * The whole point of this file: storage → the provider's state initializer →

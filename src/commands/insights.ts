@@ -25,6 +25,7 @@ import { toError } from '../utils/errors.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import { lazySchema } from '../utils/lazySchema.js'
 import { logError } from '../utils/log.js'
+import { extractTextContent } from '../utils/messages.js'
 import { getDefaultOpusModel } from '../utils/model/model.js'
 import { sideQuery } from '../utils/sideQuery.js'
 import {
@@ -37,6 +38,7 @@ import { jsonParse, jsonStringify } from '../utils/slowOperations.js'
 import { countCharInString } from '../utils/stringUtils.js'
 import { asSystemPrompt } from '../utils/systemPromptType.js'
 import { escapeXmlAttr as escapeHtml } from '../utils/xml.js'
+import { z } from 'zod'
 
 // Model for facet extraction and summarization (Opus - best quality)
 function getAnalysisModel(): string {

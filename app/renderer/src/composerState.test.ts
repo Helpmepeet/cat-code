@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 
 import type { AgentConfigSnapshot, ServerFrame } from '../../shared/protocol.js'
+import { reducePromptDrafts, selectPromptDraft } from './appModel.js'
 import {
+  applyRefusedSubmitRestoration,
   createRetainedSubmitState,
   foldRecalledPrompts,
   reduceRetainedSubmitCleared,
@@ -17,6 +19,7 @@ import {
   buildSubmitPrompt,
   caretAtHistoryEdge,
   countNewlines,
+  createFileAttachmentState,
   createHistoryState,
   createImageAttachmentState,
   createPasteState,
@@ -32,6 +35,8 @@ import {
   pasteTokenBeforeCaret,
   PASTE_MAX_LINES,
   PASTE_THRESHOLD,
+  reduceFileAttachmentRemoved,
+  reduceFileAttachmentSelected,
   reduceHistoryPushed,
   reduceImageAttachmentAdded,
   reduceImageAttachmentRemoved,
@@ -58,8 +63,11 @@ import {
   reduceTransportErrorSet,
   resolvePendingSubmit,
   restoreSelectedPrompt,
+  restoreDraftWithRefusedSnapshot,
   restoreDraftWithPending,
+  composerPromptPlaceholder,
   selectComposerGate,
+  selectFileAttachment,
   selectPendingSubmit,
   selectTransportError,
   shouldReleasePendingSubmitOnStop,
@@ -599,6 +607,30 @@ function gateInput(overrides: Partial<ComposerGateInput> = {}): ComposerGateInpu
   }
 }
 
+/**
+ * The editable composer's prompt (PEER-SESSIONS §6). A named session is
+ * addressed by its own name; an unnamed one keeps the original string, which is
+ * the case for every session that predates the field.
+ */
+describe('composer prompt placeholder', () => {
+  test('a named session is addressed by its name', () => {
+    expect(composerPromptPlaceholder('Bear')).toBe(
+      'Ask Bear anything or describe a task…',
+    )
+  })
+
+  test('an unnamed session keeps the original prompt, byte for byte', () => {
+    // Pinned as a literal, not derived: this is the string on screen for every
+    // existing install, and a "harmless" reword of it would ship unreviewed.
+    const original = 'Ask Cat Code anything or describe a task…'
+    expect(composerPromptPlaceholder(null)).toBe(original)
+    // A name that is only whitespace is not a name; it would otherwise render
+    // as "Ask  anything or describe a task…".
+    expect(composerPromptPlaceholder('')).toBe(original)
+    expect(composerPromptPlaceholder('   ')).toBe(original)
+  })
+})
+
 describe('composer gate — three reasons the engine cannot take a submit YET', () => {
   test('a live, idle session is editable and engine-enabled', () => {
     const gate = selectComposerGate(gateInput())
@@ -1019,6 +1051,46 @@ describe('image attachment submit state', () => {
     ])
   })
 
+  test('appends sequential images with stable ids and submits both blocks', () => {
+    let state = createImageAttachmentState()
+    state = reduceImageAttachmentAdded(state, S1, image)
+    const firstAttachment = selectImageAttachments(state, S1)[0]!
+    const secondImage = {
+      mediaType: 'image/webp' as const,
+      data: 'BBBB',
+      name: 'second.webp',
+    }
+
+    state = reduceImageAttachmentAdded(state, S1, secondImage)
+    const attachments = selectImageAttachments(state, S1)
+
+    expect(attachments).toEqual([
+      { ...image, id: 1 },
+      { ...secondImage, id: 2 },
+    ])
+    expect(attachments[0]).toEqual(firstAttachment)
+    expect(new Set(attachments.map(attachment => attachment.id)).size).toBe(2)
+    expect(buildSubmitPrompt('inspect both', attachments)).toEqual([
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/png',
+          data: 'AAAA',
+        },
+      },
+      {
+        type: 'image',
+        source: {
+          type: 'base64',
+          media_type: 'image/webp',
+          data: 'BBBB',
+        },
+      },
+      { type: 'text', text: 'inspect both' },
+    ])
+  })
+
   test('an image-only prompt is sendable and removal clears its session state', () => {
     let state = reduceImageAttachmentAdded(createImageAttachmentState(), S1, image)
     const attachments = selectImageAttachments(state, S1)
@@ -1038,6 +1110,21 @@ describe('image attachment submit state', () => {
 
     state = reduceImageAttachmentRemoved(state, S1, attachments[0]!.id)
     expect(selectImageAttachments(state, S1)).toEqual([])
+  })
+})
+
+describe('native file attachment state', () => {
+  const file = { name: 'recommendation.md', token: 'picker-token' }
+
+  test('keeps an opaque selection scoped to its session', () => {
+    let state = createFileAttachmentState()
+    state = reduceFileAttachmentSelected(state, S1, file)
+
+    expect(selectFileAttachment(state, S1)).toEqual(file)
+    expect(selectFileAttachment(state, S2)).toBeNull()
+
+    state = reduceFileAttachmentRemoved(state, S1)
+    expect(selectFileAttachment(state, S1)).toBeNull()
   })
 })
 
@@ -1477,6 +1564,231 @@ describe('D5 — a refused submit comes back, images included', () => {
     expect(outcome.state[S1]).toBeUndefined()
   })
 
+  test('refusals across out-of-order batches restore original order ahead of the live draft', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-first',
+      text: 'FIRST',
+      images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-second',
+      text: 'SECOND',
+      images: [image],
+    })
+
+    const secondFirst = reduceSubmitAnswers(state, [
+      submitAnswerFrame(S1, 'sub-second', false),
+    ])
+    expect(secondFirst.restored.map(item => item.retained.text)).toEqual(['SECOND'])
+    expect(secondFirst.state[S1]?.[1]?.settlement).toBe('refused')
+
+    const replay = reduceSubmitAnswers(secondFirst.state, [
+      submitAnswerFrame(S1, 'sub-second', false),
+    ])
+    expect(replay).toEqual({ state: secondFirst.state, restored: [] })
+
+    const firstLater = reduceSubmitAnswers(replay.state, [
+      submitAnswerFrame(S1, 'sub-first', false),
+    ])
+    expect(firstLater.restored.map(item => item.retained.text)).toEqual([
+      'FIRST',
+      'SECOND',
+    ])
+    expect(firstLater.restored[1]?.retained.images).toEqual([image])
+    expect(firstLater.state[S1]).toBeUndefined()
+    const secondDraft = restoreDraftWithRefusedSnapshot(
+      'CURRENT DRAFT',
+      null,
+      secondFirst.restored.map(item => item.retained),
+    )
+    expect(secondDraft.draft).toBe('SECOND\nCURRENT DRAFT')
+    expect(restoreDraftWithRefusedSnapshot(
+      secondDraft.draft,
+      secondDraft.state,
+      firstLater.restored.map(item => item.retained),
+    ).draft).toBe('FIRST\nSECOND\nCURRENT DRAFT')
+  })
+
+  test('a known refusal is released without waiting for a later unanswered submit', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-refused',
+      text: 'KNOWN REFUSAL',
+      images: [image],
+      file: { name: 'evidence.txt', token: 'file-token' },
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'sub-unknown',
+      text: 'STILL IN FLIGHT',
+      images: [],
+    })
+
+    const refused = reduceSubmitAnswers(state, [
+      submitAnswerFrame(S1, 'sub-refused', false),
+    ])
+
+    expect(refused.restored).toEqual([{
+      sessionId: S1,
+      retained: {
+        submitId: 'sub-refused',
+        text: 'KNOWN REFUSAL',
+        images: [image],
+        file: { name: 'evidence.txt', token: 'file-token' },
+      },
+    }])
+    expect(refused.state[S1]).toEqual([
+      {
+        submitId: 'sub-refused',
+        text: 'KNOWN REFUSAL',
+        images: [image],
+        file: { name: 'evidence.txt', token: 'file-token' },
+        settlement: 'refused',
+        restored: true,
+      },
+      {
+        submitId: 'sub-unknown',
+        text: 'STILL IN FLIGHT',
+        images: [],
+      },
+    ])
+
+    // A replayed answer cannot restore the released copy twice.
+    expect(reduceSubmitAnswers(refused.state, [
+      submitAnswerFrame(S1, 'sub-refused', false),
+    ])).toEqual({ state: refused.state, restored: [] })
+  })
+
+  test('forward-batch refusals replace their prefix without reversing live draft text', () => {
+    let state = createRetainedSubmitState()
+    for (const [submitId, text] of [['A', 'FIRST'], ['B', 'SECOND']] as const) {
+      state = reduceRetainedSubmitHeld(state, S1, { submitId, text, images: [] })
+    }
+    const first = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'A', false)])
+    const firstDraft = restoreDraftWithRefusedSnapshot(
+      'CURRENT', null, first.restored.map(item => item.retained),
+    )
+    const second = reduceSubmitAnswers(first.state, [submitAnswerFrame(S1, 'B', false)])
+    const secondDraft = restoreDraftWithRefusedSnapshot(
+      `${firstDraft.draft} EDITED`,
+      firstDraft.state,
+      second.restored.map(item => item.retained),
+    )
+    expect(secondDraft.draft).toBe('FIRST\nSECOND\nCURRENT EDITED')
+  })
+
+  test('a later known refusal is restored even while an earlier submit stays unknown', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'A', text: 'UNKNOWN', images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'B', text: 'KNOWN', images: [image],
+    })
+    const outcome = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'B', false)])
+    expect(outcome.restored.map(item => item.retained.submitId)).toEqual(['B'])
+    expect(outcome.state[S1]?.[1]).toMatchObject({
+      submitId: 'B', settlement: 'refused', restored: true,
+    })
+    const restored = restoreDraftWithRefusedSnapshot(
+      'LIVE EDIT', null, outcome.restored.map(item => item.retained),
+    )
+    expect(restored.draft).toBe('KNOWN\nLIVE EDIT')
+    expect(restored.retained[0]?.images).toEqual([image])
+
+    // A lifecycle/close cleanup can now discard only the transport copies: the
+    // known refusal has already reached the composer, while unknown A is never
+    // claimed or resent.
+    const cleaned = reduceRetainedSubmitCleared(outcome.state, S1)
+    expect(cleaned[S1]).toBeUndefined()
+  })
+
+  test('editing a restored prefix preserves the edit and does not restore its attachments twice', () => {
+    const old = { submitId: 'A', text: 'OLD', images: [image] }
+    const first = restoreDraftWithRefusedSnapshot('LIVE', null, [old])
+    const next = { submitId: 'B', text: 'NEW', images: [] }
+    const edited = restoreDraftWithRefusedSnapshot(
+      'user rewrote OLD\nLIVE',
+      first.state,
+      [old, next],
+    )
+    expect(edited.draft).toBe('NEW\nuser rewrote OLD\nLIVE')
+    expect(edited.retained).toEqual([next])
+  })
+
+  test('App restoration actions compose atomically against the latest draft state', () => {
+    const drafts = { [S1]: 'CURRENT' }
+    const a = { submitId: 'A', text: 'A', images: [image] }
+    const b = { submitId: 'B', text: 'B', images: [] }
+    const first = applyRefusedSubmitRestoration(
+      drafts, new Map(), S1, [a],
+    )
+    const second = applyRefusedSubmitRestoration(
+      first.drafts, first.recovery, S1, [a, b],
+    )
+    expect(selectPromptDraft(second.drafts, S1)).toBe('A\nB\nCURRENT')
+    expect(first.images).toEqual([image])
+    expect(second.images).toBeNull()
+    // Inputs stay immutable, so React StrictMode may evaluate the transition
+    // twice without duplicating a prefix or mutating shared recovery metadata.
+    expect(applyRefusedSubmitRestoration(
+      first.drafts, first.recovery, S1, [a, b],
+    )).toEqual(second)
+  })
+
+  test('an interleaved recall is preserved when another refusal arrives before render', () => {
+    const a = { submitId: 'A', text: 'A', images: [] }
+    const b = { submitId: 'B', text: 'B', images: [] }
+    const first = applyRefusedSubmitRestoration(
+      { [S1]: 'LIVE' }, new Map(), S1, [a],
+    )
+    const recalledDrafts = reducePromptDrafts(
+      first.drafts,
+      S1,
+      restoreDraftWithPending(selectPromptDraft(first.drafts, S1), 'RECALLED'),
+    )
+    const second = applyRefusedSubmitRestoration(
+      recalledDrafts, first.recovery, S1, [a, b],
+    )
+    const draft = selectPromptDraft(second.drafts, S1)
+    expect(draft).toBe('B\nRECALLED\nA\nLIVE')
+    expect(draft.split('\n').filter(line => line === 'A')).toHaveLength(1)
+  })
+
+  test('accepting the final sibling clears already-restored transport copies', () => {
+    let state = createRetainedSubmitState()
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'A', text: 'A', images: [],
+    })
+    state = reduceRetainedSubmitHeld(state, S1, {
+      submitId: 'B', text: 'B', images: [],
+    })
+    const refused = reduceSubmitAnswers(state, [submitAnswerFrame(S1, 'A', false)])
+    expect(refused.state[S1]?.[0]).toMatchObject({ restored: true })
+    const accepted = reduceSubmitAnswers(
+      refused.state, [submitAnswerFrame(S1, 'B', true)],
+    )
+    expect(accepted).toEqual({ state: {}, restored: [] })
+  })
+
+  test('an older refusal arriving later cannot replace the newer refused image', () => {
+    const older = {
+      submitId: 'A', text: 'A', images: [{ ...image, data: 'OLDER' }],
+    }
+    const newer = {
+      submitId: 'B', text: 'B', images: [{ ...image, data: 'NEWER' }],
+    }
+    const b = applyRefusedSubmitRestoration(
+      { [S1]: 'LIVE' }, new Map(), S1, [newer],
+    )
+    expect(b.images?.[0]?.data).toBe('NEWER')
+    const a = applyRefusedSubmitRestoration(
+      b.drafts, b.recovery, S1, [older, newer],
+    )
+    expect(a.images).toBeNull()
+    expect(selectPromptDraft(a.drafts, S1)).toBe('A\nB\nLIVE')
+  })
+
   test('a park refusal carrying a recall’s id cannot refuse a submit', () => {
     // `handlePromptRecall`'s parking branch answers with the RECALL's requestId
     // on an error frame. Positionally that read as a refusal of whatever submit
@@ -1575,11 +1887,7 @@ describe('D1b — folding recalled messages back into the composer', () => {
     ])
   })
 
-  test('two image-bearing messages fold to ONE image, the most recent', () => {
-    // The composer holds exactly one image and the submit schema caps base64 as
-    // a total across the prompt, so restoring one per message would build a
-    // draft the sidecar refuses, which the refusal path restores again: the
-    // user can neither send nor easily clear it.
+  test('two image-bearing messages preserve both images in message order', () => {
     const folded = foldRecalledPrompts([
       {
         id: 'a',
@@ -1605,7 +1913,8 @@ describe('D1b — folding recalled messages back into the composer', () => {
 
     expect(folded.text).toBe('first\nsecond')
     expect(folded.images).toEqual([
-      { id: 1, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
+      { id: 1, mediaType: 'image/png', data: 'AAAA', name: 'image' },
+      { id: 2, mediaType: 'image/webp', data: 'BBBB', name: 'image' },
     ])
   })
 

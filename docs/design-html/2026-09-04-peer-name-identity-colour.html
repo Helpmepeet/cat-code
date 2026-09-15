@@ -1,0 +1,269 @@
+<title>Peer Name Identity Colour</title>
+<style>
+  :root {
+    --page-bg: #16161a;
+    --page-fg: #e6e6ea;
+    --page-dim: #9a9aa4;
+    --page-line: rgba(255, 255, 255, 0.1);
+    --page-card: #1d1d22;
+    font-family: ui-sans-serif, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  body {
+    margin: 0;
+    background: var(--page-bg);
+    color: var(--page-fg);
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 56px 28px 120px; }
+  h1 { font-size: 25px; font-weight: 620; letter-spacing: -0.02em; margin: 0 0 6px; }
+  h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--page-dim);
+    margin: 56px 0 14px; padding-bottom: 9px;
+    border-bottom: 1px solid var(--page-line);
+  }
+  p { margin: 0 0 13px; max-width: 74ch; color: #c8c8d0; }
+  .lede { font-size: 15px; color: var(--page-dim); margin-bottom: 4px; }
+  code {
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.88em; background: rgba(255,255,255,0.07);
+    padding: 1px 5px; border-radius: 4px;
+  }
+  .note {
+    border-left: 2px solid rgba(255,255,255,0.18);
+    padding: 2px 0 2px 14px; margin: 18px 0; color: var(--page-dim);
+    max-width: 74ch;
+  }
+
+  /* ---- app frame: reproduces the real sidebar shell ---- */
+  .stage { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 18px; }
+  @media (max-width: 900px) { .stage { grid-template-columns: 1fr; } }
+  .stage-col > .cap {
+    font-size: 11px; color: var(--page-dim); margin-bottom: 8px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .cap .tag {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em;
+    padding: 2px 6px; border-radius: 3px; border: 1px solid var(--page-line);
+  }
+  .tag.now { color: #9a9aa4; }
+  .tag.next { color: #e6e6ea; border-color: rgba(255,255,255,0.3); }
+
+  .app {
+    border-radius: 9px; overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.09);
+    font-size: 13px;
+  }
+  .app.dark { background: #09090b; }
+  .app.light { background: #fcfcfd; }
+  .rail { padding: 9px 7px; }
+  .grouphead {
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+    padding: 7px 6px 5px;
+  }
+  .app.dark .grouphead { color: #75757b; }
+  .app.light .grouphead { color: #767680; }
+
+  .row {
+    display: flex; flex-direction: column; gap: 1px;
+    padding: 6px 8px 6px 7px; border-radius: 6px;
+    border: 1px solid transparent;
+  }
+  .row.active.dark-a { border-color: rgba(244,114,182,0.18); background: rgba(244,114,182,0.09); }
+  .row.active.light-a { border-color: rgba(244,114,182,0.22); background: rgba(244,114,182,0.08); }
+  .row .title { font-size: 12.5px; }
+  .app.dark .row .title { color: #f4f4f5; }
+  .app.light .row .title { color: #18181b; }
+
+  /* the subtitle line, exactly `time · name` at 10px */
+  .sub { display: flex; align-items: center; gap: 5px; font-size: 10px; }
+  .app.dark .sub { color: #838389; }
+  .app.light .sub { color: #6a6a74; }
+  .app.dark .sub .dot { color: #75757b; }
+  .app.light .sub .dot { color: #767680; }
+  .nm { font-variant-numeric: tabular-nums; }
+
+  /* ---- identity tints ---- */
+  .app.dark  .p1 { color: #5fb3ac; } .app.light  .p1 { color: #2f7a74; }
+  .app.dark  .p2 { color: #7ba7dd; } .app.light  .p2 { color: #3a6ea8; }
+  .app.dark  .p3 { color: #a996e6; } .app.light  .p3 { color: #6a55b5; }
+  .app.dark  .p4 { color: #d38fc4; } .app.light  .p4 { color: #a3468c; }
+  .app.dark  .p5 { color: #c99a7c; } .app.light  .p5 { color: #8a5c3c; }
+  .app.dark  .p6 { color: #9bb583; } .app.light  .p6 { color: #55743f; }
+
+  /* ---- transcript seam ---- */
+  .seam {
+    border-radius: 9px; border: 1px solid rgba(255,255,255,0.09);
+    padding: 26px 24px; font-size: 13px;
+  }
+  .seam.dark { background: #09090b; }
+  .seam.light { background: #fcfcfd; }
+  .seamline {
+    display: flex; align-items: center; gap: 7px; font-size: 11px;
+    padding-bottom: 14px; margin-bottom: 14px;
+  }
+  .seam.dark .seamline { color: #838389; border-bottom: 1px solid rgba(255,255,255,0.06); }
+  .seam.light .seamline { color: #6a6a74; border-bottom: 1px solid rgba(0,0,0,0.07); }
+  .seam .body { max-width: none; }
+  .seam.dark .body { color: #a1a1aa; }
+  .seam.light .body { color: #52525b; }
+
+  /* ---- swatch grid ---- */
+  .sw { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; margin-top: 16px; }
+  .swatch { border: 1px solid var(--page-line); border-radius: 7px; overflow: hidden; }
+  .swatch .chip { height: 42px; display: flex; align-items: flex-end; padding: 6px 8px; }
+  .swatch .meta { padding: 7px 9px; font-size: 10.5px; color: var(--page-dim); display: flex; justify-content: space-between; }
+  .swatch .meta b { color: var(--page-fg); font-weight: 500; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* ---- status vs identity proof ---- */
+  .proof { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .pill {
+    background: #09090b; border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 6px; padding: 8px 12px; font-size: 11px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .pill .lbl { color: #75757b; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; }
+
+  table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--page-line); vertical-align: top; }
+  th { font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--page-dim); font-weight: 600; }
+  td.q { color: var(--page-dim); }
+</style>
+
+<div class="wrap">
+
+  <h1>Peer name identity colour</h1>
+  <p class="lede">A name in the sidebar is currently the same grey as the timestamp beside it. This is what it would look like if it were not.</p>
+
+  <h2>What is actually wrong</h2>
+  <p>The subtitle renders <code>time · name</code> inside one element carrying <code>text-text-faint</code>. The name inherits it, so both halves are <code>#838389</code> and the divider is one step darker. There is no visual boundary between the two, which is the whole complaint: the name is present but not findable.</p>
+  <div class="note">Nothing is broken. It reads as a single grey string because it <em>is</em> a single grey string.</div>
+
+  <h2>Proposal, in the frame it lives in</h2>
+  <p>Same sidebar, same rows, same six peers. Left is today. Right is the proposal.</p>
+
+  <div class="stage">
+    <div class="stage-col">
+      <div class="cap"><span class="tag now">now</span> one grey, name and time alike</div>
+      <div class="app dark">
+        <div class="rail">
+          <div class="grouphead">cat-code</div>
+          <div class="row active dark-a"><div class="title">Peer request plane wiring</div><div class="sub"><span>14m</span><span class="dot">·</span><span class="nm">Quartz</span></div></div>
+          <div class="row"><div class="title">Renderer projector audit</div><div class="sub"><span>31m</span><span class="dot">·</span><span class="nm">Basalt</span></div></div>
+          <div class="row"><div class="title">Sidecar boundary tests</div><div class="sub"><span>1h</span><span class="dot">·</span><span class="nm">Cinnabar</span></div></div>
+          <div class="row"><div class="title">Transcript backfill worker</div><div class="sub"><span>2h</span><span class="dot">·</span><span class="nm">Onyx</span></div></div>
+          <div class="row"><div class="title">Accounts pool review</div><div class="sub"><span>3h</span><span class="dot">·</span><span class="nm">Feldspar</span></div></div>
+          <div class="row"><div class="title">Untitled session</div><div class="sub"><span>5h</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage-col">
+      <div class="cap"><span class="tag next">proposed</span> name carries its own tint</div>
+      <div class="app dark">
+        <div class="rail">
+          <div class="grouphead">cat-code</div>
+          <div class="row active dark-a"><div class="title">Peer request plane wiring</div><div class="sub"><span>14m</span><span class="dot">·</span><span class="nm p3">Quartz</span></div></div>
+          <div class="row"><div class="title">Renderer projector audit</div><div class="sub"><span>31m</span><span class="dot">·</span><span class="nm p1">Basalt</span></div></div>
+          <div class="row"><div class="title">Sidecar boundary tests</div><div class="sub"><span>1h</span><span class="dot">·</span><span class="nm p5">Cinnabar</span></div></div>
+          <div class="row"><div class="title">Transcript backfill worker</div><div class="sub"><span>2h</span><span class="dot">·</span><span class="nm p2">Onyx</span></div></div>
+          <div class="row"><div class="title">Accounts pool review</div><div class="sub"><span>3h</span><span class="dot">·</span><span class="nm p4">Feldspar</span></div></div>
+          <div class="row"><div class="title">Untitled session</div><div class="sub"><span>5h</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p style="margin-top:22px">The same pair in light appearance, because both ship and a tint that works on near-black can vanish on near-white.</p>
+
+  <div class="stage">
+    <div class="stage-col">
+      <div class="cap"><span class="tag now">now</span> light</div>
+      <div class="app light">
+        <div class="rail">
+          <div class="grouphead">cat-code</div>
+          <div class="row active light-a"><div class="title">Peer request plane wiring</div><div class="sub"><span>14m</span><span class="dot">·</span><span class="nm">Quartz</span></div></div>
+          <div class="row"><div class="title">Renderer projector audit</div><div class="sub"><span>31m</span><span class="dot">·</span><span class="nm">Basalt</span></div></div>
+          <div class="row"><div class="title">Sidecar boundary tests</div><div class="sub"><span>1h</span><span class="dot">·</span><span class="nm">Cinnabar</span></div></div>
+          <div class="row"><div class="title">Transcript backfill worker</div><div class="sub"><span>2h</span><span class="dot">·</span><span class="nm">Onyx</span></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="stage-col">
+      <div class="cap"><span class="tag next">proposed</span> light</div>
+      <div class="app light">
+        <div class="rail">
+          <div class="grouphead">cat-code</div>
+          <div class="row active light-a"><div class="title">Peer request plane wiring</div><div class="sub"><span>14m</span><span class="dot">·</span><span class="nm p3">Quartz</span></div></div>
+          <div class="row"><div class="title">Renderer projector audit</div><div class="sub"><span>31m</span><span class="dot">·</span><span class="nm p1">Basalt</span></div></div>
+          <div class="row"><div class="title">Sidecar boundary tests</div><div class="sub"><span>1h</span><span class="dot">·</span><span class="nm p5">Cinnabar</span></div></div>
+          <div class="row"><div class="title">Transcript backfill worker</div><div class="sub"><span>2h</span><span class="dot">·</span><span class="nm p2">Onyx</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2>The constraint that shaped the palette</h2>
+  <p><code>theme.css</code> already states it: a hue that carries meaning "must not move with a taste preference." Green means healthy, amber means warning, red means danger, blue is both info and a config source. Five of those hues are also selectable accents. So identity colours cannot simply be picked from the wheel: a peer tinted red would read as a peer in trouble.</p>
+  <p>The way out is to separate identity from status by <strong>saturation, not hue</strong>. Status colours in this app are vivid. Identity tints are muted, sitting one step above the grey ramp rather than competing with the accent. That frees the whole wheel, including green and amber, because a muted sage at 10px does not read as "healthy".</p>
+
+  <div class="proof">
+    <div class="pill"><span class="lbl">status</span><span style="color:#4ade80">healthy</span></div>
+    <div class="pill"><span class="lbl">status</span><span style="color:#fbbf24">warning</span></div>
+    <div class="pill"><span class="lbl">status</span><span style="color:#f87171">failed</span></div>
+    <div class="pill"><span class="lbl">status</span><span style="color:#60a5fa">info</span></div>
+    <div class="pill"><span class="lbl">identity</span><span style="color:#9bb583">Feldspar</span></div>
+    <div class="pill"><span class="lbl">identity</span><span style="color:#c99a7c">Cinnabar</span></div>
+    <div class="pill"><span class="lbl">identity</span><span style="color:#5fb3ac">Basalt</span></div>
+    <div class="pill"><span class="lbl">identity</span><span style="color:#7ba7dd">Onyx</span></div>
+  </div>
+  <p style="margin-top:14px">Read the two rows against each other. The status colours announce; the identity tints label. That difference is what stops a green peer name from being mistaken for a green health chip.</p>
+
+  <h2>The six</h2>
+  <p>Six rather than more, because at 10px two neighbouring hues stop being distinguishable and a bigger set buys collisions rather than clarity.</p>
+
+  <div class="sw">
+    <div class="swatch"><div class="chip" style="background:#5fb3ac"></div><div class="meta"><b>teal</b><span class="mono">#5fb3ac</span></div><div class="meta"><span>light</span><span class="mono">#2f7a74</span></div></div>
+    <div class="swatch"><div class="chip" style="background:#7ba7dd"></div><div class="meta"><b>blue</b><span class="mono">#7ba7dd</span></div><div class="meta"><span>light</span><span class="mono">#3a6ea8</span></div></div>
+    <div class="swatch"><div class="chip" style="background:#a996e6"></div><div class="meta"><b>violet</b><span class="mono">#a996e6</span></div><div class="meta"><span>light</span><span class="mono">#6a55b5</span></div></div>
+    <div class="swatch"><div class="chip" style="background:#d38fc4"></div><div class="meta"><b>magenta</b><span class="mono">#d38fc4</span></div><div class="meta"><span>light</span><span class="mono">#a3468c</span></div></div>
+    <div class="swatch"><div class="chip" style="background:#c99a7c"></div><div class="meta"><b>clay</b><span class="mono">#c99a7c</span></div><div class="meta"><span>light</span><span class="mono">#8a5c3c</span></div></div>
+    <div class="swatch"><div class="chip" style="background:#9bb583"></div><div class="meta"><b>sage</b><span class="mono">#9bb583</span></div><div class="meta"><span>light</span><span class="mono">#55743f</span></div></div>
+  </div>
+
+  <h2>The other surface</h2>
+  <p>The name also opens a transcript, in the provenance seam a created session starts with. Same tint, so a peer is the same colour wherever it appears.</p>
+
+  <div class="stage" style="margin-top:16px">
+    <div class="stage-col">
+      <div class="cap"><span class="tag now">now</span></div>
+      <div class="seam dark">
+        <div class="seamline"><span>Quartz</span><span>·</span><span>created by Alex</span></div>
+        <div class="body">Read the peer request plane and report what the delivery path does when the recipient is parked.</div>
+      </div>
+    </div>
+    <div class="stage-col">
+      <div class="cap"><span class="tag next">proposed</span></div>
+      <div class="seam dark">
+        <div class="seamline"><span class="p3">Quartz</span><span>·</span><span>created by <span class="p6">Alex</span></span></div>
+        <div class="body">Read the peer request plane and report what the delivery path does when the recipient is parked.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2>How a name gets its colour</h2>
+  <p>Not random per session. A hash of the name picks the index, so a peer keeps its colour for as long as it exists, across restarts and across both surfaces. Random-per-render would mean the same peer changed colour between the sidebar and the transcript, which is worse than no colour at all.</p>
+
+  <table>
+    <tr><th>question</th><th>answer</th></tr>
+    <tr><td class="q">Two peers land on the same tint?</td><td>Possible with six colours. Names sit next to a distinct title and timestamp, so a repeat is a mild collision, not an ambiguity.</td></tr>
+    <tr><td class="q">Does it fight the accent?</td><td>The accent owns fills, borders and the active row. These are text only, and muted, so they sit below it in the hierarchy.</td></tr>
+    <tr><td class="q">What about a name with no peer?</td><td>Unchanged. A row with no name still shows the time alone, exactly as today.</td></tr>
+  </table>
+
+  <h2>What I would not do</h2>
+  <p>Not a coloured dot or a filled chip beside the name. That adds an element to a 10px subtitle already carrying three, and a filled shape at that size reads as a status indicator, which is the exact confusion the saturation split exists to avoid. Colouring the existing text costs no space.</p>
+
+</div>

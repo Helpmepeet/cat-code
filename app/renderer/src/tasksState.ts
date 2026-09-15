@@ -212,9 +212,9 @@ function toTaskAgentSource(item: TaskSnapshotItem): TaskAgentSource | null {
  * (local_bash/local_workflow/monitor_mcp/dream) have no such per-type state
  * machine — their status IS the whole state, mapped 1:1 onto the same
  * `AgentStateKey` vocabulary. NOTE (B6, 2026-07-12 review): the P4-8
- * orchestrator roster does NOT consume this function — it derives its own
- * state via `orchestratorState.ts`'s `orchestratorWorkerState` (a different
- * source shape, `AgentModeWorkerItem` vs `TaskSnapshotItem`, and it carries
+ * worker roster does NOT consume this function — it derives its own
+ * state via `workersState.ts`'s `workerState` (a different
+ * source shape, `LiveWorkerItem` vs `TaskSnapshotItem`, and it carries
  * the `active` flag this function has no access to).
  */
 export function taskDisplayState(item: TaskSnapshotItem): AgentStateKey {

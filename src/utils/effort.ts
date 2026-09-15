@@ -1,4 +1,5 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
+import { getAntModelOverrideConfig, resolveAntModel } from './model/antModels.js'
 import { isUltrathinkEnabled } from './thinking.js'
 import { getInitialSettings } from './settings/settings.js'
 import { isProSubscriber, isMaxSubscriber, isTeamSubscriber } from './auth.js'
@@ -90,7 +91,8 @@ export function modelSupportsMaxEffort(model: string): boolean {
   if (
     m === 'gpt-5.6-sol' ||
     m === 'gpt-5.6-terra' ||
-    m === 'gpt-5.6-luna'
+    m === 'gpt-5.6-luna' ||
+    m === 'gpt-6-astra'
   ) {
     return true
   }
@@ -106,6 +108,9 @@ export function getSupportedEffortLevels(model: string): readonly EffortLevel[] 
     return ['low', 'medium', 'high', 'xhigh', 'max', 'ultra']
   }
   if (m === 'gpt-5.6-luna') {
+    return ['low', 'medium', 'high', 'xhigh', 'max']
+  }
+  if (m === 'gpt-6-astra') {
     return ['low', 'medium', 'high', 'xhigh', 'max']
   }
   if (m.includes('codex')) {

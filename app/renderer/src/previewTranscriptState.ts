@@ -93,10 +93,7 @@ export function reduceLiveTranscriptState(
     return removeTranscriptSession(state, action.sessionId)
   }
   if ('type' in action && action.type === '__frameBatch') {
-    if (action.actions.length === 0) return state
-    return action.actions.length === 1
-      ? projectServerFrame(state, action.actions[0]!)
-      : projectServerFrames(state, action.actions)
+    return projectServerFrames(state, action.actions)
   }
   return projectServerFrame(state, action)
 }
@@ -137,12 +134,7 @@ export function projectPreviewTranscriptCache(
   // gives an incomplete cache the same boundary row every other path draws. A
   // preview-only banner used to say it instead, and withdrew itself at the
   // exact moment the pane went live and the fact became actionable.
-  transcript =
-    cacheFrames.length === 0
-      ? transcript
-      : cacheFrames.length === 1
-        ? projectServerFrame(transcript, cacheFrames[0]!)
-        : projectServerFrames(transcript, cacheFrames)
+  transcript = projectServerFrames(transcript, cacheFrames)
   return {
     transcript,
     runFacts: selectPreviewRunFacts(cache),
@@ -293,13 +285,6 @@ export function selectPreviewTranscript(
   sessionId: SessionId,
 ): TranscriptState | null {
   return state.bySession[sessionId]?.transcript ?? null
-}
-
-export function selectPreviewRunFactsFor(
-  state: PreviewTranscriptState,
-  sessionId: SessionId | null,
-): PreviewRunFacts | null {
-  return sessionId ? (state.bySession[sessionId]?.runFacts ?? null) : null
 }
 
 export type PaneTranscriptSelection = {

@@ -8,8 +8,25 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'fs'
-import { link, mkdir, open, readFile, rename, unlink } from 'fs/promises'
-import { basename, dirname, join } from 'path'
+import {
+  link,
+  mkdir,
+  open,
+  readFile,
+  readlink,
+  realpath,
+  rename,
+  unlink,
+} from 'fs/promises'
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  normalize,
+  parse,
+  sep,
+} from 'path'
 import { lock } from './lockfile.js'
 
 export type AtomicWriteOptions = {
@@ -22,11 +39,59 @@ export type AtomicWriteOptions = {
   tempDirectory?: string
 }
 
-export async function acquireFileMutationLock(
-  targetPath: string,
-): Promise<() => Promise<void>> {
+async function canonicalFileMutationPath(targetPath: string): Promise<string> {
   await mkdir(dirname(targetPath), { recursive: true })
-  return lock(targetPath, {
+
+  try {
+    return await realpath(targetPath)
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error
+    }
+  }
+
+  let linkTarget: string
+  try {
+    linkTarget = await readlink(targetPath)
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      'code' in error &&
+      (error.code === 'ENOENT' || error.code === 'EINVAL')
+    ) {
+      return join(await realpath(dirname(targetPath)), basename(targetPath))
+    }
+    throw error
+  }
+
+  const root = isAbsolute(linkTarget) ? parse(linkTarget).root : ''
+  let directory = root || (await realpath(dirname(targetPath)))
+  const components = linkTarget
+    .slice(root.length)
+    .split(sep === '\\' ? /[\\/]/ : /\//)
+  const name = components.pop()!
+
+  // Resolve linked directories before applying '..' so traversal follows the
+  // filesystem path rather than normalizing the unresolved link text first.
+  for (const component of components) {
+    if (component === '' || component === '.') continue
+    directory =
+      component === '..'
+        ? dirname(directory)
+        : await realpath(join(directory, component))
+  }
+
+  return canonicalFileMutationPath(join(directory, name))
+}
+
+async function acquireCanonicalFileMutationLock(
+  canonicalPath: string,
+): Promise<() => Promise<void>> {
+  const unlock = await lock(canonicalPath, {
     realpath: false,
     retries: {
       // A real extraction can hold this lock for several model turns. Keep
@@ -41,6 +106,74 @@ export async function acquireFileMutationLock(
     stale: 120_000,
     update: 30_000,
   })
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    try {
+      await unlock()
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !('code' in error) ||
+        error.code !== 'ERELEASED'
+      ) {
+        throw error
+      }
+    }
+  }
+}
+
+export async function acquireFileMutationLock(
+  targetPath: string,
+): Promise<() => Promise<void>> {
+  return acquireCanonicalFileMutationLock(
+    await canonicalFileMutationPath(targetPath),
+  )
+}
+
+/**
+ * Acquire the same per-path locks used by individual file mutation tools.
+ *
+ * Canonical path ordering prevents two multi-file mutations from deadlocking
+ * while they wait on the same set of cooperative locks. This protects
+ * cooperating writers only; it does not make unrelated filesystem writers
+ * transactional.
+ */
+export async function acquireFileMutationLocks(
+  targetPaths: readonly string[],
+): Promise<() => Promise<void>> {
+  const canonicalPaths = await Promise.all(
+    targetPaths.map(path => canonicalFileMutationPath(normalize(path))),
+  )
+  const paths = [...new Set(canonicalPaths)].sort()
+  const releases: Array<() => Promise<void>> = []
+
+  try {
+    for (const path of paths) {
+      releases.push(await acquireCanonicalFileMutationLock(path))
+    }
+  } catch (error) {
+    for (const release of releases.reverse()) {
+      await release().catch(() => {})
+    }
+    throw error
+  }
+
+  let released = false
+  return async () => {
+    if (released) return
+    released = true
+    let firstError: unknown
+    for (const release of releases.reverse()) {
+      try {
+        await release()
+      } catch (error) {
+        firstError ??= error
+      }
+    }
+    if (firstError !== undefined) throw firstError
+  }
 }
 
 function tempPathFor(
@@ -77,26 +210,47 @@ function syncDirectoryBestEffortSync(directory: string): void {
   }
 }
 
-export async function writeFileAtomicDurable(
+/**
+ * Write `content` to a fresh temp file beside (or in `options.tempDirectory`
+ * next to) the destination and fsync it, returning the staged path for the
+ * caller to publish.
+ *
+ * Every durable writer below shares this half: the data must be on disk before
+ * the name is published, or a crash between the two leaves the destination
+ * pointing at a partial file. On failure nothing is left behind, so a caller
+ * that never reaches publication has nothing to clean up.
+ */
+async function stageTempFile(
   filePath: string,
   content: string | Uint8Array,
-  options: AtomicWriteOptions = {},
-): Promise<void> {
+  options: AtomicWriteOptions,
+): Promise<string> {
   const tempDirectory = options.tempDirectory ?? dirname(filePath)
   await mkdir(tempDirectory, { recursive: true })
   const tempPath = tempPathFor(filePath, tempDirectory)
   let handle: Awaited<ReturnType<typeof open>> | undefined
   try {
     handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, {
-      encoding: options.encoding,
-    })
+    await handle.writeFile(content, { encoding: options.encoding })
     await handle.sync()
     await handle.close()
-    handle = undefined
-    await rename(tempPath, filePath)
+    return tempPath
   } catch (error) {
     await handle?.close().catch(() => {})
+    await unlink(tempPath).catch(() => {})
+    throw error
+  }
+}
+
+export async function writeFileAtomicDurable(
+  filePath: string,
+  content: string | Uint8Array,
+  options: AtomicWriteOptions = {},
+): Promise<void> {
+  const tempPath = await stageTempFile(filePath, content, options)
+  try {
+    await rename(tempPath, filePath)
+  } catch (error) {
     await unlink(tempPath).catch(() => {})
     throw error
   }
@@ -108,18 +262,8 @@ export async function writeFileAtomicDurableIfAbsent(
   content: string | Uint8Array,
   options: AtomicWriteOptions = {},
 ): Promise<boolean> {
-  const tempDirectory = options.tempDirectory ?? dirname(filePath)
-  await mkdir(tempDirectory, { recursive: true })
-  const tempPath = tempPathFor(filePath, tempDirectory)
-  let handle: Awaited<ReturnType<typeof open>> | undefined
+  const tempPath = await stageTempFile(filePath, content, options)
   try {
-    handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, {
-      encoding: options.encoding,
-    })
-    await handle.sync()
-    await handle.close()
-    handle = undefined
     try {
       await link(tempPath, filePath)
     } catch (error) {
@@ -135,7 +279,7 @@ export async function writeFileAtomicDurableIfAbsent(
     await syncDirectoryBestEffort(dirname(filePath))
     return true
   } finally {
-    await handle?.close().catch(() => {})
+    // link() leaves the temp under a second name, so it always needs removing.
     await unlink(tempPath).catch(() => {})
   }
 }
@@ -153,17 +297,8 @@ export async function writeFileAtomicDurableIfContentMatches(
   content: string,
   options: AtomicWriteOptions = {},
 ): Promise<'written' | 'conflict'> {
-  const tempDirectory = options.tempDirectory ?? dirname(filePath)
-  await mkdir(tempDirectory, { recursive: true })
-  const tempPath = tempPathFor(filePath, tempDirectory)
-  let handle: Awaited<ReturnType<typeof open>> | undefined
+  const tempPath = await stageTempFile(filePath, content, options)
   try {
-    handle = await open(tempPath, 'wx', options.mode ?? 0o600)
-    await handle.writeFile(content, { encoding: options.encoding })
-    await handle.sync()
-    await handle.close()
-    handle = undefined
-
     // This is a compare-then-rename operation, not a general filesystem CAS.
     // Callers must hold the shared mutation lock when they need to serialize
     // against other engine writers. The comparison still preserves a local
@@ -188,7 +323,7 @@ export async function writeFileAtomicDurableIfContentMatches(
     await syncDirectoryBestEffort(dirname(filePath))
     return 'written'
   } finally {
-    await handle?.close().catch(() => {})
+    // A no-op after a successful rename; removes the staged file on conflict.
     await unlink(tempPath).catch(() => {})
   }
 }

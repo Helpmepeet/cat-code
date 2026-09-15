@@ -13,6 +13,7 @@ import { ToolsExpandedProvider } from './ToolsExpandedProvider.js'
 import { RendererErrorBoundary } from './RendererErrorBoundary.js'
 import { getBridge } from './bridge.js'
 import { installReactDevPerformanceTrackFilter } from './reactDevPerformanceTrack.js'
+import 'katex/dist/katex.min.css'
 import './theme.css'
 
 // Before the first render: React's dev build otherwise retains a native copy of

@@ -1,3 +1,4 @@
+import type * as React from 'react'
 import type {
   ToolResultBlockParam,
   ToolUseBlockParam,
@@ -160,6 +161,33 @@ export type CompactProgressEvent =
   | { type: 'compact_start' }
   | { type: 'compact_end' }
 
+/**
+ * One coherent MCP generation: the clients, tools, commands, and resources a
+ * live MCP lifecycle published together. Read it whole, never field by field —
+ * combining fields from two reads can mix generations (a tool whose client has
+ * already closed, a resource for a server that no longer exists).
+ */
+export type McpRuntimeSnapshot = Readonly<{
+  clients: readonly MCPServerConnection[]
+  tools: Tools
+  commands: readonly Command[]
+  resources: Readonly<Record<string, readonly ServerResource[]>>
+}>
+
+/**
+ * The runtime values a query loop swaps in between model/tool iterations,
+ * derived from a single McpRuntimeSnapshot: `tools` is the full
+ * permission-aware pool (the caller's base tools plus that generation's MCP
+ * tools) and `commands` is the caller's catalog plus that generation's MCP
+ * commands.
+ */
+export type McpRuntimeInputs = {
+  tools: Tools
+  commands: Command[]
+  mcpClients: MCPServerConnection[]
+  mcpResources: Record<string, ServerResource[]>
+}
+
 export type ToolUseContext = {
   options: {
     commands: Command[]
@@ -182,10 +210,31 @@ export type ToolUseContext = {
     querySource?: QuerySource
     /** Optional callback to get the latest tools (e.g., after MCP servers connect mid-query) */
     refreshTools?: () => Tools
+    /**
+     * Atomic replacement for refreshTools: refreshes tools, commands, MCP
+     * clients, and MCP resources together from one MCP generation. A caller
+     * that sets this must not also set refreshTools — the query loop prefers
+     * this seam and never falls back to the tools-only one, because a subagent
+     * launched from a refreshed tool pool would otherwise inherit stale
+     * clients and resources.
+     */
+    refreshMcpRuntime?: () => McpRuntimeInputs
+    /**
+     * The current MCP generation, for callers that assemble their own tool
+     * pool under a different permission context (subagent launch). One call
+     * returns one coherent snapshot: read it once and pass it down rather than
+     * calling again per field.
+     */
+    getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
     /** Optional callback to re-run auth-dependent refresh hooks after account changes. */
     onChangeAPIKey?: () => void
   }
   abortController: AbortController
+  /** Internal executor hook fired immediately before a permitted tool effect starts. */
+  onToolExecutionStart?: () => void
+  /** Called only after a provider has returned a valid response to a request
+   * containing claimed local-worker instructions. */
+  onLocalAgentMessagesDelivered?: (messageIds: string[]) => Promise<void> | void
   readFileState: FileStateCache
   getAppState(): AppState
   setAppState(f: (prev: AppState) => AppState): void
@@ -251,6 +300,7 @@ export type ToolUseContext = {
   ) => void
   setConversationId?: (id: UUID) => void
   agentId?: AgentId // Only set for subagents; use getSessionId() for session ID. Hooks use this to distinguish subagent calls.
+  agentRunId?: string
   agentType?: string // Subagent type name. For the main thread's --agent type, hooks fall back to getMainThreadAgentType().
   /** When true, canUseTool must always be called even when hooks auto-approve.
    *  Used by speculation for overlay file path rewriting. */

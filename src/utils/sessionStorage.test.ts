@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { randomUUID, type UUID } from 'crypto'
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { dirname, join } from 'path'
@@ -8,10 +8,207 @@ import { getAPISessionId, getSessionId, getSessionProjectDir, switchSession } fr
 import { applyPostCodexAccountSwitchRefresh } from '../services/api/codexAccountPool.js'
 import { asAgentId, asSessionId } from '../types/ids.js'
 import type { AssistantMessage } from '../types/message.js'
+import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+
+function createRewindContinuationFixture(
+  sessionId: string,
+  cwd: string,
+  discardedAssistantText: string,
+) {
+  const retainedUserUuid = randomUUID()
+  const retainedAssistantUuid = randomUUID()
+  const retainedAttachmentUuid = randomUUID()
+  const discardedUserUuid = randomUUID()
+  const discardedAssistantUuid = randomUUID()
+  const continuationUserUuid = randomUUID()
+  const continuationAssistantUuid = randomUUID()
+  const base = {
+    isSidechain: false,
+    sessionId,
+    cwd,
+    version: 'test',
+  }
+  const entries = [
+    {
+      parentUuid: null,
+      ...base,
+      type: 'user',
+      uuid: retainedUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:00.000Z',
+      message: { role: 'user', content: 'retained prompt' },
+    },
+    {
+      parentUuid: retainedUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: retainedAssistantUuid,
+      timestamp: '2026-08-24T04:00:01.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'retained answer' }],
+      },
+    },
+    {
+      parentUuid: retainedAssistantUuid,
+      ...base,
+      type: 'attachment',
+      uuid: retainedAttachmentUuid,
+      timestamp: '2026-08-24T04:00:01.100Z',
+      attachment: { type: 'hook', content: 'retained metadata' },
+    },
+    {
+      parentUuid: retainedAttachmentUuid,
+      ...base,
+      type: 'user',
+      uuid: discardedUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:02.000Z',
+      message: { role: 'user', content: 'discarded prompt' },
+    },
+    {
+      parentUuid: discardedUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: discardedAssistantUuid,
+      timestamp: '2026-08-24T04:00:03.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: discardedAssistantText }],
+      },
+    },
+    {
+      type: 'active-conversation-tip',
+      sessionId,
+      tipUuid: retainedAssistantUuid,
+    },
+    {
+      parentUuid: retainedAttachmentUuid,
+      ...base,
+      type: 'user',
+      uuid: continuationUserUuid,
+      userType: 'external',
+      timestamp: '2026-08-24T04:00:04.000Z',
+      message: { role: 'user', content: 'continuation prompt' },
+    },
+    {
+      parentUuid: continuationUserUuid,
+      ...base,
+      type: 'assistant',
+      uuid: continuationAssistantUuid,
+      timestamp: '2026-08-24T04:00:05.000Z',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'text', text: 'continuation answer' }],
+      },
+    },
+  ]
+  return {
+    entries,
+    expectedUuids: [
+      retainedUserUuid,
+      retainedAssistantUuid,
+      retainedAttachmentUuid,
+      continuationUserUuid,
+      continuationAssistantUuid,
+    ],
+  }
+}
+
+describe('session archive flag', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  let tempDir: string
+  let sessionId: UUID
+
+  beforeEach(async () => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    tempDir = mkdtempSync(join(tmpdir(), 'session-archive-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  afterEach(async () => {
+    clearSessionMessagesCache()
+    resetProjectForTesting()
+    await releaseActiveTranscriptLease()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  /**
+   * The whole point of archive is that it survives with no live engine for that
+   * session, so the round trip through the transcript file IS the feature.
+   *
+   * Scope of this test: a transcript with no compaction boundary, which is read
+   * whole. It does NOT exercise `scanPreBoundaryMetadata` — see the marker test
+   * below for that half.
+   */
+  test('an archived session reads back as archived', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+    await setSessionArchived(sessionId, true, path)
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBe(true)
+  })
+
+  /**
+   * Un-archiving writes `false`, which is a VALUE, not an absence — so it
+   * cannot use the empty-string-means-cleared convention `tag` and
+   * `custom-title` rely on. Last entry must win, or a session could never be
+   * brought back out of the archive.
+   */
+  test('un-archiving wins over an earlier archive', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+    await setSessionArchived(sessionId, true, path)
+    await setSessionArchived(sessionId, false, path)
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBe(false)
+  })
+
+  /**
+   * `archived` must be in METADATA_TYPE_MARKERS or it is invisible on any
+   * transcript with a compaction boundary. That scan (`scanPreBoundaryMetadata`)
+   * only runs when a boundary truncated pre-boundary bytes, and its fast path
+   * skips a whole chunk when it contains no marker — so a missing marker does
+   * not fail loudly, it silently drops the flag on exactly the long sessions
+   * most likely to be archived. Asserted structurally because the constant is
+   * module-private and building a boundary fixture would not make the
+   * invariant any clearer.
+   */
+  test('the archived entry is registered as a metadata marker', () => {
+    const source = readFileSync(
+      new URL('./sessionStorage.ts', import.meta.url),
+      'utf8',
+    )
+    const markers = source.slice(
+      source.indexOf('const METADATA_TYPE_MARKERS = ['),
+      source.indexOf('const METADATA_MARKER_BUFS'),
+    )
+    expect(markers).toContain('"type":"archived"')
+  })
+
+  /** A session nobody archived must not appear archived. */
+  test('an untouched session has no archive flag', async () => {
+    const path = getTranscriptPathForSession(sessionId)
+    await recordTranscript([createUserMessage({ content: 'hello' })])
+    await flushCurrentTranscriptDurably()
+
+    const { archived } = await loadTranscriptFile(path)
+    expect(archived.get(sessionId)).toBeUndefined()
+  })
+})
 
 describe('session storage', () => {
   const originalSessionId = getSessionId()
@@ -43,7 +240,7 @@ describe('session storage', () => {
     rmSync(tempDir, { recursive: true, force: true })
   })
 
-  test('last session log restores saved mode', async () => {
+  test('last session log normalizes legacy `agent` mode', async () => {
     const messageUuid = randomUUID()
     const timestamp = '2026-06-18T00:00:00.000Z'
     const transcript = [
@@ -71,8 +268,39 @@ describe('session storage', () => {
     await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
 
     await expect(getLastSessionLog(sessionId as UUID)).resolves.toMatchObject({
-      mode: 'agent',
+      mode: 'normal',
       firstPrompt: 'resume me',
+    })
+    expect(readFileSync(getTranscriptPathForSession(sessionId), 'utf8')).toContain(
+      '"mode":"agent"',
+    )
+  })
+
+  test('last session log preserves coordinator mode', async () => {
+    const messageUuid = randomUUID()
+    const timestamp = '2026-06-18T00:00:00.000Z'
+    const transcript = [
+      { type: 'mode', sessionId, mode: 'coordinator' },
+      {
+        type: 'user',
+        uuid: messageUuid,
+        parentUuid: null,
+        isSidechain: false,
+        sessionId,
+        cwd: tempDir,
+        userType: 'external',
+        version: 'test',
+        timestamp,
+        message: { role: 'user', content: 'resume coordinator' },
+      },
+    ]
+      .map(entry => JSON.stringify(entry))
+      .join('\n')
+
+    await writeFile(getTranscriptPathForSession(sessionId), `${transcript}\n`)
+
+    await expect(getLastSessionLog(sessionId as UUID)).resolves.toMatchObject({
+      mode: 'coordinator',
     })
   })
 
@@ -215,6 +443,188 @@ describe('session storage', () => {
       firstAssistant.uuid,
       branchedUser.uuid,
       branchedAssistant.uuid,
+    ])
+  })
+
+  test('active tip follows a compact continuation through logicalParentUuid', async () => {
+    const retained = randomUUID()
+    const replacement = randomUUID()
+    const boundary = randomUUID()
+    const summary = randomUUID()
+    const later = randomUUID()
+    const common = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      userType: 'external',
+      version: 'test',
+    }
+    const entries = [
+      { ...common, type: 'user', uuid: retained, parentUuid: null, timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'retained' } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: retained },
+      { ...common, type: 'user', uuid: replacement, parentUuid: retained, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'user', content: 'replacement' } },
+      { ...common, type: 'system', subtype: 'compact_boundary', uuid: boundary, parentUuid: null, logicalParentUuid: replacement, timestamp: '2026-09-12T00:00:02.000Z', content: 'Conversation compacted', level: 'info', isMeta: false, compactMetadata: { trigger: 'manual', preTokens: 200000 } },
+      { ...common, type: 'user', uuid: summary, parentUuid: boundary, timestamp: '2026-09-12T00:00:03.000Z', isCompactSummary: true, message: { role: 'user', content: 'summary' } },
+      { ...common, type: 'user', uuid: later, parentUuid: summary, timestamp: '2026-09-12T00:00:04.000Z', message: { role: 'user', content: 'post-compaction' } },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadTranscriptFromFile(getTranscriptPathForSession(sessionId))
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      boundary,
+      summary,
+      later,
+    ])
+    const display = await loadDisplayTranscriptFromJsonlPath(
+      getTranscriptPathForSession(sessionId),
+      { maxMessages: 100, maxBytes: 1024 * 1024 },
+    )
+    expect(display.messages.map(message => message.uuid)).toContain(later)
+  })
+
+  test('null active tip follows an ordinary replacement root', async () => {
+    const discardedUser = randomUUID()
+    const discardedAssistant = randomUUID()
+    const replacementUser = randomUUID()
+    const replacementAssistant = randomUUID()
+    const common = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const entries = [
+      { ...common, type: 'user', uuid: discardedUser, parentUuid: null, userType: 'external', timestamp: '2026-09-12T00:00:00.000Z', message: { role: 'user', content: 'discarded' } },
+      { ...common, type: 'assistant', uuid: discardedAssistant, parentUuid: discardedUser, timestamp: '2026-09-12T00:00:01.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'discarded answer' }] } },
+      { type: 'active-conversation-tip', sessionId, tipUuid: null },
+      { ...common, type: 'user', uuid: replacementUser, parentUuid: null, userType: 'external', timestamp: '2026-09-12T00:00:02.000Z', message: { role: 'user', content: 'replacement' } },
+      { ...common, type: 'assistant', uuid: replacementAssistant, parentUuid: replacementUser, timestamp: '2026-09-12T00:00:03.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'replacement answer' }] } },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const loaded = await loadTranscriptFromFile(getTranscriptPathForSession(sessionId))
+    expect(loaded.messages.map(message => message.uuid)).toEqual([
+      replacementUser,
+      replacementAssistant,
+    ])
+  })
+
+  for (const [label, discardedAssistantText] of [
+    ['small transcript', 'discarded answer'],
+    ['large transcript', 'x'.repeat(6 * 1024 * 1024)],
+  ] as const) {
+    test(`rewound continuation follows retained metadata in the ${label}`, async () => {
+      const { entries, expectedUuids } = createRewindContinuationFixture(
+        sessionId,
+        tempDir,
+        discardedAssistantText,
+      )
+      const path = getTranscriptPathForSession(sessionId)
+      await writeFile(
+        path,
+        `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+      )
+
+      const resumed = await getLastSessionLog(sessionId as UUID)
+      expect(resumed?.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+
+      clearSessionMessagesCache()
+      const explicitPath = await loadTranscriptFromFile(path)
+      expect(explicitPath.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+
+      const display = await loadDisplayTranscriptFromJsonlPath(path, {
+        maxMessages: 20,
+        maxBytes: 20 * 1024 * 1024,
+      })
+      expect(display.messages.map(message => message.uuid)).toEqual(
+        expectedUuids,
+      )
+    })
+  }
+
+  test('null active tip reconnects a continuation through retained metadata', async () => {
+    const attachmentUuid = randomUUID()
+    const discardedUserUuid = randomUUID()
+    const discardedAssistantUuid = randomUUID()
+    const continuationUserUuid = randomUUID()
+    const continuationAssistantUuid = randomUUID()
+    const base = {
+      isSidechain: false,
+      sessionId,
+      cwd: tempDir,
+      version: 'test',
+    }
+    const entries = [
+      {
+        parentUuid: null,
+        ...base,
+        type: 'attachment',
+        uuid: attachmentUuid,
+        timestamp: '2026-08-24T05:00:00.000Z',
+        attachment: { type: 'startup-hook', content: 'retained metadata' },
+      },
+      {
+        parentUuid: attachmentUuid,
+        ...base,
+        type: 'user',
+        uuid: discardedUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T05:00:01.000Z',
+        message: { role: 'user', content: 'discarded first prompt' },
+      },
+      {
+        parentUuid: discardedUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: discardedAssistantUuid,
+        timestamp: '2026-08-24T05:00:02.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'discarded answer' }],
+        },
+      },
+      { type: 'active-conversation-tip', sessionId, tipUuid: null },
+      {
+        parentUuid: attachmentUuid,
+        ...base,
+        type: 'user',
+        uuid: continuationUserUuid,
+        userType: 'external',
+        timestamp: '2026-08-24T05:00:03.000Z',
+        message: { role: 'user', content: 'continuation prompt' },
+      },
+      {
+        parentUuid: continuationUserUuid,
+        ...base,
+        type: 'assistant',
+        uuid: continuationAssistantUuid,
+        timestamp: '2026-08-24T05:00:04.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'continuation answer' }],
+        },
+      },
+    ]
+    await writeFile(
+      getTranscriptPathForSession(sessionId),
+      `${entries.map(entry => JSON.stringify(entry)).join('\n')}\n`,
+    )
+
+    const resumed = await getLastSessionLog(sessionId as UUID)
+    expect(resumed?.messages.map(message => message.uuid)).toEqual([
+      attachmentUuid,
+      continuationUserUuid,
+      continuationAssistantUuid,
     ])
   })
 
@@ -533,7 +943,7 @@ describe('session storage', () => {
       customTitle: 'title after login',
       tag: 'after-login',
       agentSetting: 'plan',
-      mode: 'agent',
+      mode: 'normal',
     })
     expect(log?.contentReplacements).toEqual([
       { kind: 'tool-result', toolUseId: 'before', replacement: 'old stub' },
@@ -1590,6 +2000,103 @@ describe('session storage', () => {
       const text = await Bun.file(agentTranscriptPath).text()
       expect(text).toContain('"subtype":"prompt_cache_break"')
       expect(text).toContain('CACHE-BREAK-MARKER')
+    })
+  })
+})
+
+/**
+ * Anything the operator types mid-turn is drained into a `queued_command`
+ * attachment and IS sent to the model (attachments.ts
+ * getQueuedCommandAttachments, drained in query.ts). The transcript used to
+ * drop every attachment for non-ant users, and `scripts/build.ts` hard-defines
+ * USER_TYPE='external', so the drop was total: a corpus sweep of 2,060
+ * transcripts / 354,456 entries in ~/.cat-code/projects found zero attachment
+ * entries. That means the transcript did not record what the model was
+ * actually told, and a resumed prefix could not match what was cached.
+ *
+ * The round trip through the file is the test: the write path (isLoggableMessage
+ * inside recordTranscript) and the read path (isTranscriptMessage, which already
+ * admits 'attachment' into the parentUuid chain) have to agree.
+ */
+describe('attachment persistence', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  let tempDir: string
+  let sessionId: UUID
+
+  beforeEach(async () => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    tempDir = mkdtempSync(join(tmpdir(), 'attachment-persist-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  afterEach(async () => {
+    clearSessionMessagesCache()
+    resetProjectForTesting()
+    await releaseActiveTranscriptLease()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  test('a queued command typed mid-turn survives to the transcript', async () => {
+    // Built by the real producer, not a hand-written shape — the defect is
+    // about what this exact path emits.
+    const attachments = await getQueuedCommandAttachments([
+      { value: 'also check the sidecar', mode: 'prompt', uuid: randomUUID() },
+    ])
+    expect(attachments).toHaveLength(1)
+
+    await recordTranscript([
+      createUserMessage({ content: 'first prompt' }),
+      createAttachmentMessage(attachments[0]!),
+    ])
+    await flushCurrentTranscriptDurably()
+
+    const { messages } = await loadTranscriptFile(
+      getTranscriptPathForSession(sessionId),
+    )
+    const loaded = [...messages.values()]
+    const attachment = loaded.find(m => m.type === 'attachment')
+    expect(attachment).toBeDefined()
+    expect(attachment).toMatchObject({
+      attachment: { type: 'queued_command', prompt: 'also check the sidecar' },
+    })
+  })
+
+  /**
+   * hooks.ts:721 writes `content: ''` for the ordinary silent hook success on
+   * purpose, so persisting those would add a row per hook per turn carrying no
+   * information. Upstream drops exactly this one shape and nothing else (its
+   * attachment denylist has been `new Set([])` since at least 2.1.214).
+   */
+  test('a silent hook_success is dropped, one with output is kept', async () => {
+    const base = {
+      type: 'hook_success' as const,
+      hookName: 'PreToolUse:Bash',
+      toolUseID: 'toolu_test',
+      hookEvent: 'PreToolUse' as const,
+      exitCode: 0,
+    }
+
+    await recordTranscript([
+      createUserMessage({ content: 'first prompt' }),
+      createAttachmentMessage({ ...base, content: '', stdout: '', stderr: '' }),
+      createAttachmentMessage({ ...base, content: '', stdout: 'noisy hook\n', stderr: '' }),
+    ])
+    await flushCurrentTranscriptDurably()
+
+    const { messages } = await loadTranscriptFile(
+      getTranscriptPathForSession(sessionId),
+    )
+    const attachments = [...messages.values()].filter(
+      m => m.type === 'attachment',
+    )
+    expect(attachments).toHaveLength(1)
+    expect(attachments[0]).toMatchObject({
+      attachment: { stdout: 'noisy hook\n' },
     })
   })
 })

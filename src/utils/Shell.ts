@@ -40,6 +40,10 @@ import { createPowerShellProvider } from './shell/powershellProvider.js'
 import type { ShellProvider, ShellType } from './shell/shellProvider.js'
 import { subprocessEnv } from './subprocessEnv.js'
 import { posixPathToWindowsPath } from './windowsPaths.js'
+import {
+  applyWorkerEnvAllowlist,
+  isWorkerScopedExec,
+} from './workerSubprocessEnv.js'
 
 const DEFAULT_TIMEOUT = 30 * 60 * 1000 // 30 minutes
 
@@ -172,6 +176,12 @@ export type ExecOptions = {
   shouldAutoBackground?: boolean
   /** When provided, stdout is piped (not sent to file) and this callback fires on each data chunk. */
   onStdout?: (data: string) => void
+  /**
+   * The subagent this command runs on behalf of, undefined on the main thread.
+   * This is the fact only, mirroring ToolUseContext.agentId; the policy that
+   * reads it lives in isWorkerScopedExec in src/utils/workerSubprocessEnv.ts.
+   */
+  agentId?: string
 }
 
 /**
@@ -191,8 +201,10 @@ export async function exec(
     shouldUseSandbox,
     shouldAutoBackground,
     onStdout,
+    agentId,
   } = options ?? {}
   const commandTimeout = timeout || DEFAULT_TIMEOUT
+  const workerScoped = isWorkerScopedExec(agentId)
 
   const provider = await resolveProvider[shellType]()
 
@@ -211,6 +223,7 @@ export async function exec(
       id,
       sandboxTmpDir: shouldUseSandbox ? sandboxTmpDir : undefined,
       useSandbox: shouldUseSandbox ?? false,
+      workerScoped,
     })
 
   let commandString = builtCommand
@@ -312,20 +325,25 @@ export async function exec(
     )
   }
 
+  // Composed first so the worker allowlist can filter the whole thing. Filtering
+  // only subprocessEnv() would miss envOverrides, which carries the session env
+  // vars set via /env and would put arbitrary names back after the filter ran.
+  const composedEnv: NodeJS.ProcessEnv = {
+    ...subprocessEnv(),
+    SHELL: shellType === 'bash' ? binShell : undefined,
+    GIT_EDITOR: 'true',
+    CLAUDECODE: '1',
+    ...envOverrides,
+    ...(process.env.USER_TYPE === 'ant'
+      ? {
+          CLAUDE_CODE_SESSION_ID: getSessionId(),
+        }
+      : {}),
+  }
+
   try {
     const childProcess = spawn(spawnBinary, shellArgs, {
-      env: {
-        ...subprocessEnv(),
-        SHELL: shellType === 'bash' ? binShell : undefined,
-        GIT_EDITOR: 'true',
-        CLAUDECODE: '1',
-        ...envOverrides,
-        ...(process.env.USER_TYPE === 'ant'
-          ? {
-              CLAUDE_CODE_SESSION_ID: getSessionId(),
-            }
-          : {}),
-      },
+      env: workerScoped ? applyWorkerEnvAllowlist(composedEnv) : composedEnv,
       cwd,
       stdio: usePipeMode
         ? ['pipe', 'pipe', 'pipe']

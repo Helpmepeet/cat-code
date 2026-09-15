@@ -45,15 +45,12 @@
  * booleans below are read through a separate, disk-write-free path and stay
  * accurate regardless.
  *
- * The ONE outbound network call is `fetchPoolUsage`, the same read-only (GET,
- * existing tokens, no refresh, no completion burn) call the sidecar accounts
- * domain already makes. It is what keeps the headroom numbers live; a failure
- * degrades to "pool without fresh usage" and never fails the run. Its
- * module-level cache (`codexUsage.ts:93`, 1-minute TTL) does not help this
- * process: each run is a fresh disposable worker, so `cachedSnapshot` always
- * starts `null` here and every run performs a live fetch regardless of poll
- * interval — see `accountsPoolRunner.ts`'s cadence comment for the actual
- * reason the interval is 60 s.
+ * Usage observations come from `fetchPoolUsage`, the same read-only path the
+ * sidecar accounts domain uses. Its engine-owned private cache shares recent
+ * observations and coalesces unforced reads across processes. A cache miss may
+ * issue GET requests using existing tokens; it never refreshes credentials or
+ * generates a completion. Failures leave the pool without fresh usage and do
+ * not fail the worker run. Forced refreshes bypass that shared observation.
  *
  * It also aggregates the Accounts page's usage analytics for both ranges
  * (`readUsageStats`), for the same reason the pool read moved here: that page
@@ -78,10 +75,17 @@ import {
 } from '../shared/accountsPoolWorker.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
 import type { UsageStatsByRange } from '../shared/protocol.js'
+import {
+  bootstrapWorkerEngine,
+  emitWorkerRecord,
+  errorText,
+  runDisposableWorker,
+} from './workerRuntime.js'
 
 // Set the one-switch minimal mode before ANY engine module is dynamically
-// imported (mirrors `sessionsCatalogWorker.ts:33`): a pool read must not drag in
-// SessionStart hooks or the live-session machinery.
+// imported (mirrors `sessionsCatalogWorker.ts:40`): a pool read must not drag in
+// SessionStart hooks or the live-session machinery. `workerRuntime.js` above is
+// engine-free by contract, so importing it does not pre-empt this.
 process.env.CLAUDE_CODE_SIMPLE = '1'
 
 async function main(): Promise<void> {
@@ -96,22 +100,14 @@ async function main(): Promise<void> {
     { getPoolStatus, loadPoolForObservation },
     { loadClaudePoolForObservation },
     { buildAccountsSnapshot, createSidecarAccountsDomain },
-    { ensureEngineMacro },
-    { enableConfigs },
   ] = await Promise.all([
     import('../../src/services/api/codexAccountPool.js'),
     import('../../src/services/api/claudeAccountPool.js'),
     import('./accountsDomain.js'),
-    import('./initializeRuntime.js'),
-    import('../../src/utils/config.js'),
   ])
-  ensureEngineMacro()
-  // The engine hard-fails any config read taken before this latch
-  // (`config.ts:1465` "Config accessed before allowed"), and both pool loads
-  // read the global config. `enableConfigs` is the engine's own idempotent
-  // unlock and validates the config file; it is the ONLY piece of `init()`
-  // this worker needs, and it carries none of init's live side-effects.
-  enableConfigs()
+  // Both pool loads below read the global config, so the config latch this
+  // opens is load-bearing here, not just hygiene.
+  await bootstrapWorkerEngine()
 
   // Both loads are disk-only (vault + config) observation; neither refreshes
   // a token or writes a vault file (see the file header). `buildAccountsSnapshot`
@@ -245,16 +241,13 @@ async function main(): Promise<void> {
  */
 async function readUsageStats(): Promise<UsageStatsByRange | null> {
   try {
-    const { tryGetUsageStatsSnapshot } = await import('./statsDomain.js')
-    const [sevenDay, thirtyDay] = await Promise.all([
-      tryGetUsageStatsSnapshot('7d'),
-      tryGetUsageStatsSnapshot('30d'),
-    ])
-    if (!sevenDay || !thirtyDay) {
+    const { tryGetUsageStatsSnapshots } = await import('./statsDomain.js')
+    const snapshots = await tryGetUsageStatsSnapshots()
+    if (!snapshots) {
       process.stderr.write('[accounts-worker] usage stats read failed\n')
       return null
     }
-    return { '7d': sevenDay, '30d': thirtyDay }
+    return snapshots
   } catch (error) {
     process.stderr.write(
       `[accounts-worker] usage stats skipped: ${errorText(error)}\n`,
@@ -309,16 +302,11 @@ async function readAnthropicRouteFacts(): Promise<{
 }
 
 function emit(result: AccountsPoolWorkerResult): Promise<void> {
-  const line = JSON.stringify(result)
-  if (Buffer.byteLength(line, 'utf8') > MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES) {
-    throw new Error('accounts pool result exceeds record limit')
-  }
-  return new Promise((resolve, reject) => {
-    process.stdout.write(`${line}\n`, error => {
-      if (error) reject(error)
-      else resolve()
-    })
-  })
+  return emitWorkerRecord(
+    result,
+    MAX_ACCOUNTS_POOL_WORKER_RECORD_BYTES,
+    'accounts pool result',
+  )
 }
 
 async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
@@ -346,11 +334,4 @@ async function readDeleteRequest(): Promise<AccountsPoolWorkerDeleteRequest> {
   return request
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-void main().catch(error => {
-  process.stderr.write(`[accounts-worker] fatal: ${errorText(error)}\n`)
-  process.exit(1)
-})
+runDisposableWorker('accounts-worker', main)

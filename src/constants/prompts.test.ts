@@ -1,125 +1,43 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { getSystemPrompt } from './prompts.js'
 import {
-  getAgentModeSystemPromptSections,
-  getAgentModeWorkerControlGuidance,
-  getSystemPrompt,
-} from './prompts.js'
-import {
-  getGPTSessionGuidanceSection,
+  getGPTIntroSection,
   getGPTToneAndStyleSection,
+  getGPTUsingToolsSection,
 } from './promptStyles/gpt.js'
 import { clearSystemPromptSections } from './systemPromptSections.js'
 
-describe('Agent Mode dynamic prompt guidance', () => {
-  test('uses the orchestrator prompt as the single owner of worker-first guidance', async () => {
-    const originalOpenAiApiKey = process.env.OPENAI_API_KEY
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.OPENAI_API_KEY = originalOpenAiApiKey ?? 'test-key'
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      const sections = await getAgentModeSystemPromptSections(
-        [
-          { name: 'Agent' },
-          { name: 'ListWorkers' },
-          { name: 'WaitWorkers' },
-          { name: 'GetWorkerResult' },
-          { name: 'CancelWorker' },
-        ] as any,
-        'gpt-5.6-terra',
-        [],
-        [],
-      )
-      const prompt = sections.join('\n')
-
-      expect(prompt).toContain('## Delegation rules')
-      expect(prompt).toContain('default to a coding worker')
-      expect(prompt).toContain('AGENT MODE: Agent is available for bounded delegated work. Follow the Agent Mode doctrine above.')
-      expect(prompt).not.toContain(
-        'If the patch touches prompt, session-state, worker-control, or orchestration surfaces, use a coding worker even if it is still one file',
-      )
-      expect(prompt).toContain(
-        'Agent Mode should feel different from normal chat because execution pressure moves outward sooner',
-      )
-    } finally {
-      if (originalOpenAiApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY
-      } else {
-        process.env.OPENAI_API_KEY = originalOpenAiApiKey
-      }
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
-  })
-
-  test('includes worker-control guidance when worker-control tools are present', async () => {
-    const originalAnthropicApiKey = process.env.ANTHROPIC_API_KEY
-    process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey ?? 'test-key'
-
-    try {
-      const sections = await getAgentModeSystemPromptSections(
-        [
-          { name: 'Agent' },
-          { name: 'ListWorkers' },
-          { name: 'WaitWorkers' },
-          { name: 'GetWorkerResult' },
-          { name: 'CancelWorker' },
-        ] as any,
-        'claude-sonnet-4-6',
-        [],
-        [],
-      )
-      const prompt = sections.join('\n')
-
-      expect(prompt).toContain('before spawning more workers when prior workers may exist.')
-      expect(prompt).toContain('after launching parallel workers so convergence is explicit')
-      expect(prompt).toContain('synthesized only after actually using it')
-      expect(prompt).toContain('no-longer-needed workers.')
-      expect(prompt).toContain(
-        'Worker-control tools available in this session: ListWorkers, WaitWorkers, GetWorkerResult, CancelWorker.',
-      )
-      expect(prompt).toContain('Follow the Worker control tools doctrine above.')
-      expect(prompt).toContain('Do not both spawn Explore and then keep investigating the same area yourself')
-      expect(prompt).toContain('Prefer worker handles over raw task IDs')
-    } finally {
-      if (originalAnthropicApiKey === undefined) {
-        delete process.env.ANTHROPIC_API_KEY
-      } else {
-        process.env.ANTHROPIC_API_KEY = originalAnthropicApiKey
-      }
-    }
-  })
-
-  test('omits worker-control guidance when worker-control tools are absent', async () => {
-    expect(getAgentModeWorkerControlGuidance(new Set(['Agent']))).toBeNull()
-  })
-})
+// Command availability is filtered by auth, so an assembly built with no
+// credential anywhere throws before it reaches the sections under test. The
+// value is never sent: nothing here makes a request.
+process.env.ANTHROPIC_API_KEY ??= 'test-key'
+process.env.OPENAI_API_KEY ??= 'test-key'
 
 const promptsSource = await Bun.file(
   new URL('./prompts.ts', import.meta.url),
 ).text()
 
 describe('Normal mode static delegation guidance', () => {
-  test('suggests implementor and verification without Agent Mode worker doctrine', () => {
+  test('suggests implementor and verification without a worker-first mandate', () => {
     expect(promptsSource).toContain('available-agent list includes implementor or verification')
     expect(promptsSource).not.toContain(
       'In normal mode, prefer a worker over main-thread execution for any implementation expected to touch multiple files',
     )
   })
 
-  test('keeps routine review inline unless the user requests an independent review', () => {
+  // A requested review is the task itself, not a candidate for delegation. The
+  // 2026-08-17 wording only covered "your own work", so a review the session was
+  // ASSIGNED fell outside it and was relayed whole to one subagent.
+  test('keeps a requested review inline unless the user asks for another agent', () => {
     const reviewRule =
-      'Do not spawn a subagent solely to review, verify, critique, or double-check your own work. Routine self-review should be done directly in the main thread. Use a subagent for an independent review only when the user explicitly requests one.'
+      'Do not spawn a subagent solely to review, verify, critique, or double-check work, whether it is your own or the task the user gave you. Use a review subagent only when the user explicitly asks for another agent; "adversarial", "cold" and "audit" name a method to apply, not a second agent.'
     const delegationReasons =
       'Before spawning, require a concrete reason based on parallelism, context isolation, or explicit user request.'
 
     expect(promptsSource).toContain(reviewRule)
     expect(promptsSource).toContain(delegationReasons)
 
-    const gptGuidance = getGPTSessionGuidanceSection(new Set(['Agent']), [])
+    const gptGuidance = getGPTUsingToolsSection(new Set(['Agent']))
     expect(gptGuidance).toContain(reviewRule)
     expect(gptGuidance).toContain(delegationReasons)
   })
@@ -131,9 +49,11 @@ describe('GPT read discipline guidance', () => {
     delete process.env.EMBEDDED_SEARCH_TOOLS
 
     try {
-      const guidance = getGPTSessionGuidanceSection(new Set(['Grep', 'Read']), [])
+      const guidance = getGPTUsingToolsSection(new Set(['Grep', 'Read']))
 
       expect(guidance).toContain('Grep to locate')
+      expect(guidance).toContain('Read files systematically when the requested coverage requires it')
+      expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('head_limit')
     } finally {
       if (savedEmbeddedSearch === undefined) {
@@ -151,12 +71,11 @@ describe('GPT read discipline guidance', () => {
     delete process.env.CLAUDE_CODE_ENTRYPOINT
 
     try {
-      const guidance = getGPTSessionGuidanceSection(
-        new Set(['Bash', 'Read']),
-        [],
-      )
+      const guidance = getGPTUsingToolsSection(new Set(['Bash', 'Read']))
 
       expect(guidance).toContain('READ DISCIPLINE:')
+      expect(guidance).toContain('Read files systematically when the requested coverage requires it')
+      expect(guidance).not.toContain('do not sweep a directory file-by-file')
       expect(guidance).toContain('`find` or `grep` via the Bash tool')
       expect(guidance).not.toContain('Grep')
       expect(guidance).not.toContain('Glob')
@@ -180,14 +99,91 @@ describe('GPT read discipline guidance', () => {
   })
 })
 
+describe('GPT section boundaries', () => {
+  const GPT_TOOLS = [
+    { name: 'Agent' },
+    { name: 'AskUserQuestion' },
+    { name: 'Bash' },
+    { name: 'Read' },
+    { name: 'Grep' },
+    { name: 'apply_patch' },
+  ] as unknown as Parameters<typeof getSystemPrompt>[0]
+
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  // Each rule has one home. Before the redraw, session guidance carried the
+  // proceed/confirm rule, the investigation rule, and the whole delegation
+  // block, so an assembly that drops session guidance lost them and the
+  // always-present actions section never stated when to proceed alone.
+  test('the GPT assembly files each moved rule under the section that owns it', async () => {
+    const prompt = (await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')).join('\n')
+    const sectionNamed = (heading: string) => {
+      const start = prompt.indexOf(`${heading}\n`)
+      expect(start).toBeGreaterThan(-1)
+      const next = prompt.indexOf('\n# ', start + 1)
+      return next === -1 ? prompt.slice(start) : prompt.slice(start, next)
+    }
+
+    const actions = sectionNamed('# Acting and Asking')
+    expect(actions).toContain('ACT OR ASK:')
+    expect(actions).toContain('REQUEST SCOPE:')
+
+    const usingTools = sectionNamed('# Using Your Tools')
+    expect(usingTools).toContain('READ DISCIPLINE:')
+    expect(usingTools).toContain('AGENT TOOL:')
+
+    const sessionGuidance = sectionNamed('# Session-Specific Guidance')
+    expect(sessionGuidance).not.toContain('ACT OR ASK')
+    expect(sessionGuidance).not.toContain('INVESTIGATION:')
+    expect(sessionGuidance).not.toContain('READ DISCIPLINE:')
+    expect(sessionGuidance).not.toContain('AGENT TOOL:')
+  })
+
+  // The placement assertions above pass with every rule body emptied, so they
+  // pin where a rule lives and not what it says. These pin the substance of the
+  // two rules that decide what a session may do without asking.
+  test('the moved permission rules still carry their content, not just their labels', async () => {
+    const prompt = (await getSystemPrompt(GPT_TOOLS, 'gpt-5.6-terra')).join('\n')
+
+    expect(prompt).toContain('take the natural next action')
+    expect(prompt).toContain(
+      'confirm first unless the user or loaded durable instructions already authorize that scope',
+    )
+    expect(prompt).toContain('RISKY ACTIONS include')
+    expect(prompt).toContain(
+      'does not by itself authorize implementation',
+    )
+    expect(prompt).toContain('Escalate to the user with')
+  })
+
+})
+
 describe('GPT copyable text guidance', () => {
   test('distinguishes shell commands from copyable text', () => {
-    const guidance = getGPTToneAndStyleSection()
+    const guidance = getGPTToneAndStyleSection('gpt-5.6')
 
     expect(guidance).toContain(
       'Shell commands are commands, not copyable text',
     )
     expect(guidance).toContain('```sh fenced code block')
+  })
+})
+
+describe('well-known URL homepages', () => {
+  test('allows only a directly relevant public service root homepage', async () => {
+    const claudePrompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+    const gptIntro = getGPTIntroSection(null)
+    const rule =
+      "You may navigate to a well-known public service's exact root homepage when it directly fits the user's request."
+    const boundary =
+      'Never infer a deeper path, video link, playlist, search-result URL, account page, purchase page, or another domain.'
+
+    expect(claudePrompt).toContain(rule)
+    expect(claudePrompt).toContain(boundary)
+    expect(gptIntro).toContain(rule)
+    expect(gptIntro).toContain(boundary)
   })
 })
 
@@ -238,22 +234,151 @@ describe('mechanical prompt cleanup', () => {
   })
 })
 
+describe('session transcript guidance scope', () => {
+  afterEach(() => {
+    clearSystemPromptSections()
+  })
+
+  const transcriptSection = async (embedded = false) => {
+    const saved = {
+      embedded: process.env.EMBEDDED_SEARCH_TOOLS,
+      entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT,
+    }
+    try {
+      if (embedded) {
+        process.env.EMBEDDED_SEARCH_TOOLS = '1'
+      } else {
+        delete process.env.EMBEDDED_SEARCH_TOOLS
+      }
+      clearSystemPromptSections()
+      const prompt = (await getSystemPrompt([], 'claude-opus-5')).join('\n')
+      const start = prompt.indexOf('## Reading session transcripts')
+      expect(start).toBeGreaterThan(-1)
+      return prompt.slice(start)
+    } finally {
+      if (saved.embedded === undefined) delete process.env.EMBEDDED_SEARCH_TOOLS
+      else process.env.EMBEDDED_SEARCH_TOOLS = saved.embedded
+      if (saved.entrypoint === undefined)
+        delete process.env.CLAUDE_CODE_ENTRYPOINT
+      else process.env.CLAUDE_CODE_ENTRYPOINT = saved.entrypoint
+      clearSystemPromptSections()
+    }
+  }
+
+  test('prefers session-reading tools for understanding another session while keeping raw transcripts available for debugging', async () => {
+    const section = await transcriptSection()
+
+    // Concise tool-preference statement without raw file prohibition
+    expect(section).toContain(
+      'These files are the raw record of a session.',
+    )
+    expect(section).toContain(
+      "When you need to understand another session's work, prefer the available session-reading tool.",
+    )
+    expect(section).toContain(
+      'For debugging that requires raw events or tool results the tool does not expose, inspect the transcript directly.',
+    )
+
+    // Mistaken restrictions must not be present
+    expect(section).not.toContain('narrow forensic surface, not a general session-discovery API')
+    expect(section).not.toContain('Use this route only for a specific session identifier')
+    expect(section).not.toContain('Do not scan the raw projects directory')
+    expect(section).not.toContain('explain that corpus-wide analysis is unavailable')
+    expect(section).not.toContain('Do not use raw files to bypass')
+    expect(section).not.toContain('you were given')
+    expect(section).not.toContain('you were not given')
+  })
+
+  test('covers dedicated search-tool variant with prefix resolution, scoped queries, and subagent metadata', async () => {
+    const section = await transcriptSection(false)
+
+    // Resolution guidance
+    expect(section).toContain(
+      'Prefer a known workspace and full session ID to open the path directly.',
+    )
+    expect(section).toContain(
+      'When resolving a specific session by prefix, locate the file with Glob',
+    )
+    expect(section).toContain(
+      'Glob pattern="**/*9a993deb*.jsonl" path="~/.cat-code/projects/"',
+    )
+    expect(section).toContain(
+      'Require unambiguous resolution to a single file before reading contents.',
+    )
+
+    // Paths and metadata workflow
+    expect(section).toContain(
+      '~/.cat-code/projects/<sanitized-cwd>/<session-id>.jsonl',
+    )
+    expect(section).toContain('subagents/agent-<hash>.jsonl')
+    expect(section).toContain('subagents/agent-<hash>.meta.json')
+    expect(section).toContain(
+      'Read .meta.json first when you want to know what a subagent was for or who spawned it.',
+    )
+
+    // Scoped queries with Grep
+    expect(section).toContain(
+      'Examples for querying an individual transcript:',
+    )
+    expect(section).toContain(
+      `Grep '"type":"tool_use"' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"stop_reason"' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"type":"subagent-' path="<path-to-transcript.jsonl>"`,
+    )
+    expect(section).toContain(
+      `Grep '"tool_use_id":"' path="<path-to-transcript.jsonl>"`,
+    )
+  })
+
+  test('covers embedded search-tool variant with find resolution and scoped grep queries', async () => {
+    const section = await transcriptSection(true)
+
+    // Resolution guidance with find
+    expect(section).toContain(
+      'Prefer a known workspace and full session ID to open the path directly.',
+    )
+    expect(section).toContain(
+      'find ~/.cat-code/projects -name \'*9a993deb*.jsonl\'',
+    )
+    expect(section).toContain(
+      'Require unambiguous resolution to a single file before reading contents.',
+    )
+
+    // Scoped queries with grep
+    expect(section).toContain(
+      `grep '"type":"tool_use"' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"stop_reason"' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"type":"subagent-' <path-to-transcript.jsonl>`,
+    )
+    expect(section).toContain(
+      `grep '"tool_use_id":"' <path-to-transcript.jsonl>`,
+    )
+
+    // Must not contain dedicated Glob/Grep tools
+    expect(section).not.toContain('Glob')
+    expect(section).not.toContain('Grep')
+  })
+})
+
 describe('system prompt section cache keying', () => {
   const withCleanPromptEnv = async (run: () => Promise<void>) => {
     const saved = {
       simple: process.env.CLAUDE_CODE_SIMPLE,
-      agentMode: process.env.CLAUDE_CODE_AGENT_MODE,
     }
     delete process.env.CLAUDE_CODE_SIMPLE
-    delete process.env.CLAUDE_CODE_AGENT_MODE
     try {
       await run()
     } finally {
       if (saved.simple === undefined) delete process.env.CLAUDE_CODE_SIMPLE
       else process.env.CLAUDE_CODE_SIMPLE = saved.simple
-      if (saved.agentMode === undefined)
-        delete process.env.CLAUDE_CODE_AGENT_MODE
-      else process.env.CLAUDE_CODE_AGENT_MODE = saved.agentMode
     }
   }
 
@@ -292,11 +417,15 @@ describe('system prompt section cache keying', () => {
 describe('language section caching contract', () => {
   test('language stays out of the section key so it applies to new sessions only', () => {
     // H2 ruling: keying language would silently turn "applies next session"
-    // into a live mid-session switch. Both prompt builds must opt out.
+    // into a live mid-session switch. Both prompt builds must opt out, and
+    // they now share one registration in buildDynamicPromptSections, so a
+    // second registration would mean the duplication came back.
+    const registrations = promptsSource.match(/systemPromptSection\(\s*'language',/g)
+    expect(registrations?.length).toBe(1)
     const optOuts = promptsSource.match(
       /systemPromptSection\(\s*'language',\s*NO_SECTION_INPUTS\s*,/g,
     )
-    expect(optOuts?.length).toBe(2)
+    expect(optOuts?.length).toBe(1)
   })
 })
 
@@ -306,9 +435,8 @@ describe('session guidance keying across the two prompt builds', () => {
   })
 
   test('a GPT build is not served the Claude-style guidance cached before it', async () => {
-    // session_guidance is the most heavily branched section: it selects among
-    // four compute functions on (gpt x agentMode). Warm on Claude, then build
-    // GPT. Under name-only keying the GPT build served the Claude text.
+    // session_guidance selects provider-specific guidance. Warm on Claude, then
+    // build GPT. Under name-only keying the GPT build served the Claude text.
     const tools = [
       { name: 'Agent' },
       { name: 'AskUserQuestion' },

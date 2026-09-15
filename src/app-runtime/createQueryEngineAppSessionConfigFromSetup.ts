@@ -1,7 +1,7 @@
 import type { Command } from '../commands.js'
 import type { MCPServerConnection, ServerResource } from '../services/mcp/types.js'
 import type { AppState } from '../state/AppStateStore.js'
-import type { Tool } from '../Tool.js'
+import type { McpRuntimeSnapshot, Tool, ToolUseContext } from '../Tool.js'
 import type { AgentDefinition } from '../tools/AgentTool/loadAgentsDir.js'
 import type { FileStateCache } from '../utils/fileStateCache.js'
 import type { ThinkingConfig } from '../utils/thinking.js'
@@ -15,6 +15,16 @@ export type QueryEngineAppSessionSetup = {
   mcpCommands: readonly Command[]
   mcpClients: readonly MCPServerConnection[]
   mcpResources: Record<string, ServerResource[]>
+  /**
+   * Optional live MCP source owned by the session's MCP lifecycle. When
+   * supplied, the four static mcp* values above are unused: the engine reads
+   * one snapshot per turn and refreshes between iterations, and getAppState()
+   * passes the store's real MCP state straight through so ToolSearch pending
+   * checks and Agent required-server checks see the same generation the tool
+   * pool came from. Without it the frozen setup overlay below is kept, because
+   * a static caller's store has no MCP state to observe.
+   */
+  getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
   agents: readonly AgentDefinition[]
   getAppState: () => AppState
   setAppState: (f: (prev: AppState) => AppState) => void
@@ -30,6 +40,7 @@ export type QueryEngineAppSessionSetup = {
   jsonSchema?: Record<string, unknown>
   verbose?: boolean
   replayUserMessages?: boolean
+  handleElicitation?: ToolUseContext['handleElicitation']
   setSDKStatus?: QueryEngineAppSessionConfig['setSDKStatus']
 }
 
@@ -44,6 +55,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
   mcpCommands,
   mcpClients,
   mcpResources,
+  getMcpRuntimeSnapshot,
   agents,
   getAppState,
   setAppState,
@@ -59,6 +71,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
   jsonSchema,
   verbose,
   replayUserMessages,
+  handleElicitation,
   setSDKStatus,
 }: QueryEngineAppSessionSetup): QueryEngineAppSessionConfig {
   const setupTools = [...tools]
@@ -81,25 +94,34 @@ export function createQueryEngineAppSessionConfigFromSetup({
       ]),
     ) as Record<string, ServerResource[]>
 
+  const isLive = getMcpRuntimeSnapshot !== undefined
+
   return {
     cwd,
-    tools: [...setupTools, ...setupMcpTools],
-    commands: [...setupCommands, ...setupMcpCommands],
+    // Live callers hand the engine the base pool and catalog; it layers each
+    // turn's MCP generation on top itself. Static callers keep the merged
+    // arrays, which are the only MCP values they will ever have.
+    tools: isLive ? setupTools : [...setupTools, ...setupMcpTools],
+    commands: isLive ? setupCommands : [...setupCommands, ...setupMcpCommands],
     mcpClients: setupMcpClients,
+    mcpResources: copyMcpResources(),
+    getMcpRuntimeSnapshot,
     agents: setupAgents,
-    getAppState: () => {
-      const state = getAppState()
-      return {
-        ...state,
-        mcp: {
-          ...state.mcp,
-          clients: [...setupMcpClients],
-          tools: [...setupMcpTools],
-          commands: [...setupMcpCommands],
-          resources: copyMcpResources(),
+    getAppState: isLive
+      ? getAppState
+      : () => {
+          const state = getAppState()
+          return {
+            ...state,
+            mcp: {
+              ...state.mcp,
+              clients: [...setupMcpClients],
+              tools: [...setupMcpTools],
+              commands: [...setupMcpCommands],
+              resources: copyMcpResources(),
+            },
+          }
         },
-      }
-    },
     setAppState,
     readFileCache,
     customSystemPrompt,
@@ -113,6 +135,7 @@ export function createQueryEngineAppSessionConfigFromSetup({
     jsonSchema,
     verbose,
     replayUserMessages,
+    handleElicitation,
     includePartialMessages: true,
     setSDKStatus,
   }

@@ -1,7 +1,7 @@
+import { type APIProvider, getAPIProvider } from '../../utils/model/providers.js'
 import { feature } from 'bun:bundle'
 import { prependBullets } from '../../constants/prompts.js'
 import { isGPTPromptStyle } from '../../constants/promptStyle.js'
-import { getAttributionTexts } from '../../utils/attribution.js'
 import { hasEmbeddedSearchTools } from '../../utils/embeddedTools.js'
 import { isEnvTruthy } from '../../utils/envUtils.js'
 import { shouldIncludeGitInstructions } from '../../utils/gitSettings.js'
@@ -16,13 +16,13 @@ import {
   getUndercoverInstructions,
   isUndercover,
 } from '../../utils/undercover.js'
-import { AGENT_TOOL_NAME } from '../AgentTool/constants.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
+import { NOTEBOOK_EDIT_TOOL_NAME } from '../NotebookEditTool/constants.js'
 import { GLOB_TOOL_NAME } from '../GlobTool/prompt.js'
 import { GREP_TOOL_NAME } from '../GrepTool/prompt.js'
-import { TodoWriteTool } from '../TodoWriteTool/TodoWriteTool.js'
 import { BASH_TOOL_NAME } from './toolName.js'
 
 export function getDefaultTimeoutMs(): number {
@@ -76,97 +76,14 @@ Use the gh command via the Bash tool for other GitHub-related tasks including wo
 - View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments`
   }
 
-  // For external users, include full inline instructions
-  const { commit: commitAttribution, pr: prAttribution } = getAttributionTexts()
+  return `# Git
 
-  return `# Committing changes with git
-
-Create commits when the user requests one or when loaded repository instructions explicitly require one as part of the workflow. If neither applies, ask first. When either source authorizes a new git commit, follow these steps carefully:
-
-You can call multiple tools in a single response. When multiple independent pieces of information are requested and all commands are likely to succeed, run multiple tool calls in parallel for optimal performance. The numbered steps below indicate which commands should be batched in parallel.
-
-Git Safety Protocol:
-- NEVER update the git config
-- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless the user explicitly requests these actions. Taking unauthorized destructive actions is unhelpful and can result in lost work, so it's best to ONLY run these commands when given direct instructions 
-- NEVER skip hooks (--no-verify, --no-gpg-sign, etc) unless the user explicitly requests it
-- NEVER run force push to main/master, warn the user if they request it
-- CRITICAL: Always create NEW commits rather than amending, unless the user explicitly requests a git amend. When a pre-commit hook fails, the commit did NOT happen — so --amend would modify the PREVIOUS commit, which may result in destroying work or losing previous changes. Instead, after hook failure, fix the issue, re-stage, and create a NEW commit
-- When staging files, prefer adding specific files by name rather than using "git add -A" or "git add .", which can accidentally include sensitive files (.env, credentials) or large binaries
-- NEVER commit changes unless the user explicitly asks or loaded repository instructions explicitly require a commit. In either case, stage only the intended paths and do not push unless separately authorized.
-
-1. Run the following bash commands in parallel, each using the ${BASH_TOOL_NAME} tool:
-  - Run a git status command to see all untracked files. IMPORTANT: Never use the -uall flag as it can cause memory issues on large repos.
-  - Run a git diff command to see both staged and unstaged changes that will be committed.
-  - Run a git log command to see recent commit messages, so that you can follow this repository's commit message style.
-2. Analyze all staged changes (both previously staged and newly added) and draft a commit message:
-  - Summarize the nature of the changes (eg. new feature, enhancement to an existing feature, bug fix, refactoring, test, docs, etc.). Ensure the message accurately reflects the changes and their purpose (i.e. "add" means a wholly new feature, "update" means an enhancement to an existing feature, "fix" means a bug fix, etc.).
-  - Do not commit files that likely contain secrets (.env, credentials.json, etc). Warn the user if they specifically request to commit those files
-  - Treat the commit message as a durable handoff to future developers and agent sessions. A reader with no access to the current conversation must be able to understand what the commit changes, why it was needed, the resulting behavior, and any important implementation decisions from the message itself.
-  - Follow the repository's established commit-message convention. Start with a concise subject that identifies the outcome of the change, uses the imperative mood, and can stand alone in a log.
-  - Add a body for every non-trivial change. A subject-only message is appropriate only when the complete change and its reason are genuinely self-evident (for example, correcting a typo).
-  - In the body, explain the problem or context that motivated the change, what changed at the behavioral or architectural level, and why this approach was chosen. Include material constraints, tradeoffs, compatibility implications, or follow-up consequences. The diff should supply implementation detail, not missing context.
-  - Be concrete and proportionate. Do not merely restate the subject, enumerate filenames, narrate the diff, or pad the message with generic claims. Use paragraphs by default; use bullets when the commit contains distinct changes or the repository consistently prefers them.
-  - Describe all meaningful staged changes, including previously staged work. If the staged changes do not form one coherent commit, tell the user instead of hiding unrelated work behind a vague message.
-  - Write the message as if the user wrote it: no "Claude did X", "AI-assisted", or other model-centered framing. Never invent issue numbers, motivations, test results, or other context not supported by the changes or the user's request.
-3. Run the following commands in parallel:
-   - Add relevant untracked files to the staging area.
-   - Create the commit with a message${commitAttribution ? ` ending with:\n   ${commitAttribution}` : '.'}
-   - Run git status after the commit completes to verify success.
-   Note: git status depends on the commit completing, so run it sequentially after the commit.
-4. If the commit fails due to pre-commit hook: fix the issue and create a NEW commit
-
-Important notes:
-- NEVER run additional commands to read or explore code, besides git bash commands
-- NEVER use the ${TodoWriteTool.name} or ${AGENT_TOOL_NAME} tools
-- DO NOT push to the remote repository unless the user explicitly asks you to do so
-- IMPORTANT: Never use git commands with the -i flag (like git rebase -i or git add -i) since they require interactive input which is not supported.
-- IMPORTANT: Do not use --no-edit with git rebase commands, as the --no-edit flag is not a valid option for git rebase.
-- If there are no changes to commit (i.e., no untracked files and no modifications), do not create an empty commit
-- In order to ensure good formatting, ALWAYS pass the commit message via a HEREDOC, a la this example:
-<example>
-git commit -m "$(cat <<'EOF'
-   Concise imperative subject
-
-   Explain the problem this change addresses and why the chosen behavior is
-   the right solution. Include important consequences or constraints.${commitAttribution ? `\n\n   ${commitAttribution}` : ''}
-   EOF
-   )"
-</example>
-
-# Creating pull requests
-Use the gh command via the Bash tool for ALL GitHub-related tasks including working with issues, pull requests, checks, and releases. If given a Github URL use the gh command to get the information needed.
-
-IMPORTANT: When the user asks you to create a pull request, follow these steps carefully:
-
-1. Run the following bash commands in parallel using the ${BASH_TOOL_NAME} tool, in order to understand the current state of the branch since it diverged from the main branch:
-   - Run a git status command to see all untracked files (never use -uall flag)
-   - Run a git diff command to see both staged and unstaged changes that will be committed
-   - Check if the current branch tracks a remote branch and is up to date with the remote, so you know if you need to push to the remote
-   - Run a git log command and \`git diff [base-branch]...HEAD\` to understand the full commit history for the current branch (from the time it diverged from the base branch)
-2. Analyze all changes that will be included in the pull request, making sure to look at all relevant commits (NOT just the latest commit, but ALL commits that will be included in the pull request!!!), and draft a pull request title and summary:
-   - Keep the PR title short (under 70 characters)
-   - Use the description/body for details, not the title
-3. Run the following commands in parallel:
-   - Create new branch if needed
-   - Push to remote with -u flag if needed
-   - Create PR using gh pr create with the format below. Use a HEREDOC to pass the body to ensure correct formatting.
-<example>
-gh pr create --title "the pr title" --body "$(cat <<'EOF'
-## Summary
-<1-3 bullet points>
-
-## Test plan
-[Bulleted markdown checklist of TODOs for testing the pull request...]${prAttribution ? `\n\n${prAttribution}` : ''}
-EOF
-)"
-</example>
-
-Important:
-- DO NOT use the ${TodoWriteTool.name} or ${AGENT_TOOL_NAME} tools
-- Return the PR URL when you're done, so the user can see it
-
-# Other common operations
-- View comments on a Github PR: gh api repos/foo/bar/pulls/123/comments`
+- Commit only when the user asks or loaded repository instructions explicitly require one as part of the workflow; then stage only the intended paths and do not push unless separately authorized.
+- Prefer staging specific named paths over \`git add -A\` or \`git add .\`.
+- NEVER skip hooks (--no-verify, --no-gpg-sign) unless explicitly asked. A failed pre-commit hook means the commit did NOT happen: fix, re-stage, create a NEW commit, never --amend.
+- NEVER run destructive git commands (push --force, reset --hard, checkout ., restore ., clean -f, branch -D) unless explicitly asked.
+- Interactive git flags (-i, e.g. git rebase -i, git add -i) are not supported.
+- Use the \`gh\` CLI for GitHub work (issues, PRs, checks, releases).`
 }
 
 // SandboxManager merges config from multiple sources (settings layers, defaults,
@@ -280,10 +197,26 @@ function getSimpleSandboxSection(): string {
   ].join('\n')
 }
 
-export function getBashPrompt(provider: APIProvider = getAPIProvider()): string {
+export function getBashPrompt(
+  provider: APIProvider = getAPIProvider(),
+  enabledToolNames?: ReadonlySet<string>,
+): string {
   // Ant-native builds alias find/grep to embedded bfs/ugrep in Claude's shell,
   // so we don't steer away from them (and Glob/Grep tools are removed).
   const embedded = hasEmbeddedSearchTools()
+
+  // The registry swaps Edit for apply_patch by SESSION provider
+  // (getProviderFileEditTool in ../../tools.ts) while this prompt renders per
+  // REQUEST provider, so a gpt-* worker inside an Anthropic session was told
+  // to use apply_patch while Edit shipped. The tool pool is the truth when the
+  // caller passes it; the provider is only the fallback.
+  const editToolName = enabledToolNames?.has(FILE_PATCH_TOOL_NAME)
+    ? FILE_PATCH_TOOL_NAME
+    : enabledToolNames?.has(FILE_EDIT_TOOL_NAME)
+      ? FILE_EDIT_TOOL_NAME
+      : isGPTPromptStyle(provider)
+        ? FILE_PATCH_TOOL_NAME
+        : FILE_EDIT_TOOL_NAME
 
   const toolPreferenceItems = [
     ...(embedded
@@ -293,7 +226,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
           `Content search: Use ${GREP_TOOL_NAME} (NOT grep or rg)`,
         ]),
     `Read files: Use ${FILE_READ_TOOL_NAME} (NOT cat/head/tail)`,
-    `Edit files: Use ${FILE_EDIT_TOOL_NAME} (NOT sed/awk)`,
+    `Edit files: Use ${editToolName} (NOT sed/awk)`,
     `Write files: Use ${FILE_WRITE_TOOL_NAME} (NOT echo >/cat <<EOF)`,
     'Communication: Output text directly (NOT echo/printf)',
   ]
@@ -336,7 +269,7 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   ]
   const backgroundNote = getBackgroundUsageNote()
   const workingDirectoryNote =
-    "The main session's working directory persists between commands, but shell state does not. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
+    "The main session's working directory persists between commands and is used by later tools. A foreground Bash command updates it to the command's final `pwd`, but shell state does not persist. In agent threads, a `cd` applies only to the current Bash call; the next call starts in the agent's assigned working directory. The shell environment is initialized from the user's profile (bash or zsh)."
 
   const instructionItems: Array<string | string[]> = [
     'If your command will create new directories or files, first use this tool to run `ls` to verify the parent directory exists and is the correct location.',
@@ -363,14 +296,33 @@ export function getBashPrompt(provider: APIProvider = getAPIProvider()): string 
   ]
 
   if (isGPTPromptStyle(provider)) {
+    // Mutations are steered to a dedicated tool so the user can review them;
+    // reads and search stay open because they are cheap and lossless.
+    const gptToolPreferenceItems = [
+      ...(embedded
+        ? []
+        : [
+            `File search: Use ${GLOB_TOOL_NAME}, or \`rg --files\``,
+            `Content search: Use ${GREP_TOOL_NAME}, or \`rg\``,
+          ]),
+      `Read files: Use ${FILE_READ_TOOL_NAME} for whole files; \`sed -n\` line ranges are fine here for a slice`,
+      `Edit files: Use ${editToolName}`,
+      `Write files: Use ${FILE_WRITE_TOOL_NAME}`,
+      'Communication: Output text directly (NOT echo/printf)',
+    ]
+
     return [
       'Executes a given bash command and returns its output.',
       '',
       workingDirectoryNote,
       '',
-      `TOOL SELECTION CONSTRAINT: Before using ${BASH_TOOL_NAME}, check whether a dedicated tool can perform the task. Avoid using this tool to run ${avoidCommands} commands unless you have verified that no dedicated tool can accomplish the task or the user explicitly asked for Bash.`,
+      `FILE MUTATIONS: Use ${editToolName} for local file edits. Do not create or edit files with cat, heredocs, or other shell write tricks. Formatting commands and bulk mechanical rewrites do not need ${editToolName}. Do not use Python to read or write files when a simple shell command or ${editToolName} is enough.`,
       '',
-      ...prependBullets(toolPreferenceItems),
+      `SHOW THE DIFF: After any file mutation performed by a command rather than by ${editToolName}, ${FILE_WRITE_TOOL_NAME}, or ${NOTEBOOK_EDIT_TOOL_NAME} (scripts, formatters, generators, refactoring tools), show the resulting git diff before moving on. If the change is generated or too large to read, show git diff --stat and git status --short instead. Never skip the check.`,
+      '',
+      `READS AND SEARCH: \`rg\`, \`rg --files\`, \`sed -n\` line ranges, and \`git diff\` / \`git show\` / \`git blame\` are all fine to run here. ${FILE_READ_TOOL_NAME} stays the default for whole-file reads because it is bounded (offset/limit) and numbered.`,
+      '',
+      ...prependBullets(gptToolPreferenceItems),
       '',
       'COMMAND EXECUTION RULES',
       ...prependBullets(instructionItems),

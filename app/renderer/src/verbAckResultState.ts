@@ -1,22 +1,22 @@
 /**
  * Renderer consumer for the four verb-ack `.result` frames that had NO renderer
  * consumer before decision #5 (audit `docs/migration/reviews/2026-07-21-app-cutlist-ram-audit.md`
- * §I.4): `agent-mode.set.result`, `task-control.result`, `run-control.result`,
- * and `settings.result`. Each verb's SUCCESS mutates the sidecar's store and
+ * §I.4): `task-control.result`, `run-control.result`, and `settings.result`.
+ * Each verb's SUCCESS mutates the sidecar's store and
  * re-broadcasts a snapshot (so the UI already updates); a FAILURE mutates
  * nothing → no re-broadcast → the failed verb was previously SILENT to the user.
  *
  * This is a standalone result-only reducer following `sessionActionRuntimeState.ts`
  * (there is no snapshot half here — these verbs' live read-seams already live in
  * their own domain modules: `runControlsState` / `tasksState` / `settingsState` /
- * `orchestratorState`). It records the most recent ack per session (T5a-analog
+ * `workersState`). It records the most recent ack per session (T5a-analog
  * `requestId`) so `App.tsx` can toast the sidecar's REAL, redacted `message` on
  * failure — never an optimistic guess, never token material.
  */
 
 import type {
-  AgentModeSetResultFrame,
   ErrorFrame,
+  PromptForceResultFrame,
   PromptRecallResultFrame,
   RunControlResultFrame,
   ServerFrame,
@@ -27,14 +27,14 @@ import type {
 import type { ToastTone } from './toastModel.js'
 
 /**
- * The four previously-unconsumed verb-ack results. Every member shares the
+ * The previously-unconsumed verb-ack results. Every member shares the
  * `ok` + `message` + `requestId` fields the failure surface needs.
  */
 export type VerbAckResultFrame =
-  | AgentModeSetResultFrame
   | TaskControlResultFrame
   | RunControlResultFrame
   | SettingsResultFrame
+  | PromptForceResultFrame
   /**
    * D1b. Its `ok:false` is not a failed verb: the recall ran, and the engine
    * simply had already taken one of the messages. It joins this union because
@@ -226,10 +226,10 @@ export function reduceVerbAckResultState(
   // Explicit union check (not a Set.has) so TS narrows `frame` to
   // `VerbAckResultFrame` with no `as` cast — the projector-style rule.
   if (
-    frame.kind === 'agent-mode.set.result' ||
     frame.kind === 'task-control.result' ||
     frame.kind === 'run-control.result' ||
     frame.kind === 'settings.result' ||
+    frame.kind === 'prompt-force.result' ||
     frame.kind === 'prompt-recall.result' ||
     isCorrelatedBadRequest(frame)
   ) {
@@ -279,6 +279,17 @@ export function verbAckErrorToast(
   // the text landing back in the composer is the whole story (the D5 precedent).
   if (frame.kind === 'prompt-recall.result') {
     return frame.ok ? null : { message: frame.message, tone: 'warn' }
+  }
+  // Both background verbs race the work they act on: a worker can finish, or go
+  // to the background by another route, between the card rendering and the click
+  // landing. That refusal is a report about the world, not a fault the user
+  // caused, so it takes the softer tone for the same reason a beaten recall does.
+  if (
+    frame.kind === 'task-control.result' &&
+    (frame.verb === 'task.background' || frame.verb === 'task.background.one') &&
+    !frame.ok
+  ) {
+    return { message: frame.message, tone: 'warn' }
   }
   if (frame.kind !== 'error' && frame.ok) return null
   return { message: frame.message, tone: 'danger' }

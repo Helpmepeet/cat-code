@@ -15,6 +15,10 @@ import {
   writePinnedSessionsToStorage,
   type PinnedSessions,
 } from './sidebarPinnedSessions.js'
+import {
+  memoryStorage as storage,
+  throwingStorage,
+} from './viewPreferenceStorageFixture.js'
 
 // The Pinned section's behaviour is a pure module by necessity: the renderer
 // suite is SSR-only (`renderToStaticMarkup`), so no drag, pointer event or
@@ -28,15 +32,6 @@ function rows(...ids: string[]): { sessionId: string }[] {
 
 function idsOf(list: readonly { sessionId: string }[]): string[] {
   return list.map(row => row.sessionId)
-}
-
-function storage(seed: Record<string, string> = {}) {
-  const store = new Map(Object.entries(seed))
-  return {
-    getItem: (key: string) => store.get(key) ?? null,
-    setItem: (key: string, value: string) => void store.set(key, value),
-    raw: store,
-  }
 }
 
 // ── pin membership ───────────────────────────────────────────────────────────
@@ -328,14 +323,7 @@ test('a null storage disables persistence without throwing', () => {
 })
 
 test('a throwing storage never propagates (view state is best-effort)', () => {
-  const hostile = {
-    getItem: () => {
-      throw new Error('denied')
-    },
-    setItem: () => {
-      throw new Error('denied')
-    },
-  }
+  const hostile = throwingStorage()
   expect(readPinnedSessionsFromStorage(hostile)).toBeNull()
   expect(() => writePinnedSessionsToStorage(hostile, ['a'])).not.toThrow()
 })

@@ -54,10 +54,10 @@ import {
   loadPoolForObservation,
   saveCodexTokenToVault,
   setAccountAlias,
-  switchToAccount,
   validateCodexAccountAlias,
   type PoolAccount,
 } from '../../src/services/api/codexAccountPool.js'
+import { commitCodexAccountSwitch } from '../../src/services/api/codexAccountSwitch.js'
 import {
   getClaudePoolStatus,
   loadClaudePoolForObservation,
@@ -114,8 +114,15 @@ export type AccountVerbResult = {
  * real credentials (§10 — live execution is the operator GUI step).
  */
 export type AccountsCommandExecutor = {
-  /** Switch the persisted active account. `accountId` already re-resolved. */
-  switch(accountId: string): AccountVerbResult
+  /**
+   * Switch the persisted active account. `accountId` already re-resolved.
+   *
+   * Async because the real implementation runs the engine's WHOLE switch
+   * transaction, not just the pool write: live subagent leases have to be
+   * reassigned and the auth-sensitive caches cleared, and the cache clear
+   * awaits (`commitCodexAccountSwitch`, `src/services/api/codexAccountSwitch.ts`).
+   */
+  switch(accountId: string): Promise<AccountVerbResult>
   /** Switch the active Anthropic subscription account and refresh auth caches. */
   switchAnthropic(accountId: string): Promise<AccountVerbResult>
   /** Rename a vault account. `alias` already re-validated against the live pool. */
@@ -127,7 +134,7 @@ export type AccountsCommandExecutor = {
   /** Refresh OAuth tokens for every unlocked vault account. */
   touchAll(): Promise<AccountVerbResult>
   /**
-   * Fetch soft usage hints (5h/weekly used-percent + reset) for every pool
+   * Fetch soft usage hints (primary/secondary used-percent + reset) for every pool
    * account from the ChatGPT wham/usage endpoint and apply them to the live
    * pool — the same call the engine makes at startup (`initAccountPool` →
    * `fetchPoolUsage`). Read-only (GET, often live in this long-lived process:
@@ -416,8 +423,11 @@ export function buildAccountStatus(
     source: account.source,
     usagePrimary: account.usagePrimary ?? null,
     usageWeekly: account.usageWeekly ?? null,
+    usagePrimaryWindowSeconds: account.usagePrimaryWindowSeconds ?? null,
+    usageSecondaryWindowSeconds: account.usageSecondaryWindowSeconds ?? null,
     usageLimitReached: account.usageLimitReached === true,
     usageResetAt: account.usageResetAt ?? null,
+    usageWeeklyResetAt: account.usageWeeklyResetAt ?? null,
     lastRefreshIso: account.lastRefreshIso ?? null,
     lastError: account.lastError ?? null,
     planType: account.planType ?? null,
@@ -513,10 +523,26 @@ export function buildAccountsSnapshot(
  * Real executor — wires the engine's own account machinery
  * ------------------------------------------------------------------------- */
 
-export function createRealAccountsExecutor(): AccountsCommandExecutor {
+export function createRealAccountsExecutor(
+  options: {
+    /**
+     * The engine's own switch transaction, behind the same injection idiom the
+     * domain seams use, so a test can prove the executor runs the WHOLE
+     * transaction without touching a real vault.
+     */
+    commitSwitch?: (accountId: string) => Promise<PoolAccount | null>
+  } = {},
+): AccountsCommandExecutor {
+  const commitSwitch = options.commitSwitch ?? commitCodexAccountSwitch
   return {
-    switch(accountId) {
-      const account = switchToAccount(accountId)
+    // The desktop switch must run the SAME transaction the terminal
+    // `/switch-account` runs, not just the pool write. `switchToAccount` alone
+    // left live `follow-main` subagent leases pointed at the previous account
+    // and never cleared the sticky-HTTP-fallback / auth-sensitive caches; the
+    // main-thread lease self-healed on the next turn (it is registered and
+    // released per turn, `src/query.ts`), the worker leases did not.
+    async switch(accountId) {
+      const account = await commitSwitch(accountId)
       return account
         ? { ok: true, message: `Switched to ${account.alias ?? 'account'}` }
         : { ok: false, message: 'Could not switch to that account.' }
@@ -589,7 +615,7 @@ export function createRealAccountsExecutor(): AccountsCommandExecutor {
       return { ok: true, message: 'Refresh complete.', touchAllResults }
     },
     async refreshUsage() {
-      // updateRoutingHints applies the fetched 5h/weekly percents onto the live
+      // updateRoutingHints applies the fetched primary/secondary percents onto the live
       // pool accounts, which `buildAccountStatus` then reads. A total failure
       // (offline / stale tokens) returns 0 results and leaves the fields as-is.
       const snapshot = await fetchPoolUsage({ updateRoutingHints: true })
@@ -919,12 +945,12 @@ export function createSidecarAccountsDomain(
           if (!account) {
             return notFound('account.switch')
           }
-          // `switchToAccount` returns null when the target is not uniquely
+          // The engine transaction returns null when the target is not uniquely
           // resolvable or not switchable, so the switch can fail here. Report
           // what actually happened, as the Anthropic arm above already does:
           // an unconditional `true` re-broadcasts a pool change to every
           // connection for a switch that never took place.
-          const result = executor.switch(account.accountId)
+          const result = await executor.switch(account.accountId)
           return {
             verb: 'account.switch',
             result,

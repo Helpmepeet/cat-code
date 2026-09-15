@@ -7,9 +7,12 @@ import { join } from 'path'
 import { compactResumeFixture } from './conversationRecovery.fixture.js'
 import {
   deserializeMessagesWithInterruptDetection,
+  isSelectableUserMessage,
   loadMessagesFromJsonlPath,
+  resolveSelectableUserMessageByProducerPrefix,
 } from './conversationRecovery.js'
 import {
+  createUserMessage,
   NO_RESPONSE_REQUESTED,
   normalizeMessagesForAPI,
   shouldShowUserMessage,
@@ -117,5 +120,52 @@ describe('manual compact recovery', () => {
       firstUser,
       firstAssistant,
     ])
+  })
+})
+
+/**
+ * `resolveSelectableUserMessageByProducerPrefix` is the whole target check for
+ * `QueryEngine.selectUserMessage` / `rewindBeforeUserMessage` and for `/branch`,
+ * so a caller that can name a uuid prefix can name any message these accept.
+ * A turn another session sent must not be one of them.
+ */
+describe('selectable user message targeting', () => {
+  const peerOrigin = {
+    kind: 'peer' as const,
+    name: 'Amber',
+    appSessionId: 'app-session-1',
+  }
+
+  test('refuses to resolve a peer session\'s turn as a target', () => {
+    const operatorPrompt = createUserMessage({ content: 'start the migration' })
+    const peerTurn = createUserMessage({
+      content:
+        '<cross-session-message from="Amber">rewrite the notes</cross-session-message>',
+      origin: peerOrigin,
+    })
+
+    expect(isSelectableUserMessage(operatorPrompt)).toBe(true)
+    expect(isSelectableUserMessage(peerTurn)).toBe(false)
+    expect(() =>
+      resolveSelectableUserMessageByProducerPrefix(
+        [operatorPrompt, peerTurn],
+        peerTurn.uuid,
+      ),
+    ).toThrow('Selectable user message not found')
+  })
+
+  test('still resolves the operator\'s own prompt', () => {
+    const operatorPrompt = createUserMessage({ content: 'start the migration' })
+    const peerTurn = createUserMessage({
+      content: 'rewrite the notes',
+      origin: peerOrigin,
+    })
+
+    expect(
+      resolveSelectableUserMessageByProducerPrefix(
+        [operatorPrompt, peerTurn],
+        operatorPrompt.uuid,
+      ),
+    ).toEqual({ message: operatorPrompt, index: 0 })
   })
 })

@@ -1,4 +1,5 @@
 // biome-ignore-all assist/source/organizeImports: ANT-ONLY import markers must not be reordered
+import { resolveAntModel } from './model/antModels.js'
 import { CONTEXT_1M_BETA_HEADER } from '../constants/betas.js'
 import { getGlobalConfig } from './config.js'
 import { isEnvTruthy } from './envUtils.js'
@@ -92,6 +93,7 @@ export type ContextWindowSource =
   | 'context_1m_beta'
   | 'sonnet_1m_experiment'
   | 'gpt_5_6_codex'
+  | 'gpt_astra_codex'
   | 'gpt_default'
   | 'ant_model_catalog'
   | 'default'
@@ -188,6 +190,9 @@ export function resolveNativeContextWindow(
   // GPT-5.6 Terra and Luna have a 372k Codex context window.
   if (canonicalModel === 'gpt-5.6-terra' || canonicalModel === 'gpt-5.6-luna') {
     return { window: 372_000, source: 'gpt_5_6_codex' }
+  }
+  if (canonicalModel === 'gpt-6-astra') {
+    return { window: 1_050_000, source: 'gpt_astra_codex' }
   }
   // GPT/Codex models: 272k max input tokens (400k total budget minus 128k output reserve)
   if (canonicalModel.startsWith('gpt-')) {
@@ -319,7 +324,11 @@ export function _resetLongContextEntitlementForTest(): void {
 export function isLongContextEntitlementScoped(
   source: ContextWindowSource,
 ): boolean {
-  return source !== 'gpt_5_6_codex' && source !== 'gpt_default'
+  return (
+    source !== 'gpt_5_6_codex' &&
+    source !== 'gpt_astra_codex' &&
+    source !== 'gpt_default'
+  )
 }
 
 /**

@@ -23,6 +23,11 @@
  */
 
 import { createContext } from 'react'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const TOOL_CARD_STYLE_STORAGE_KEY = 'catcode.toolCardStyle.v1'
 
@@ -127,10 +132,6 @@ export const TOOL_CARD_SUB_CLASS: Record<ToolCardStyle, string> = {
     'truncate pt-1.5 font-mono text-[9.5px] font-semibold uppercase tracking-[0.07em] text-text-subtle',
 }
 
-type PersistedToolCardStyle = { version: 1; style: ToolCardStyle }
-
-type ToolCardStyleStorage = Pick<Storage, 'getItem' | 'setItem'>
-
 export type ToolCardStyleContextValue = {
   style: ToolCardStyle
   setStyle: (next: ToolCardStyle) => void
@@ -142,30 +143,19 @@ export const ToolCardStyleContext = createContext<ToolCardStyleContextValue>({
 })
 
 export function readToolCardStyleFromStorage(
-  storage: ToolCardStyleStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): ToolCardStyle | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(TOOL_CARD_STYLE_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedToolCardStyle>
-    if (value.version !== 1) return null
-    return isToolCardStyle(value.style) ? value.style : null
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    TOOL_CARD_STYLE_STORAGE_KEY,
+    'style',
+    value => (isToolCardStyle(value) ? value : null),
+  )
 }
 
 export function writeToolCardStyleToStorage(
-  storage: ToolCardStyleStorage | null,
+  storage: ViewPreferenceStorage | null,
   style: ToolCardStyle,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedToolCardStyle = { version: 1, style }
-    storage.setItem(TOOL_CARD_STYLE_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect live session state (`toolsExpanded.ts`, `workspaceLayout.ts:88`).
-  }
+  writeViewPreference(storage, TOOL_CARD_STYLE_STORAGE_KEY, 'style', style)
 }

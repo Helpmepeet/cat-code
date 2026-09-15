@@ -29,6 +29,7 @@ import {
   unregisterAgentForeground,
   registerAgentForeground,
 } from './LocalAgentTask.js'
+import { formatBlockedHandoff } from '../../tools/AskParentSessionTool/AskParentSessionTool.js'
 import { getPillLabel, pillNeedsCta } from '../pillLabel.js'
 import {
   getTaskStatusIcon,
@@ -39,6 +40,7 @@ import {
   getCommandsByMaxPriority,
   resetCommandQueue,
 } from '../../utils/messageQueueManager.js'
+import { generateTaskAttachments } from '../../utils/task/framework.js'
 
 function buildPoolAccount(
   overrides: Partial<PoolAccount> & Pick<PoolAccount, 'accountId'>,
@@ -129,6 +131,33 @@ describe('LocalAgentTask foreground cleanup', () => {
 
     expect(getCodexLeaseForOwner(agentId)).toBeUndefined()
     expect(appState.tasks[agentId]).toBeUndefined()
+  })
+
+  test('unregisterAgentForeground retains unresolved instructions for the parent', () => {
+    const agentId = 'sync-agent-unresolved'
+    registerAgentForeground({
+      agentId,
+      description: 'Unresolved foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    expect(queuePendingMessageIfRunning(agentId, 'finish the audit', setAppState)).toBe(
+      true,
+    )
+
+    unregisterAgentForeground(agentId, setAppState)
+
+    expect(appState.tasks[agentId]).toMatchObject({
+      status: 'completed',
+      acceptingMessages: false,
+      pendingMessages: [
+        {
+          message: 'finish the audit',
+          status: 'undelivered',
+        },
+      ],
+    })
   })
 
   test('unregisterAgentForeground hands back the account it just released', () => {
@@ -237,7 +266,7 @@ describe('LocalAgentTask foreground cleanup', () => {
   })
 
   test('registerAgentForeground stores the resolved friendly agent name', () => {
-    registerAgentForeground({
+    const registration = registerAgentForeground({
       agentId: 'sync-agent-4',
       description: 'Sync foreground agent',
       prompt: 'test prompt',
@@ -255,6 +284,10 @@ describe('LocalAgentTask foreground cleanup', () => {
       agentName: 'Curie',
       agentType: 'implementor',
     })
+    expect(
+      (appState.tasks['sync-agent-4'] as { abortController?: AbortController })
+        .abortController,
+    ).toBe(registration.abortController)
   })
 
   test('completeAgentTask records blocked handoff metadata from the result', () => {
@@ -303,6 +336,179 @@ describe('LocalAgentTask foreground cleanup', () => {
       status: 'completed',
       handoffStatus: 'blocked',
       blockReason: 'Should I update the public API too?',
+    })
+  })
+
+  test('terminal notification reports an unresolved instruction outcome', () => {
+    const agentId = 'sync-agent-delivery-report'
+    registerAgentForeground({
+      agentId,
+      description: 'Delivery report agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    queuePendingMessageIfRunning(agentId, 'send the final note', setAppState)
+    completeAgentTask(
+      {
+        agentId,
+        content: [{ type: 'text', text: 'done' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+    )
+    enqueueAgentNotification({
+      taskId: agentId,
+      description: 'Delivery report agent',
+      status: 'completed',
+      setAppState,
+      finalMessage: 'done',
+    })
+
+    const notification = dequeue()
+    expect(notification?.value).toContain('Unresolved worker instructions:')
+    expect(notification?.value).toContain('Undelivered:')
+    expect(notification?.value).toContain('send the final note')
+    expect(appState.tasks[agentId]?.notified).toBe(true)
+  })
+
+  test('notification outcomes settle only the origin groups whose enqueue succeeds', () => {
+    const agentId = 'sync-agent-grouped-delivery-report'
+    registerAgentForeground({
+      agentId,
+      description: 'Grouped delivery report agent',
+      prompt: 'test prompt',
+      selectedAgent: { name: 'general-purpose', prompt: 'test prompt' },
+      setAppState,
+    })
+    queuePendingMessageIfRunning(
+      agentId,
+      'failed sender instruction',
+      setAppState,
+      'sender-failed' as never,
+    )
+    queuePendingMessageIfRunning(
+      agentId,
+      'successful sender instruction',
+      setAppState,
+      'sender-success' as never,
+    )
+    queuePendingMessageIfRunning(agentId, 'main instruction', setAppState)
+    completeAgentTask(
+      {
+        agentId,
+        content: [{ type: 'text', text: 'done' }],
+        totalToolUseCount: 0,
+        totalDurationMs: 1,
+        totalTokens: 1,
+      },
+      setAppState,
+    )
+
+    const enqueued: Array<{ agentId?: string; value: unknown }> = []
+    enqueueAgentNotification(
+      {
+        taskId: agentId,
+        description: 'Grouped delivery report agent',
+        status: 'completed',
+        setAppState,
+        finalMessage: 'done',
+      },
+      {
+        enqueueNotification(command) {
+          if (command.agentId === 'sender-failed') {
+            throw new Error('injected enqueue failure')
+          }
+          enqueued.push(command)
+        },
+      },
+    )
+
+    const task = appState.tasks[agentId]
+    expect(task?.pendingMessages).toMatchObject([
+      {
+        message: 'failed sender instruction',
+        originAgentId: 'sender-failed',
+        reported: false,
+      },
+      {
+        message: 'successful sender instruction',
+        originAgentId: 'sender-success',
+        reported: true,
+      },
+      {
+        message: 'main instruction',
+        reported: true,
+      },
+    ])
+    expect(task?.notified).toBe(true)
+    expect(
+      enqueued.find(command => command.agentId === 'sender-success')?.value,
+    ).toContain('successful sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).not.toContain('successful sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === 'sender-success')?.value,
+    ).not.toContain('failed sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).not.toContain('failed sender instruction')
+    expect(
+      enqueued.find(command => command.agentId === undefined)?.value,
+    ).toContain('main instruction')
+    expect(generateTaskAttachments(appState).evictedTaskIds).toEqual([])
+  })
+
+  // The handoff runAgent writes when a worker calls ask_parent_session has to
+  // land here the same way a model-written one does: extractHandoffStatus and
+  // extractBlockReason read the RESULT TEXT, so a constructed result that
+  // drifts from that skeleton would show as an ordinary completion with the
+  // question buried in it.
+  test('completeAgentTask reads the harness-written escalation handoff', () => {
+    registerAgentForeground({
+      agentId: 'sync-agent-escalated',
+      description: 'Sync foreground agent',
+      prompt: 'test prompt',
+      selectedAgent: {
+        name: 'general-purpose',
+        agentType: 'general-purpose',
+        prompt: 'test prompt',
+      },
+      agentName: 'Wilkes',
+      setAppState,
+    })
+
+    completeAgentTask(
+      {
+        agentId: 'sync-agent-escalated',
+        agentType: 'general-purpose',
+        agentName: 'Wilkes',
+        model: 'gpt-5.6-luna',
+        content: [
+          {
+            type: 'text',
+            text: formatBlockedHandoff({
+              kind: 'question',
+              message: 'Which components does Q to S cover?',
+              evidence: ['ToolSearch select:Agent returned nothing'],
+            }),
+          },
+        ],
+        totalToolUseCount: 1,
+        totalDurationMs: 100,
+        totalTokens: 10,
+      },
+      setAppState,
+    )
+
+    expect(appState.tasks['sync-agent-escalated']).toMatchObject({
+      type: 'local_agent',
+      status: 'completed',
+      handoffStatus: 'blocked',
+      blockReason: 'Which components does Q to S cover?',
     })
   })
 
@@ -608,7 +814,9 @@ describe('queuePendingMessageIfRunning', () => {
     const stoppedId = 'stopped'
 
     expect(queuePendingMessageIfRunning(runningId, 'follow-up', setAppState)).toBe(true)
-    expect(appState.tasks[runningId].pendingMessages).toEqual(['follow-up'])
+    expect(appState.tasks[runningId].pendingMessages).toMatchObject([
+      { message: 'follow-up', status: 'pending' },
+    ])
     expect(queuePendingMessageIfRunning(stoppedId, 'late', setAppState)).toBe(false)
     expect(appState.tasks[stoppedId].pendingMessages).toEqual([])
   })

@@ -138,6 +138,38 @@ function filterOutFlags(args: string[]): string[] {
   return result
 }
 
+/**
+ * Like filterOutFlags, but for commands whose flags take a separate argument
+ * that is NOT a path (a delimiter, a field list, a column count). Without
+ * this, `cut -d / data.txt` yields ['/', 'data.txt'] and the delimiter '/' is
+ * validated as a path outside cwd, prompting for a command that reads only
+ * data.txt.
+ */
+function filterOutFlagsWithArgs(
+  flagsWithArgs: Set<string>,
+): (args: string[]) => string[] {
+  return (args: string[]): string[] => {
+    const result: string[] = []
+    let afterDoubleDash = false
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (arg === undefined || arg === null) continue
+      if (afterDoubleDash) {
+        result.push(arg)
+      } else if (arg === '--') {
+        afterDoubleDash = true
+      } else if (arg.startsWith('-')) {
+        // Only the exact flag consumes the next arg. Bundled forms like `-d/`
+        // and `--delimiter=/` carry their value inline and consume nothing.
+        if (flagsWithArgs.has(arg)) i++
+      } else {
+        result.push(arg)
+      }
+    }
+    return result
+  }
+}
+
 // Helper: Parse grep/rg style commands (pattern then paths)
 function parsePatternCommand(
   args: string[],
@@ -281,13 +313,9 @@ export const PATH_EXTRACTORS: Record<
   sort: filterOutFlags,
   uniq: filterOutFlags,
   wc: filterOutFlags,
-  cut: filterOutFlags,
-  paste: filterOutFlags,
-  column: filterOutFlags,
   file: filterOutFlags,
   stat: filterOutFlags,
   diff: filterOutFlags,
-  awk: filterOutFlags,
   strings: filterOutFlags,
   hexdump: filterOutFlags,
   od: filterOutFlags,
@@ -296,6 +324,97 @@ export const PATH_EXTRACTORS: Record<
   sha256sum: filterOutFlags,
   sha1sum: filterOutFlags,
   md5sum: filterOutFlags,
+
+  // cut/paste/column: flags whose argument is a delimiter, field list or width,
+  // never a path. Long forms cover GNU coreutils and util-linux; short forms
+  // cover the BSD utilities shipped on macOS.
+  cut: filterOutFlagsWithArgs(
+    new Set([
+      '-d',
+      '--delimiter',
+      '-f',
+      '--fields',
+      '-b',
+      '--bytes',
+      '-c',
+      '--characters',
+      '--output-delimiter',
+    ]),
+  ),
+  // NOTE: paste's -s takes NO argument; its separator flag is -d/--delimiters.
+  paste: filterOutFlagsWithArgs(new Set(['-d', '--delimiters'])),
+  column: filterOutFlagsWithArgs(
+    new Set([
+      '-s',
+      '--separator',
+      '-o',
+      '--output-separator',
+      '-c',
+      '--output-width',
+    ]),
+  ),
+
+  // awk: the first non-flag is the program text (not a path) unless -e/-f
+  // already supplied it. The flag arguments split two ways: -F/-v/-e carry a
+  // separator, an assignment or program source, while -f/-E name a real
+  // program FILE that awk reads and which must stay a validated path.
+  awk: args => {
+    const nonPathFlagsWithArgs = new Set([
+      '-F',
+      '--field-separator',
+      '-v',
+      '--assign',
+      '-e',
+      '--source',
+    ])
+    const pathFlagsWithArgs = new Set(['-f', '--file', '-E', '--exec'])
+    const paths: string[] = []
+    let programFound = false
+    let afterDoubleDash = false
+
+    for (let i = 0; i < args.length; i++) {
+      const arg = args[i]
+      if (arg === undefined || arg === null) continue
+
+      if (!afterDoubleDash && arg === '--') {
+        afterDoubleDash = true
+        continue
+      }
+
+      if (!afterDoubleDash && arg !== '-' && arg.startsWith('-')) {
+        const eq = arg.indexOf('=')
+        const flag = eq >= 0 ? arg.slice(0, eq) : arg
+
+        if (nonPathFlagsWithArgs.has(flag)) {
+          if (flag === '-e' || flag === '--source') programFound = true
+          if (eq < 0) i++
+          continue
+        }
+
+        if (pathFlagsWithArgs.has(flag)) {
+          programFound = true
+          if (eq >= 0) {
+            paths.push(arg.slice(eq + 1))
+          } else {
+            const next = args[i + 1]
+            if (next !== undefined) {
+              paths.push(next)
+              i++
+            }
+          }
+          continue
+        }
+        continue
+      }
+
+      if (!programFound) {
+        programFound = true
+        continue
+      }
+      paths.push(arg)
+    }
+    return paths
+  },
 
   // tr: special case - skip character sets
   tr: args => {
@@ -932,7 +1051,12 @@ function validateOutputRedirections(
   // Example attack: cd .claude/ && echo "malicious" > settings.json
   // The redirection target would be validated relative to the original CWD, but the
   // actual write happens in the changed directory after 'cd' executes.
-  if (compoundCommandHasCd && redirections.length > 0) {
+  // /dev/null is exempt: it discards output, so the working directory 'cd'
+  // leaves us in cannot change where the write lands.
+  if (
+    compoundCommandHasCd &&
+    redirections.some(({ target }) => target !== '/dev/null')
+  ) {
     return {
       behavior: 'ask',
       message: `Commands that change directories and write via output redirection require explicit approval to ensure paths are evaluated correctly. For security, Cat Code cannot automatically determine the final working directory when 'cd' is used in compound commands.`,

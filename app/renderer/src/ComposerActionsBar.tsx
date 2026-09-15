@@ -1,4 +1,6 @@
 import {
+  useEffect,
+  useRef,
   useState,
   type FocusEvent as ReactFocusEvent,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -9,6 +11,7 @@ import {
   statusDotTone,
   usageTone,
 } from './accountsPageModel.js'
+import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 import { toggleAccountChip } from './composerAccountChip.js'
 import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
@@ -25,6 +28,7 @@ import {
   type DonutView,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
+import { ActionWarningIcon } from './SessionActionIcons.js'
 import { toneClasses } from './tone.js'
 import { selectTokenWarning, type TokenWarning } from './tokenWarning.js'
 import type {
@@ -186,6 +190,15 @@ const POPOVER_PANEL =
   'absolute bottom-full left-0 z-40 mb-2 rounded-lg border border-shell-seam bg-surface-raised p-1.5 shadow-lg'
 const POPOVER_HEADING =
   'px-2 pb-1 pt-0.5 text-[10px] font-semibold uppercase tracking-wide text-text-subtle'
+/**
+ * The keyboard's own feedback. Arrow-key roving moves focus and nothing else —
+ * activation stays on Enter/Space — so without a ring the keys appear to do
+ * nothing at all, which on a 6px-tall effort rung is the difference between a
+ * usable control and a dead one. Inset, because the panel scrolls and an
+ * outward ring on the first or last row would be clipped by it.
+ */
+const MENU_FOCUS_RING =
+  'focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2'
 // The account/context cluster rides `ml-auto` at the rail's right edge, so its
 // popovers anchor right (a `left-0` panel would overflow off-screen). Own padding
 // per section (no panel-wide `p-1.5`), matching the prototype's sectioned popovers.
@@ -216,13 +229,31 @@ const ANTHROPIC_STATUS_LABEL: Record<AnthropicAccountStatus['status'], string> =
 }
 
 /**
- * Interactive MODEL face → a popover of the REAL selectable models (`model.set`).
+ * Interactive MODEL face → the composer's model card (`model.set`), a two-face
+ * popover: a grouped list of the REAL selectable models, and, once one is
+ * picked, that model's effort ladder (`effort.set`).
  *
  * The face reads the engine's display NAME for the resolved model (`label`), not
  * the model id (`current`): picking "Haiku 4.5" used to leave the face reading
  * `claude-haiku-4-5-20251001`, because `current` is what the engine resolves the
  * selection to. `current` is still the fallback, so a model the engine has no
  * name for shows its id rather than nothing.
+ *
+ * WHY EFFORT LIVES HERE TOO, next to a rail that already has its own effort
+ * face. The two are one decision at the moment of switching: the valid levels
+ * are a property of the model (`getSupportedEffortLevels`, and some models have
+ * none at all), and a switch to a model that cannot take the level you
+ * are on silently drops it (`reconcileEffortForModel`). Choosing a model in one
+ * popover and discovering the reset in another is what this closes. The rail's
+ * `ReasoningChip` is untouched and stays the direct route for an effort-only
+ * change; both write the same `effort.set` verb, so they cannot disagree.
+ *
+ * ONE FACE AT A TIME, never both: the card's job is the switch, and a model list
+ * standing beside a ladder spends the whole card on a comparison that only
+ * matters for the row being picked. Picking a row with no levels at all (Haiku)
+ * closes the card instead of advancing, which is why the rows that DO lead
+ * somewhere carry a chevron — `option.effortOptions` is what makes that
+ * predictable before the click, and it is the only reason that field exists.
  */
 function ModelChip({
   current,
@@ -231,8 +262,11 @@ function ModelChip({
   provider,
   providerSwitchLocked,
   options,
+  effortSelected,
   onSelect,
+  onSetEffort,
   faceProps,
+  onFocusComposer,
 }: {
   current: string | null
   label: string | null
@@ -240,11 +274,38 @@ function ModelChip({
   provider: RunControlProvider
   providerSwitchLocked: boolean
   options: RunControlModelOption[]
+  /** `RunControlsSnapshot.effort.selected` — the RAW session selection, null = Auto. */
+  effortSelected: string | null
   onSelect: (value: string | null) => void
+  /** Absent when the pane has no effort setter wired; the card is then the plain
+   * model list it was before, with no second face to reach. */
+  onSetEffort?: (effort: string) => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
+  // The row whose ladder the second face is showing, or null for the model list.
+  // Held as the OPTION, not a model id: its `effortOptions` are the ladder, and
+  // they are already correct in the snapshot the user is looking at, so the face
+  // does not wait on the re-broadcast that follows `model.set`.
+  const [effortStep, setEffortStep] = useState<RunControlModelOption | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // Set by the back control, read by the effect below. Leaving the second face
+  // unmounts the button that had focus, which would otherwise drop it on
+  // `<body>` — the same fall `usePopoverFocus` exists to prevent when the whole
+  // panel closes. Coming back is the same event one level down.
+  const returningToList = useRef(false)
+  useEffect(() => {
+    if (effortStep !== null || !returningToList.current) return
+    returningToList.current = false
+    // The row you came from IS the checked one: reaching the second face
+    // applied the pick.
+    panelRef.current
+      ?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]')
+      ?.focus()
+  }, [effortStep])
   const face = label ?? current
+  const groups = groupOptionsByProvider(options)
   return (
     <div ref={ref} className="relative shrink-0">
       <button
@@ -254,54 +315,331 @@ function ModelChip({
         aria-haspopup="menu"
         aria-expanded={open}
         title={face ? `Model: ${face}` : 'Select model'}
-        onClick={() => setOpen(value => !value)}
+        onClick={() => {
+          // Reopening always lands on the model list. An outside click closes
+          // without running `close`, so this is also where a step left behind by
+          // one is cleared.
+          setEffortStep(null)
+          setOpen(value => !value)
+        }}
         className={`${RAIL_FACE} text-[light-dark(#0e7490,#22d3ee)] hover:text-text-primary`}
       >
         {face ?? 'Model'}
       </button>
       {open ? (
         <div
+          ref={panelRef}
           role="menu"
-          aria-label="Model"
+          aria-label={effortStep ? 'Reasoning effort' : 'Model'}
           onKeyDown={handleMenuRovingKeyDown}
           className={`${POPOVER_PANEL} max-h-[320px] w-64 overflow-auto`}
         >
-          <div className={POPOVER_HEADING}>Model</div>
-          {options.map(option => {
-            const active = selected === option.value
-            const crossProvider =
-              (provider === 'openai') !== (option.provider === 'openai')
-            const disabled = providerSwitchLocked && crossProvider
-            return (
-              <button
-                key={option.value ?? '__provider_default__'}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                aria-disabled={disabled}
-                disabled={disabled}
-                onClick={() => {
-                  if (disabled) return
-                  onSelect(option.value)
-                  close()
-                }}
-                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
-                  active ? 'bg-white/[0.06]' : ''
-                }`}
-              >
-                <span
-                  className={`min-w-0 truncate text-xs ${active ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-primary'}`}
+          {effortStep && onSetEffort ? (
+            <ModelEffortFace
+              option={effortStep}
+              selected={effortSelected}
+              onSelect={effort => {
+                onSetEffort(effort)
+                const selected = effort === 'auto' ? null : effort
+                if (effortSelected === selected) close()
+              }}
+              onBack={() => {
+                returningToList.current = true
+                setEffortStep(null)
+              }}
+            />
+          ) : (
+            groups.map(group => {
+              // The lock is a PROVIDER fact, so it reads at the group: four
+              // identically dimmed rows say the same thing four times, and the
+              // rows carried no visual state at all before (native `disabled`
+              // alone paints nothing).
+              const groupLocked =
+                providerSwitchLocked &&
+                (provider === 'openai') !== (group.provider === 'openai')
+              return (
+                <div
+                  key={group.provider}
+                  className={groupLocked ? 'opacity-40' : undefined}
                 >
-                  {option.label}
-                </span>
-                <span className="shrink-0 text-[10px] uppercase tracking-wide text-text-subtle">
-                  {formatProvider(option.provider)}
-                </span>
-              </button>
-            )
-          })}
+                  {groups.length > 1 ? (
+                    <div className={POPOVER_HEADING}>
+                      {formatProvider(group.provider)}
+                    </div>
+                  ) : null}
+                  {group.options.map(option => {
+                    const active = selected === option.value
+                    const hasEffort =
+                      onSetEffort != null && option.effortOptions.length > 0
+                    return (
+                      <button
+                        key={option.value ?? '__provider_default__'}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={active}
+                        aria-disabled={groupLocked}
+                        disabled={groupLocked}
+                        onClick={() => {
+                          if (groupLocked) return
+                          onSelect(option.value)
+                          // A model with no effort knob has no second face, so
+                          // the pick IS the whole interaction.
+                          if (hasEffort) setEffortStep(option)
+                          else close()
+                        }}
+                        className={`${MENU_FOCUS_RING} flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5 ${
+                          active ? 'bg-white/[0.06]' : ''
+                        }`}
+                      >
+                        <span
+                          className={`min-w-0 truncate text-xs ${active ? 'text-[light-dark(#0e7490,#22d3ee)]' : 'text-text-primary'}`}
+                        >
+                          {option.label}
+                        </span>
+                        <span className="flex shrink-0 items-center gap-1.5">
+                          {/* What "Default" currently resolves to, and only while
+                            * it is the live selection — `label` is the engine's
+                            * name for the model this session RUNS, which answers
+                            * for the Default row only when Default is what is
+                            * selected. */}
+                          {option.value === null && active && label ? (
+                            <span className="text-[11px] text-text-ghost">
+                              {label}
+                            </span>
+                          ) : null}
+                          {hasEffort ? <StepChevron /> : null}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )
+            })
+          )}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/** Provider groups in first-appearance order, so the engine's own option order
+ * (`getModelOptions()`, Default first) survives the grouping. */
+function groupOptionsByProvider(
+  options: RunControlModelOption[],
+): { provider: RunControlProvider; options: RunControlModelOption[] }[] {
+  const groups: { provider: RunControlProvider; options: RunControlModelOption[] }[] = []
+  for (const option of options) {
+    const group = groups.find(entry => entry.provider === option.provider)
+    if (group) group.options.push(option)
+    else groups.push({ provider: option.provider, options: [option] })
+  }
+  return groups
+}
+
+/** The chevron marking a row that leads to an effort ladder. */
+function StepChevron() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="text-text-ghost"
+      aria-hidden
+    >
+      <polyline points="9 18 15 12 9 6" />
+    </svg>
+  )
+}
+
+/**
+ * The model card's SECOND face: one model's effort ladder.
+ *
+ * The levels are ordinal, so they are drawn as one divided rail filled up to the
+ * chosen level rather than as a list of equal rows — the same reason the rail's
+ * own effort face shows a word and not a number. Two things fall out of that for
+ * free: the fill says how far up you are, and a rail that runs out sooner says
+ * the model tops out sooner. Levels
+ * come from the option the user picked, so this face is correct in the same
+ * frame the pick happens, before the sidecar's re-broadcast lands.
+ *
+ * `selected` is the RAW session selection, not the applied tier, for the reason
+ * `ReasoningChip` gives: an env or provider default must not read back as a
+ * level the user chose. Auto is therefore an empty rail, and it is a control of
+ * its own rather than a rung, because it is not a point on the scale.
+ */
+/**
+ * Where a key lands inside the rail, as an index into the rungs. The rail is a
+ * horizontal control living inside a vertical menu, so it answers Left/Right
+ * itself and leaves Up/Down to the menu's own roving, which walks the face's
+ * items in order (back, Auto, then the rungs).
+ *
+ * Home/End are answered here too, for the same reason: inside the rail they
+ * mean the ends of the SCALE, which is not what they mean in the menu around
+ * it. Handling them first is what makes that true — `handleMenuRovingKeyDown`
+ * returns early on an already-defaulted event.
+ *
+ * Movement CLAMPS rather than wrapping, unlike the menu: a scale has ends, and
+ * arrowing off `Ultra` back round to `Low` would be a long way from what the
+ * key was asking for.
+ */
+function nextRungIndex(
+  key: string,
+  currentIndex: number,
+  count: number,
+): number | null {
+  if (count <= 0) return null
+  switch (key) {
+    case 'ArrowLeft':
+      return Math.max(0, (currentIndex < 0 ? 0 : currentIndex) - 1)
+    case 'ArrowRight':
+      return Math.min(count - 1, currentIndex + 1)
+    case 'Home':
+      return 0
+    case 'End':
+      return count - 1
+    default:
+      return null
+  }
+}
+
+function ModelEffortFace({
+  option,
+  selected,
+  onSelect,
+  onBack,
+}: {
+  option: RunControlModelOption
+  selected: string | null
+  onSelect: (effort: string) => void
+  onBack: () => void
+}) {
+  const levels = option.effortOptions
+  const currentIndex = selected === null ? -1 : levels.indexOf(selected)
+  const isAuto = selected === null
+  const faceRef = useRef<HTMLDivElement>(null)
+  // Arriving here is a KEYBOARD move as often as a click: the pick that opened
+  // this face unmounted the row that had focus. Land on whatever is currently
+  // checked — the level, or Auto when no level is set — so the first arrow key
+  // moves from where the user already is.
+  useEffect(() => {
+    const face = faceRef.current
+    if (!face) return
+    const landing =
+      face.querySelector<HTMLElement>('[aria-checked="true"]') ??
+      face.querySelector<HTMLElement>('[role="menuitemradio"]')
+    landing?.focus()
+  }, [])
+
+  /**
+   * Escape leaves the LADDER, not the card. A second Escape then closes, because
+   * this handler stops only the first one from reaching the document listener
+   * `usePopoverFocus` dismisses on — the menu convention, where Escape unwinds
+   * one level at a time. Without it the two-face card would be the one place in
+   * the composer where stepping in and changing your mind costs you the popover.
+   */
+  function onFaceKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== 'Escape' || event.defaultPrevented) return
+    event.preventDefault()
+    event.stopPropagation()
+    onBack()
+  }
+
+  function onRailKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+    if (event.defaultPrevented) return
+    const rungs = Array.from(
+      event.currentTarget.querySelectorAll<HTMLButtonElement>('button'),
+    )
+    const active = rungs.indexOf(document.activeElement as HTMLButtonElement)
+    const target = nextRungIndex(event.key, active, rungs.length)
+    if (target === null) return
+    event.preventDefault()
+    rungs[target]?.focus()
+  }
+
+  return (
+    <div ref={faceRef} onKeyDown={onFaceKeyDown}>
+      <button
+        type="button"
+        role="menuitem"
+        onClick={onBack}
+        className={`${MENU_FOCUS_RING} flex w-full items-center gap-1.5 rounded-md px-2 pb-1.5 pt-1 text-left text-xs text-[light-dark(#0e7490,#22d3ee)] transition-colors hover:bg-white/5`}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className="shrink-0 text-text-ghost"
+          aria-hidden
+        >
+          <polyline points="15 18 9 12 15 6" />
+        </svg>
+        <span className="min-w-0 truncate">{option.label}</span>
+      </button>
+      <div className="flex items-center justify-between px-2 pb-1">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-text-subtle">
+          Effort
+        </span>
+        <span className="flex items-center gap-1.5">
+          {currentIndex >= 0 ? (
+            <span className="text-[11px] text-tone-warn">
+              {formatEffort(levels[currentIndex]!)}
+            </span>
+          ) : null}
+          <button
+            type="button"
+            role="menuitemradio"
+            aria-checked={isAuto}
+            onClick={() => onSelect('auto')}
+            className={`${MENU_FOCUS_RING} rounded px-1 py-0.5 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+              isAuto
+                ? 'bg-white/[0.06] text-tone-warn'
+                : 'text-text-subtle hover:text-text-primary'
+            }`}
+          >
+            Auto
+          </button>
+        </span>
+      </div>
+      {/* One divided rail, not six buttons: hairline dividers in the panel's own
+        * colour keep the rungs separable while the bar still reads as a single
+        * meter, so a full bar means "this model's ceiling" rather than "six of
+        * six things are on". The buttons carry the vertical padding, so the hit
+        * target is the row height and not the 6px bar. */}
+      <div className="flex px-2 pb-1" onKeyDown={onRailKeyDown}>
+        {levels.map((level, index) => {
+          const on = currentIndex >= 0 && index <= currentIndex
+          return (
+            <button
+              key={level}
+              type="button"
+              role="menuitemradio"
+              aria-checked={index === currentIndex}
+              aria-label={formatEffort(level)}
+              title={formatEffort(level)}
+              onClick={() => onSelect(level)}
+              className={`${MENU_FOCUS_RING} flex-1 rounded-sm py-1.5`}
+            >
+              <span
+                className={`block h-1.5 border-r border-surface-raised transition-colors ${
+                  index === 0 ? 'rounded-l-full' : ''
+                } ${index === levels.length - 1 ? 'rounded-r-full border-r-0' : ''} ${
+                  on ? 'bg-tone-warn' : 'bg-white/15'
+                }`}
+              />
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
@@ -328,14 +666,16 @@ function ReasoningChip({
   options,
   onSelect,
   faceProps,
+  onFocusComposer,
 }: {
   current: string | null
   selected: string | null
   options: string[]
   onSelect: (effort: string) => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   // 'Auto' clears the explicit tier (sends 'auto' → the engine's provider default).
   // The face shows the effective tier, while the checkmark reflects the raw
   // selection so an env/default override never lies about what the API receives.
@@ -444,25 +784,33 @@ function FastChip({
 
 /** One account's compact used-percent bar (5h or weekly) — the prototype's
  * `UsedMetric` (Surfaces.jsx:572), token-toned via the SAME `usageTone`/`toneClasses`
- * the Accounts page uses so the composer reads identically. Null usage → 0%. */
-function AccountUsageBar({ pct }: { pct: number | null }) {
-  const p = pct ?? 0
+ * the Accounts page uses so the composer reads identically. Null usage → empty slot. */
+function AccountUsageBar({
+  pct,
+  className = 'w-[72px]',
+}: {
+  pct: number | null
+  className?: string
+}) {
+  if (pct == null) {
+    return <span className={className} aria-hidden="true" />
+  }
   const t = toneClasses(usageTone(pct))
   return (
-    <span className="flex w-[72px] items-center gap-1.5">
+    <span className={`flex items-center gap-1.5 ${className}`}>
       <span className="h-1 flex-1 overflow-hidden rounded-full bg-shell-hover">
         {/* §0 EXCEPTION: data-driven percent width Tailwind can't express — the
             single allowed inline style (width only), mirroring AccountsPage's
             HeadroomBar (AccountsPage.tsx:213). */}
         <span
           className={`block h-full rounded-full ${t.dot}`}
-          style={{ width: `${Math.max(2, Math.min(100, p))}%` }}
+          style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
         />
       </span>
       <span
         className={`w-7 shrink-0 text-right text-[11px] font-semibold tabular-nums ${t.text}`}
       >
-        {p}%
+        {pct}%
       </span>
     </span>
   )
@@ -488,11 +836,6 @@ export function AccountSwitcherPanel({
   onSwitch: (accountId: string) => void
   onManage?: () => void
 }) {
-  // ACCT-4: the authoritative readiness predicate (matches the sidecar's
-  // readyCount, `app/sidecar/accountsDomain.ts:179-181`) — a healthy account
-  // that has already hit its usage limit is not ready, even though its own
-  // status is still 'healthy'.
-  const ready = pool.filter(a => a.status === 'healthy' && !a.usageLimitReached).length
   return (
     <div
       role="menu"
@@ -500,15 +843,7 @@ export function AccountSwitcherPanel({
       onKeyDown={handleMenuRovingKeyDown}
       className={`${POPOVER_PANEL_RIGHT} w-[336px]`}
     >
-      <div className="flex items-center justify-between px-3.5 pb-2 pt-2.5">
-        <span className="text-[10px] font-bold uppercase tracking-[0.13em] text-text-subtle">
-          Accounts
-        </span>
-        <span className="text-[11px] tabular-nums text-text-subtle">
-          <span className="text-tone-good">{ready}</span>/{pool.length} healthy
-        </span>
-      </div>
-      <div className="flex items-center gap-3 px-3.5 pb-1.5">
+      <div className="flex items-center gap-3 px-3.5 pb-1.5 pt-2.5">
         <span className="flex-1 text-[9px] font-bold uppercase tracking-[0.1em] text-text-subtle">
           Account
         </span>
@@ -525,11 +860,15 @@ export function AccountSwitcherPanel({
           const unavailable = acct.status !== 'healthy'
           const clickable = !isActive && acct.switchable
           const rowAlias = acct.alias ?? '(unnamed)'
+          const { fiveHour, weekly } = selectWelcomeUsageWindows(acct)
+          const hasBoth = fiveHour !== null && weekly !== null
+          const singleWindow = hasBoth ? null : (weekly ?? fiveHour)
           return (
             <button
               key={acct.id}
               type="button"
               role="menuitem"
+              aria-current={isActive ? 'true' : undefined}
               // ACCT-6: a visible unavailable/active row stays focusable and
               // announced via aria-disabled — native `disabled` would drop it
               // from the tab order, hiding its state from keyboard users.
@@ -562,7 +901,7 @@ export function AccountSwitcherPanel({
                 // read as "Capped") — only a genuinely capped row implies
                 // reset timing.
                 <span
-                  className={`w-[152px] text-[11px] ${toneClasses(statusDotTone(acct)).text}`}
+                  className={`w-[156px] text-[11px] ${toneClasses(statusDotTone(acct)).text}`}
                 >
                   {acct.availabilityLabel}
                   {acct.status === 'capped' ? (
@@ -572,11 +911,18 @@ export function AccountSwitcherPanel({
                     </span>
                   ) : null}
                 </span>
-              ) : (
+              ) : hasBoth ? (
                 <>
-                  <AccountUsageBar pct={acct.usagePrimary} />
-                  <AccountUsageBar pct={acct.usageWeekly} />
+                  <AccountUsageBar pct={fiveHour.percent} />
+                  <AccountUsageBar pct={weekly.percent} />
                 </>
+              ) : singleWindow ? (
+                <AccountUsageBar
+                  pct={singleWindow.percent}
+                  className="w-[156px]"
+                />
+              ) : (
+                <span className="w-[156px]" aria-hidden="true" />
               )}
             </button>
           )
@@ -608,6 +954,7 @@ function AccountChip({
   onManage,
   onOpen,
   faceProps,
+  onFocusComposer,
 }: {
   active: AccountStatus
   accounts: AccountStatus[]
@@ -615,8 +962,9 @@ function AccountChip({
   onManage?: () => void
   onOpen?: () => void
   faceProps?: ComposerFaceProps
+  onFocusComposer?: () => void
 }) {
-  const { open, setOpen, close, ref, triggerRef } = usePopover()
+  const { open, setOpen, close, ref, triggerRef } = usePopover(onFocusComposer)
   const pool = accounts.length > 0 ? accounts : [active]
   const alias = active.alias ?? '(unnamed)'
   return (
@@ -922,7 +1270,7 @@ export function ContextUsagePanel({
             title="Clear conversation history but keep a summary in context"
             className={`flex w-full items-center gap-2 border-t px-3.5 py-[9px] text-left text-[11.5px] font-medium transition-colors ${t.text} ${t.softBorder} ${ESCALATED_ACTION_TINT[escalated]}`}
           >
-            <WarningTriangle size={12} />
+            <ActionWarningIcon size={12} />
             <span className="flex-1">Running low, compact now</span>
           </button>
         )
@@ -951,28 +1299,6 @@ function CompactIcon() {
       <path d="M20 10h-6V4" />
       <path d="M14 10l7-7" />
       <path d="M3 21l7-7" />
-    </svg>
-  )
-}
-
-/** The warning triangle, at the two sizes the prototype draws it (Surfaces.jsx:436
- * face 14px, `:452` popover header 13px). */
-function WarningTriangle({ size }: { size: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-      <line x1="12" y1="9" x2="12" y2="13" />
-      <line x1="12" y1="17" x2="12.01" y2="17" />
     </svg>
   )
 }
@@ -1021,7 +1347,7 @@ function TokenWarningChip({
         onClick={() => setOpen(value => !value)}
         className="animate-token-warn-in flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-tone-warn"
       >
-        <WarningTriangle size={14} />
+        <ActionWarningIcon size={14} />
       </button>
       {open ? (
         <div
@@ -1031,7 +1357,7 @@ function TokenWarningChip({
         >
           <div className="mb-1.5 flex items-center gap-[7px]">
             <span className="inline-flex text-tone-warn">
-              <WarningTriangle size={13} />
+              <ActionWarningIcon size={13} />
             </span>
             <span className="text-[12.5px] font-semibold text-text-primary">
               {summary}
@@ -1257,7 +1583,7 @@ export function ComposerActionsBar({
 
   // Roving navigation among the faces. Runs at the toolbar level, so it also fires
   // for keydowns bubbling out of an open popover — those are guarded out and left to
-  // the popover's own machinery (usePopover: first-item focus + Escape-to-close;
+  // the popover's own machinery (usePopover: selected-item focus + Escape-to-close;
   // handleMenuRovingKeyDown: in-panel ArrowUp/Down/Home/End roving, Feature #13).
   const onToolbarKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const target = event.target as HTMLElement
@@ -1312,7 +1638,7 @@ export function ComposerActionsBar({
       case 'ArrowDown':
         // Enter/Space already open a popover via the button's native click;
         // ArrowDown matches by activating the trigger, reusing usePopover's open +
-        // first-item focus. Faces without a popover (no aria-haspopup) ignore it.
+        // selected-item focus. Faces without a popover (no aria-haspopup) ignore it.
         if (current.getAttribute('aria-haspopup')) {
           event.preventDefault()
           current.click()
@@ -1345,12 +1671,11 @@ export function ComposerActionsBar({
       className="mt-3 flex items-center gap-4 px-1"
     >
       {/* Attach (§10, Chat.jsx:1435): quiet #3f3f46 glyph brightening to
-       * #a1a1aa on hover. The owner opens the image picker; clipboard images
-       * use the same attachment path from the composer paste handler. */}
+       * #a1a1aa on hover. The owner opens main's native file picker. */}
       <button
         {...faceProps('attach')}
         aria-label="Add attachment"
-        title="Add image"
+        title="Add file or photo"
         className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-[5px] text-text-ghost transition-colors hover:text-text-muted disabled:opacity-50"
         disabled={attachDisabled}
         onClick={onAttach}
@@ -1384,8 +1709,11 @@ export function ComposerActionsBar({
               provider={runControls.model.provider}
               providerSwitchLocked={runControls.model.providerSwitchLocked}
               options={runControls.model.options}
+              effortSelected={runControls.effort.selected}
               onSelect={onSetModel}
+              onSetEffort={onSetEffort}
               faceProps={faceProps('model')}
+              onFocusComposer={onFocusComposer}
             />
             <RailSep />
           </>
@@ -1413,6 +1741,7 @@ export function ComposerActionsBar({
               options={runControls.effort.options}
               onSelect={onSetEffort}
               faceProps={faceProps('effort')}
+              onFocusComposer={onFocusComposer}
             />
             <RailSep />
           </>
@@ -1432,6 +1761,7 @@ export function ComposerActionsBar({
           onSetMode={onSetMode}
           readOnlyMode={permissionModeReadOnly}
           faceProps={faceProps('mode')}
+          onFocusComposer={onFocusComposer}
         />
         {fastInteractive && runControls && onSetFast ? (
           <FastChip
@@ -1455,6 +1785,7 @@ export function ComposerActionsBar({
               onManage={onManageAccounts}
               onOpen={onOpenAccountSwitcher}
               faceProps={faceProps('account')}
+              onFocusComposer={onFocusComposer}
             />
           ) : showAccount ? (
             /* The same status dot the interactive chip shows, for the same

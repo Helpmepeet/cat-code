@@ -1,11 +1,22 @@
-# P4-8b — the in-session Orchestrator toggle is a live per-session env switch
+# P4-8b — superseded in-session Orchestrator toggle
 
-**Status: RULED + BUILT 2026-07-13.** Makes the WelcomeScreen's Orchestrator control
+**Status: SUPERSEDED 2026-09-07.** The Agent Mode toggle and its desktop control
+plane were retired. This document records the historical decision and is no longer
+an active implementation contract.
+
+**Retirement amendment 2026-09-07.** Agent Mode, `CLAUDE_CODE_AGENT_MODE`, the
+WelcomeScreen Orchestrator control, `agent-mode.set`, and `agent-mode.snapshot` are
+removed. Generic worker roster and inspection remain on the outbound-only
+live-worker snapshot, and the removed inbound verb is rejected by the sidecar's
+closed vocabulary. The Unix-socket transport, N-process topology, raw event
+fidelity, die-with-window lifetime, and two-id model are unchanged.
+
+The historical decision made the WelcomeScreen's Orchestrator control
 (previously a read-only reflect of `AgentModeSnapshot.active`) actually switch agent mode
 for the in-session (`variant:'session'`) empty state. All anchors verified against the
 working tree; where this doc and source disagree, source wins.
 
-## The decision
+## Historical decision
 
 The Orchestrator toggle is wired to the engine's OWN runtime mode switch, **not** an
 engine respawn and **not** a session-lifecycle change:

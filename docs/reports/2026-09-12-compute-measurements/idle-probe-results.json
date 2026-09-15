@@ -1,0 +1,312 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-12T12:41:30.857Z",
+  "scope": "Warmed, tight-loop CPU of the healthy quarantine-probe function body from exact source snapshots. Includes async loop/validation overhead. Excludes timer dispatch, OS wakeups, engine background work, quarantined recovery and energy. No before/after scheduler comparison.",
+  "environment": {
+    "runtime": "1.4.0",
+    "platform": "darwin",
+    "arch": "arm64",
+    "osRelease": "25.6.0",
+    "cpu": "Apple M4 Pro",
+    "logicalCpus": 12
+  },
+  "fixture": {
+    "checksPerSample": 200000,
+    "warmupChecks": 20000,
+    "repetitions": 7,
+    "accountCounts": [
+      1,
+      8,
+      32
+    ],
+    "order": "forward/reverse alternation",
+    "credentials": "synthetic only",
+    "imports": "account engine not imported; only the captured pure status accessor and probe function execute"
+  },
+  "sources": {
+    "src/services/api/codexAccountPool.ts": "1a9974be426fc503dc88f29f921c826ac6929569a08a80eaeafc7d2b153ba318",
+    "src/services/api/codexTokenRefresh.ts": "49e187e94c1fd6a9fe2ae4b20d3866e87bdd86aebdd9feda1b9e4c785661b889"
+  },
+  "fragmentHashes": {
+    "getPoolStatus": "7e1c603febefd34991dff934962b48938dd311f9f6fdd66e4977f06cb68c80c2",
+    "runQuarantineProbeOnce": "2058e64914843a9380bacd2199287de4a93b8c0d97da5ed0e17425e0f9f624f8"
+  },
+  "forbiddenIoCalls": 0,
+  "samples": [
+    {
+      "repetition": 0,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 17784,
+      "elapsedMs": 10.08274999999999
+    },
+    {
+      "repetition": 0,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 29613,
+      "elapsedMs": 16.513541000000004
+    },
+    {
+      "repetition": 0,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 25487,
+      "elapsedMs": 16.443667000000005
+    },
+    {
+      "repetition": 0,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 26208,
+      "elapsedMs": 21.47854199999999
+    },
+    {
+      "repetition": 1,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 26658,
+      "elapsedMs": 21.745499999999993
+    },
+    {
+      "repetition": 1,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 19927,
+      "elapsedMs": 16.212125000000015
+    },
+    {
+      "repetition": 1,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 18181,
+      "elapsedMs": 13.838457999999974
+    },
+    {
+      "repetition": 1,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9409,
+      "elapsedMs": 8.196875000000006
+    },
+    {
+      "repetition": 2,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9288,
+      "elapsedMs": 8.164292000000017
+    },
+    {
+      "repetition": 2,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 19869,
+      "elapsedMs": 14.539209
+    },
+    {
+      "repetition": 2,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 20707,
+      "elapsedMs": 16.20462500000002
+    },
+    {
+      "repetition": 2,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 27471,
+      "elapsedMs": 22.189333000000005
+    },
+    {
+      "repetition": 3,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 26203,
+      "elapsedMs": 21.727999999999952
+    },
+    {
+      "repetition": 3,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 18705,
+      "elapsedMs": 14.801207999999974
+    },
+    {
+      "repetition": 3,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 17813,
+      "elapsedMs": 13.762625000000014
+    },
+    {
+      "repetition": 3,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9447,
+      "elapsedMs": 8.138666
+    },
+    {
+      "repetition": 4,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9751,
+      "elapsedMs": 8.315625000000011
+    },
+    {
+      "repetition": 4,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 19582,
+      "elapsedMs": 14.177750000000003
+    },
+    {
+      "repetition": 4,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 19111,
+      "elapsedMs": 14.912624999999991
+    },
+    {
+      "repetition": 4,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 26795,
+      "elapsedMs": 21.89549999999997
+    },
+    {
+      "repetition": 5,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 26931,
+      "elapsedMs": 21.92195799999996
+    },
+    {
+      "repetition": 5,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 19356,
+      "elapsedMs": 15.065999999999974
+    },
+    {
+      "repetition": 5,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 17497,
+      "elapsedMs": 13.653291000000024
+    },
+    {
+      "repetition": 5,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9221,
+      "elapsedMs": 8.121915999999999
+    },
+    {
+      "repetition": 6,
+      "name": "async-loop-control",
+      "accountCount": null,
+      "checks": 200000,
+      "cpuMicros": 9173,
+      "elapsedMs": 8.045875000000024
+    },
+    {
+      "repetition": 6,
+      "name": "healthy-1",
+      "accountCount": 1,
+      "checks": 200000,
+      "cpuMicros": 17648,
+      "elapsedMs": 13.907709000000011
+    },
+    {
+      "repetition": 6,
+      "name": "healthy-8",
+      "accountCount": 8,
+      "checks": 200000,
+      "cpuMicros": 21058,
+      "elapsedMs": 15.688333999999998
+    },
+    {
+      "repetition": 6,
+      "name": "healthy-32",
+      "accountCount": 32,
+      "checks": 200000,
+      "cpuMicros": 25462,
+      "elapsedMs": 21.638750000000016
+    }
+  ],
+  "groups": [
+    {
+      "name": "async-loop-control",
+      "accountCount": null,
+      "cpuMicrosPerCheck": {
+        "median": 0.047045,
+        "min": 0.045865,
+        "max": 0.08892
+      },
+      "illustrativeBodyCpuMsPerHour": null
+    },
+    {
+      "name": "healthy-1",
+      "accountCount": 1,
+      "cpuMicrosPerCheck": {
+        "median": 0.090905,
+        "min": 0.087485,
+        "max": 0.148065
+      },
+      "illustrativeBodyCpuMsPerHour": {
+        "fourSessions": 1.309032,
+        "eightSessions": 2.618064
+      }
+    },
+    {
+      "name": "healthy-8",
+      "accountCount": 8,
+      "cpuMicrosPerCheck": {
+        "median": 0.099635,
+        "min": 0.093525,
+        "max": 0.127435
+      },
+      "illustrativeBodyCpuMsPerHour": {
+        "fourSessions": 1.434744,
+        "eightSessions": 2.869488
+      }
+    },
+    {
+      "name": "healthy-32",
+      "accountCount": 32,
+      "cpuMicrosPerCheck": {
+        "median": 0.13329,
+        "min": 0.12731,
+        "max": 0.137355
+      },
+      "illustrativeBodyCpuMsPerHour": {
+        "fourSessions": 1.919376,
+        "eightSessions": 3.838752
+      }
+    }
+  ]
+}

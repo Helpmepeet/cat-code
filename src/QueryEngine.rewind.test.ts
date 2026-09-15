@@ -127,6 +127,7 @@ describe('QueryEngine conversation rewind', () => {
 
     await engine.rewindBeforeUserMessage(selected.uuid)
 
+    expect(engine.getMessages()).toEqual([first, answer, attachment])
     expect(markers).toEqual([answer.uuid])
   })
 })

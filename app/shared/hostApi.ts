@@ -84,6 +84,52 @@ export type SessionDescriptor = {
   cwd: string
   title: string | null
   /**
+   * The session's peer NAME (PEER-SESSIONS §2), or null for a row that predates
+   * the field and has not been spawned since — every LIVE session has one,
+   * because the spawn path allocates it.
+   *
+   * On the descriptor, not only in the registry, because the sidebar row and its
+   * menu must RENDER from state: a name the renderer could not read would make
+   * "Message Bear" and the row subtitle guesswork. Additive control-plane
+   * descriptor field, not a wire frame, so no `protocol.ts` version bump (the
+   * `lastMessageSentAt` / `titleUpdatedAt` precedent).
+   *
+   * OPTIONAL, unlike `forked` / `parked`, and deliberately so for now: the host
+   * always sets it (`descriptorFromRow`), but many descriptor FIXTURES under
+   * `app/main` and `app/renderer` build the type by hand, and a required field
+   * would have made this control-plane change edit every one of those files,
+   * none of which owns anything in it. Readers use `descriptor.name ?? null`. Tighten to required in
+   * the wave that touches those surfaces anyway.
+   */
+  name?: string | null
+  /**
+   * The `appSessionId` of the session that created this one, when an agent did
+   * (PEER-SESSIONS §2), or null for a user-created session.
+   *
+   * An ID, deliberately NEVER a name, and no resolved creator name is offered
+   * beside it. Names are reused after a reap; ids are not, so a name baked into
+   * a descriptor would outlive the row it came from and quietly start pointing
+   * at a different session. Readers resolve the id against the sessions they can
+   * see and render a creator they cannot find as gone.
+   *
+   * On the descriptor because the renderer derives the "Bear, created by Alex"
+   * seam row from `name` and this (PEER-SESSIONS §6) and may not read the
+   * registry itself. Additive control-plane descriptor field, not a wire frame,
+   * so no `protocol.ts` version bump. Optional for the same fixture reason as
+   * `name` above; the host always sets it, and readers use `?? null`.
+   */
+  createdBy?: string | null
+  /**
+   * The user's standing "do not let peers reopen this session" answer
+   * (PEER-SESSIONS §6). False for every row that has not been blocked.
+   *
+   * Here for the same reason `name` is: without it the row menu would be a
+   * write-only toggle that cannot show its own state. Additive control-plane
+   * descriptor field, not a wire frame. Optional for the same fixture reason as
+   * `name` above; the host always sets it, and readers test `=== true`.
+   */
+  peerWakeBlocked?: boolean
+  /**
    * Main-supplied branch provenance, persisted by the host registry. Additive
    * control-plane descriptor state, not a wire frame.
    */
@@ -157,6 +203,19 @@ export type HostErrorCode =
   | 'spawn_failed'
   /** Registry file unwritable — sessions still work, persistence degrades. */
   | 'registry_unavailable'
+  /**
+   * The row exists and the caller may name it, but no restore can reach it.
+   *
+   * Deliberately NOT `session_not_found`, and that separation is the whole
+   * point of the code. A caller that cannot restore a session has to know
+   * whether waiting would help: `session_not_found` covers both an id nobody
+   * holds AND a row whose spawn is already in flight, so the peer plane reads
+   * it as "already restoring, wait for ready" and sits through the full wake
+   * timeout. For a settled `disconnected` process that readiness never comes:
+   * nothing reconnects a lost socket, and only a user-driven restart in place
+   * clears the state. One code that means "stop waiting, this one is stuck".
+   */
+  | 'session_unreachable'
 
 /** A typed host failure — never a bare thrown string (REGISTRY.md §6.1). */
 export type HostError = {
@@ -170,6 +229,38 @@ export type HostError = {
  * never an exception carrying internal state across the boundary (HC2).
  */
 export type HostResult<T> = { ok: true; value: T } | { ok: false; error: HostError }
+
+export const MAX_ATTACHMENT_SOURCE_IMAGE_BYTES = 25 * 1024 * 1024
+
+export type AttachmentImageMediaType =
+  | 'image/jpeg'
+  | 'image/png'
+  | 'image/gif'
+  | 'image/webp'
+
+export type AttachmentFileTokenSelection = {
+  kind: 'file'
+  name: string
+  token: string
+}
+
+/**
+ * A file chosen in main's native dialog. Images cross as bounded bytes so the
+ * renderer can use its normal image-paste pipeline. Every other file stays an
+ * opaque, session-bound token whose resolved path remains in main until submit.
+ */
+export type AttachmentFileSelection =
+  | AttachmentFileTokenSelection
+  | {
+      kind: 'image'
+      name: string
+      mediaType: AttachmentImageMediaType
+      bytes: Uint8Array
+    }
+  | {
+      kind: 'error'
+      message: string
+    }
 
 /* ------------------------------------------------------------------------- *
  * P4-35 — the file sink (operator ruling 2026-07-30)
@@ -322,6 +413,23 @@ export type HostApi = {
     appSessionId: SessionId,
   ): Promise<HostResult<SessionDescriptor>>
   closeSession(appSessionId: SessionId): Promise<HostResult<void>>
+  /**
+   * Set or clear this row's "do not let peers reopen this session" flag
+   * (PEER-SESSIONS §6) — the user's one control over the ruling that a peer
+   * message may wake a closed session. Renderer-facing: the sidebar row menu
+   * reaches it through one fixed preload sender (HC3, the `closeSession`
+   * precedent), and it takes a session id and a boolean, nothing else. No
+   * sidecar surface: no frame carries it and no peer can clear it.
+   *
+   * Durable (a registry field), so it survives close, park, restore and
+   * relaunch. An unknown id is `session_not_found` (HC2), never a silent
+   * success — a toggle that reports OK while persisting nothing is how a
+   * write-only control lies to the user.
+   */
+  setPeerWakeBlocked(
+    appSessionId: SessionId,
+    blocked: boolean,
+  ): Promise<HostResult<void>>
   listSessions(): SessionDescriptor[]
   /**
    * IDLE-PARK §1c — may this row's engine session id be resumed if its live

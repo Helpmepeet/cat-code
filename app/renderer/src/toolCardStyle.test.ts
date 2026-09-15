@@ -19,18 +19,12 @@ import {
   readToolCardStyleFromStorage,
   writeToolCardStyleToStorage,
 } from './toolCardStyle.js'
+import { memoryStorage } from './viewPreferenceStorageFixture.js'
 
-function store(initial?: string) {
-  const map = new Map<string, string>()
-  if (initial !== undefined) map.set(TOOL_CARD_STYLE_STORAGE_KEY, initial)
-  return {
-    map,
-    getItem: (key: string) => map.get(key) ?? null,
-    setItem: (key: string, value: string) => {
-      map.set(key, value)
-    },
-  }
-}
+const store = (initial?: string) =>
+  memoryStorage(
+    initial === undefined ? {} : { [TOOL_CARD_STYLE_STORAGE_KEY]: initial },
+  )
 
 test('the shipped default is the drawing the app already had', () => {
   expect(DEFAULT_TOOL_CARD_STYLE).toBe('cards')

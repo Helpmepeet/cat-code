@@ -18,7 +18,6 @@
     "AgentStateWord": "renderer/src/AgentChrome.tsx",
     "AgentSectionLabel": "renderer/src/AgentChrome.tsx",
     "AgentActionButton": "renderer/src/AgentChrome.tsx",
-    "OrchestratorBadge": "renderer/src/AgentChrome.tsx",
     "Baton": "renderer/src/AgentChrome.tsx"
   },
   "dtsPropsFor": {
@@ -27,11 +26,10 @@
     "AgentTypeLabel": "/** Agent type / subagent role. Renders the normalized display label in mono, toned by type. Renders nothing when null or empty. */\n  role: string | null;",
     "AgentTypeChip": "/** Agent type / subagent role. Renders a soft-tinted uppercase pill. An unrecognised role still gets a neutral chip; only null or empty renders nothing. */\n  role: string | null;",
     "AgentHandle": "/** The worker's display name, already stripped of any leading @ (e.g. \"Ada\", \"Turing\"). */\n  name: string;\n  /** Optional extra classes on the name span. */\n  className?: string;",
-    "AgentStateLabel": "/** Lifecycle state. Renders as a pip plus its full word, e.g. a purple \"Waiting on orchestrator\". */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';\n  /** Pip size. Default 'sm'. */\n  size?: 'xs' | 'sm';",
+    "AgentStateLabel": "/** Lifecycle state. Renders as a pip plus its full word, e.g. a purple \"Waiting on the assistant\". */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';\n  /** Pip size. Default 'sm'. */\n  size?: 'xs' | 'sm';",
     "AgentStateWord": "/** Lifecycle state. Renders the COMPRESSED word for crowded rows (running / needs input / done / failed), toned by the same vocabulary AgentStateLabel uses. No pip. */\n  state: 'running' | 'background' | 'completed' | 'failed' | 'stopped' | 'waiting' | 'needs-you' | 'paused' | 'result-ready' | 'reviewed' | 'attention' | 'resumable' | 'stale' | 'resumed';",
     "AgentSectionLabel": "/** Caption text. Rendered uppercase with wide tracking. */\n  children: React.ReactNode;\n  /** Caption colour. Default 'muted'. */\n  tone?: 'muted' | 'accent' | 'lease' | 'warn';",
     "AgentActionButton": "/** Button text. */\n  label: string;\n  /** Outline tone. 'danger' is the shipped case (worker Stop). Default 'neutral'. */\n  tone?: 'neutral' | 'accent' | 'danger';\n  /** Native title attribute. */\n  title?: string;\n  onClick: () => void;",
-    "OrchestratorBadge": "/** Is orchestrator mode on for this session? */\n  active: boolean;\n  /** Makes the badge the mode SWITCH. Omit for a passive marker, which renders nothing when inactive. */\n  onToggle?: (next: boolean) => void;\n  /** Session name, used only to build the accessible label. */\n  sessionLabel?: string;",
-    "Baton": "/** Who must act next. 'user' is the only amber case; 'none' renders nothing. */\n  owner: 'none' | 'orchestrator' | 'user';"
+    "Baton": "/** Who must act next. 'assistant' is the worker handoff case; 'none' renders nothing. */\n  owner: 'none' | 'assistant';"
   }
 }

@@ -114,6 +114,29 @@ export type MergedSessionRow = {
   title: string | null
   /** The label to render: title > first prompt > cwd basename > fallback. */
   displayLabel: string
+  /**
+   * The session's peer NAME (PEER-SESSIONS §2), or null. Distinct from `title`
+   * and `displayLabel`: the title is what this session is ABOUT and the user can
+   * rewrite it, the name is who it IS and is allocated once at spawn.
+   *
+   * A registry field, so a history-only row never has one and a registry row
+   * carries it whether it is live, parked or closed. Null for a registry row
+   * that predates the field and has not been spawned since.
+   *
+   * Null is also what a REAPED session reads as: the bound reap drops the row
+   * and the transcript returns as history, so a conversation that used to be a
+   * peer stops being one and gets a different name if it is ever reopened. That
+   * follows from §2's release-on-reap rule, not from a lost write — the title,
+   * which is what the user reads, survives the round trip.
+   */
+  name: string | null
+  /**
+   * PEER-SESSIONS §6 — has the user said that peers may not reopen this session?
+   * Optional, exactly like the descriptor field it mirrors: absent is the same
+   * answer as false, and only a registry-backed row can carry it at all, so the
+   * menu reads it as `=== true`.
+   */
+  peerWakeBlocked?: boolean
   /** A live registry row with a running process. */
   live: boolean
   /** A registry row whose process is gone but can be re-spawned. */
@@ -148,7 +171,7 @@ export type MergedSessionRow = {
   transcriptActivityAtMs: number | null
   gitBranch: string | null
   tag: string | null
-  mode: 'agent' | 'coordinator' | 'normal' | null
+  mode: 'coordinator' | 'normal' | null
   agentSetting: string | null
   prNumber: number | null
   prRepository: string | null
@@ -217,6 +240,8 @@ export function selectMergedSessionRows(
       cwdExists: entry?.cwdExists ?? true,
       title,
       displayLabel: resolveSessionLabel(title, descriptor.cwd),
+      name: descriptor.name ?? null,
+      peerWakeBlocked: descriptor.peerWakeBlocked === true,
       live: !descriptor.restorable && descriptor.status !== 'exited',
       restorable: descriptor.restorable,
       status: descriptor.status,
@@ -246,6 +271,17 @@ export function selectMergedSessionRows(
       cwdExists: entry.cwdExists,
       title: entry.title,
       displayLabel: resolveSessionLabel(entry.title, entry.cwd),
+      // No row, so no peer identity — which is the honest reading, not a gap.
+      // Two different histories land here. A transcript the registry never
+      // tracked (a terminal session) was never allocated a name at all. A
+      // transcript whose row was REAPED had one, and a `createdBy`, and possibly
+      // the user's peer-reopen decision; the bound reap took the row and the
+      // pool may have handed that name to someone else since
+      // (`app/host/registry.ts` `enforceBound`). Both are un-addressable now, so
+      // both read null: this row is a conversation, not a peer, until the
+      // operator opens it and the host mints a fresh identity for the new row.
+      name: null,
+      peerWakeBlocked: false,
       live: false,
       restorable: false,
       status: 'history',

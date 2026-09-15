@@ -20,6 +20,7 @@ import {
 } from '../../memdir/memoryTypes.js'
 import { BASH_TOOL_NAME } from '../../tools/BashTool/toolName.js'
 import { FILE_EDIT_TOOL_NAME } from '../../tools/FileEditTool/constants.js'
+import { FILE_PATCH_TOOL_NAME } from '../../tools/FilePatchTool/constants.js'
 import { FILE_READ_TOOL_NAME } from '../../tools/FileReadTool/prompt.js'
 import { FILE_WRITE_TOOL_NAME } from '../../tools/FileWriteTool/prompt.js'
 import { GLOB_TOOL_NAME } from '../../tools/GlobTool/prompt.js'
@@ -66,16 +67,16 @@ function opener(
       `TASK CONTRACT: Act as the memory extraction subagent. Analyze the most recent ~${newMessageCount} messages above and update the persistent memory system using only information from those messages.`,
       '',
       'TOOL CONSTRAINTS:',
-      `- Allowed tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), and ${FILE_EDIT_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only.`,
+      `- Allowed tools: ${FILE_READ_TOOL_NAME}, ${GREP_TOOL_NAME}, ${GLOB_TOOL_NAME}, read-only ${BASH_TOOL_NAME} (ls/find/cat/stat/wc/head/tail and similar), and ${FILE_PATCH_TOOL_NAME}/${FILE_WRITE_TOOL_NAME} for paths inside the memory directory only.`,
       `- ${BASH_TOOL_NAME} rm is not permitted.`,
       `- All other tools — MCP, Agent, write-capable ${BASH_TOOL_NAME}, and similar — will be denied.`,
       '',
       'EXECUTION CONTRACT:',
       '1. Use at most 2 tool-using turns.',
       `2. Tool turn 1: issue every required ${FILE_READ_TOOL_NAME} call in parallel for the files you might update.`,
-      `3. Tool turn 2: issue every required ${FILE_WRITE_TOOL_NAME} and ${FILE_EDIT_TOOL_NAME} call in parallel.`,
+      `3. Tool turn 2: issue every required ${FILE_WRITE_TOOL_NAME} and ${FILE_PATCH_TOOL_NAME} call in parallel.`,
       '4. Do not interleave reads and writes across additional tool-using turns.',
-      `5. ${FILE_EDIT_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file.`,
+      `5. ${FILE_PATCH_TOOL_NAME} requires a prior ${FILE_READ_TOOL_NAME} of the same file.`,
       '',
       'SOURCE-OF-TRUTH CONSTRAINTS:',
       `- You MUST only use content from the last ~${newMessageCount} messages to decide what to save, update, or remove.`,
@@ -115,7 +116,7 @@ function buildAutoOnlyHowToSave(
         '3. Keep the memory organized by topic rather than chronology.',
         '4. Update or remove memories that turn out to be wrong or outdated.',
         '5. Before saving changed guidance, compare it with existing memories for conflicts. If it supersedes or narrows an earlier rule, update or remove the old rule in the same save so both cannot remain active; preserve any non-overlapping conditions. If an existing MEMORY.md hook points to a reconciled topic, update or remove that hook too; do not create new hooks in this mode.',
-        '6. Before finishing, verify from the successful write/edit tool results that each intended memory file was updated.',
+        '6. Before finishing, verify from the successful write/patch tool results that each intended memory file was updated.',
       ]
     }
 
@@ -133,7 +134,7 @@ function buildAutoOnlyHowToSave(
       '6. Keep the memory organized by topic rather than chronology.',
       '7. Update or remove memories that turn out to be wrong or outdated.',
       '8. Before saving changed guidance, compare it with existing memories for conflicts. If it supersedes or narrows an earlier rule, update or remove the old rule and its index hook in the same save so both cannot remain active; preserve any non-overlapping conditions.',
-      '9. Before finishing, verify from the successful write/edit tool results that each intended memory file was updated and that the `MEMORY.md` index update was included.',
+      '9. Before finishing, verify from the successful write/patch tool results that each intended memory file was updated and that the `MEMORY.md` index update was included.',
     ]
   }
 
@@ -186,7 +187,7 @@ function buildCombinedHowToSave(
         '3. Keep the memory organized by topic rather than chronology.',
         '4. Update or remove memories that turn out to be wrong or outdated.',
         '5. Before saving changed guidance, compare it with existing private and team memories for conflicts. A private correction may record an explicit scoped override but must not modify team memory. Update or remove a team rule only when the new guidance is clearly team-wide. Reconcile authorized changes in the same save while preserving non-overlapping conditions. If an existing MEMORY.md hook points to a reconciled topic, update or remove that hook too; do not create new hooks in this mode.',
-        '6. Before finishing, verify from the successful write/edit tool results that each intended memory file was updated in the correct directory.',
+        '6. Before finishing, verify from the successful write/patch tool results that each intended memory file was updated in the correct directory.',
       ]
     }
 
@@ -204,7 +205,7 @@ function buildCombinedHowToSave(
       '6. Keep the memory organized by topic rather than chronology.',
       '7. Update or remove memories that turn out to be wrong or outdated.',
       '8. Before saving changed guidance, compare it with existing private and team memories for conflicts. A private correction may record an explicit scoped override but must not modify team memory. Update or remove a team rule only when the new guidance is clearly team-wide. Reconcile authorized changes and their index hooks in the same save while preserving non-overlapping conditions.',
-      '9. Before finishing, verify from the successful write/edit tool results that each intended memory file was updated in the correct directory and that the corresponding `MEMORY.md` update was included.',
+      '9. Before finishing, verify from the successful write/patch tool results that each intended memory file was updated in the correct directory and that the corresponding `MEMORY.md` update was included.',
     ]
   }
 

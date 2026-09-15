@@ -1,6 +1,6 @@
 # Config And Persistence Routing Map
 
-Last refreshed: 2026-08-13
+Last refreshed: 2026-09-11
 
 ## Purpose
 
@@ -55,9 +55,9 @@ for the config and persistence slice.
 | Policy settings precedence | `src/utils/settings/settings.ts` | `src/utils/settings/mdm/settings.ts`, `src/services/remoteManagedSettings/syncCacheState.ts` | `policySettings` is first-source-wins: remote -> admin MDM/HKLM/plist -> managed settings files/drop-ins -> HKCU. It does not deep-merge across policy sources. |
 | Policy limits | `src/services/policyLimits/index.ts` | `src/services/policyLimits/types.ts` | Policy limits are separate from managed settings. They cache in `policy-limits.json`, fail open for most policies, poll hourly, and can fail closed for specific essential-traffic-only policies on cache miss. |
 | Settings validation and diagnostics | `src/utils/settings/validation.ts` | `src/utils/settings/allErrors.ts`, `src/utils/settings/validationTips.ts`, `src/screens/Doctor.tsx` | Invalid permission rules can be filtered before schema validation. Use the validation surfaces before inventing new diagnostics. |
-| Transcript file path | `src/utils/sessionStorage.ts` | `src/bootstrap/state.ts`, `src/utils/path.ts` | Transcripts live under `getClaudeConfigHomeDir()/projects/<sanitized-project>/<sessionId>.jsonl`. `sessionProjectDir` can override path derivation for resumed sessions. |
-| Transcript write path | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `src/utils/sessionStoragePortable.ts` | `recordTranscript()` dedupes by UUID and maintains parent chains. Progress messages are not chain participants. |
-| Transcript metadata entries | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `app/shared/transcriptRunFacts.ts` | Titles, tags, agent metadata, mode, worktree state, thread goals, content replacements, file history, attribution, context-collapse, and `system`/`run_facts` entries are separate JSONL entry types. A main-thread run-facts record atomically captures the model, permission mode, effort, and actual context window used for a turn; preview backfill retains legacy derivation for transcripts that predate it. |
+| Transcript file path | `src/utils/sessionStorage.ts` | `src/bootstrap/state.ts`, `src/utils/path.ts`, `src/tools/EnterWorktreeTool/EnterWorktreeTool.ts` | Transcripts live under `getClaudeConfigHomeDir()/projects/<sanitized-project>/<sessionId>.jsonl`. `sessionProjectDir` can override path derivation for resumed sessions; `EnterWorktreeTool` pins it before changing the original cwd so the active transcript and hook path do not move. |
+| Transcript write path | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `src/utils/sessionStoragePortable.ts` | `recordTranscript()` dedupes by UUID and maintains parent chains. Progress and silent hook-success messages are not chain participants; attachments are persisted so queued input and resume state remain faithful. |
+| Transcript metadata entries | `src/utils/sessionStorage.ts` | `src/types/logs.ts`, `app/shared/transcriptRunFacts.ts` | Titles, tags, agent metadata, mode, worktree state, thread goals, content replacements, file history, attribution, context-collapse, and `system`/`run_facts` entries are separate JSONL entry types. Legacy `agent` mode metadata is normalized to `normal` at ingestion without rewriting JSONL; current runtime values are `coordinator` and `normal`. A main-thread run-facts record atomically captures the model, permission mode, effort, and actual context window used for a turn; preview backfill retains legacy derivation for transcripts that predate it. Rewind markers retain their metadata-only descendants until the first retained user/assistant child, so a continuation cannot anchor a discarded branch. |
 | Resume loading | `src/utils/conversationRecovery.ts` | `src/utils/sessionStorage.ts`, `src/commands/resume/`, `src/screens/ResumeConversation.tsx` | `loadConversationForResume()` loads the latest, a session ID, a `LogOption`, or a JSONL path, then deserializes and runs resume session-start hooks. |
 | Resume state restoration | `src/utils/sessionRestore.ts` | `src/screens/REPL.tsx`, `src/main.tsx` | Restore is split between transcript loading and process state: cwd/worktree, mode, cost state, file history, attribution, todos, agent setting, context collapse, and metadata adoption. |
 | Forked resume | `src/utils/sessionRestore.ts` | `src/utils/sessionStorage.ts` | `--fork-session` keeps the fresh session ID but must seed content replacements into the new transcript. It should not adopt the source worktree state. |
@@ -117,7 +117,7 @@ Important exceptions:
 
 | Surface | Focused command |
 |---|---|
-| Session transcript persistence | `bun test src/utils/sessionStorage.test.ts` |
+| Session transcript persistence and worktree pinning | `bun test src/utils/sessionStorage.test.ts src/tools/EnterWorktreeTool/EnterWorktreeTool.test.ts` |
 | Deferred queue, locks, identity, cancellation, and recovery | `bun test src/services/deferredContinuation.test.ts src/services/deferredContinuation.probe.test.ts src/utils/sessionRestore.deferred.test.ts` |
 | Full engine gate | `bun run build:dev:full` |
 
@@ -171,6 +171,10 @@ Do not treat `src/history.ts` or prompt input history as transcript truth.
   than rebuilding paths by hand.
 - Progress entries are UI state and should not participate in transcript parent
   chains.
+- A rewind marker identifies a user/assistant tip, not every later JSONL entry.
+  Preserve only metadata descendants on that active branch before the next main
+  conversation message; do not promote discarded-branch metadata into a resume
+  anchor.
 - Deferred continuation history is terminal authority, not disposable logging:
   it suppresses surviving pending work after an interrupted transition. Resume
   probes its per-session lock without canceling a pending job; only a model-turn

@@ -290,7 +290,7 @@ async function routeToTeammate(
 }
 
 /**
- * Resolves a target against running/resumable local subagents (registered
+ * Resolves a target against running or previously recorded local subagents (registered
  * alias, durable worker handle, or raw agent ID) — used both for explicit
  * `@name` targets (which never consult the team roster) and as the fallback
  * for a bare name with no active-teammate match. Returns `null` when there is
@@ -322,14 +322,31 @@ async function routeToLocalWorker(
       agentId,
       message,
       context.setAppStateForTasks ?? context.setAppState,
+      context.agentId,
     )
     if (queued) {
       return {
         data: {
           success: true,
-          message: `Message queued for delivery to ${displayInput} at its next tool round.`,
+          message: `Message queued for delivery to ${displayInput} in this worker execution.`,
         },
       }
+    }
+  }
+  if (
+    isLocalAgentTask(task) &&
+    !isMainSessionTask(task) &&
+    task.status === 'running' &&
+    task.acceptingMessages === false
+  ) {
+    const resumeTarget = resolved.displayName.startsWith('@')
+      ? resolved.displayName
+      : displayInput.trim()
+    return {
+      data: {
+        success: false,
+        message: `Agent "${resolved.displayName}" is finishing and no longer accepts messages. Use ResumeAgent({ agentId: "${resumeTarget}", prompt }) after it stops to send this instruction.${formatContextSizeHint(resolved.contextTokens, resolved.contextWindowTokens)}`,
+      },
     }
   }
   const resumeTarget = resolved.displayName.startsWith('@')
@@ -437,35 +454,69 @@ async function handleBroadcast(
 }
 
 /**
- * Finds one outstanding request record matching the exact request/type and
- * sender/recipient agent+allocation ID tuple — the same correlation
- * `classifyMailboxMessage`/`claimPendingControl` use, but as a read-only
- * existence check for a producer about to send the RESPONSE side (shutdown
- * approval/rejection, plan approval/rejection). A `consumed` record never
+ * Reads the call-time team snapshot, resolves the calling principal, and checks
+ * its role. The call-time snapshot is authoritative — validation may have
+ * preceded a permission wait, so re-checking here is what actually matters.
+ *
+ * Returns the refusal reason rather than throwing, because each caller wraps it
+ * in its own output shape (RequestOutput carries a target, ResponseOutput does
+ * not).
+ */
+async function resolveAuthorizedSender(
+  teamName: string,
+  requiredKind: TeamPrincipal['kind'],
+  unauthorizedMessage: string,
+): Promise<
+  { snapshot: Readonly<TeamFile>; sender: TeamPrincipal } | { error: string }
+> {
+  let snapshot: Readonly<TeamFile>
+  let sender: TeamPrincipal
+  try {
+    snapshot = await readTeamSnapshot(teamName)
+    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
+  } catch (error) {
+    return { error: `Cannot verify team roster: ${errorMessage(error)}` }
+  }
+  if (sender.kind !== requiredKind) {
+    return { error: unauthorizedMessage }
+  }
+  return { snapshot, sender }
+}
+
+/**
+ * Resolves the leader principal and confirms one outstanding shutdown request
+ * matching the exact request id and the leader/sender agent+allocation ID
+ * tuple — the same correlation `classifyMailboxMessage`/`claimPendingControl`
+ * use, but as a read-only existence check for a teammate about to send the
+ * RESPONSE side (shutdown approval/rejection). A `consumed` record never
  * matches (replay/duplicate); the actual claim-to-`processing` happens on
  * the leader's consumption side (useInboxPoller/attachments.ts).
+ *
+ * Returns the leader rather than the matched record: neither caller reads the
+ * record, only the leader it correlates against.
  */
-function findOutstandingRequest(
-  pendingControls: readonly PendingControlRecord[],
-  args: {
-    requestId: string
-    requestType: PendingControlRecord['requestType']
-    senderAgentId: string
-    senderAllocationId: string
-    recipientAgentId: string
-    recipientAllocationId: string
-  },
-): PendingControlRecord | undefined {
-  return pendingControls.find(
-    p =>
-      p.requestId === args.requestId &&
-      p.requestType === args.requestType &&
+function requireOutstandingShutdown(
+  snapshot: Readonly<TeamFile>,
+  requestId: string,
+  sender: TeamPrincipal,
+): { leader: TeamPrincipal } | { error: string } {
+  const leader = resolveLeaderPrincipal(snapshot)
+  const pending = (snapshot.pendingControls ?? []).find(
+    (p: PendingControlRecord) =>
+      p.requestId === requestId &&
+      p.requestType === 'shutdown' &&
       p.state !== 'consumed' &&
-      p.senderAgentId === args.senderAgentId &&
-      p.senderAllocationId === args.senderAllocationId &&
-      p.recipientAgentId === args.recipientAgentId &&
-      p.recipientAllocationId === args.recipientAllocationId,
+      p.senderAgentId === leader.agentId &&
+      p.senderAllocationId === leader.allocationId &&
+      p.recipientAgentId === sender.agentId &&
+      p.recipientAllocationId === sender.allocationId,
   )
+  if (!pending) {
+    return {
+      error: `No outstanding shutdown request "${requestId}" found for you. It may already be resolved or was never sent to you.`,
+    }
+  }
+  return { leader }
 }
 
 async function handleShutdownRequest(
@@ -486,34 +537,23 @@ async function handleShutdownRequest(
     }
   }
 
-  let snapshot: Readonly<TeamFile>
-  let sender: TeamPrincipal
-  try {
-    snapshot = await readTeamSnapshot(teamName)
-    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
-  } catch (error) {
+  // Authority: only the team lead may issue a shutdown_request.
+  const authorized = await resolveAuthorizedSender(
+    teamName,
+    'leader',
+    'Only the team lead can request teammate shutdown.',
+  )
+  if ('error' in authorized) {
     return {
       data: {
         success: false,
-        message: `Cannot verify team roster: ${errorMessage(error)}`,
+        message: authorized.error,
         request_id: '',
         target: targetName,
       },
     }
   }
-  // Authority: only the team lead may issue a shutdown_request. The
-  // call-time snapshot is authoritative — validation may have preceded a
-  // permission wait, so re-checking here is what actually matters.
-  if (sender.kind !== 'leader') {
-    return {
-      data: {
-        success: false,
-        message: 'Only the team lead can request teammate shutdown.',
-        request_id: '',
-        target: targetName,
-      },
-    }
-  }
+  const sender = authorized.sender
 
   const roster = await resolveFreshRosterMember(teamName, targetName)
   if (roster.kind !== 'member') {
@@ -581,48 +621,29 @@ async function handleShutdownApproval(
     }
   }
 
-  let snapshot: Readonly<TeamFile>
-  let sender: TeamPrincipal
-  try {
-    snapshot = await readTeamSnapshot(teamName)
-    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
-  } catch (error) {
+  const authorized = await resolveAuthorizedSender(
+    teamName,
+    'teammate',
+    'Only a teammate can approve its own shutdown.',
+  )
+  if ('error' in authorized) {
     return {
-      data: {
-        success: false,
-        message: `Cannot verify team roster: ${errorMessage(error)}`,
-        request_id: requestId,
-      },
+      data: { success: false, message: authorized.error, request_id: requestId },
     }
   }
-  if (sender.kind !== 'teammate') {
-    return {
-      data: {
-        success: false,
-        message: 'Only a teammate can approve its own shutdown.',
-        request_id: requestId,
-      },
-    }
-  }
+  const sender = authorized.sender
 
-  const leader = resolveLeaderPrincipal(snapshot)
-  const pending = findOutstandingRequest(snapshot.pendingControls ?? [], {
+  const outstanding = requireOutstandingShutdown(
+    authorized.snapshot,
     requestId,
-    requestType: 'shutdown',
-    senderAgentId: leader.agentId,
-    senderAllocationId: leader.allocationId,
-    recipientAgentId: sender.agentId,
-    recipientAllocationId: sender.allocationId,
-  })
-  if (!pending) {
+    sender,
+  )
+  if ('error' in outstanding) {
     return {
-      data: {
-        success: false,
-        message: `No outstanding shutdown request "${requestId}" found for you. It may already be resolved or was never sent to you.`,
-        request_id: requestId,
-      },
+      data: { success: false, message: outstanding.error, request_id: requestId },
     }
   }
+  const leader = outstanding.leader
 
   logForDebugging(
     `[SendMessageTool] handleShutdownApproval: teamName=${teamName}, agentId=${sender.agentId}, agentName=${sender.name}`,
@@ -736,48 +757,29 @@ async function handleShutdownRejection(
     }
   }
 
-  let snapshot: Readonly<TeamFile>
-  let sender: TeamPrincipal
-  try {
-    snapshot = await readTeamSnapshot(teamName)
-    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
-  } catch (error) {
+  const authorized = await resolveAuthorizedSender(
+    teamName,
+    'teammate',
+    'Only a teammate can reject its own shutdown request.',
+  )
+  if ('error' in authorized) {
     return {
-      data: {
-        success: false,
-        message: `Cannot verify team roster: ${errorMessage(error)}`,
-        request_id: requestId,
-      },
+      data: { success: false, message: authorized.error, request_id: requestId },
     }
   }
-  if (sender.kind !== 'teammate') {
-    return {
-      data: {
-        success: false,
-        message: 'Only a teammate can reject its own shutdown request.',
-        request_id: requestId,
-      },
-    }
-  }
+  const sender = authorized.sender
 
-  const leader = resolveLeaderPrincipal(snapshot)
-  const pending = findOutstandingRequest(snapshot.pendingControls ?? [], {
+  const outstanding = requireOutstandingShutdown(
+    authorized.snapshot,
     requestId,
-    requestType: 'shutdown',
-    senderAgentId: leader.agentId,
-    senderAllocationId: leader.allocationId,
-    recipientAgentId: sender.agentId,
-    recipientAllocationId: sender.allocationId,
-  })
-  if (!pending) {
+    sender,
+  )
+  if ('error' in outstanding) {
     return {
-      data: {
-        success: false,
-        message: `No outstanding shutdown request "${requestId}" found for you. It may already be resolved or was never sent to you.`,
-        request_id: requestId,
-      },
+      data: { success: false, message: outstanding.error, request_id: requestId },
     }
   }
+  const leader = outstanding.leader
 
   const rejectedMessage = createShutdownRejectedMessage({
     requestId,
@@ -811,132 +813,35 @@ async function handleShutdownRejection(
   }
 }
 
-async function handlePlanApproval(
+async function handlePlanDecision(
   recipientName: string,
   requestId: string,
+  decision: { outcome: 'approved' } | { outcome: 'rejected'; feedback: string },
   context: ToolUseContext,
 ): Promise<{ data: ResponseOutput }> {
   const appState = context.getAppState()
   const teamName = appState.teamContext?.teamName
+  const approved = decision.outcome === 'approved'
+  const verb = approved ? 'approve' : 'reject'
 
   if (!isTeamLead(appState.teamContext) || !teamName) {
     throw new Error(
-      'Only the team lead can approve plans. Teammates cannot approve their own or other plans.',
+      `Only the team lead can ${verb} plans. Teammates cannot ${verb} their own or other plans.`,
     )
   }
 
-  let snapshot: Readonly<TeamFile>
-  let sender: TeamPrincipal
-  try {
-    snapshot = await readTeamSnapshot(teamName)
-    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
-  } catch (error) {
-    return {
-      data: {
-        success: false,
-        message: `Cannot verify team roster: ${errorMessage(error)}`,
-        request_id: requestId,
-      },
-    }
-  }
-  if (sender.kind !== 'leader') {
-    return {
-      data: {
-        success: false,
-        message: 'Only the team lead can approve plans.',
-        request_id: requestId,
-      },
-    }
-  }
-
-  const recipient = resolveTeamPrincipalByName(snapshot, recipientName)
-  if (!recipient) {
-    return {
-      data: {
-        success: false,
-        message: `No teammate named "${recipientName}" found in the current roster.`,
-        request_id: requestId,
-      },
-    }
-  }
-
-  const leaderExternalMode = toExternalPermissionMode(
-    appState.toolPermissionContext.mode,
+  const authorized = await resolveAuthorizedSender(
+    teamName,
+    'leader',
+    `Only the team lead can ${verb} plans.`,
   )
-  const modeToInherit =
-    leaderExternalMode === 'plan' ? 'default' : leaderExternalMode
-
-  const approvalResponse = createPlanApprovalResponseMessage({
-    requestId,
-    approved: true,
-    permissionMode: modeToInherit,
-  })
-
-  try {
-    await writeControlToMailbox({
-      recipient,
-      control: approvalResponse,
-      teamName,
-    })
-  } catch (error) {
+  if ('error' in authorized) {
     return {
-      data: {
-        success: false,
-        message: `Failed to send plan approval to ${recipientName}: ${errorMessage(error)}`,
-        request_id: requestId,
-      },
+      data: { success: false, message: authorized.error, request_id: requestId },
     }
   }
 
-  return {
-    data: {
-      success: true,
-      message: `Plan approved for ${recipientName}. They will receive the approval and can proceed with implementation.`,
-      request_id: requestId,
-    },
-  }
-}
-
-async function handlePlanRejection(
-  recipientName: string,
-  requestId: string,
-  feedback: string,
-  context: ToolUseContext,
-): Promise<{ data: ResponseOutput }> {
-  const appState = context.getAppState()
-  const teamName = appState.teamContext?.teamName
-
-  if (!isTeamLead(appState.teamContext) || !teamName) {
-    throw new Error(
-      'Only the team lead can reject plans. Teammates cannot reject their own or other plans.',
-    )
-  }
-
-  let snapshot: Readonly<TeamFile>
-  let sender: TeamPrincipal
-  try {
-    snapshot = await readTeamSnapshot(teamName)
-    sender = await resolveCurrentTeamPrincipal(teamName, snapshot)
-  } catch (error) {
-    return {
-      data: {
-        success: false,
-        message: `Cannot verify team roster: ${errorMessage(error)}`,
-        request_id: requestId,
-      },
-    }
-  }
-  if (sender.kind !== 'leader') {
-    return {
-      data: {
-        success: false,
-        message: 'Only the team lead can reject plans.',
-        request_id: requestId,
-      },
-    }
-  }
-
-  const recipient = resolveTeamPrincipalByName(snapshot, recipientName)
+  const recipient = resolveTeamPrincipalByName(authorized.snapshot, recipientName)
   if (!recipient) {
     return {
       data: {
@@ -947,23 +852,36 @@ async function handlePlanRejection(
     }
   }
 
-  const rejectionResponse = createPlanApprovalResponseMessage({
-    requestId,
-    approved: false,
-    feedback,
-  })
+  let response: ReturnType<typeof createPlanApprovalResponseMessage>
+  if (decision.outcome === 'approved') {
+    const leaderExternalMode = toExternalPermissionMode(
+      appState.toolPermissionContext.mode,
+    )
+    response = createPlanApprovalResponseMessage({
+      requestId,
+      approved: true,
+      permissionMode:
+        leaderExternalMode === 'plan' ? 'default' : leaderExternalMode,
+    })
+  } else {
+    response = createPlanApprovalResponseMessage({
+      requestId,
+      approved: false,
+      feedback: decision.feedback,
+    })
+  }
 
   try {
     await writeControlToMailbox({
       recipient,
-      control: rejectionResponse,
+      control: response,
       teamName,
     })
   } catch (error) {
     return {
       data: {
         success: false,
-        message: `Failed to send plan rejection to ${recipientName}: ${errorMessage(error)}`,
+        message: `Failed to send plan ${approved ? 'approval' : 'rejection'} to ${recipientName}: ${errorMessage(error)}`,
         request_id: requestId,
       },
     }
@@ -972,7 +890,10 @@ async function handlePlanRejection(
   return {
     data: {
       success: true,
-      message: `Plan rejected for ${recipientName} with feedback: "${feedback}"`,
+      message:
+        decision.outcome === 'approved'
+          ? `Plan approved for ${recipientName}. They will receive the approval and can proceed with implementation.`
+          : `Plan rejected for ${recipientName} with feedback: "${decision.feedback}"`,
       request_id: requestId,
     },
   }
@@ -981,7 +902,7 @@ async function handlePlanRejection(
 export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
   buildTool({
     name: SEND_MESSAGE_TOOL_NAME,
-    searchHint: 'send messages to subagents, Agent Mode workers, or agent teammates',
+    searchHint: 'send messages to subagents or agent teammates',
     maxResultSizeChars: 100_000,
 
     userFacingName() {
@@ -1389,7 +1310,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No running subagent or Agent Mode worker found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
+            message: `No running subagent found for ${input.to}. Without Agent Teams, SendMessage can only target running worker handles or agent IDs.`,
           },
         }
       }
@@ -1401,7 +1322,7 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
         return {
           data: {
             success: false,
-            message: `No running subagent, Agent Mode worker, or active teammate found for "${input.to}".`,
+            message: `No running subagent or active teammate found for "${input.to}".`,
           },
         }
       }
@@ -1422,17 +1343,15 @@ export const SendMessageTool: Tool<InputSchema, SendMessageToolOutput> =
             input.message.reason!,
           )
         case 'plan_approval_response':
-          if (input.message.approve) {
-            return handlePlanApproval(
-              input.to,
-              input.message.request_id,
-              context,
-            )
-          }
-          return handlePlanRejection(
+          return handlePlanDecision(
             input.to,
             input.message.request_id,
-            input.message.feedback ?? 'Plan needs revision',
+            input.message.approve
+              ? { outcome: 'approved' }
+              : {
+                  outcome: 'rejected',
+                  feedback: input.message.feedback ?? 'Plan needs revision',
+                },
             context,
           )
       }

@@ -1,12 +1,12 @@
 /**
  * Main-owned PL-B worker runner. This module contains no Electron imports and is
- * unit-testable. It spawns exactly ONE serialized engine-graph worker, sends one
- * bounded manifest, parses bounded NDJSON records, validates every record
- * fail-closed, re-scans for secret-keyed material, and hands accepted session
- * results to main (the sole cache writer).
+ * unit-testable. It spawns exactly ONE serialized engine-graph worker (the
+ * spawn/framing/teardown mechanism is `ndjsonWorker.ts`), sends one bounded
+ * manifest, validates every record fail-closed, re-scans for secret-keyed
+ * material, and hands accepted session results to main (the sole cache writer).
  */
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import type { spawn } from 'node:child_process'
 
 import type { SessionDescriptor } from '../shared/hostApi.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
@@ -26,9 +26,9 @@ import {
   hasAnyRunFact,
   writeCache,
 } from './transcriptCache.js'
+import { runNdjsonWorker, type WorkerProcessLifecycle } from './ndjsonWorker.js'
 
 export const TRANSCRIPT_BACKFILL_TIMEOUT_MS = 5 * 60 * 1000
-const MAX_BACKFILL_STDERR_BYTES = 64 * 1024
 
 export type TranscriptBackfillRunOptions = {
   items: TranscriptBackfillItem[]
@@ -44,13 +44,6 @@ export type TranscriptBackfillRunOptions = {
   onWorkerLifecycle?: (event: WorkerProcessLifecycle) => void
   log?: (line: string) => void
 }
-
-export type WorkerProcessLifecycle = Readonly<{
-  phase: 'started' | 'exited'
-  pid: number
-  code?: number | null
-  signal?: NodeJS.Signals | null
-}>
 
 export type TranscriptBackfillRunSummary = {
   attempted: number
@@ -166,20 +159,6 @@ export async function runTranscriptBackfill(
     return { attempted: 0, accepted: 0, failed: 0, rejected: 0 }
   }
 
-  const spawnWorker = options.spawnWorker ?? spawn
-  const child = spawnWorker(options.command, options.args, {
-    cwd: options.cwd,
-    env: {
-      ...process.env,
-      ...options.env,
-      // Defense in depth with the worker's own pre-import assignment + --bare
-      // argv: SessionStart hooks must stay suppressed even if one gate drifts.
-      CLAUDE_CODE_SIMPLE: '1',
-    },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  }) as ChildProcessWithoutNullStreams
-  options.onWorkerLifecycle?.({ phase: 'started', pid: child.pid ?? 0 })
-
   const expected = new Map(
     request.items.map(item => [
       item.appSessionId,
@@ -191,86 +170,59 @@ export async function runTranscriptBackfill(
   let failed = 0
   let rejected = 0
   let doneAttempted: number | null = null
-  let pending = Buffer.alloc(0)
-  let stderr = Buffer.alloc(0)
-  let timedOut = false
-  let aborted = false
   let callbackError: unknown = null
-  let stdinError: unknown = null
 
-  const terminate = () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM')
-  }
-  const timeout = setTimeout(() => {
-    timedOut = true
-    terminate()
-  }, options.timeoutMs ?? TRANSCRIPT_BACKFILL_TIMEOUT_MS)
-  const onAbort = () => {
-    aborted = true
-    terminate()
-  }
-  options.signal?.addEventListener('abort', onAbort, { once: true })
-
-  child.stderr.on('data', chunk => {
-    if (stderr.byteLength >= MAX_BACKFILL_STDERR_BYTES) return
-    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    stderr = Buffer.concat([
-      stderr,
-      next.subarray(0, MAX_BACKFILL_STDERR_BYTES - stderr.byteLength),
-    ])
-  })
-
-  child.stdout.on('data', chunk => {
-    const next = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
-    pending = Buffer.concat([pending, next])
-    while (true) {
-      const newline = pending.indexOf(0x0a)
-      if (newline < 0) break
-      const line = pending.subarray(0, newline)
-      pending = pending.subarray(newline + 1)
-      if (line.byteLength === 0) continue
-      if (line.byteLength > MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES) {
+  const { code, signal, aborted, timedOut, stdinError, trailingBytes } =
+    await runNdjsonWorker({
+      command: options.command,
+      args: options.args,
+      cwd: options.cwd,
+      env: options.env,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs ?? TRANSCRIPT_BACKFILL_TIMEOUT_MS,
+      spawnWorker: options.spawnWorker,
+      maxRecordBytes: MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES,
+      input,
+      onWorkerLifecycle: options.onWorkerLifecycle,
+      log: options.log,
+      onOversizeRecord: () => {
         rejected += 1
-        terminate()
-        return
-      }
-      let raw: unknown
-      try {
-        raw = JSON.parse(line.toString('utf8'))
-      } catch {
-        rejected += 1
-        terminate()
-        return
-      }
-      const result = parseTranscriptBackfillResult(raw)
-      if (!result || !scanForSecrets(result).ok) {
-        rejected += 1
-        terminate()
-        return
-      }
-      if (result.type === 'done') {
-        if (doneAttempted !== null) {
+      },
+      onRecord: line => {
+        let raw: unknown
+        try {
+          raw = JSON.parse(line.toString('utf8'))
+        } catch {
           rejected += 1
-          terminate()
-          return
+          return 'stop'
         }
-        doneAttempted = result.attempted
-        continue
-      }
-      const identity = expected.get(result.appSessionId)
-      if (
-        !identity ||
-        !identity.startsWith(`${result.engineSessionId}\0`) ||
-        seen.has(result.appSessionId)
-      ) {
-        rejected += 1
-        terminate()
-        return
-      }
-      seen.add(result.appSessionId)
-      if (result.type === 'failure') {
-        failed += 1
-      } else {
+        const result = parseTranscriptBackfillResult(raw)
+        if (!result || !scanForSecrets(result).ok) {
+          rejected += 1
+          return 'stop'
+        }
+        if (result.type === 'done') {
+          if (doneAttempted !== null) {
+            rejected += 1
+            return 'stop'
+          }
+          doneAttempted = result.attempted
+          return 'continue'
+        }
+        const identity = expected.get(result.appSessionId)
+        if (
+          !identity ||
+          !identity.startsWith(`${result.engineSessionId}\0`) ||
+          seen.has(result.appSessionId)
+        ) {
+          rejected += 1
+          return 'stop'
+        }
+        seen.add(result.appSessionId)
+        if (result.type === 'failure') {
+          failed += 1
+          return 'continue'
+        }
         try {
           options.onSession(result)
           accepted += 1
@@ -280,39 +232,12 @@ export async function runTranscriptBackfill(
           // and reject only after its stdio has closed and it has been reaped.
           callbackError = error
           rejected += 1
-          terminate()
-          return
+          return 'stop'
         }
-      }
-    }
-    // Only the unterminated tail is one in-flight record. Several complete
-    // records may arrive in one OS chunk and are drained above before this cap.
-    if (pending.byteLength > MAX_TRANSCRIPT_BACKFILL_RECORD_BYTES) {
-      rejected += 1
-      terminate()
-    }
-  })
+        return 'continue'
+      },
+    })
 
-  const onStdinError = (error: unknown) => {
-    stdinError = error
-    terminate()
-  }
-  child.stdin.on('error', onStdinError)
-  const closed = waitForClose(child)
-  let code: number | null
-  let signal: NodeJS.Signals | null
-  try {
-    child.stdin.end(input)
-    ;({ code, signal } = await closed)
-    options.onWorkerLifecycle?.({ phase: 'exited', pid: child.pid ?? 0, code, signal })
-  } finally {
-    clearTimeout(timeout)
-    options.signal?.removeEventListener('abort', onAbort)
-    child.stdin.removeListener('error', onStdinError)
-  }
-
-  const diagnostics = stderr.toString('utf8').trim()
-  if (diagnostics) options.log?.(diagnostics)
   if (aborted) throw new Error('transcript-backfill worker aborted')
   if (timedOut) throw new Error('transcript-backfill worker timed out')
   if (callbackError !== null) {
@@ -330,7 +255,7 @@ export async function runTranscriptBackfill(
       `transcript-backfill worker failed (code=${String(code)} signal=${String(signal)})`,
     )
   }
-  if (pending.byteLength !== 0 || doneAttempted !== request.items.length) {
+  if (trailingBytes !== 0 || doneAttempted !== request.items.length) {
     throw new Error('transcript-backfill worker ended without a valid done record')
   }
   if (seen.size !== request.items.length) {
@@ -342,16 +267,4 @@ export async function runTranscriptBackfill(
     failed,
     rejected,
   }
-}
-
-function waitForClose(
-  child: ChildProcessWithoutNullStreams,
-): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject)
-    // `exit` can precede delivery of the final stdout chunk. `close` is the
-    // child-process guarantee that stdio has drained, so completion validation
-    // below cannot race the terminal `done` record.
-    child.once('close', (code, signal) => resolve({ code, signal }))
-  })
 }

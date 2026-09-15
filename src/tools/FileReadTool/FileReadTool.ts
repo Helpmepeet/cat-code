@@ -36,7 +36,6 @@ import {
   FILE_NOT_FOUND_CWD_NOTE,
   findSimilarFile,
   getFileIdentity,
-  getFileModificationTimeAsync,
   suggestPathUnderCwd,
 } from '../../utils/file.js'
 import { logFileOperation } from '../../utils/fileOperationAnalytics.js'
@@ -243,10 +242,10 @@ const inputSchema = lazySchema(() =>
   z.strictObject({
     file_path: z.string().describe('The absolute path to the file to read'),
     offset: semanticNumber(z.number().int().nonnegative().optional()).describe(
-      'The line number to start reading from. Only provide if the file is too large to read at once',
+      'The line number to start reading from. Provide it when you already know which part of the file you need',
     ),
     limit: semanticNumber(z.number().int().positive().optional()).describe(
-      'The number of lines to read. Only provide if the file is too large to read at once.',
+      'The number of lines to read, starting at offset. Provide it when you already know how much of the file you need.',
     ),
     pages: z
       .string()
@@ -564,6 +563,7 @@ export const FileReadTool = buildTool({
       existingState &&
       !existingState.isPartialView &&
       existingState.offset !== undefined &&
+      existingState.fileIdentity !== undefined &&
       // An internal refresh may populate the shared cache without returning
       // the contents to the model. A later model-invoked Read must not dedup
       // against that invisible result.
@@ -573,8 +573,8 @@ export const FileReadTool = buildTool({
         existingState.offset === offset && existingState.limit === limit
       if (rangeMatch) {
         try {
-          const mtimeMs = await getFileModificationTimeAsync(fullFilePath)
-          if (mtimeMs === existingState.timestamp) {
+          const currentIdentity = getFileIdentity(fullFilePath)
+          if (fileIdentitiesEqual(existingState.fileIdentity, currentIdentity)) {
             const analyticsExt = getFileExtensionForAnalytics(fullFilePath)
             logEvent('tengu_file_read_dedup', {
               ...(analyticsExt !== undefined && { ext: analyticsExt }),
@@ -587,7 +587,7 @@ export const FileReadTool = buildTool({
             }
           }
         } catch {
-          // stat failed — fall through to full read
+          // An unavailable identity cannot prove that the cached Read is current.
         }
       }
     }

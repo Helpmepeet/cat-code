@@ -5,7 +5,7 @@ import {
   writeFileAtomicDurableIfAbsent,
 } from './atomicFile.js'
 
-const [role, filePath, iterationsRaw] = process.argv.slice(2)
+const [role, filePath, iterationsRaw, ...extraArgs] = process.argv.slice(2)
 const iterations = Number(iterationsRaw)
 
 if (!role || !filePath || !Number.isInteger(iterations)) {
@@ -75,6 +75,73 @@ if (role === 'terminal-writer') {
   const waitedMs = Date.now() - startedAt
   await release()
   process.stdout.write(JSON.stringify({ role, pid: process.pid, waitedMs }))
+} else if (role === 'alias-editor') {
+  const [dataPath, coordinationDirectory] = extraArgs
+  if (!dataPath || !coordinationDirectory) {
+    throw new Error('alias-editor expected data and coordination paths')
+  }
+
+  const release = await acquireFileMutationLock(filePath)
+  try {
+    const snapshot = JSON.parse(await readFile(dataPath, 'utf8')) as {
+      edits: number[]
+    }
+    await Bun.write(
+      `${coordinationDirectory}/entered-${iterations}`,
+      String(process.pid),
+    )
+
+    if (iterations === 1) {
+      const deadline = Date.now() + 750
+      while (Date.now() < deadline) {
+        if (await Bun.file(`${coordinationDirectory}/entered-2`).exists()) break
+        await Bun.sleep(5)
+      }
+    } else {
+      while (!(await Bun.file(`${coordinationDirectory}/wrote-1`).exists())) {
+        await Bun.sleep(5)
+      }
+    }
+
+    snapshot.edits.push(iterations)
+    await writeFileAtomicDurable(dataPath, JSON.stringify(snapshot), {
+      encoding: 'utf8',
+    })
+    await Bun.write(
+      `${coordinationDirectory}/wrote-${iterations}`,
+      String(process.pid),
+    )
+  } finally {
+    await release()
+  }
+} else if (role === 'file-edit') {
+  const [oldString, newString, coordinationDirectory] = extraArgs
+  if (!oldString || !newString || !coordinationDirectory) {
+    throw new Error('file-edit expected strings and a coordination path')
+  }
+  const [{ FileEditTool }, { createFileStateCacheWithSizeLimit }] =
+    await Promise.all([
+      import('../tools/FileEditTool/FileEditTool.js'),
+      import('./fileStateCache.js'),
+    ])
+  await Bun.write(
+    `${coordinationDirectory}/file-edit-started`,
+    String(process.pid),
+  )
+  await FileEditTool.call(
+    {
+      file_path: filePath,
+      old_string: oldString,
+      new_string: newString,
+      replace_all: false,
+    },
+    {
+      readFileState: createFileStateCacheWithSizeLimit(10),
+      updateFileHistoryState: () => undefined,
+    } as never,
+    undefined as never,
+    { uuid: 'atomic-file-probe' } as never,
+  )
 } else {
   throw new Error(`unknown role: ${role}`)
 }

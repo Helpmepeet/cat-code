@@ -256,6 +256,16 @@ describe('long-context entitlement clamp', () => {
     ).toEqual(['output_reservation'])
   })
 
+  test('an Anthropic entitlement refusal never narrows Astra', () => {
+    noteLongContextEntitlementRefused()
+
+    expect(getContextWindowForModel('gpt-6-astra')).toBe(1_050_000)
+    expect(getEffectiveContextWindowSize('gpt-6-astra')).toBe(1_030_000)
+    expect(
+      resolveContextWindowPolicy('gpt-6-astra').clamps.map(c => c.reason),
+    ).toEqual(['output_reservation'])
+  })
+
   test('a different active Claude account regains its full window', () => {
     saveGlobalConfig(current => ({
       ...current,

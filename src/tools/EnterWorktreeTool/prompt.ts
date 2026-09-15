@@ -1,9 +1,9 @@
 export function getEnterWorktreeToolPrompt(): string {
-  return `Create an isolated workspace for this attempt. In Agent Mode, worktrees are execution backends: the main workspace stays untouched while isolated work runs.
+  return `Create an isolated workspace for this attempt. Worktrees keep the main workspace untouched while isolated work runs.
 
 ## When to Use
 
-- Agent Mode needs isolation for parallel edits, risky edits, broad refactors, experiments, or an implementation attempt that should not touch the main workspace yet
+- Use isolation for parallel edits, risky edits, broad refactors, experiments, or an implementation attempt that should not touch the main workspace yet
 - The user explicitly asks to work in a worktree
 
 ## When NOT to Use
@@ -27,7 +27,7 @@ export function getEnterWorktreeToolPrompt(): string {
 
 ## Behavior
 
-- In a git repository: creates a new git worktree inside \`.claude/worktrees/\` with a new branch based on HEAD
+- In a git repository: creates a new git worktree inside \`.cat-code/worktrees/\` with a new branch based on HEAD
 - Outside a git repository: delegates to WorktreeCreate/WorktreeRemove hooks for VCS-agnostic isolation
 - Switches the session's working directory to the isolated workspace
 - Use ExitWorktree to leave mid-session. On session exit, if still in the worktree, the user will be prompted only for the meaningful outcome: apply, discard, or keep the isolated result.

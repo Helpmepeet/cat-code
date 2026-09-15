@@ -78,6 +78,7 @@ export function ripgrepCommand(): {
 }
 
 const MAX_BUFFER_SIZE = 20_000_000 // 20MB; large monorepos can have 200k+ files
+const MAX_ERROR_DIAGNOSTIC_LENGTH = 2_000
 
 /**
  * Check if an error is EAGAIN (resource temporarily unavailable).
@@ -408,6 +409,20 @@ export async function ripGrep(
         return
       }
 
+      // Numeric exit codes >= 2 indicate ripgrep usage or configuration errors.
+      // Reject with the bounded stderr diagnostic instead of treating partial
+      // output as search results.
+      if (typeof error.code === 'number' && error.code >= 2) {
+        const diagnostic = (stderr.trim() || error.message).trim()
+        const boundedDiagnostic =
+          diagnostic.length > MAX_ERROR_DIAGNOSTIC_LENGTH
+            ? `${diagnostic.slice(0, MAX_ERROR_DIAGNOSTIC_LENGTH)}...`
+            : diagnostic
+        error.message = `ripgrep search failed with exit code ${error.code}${boundedDiagnostic ? `: ${boundedDiagnostic}` : ''}`
+        reject(error)
+        return
+      }
+
       // For all other errors, try to return partial results if available
       const hasOutput = stdout && stdout.trim().length > 0
       const isTimeout =
@@ -434,10 +449,10 @@ export async function ripGrep(
         `rg error (signal=${error.signal}, code=${error.code}, stderr: ${stderr}), ${lines.length} results`,
       )
 
-      // code 2 = ripgrep usage error (already handled); ABORT_ERR = caller
-      // explicitly aborted (not an error, just a cancellation — interactive
-      // callers may abort on every keystroke-after-debounce).
-      if (error.code !== 2 && error.code !== 'ABORT_ERR') {
+      // ABORT_ERR = caller explicitly aborted (not an error, just a
+      // cancellation — interactive callers may abort on every
+      // keystroke-after-debounce).
+      if (error.code !== 'ABORT_ERR') {
         logError(error)
       }
 

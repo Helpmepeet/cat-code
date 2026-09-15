@@ -17,7 +17,7 @@ import {
 } from '../../services/analytics/index.js'
 import { snapshotLeaseAccount, type CodexLeaseAccount } from '../../services/api/codexAccountLeaseManager.js'
 import { clearDumpState } from '../../services/api/dumpPrompts.js'
-import { recordWorkerSessionTerminal } from '../../agent-mode/sessionState.js'
+import { recordWorkerSessionTerminal } from '../../utils/workerState.js'
 import type { AppState } from '../../state/AppState.js'
 import type {
   Tool,
@@ -61,7 +61,7 @@ import {
 } from '../../utils/permissions/yoloClassifier.js'
 import { emitTaskProgress as emitTaskProgressEvent } from '../../utils/task/sdkProgress.js'
 import { FILE_EDIT_TOOL_NAME } from '../FileEditTool/constants.js'
-import { FILE_PATCH_TOOL_NAME } from '../FilePatchTool/constants.js'
+import { isFilePatchToolName } from '../FilePatchTool/constants.js'
 import { FILE_WRITE_TOOL_NAME } from '../FileWriteTool/prompt.js'
 import { appendSubagentTerminal } from '../../utils/sessionStorage.js'
 import { unregisterActiveSubagent } from '../../utils/cleanupRegistry.js'
@@ -78,6 +78,11 @@ import { RESUME_AGENT_TOOL_NAME } from '../ResumeAgentTool/constants.js'
 import { SEND_MESSAGE_TOOL_NAME } from '../SendMessageTool/constants.js'
 import { TASK_STOP_TOOL_NAME } from '../TaskStopTool/prompt.js'
 import { AGENT_TOOL_NAME, LEGACY_AGENT_TOOL_NAME } from './constants.js'
+import {
+  acquireAgentLifecycleOwnership,
+  releaseAgentLifecycleOwnership,
+  type AgentLifecycleOwnership,
+} from './agentLifecycleOwnership.js'
 import type { AgentDefinition } from './loadAgentsDir.js'
 export type ResolvedAgentTools = {
   hasWildcard: boolean
@@ -143,7 +148,7 @@ export function filterToolsForAgent({
     }
     // Grant-only tools (Skill) are withheld from EVERY worker unless its own
     // definition named the tool — foreground and background must not differ,
-    // or the orchestrator doctrine is true for one spawn shape and false for
+    // or the worker tool policy is true for one spawn shape and false for
     // the other (owner decision 2026-07-30, C10). Enforced only when the
     // caller supplies the definition's own list; see the field doc above.
     if (
@@ -243,7 +248,7 @@ export function resolveAgentTools(
 
   // The two file-edit aliases are one capability, so denying either denies
   // both. Without this, a role that disallows Edit (Explore, Plan, the
-  // verifiers) receives Apply_patch on the OpenAI path, where the pool swaps
+  // verifiers) receives apply_patch on the OpenAI path, where the pool swaps
   // the alias — a provider swap must not grant a read-only role write access
   // (owner decision 2026-07-30, C11).
   if (
@@ -474,7 +479,6 @@ const MAX_CHANGED_FILE_ENTRIES = 200
 const EDITING_TOOL_NAMES = new Set([
   FILE_EDIT_TOOL_NAME,
   FILE_WRITE_TOOL_NAME,
-  FILE_PATCH_TOOL_NAME,
 ])
 
 type ChangedFileEntry = {
@@ -549,7 +553,7 @@ function pathsForEditingTool(toolName: string, input: unknown): string[] {
     return typeof filePath === 'string' ? [filePath] : []
   }
 
-  if (toolName !== FILE_PATCH_TOOL_NAME) return []
+  if (!isFilePatchToolName(toolName)) return []
 
   const patchInput = input as {
     ops?: Array<{ path?: unknown; moveTo?: unknown }>
@@ -590,7 +594,10 @@ function collectChangedFiles(messages: MessageType[]): {
   for (const message of messages) {
     if (message.type !== 'assistant') continue
     for (const block of message.message.content) {
-      if (block.type !== 'tool_use' || !EDITING_TOOL_NAMES.has(block.name)) {
+      if (
+        block.type !== 'tool_use' ||
+        (!EDITING_TOOL_NAMES.has(block.name) && !isFilePatchToolName(block.name))
+      ) {
         continue
       }
 
@@ -952,12 +959,14 @@ export async function runAsyncAgentLifecycle({
   toolUseContext,
   rootSetAppState,
   agentIdForCleanup,
+  runId,
   enableSummarization,
   getWorktreeResult,
   formatFinalMessage,
   parentTranscriptPath,
   parentSessionId,
   sessionStateTracking,
+  lifecycleOwnership: existingLifecycleOwnership,
 }: {
   taskId: string
   abortController: AbortController
@@ -969,6 +978,7 @@ export async function runAsyncAgentLifecycle({
   toolUseContext: ToolUseContext
   rootSetAppState: SetAppState
   agentIdForCleanup: string
+  runId?: string
   enableSummarization: boolean
   getWorktreeResult: () => Promise<{
     worktreePath?: string
@@ -982,14 +992,19 @@ export async function runAsyncAgentLifecycle({
   /** Parent session ID captured at spawn time. Must be passed explicitly for
    * the same reason as parentTranscriptPath. */
   parentSessionId: string
-  /** Durable Agent Mode/coordinator tracking context. When omitted, terminal
-   * recording must not create Agent Mode state for ordinary subagents. */
+  /** Durable coordinator tracking context. When omitted, terminal recording
+   * must not create coordinator state for ordinary subagents. */
   sessionStateTracking?: {
     mode: string
-    objective: string
     statePath?: string
   }
+  lifecycleOwnership?: AgentLifecycleOwnership
 }): Promise<void> {
+  const lifecycleOwnership =
+    existingLifecycleOwnership ?? acquireAgentLifecycleOwnership(taskId)
+  if (!lifecycleOwnership || lifecycleOwnership.agentId !== taskId) {
+    throw new Error(`Agent ${taskId} already has an active lifecycle`)
+  }
   let stopSummarization: (() => void) | undefined
   const agentMessages: MessageType[] = []
   const tracker = createProgressTracker()
@@ -1004,6 +1019,8 @@ export async function runAsyncAgentLifecycle({
             asAgentId(taskId),
             params,
             rootSetAppState,
+            {},
+            runId,
           )
           stopSummarization = stop
         }
@@ -1015,7 +1032,13 @@ export async function runAsyncAgentLifecycle({
       // means live is always a suffix of disk, so merge is order-correct.
       rootSetAppState(prev => {
         const t = prev.tasks[taskId]
-        if (!isLocalAgentTask(t) || !t.retain) return prev
+        if (
+          !isLocalAgentTask(t) ||
+          !t.retain ||
+          (runId !== undefined && t.runId !== runId)
+        ) {
+          return prev
+        }
         const base = t.messages ?? []
         return {
           ...prev,
@@ -1035,6 +1058,7 @@ export async function runAsyncAgentLifecycle({
         taskId,
         getProgressUpdate(tracker),
         rootSetAppState,
+        runId,
       )
       const lastToolName = getLastToolUseName(message)
       if (lastToolName) {
@@ -1089,7 +1113,7 @@ export async function runAsyncAgentLifecycle({
     // preserved through the failure notification.
     if (agentResult.error) {
       const apiErrorMsg = agentResult.error
-      failAsyncAgent(taskId, apiErrorMsg, rootSetAppState)
+      failAsyncAgent(taskId, apiErrorMsg, rootSetAppState, runId)
       appendSubagentTerminal(parentTranscriptPath, {
         sessionId: parentSessionId,
         agentId: asAgentId(taskId),
@@ -1103,11 +1127,9 @@ export async function runAsyncAgentLifecycle({
         sessionId: parentSessionId,
         agentId: taskId,
         status: 'failed',
-        error: apiErrorMsg,
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+        logForDebugging(`Failed to record worker failure: ${_err}`),
       )
       unregisterActiveSubagent(taskId)
 
@@ -1130,12 +1152,13 @@ export async function runAsyncAgentLifecycle({
           durationMs: agentResult.totalDurationMs,
         },
         toolUseId: toolUseContext.toolUseId,
+        runId,
         ...worktreeResult,
       })
       return
     }
 
-    completeAsyncAgent(agentResult, rootSetAppState)
+    completeAsyncAgent(agentResult, rootSetAppState, runId)
 
     appendSubagentTerminal(parentTranscriptPath, {
       sessionId: parentSessionId,
@@ -1149,10 +1172,9 @@ export async function runAsyncAgentLifecycle({
       sessionId: parentSessionId,
       agentId: taskId,
       status: 'completed',
-      outputSummary: description,
       createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker completion: ${_err}`),
+      logForDebugging(`Failed to record worker completion: ${_err}`),
     )
     unregisterActiveSubagent(taskId)
 
@@ -1190,6 +1212,7 @@ export async function runAsyncAgentLifecycle({
         durationMs: agentResult.totalDurationMs,
       },
       toolUseId: toolUseContext.toolUseId,
+      runId,
       ...worktreeResult,
     })
   } catch (error) {
@@ -1199,7 +1222,7 @@ export async function runAsyncAgentLifecycle({
       // but only this catch handler has agentMessages, so the notification
       // must fire unconditionally. Transition status BEFORE worktree cleanup
       // so TaskOutput unblocks even if git hangs (gh-20236).
-      killAsyncAgent(taskId, rootSetAppState)
+      killAsyncAgent(taskId, rootSetAppState, runId)
       logEvent('tengu_agent_tool_terminated', {
         agent_type:
           metadata.agentType as AnalyticsMetadata_I_VERIFIED_THIS_IS_NOT_CODE_OR_FILEPATHS,
@@ -1223,10 +1246,9 @@ export async function runAsyncAgentLifecycle({
         sessionId: parentSessionId,
         agentId: taskId,
         status: 'killed',
-        outputSummary: description,
         createStateIfMissing: sessionStateTracking,
       }).catch(_err =>
-        logForDebugging(`Failed to record Agent Mode worker kill: ${_err}`),
+      logForDebugging(`Failed to record worker kill: ${_err}`),
       )
       unregisterActiveSubagent(taskId)
       const worktreeResult = await getWorktreeResult()
@@ -1237,6 +1259,7 @@ export async function runAsyncAgentLifecycle({
         status: 'killed',
         setAppState: rootSetAppState,
         toolUseId: toolUseContext.toolUseId,
+        runId,
         finalMessage: partialResult,
         usage: {
           totalTokens: getTokenCountFromTracker(tracker),
@@ -1248,7 +1271,7 @@ export async function runAsyncAgentLifecycle({
       return
     }
     const msg = errorMessage(error)
-    failAsyncAgent(taskId, msg, rootSetAppState)
+    failAsyncAgent(taskId, msg, rootSetAppState, runId)
     appendSubagentTerminal(parentTranscriptPath, {
       sessionId: parentSessionId,
       agentId: asAgentId(taskId),
@@ -1262,11 +1285,9 @@ export async function runAsyncAgentLifecycle({
       sessionId: parentSessionId,
       agentId: taskId,
       status: 'failed',
-      error: msg,
-      outputSummary: description,
       createStateIfMissing: sessionStateTracking,
     }).catch(_err =>
-      logForDebugging(`Failed to record Agent Mode worker failure: ${_err}`),
+      logForDebugging(`Failed to record worker failure: ${_err}`),
     )
     unregisterActiveSubagent(taskId)
     const worktreeResult = await getWorktreeResult()
@@ -1278,6 +1299,7 @@ export async function runAsyncAgentLifecycle({
       error: msg,
       setAppState: rootSetAppState,
       toolUseId: toolUseContext.toolUseId,
+      runId,
       finalMessage: partialResult,
       usage: {
         totalTokens: getTokenCountFromTracker(tracker),
@@ -1289,5 +1311,6 @@ export async function runAsyncAgentLifecycle({
   } finally {
     clearInvokedSkillsForAgent(agentIdForCleanup)
     clearDumpState(agentIdForCleanup)
+    releaseAgentLifecycleOwnership(lifecycleOwnership)
   }
 }

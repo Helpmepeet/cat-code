@@ -160,6 +160,16 @@ function thinkingRow(index: number, content: string): NestedTranscriptRow {
   return { ...blockSource, id: `s:m:${index}:thinking`, kind: 'thinking', content }
 }
 
+function userImageRow(): NestedTranscriptRow {
+  return {
+    ...blockSource,
+    id: 's:m:0:user-image',
+    kind: 'user-image',
+    source: { type: 'base64', mediaType: 'image/png', data: 'AAAA' },
+    isReplay: false,
+  }
+}
+
 /** A scroll parent `findPaneScroller` accepts, holding one transcript. */
 function Pane({
   rows,
@@ -251,6 +261,71 @@ async function click(element: HTMLElement | null | undefined): Promise<void> {
     element?.click()
   })
 }
+
+test('a sent image preview supports every dismiss route and restores thumbnail focus', async () => {
+  const tree = await harness.mount(
+    createElement(TranscriptRowsView, { rows: [userImageRow()] }),
+  )
+  const trigger = tree.container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Expand sent image"]',
+  )
+  expect(trigger).not.toBeNull()
+  trigger?.focus()
+
+  await click(trigger)
+  await harness.nextFrame()
+
+  const dialog = document.body.querySelector<HTMLElement>(
+    '[role="dialog"][aria-label="Sent image preview"]',
+  )
+  expect(dialog).not.toBeNull()
+  expect(
+    dialog?.querySelector<HTMLImageElement>('img')?.getAttribute('src'),
+  ).toBe('data:image/png;base64,AAAA')
+  expect(document.activeElement?.getAttribute('aria-label')).toBe(
+    'Close image preview',
+  )
+
+  await act(async () => {
+    document.dispatchEvent(
+      new globalThis.KeyboardEvent('keydown', {
+        key: 'Escape',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  expect(
+    document.body.querySelector(
+      '[role="dialog"][aria-label="Sent image preview"]',
+    ),
+  ).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+
+  await click(trigger)
+  await harness.nextFrame()
+  await click(
+    document.body.querySelector<HTMLButtonElement>(
+      'button[aria-label="Close image preview"]',
+    ),
+  )
+  expect(
+    document.body.querySelector(
+      '[role="dialog"][aria-label="Sent image preview"]',
+    ),
+  ).toBeNull()
+  expect(document.activeElement).toBe(trigger)
+
+  await click(trigger)
+  await harness.nextFrame()
+  await click(document.body.querySelector<HTMLElement>('[data-window-overlay]'))
+  expect(
+    document.body.querySelector(
+      '[role="dialog"][aria-label="Sent image preview"]',
+    ),
+  ).toBeNull()
+})
 
 test('a successful message copy briefly replaces the copy icon with a checkmark', async () => {
   const clipboardWrites: string[] = []

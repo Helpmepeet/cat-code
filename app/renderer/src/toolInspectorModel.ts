@@ -1,19 +1,18 @@
 import type {
-  ToolCardStatus,
   ToolDiffProjection,
   ToolFamily,
   ToolUseRow,
 } from './transcriptProjector.js'
-import type { Tone } from './tone.js'
 
+/**
+ * Exactly what the drawer paints. The Tool / Summary / Status / raw-Input stack
+ * was removed on 2026-08-13 (see `ToolInspector.tsx`'s header); the model was
+ * left computing its fields, so they are gone from here too rather than sitting
+ * as a second, unread account of a row the card already describes.
+ */
 export type ToolInspectorModel = {
   family: ToolFamily
-  name: string
   summary: string
-  status: ToolCardStatus
-  statusLabel: string
-  statusTone: Tone
-  input: Record<string, unknown>
   diff: ToolDiffProjection | null
   output: string | null
 }
@@ -31,30 +30,11 @@ const SUMMARY_KEYS = [
   'name',
 ] as const
 
-const STATUS_TONE: Record<ToolCardStatus, Tone> = {
-  pending: 'accent',
-  success: 'good',
-  error: 'danger',
-  cancelled: 'warn',
-}
-
-const STATUS_LABEL: Record<ToolCardStatus, string> = {
-  pending: 'running',
-  success: 'success',
-  error: 'error',
-  cancelled: 'stopped',
-}
-
 export function describeToolForInspector(row: ToolUseRow): ToolInspectorModel {
   const input = isRecord(row.input) ? row.input : {}
   return {
     family: row.toolFamily,
-    name: row.toolName,
     summary: deriveSummary(input),
-    status: row.status,
-    statusLabel: STATUS_LABEL[row.status] ?? 'unknown',
-    statusTone: STATUS_TONE[row.status] ?? 'default',
-    input,
     diff: row.result?.diff ?? null,
     output: selectOutput(row, input),
   }

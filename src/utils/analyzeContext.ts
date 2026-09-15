@@ -1,7 +1,5 @@
-import { feature } from 'bun:bundle'
 import type { Anthropic } from '@anthropic-ai/sdk'
 import {
-  getAgentModeSystemPromptSections,
   getSystemPrompt,
   SYSTEM_PROMPT_DYNAMIC_BOUNDARY,
 } from 'src/constants/prompts.js'
@@ -1044,23 +1042,12 @@ export async function analyzeContextUsage(
   const additionalWorkingDirectories = Array.from(
     toolPermissionContext.additionalWorkingDirectories.keys(),
   )
-  const isAgentModeActive = isEnvTruthy(process.env.CLAUDE_CODE_AGENT_MODE)
-  const [defaultSystemPrompt, agentModePromptSections] = await Promise.all([
-    getSystemPrompt(
-      tools,
-      runtimeModel,
-      additionalWorkingDirectories,
-      toolUseContext?.options.mcpClients,
-    ),
-    isAgentModeActive && !toolUseContext?.options.customSystemPrompt
-      ? getAgentModeSystemPromptSections(
-          tools,
-          runtimeModel,
-          additionalWorkingDirectories,
-          toolUseContext?.options.mcpClients,
-        )
-      : Promise.resolve(undefined),
-  ])
+  const defaultSystemPrompt = await getSystemPrompt(
+    tools,
+    runtimeModel,
+    additionalWorkingDirectories,
+    toolUseContext?.options.mcpClients,
+  )
   const effectiveSystemPrompt = buildEffectiveSystemPrompt({
     mainThreadAgentDefinition,
     toolUseContext: toolUseContext ?? {
@@ -1069,7 +1056,6 @@ export async function analyzeContextUsage(
     customSystemPrompt: toolUseContext?.options.customSystemPrompt,
     defaultSystemPrompt,
     appendSystemPrompt: toolUseContext?.options.appendSystemPrompt,
-    agentModePromptSections,
   })
 
   // Critical operations that should not fail due to skills
@@ -1239,24 +1225,9 @@ export async function analyzeContextUsage(
   // Reserved space after messages (not counted in actualUsage shown to user).
   // Reactive prefix compaction does NOT skip this: it changes which compaction
   // runs at the autocompact threshold, not whether the threshold fires, so the
-  // reserved buffer stays real. Context-collapse (marble_origami) does skip it
-  // — collapse owns the threshold ladder and autocompact is suppressed in
-  // shouldAutoCompact, so the 33k buffer shown here would be a lie.
+  // reserved buffer stays real.
   let reservedTokens = 0
-  let skipReservedBuffer = false
-  if (feature('CONTEXT_COLLAPSE')) {
-    /* eslint-disable @typescript-eslint/no-require-imports */
-    const { isContextCollapseEnabled } =
-      require('../services/contextCollapse/index.js') as typeof import('../services/contextCollapse/index.js')
-    /* eslint-enable @typescript-eslint/no-require-imports */
-    if (isContextCollapseEnabled()) {
-      skipReservedBuffer = true
-    }
-  }
-  if (skipReservedBuffer) {
-    // No buffer category pushed — collapse manages headroom itself and doesn't
-    // need a visible reservation in the grid.
-  } else if (isAutoCompact && autoCompactThreshold !== undefined) {
+  if (isAutoCompact && autoCompactThreshold !== undefined) {
     // Autocompact buffer (from effective context)
     reservedTokens = contextWindow - autoCompactThreshold
     cats.push({

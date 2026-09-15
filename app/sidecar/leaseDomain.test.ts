@@ -1,16 +1,15 @@
 /**
- * P4-32b — the Codex lease read seam (L1, `decisions/ORCHESTRATOR-IN-SESSION.md`
- * §7, ruled §10).
+ * P4-32b — the Codex lease read seam (L1, ruled 2026-07-30).
  *
  * Two things are load-bearing here and both get a live-path test rather than a
  * shape test:
  *
  *  1. **The join key.** `LeaseOwnerRow.ownerId` must equal the roster's
- *     `AgentModeWorkerItem.agentId`, or the worker detail renders someone else's
+ *     `LiveWorkerItem.agentId`, or the worker detail renders someone else's
  *     account. So the round-trip below puts a lease in the ENGINE's own map under
  *     the id `AgentTool` registers, looks it up through the engine's own
  *     `getCodexLeaseForOwner`, builds the roster with the REAL
- *     `agentModeSnapshot`, and asserts the two ids meet.
+ *     `workersSnapshot`, and asserts the two ids meet.
  *  2. **Redaction.** The projection must be `secretGuard`-clean even when the pool
  *     holds tokens.
  */
@@ -28,7 +27,7 @@ import type { TaskState } from '../../src/tasks/types.js'
 import type { AppStateStore } from '../../src/state/AppStateStore.js'
 import type { LeaseSnapshotFrame } from '../shared/protocol.js'
 import { scanForSecrets } from '../shared/secretGuard.js'
-import { agentModeSnapshot } from './agentModeDomain.js'
+import { workersSnapshot } from './workersDomain.js'
 import {
   createSidecarLeaseDomain,
   leaseSnapshot,
@@ -374,16 +373,71 @@ describe('domain wiring', () => {
       },
     } as unknown as AppStateStore
     let notified = 0
-    const stop = createSidecarLeaseDomain(store, { reader: fakeReader() }).subscribe(
-      () => {
-        notified += 1
-      },
-    )
+    const stop = createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: () => () => {},
+    }).subscribe(() => {
+      notified += 1
+    })
     expect(listeners).toHaveLength(1)
     listeners[0]!()
     expect(notified).toBe(1)
     stop()
     expect(unsubscribed).toBe(1)
+  })
+
+  /*
+   * The store is not enough. A lease also MOVES with no task mutation at all —
+   * `failoverCodexLease` mid-turn, an account switch reassigning every
+   * `follow-main` lease — and while this domain subscribed to the store ONLY,
+   * nothing re-emitted `lease.snapshot` until some unrelated app-state change
+   * happened to fire. The roster went on naming the previous account.
+   */
+  test('subscribe also rides the lease manager, with no app-state mutation', () => {
+    const leaseListeners: Array<() => void> = []
+    const store = {
+      getState: () => ({ tasks: {} }),
+      subscribe: () => () => {},
+    } as unknown as AppStateStore
+    let notified = 0
+    createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: fn => {
+        leaseListeners.push(fn)
+        return () => {}
+      },
+    }).subscribe(() => {
+      notified += 1
+    })
+
+    expect(leaseListeners).toHaveLength(1)
+    leaseListeners[0]!()
+    leaseListeners[0]!()
+    expect(notified).toBe(2)
+  })
+
+  test('the returned unsubscribe detaches BOTH sources, and twice is a no-op', () => {
+    let storeDetached = 0
+    let leaseDetached = 0
+    const store = {
+      getState: () => ({ tasks: {} }),
+      subscribe: () => () => {
+        storeDetached += 1
+      },
+    } as unknown as AppStateStore
+    const stop = createSidecarLeaseDomain(store, {
+      reader: fakeReader(),
+      subscribeToLeaseChanges: () => () => {
+        leaseDetached += 1
+      },
+    }).subscribe(() => {})
+
+    stop()
+    expect(storeDetached).toBe(1)
+    expect(leaseDetached).toBe(1)
+    stop()
+    expect(storeDetached).toBe(1)
+    expect(leaseDetached).toBe(1)
   })
 })
 
@@ -403,7 +457,7 @@ describe('the join key against the real engine lease manager', () => {
     })
 
     const tasks = { [agentId]: localAgentTask({ agentId }) }
-    const roster = agentModeSnapshot(tasks, null, true)
+    const roster = workersSnapshot(tasks)
     expect(roster.workers).toHaveLength(1)
     const workerAgentId = roster.workers[0]!.agentId
 

@@ -745,36 +745,56 @@ export async function removeTeammateFromTeamFile(
 }
 
 /**
+ * Adds or removes a pane ID in the hidden panes list. A pane already in the
+ * wanted state writes nothing but still reports success.
+ */
+async function setPaneHidden(
+  teamName: string,
+  paneId: string,
+  hidden: boolean,
+): Promise<boolean> {
+  const verb = hidden ? 'add' : 'remove'
+  try {
+    await transactTeamFile(teamName, teamFile => {
+      const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
+      if (hiddenPaneIds.includes(paneId) === hidden) {
+        return { teamFile, result: undefined }
+      }
+      return {
+        teamFile: {
+          ...teamFile,
+          hiddenPaneIds: hidden
+            ? [...hiddenPaneIds, paneId]
+            : hiddenPaneIds.filter(id => id !== paneId),
+        },
+        result: undefined,
+      }
+    })
+    logForDebugging(
+      hidden
+        ? `[TeammateTool] Added ${paneId} to hidden panes for team ${teamName}`
+        : `[TeammateTool] Removed ${paneId} from hidden panes for team ${teamName}`,
+    )
+    return true
+  } catch (e) {
+    logForDebugging(
+      `[TeammateTool] Cannot ${verb} hidden pane ${paneId} for "${teamName}": ${errorMessage(e)}`,
+    )
+    return false
+  }
+}
+
+/**
  * Adds a pane ID to the hidden panes list in the team file.
  * @param teamName - The name of the team
  * @param paneId - The pane ID to hide
  * @returns true if the pane was added to hidden list, false if team doesn't exist
  */
-export async function addHiddenPaneId(
+export function addHiddenPaneId(
   teamName: string,
   paneId: string,
 ): Promise<boolean> {
-  try {
-    await transactTeamFile(teamName, teamFile => {
-      const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-      if (hiddenPaneIds.includes(paneId)) {
-        return { teamFile, result: undefined }
-      }
-      return {
-        teamFile: { ...teamFile, hiddenPaneIds: [...hiddenPaneIds, paneId] },
-        result: undefined,
-      }
-    })
-    logForDebugging(
-      `[TeammateTool] Added ${paneId} to hidden panes for team ${teamName}`,
-    )
-    return true
-  } catch (e) {
-    logForDebugging(
-      `[TeammateTool] Cannot add hidden pane ${paneId} for "${teamName}": ${errorMessage(e)}`,
-    )
-    return false
-  }
+  return setPaneHidden(teamName, paneId, true)
 }
 
 /**
@@ -783,34 +803,11 @@ export async function addHiddenPaneId(
  * @param paneId - The pane ID to show (remove from hidden list)
  * @returns true if the pane was removed from hidden list, false if team doesn't exist
  */
-export async function removeHiddenPaneId(
+export function removeHiddenPaneId(
   teamName: string,
   paneId: string,
 ): Promise<boolean> {
-  try {
-    await transactTeamFile(teamName, teamFile => {
-      const hiddenPaneIds = teamFile.hiddenPaneIds ?? []
-      if (!hiddenPaneIds.includes(paneId)) {
-        return { teamFile, result: undefined }
-      }
-      return {
-        teamFile: {
-          ...teamFile,
-          hiddenPaneIds: hiddenPaneIds.filter(id => id !== paneId),
-        },
-        result: undefined,
-      }
-    })
-    logForDebugging(
-      `[TeammateTool] Removed ${paneId} from hidden panes for team ${teamName}`,
-    )
-    return true
-  } catch (e) {
-    logForDebugging(
-      `[TeammateTool] Cannot remove hidden pane ${paneId} for "${teamName}": ${errorMessage(e)}`,
-    )
-    return false
-  }
+  return setPaneHidden(teamName, paneId, false)
 }
 
 /**

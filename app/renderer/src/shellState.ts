@@ -237,17 +237,38 @@ export function selectPaneSessions(state: ShellState): SessionDescriptor[] {
 /**
  * The active id after the pane roster changes. Live tabs and cached previews are
  * both valid focus owners; only a close/reap that removes the active id moves
- * focus to the first remaining pane (or null).
+ * focus to the immediately preceding open tab, or the next tab when there is no
+ * preceding one.
  */
 export function activeAfterPaneChange(
   current: SessionId | null,
   paneOrder: readonly SessionId[],
+  openOrder: readonly SessionId[] = paneOrder,
 ): SessionId | null {
   if (current === null) return null
   if (paneOrder.includes(current)) return current
+
+  const openIndex = openOrder.indexOf(current)
+  if (openIndex >= 0) {
+    const remaining = new Set(paneOrder)
+    for (let index = openIndex - 1; index >= 0; index -= 1) {
+      const candidate = openOrder[index]
+      if (candidate !== undefined && remaining.has(candidate)) return candidate
+    }
+    for (let index = openIndex + 1; index < openOrder.length; index += 1) {
+      const candidate = openOrder[index]
+      if (candidate !== undefined && remaining.has(candidate)) return candidate
+    }
+  }
+
   return paneOrder[0] ?? null
 }
 
+/**
+ * One session by id. Its last production caller left with the creation seam
+ * (2026-09-05); it stays as this module's read API beside `selectSessions`,
+ * because the alternative is reducer tests reaching into `byId` directly.
+ */
 export function selectSession(
   state: ShellState,
   sessionId: SessionId | null,

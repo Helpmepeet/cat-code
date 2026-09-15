@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { setSharedUsageCacheDirectoryForTest } from './api/codexUsageSharedCache.js'
 import { chmod, lstat, mkdir, mkdtemp, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { CodexStatus, CodexStatusDecisionAction } from './api/codexStatus.js'
@@ -47,6 +48,7 @@ import type { AssistantMessage, Message } from '../types/message.js'
 
 const NOW = 1_700_000_000_000
 const cleanup: string[] = []
+beforeEach(() => setSharedUsageCacheDirectoryForTest(null))
 
 afterEach(async () => {
   deferredRunnerForTest.clearForegroundRegistrations()

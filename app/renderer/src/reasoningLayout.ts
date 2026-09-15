@@ -28,8 +28,8 @@
  * `SettingsSchema` key the sidecar writes to disk — including `reasoningDisplay`
  * ('off' | 'summary' | 'raw'), which decides WHICH reasoning is shown and is a
  * different axis from this one. Layout is a desktop rendering choice with no
- * engine meaning, so it persists like the workspace layout: versioned JSON in
- * the renderer's own storage, best-effort (`workspaceLayout.ts:71`).
+ * engine meaning, so it persists through the shared codec (`viewPreference.ts`):
+ * versioned JSON in the renderer's own storage, best-effort.
  */
 
 import { createContext } from 'react'
@@ -37,6 +37,11 @@ import type {
   NestedTranscriptRow,
   TranscriptDisplayItem,
 } from './transcriptProjector.js'
+import {
+  readViewPreference,
+  writeViewPreference,
+  type ViewPreferenceStorage,
+} from './viewPreference.js'
 
 export const REASONING_LAYOUT_STORAGE_KEY = 'catcode.reasoningLayout.v1'
 
@@ -66,13 +71,6 @@ export const REASONING_WITHHELD_TEXT = 'reasoning not shared by the provider'
  */
 export const REASONING_HEADING_MAX_CHARS = 140
 
-type ReasoningLayoutStorage = Pick<Storage, 'getItem' | 'setItem'>
-
-type PersistedReasoningLayout = {
-  version: 1
-  mode: ReasoningLayoutMode
-}
-
 export function isReasoningLayoutMode(
   value: unknown,
 ): value is ReasoningLayoutMode {
@@ -83,32 +81,21 @@ export function isReasoningLayoutMode(
 }
 
 export function readReasoningLayoutFromStorage(
-  storage: ReasoningLayoutStorage | null,
+  storage: ViewPreferenceStorage | null,
 ): ReasoningLayoutMode | null {
-  if (!storage) return null
-  try {
-    const raw = storage.getItem(REASONING_LAYOUT_STORAGE_KEY)
-    if (!raw) return null
-    const value = JSON.parse(raw) as Partial<PersistedReasoningLayout>
-    if (value.version !== 1 || !isReasoningLayoutMode(value.mode)) return null
-    return value.mode
-  } catch {
-    return null
-  }
+  return readViewPreference(
+    storage,
+    REASONING_LAYOUT_STORAGE_KEY,
+    'mode',
+    value => (isReasoningLayoutMode(value) ? value : null),
+  )
 }
 
 export function writeReasoningLayoutToStorage(
-  storage: ReasoningLayoutStorage | null,
+  storage: ViewPreferenceStorage | null,
   mode: ReasoningLayoutMode,
 ): void {
-  if (!storage) return
-  try {
-    const value: PersistedReasoningLayout = { version: 1, mode }
-    storage.setItem(REASONING_LAYOUT_STORAGE_KEY, JSON.stringify(value))
-  } catch {
-    // Renderer-owned view persistence is best-effort; a storage failure must not
-    // affect the live session/control-plane state (workspaceLayout.ts:88).
-  }
+  writeViewPreference(storage, REASONING_LAYOUT_STORAGE_KEY, 'mode', mode)
 }
 
 export type ReasoningLayoutContextValue = {

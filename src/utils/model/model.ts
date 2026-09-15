@@ -28,6 +28,7 @@ import type { PermissionMode } from '../permissions/PermissionMode.js'
 import {
   getAPIProvider,
   getConfiguredAnthropicProvider,
+  isAnthropicCloudProvider,
   isFirstPartyAnthropicBaseUrl,
 } from './providers.js'
 import { LIGHTNING_BOLT } from '../../constants/figures.js'
@@ -228,8 +229,10 @@ export function getDefaultOpusModel(): ModelName {
   }
   // 3P providers (Bedrock, Vertex, Foundry) — kept as a separate branch
   // even when values match, since 3P availability lags firstParty and
-  // these will diverge again at the next model launch.
-  if (getAPIProvider() !== 'firstParty') {
+  // these will diverge again at the next model launch. The Codex session
+  // provider ('openai') is NOT one of them and takes the current default;
+  // see isAnthropicCloudProvider().
+  if (isAnthropicCloudProvider()) {
     return getModelStrings().opus46
   }
   return getModelStrings().opus5
@@ -428,6 +431,9 @@ export function firstPartyNameToCanonical(name: ModelName): ModelShortName {
   if (name.includes('gpt-5.6-luna')) {
     return 'gpt-5.6-luna'
   }
+  if (name.includes('gpt-6-astra')) {
+    return 'gpt-6-astra'
+  }
   const match = name.match(/(claude-(\d+-\d+-)?\w+)/)
   if (match && match[1]) {
     return match[1]
@@ -525,6 +531,7 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
     if (model === 'gpt-5.6-sol') return 'GPT 5.6 Sol'
     if (model === 'gpt-5.6-terra') return 'GPT 5.6 Terra'
     if (model === 'gpt-5.6-luna') return 'GPT 5.6 Luna'
+    if (model === 'gpt-6-astra') return 'GPT 6 Astra'
     if (model === 'gpt-5.2') return 'GPT 5.2'
     return model
   }
@@ -578,6 +585,8 @@ export function getPublicModelDisplayName(model: ModelName): string | null {
       return 'GPT-5.6 Terra'
     case getModelStrings().gpt56luna:
       return 'GPT-5.6 Luna'
+    case getModelStrings().gpt6astra:
+      return 'GPT-6 Astra'
     default:
       return null
   }
@@ -840,6 +849,9 @@ export function getMarketingNameForModel(modelId: string): string | undefined {
   }
   if (canonical.includes('gpt-5.6-luna')) {
     return 'GPT-5.6 Luna'
+  }
+  if (canonical.includes('gpt-6-astra')) {
+    return 'GPT-6 Astra'
   }
   return undefined
 }

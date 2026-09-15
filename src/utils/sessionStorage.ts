@@ -52,8 +52,11 @@ import {
   type DeferredContinuationResultEntryV1,
   type Entry,
   type FileHistorySnapshotMessage,
+  type LegacySessionMode,
   type LogOption,
   type PersistedWorktreeSession,
+  normalizeSessionMode,
+  type SessionMode,
   type SerializedMessage,
   sortLogs,
   type SubagentSpawnedMessage,
@@ -274,6 +277,32 @@ export function getTranscriptPath(): string {
   return join(projectDir, `${getSessionId()}.jsonl`)
 }
 
+/**
+ * Latch the current session's transcript to the project dir it resolves to
+ * right now, so a later `setOriginalCwd` can't move it.
+ *
+ * Callers that chdir the session mid-flight (EnterWorktreeTool) leave
+ * `Project.sessionFile` pointing at the file materialized under the ORIGINAL
+ * project dir while `getTranscriptPath()` — and everything derived from it:
+ * `getAgentTranscriptPath`, `getAgentTranscriptPathForSession`,
+ * `listAgentMetadataForSession`, the remote-agents dir, and the hook payload's
+ * `transcript_path` — would start resolving under the new cwd's project dir,
+ * a file nobody writes.
+ *
+ * This is the same fix resume/branch already has (see the comment on
+ * `getTranscriptPathForSession`): pin `sessionProjectDir` rather than let the
+ * path derive from a cwd that moved. `switchSession` is the only setter, by
+ * design (CC-34); re-passing the current session id makes its subscribers
+ * no-ops (`setCodexPromptCacheKey` skips on unchanged key, the PID file
+ * rewrites the same id).
+ */
+export function pinSessionProjectDir(): void {
+  switchSession(
+    getSessionId(),
+    getSessionProjectDir() ?? getProjectDir(getOriginalCwd()),
+  )
+}
+
 export function getTranscriptPathForSession(sessionId: string): string {
   // When asking for the CURRENT session's transcript, honor sessionProjectDir
   // the same way getTranscriptPath() does. Without this, hooks get a
@@ -373,6 +402,9 @@ export type AgentMetadata = {
   agentType: string
   /** Friendly system/user-facing name for targeting this subagent. */
   agentName?: string
+  /** Explicit cwd override assigned by AgentTool call (mutually exclusive with
+   * worktree isolation). */
+  assignedCwd?: string
   /** Worktree path if the agent was spawned with isolation: "worktree" */
   worktreePath?: string
   /** Original task description from the AgentTool input. Persisted so a
@@ -393,8 +425,9 @@ export type AgentMetadata = {
  * a fork silently degrades to general-purpose (4KB system prompt, no
  * inherited history). Sidecar file avoids JSONL schema changes.
  *
- * Also stores the worktreePath when the agent was spawned with worktree
- * isolation, enabling resume to restore the correct cwd.
+ * Also stores an explicit assignedCwd (when provided), and the worktreePath
+ * when the agent was spawned with worktree isolation, enabling resume to
+ * restore the correct cwd.
  */
 export async function writeAgentMetadata(
   agentId: AgentId,
@@ -514,6 +547,40 @@ function getOwnedTranscriptPath(): string | null {
 }
 
 /**
+ * Shared body of the diagnostic appenders below: resolve the owning transcript,
+ * stamp the standard `system` envelope, append, and swallow any failure.
+ *
+ * The lease assertion runs OUTSIDE the try on purpose, so a lease violation
+ * still throws to the caller instead of disappearing into the best-effort
+ * catch. `agentId` picks the agent-owned transcript when the record belongs to
+ * a subagent; a null path means nothing owns a transcript, so nothing is
+ * written (a diagnostic must never mint an orphan transcript).
+ */
+function appendSystemDiagnostic(
+  subtype: string,
+  entry: Record<string, unknown>,
+  options?: { agentId?: AgentId; includeSessionId?: boolean },
+): void {
+  assertActiveTranscriptLease(getSessionId())
+  try {
+    const transcriptPath = options?.agentId
+      ? getOwnedAgentTranscriptPath(options.agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null) return
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype,
+      ...(options?.includeSessionId ? { sessionId: getSessionId() } : {}),
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      ...entry,
+    })
+  } catch {
+    // Best-effort — don't let diagnostic writes crash the API path.
+  }
+}
+
+/**
  * Append a codex_request_start diagnostic entry to the current session JSONL.
  *
  * The start-side counterpart of `recordCodexSendPath` /
@@ -545,20 +612,7 @@ export function recordCodexRequestStart(entry: {
   account_id_prefix: string | null
   model: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_request_start',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_request_start', entry)
 }
 
 /**
@@ -589,20 +643,7 @@ export function recordCodexSendPath(entry: {
   input_tokens?: number
   route_headers?: Record<string, string>
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_send_path',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_send_path', entry)
 }
 
 /**
@@ -639,20 +680,7 @@ export function recordCodexStreamSurface(entry: {
   error_name?: string
   fallback_error_name?: string
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'codex_stream_surface',
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('codex_stream_surface', entry)
 }
 
 /**
@@ -804,23 +832,10 @@ export function recordPromptCacheBreak(entry: {
   newEffortValue: string
   triggeringCommand?: string | null
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'prompt_cache_break',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('prompt_cache_break', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 /**
@@ -868,23 +883,10 @@ export function recordPostTurnStall(entry: {
   query_source: string
   agentId?: AgentId
 }): void {
-  assertActiveTranscriptLease(getSessionId())
-  try {
-    const transcriptPath = entry.agentId
-      ? getOwnedAgentTranscriptPath(entry.agentId)
-      : getOwnedTranscriptPath()
-    if (transcriptPath === null) return
-    appendEntryToFile(transcriptPath, {
-      type: 'system',
-      subtype: 'post_turn_stall',
-      sessionId: getSessionId(),
-      uuid: randomUUID(),
-      timestamp: new Date().toISOString(),
-      ...entry,
-    })
-  } catch {
-    // Best-effort — don't let diagnostic writes crash the API path.
-  }
+  appendSystemDiagnostic('post_turn_stall', entry, {
+    agentId: entry.agentId,
+    includeSessionId: true,
+  })
 }
 
 export type RemoteAgentMetadata = {
@@ -1108,12 +1110,14 @@ const REMOTE_FLUSH_INTERVAL_MS = 10
 class Project {
   // Minimal cache for current session only (not all sessions)
   currentSessionTag: string | undefined
+  /** Archive is a user-hidden flag, not a delete: the transcript is untouched. */
+  currentSessionArchived: boolean | undefined
   currentSessionTitle: string | undefined
   currentSessionAgentName: string | undefined
   currentSessionAgentColor: string | undefined
   currentSessionLastPrompt: string | undefined
   currentSessionAgentSetting: string | undefined
-  currentSessionMode: 'agent' | 'coordinator' | 'normal' | undefined
+  currentSessionMode: SessionMode | undefined
   // Tri-state: undefined = no goal metadata seen yet, null = cleared,
   // object = current goal state. reAppendSessionMetadata writes null so
   // resume preserves a cleared goal across compaction and exit.
@@ -1380,6 +1384,15 @@ class Project {
         this.currentSessionTag = tailTag || undefined
       }
     }
+    // Archive is a boolean, so it cannot reuse extractLastJsonStringField's
+    // empty-string-means-cleared convention: un-archiving writes `false`, which
+    // is a value, not an absence. The last entry wins either way.
+    const archivedLine = tailLines.findLast(l =>
+      l.startsWith('{"type":"archived"'),
+    )
+    if (archivedLine) {
+      this.currentSessionArchived = /"archived":\s*true/.test(archivedLine)
+    }
 
     // lastPrompt is re-appended so readLiteMetadata can show what the
     // user was most recently doing. Written first so customTitle/tag/etc
@@ -1404,6 +1417,15 @@ class Project {
       appendEntryToFile(this.sessionFile, {
         type: 'tag',
         tag: this.currentSessionTag,
+        sessionId,
+      })
+    }
+    // Re-appended only when archived: the absence of the entry is the default,
+    // so an un-archived session writes nothing here and stays cheap.
+    if (this.currentSessionArchived) {
+      appendEntryToFile(this.sessionFile, {
+        type: 'archived',
+        archived: true,
         sessionId,
       })
     }
@@ -3003,6 +3025,42 @@ export function buildConversationChain(
   return recoverOrphanedParallelToolResults(messages, transcript, seen)
 }
 
+/**
+ * Rewind markers store the last user/assistant UUID, while a continuation may
+ * be parented through retained attachment or system records after that UUID.
+ * Only walk metadata descendants before the first main-chain user/assistant
+ * child so discarded branches cannot become continuation anchors.
+ */
+function collectActiveConversationMetadataDescendants(
+  messages: Iterable<TranscriptMessage>,
+  root: UUID | null,
+): Set<UUID> {
+  const descendants = new Set<UUID>()
+  let rootSeen = root === null
+
+  for (const message of messages) {
+    if (message.isSidechain) continue
+    if (message.uuid === root) {
+      rootSeen = true
+      continue
+    }
+    if (!rootSeen) continue
+
+    const parent = message.parentUuid
+    const extendsActiveBranch =
+      root === null
+        ? parent === null || (parent !== null && descendants.has(parent))
+        : parent === root ||
+          (parent !== null && descendants.has(parent))
+    if (!extendsActiveBranch) continue
+
+    if (message.type === 'user' || message.type === 'assistant') break
+    descendants.add(message.uuid)
+  }
+
+  return descendants
+}
+
 export type ActiveConversationSelection = {
   messages: TranscriptMessage[]
   tip: TranscriptMessage | null
@@ -3709,6 +3767,26 @@ export function getCurrentThreadGoal(sessionId?: string): ThreadGoal | null {
   }
 }
 
+/**
+ * Archive or un-archive a session. Archive HIDES a session from the default
+ * catalog view; it never removes or rewrites the transcript, so it is fully
+ * reversible and safe to apply to a session another process is reading.
+ *
+ * Written as an appended metadata entry, the same mechanism `saveTag` uses, so
+ * it survives without a live engine for that session and the last entry wins.
+ */
+export async function setSessionArchived(
+  sessionId: UUID,
+  archived: boolean,
+  fullPath?: string,
+): Promise<void> {
+  const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
+  appendEntryToFile(resolvedPath, { type: 'archived', archived, sessionId })
+  if (sessionId === getSessionId()) {
+    getProject().currentSessionArchived = archived || undefined
+  }
+}
+
 export async function saveTag(sessionId: UUID, tag: string, fullPath?: string) {
   // Fall back to computed path if fullPath is not provided
   const resolvedPath = fullPath ?? getTranscriptPathForSession(sessionId)
@@ -3783,7 +3861,7 @@ export function restoreSessionMetadata(meta: {
   agentName?: string
   agentColor?: string
   agentSetting?: string
-  mode?: 'agent' | 'coordinator' | 'normal'
+  mode?: LegacySessionMode
   threadGoal?: ThreadGoal | null
   worktreeSession?: PersistedWorktreeSession | null
   prNumber?: number
@@ -3798,7 +3876,8 @@ export function restoreSessionMetadata(meta: {
   if (meta.agentName) project.currentSessionAgentName = meta.agentName
   if (meta.agentColor) project.currentSessionAgentColor = meta.agentColor
   if (meta.agentSetting) project.currentSessionAgentSetting = meta.agentSetting
-  if (meta.mode) project.currentSessionMode = meta.mode
+  const mode = normalizeSessionMode(meta.mode)
+  if (mode) project.currentSessionMode = mode
   if (meta.threadGoal !== undefined)
     project.currentSessionThreadGoal = meta.threadGoal
   if (meta.worktreeSession !== undefined)
@@ -3902,7 +3981,7 @@ export function cacheSessionTitle(customTitle: string): void {
  * first user message, and re-stamped by reAppendSessionMetadata on exit.
  * Cache-only here to avoid creating metadata-only session files at startup.
  */
-export function saveMode(mode: 'agent' | 'coordinator' | 'normal'): void {
+export function saveMode(mode: SessionMode): void {
   getProject().currentSessionMode = mode
 }
 
@@ -4037,7 +4116,7 @@ export async function loadFullLog(log: LogOption): Promise<LogOption> {
       agentName: sessionId ? agentNames.get(sessionId) : log.agentName,
       agentColor: sessionId ? agentColors.get(sessionId) : log.agentColor,
       agentSetting: sessionId ? agentSettings.get(sessionId) : log.agentSetting,
-      mode: sessionId ? (modes.get(sessionId) as LogOption['mode']) : log.mode,
+      mode: sessionId ? modes.get(sessionId) : normalizeSessionMode(log.mode),
       worktreeSession:
         sessionId && worktreeStates.has(sessionId)
           ? worktreeStates.get(sessionId)
@@ -4138,6 +4217,7 @@ const METADATA_TYPE_MARKERS = [
   '"type":"summary"',
   '"type":"custom-title"',
   '"type":"tag"',
+  '"type":"archived"',
   '"type":"agent-name"',
   '"type":"agent-color"',
   '"type":"agent-setting"',
@@ -4341,6 +4421,7 @@ function findActiveConversationTipInBuffer(
   let activeTip: ActiveConversationTipEntry | undefined
   let activeRoot: UUID | null | undefined
   const activeDescendants = new Set<UUID>()
+  const bufferedMessages = new Map<UUID, TranscriptMessage>()
   let pos = 0
 
   while (pos < buf.length) {
@@ -4366,13 +4447,20 @@ function findActiveConversationTipInBuffer(
             : undefined
         activeRoot = activeTip?.tipUuid
         activeDescendants.clear()
+        if (activeTip) {
+          for (const uuid of collectActiveConversationMetadataDescendants(
+            bufferedMessages.values(),
+            activeTip.tipUuid,
+          )) {
+            activeDescendants.add(uuid)
+          }
+        }
       } catch {
         activeTip = undefined
         activeRoot = undefined
         activeDescendants.clear()
       }
     } else if (
-      activeTip &&
       lineEnd - pos > PARENT_PREFIX.length &&
       buf.compare(
         PARENT_PREFIX,
@@ -4387,22 +4475,25 @@ function findActiveConversationTipInBuffer(
           buf.toString('utf8', pos, lineEnd),
         ) as Entry
         if (isTranscriptMessage(candidate) && !candidate.isSidechain) {
-          const parent = candidate.parentUuid
-          const extendsActiveBranch =
-            activeRoot === null
-              ? parent === null ||
-                (parent !== null && activeDescendants.has(parent))
-              : parent === activeRoot ||
-                (parent !== null && activeDescendants.has(parent))
-          if (extendsActiveBranch) {
-            activeDescendants.add(candidate.uuid)
-            if (
-              candidate.type === 'user' ||
-              candidate.type === 'assistant'
-            ) {
-              activeTip = { ...activeTip, tipUuid: candidate.uuid }
+          if (activeTip) {
+            const parent = candidate.parentUuid
+            const extendsActiveBranch =
+              activeRoot === null
+                ? parent === null ||
+                  (parent !== null && activeDescendants.has(parent))
+                : parent === activeRoot ||
+                  (parent !== null && activeDescendants.has(parent))
+            if (extendsActiveBranch) {
+              activeDescendants.add(candidate.uuid)
+              if (
+                candidate.type === 'user' ||
+                candidate.type === 'assistant'
+              ) {
+                activeTip = { ...activeTip, tipUuid: candidate.uuid }
+              }
             }
           }
+          bufferedMessages.set(candidate.uuid, candidate)
         }
       } catch {
         // Malformed transcript lines do not make an older marker authoritative.
@@ -4611,13 +4702,14 @@ export async function loadTranscriptFile(
   summaries: Map<UUID, string>
   customTitles: Map<UUID, string>
   tags: Map<UUID, string>
+  archived: Map<UUID, boolean>
   agentNames: Map<UUID, string>
   agentColors: Map<UUID, string>
   agentSettings: Map<UUID, string>
   prNumbers: Map<UUID, number>
   prUrls: Map<UUID, string>
   prRepositories: Map<UUID, string>
-  modes: Map<UUID, string>
+  modes: Map<UUID, SessionMode>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
@@ -4636,13 +4728,14 @@ export async function loadTranscriptFile(
   const summaries = new Map<UUID, string>()
   const customTitles = new Map<UUID, string>()
   const tags = new Map<UUID, string>()
+  const archived = new Map<UUID, boolean>()
   const agentNames = new Map<UUID, string>()
   const agentColors = new Map<UUID, string>()
   const agentSettings = new Map<UUID, string>()
   const prNumbers = new Map<UUID, number>()
   const prUrls = new Map<UUID, string>()
   const prRepositories = new Map<UUID, string>()
-  const modes = new Map<UUID, string>()
+  const modes = new Map<UUID, SessionMode>()
   const threadGoals = new Map<UUID, ThreadGoal | null>()
   const worktreeStates = new Map<UUID, PersistedWorktreeSession | null>()
   const fileHistorySnapshots = new Map<UUID, FileHistorySnapshotMessage>()
@@ -4662,6 +4755,46 @@ export async function loadTranscriptFile(
   let activeConversationTip: ActiveConversationTipEntry | undefined
   let activeConversationRoot: UUID | null | undefined
   const activeConversationDescendants = new Set<UUID>()
+
+  // Session-scoped metadata entries. Both passes below read them — the
+  // pre-boundary metadata-only scan and the main entry walk — so the dispatch
+  // lives here once: a new metadata entry type added to only one of the two
+  // copies would load from short transcripts and silently vanish from
+  // compacted ones. Returns whether the entry was one of these types.
+  const applySessionMetadataEntry = (entry: Entry): boolean => {
+    if (entry.type === 'summary' && entry.leafUuid) {
+      summaries.set(entry.leafUuid, entry.summary)
+    } else if (entry.type === 'custom-title' && entry.sessionId) {
+      setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
+    } else if (entry.type === 'tag' && entry.sessionId) {
+      setLatestMapValue(tags, entry.sessionId, entry.tag)
+    } else if (entry.type === 'archived' && entry.sessionId) {
+      setLatestMapValue(archived, entry.sessionId, entry.archived === true)
+    } else if (entry.type === 'agent-name' && entry.sessionId) {
+      setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
+    } else if (entry.type === 'agent-color' && entry.sessionId) {
+      setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
+    } else if (entry.type === 'agent-setting' && entry.sessionId) {
+      setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
+    } else if (entry.type === 'mode' && entry.sessionId) {
+      const mode = normalizeSessionMode(entry.mode)
+      if (mode) setLatestMapValue(modes, entry.sessionId, mode)
+    } else if (
+      entry.type === 'thread-goal-updated' ||
+      entry.type === 'thread-goal-cleared'
+    ) {
+      applyThreadGoalEntry(threadGoals, entry)
+    } else if (entry.type === 'worktree-state' && entry.sessionId) {
+      setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
+    } else if (entry.type === 'pr-link' && entry.sessionId) {
+      setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
+      setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
+      setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+    } else {
+      return false
+    }
+    return true
+  }
 
   try {
     // For large transcripts, avoid materializing megabytes of stale content.
@@ -4767,7 +4900,12 @@ export async function loadTranscriptFile(
         buf,
         fileSessionId ?? undefined,
       )
-      buf = walkChainBeforeParse(buf, bufferedActiveTip?.tipUuid)
+      // Active-tip descendants can cross a compaction boundary through
+      // logicalParentUuid. Let the parsed branch tracker select them; filtering
+      // first by the physical parent chain would discard them irreversibly.
+      if (!bufferedActiveTip) {
+        buf = walkChainBeforeParse(buf)
+      }
     }
 
     // First pass: process metadata-only lines collected during the boundary scan.
@@ -4779,32 +4917,7 @@ export async function loadTranscriptFile(
         Buffer.from(metadataLines.join('\n')),
       )
       for (const entry of metaEntries) {
-        if (entry.type === 'summary' && entry.leafUuid) {
-          summaries.set(entry.leafUuid, entry.summary)
-        } else if (entry.type === 'custom-title' && entry.sessionId) {
-          setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-        } else if (entry.type === 'tag' && entry.sessionId) {
-          setLatestMapValue(tags, entry.sessionId, entry.tag)
-        } else if (entry.type === 'agent-name' && entry.sessionId) {
-          setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-        } else if (entry.type === 'agent-color' && entry.sessionId) {
-          setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-        } else if (entry.type === 'agent-setting' && entry.sessionId) {
-          setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-        } else if (entry.type === 'mode' && entry.sessionId) {
-          setLatestMapValue(modes, entry.sessionId, entry.mode)
-        } else if (
-          entry.type === 'thread-goal-updated' ||
-          entry.type === 'thread-goal-cleared'
-        ) {
-          applyThreadGoalEntry(threadGoals, entry)
-        } else if (entry.type === 'worktree-state' && entry.sessionId) {
-          setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-        } else if (entry.type === 'pr-link' && entry.sessionId) {
-          setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-          setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-          setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
-        }
+        applySessionMetadataEntry(entry)
       }
     }
 
@@ -4841,7 +4954,14 @@ export async function loadTranscriptFile(
           entry.parentUuid = progressBridge.get(entry.parentUuid) ?? null
         }
         if (activeConversationTip && !entry.isSidechain) {
-          const parent = entry.parentUuid
+          // `null` is a meaningful root for an ordinary message: after a
+          // rewind before the first prompt, the replacement turn starts a new
+          // root chain and must advance the explicitly-null active tip. Only a
+          // compact boundary may replace its physical null parent with the
+          // logical pre-compaction parent.
+          const parent = isCompactBoundaryMessage(entry)
+            ? (entry.parentUuid ?? entry.logicalParentUuid)
+            : entry.parentUuid
           const extendsActiveBranch =
             activeConversationRoot === null
               ? parent === null ||
@@ -4877,31 +4997,16 @@ export async function loadTranscriptFile(
           parseActiveConversationTipEntry(entry) ?? undefined
         activeConversationRoot = activeConversationTip?.tipUuid
         activeConversationDescendants.clear()
-      } else if (entry.type === 'summary' && entry.leafUuid) {
-        summaries.set(entry.leafUuid, entry.summary)
-      } else if (entry.type === 'custom-title' && entry.sessionId) {
-        setLatestMapValue(customTitles, entry.sessionId, entry.customTitle)
-      } else if (entry.type === 'tag' && entry.sessionId) {
-        setLatestMapValue(tags, entry.sessionId, entry.tag)
-      } else if (entry.type === 'agent-name' && entry.sessionId) {
-        setLatestMapValue(agentNames, entry.sessionId, entry.agentName)
-      } else if (entry.type === 'agent-color' && entry.sessionId) {
-        setLatestMapValue(agentColors, entry.sessionId, entry.agentColor)
-      } else if (entry.type === 'agent-setting' && entry.sessionId) {
-        setLatestMapValue(agentSettings, entry.sessionId, entry.agentSetting)
-      } else if (entry.type === 'mode' && entry.sessionId) {
-        setLatestMapValue(modes, entry.sessionId, entry.mode)
-      } else if (
-        entry.type === 'thread-goal-updated' ||
-        entry.type === 'thread-goal-cleared'
-      ) {
-        applyThreadGoalEntry(threadGoals, entry)
-      } else if (entry.type === 'worktree-state' && entry.sessionId) {
-        setLatestMapValue(worktreeStates, entry.sessionId, entry.worktreeSession)
-      } else if (entry.type === 'pr-link' && entry.sessionId) {
-        setLatestMapValue(prNumbers, entry.sessionId, entry.prNumber)
-        setLatestMapValue(prUrls, entry.sessionId, entry.prUrl)
-        setLatestMapValue(prRepositories, entry.sessionId, entry.prRepository)
+        if (activeConversationTip) {
+          for (const uuid of collectActiveConversationMetadataDescendants(
+            messages.values(),
+            activeConversationTip.tipUuid,
+          )) {
+            activeConversationDescendants.add(uuid)
+          }
+        }
+      } else if (applySessionMetadataEntry(entry)) {
+        // Handled above: session-scoped metadata shared with the pre-boundary pass.
       } else if (entry.type === 'file-history-snapshot') {
         fileHistorySnapshots.set(entry.messageId, entry)
       } else if (entry.type === 'attribution-snapshot') {
@@ -4929,6 +5034,7 @@ export async function loadTranscriptFile(
           timestamp: entry.timestamp,
           sessionId: entry.sessionId,
           ...(entry.uuid !== undefined ? { uuid: entry.uuid } : {}),
+          ...(entry.agentId !== undefined ? { agentId: entry.agentId } : {}),
           ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
           ...(entry.content !== undefined ? { content: entry.content } : {}),
         })
@@ -5055,6 +5161,7 @@ export async function loadTranscriptFile(
     summaries,
     customTitles,
     tags,
+    archived,
     agentNames,
     agentColors,
     agentSettings,
@@ -5126,7 +5233,7 @@ async function loadSessionFile(
   agentSettings: Map<UUID, string>
   threadGoals: Map<UUID, ThreadGoal | null>
   worktreeStates: Map<UUID, PersistedWorktreeSession | null>
-  modes: Map<UUID, string>
+  modes: Map<UUID, SessionMode>
   fileHistorySnapshots: Map<UUID, FileHistorySnapshotMessage>
   attributionSnapshots: Map<UUID, AttributionSnapshotMessage>
   contentReplacements: Map<UUID, ContentReplacementRecord[]>
@@ -5155,6 +5262,11 @@ export type SessionQueueOperation = {
   timestamp: string
   sessionId: string
   uuid?: UUID
+  /**
+   * Agent this notification was addressed to; undefined = main thread. Carried
+   * on every operation, like `uuid` (`messageQueueManager.logOperation`).
+   */
+  agentId?: AgentId
   /**
    * Recorded on `enqueue` only, like `content`, and read there: it is how a
    * reader tells a user prompt from a task notification. A retraction is matched
@@ -5304,9 +5416,7 @@ export async function getLastSessionLog(
     messageCount: countVisibleMessages(transcript),
     leafUuid: lastMessage?.uuid,
     mode: messages.values().next().value?.type
-      ? (getLatestSessionScopedValue(modes) as
-          | LogOption['mode']
-          | undefined)
+      ? getLatestSessionScopedValue(modes)
       : undefined,
     worktreeSession: getLatestSessionScopedValue(worktreeStates),
     contextCollapseCommits: contextCollapseCommits.filter(
@@ -5767,18 +5877,38 @@ export async function loadAllSubagentTranscriptsFromDisk(): Promise<{
 // without awaiting recordTranscript's return value (race-free hint tracking).
 export function isLoggableMessage(m: Message): boolean {
   if (m.type === 'progress') return false
-  // IMPORTANT: We deliberately filter out most attachments for non-ants because
-  // they have sensitive info for training that we don't want exposed to the public.
-  // When enabled, we allow hook_additional_context through since it contains
-  // user-configured hook output that is useful for session context on resume.
-  if (m.type === 'attachment' && getUserType() !== 'ant') {
+  // Attachments ARE persisted. The old non-ant drop existed to keep attachment
+  // content out of public training data; this fork has one user and ships
+  // USER_TYPE='external' (scripts/build.ts), so the drop was total and cost
+  // real fidelity: mid-turn typing becomes a queued_command attachment that IS
+  // sent to the model (attachments.ts getQueuedCommandAttachments, drained in
+  // query.ts), so a transcript without attachments does not record what the
+  // model was told, and a resumed prefix cannot match what was cached.
+  // isTranscriptMessage already admits 'attachment' into the parentUuid chain
+  // on the read side. Upstream reached the same place: its equivalent denylist
+  // has been `new Set([])` since at least 2.1.214.
+  //
+  // A hook_success with no content and no output is the one exception, also
+  // upstream's: hooks.ts deliberately writes content:'' for the ordinary
+  // silent success, so persisting it would add a row per hook per turn that
+  // says nothing.
+  if (m.type === 'attachment') {
+    // AttachmentMessage.attachment is typed `unknown` (types/message.ts), so
+    // the shape has to be named here to read it.
+    const attachment = m.attachment as {
+      type?: string
+      content?: string
+      stdout?: string
+      stderr?: string
+    } | null
     if (
-      m.attachment.type === 'hook_additional_context' &&
-      isEnvTruthy(process.env.CLAUDE_CODE_SAVE_HOOK_ADDITIONAL_CONTEXT)
+      attachment?.type === 'hook_success' &&
+      !attachment.content &&
+      !attachment.stdout?.trim() &&
+      !attachment.stderr?.trim()
     ) {
-      return true
+      return false
     }
-    return false
   }
   return true
 }
@@ -6095,7 +6225,7 @@ export async function loadAllLogsFromSessionFile(
       agentName: agentNames.get(sessionId),
       agentColor: agentColors.get(sessionId),
       agentSetting: agentSettings.get(sessionId),
-      mode: modes.get(sessionId) as LogOption['mode'],
+      mode: modes.get(sessionId),
       prNumber: prNumbers.get(sessionId),
       prUrl: prUrls.get(sessionId),
       prRepository: prRepositories.get(sessionId),
