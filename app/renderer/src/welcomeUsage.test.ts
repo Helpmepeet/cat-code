@@ -5,6 +5,7 @@ import { selectWelcomeUsageWindows } from './welcomeUsage.js'
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'account',
     status: 'healthy',
     statusReason: null,

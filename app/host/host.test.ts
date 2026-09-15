@@ -190,7 +190,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'ready',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId,
         engineSessionId,
         payload: { type: 'app.ready' } as never,
@@ -213,7 +213,7 @@ class FakeSupervisor {
       sessionId,
       frame: {
         kind: 'event',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId,
         ...(opts.replay ? { replay: true } : {}),
         event,

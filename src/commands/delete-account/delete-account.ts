@@ -3,7 +3,6 @@ import {
   applyPostCodexAccountSwitchRefresh,
   getPoolStatus,
   isCodexAccountSwitchable,
-  removeCodexAccount,
   resolveCodexAccountByPrefix,
 } from '../../services/api/codexAccountPool.js'
 import {
@@ -12,15 +11,10 @@ import {
   resolveClaudeAccountByPrefix,
   syncClaudeAccountToStorage,
 } from '../../services/api/claudeAccountPool.js'
-import {
-  reassignCodexLeaseToActiveAccount,
-  releaseCodexLease,
-  repairLeasesForDeletedAccount,
-} from '../../services/api/codexAccountLeaseManager.js'
 import { clearOAuthTokenCache } from '../../utils/auth.js'
-import { resetCodexCacheContext } from '../../services/api/codex-fetch-adapter.js'
 import { stripSignatureBlocks } from '../../utils/messages.js'
 import type { LocalCommandCall } from '../../types/command.js'
+import * as codexAccountDeletion from '../../services/api/codexAccountSignOut.js'
 
 function applyPostDeleteAccountStateRefresh(
   context: Parameters<LocalCommandCall>[1],
@@ -101,15 +95,15 @@ export const call: LocalCommandCall = async (args, context) => {
 
   if (selected?.provider === 'codex') {
     const codexAcct = selected.account
-    if (!codexAcct.vaultFilePath) {
-      return {
-        type: 'text',
-        value: `Account "${codexAcct.alias ?? codexAcct.accountId.slice(0, 12)}" is config-only and cannot be deleted.\nUse /logout to clear session credentials, or restart after fixing profile storage.`,
-      }
-    }
+    const hasVaultProfile =
+      codexAcct.source === 'vault' &&
+      ('vaultFilePaths' in codexAcct
+        ? codexAcct.vaultFilePaths.length > 0
+        : Boolean(codexAcct.vaultFilePath))
 
     const { accounts: codexAccounts, activeIndex: codexActiveIndex } = getPoolStatus()
-    const wasActive = codexAccounts[codexActiveIndex]?.accountId === codexAcct.accountId
+    const wasActive =
+      codexAccounts[codexActiveIndex]?.accountId === codexAcct.accountId
     const deletedLabel = codexAcct.alias ?? codexAcct.accountId.slice(0, 12)
 
     if (!confirmed) {
@@ -125,40 +119,46 @@ export const call: LocalCommandCall = async (args, context) => {
       }
       const lines = [
         `Delete Codex account "${deletedLabel}"?`,
-        'This removes the saved vault profile from disk.',
+        hasVaultProfile
+          ? 'This removes the saved vault profile from disk.'
+          : 'This clears the saved session credentials.',
       ]
       if (impact) lines.push(impact)
       lines.push('', `Run: /delete-account ${deletedLabel} --confirm`)
       return { type: 'text', value: lines.join('\n') }
     }
 
-    const deletedAccountId = codexAcct.accountId
-    const ok = removeCodexAccount(deletedAccountId)
-    if (!ok) {
-      return { type: 'text', value: 'Failed to delete account. Check logs for details.' }
+    const deletion = await codexAccountDeletion.deleteCodexAccount({
+      accountId: codexAcct.accountId,
+      expectedCredentialGeneration:
+        'lifecycleGeneration' in codexAcct &&
+        typeof codexAcct.lifecycleGeneration === 'number'
+          ? codexAcct.lifecycleGeneration
+          : codexAcct.credentialGeneration ?? 0,
+      operationId: codexAccountDeletion.createCodexAccountDeletionOperationId(),
+    })
+    if (
+      deletion.status !== 'committed' &&
+      deletion.status !== 'already_committed'
+    ) {
+      return {
+        type: 'text',
+        value: 'Failed to delete account. Check logs for details.',
+      }
     }
 
-    // Repair every lease that was pointing at the deleted account (main or
-    // subagent) before refreshing UI. Leases that cannot find a healthy
-    // alternative are released.
-    repairLeasesForDeletedAccount(deletedAccountId)
-
-    if (getPoolStatus().activeIndex >= 0) {
-      reassignCodexLeaseToActiveAccount('main-thread')
-    } else {
-      releaseCodexLease('main-thread')
-    }
-    resetCodexCacheContext()
-    await clearAuthRelatedCaches()
     applyPostDeleteAccountStateRefresh(context)
 
-    const after = getPoolStatus()
-    const newActive = after.activeIndex >= 0 ? after.accounts[after.activeIndex] : null
-    if (wasActive && newActive) {
-      const newLabel = newActive.alias ?? newActive.accountId.slice(0, 12)
+    if (deletion.targetWasActive && deletion.replacementActiveAccountId) {
+      const newActive = getPoolStatus().accounts.find(
+        account => account.accountId === deletion.replacementActiveAccountId,
+      )
+      const newLabel =
+        newActive?.alias ??
+        deletion.replacementActiveAccountId.slice(0, 12)
       return { type: 'text', value: `Deleted ${deletedLabel}. Active Codex account is now ${newLabel}.` }
     }
-    if (wasActive) {
+    if (deletion.targetWasActive) {
       return { type: 'text', value: `Deleted ${deletedLabel}. No Codex accounts remain.` }
     }
     return { type: 'text', value: `Deleted ${deletedLabel}.` }

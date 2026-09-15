@@ -32,7 +32,7 @@ const ALL_STATUSES = Object.keys(
 
 const validReady = {
   kind: 'ready',
-  protocolVersion: 1,
+  protocolVersion: 2,
   sessionId: 'session-1',
   engineSessionId: 'engine-session-1',
   payload: {
@@ -81,7 +81,7 @@ test('tracks terminal supervisor lifecycle state and disables input', () => {
 
   state = reduceConnectionState(state, {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     status: 'disconnected',
   } as ServerFrame)
@@ -100,7 +100,7 @@ test('a lifecycle frame only disables its addressed session', () => {
   } as ServerFrame)
   state = reduceConnectionState(state, {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     status: 'disconnected',
   })
@@ -123,7 +123,7 @@ test('typed forward failures update only the addressed session state', () => {
 
   state = reduceConnectionState(state, {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-2',
     code: 'session_not_ready',
     message: 'session is still spawning',
@@ -140,7 +140,7 @@ test('typed forward failures update only the addressed session state', () => {
 
   state = reduceConnectionState(state, {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-3',
     code: 'session_not_found',
     message: 'session is gone',
@@ -150,7 +150,7 @@ test('typed forward failures update only the addressed session state', () => {
 
   state = reduceConnectionState(state, {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-2',
     code: 'session_disconnected',
     message: 'sidecar exited',
@@ -180,7 +180,7 @@ test('classifies the spawn-in-flight statuses as transient and the rest as termi
 function parkExitFrame(sessionId: string): ServerFrame {
   return {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     status: 'exited',
     // PARKED_EXIT_CODE — the sidecar's gated self-exit code, the same signal the
@@ -213,7 +213,7 @@ test('resume failure stays distinct from retryable process deaths', () => {
   const exitWith = (sessionId: string, code: number | null): ServerFrame =>
     ({
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId,
       status: 'exited',
       exit: { code, signal: null },
@@ -261,14 +261,14 @@ test('a late send error cannot overwrite an unloadable restore', () => {
     )
     state = reduceConnectionState(state, {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status: 'exited',
       exit: { code: 4, signal: null },
     } as ServerFrame)
     state = reduceConnectionState(state, {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       code,
       message: 'late response from the old connection',
@@ -289,7 +289,7 @@ test('a park exit code cannot smuggle a park reading into a non-exit lifecycle s
   for (const status of ['disconnected', 'failed'] as const) {
     const state = reduceConnectionState(createConnectionState(), {
       kind: 'lifecycle',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       status,
       exit: { code: 5, signal: null },
@@ -358,7 +358,7 @@ test('a stray verb from a parked pane cannot turn the park back into a crash', (
 
     state = reduceConnectionState(state, {
       kind: 'error',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 'session-1',
       code,
       message: 'no engine',
@@ -383,7 +383,7 @@ test('the unpark in progress is still allowed to move a parked session', () => {
   state = reduceConnectionState(state, parkExitFrame('session-1'))
   state = reduceConnectionState(state, {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     code: 'session_not_ready',
     message: 'still spawning',
@@ -402,7 +402,7 @@ test('a session that never parked still reports a send failure honestly', () => 
   )
   state = reduceConnectionState(state, {
     kind: 'error',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     code: 'session_disconnected',
     message: 'gone',
@@ -423,7 +423,7 @@ test('a restore that dies after a park is reported, not hidden by the park', () 
   state = reduceConnectionState(state, parkExitFrame('session-1'))
   state = reduceConnectionState(state, {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     status: 'failed',
   } as ServerFrame)
@@ -486,7 +486,7 @@ test('no recovery sentence prints the engine discriminant or an em dash', () => 
 const turnStatus = (sessionId: string, activeTurn: boolean) =>
   ({
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId,
     event: { type: 'turn.status', activeTurn },
   }) as unknown as ServerFrame
@@ -523,7 +523,7 @@ test('a turn boundary never revives a session the lifecycle already killed', () 
   )
   state = reduceConnectionState(state, {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'session-1',
     status: 'exited',
   } as ServerFrame)

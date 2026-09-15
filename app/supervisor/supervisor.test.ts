@@ -49,7 +49,7 @@ function readyScript({
         open(socket) {
           writeFrame(socket, {
             kind: 'ready',
-            protocolVersion: 1,
+            protocolVersion: 2,
             sessionId: ${sessionIdExpression},
             ${omitEngineSessionId ? '' : `engineSessionId: ${engineSessionIdExpression},`}
             payload: { type: 'app.ready', protocolVersion: 1, inputEnabled: true }
@@ -540,7 +540,7 @@ test('outbound frame sessionId tripwire drops and logs a mis-stamped frame', asy
   const logs: string[] = []
   const script = readyScript({
     afterOpen:
-      "writeFrame(socket, { kind: 'pong', protocolVersion: 1, sessionId: 'wrong-session', nonce: 'bad' })",
+      "writeFrame(socket, { kind: 'pong', protocolVersion: 2, sessionId: 'wrong-session', nonce: 'bad' })",
   })
   const supervisor = new SidecarSupervisor({
     sidecarCommand: process.execPath,

@@ -7,7 +7,7 @@ import { resolve } from 'node:path'
 
 beforeEach(resetBenchmarkObserver)
 function frame(sequence: number): ServerFrame {
-  return { kind: 'pong', protocolVersion: 1, sessionId: 's', nonce: String(sequence), deliveryTrace: {
+  return { kind: 'pong', protocolVersion: 2, sessionId: 's', nonce: String(sequence), deliveryTrace: {
     streamEpoch: 'e', sequence, traceId: `t-${sequence}`, deliveryAttempt: 1, replay: false,
     sourceProcessInstanceId: 'p', sourceWallTimestamp: '2026-09-12T00:00:00.000Z', sourceMonotonicTimestampMs: sequence, connectionEpoch: 1,
   } }

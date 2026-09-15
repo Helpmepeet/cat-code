@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { randomUUID } from 'crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { PNG } from 'pngjs'
@@ -22,12 +23,17 @@ import {
   saveCodexOAuthTokens,
 } from '../../utils/auth.js'
 import {
+  codexCredentialLifecycle,
+  type CodexCredentialLifecycle,
+} from '../../services/api/codexCredentialLifecycle.js'
+import {
   _generateImageToolInternalsForTest,
   GenerateImageTool,
 } from './GenerateImageTool.js'
 
 const originalFetch = globalThis.fetch
 let tempDir: string | undefined
+const lifecycleRecordPaths: string[] = []
 
 function buildPoolAccount(accountId: string): PoolAccount {
   return {
@@ -38,7 +44,47 @@ function buildPoolAccount(accountId: string): PoolAccount {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
+    credentialGeneration: 1,
+    credentialGenerationState: 'lifecycle_bound',
   }
+}
+
+const allowTestCredentialLifecycle = {
+  read(accountId: string) {
+    return {
+      status: 'valid' as const,
+      record: {
+        version: 1 as const,
+        accountId,
+        credentialGeneration: 1,
+        state: 'credentialed' as const,
+        operationId: 'image-test',
+        operationKind: 'login' as const,
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }
+  },
+  async withTransaction<T>(
+    _accountId: string,
+    _options: unknown,
+    callback: (permit: never) => T | Promise<T>,
+  ): Promise<T> {
+    return callback({} as never)
+  },
+} as unknown as CodexCredentialLifecycle
+
+function imageToolContext(
+  input: object,
+  credentialUse = { lifecycle: allowTestCredentialLifecycle },
+): ToolUseContext {
+  return {
+    ...input,
+    codexCredentialUse: credentialUse,
+  } as unknown as ToolUseContext
+}
+
+function rememberLifecycleRecord(accountId: string): void {
+  lifecycleRecordPaths.push(codexCredentialLifecycle.getPaths(accountId).recordPath)
 }
 
 function b64url(value: object): string {
@@ -80,6 +126,10 @@ beforeEach(async () => {
 
 afterEach(async () => {
   globalThis.fetch = originalFetch
+  for (const recordPath of lifecycleRecordPaths.splice(0)) {
+    await rm(recordPath, { force: true })
+    await rm(`${recordPath}.lock`, { force: true })
+  }
   if (tempDir) {
     await rm(tempDir, { recursive: true, force: true })
     tempDir = undefined
@@ -388,11 +438,11 @@ describe('GenerateImageTool', () => {
         prompt: 'generate with the leased account',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         agentId: 'subagent-123',
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(authorization).toBe('Bearer access-lease-account')
@@ -442,10 +492,10 @@ describe('GenerateImageTool', () => {
         prompt: 'prefer codex when available',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(requestUrl).toBe('https://chatgpt.com/backend-api/codex/responses')
@@ -453,6 +503,67 @@ describe('GenerateImageTool', () => {
     expect(accountId).toBe('main-account')
     expect(await readFile(outputPath)).toEqual(generatedBytes)
     expect(result.data.filePath).toBe(outputPath)
+  })
+
+  test('does not send an image request with a retained credential generation', async () => {
+    const account = buildPoolAccount('image-stale-account')
+    seedCodexAccountPoolForTest({
+      activeAccountId: account.accountId,
+      accounts: [account],
+    })
+
+    const staleLifecycle = {
+      read(accountId: string) {
+        return {
+          status: 'valid' as const,
+          record: {
+            version: 1 as const,
+            accountId,
+            credentialGeneration: 2,
+            state: 'credentialed' as const,
+            operationId: 'image-new-login',
+            operationKind: 'login' as const,
+            changedAt: '2026-09-12T00:00:00.000Z',
+          },
+        }
+      },
+      async withTransaction<T>(
+        _accountId: string,
+        _options: unknown,
+        callback: (permit: never) => T | Promise<T>,
+      ): Promise<T> {
+        return callback({} as never)
+      },
+    } as unknown as CodexCredentialLifecycle
+
+    const outputPath = join(tempDir!, 'stale.png')
+    const originalFetch = globalThis.fetch
+    let fetchCount = 0
+    globalThis.fetch = (async () => {
+      fetchCount += 1
+      return new Response('unexpected image send', { status: 200 })
+    }) as unknown as typeof globalThis.fetch
+
+    try {
+      await expect(
+        GenerateImageTool.call(
+          {
+            prompt: 'must not send after a newer login',
+            output_path: outputPath,
+          },
+          imageToolContext(
+            {
+              abortController: new AbortController(),
+              options: { mainLoopModel: 'gpt-5.6-terra' },
+            },
+            { lifecycle: staleLifecycle },
+          ),
+        ),
+      ).rejects.toThrow('credential generation is stale')
+      expect(fetchCount).toBe(0)
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   test('fails over the main lease after a Codex image endpoint 429', async () => {
@@ -501,10 +612,10 @@ describe('GenerateImageTool', () => {
         prompt: 'retry after a subscription cap',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(requestAccounts).toEqual(['primary-account', 'backup-account'])
@@ -569,11 +680,11 @@ describe('GenerateImageTool', () => {
         prompt: 'retry without moving the main lease',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         agentId: 'image-agent',
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(requestAccounts).toEqual(['subagent-account', 'backup-account'])
@@ -629,11 +740,11 @@ describe('GenerateImageTool', () => {
         prompt: 'generate from an Anthropic-model worker',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         agentId: 'unleased-agent',
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     const lease = getCodexLeaseForOwner('unleased-agent')
@@ -648,11 +759,11 @@ describe('GenerateImageTool', () => {
     expect(await readFile(outputPath)).toEqual(generatedBytes)
   })
 
-  test('fails over the main lease after a Codex image endpoint 401 without a refresh token', async () => {
+  test('fails over the main lease after a Codex image endpoint 401 when refresh fails', async () => {
     seedCodexAccountPoolForTest({
       activeAccountId: 'primary-account',
       accounts: [
-        { ...buildPoolAccount('primary-account'), refreshToken: '' },
+        buildPoolAccount('primary-account'),
         buildPoolAccount('backup-account'),
       ],
     })
@@ -666,7 +777,16 @@ describe('GenerateImageTool', () => {
     const outputPath = join(tempDir!, 'generated.png')
     const generatedBytes = Buffer.from('generated image')
     const requestAccounts: string[] = []
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = (async (input, init) => {
+      const requestUrl =
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url
+      if (requestUrl === 'https://auth.openai.com/oauth/token') {
+        throw new Error('refresh unavailable')
+      }
       requestAccounts.push(
         new Headers(init?.headers).get('chatgpt-account-id') ?? '',
       )
@@ -694,10 +814,10 @@ describe('GenerateImageTool', () => {
         prompt: 'retry after subscription auth failure',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(requestAccounts).toEqual(['primary-account', 'backup-account'])
@@ -711,11 +831,12 @@ describe('GenerateImageTool', () => {
 
   test('retries a Codex image request with the refreshed account token after a 401', async () => {
 
-    const accountId = 'ca11ab1e-0000-4000-8000-00000000f102'
+    const accountId = `image-refresh-${randomUUID()}`
     const oldAccessToken = mintAccessJwt(accountId, 0)
     const newAccessToken = mintAccessJwt(accountId, 1)
     const oldRefreshToken = 'image-refresh-old'
     const newRefreshToken = 'image-refresh-new'
+    const expiresAt = Date.now() + 3_600_000
     const vaultFilePath = join(tempDir!, 'vault', 'accounts', `${accountId}.json`)
     await mkdir(dirname(vaultFilePath), { recursive: true })
     await writeFile(
@@ -726,7 +847,7 @@ describe('GenerateImageTool', () => {
           access_token: oldAccessToken,
           refresh_token: oldRefreshToken,
           account_id: accountId,
-          expires_at: Date.now() + 3_600_000,
+          expires_at: expiresAt,
         },
         refresh: { state: 'idle' },
       })}\n`,
@@ -738,10 +859,12 @@ describe('GenerateImageTool', () => {
           accountId,
           accessToken: oldAccessToken,
           refreshToken: oldRefreshToken,
-          expiresAt: Date.now() + 3_600_000,
+          expiresAt,
           source: 'vault',
           status: 'healthy',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           vaultFilePath,
         },
       ],
@@ -752,6 +875,7 @@ describe('GenerateImageTool', () => {
       ownerLabel: 'Main thread',
       accountId,
     })
+    rememberLifecycleRecord(accountId)
 
     const outputPath = join(tempDir!, 'generated.png')
     const generatedBytes = Buffer.from('generated image')
@@ -817,7 +941,7 @@ describe('GenerateImageTool', () => {
 
   test('refreshes a near-expiry sole vault-backed Codex account through the vault for image auth', async () => {
 
-    const accountId = 'ca11ab1e-0000-4000-8000-00000000f101'
+    const accountId = `image-refresh-${randomUUID()}`
     const oldAccessToken = mintAccessJwt(accountId, 0)
     const newAccessToken = mintAccessJwt(accountId, 1)
     const oldRefreshToken = 'image-refresh-old'
@@ -860,10 +984,13 @@ describe('GenerateImageTool', () => {
           source: 'vault',
           status: 'healthy',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           vaultFilePath,
         },
       ],
     })
+    rememberLifecycleRecord(accountId)
 
     const outputPath = join(tempDir!, 'generated.png')
     const generatedBytes = Buffer.from('generated image')
@@ -992,10 +1119,10 @@ describe('GenerateImageTool', () => {
         prompt: 'generate with the main lease',
         output_path: outputPath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(authorization).toBe('Bearer access-lease-account')
@@ -1046,10 +1173,10 @@ describe('GenerateImageTool', () => {
         output_path: outputPath,
         reference_image_path: referencePath,
       },
-      {
+      imageToolContext({
         abortController: new AbortController(),
         options: { mainLoopModel: 'gpt-5.6-terra' },
-      } as ToolUseContext,
+      }),
     )
 
     expect(accountId).toBe('main-account')

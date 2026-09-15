@@ -50,7 +50,7 @@ function ready(inputEnabled = true): ReadyFrame {
     engineSessionId: 'engine-preview-session',
     payload: {
       type: 'app.ready',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 1,
       inputEnabled,
       activeTurn: false,
       abort: { status: 'idle' },

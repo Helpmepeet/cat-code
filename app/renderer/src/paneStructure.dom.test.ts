@@ -60,7 +60,7 @@ function transcriptWithRows() {
       engineSessionId: 'engine-session-1',
       payload: {
         type: 'app.ready',
-        protocolVersion: PROTOCOL_VERSION,
+        protocolVersion: 1,
         inputEnabled: true,
         activeTurn: false,
         abort: { status: 'idle' },

@@ -313,7 +313,7 @@ test('on attach, the server sends the canonical controller-derived app.ready pay
       engineSessionId: ENGINE_SESSION,
     payload: {
       type: 'app.ready',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 1,
       inputEnabled: true,
       activeTurn: false,
       abort: { status: 'idle' },
@@ -717,7 +717,15 @@ test('F6 — an error frame carrying raw engine text has its filesystem paths st
   })
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo1' } as never))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'lo1',
+      accountId: 'acct-1',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   await flush()
 
   const err = received.find(f => f.kind === 'error')
@@ -739,7 +747,15 @@ test('F6 — an over-long error message is truncated before it leaves', async ()
   })
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()), { accounts })
 
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'lo2' } as never))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'lo2',
+      accountId: 'acct-1',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   await flush()
 
   const err = received.find(f => f.kind === 'error')
@@ -5950,6 +5966,8 @@ function acctFixture(overrides: Partial<PoolAccount> = {}): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: 1,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     vaultFilePath: '/Users/secret/.cat-code/vault/acct.json',
     alias: 'main',
     ...overrides,
@@ -6160,6 +6178,92 @@ test('P4-5 — rejects account.switch with a missing accountId (schema)', () => 
   expect(received.some(f => f.kind === 'error' && f.code === 'bad_request')).toBe(true)
 })
 
+test('targeted account.logout accepts the exact account and generation shape', async () => {
+  const calls: Array<{ accountId: string; expectedCredentialGeneration: number }> = []
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      logout: async (accountId, expectedCredentialGeneration) => {
+        calls.push({ accountId, expectedCredentialGeneration })
+        return { ok: true, message: 'signed out' }
+      },
+    }),
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts },
+  )
+
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'logout-1',
+      accountId: 'target-account',
+      expectedCredentialGeneration: 7,
+    }),
+  )
+  await flush()
+
+  expect(calls).toEqual([
+    { accountId: 'target-account', expectedCredentialGeneration: 7 },
+  ])
+  expect(
+    received.some(
+      frame =>
+        frame.kind === 'account.result' &&
+        frame.requestId === 'logout-1' &&
+        frame.ok,
+    ),
+  ).toBe(true)
+})
+
+test('targeted account.logout rejects missing, unsafe, and extra fields at the boundary', () => {
+  let calls = 0
+  const accounts = makeAccountsDomain({
+    executor: fakeExecutor({
+      logout: () => {
+        calls += 1
+        return { ok: true, message: 'signed out' }
+      },
+    }),
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts },
+  )
+  const valid = {
+    type: 'account.logout',
+    requestId: 'logout-invalid',
+    accountId: 'target-account',
+    expectedCredentialGeneration: 7,
+  }
+  const invalidMessages: unknown[] = [
+    {
+      type: valid.type,
+      requestId: valid.requestId,
+      expectedCredentialGeneration: valid.expectedCredentialGeneration,
+    },
+    {
+      type: valid.type,
+      requestId: valid.requestId,
+      accountId: valid.accountId,
+    },
+    { ...valid, expectedCredentialGeneration: -1 },
+    { ...valid, expectedCredentialGeneration: 1.5 },
+    { ...valid, accessToken: 'secret' },
+    { ...valid, vaultFilePath: '/secret/profile.json' },
+  ]
+
+  for (const message of invalidMessages) {
+    server.handleData(conn, rawFrame(message))
+  }
+
+  expect(calls).toBe(0)
+  expect(
+    received.filter(frame => frame.kind === 'error' && frame.code === 'bad_request'),
+  ).toHaveLength(invalidMessages.length)
+})
+
 test('P4-5 — a valid account.rename passes the boundary and dispatches with its correlated result', async () => {
   seedCodexAccountPoolForTest({ accounts: [acctFixture()], activeAccountId: 'acct-aaaa' })
   const renames: { accountId: string; alias: string }[] = []
@@ -6197,18 +6301,29 @@ test('P4-5 — rejects account.delete without confirm:true (destructive fail-clo
   // confirm omitted
   server.handleData(
     conn,
-    rawFrame({ type: 'account.delete', requestId: 'r', accountId: 'a' }),
+    rawFrame({
+      type: 'account.delete',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+    }),
   )
   // confirm:false
   server.handleData(
     conn,
-    rawFrame({ type: 'account.delete', requestId: 'r2', accountId: 'a', confirm: false }),
+    rawFrame({
+      type: 'account.delete',
+      requestId: 'r2',
+      accountId: 'a',
+      expectedCredentialGeneration: 1,
+      confirm: false,
+    }),
   )
   expect(received.filter(f => f.kind === 'error' && f.code === 'bad_request').length).toBeGreaterThanOrEqual(2)
   expect(deleted).toBe(false)
 })
 
-test('host deletion notice clears a live sidecar pool without emitting account.result', async () => {
+test('host deletion notice reconciles a live sidecar pool without rerunning deletion', async () => {
   seedCodexAccountPoolForTest({
     accounts: [acctFixture({ accountId: 'deleted-account' })],
     activeAccountId: 'deleted-account',
@@ -6239,7 +6354,7 @@ test('host deletion notice clears a live sidecar pool without emitting account.r
   )
   await flush()
 
-  expect(deleted).toEqual(['deleted-account'])
+  expect(deleted).toEqual([])
   expect(
     received.some(
       frame =>
@@ -6282,9 +6397,178 @@ test('host deletion notice rejects extra keys before changing local state', () =
   ).toBe(true)
 })
 
+test('host sign-out notice removes only the exact generation and re-broadcasts local snapshots', async () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({
+      accountId: 'signed-out-account',
+      credentialGeneration: 1,
+      vaultFilePath: '/test-vault/accounts/signed-out-account.json',
+    })],
+    activeAccountId: 'signed-out-account',
+  })
+  const retirements: unknown[] = []
+  const lifecycle: NonNullable<
+    Parameters<typeof makeAccountsDomain>[0]
+  >['lifecycle'] = {
+    read: accountId => ({
+      status: 'valid',
+      record: {
+        version: 1,
+        accountId,
+        credentialGeneration: 2,
+        state: 'signed_out',
+        operationId: 'signout-operation',
+        operationKind: 'sign_out',
+        cleanup: 'complete',
+        changedAt: '2026-09-12T00:00:00.000Z',
+      },
+    }),
+  }
+  const accounts = makeAccountsDomain({
+    lifecycle,
+    retireWebSockets: retirement => {
+      retirements.push(retirement)
+    },
+    clearAuthCaches: async () => {},
+  })
+  const { domain: runControls } = fakeRunControlsDomain()
+  const settings = fakeSettingsDomain()
+  const leases = createSidecarLeaseDomain(makePermissionStore())
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts, runControls, settings, leases },
+  )
+  const beforeAccounts = received.filter(f => f.kind === 'accounts.snapshot').length
+  const beforeRunControls = received.filter(f => f.kind === 'run-controls.snapshot').length
+  const beforeSettings = received.filter(f => f.kind === 'settings.snapshot').length
+  const beforeLeases = received.filter(f => f.kind === 'lease.snapshot').length
+
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.profileSignedOut',
+      requestId: 'signout-request',
+      operationId: 'signout-operation',
+      accountId: 'signed-out-account',
+      oldCredentialGeneration: 1,
+      signedOutLifecycleGeneration: 2,
+      outcome: 'committed',
+      lifecycleState: 'signed_out',
+    }),
+  )
+  await waitFor(
+    () =>
+      received.filter(f => f.kind === 'accounts.snapshot').length >
+      beforeAccounts,
+  )
+
+  expect(retirements).toEqual([
+    { accountId: 'signed-out-account', credentialGeneration: 1 },
+  ])
+  expect(
+    received.filter(f => f.kind === 'accounts.snapshot').length,
+  ).toBeGreaterThan(beforeAccounts)
+  expect(
+    received.filter(f => f.kind === 'run-controls.snapshot').length,
+  ).toBeGreaterThan(beforeRunControls)
+  expect(
+    received.filter(f => f.kind === 'settings.snapshot').length,
+  ).toBeGreaterThan(beforeSettings)
+  expect(
+    received.filter(f => f.kind === 'lease.snapshot').length,
+  ).toBeGreaterThan(beforeLeases)
+  expect(received.some(f => f.kind === 'account.result')).toBe(false)
+  expect(
+    received
+      .filter(
+        (frame): frame is Extract<ServerFrame, { kind: 'accounts.snapshot' }> =>
+          frame.kind === 'accounts.snapshot',
+      )
+      .at(-1)
+      ?.accounts.accounts,
+  ).toEqual([])
+})
+
+test('host sign-out notice rejects malformed, extra, negative, fractional, and secret fields silently', () => {
+  seedCodexAccountPoolForTest({
+    accounts: [acctFixture({
+      accountId: 'signed-out-account',
+      credentialGeneration: 1,
+    })],
+    activeAccountId: 'signed-out-account',
+  })
+  const logs: string[] = []
+  const accounts = makeAccountsDomain({
+    lifecycle: {
+      read: () => ({
+        status: 'valid',
+        record: {
+          version: 1,
+          accountId: 'signed-out-account',
+          credentialGeneration: 2,
+          state: 'signed_out',
+          operationId: 'signout-operation',
+          operationKind: 'sign_out',
+          changedAt: '2026-09-12T00:00:00.000Z',
+        },
+      }),
+    },
+    clearAuthCaches: async () => {},
+  })
+  const { server, received, conn } = connect(
+    new AppSessionController(probeAdapter()),
+    { accounts, log: line => logs.push(line) },
+  )
+  const valid = {
+    type: 'account.profileSignedOut',
+    requestId: 'signout-request',
+    operationId: 'signout-operation',
+    accountId: 'signed-out-account',
+    oldCredentialGeneration: 1,
+    signedOutLifecycleGeneration: 2,
+    outcome: 'committed',
+    lifecycleState: 'signed_out',
+  }
+  const invalidMessages: unknown[] = [
+    { ...valid, operationId: '' },
+    { ...valid, accountId: '' },
+    { ...valid, oldCredentialGeneration: -1 },
+    { ...valid, signedOutLifecycleGeneration: 2.5 },
+    { ...valid, accessToken: 'SECRET' },
+    { ...valid, vaultFilePath: '/secret/profile.json' },
+  ]
+
+  for (const message of invalidMessages) {
+    server.handleData(conn, rawFrame(message))
+  }
+
+  expect(
+    logs.filter(line => line.includes('rejected account.profileSignedOut')),
+  ).toHaveLength(4)
+  expect(logs.filter(line => line.includes('unexpected key'))).toHaveLength(2)
+  expect(received.some(frame => frame.kind === 'error')).toBe(false)
+  expect(
+    received
+      .filter(
+        (frame): frame is Extract<ServerFrame, { kind: 'accounts.snapshot' }> =>
+          frame.kind === 'accounts.snapshot',
+      )
+      .at(-1)
+      ?.accounts.accounts,
+  ).toHaveLength(1)
+})
+
 test('P4-5 — an account verb with no accounts domain fails closed (internal_error)', () => {
   const { server, received, conn } = connect(new AppSessionController(probeAdapter()))
-  server.handleData(conn, accountFrame({ type: 'account.logout', requestId: 'r' }))
+  server.handleData(
+    conn,
+    accountFrame({
+      type: 'account.logout',
+      requestId: 'r',
+      accountId: 'a',
+      expectedCredentialGeneration: 0,
+    }),
+  )
   expect(received.some(f => f.kind === 'error' && f.code === 'internal_error')).toBe(true)
 })
 

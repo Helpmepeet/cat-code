@@ -1356,6 +1356,8 @@ function buildLeasePoolAccount(accountId: string, status: PoolAccount['status'] 
     source: 'config',
     status,
     lastUsedAt: 0,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     usageFetchedAt: Date.now(),
   }
 }

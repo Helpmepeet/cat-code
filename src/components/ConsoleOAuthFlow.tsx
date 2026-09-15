@@ -8,10 +8,14 @@ import { useTerminalNotification } from '../ink/useTerminalNotification.js';
 import { Box, Link, Text } from '../ink.js';
 import { useKeybinding } from '../keybindings/useKeybinding.js';
 import { getSSLErrorHint } from '../services/api/errorUtils.js';
+import {
+  createCodexOAuthLoginOperationId,
+  persistCodexOAuthLogin,
+} from '../services/api/codexLoginPersistence.js';
 import { sendNotification } from '../services/notifier.js';
 import { runCodexOAuthFlow, type CodexTokens } from '../services/oauth/codex-client.js';
 import { OAuthService } from '../services/oauth/index.js';
-import { getOauthAccountInfo, saveCodexOAuthTokens } from '../utils/auth.js';
+import { getOauthAccountInfo } from '../utils/auth.js';
 import { logError } from '../utils/log.js';
 import { getSettings_DEPRECATED } from '../utils/settings/settings.js';
 import { Select } from './CustomSelect/select.js';
@@ -101,6 +105,27 @@ export function getCodexAliasPrompt(
   return `Already saved as ${label}. Press Enter to keep this name, or type a new name.`;
 }
 const PASTE_HERE_MSG = 'Paste code here if prompted > ';
+
+export type ConsoleCodexLoginPersistenceDependencies = Readonly<{
+  persistLogin?: typeof persistCodexOAuthLogin
+  createOperationId?: typeof createCodexOAuthLoginOperationId
+}>
+
+export async function persistCodexOAuthLoginFromConsole(
+  codexTokens: CodexTokens,
+  alias: string | undefined,
+  dependencies: ConsoleCodexLoginPersistenceDependencies = {},
+): Promise<void> {
+  await (dependencies.persistLogin ?? persistCodexOAuthLogin)(
+    codexTokens,
+    {
+      operationId:
+        (dependencies.createOperationId ?? createCodexOAuthLoginOperationId)(),
+      ...(alias ? { alias } : {}),
+    },
+  );
+}
+
 export function ConsoleOAuthFlow({
   onDone,
   startingMessage,
@@ -214,21 +239,7 @@ export function ConsoleOAuthFlow({
     codexTokens: CodexTokens,
     alias?: string,
   ) => {
-    saveCodexOAuthTokens(codexTokens);
-    const { appendAccount, saveCodexTokenToVault } = await import('../services/api/codexAccountPool.js');
-    const saved = saveCodexTokenToVault(
-      { ...codexTokens, alias },
-      { writer: 'ConsoleOAuthFlow.persistCodexLogin' },
-    );
-    appendAccount(
-      { ...codexTokens, alias },
-      {
-        writer: 'ConsoleOAuthFlow.persistCodexLogin',
-        source: saved ? 'vault' : 'config',
-        vaultFilePath: saved?.filePath,
-        activate: true,
-      },
-    );
+    await persistCodexOAuthLoginFromConsole(codexTokens, alias);
   }, []);
   async function handleSubmitAlias(alias: string, codexTokens: CodexTokens) {
     try {

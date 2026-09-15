@@ -81,6 +81,7 @@ const countOccurrences = (haystack: string, needle: string): number =>
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'hiby',
     status: 'healthy',
     statusReason: null,

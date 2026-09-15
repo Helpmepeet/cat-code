@@ -4,6 +4,7 @@ import {
   getCodexAliasPrompt,
   getInitialLoginState,
   isLoginDialogCancelActive,
+  persistCodexOAuthLoginFromConsole,
 } from './ConsoleOAuthFlow.js'
 
 describe('getCodexAliasPrompt', () => {
@@ -14,6 +15,52 @@ describe('getCodexAliasPrompt', () => {
         'acct-1',
       ),
     ).toBe('Already saved as yoxrent. Press Enter to keep this name, or type a new name.')
+  })
+})
+
+describe('persistCodexOAuthLoginFromConsole', () => {
+  test('delegates Codex credential installation to the lifecycle path', async () => {
+    const calls: Array<{
+      accountId: string
+      alias?: string
+      operationId: string
+      credentialGeneration?: number
+    }> = []
+
+    await persistCodexOAuthLoginFromConsole(
+      {
+        accessToken: 'access-token',
+        refreshToken: 'refresh-token',
+        expiresAt: 1,
+        accountId: 'acct-1',
+      },
+      'work',
+      {
+        createOperationId: () => 'console-login-operation',
+        persistLogin: async (received, options) => {
+          calls.push({
+            accountId: received.accountId,
+            alias: options.alias,
+            operationId: options.operationId,
+            credentialGeneration: received.credentialGeneration,
+          })
+          return {
+            accountId: received.accountId,
+            credentialGeneration: 4,
+            source: 'vault',
+          }
+        },
+      },
+    )
+
+    expect(calls).toEqual([
+      {
+        accountId: 'acct-1',
+        alias: 'work',
+        operationId: 'console-login-operation',
+        credentialGeneration: undefined,
+      },
+    ])
   })
 })
 

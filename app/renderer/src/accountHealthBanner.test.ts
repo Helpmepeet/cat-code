@@ -12,6 +12,7 @@ const NOW = Date.UTC(2026, 6, 31, 12, 0, 0)
 function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'acct-1',
+    credentialGeneration: 0,
     alias: 'one',
     status: 'healthy',
     statusReason: null,
@@ -35,6 +36,7 @@ function account(overrides: Partial<AccountStatus> = {}): AccountStatus {
 function snapshot(accounts: AccountStatus[]): AccountsSnapshot {
   return {
     accounts,
+    signedOutProfiles: [],
     activeAccountId: accounts[0]?.id ?? null,
     readyCount: accounts.filter(
       a => a.status === 'healthy' && !a.usageLimitReached,

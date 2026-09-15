@@ -15,7 +15,7 @@ function catalogFrame(
   sessionId: string,
   commands: SlashCatalogEntry[],
 ): ServerFrame {
-  return { kind: 'slash-catalog.snapshot', protocolVersion: 1, sessionId, commands }
+  return { kind: 'slash-catalog.snapshot', protocolVersion: 2, sessionId, commands }
 }
 
 test('stores the slash catalog per session and selects it', () => {
@@ -39,12 +39,12 @@ test('a lifecycle frame clears a tracked session but leaves untracked ones alone
   const before = state
   state = reduceSlashCatalogState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's2', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's2', status: 'disconnected' },
   })
   expect(state).toBe(before) // untracked session → no change
   state = reduceSlashCatalogState(state, {
     type: 'frame',
-    frame: { kind: 'lifecycle', protocolVersion: 1, sessionId: 's1', status: 'disconnected' },
+    frame: { kind: 'lifecycle', protocolVersion: 2, sessionId: 's1', status: 'disconnected' },
   })
   expect(selectSlashCatalog(state, 's1')).toEqual([])
 })

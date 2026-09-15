@@ -7,12 +7,19 @@ import { FilePathLink } from '../../components/FilePathLink.js'
 import { MessageResponse } from '../../components/MessageResponse.js'
 import { Box, Text } from '../../ink.js'
 import { getSessionId } from '../../bootstrap/state.js'
-import { resolveCodexOAuthTokensForLeaseOwner } from '../../services/api/client.js'
+import {
+  resolveCodexOAuthTokensForLeaseOwner,
+  type ResolvedCodexOAuthTokens,
+} from '../../services/api/client.js'
 import {
   CodexAccountAuthError,
   CodexAccountCapError,
 } from '../../services/api/codex-fetch-adapter.js'
 import { registerCodexLease } from '../../services/api/codexAccountLeaseManager.js'
+import {
+  startCodexCredentialSend,
+  type CodexCredentialUseOptions,
+} from '../../services/api/codexCredentialUse.js'
 import { poolManagesCredentials } from '../../services/api/codexAccountPool.js'
 import { withRetry } from '../../services/api/withRetry.js'
 import { buildTool, type ToolDef, type ToolUseContext } from '../../Tool.js'
@@ -149,9 +156,9 @@ const outputSchema = lazySchema(() =>
 type OutputSchema = ReturnType<typeof outputSchema>
 type Output = z.infer<OutputSchema>
 
-type ImageAuth = {
-  token: string
-  accountId?: string
+type ImageAuth = ResolvedCodexOAuthTokens
+type ImageToolContext = ToolUseContext & {
+  codexCredentialUse?: CodexCredentialUseOptions
 }
 
 type ReferenceImage = {
@@ -546,10 +553,7 @@ async function getImageAuth(context: ToolUseContext): Promise<ImageAuth> {
     codexLeaseOwnerType: context.agentId ? 'subagent' : 'main',
   })
   if (codexTokens?.accessToken) {
-    return {
-      token: codexTokens.accessToken,
-      accountId: codexTokens.accountId,
-    }
+    return codexTokens
   }
 
   throw new Error('No ChatGPT account found. Log in to a Codex/ChatGPT account.')
@@ -825,6 +829,7 @@ async function generateWithCodexBackend(
   auth: ImageAuth,
   responseModel: string,
   signal: AbortSignal,
+  credentialUse?: CodexCredentialUseOptions,
 ): Promise<{ b64: string; model: string }> {
   if (!auth.accountId) {
     throw new Error('Codex image generation requires a ChatGPT account ID.')
@@ -832,29 +837,34 @@ async function generateWithCodexBackend(
 
   const referenceImage = await loadReferenceImage(input)
   const conversationId = randomUUID()
-  const response = await fetch(CODEX_IMAGE_GENERATIONS_URL, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${auth.token}`,
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-      'chatgpt-account-id': auth.accountId,
-      originator: 'codex_cli_rs',
-      'conversation-id': conversationId,
-      session_id: conversationId,
-      'x-client-request-id': conversationId,
-      'OpenAI-Beta': 'responses=experimental',
-    },
-    body: JSON.stringify(
-      buildCodexImageGenerationBody(
-        input,
-        outputFormat,
-        responseModel,
-        referenceImage,
-      ),
-    ),
-    signal,
-  })
+  const response = await startCodexCredentialSend(
+    auth,
+    authorizedAuth =>
+      globalThis.fetch(CODEX_IMAGE_GENERATIONS_URL, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${authorizedAuth.accessToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          'chatgpt-account-id': authorizedAuth.accountId,
+          originator: 'codex_cli_rs',
+          'conversation-id': conversationId,
+          session_id: conversationId,
+          'x-client-request-id': conversationId,
+          'OpenAI-Beta': 'responses=experimental',
+        },
+        body: JSON.stringify(
+          buildCodexImageGenerationBody(
+            input,
+            outputFormat,
+            responseModel,
+            referenceImage,
+          ),
+        ),
+        signal,
+      }),
+    credentialUse,
+  )
   const responseText = await response.text()
 
   if (!response.ok) {
@@ -881,6 +891,7 @@ async function generateWithCodexRetries(
   context: ToolUseContext,
   responseModel: string,
 ): Promise<{ b64: string; model: string }> {
+  const credentialUse = (context as ImageToolContext).codexCredentialUse
   const generator = withRetry(
     () => getImageAuth(context),
     async auth =>
@@ -890,6 +901,7 @@ async function generateWithCodexRetries(
         auth,
         responseModel,
         context.abortController.signal,
+        credentialUse,
       ),
     {
       maxRetries: MAX_CODEX_IMAGE_RETRIES,

@@ -29,7 +29,7 @@ function snapshot(fields: Partial<ExtensionsSnapshot> = {}): ExtensionsSnapshot 
 }
 
 function frame(sessionId: string, extensions: ExtensionsSnapshot): ExtensionsSnapshotFrame {
-  return { kind: 'extensions.snapshot', protocolVersion: 1, sessionId, extensions }
+  return { kind: 'extensions.snapshot', protocolVersion: 2, sessionId, extensions }
 }
 
 test('reducer stores the snapshot per session and select reads it back', () => {
@@ -55,7 +55,7 @@ test('a lifecycle frame drops the stale snapshot only for a tracked session', ()
   state = reduceExtensionsState(state, { type: 'frame', frame: frame('s1', snapshot()) })
   const lifecycle: LifecycleFrame = {
     kind: 'lifecycle',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 's1',
     status: 'disconnected',
   }

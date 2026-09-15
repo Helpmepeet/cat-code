@@ -15,7 +15,18 @@ let respond: (request: Request, count: number) => Response | Promise<Response>
 const clients: Client[] = []
 
 function account(id = 'account-a', extra: Partial<PoolAccount> = {}): PoolAccount {
-  return { accountId: id, accessToken: `synthetic-access-${id}`, refreshToken: `synthetic-refresh-${id}`, expiresAt: 2e12, source: 'config', status: 'healthy', lastUsedAt: 0, ...extra }
+  return {
+    accountId: id,
+    accessToken: `synthetic-access-${id}`,
+    refreshToken: `synthetic-refresh-${id}`,
+    expiresAt: 2e12,
+    source: 'config',
+    status: 'healthy',
+    lastUsedAt: 0,
+    credentialGeneration: 1,
+    credentialGenerationState: 'lifecycle_bound',
+    ...extra,
+  }
 }
 
 function body(percent: number): Response {

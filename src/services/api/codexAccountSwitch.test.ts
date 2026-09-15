@@ -19,6 +19,8 @@ function buildPoolAccount(accountId: string, alias: string): PoolAccount {
     source: 'vault',
     status: 'healthy',
     lastUsedAt: 0,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     alias,
   }
 }

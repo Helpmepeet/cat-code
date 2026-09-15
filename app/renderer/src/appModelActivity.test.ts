@@ -19,7 +19,7 @@ const ENGINE = 'engine-1'
 
 const ready = {
   kind: 'ready',
-  protocolVersion: 1,
+  protocolVersion: 2,
   sessionId: SESSION,
   engineSessionId: ENGINE,
   payload: {
@@ -40,7 +40,7 @@ const uuid = () =>
 const frame = (message: unknown) =>
   ({
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SESSION,
     event: { type: 'message', message },
   }) as never

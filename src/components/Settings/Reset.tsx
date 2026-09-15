@@ -10,6 +10,7 @@ import {
   type PoolAccount,
 } from '../../services/api/codexAccountPool.js'
 import { refreshPoolAccountForRedeem } from '../../codex-core/accounts.js'
+import { createCodexCredentialHandle } from '../../services/api/codexCredentialUse.js'
 import {
   consumeUsageLimitReset,
   fetchPoolUsage,
@@ -199,7 +200,15 @@ export function Reset({
       }
 
       const outcome = await consumeUsageLimitReset(
-        { accountId: account.accountId, accessToken: account.accessToken },
+        createCodexCredentialHandle({
+          accountId: account.accountId,
+          accessToken: account.accessToken,
+          refreshToken: account.refreshToken,
+          expiresAt: account.expiresAt,
+          credentialGeneration: account.credentialGeneration,
+          credentialSource: account.source,
+          credentialPath: account.vaultFilePath,
+        }),
         redeemRequestId,
       )
       if (!mountedRef.current) return

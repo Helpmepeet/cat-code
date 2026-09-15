@@ -20,11 +20,11 @@ const SNAPSHOT: DiagnosticsSnapshot = {
 }
 
 function snapshotFrame(sessionId: string, diagnostics: DiagnosticsSnapshot): ServerFrame {
-  return { kind: 'diagnostics.snapshot', protocolVersion: 1, sessionId, diagnostics }
+  return { kind: 'diagnostics.snapshot', protocolVersion: 2, sessionId, diagnostics }
 }
 
 function lifecycleFrame(sessionId: string): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 1, sessionId, status: 'exited' }
+  return { kind: 'lifecycle', protocolVersion: 2, sessionId, status: 'exited' }
 }
 
 test('diagnostics.snapshot frame stores the snapshot per session', () => {
@@ -66,7 +66,7 @@ test('unrelated frame kinds are ignored', () => {
   const state = createDiagnosticsState()
   const next = reduceDiagnosticsState(state, {
     type: 'frame',
-    frame: { kind: 'pong', protocolVersion: 1, sessionId: 'a', nonce: 'x' },
+    frame: { kind: 'pong', protocolVersion: 2, sessionId: 'a', nonce: 'x' },
   })
   expect(next).toBe(state)
 })

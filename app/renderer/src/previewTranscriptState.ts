@@ -466,7 +466,7 @@ function previewReadyFrame(cache: TranscriptCache): ReadyFrame {
       cache.header.engineSessionId ?? `preview:${cache.header.appSessionId}`,
     payload: {
       type: 'app.ready',
-      protocolVersion: PROTOCOL_VERSION,
+      protocolVersion: 1,
       inputEnabled: false,
       activeTurn: false,
       abort: { status: 'idle' },

@@ -32,6 +32,8 @@ function createCodexAccount(
     source: 'vault' as const,
     status: 'healthy' as const,
     lastUsedAt,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound' as const,
     alias,
     ...overrides,
   }

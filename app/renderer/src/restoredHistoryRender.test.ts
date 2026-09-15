@@ -30,7 +30,7 @@ const SESSION = 'restored-session'
 function ready(): ServerFrame {
   return {
     kind: 'ready',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SESSION,
     engineSessionId: 'engine-restored',
     payload: {
@@ -48,7 +48,7 @@ function ready(): ServerFrame {
 function frame(message: SDKMessage, replay: boolean): ServerFrame {
   return {
     kind: 'event',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: SESSION,
     ...(replay ? { replay: true as const } : {}),
     event: { type: 'message', message },

@@ -33,7 +33,7 @@ test('all workload bootstraps keep a bounded traced marker whose applied ACK sur
   for (const workload of manifest.workloads) {
     const fixture = createFixture(workload)
     const markers: ServerFrame[] = Array.from({ length: workload.sessions }, (_, index) => ({
-      kind: 'pong', protocolVersion: 1, sessionId: `bootstrap-${index}`, nonce: 'marker', deliveryTrace: mintDeliveryTrace(index + 1),
+      kind: 'pong', protocolVersion: 2, sessionId: `bootstrap-${index}`, nonce: 'marker', deliveryTrace: mintDeliveryTrace(index + 1),
     }))
     const bootstrap = markerTracedBootstrap(fixture.initial, [], markers)
     expect(bootstrap.filter(frame => frame.deliveryTrace)).toEqual(markers)

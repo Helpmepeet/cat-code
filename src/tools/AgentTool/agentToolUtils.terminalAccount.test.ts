@@ -42,6 +42,8 @@ function poolAccount(accountId: string): PoolAccount {
     source: 'config',
     status: 'healthy',
     lastUsedAt: 0,
+    credentialGeneration: 0,
+    credentialGenerationState: 'legacy_unbound',
     usageFetchedAt: Date.now(),
   }
 }

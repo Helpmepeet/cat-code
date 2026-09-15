@@ -508,7 +508,7 @@ describe('redaction', () => {
     )
     const frame: LeaseSnapshotFrame = {
       kind: 'lease.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: 's1',
       leases: snapshot,
     }

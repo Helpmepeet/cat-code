@@ -4,6 +4,7 @@ import {
   acquireCodexVaultFileLock,
   persistNextQuarantineProbe,
 } from './codexTokenRefresh.js'
+import { createCodexCredentialLifecycle } from './codexCredentialLifecycle.js'
 
 const [role, vaultPath, readyPath] = process.argv.slice(2)
 if (!role || !vaultPath || !readyPath) {
@@ -43,7 +44,33 @@ if (role === 'terminal-verdict') {
       await Bun.sleep(5)
     }
   }
-  await persistNextQuarantineProbe(vaultPath, 'desktop backoff')
+  const current = JSON.parse(await readFile(vaultPath, 'utf8')) as {
+    tokens?: {
+      account_id?: string
+      credential_generation?: number
+    }
+  }
+  const accountId = current.tokens?.account_id
+  const credentialGeneration = current.tokens?.credential_generation
+  if (
+    typeof accountId !== 'string' ||
+    !Number.isSafeInteger(credentialGeneration)
+  ) {
+    throw new Error('expected a tagged credentialed probe profile')
+  }
+  await persistNextQuarantineProbe(
+    vaultPath,
+    'desktop backoff',
+    accountId,
+    credentialGeneration,
+    {
+      lifecycle: process.env.PROBE_LIFECYCLE_DIRECTORY
+        ? createCodexCredentialLifecycle({
+            directory: process.env.PROBE_LIFECYCLE_DIRECTORY,
+          })
+        : undefined,
+    },
+  )
 } else {
   throw new Error(`unknown role: ${role}`)
 }

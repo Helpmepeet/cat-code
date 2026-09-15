@@ -218,7 +218,7 @@ test('the outbound tasks.snapshot frame is secretGuard-clean even with token-sha
   )
   const frame: TasksSnapshotFrame = {
     kind: 'tasks.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     tasks: snapshot,
   }
@@ -252,7 +252,7 @@ test('the outbound subagents field is covered by secretGuard, and a real secret 
   expect(clean.subagents).toHaveLength(1)
   const frame: TasksSnapshotFrame = {
     kind: 'tasks.snapshot',
-    protocolVersion: 1,
+    protocolVersion: 2,
     sessionId: 'sess-1',
     tasks: clean,
   }

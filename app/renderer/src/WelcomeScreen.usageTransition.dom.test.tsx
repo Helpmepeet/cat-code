@@ -27,6 +27,7 @@ afterAll(async () => {
 function account(over: Partial<AccountStatus> = {}): AccountStatus {
   return {
     id: 'fixture',
+    credentialGeneration: 0,
     alias: 'fixture',
     status: 'healthy',
     statusReason: null,
@@ -53,6 +54,7 @@ function account(over: Partial<AccountStatus> = {}): AccountStatus {
 function pool(accounts: AccountStatus[]): AccountsSnapshot {
   return {
     accounts,
+    signedOutProfiles: [],
     activeAccountId: accounts.find(a => a.isDefault)?.id ?? null,
     readyCount: accounts.filter(a => a.status === 'healthy' && !a.usageLimitReached).length,
     poolCount: accounts.length,

@@ -51,6 +51,7 @@ if (role === 'terminal-holder') {
         accessToken: 'desktop-access',
         refreshToken: 'desktop-refresh',
         accountId: 'synthetic-account',
+        credentialGeneration: 0,
       },
       { filePath: vaultPath },
     )
@@ -67,6 +68,8 @@ if (role === 'terminal-holder') {
           source: 'vault',
           status: 'healthy',
           lastUsedAt: 0,
+          credentialGeneration: 0,
+          credentialGenerationState: 'legacy_unbound',
           vaultFilePath: vaultPath,
         },
       ],

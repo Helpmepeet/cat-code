@@ -59,6 +59,7 @@ const SNAPSHOT: RunControlsSnapshot = {
 function accountsSnapshot(over: Partial<AccountsSnapshot> = {}): AccountsSnapshot {
   return {
     accounts: [],
+    signedOutProfiles: [],
     activeAccountId: null,
     readyCount: 1,
     poolCount: 1,
@@ -75,7 +76,7 @@ function frame(f: ServerFrame): { type: 'frame'; frame: ServerFrame } {
 }
 
 function lifecycle(status: 'disconnected' | 'exited' = 'disconnected'): ServerFrame {
-  return { kind: 'lifecycle', protocolVersion: 1, sessionId: SID, status }
+  return { kind: 'lifecycle', protocolVersion: 2, sessionId: SID, status }
 }
 
 function sources(over: {
@@ -103,7 +104,7 @@ function detachedWithFast(active: boolean, supportedByModel = true) {
       base.runControls,
       frame({
         kind: 'run-controls.snapshot',
-        protocolVersion: 1,
+        protocolVersion: 2,
         sessionId: SID,
         runControls: { ...SNAPSHOT, fast: { ...SNAPSHOT.fast, active, supportedByModel } },
       }),
@@ -117,7 +118,7 @@ function detached() {
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       runControls: SNAPSHOT,
     }),
@@ -126,7 +127,7 @@ function detached() {
     createPermissionState(),
     frame({
       kind: 'ready',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       engineSessionId: 'engine-1',
       payload: {
@@ -144,7 +145,7 @@ function detached() {
     permissions,
     frame({
       kind: 'permission.context',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       context: { mode: 'auto' } as never,
     }),
@@ -153,7 +154,7 @@ function detached() {
     createAccountsState(),
     frame({
       kind: 'accounts.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       accounts: SESSION_POOL,
     }),
@@ -202,7 +203,7 @@ test('a live session arms both, and display equals the live values', () => {
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       runControls: SNAPSHOT,
     }),
@@ -232,7 +233,7 @@ test('an Anthropic session never offers the Codex switcher', () => {
     createRunControlsState(),
     frame({
       kind: 'run-controls.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       runControls: {
         ...SNAPSHOT,
@@ -279,7 +280,7 @@ test('a ready composer rail uses the current global pool over its attachment sna
     createAccountsState(),
     frame({
       kind: 'accounts.snapshot',
-      protocolVersion: 1,
+      protocolVersion: 2,
       sessionId: SID,
       accounts: SESSION_POOL,
     }),

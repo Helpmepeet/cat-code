@@ -1,7 +1,6 @@
 import Anthropic, { type ClientOptions } from '@anthropic-ai/sdk'
 import { randomUUID } from 'crypto'
 import {
-  appendAccount,
   getActiveAccount,
   getPoolStatus,
   isCodexAccountSwitchable,
@@ -55,6 +54,11 @@ import {
   isEnvTruthy,
 } from '../../utils/envUtils.js'
 import { createCodexFetch } from './codex-fetch-adapter.js'
+import {
+  createCodexCredentialHandle,
+  type CodexCredentialHandle,
+  type CodexCredentialUseOptions,
+} from './codexCredentialUse.js'
 import { CodexAccountUnavailableError } from './withRetry.js'
 import { emitAccountDiagnostic } from './accountDiagnostics.js'
 import { maybeRefreshAccount, type CodexCoreAccount } from '../../codex-core/accounts.js'
@@ -120,11 +124,7 @@ type CodexLeaseOwnerOptions = {
   codexLeaseOwnerType?: 'main' | 'subagent'
 }
 
-export type ResolvedCodexOAuthTokens = {
-  accessToken: string
-  refreshToken: string
-  expiresAt: number
-  accountId: string
+export type ResolvedCodexOAuthTokens = CodexCredentialHandle & {
   source: 'pool' | 'config'
 }
 
@@ -244,43 +244,12 @@ function toCoreAccount(
     accessToken: account.accessToken,
     refreshToken: account.refreshToken,
     expiresAt: account.expiresAt,
+    credentialGeneration: account.credentialGeneration,
     profile,
     source: account.source,
     alias: account.alias,
     vaultFilePath: account.vaultFilePath,
   }
-}
-
-function rememberRefreshedPoolAccount(
-  original: PoolAccount,
-  refreshed: CodexCoreAccount,
-): void {
-  if (refreshed.accountId !== original.accountId) {
-    return
-  }
-  if (
-    refreshed.accessToken === original.accessToken &&
-    refreshed.refreshToken === original.refreshToken &&
-    refreshed.expiresAt === original.expiresAt
-  ) {
-    return
-  }
-
-  appendAccount(
-    {
-      accessToken: refreshed.accessToken,
-      refreshToken: refreshed.refreshToken,
-      expiresAt: refreshed.expiresAt,
-      accountId: refreshed.accountId,
-      alias: refreshed.alias ?? original.alias,
-    },
-    {
-      preserveCapped: true,
-      writer: 'client.resolveCodexOAuthTokensForLeaseOwner',
-      source: refreshed.source === 'config' ? 'config' : original.source,
-      vaultFilePath: refreshed.vaultFilePath ?? original.vaultFilePath,
-    },
-  )
 }
 
 /**
@@ -315,12 +284,19 @@ async function resolvePoolManagedAccount(
   account: PoolAccount,
 ): Promise<ResolvedCodexOAuthTokens> {
   const refreshed = await refreshCoreAccountBestEffort(toCoreAccount(account))
-  rememberRefreshedPoolAccount(account, refreshed)
-  return {
+  const credential = createCodexCredentialHandle({
+    accountId: refreshed.accountId,
     accessToken: refreshed.accessToken,
     refreshToken: refreshed.refreshToken,
     expiresAt: refreshed.expiresAt,
-    accountId: refreshed.accountId,
+    credentialGeneration: refreshed.credentialGeneration,
+    credentialSource: account.source,
+    credentialPath:
+      refreshed.vaultFilePath ??
+      account.vaultFilePath,
+  })
+  return {
+    ...credential,
     source: 'pool',
   }
 }
@@ -330,10 +306,14 @@ async function resolveConfigAccount(
 ): Promise<ResolvedCodexOAuthTokens> {
   const refreshed = await refreshCoreAccountBestEffort(toCoreAccount(account))
   return {
-    accessToken: refreshed.accessToken,
-    refreshToken: refreshed.refreshToken,
-    expiresAt: refreshed.expiresAt,
-    accountId: refreshed.accountId,
+    ...createCodexCredentialHandle({
+      accountId: refreshed.accountId,
+      accessToken: refreshed.accessToken,
+      refreshToken: refreshed.refreshToken,
+      expiresAt: refreshed.expiresAt,
+      credentialGeneration: refreshed.credentialGeneration,
+      credentialSource: 'config',
+    }),
     source: 'config',
   }
 }
@@ -401,6 +381,7 @@ export async function getAnthropicClient({
   codexLeaseOwnerId,
   codexLeaseOwnerType,
   codexConversationIdOverride,
+  codexCredentialUse,
 }: {
   apiKey?: string
   maxRetries: number
@@ -411,6 +392,7 @@ export async function getAnthropicClient({
   codexLeaseOwnerId?: string
   codexLeaseOwnerType?: 'main' | 'subagent'
   codexConversationIdOverride?: string
+  codexCredentialUse?: CodexCredentialUseOptions
 }): Promise<Anthropic> {
   const containerId = process.env.CLAUDE_CODE_CONTAINER_ID
   const remoteSessionId = process.env.CLAUDE_CODE_REMOTE_SESSION_ID
@@ -482,11 +464,12 @@ export async function getAnthropicClient({
         counts: countStatuses(getPoolStatus().accounts),
       })
       const codexFetch = createCodexFetch(
-        codexTokens.accessToken,
+        codexTokens,
         codexConversationIdOverride,
         {
           resolveTokensForRequest: () =>
             resolveCodexOAuthTokensForLeaseOwner(codexTokenOptions),
+          credentialUse: codexCredentialUse,
         },
       )
       const clientConfig: ConstructorParameters<typeof Anthropic>[0] = {

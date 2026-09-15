@@ -50,7 +50,7 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
     } }
   }
   const event = (sessionId: string, value: EventFrame['event']): ServerFrame => trace({
-    kind: 'event', protocolVersion: 1, sessionId, event: value,
+    kind: 'event', protocolVersion: 2, sessionId, event: value,
   })
   const stream = (sessionId: string, value: unknown): ServerFrame => event(sessionId, {
     type: 'message',
@@ -59,7 +59,7 @@ export function createFixture(workload: Workload, durationMs: number = manifest.
   })
   for (let s = 0; s < workload.sessions; s++) {
     const sessionId = `benchmark-session-${s}`
-    initial.push(trace({ kind: 'ready', protocolVersion: 1, sessionId,
+    initial.push(trace({ kind: 'ready', protocolVersion: 2, sessionId,
       engineSessionId: `benchmark-engine-${s}`, payload: {
         type: 'app.ready', protocolVersion: 1, inputEnabled: false,
         activeTurn: true, abort: { status: 'idle' }, goalSnapshot: null, pendingPermissionRequests: [],
