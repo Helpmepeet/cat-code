@@ -79,6 +79,13 @@ function segments(relPath: string): string[] {
  * bypassed.
  */
 const ALLOWED_SYMLINK_PREFIXES = [join('Contents', 'Frameworks')]
+const PRODUCTION_PRELOAD = join(
+  'Contents',
+  'Resources',
+  'app',
+  'preload',
+  'preload.cjs',
+)
 
 function walk(root: string, dir: string, out: WalkEntry[]): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -141,6 +148,12 @@ export function scanPackagedBundle(
     }
     for (const rule of SECRET_PATTERNS) {
       if (rule.pattern.test(content)) findings.push({ path: relPath, reason: rule.reason })
+    }
+    if (
+      relPath === PRODUCTION_PRELOAD &&
+      content.includes('catcode:debug:shell-state')
+    ) {
+      findings.push({ path: relPath, reason: 'development debug bridge' })
     }
   }
   return findings

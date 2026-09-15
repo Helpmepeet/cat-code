@@ -73,6 +73,7 @@ const USAGE = `Renderer memory trajectory sampler
   --out <dir>            output directory (default app/.ram-scratch/trajectory)
   --pid <n>              renderer pid override, when the log cannot be read
   --log <path>           operational log override
+  --require-packaged     fail unless the log proves app.isPackaged was true
 
 Start the desktop app yourself before running this. Press Ctrl-C at any time to
 stop early and still get a run file and a summary.
@@ -292,8 +293,12 @@ async function main(): Promise<void> {
 
   const reader = createLogReader(logPath)
   let rendererPid: number | null = null
+  let packagedObserved = false
   const startupRecords = reader.drain()
   for (const record of startupRecords) {
+    if (record.event === 'app.start' && record.fields.packaged === true) {
+      packagedObserved = true
+    }
     if (RENDERER_PID_EVENTS.has(record.event)) {
       const pid = numberField(record, 'pid')
       if (pid !== null) rendererPid = pid
@@ -304,6 +309,12 @@ async function main(): Promise<void> {
     const override = Number(args.pid)
     if (!Number.isInteger(override) || override <= 0) fail('--pid must be a positive integer')
     rendererPid = override
+  }
+  if (args['require-packaged'] === 'true' && !packagedObserved) {
+    fail(
+      `no app.start record with packaged=true was found in ${logPath}\n` +
+      'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
+    )
   }
 
   if (rendererPid === null || !isAlive(rendererPid)) {
