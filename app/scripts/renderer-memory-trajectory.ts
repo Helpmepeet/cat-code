@@ -52,8 +52,11 @@ import {
   buildTrajectoryRun,
   formatSummary,
   parseVmmapSummary,
+  RENDERER_PID_EVENTS,
+  selectPackagedRenderer,
   selectTagRow,
   type SeriesOptions,
+  type TrajectoryLogRecord,
   type TrajectorySample,
   type WorkloadId,
 } from './rendererMemoryTrajectory.js'
@@ -100,11 +103,7 @@ function fail(message: string): never {
  * Operational log reader
  * -------------------------------------------------------------------------- */
 
-type LogRecord = {
-  timestamp: string
-  event: string
-  fields: Record<string, unknown>
-}
+type LogRecord = TrajectoryLogRecord
 
 /**
  * The sink rotates at 512 KB into a new file and repoints `latest-operational`,
@@ -158,7 +157,12 @@ function createLogReader(symlinkPath: string) {
           const fields = item.fields && typeof item.fields === 'object' && !Array.isArray(item.fields)
             ? (item.fields as Record<string, unknown>)
             : {}
-          records.push({ timestamp: item.timestamp, event: item.event, fields })
+          records.push({
+            timestamp: item.timestamp,
+            event: item.event,
+            launchId: typeof item.launchId === 'string' ? item.launchId : null,
+            fields,
+          })
         } catch {
           // A half-written trailing line is normal while the app is running.
         }
@@ -175,8 +179,6 @@ function numberField(record: LogRecord, key: string): number | null {
   const value = record.fields[key]
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
-
-const RENDERER_PID_EVENTS = new Set(['window.created', 'renderer.recovery.succeeded'])
 
 /* -------------------------------------------------------------------------- *
  * Process capture
@@ -293,28 +295,37 @@ async function main(): Promise<void> {
 
   const reader = createLogReader(logPath)
   let rendererPid: number | null = null
-  let packagedObserved = false
+  const requirePackaged = args['require-packaged'] === 'true'
+  let selectedLaunchId: string | null = null
   const startupRecords = reader.drain()
-  for (const record of startupRecords) {
-    if (record.event === 'app.start' && record.fields.packaged === true) {
-      packagedObserved = true
+  if (requirePackaged) {
+    if (args.pid) {
+      fail(
+        '--pid cannot be combined with --require-packaged; renderer ownership must come from the packaged launch records',
+      )
     }
-    if (RENDERER_PID_EVENTS.has(record.event)) {
-      const pid = numberField(record, 'pid')
-      if (pid !== null) rendererPid = pid
+    const selection = selectPackagedRenderer(startupRecords)
+    if (!selection.ok) {
+      fail(
+        selection.reason + ' in ' + logPath + '\n' +
+        'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
+      )
+    }
+    selectedLaunchId = selection.launchId
+    rendererPid = selection.rendererPid
+  } else {
+    for (const record of startupRecords) {
+      if ((RENDERER_PID_EVENTS as readonly string[]).includes(record.event)) {
+        const pid = numberField(record, 'pid')
+        if (pid !== null) rendererPid = pid
+      }
     }
   }
 
-  if (args.pid) {
+  if (!requirePackaged && args.pid) {
     const override = Number(args.pid)
     if (!Number.isInteger(override) || override <= 0) fail('--pid must be a positive integer')
     rendererPid = override
-  }
-  if (args['require-packaged'] === 'true' && !packagedObserved) {
-    fail(
-      `no app.start record with packaged=true was found in ${logPath}\n` +
-      'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
-    )
   }
 
   if (rendererPid === null || !isAlive(rendererPid)) {
@@ -364,7 +375,8 @@ async function main(): Promise<void> {
   for (let index = 0; ; index++) {
     const drained = reader.drain()
     for (const record of drained) {
-      if (RENDERER_PID_EVENTS.has(record.event)) {
+      if (selectedLaunchId !== null && record.launchId !== selectedLaunchId) continue
+      if ((RENDERER_PID_EVENTS as readonly string[]).includes(record.event)) {
         const pid = numberField(record, 'pid')
         if (pid !== null && pid !== rendererPid) {
           process.stderr.write(`renderer process changed to pid ${pid}, following it\n`)

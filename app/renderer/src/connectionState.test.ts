@@ -249,6 +249,39 @@ test('resume failure stays distinct from retryable process deaths', () => {
   )
 })
 
+test('a late send error cannot overwrite an unloadable restore', () => {
+  for (const code of [
+    'session_not_found',
+    'session_not_ready',
+    'session_disconnected',
+  ] as const) {
+    let state = reduceConnectionState(
+      createConnectionState(),
+      validReady as ServerFrame,
+    )
+    state = reduceConnectionState(state, {
+      kind: 'lifecycle',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      status: 'exited',
+      exit: { code: 4, signal: null },
+    } as ServerFrame)
+    state = reduceConnectionState(state, {
+      kind: 'error',
+      protocolVersion: 1,
+      sessionId: 'session-1',
+      code,
+      message: 'late response from the old connection',
+      retryable: code === 'session_not_ready',
+    } as ServerFrame)
+
+    expect(selectConnection(state, 'session-1')).toEqual({
+      status: 'restore_failed',
+      inputEnabled: false,
+    })
+  }
+})
+
 test('a park exit code cannot smuggle a park reading into a non-exit lifecycle status', () => {
   // `disconnected` / `failed` are transport and spawn failures with no exit
   // behind them. Reclassifying on the code alone would let a socket death that

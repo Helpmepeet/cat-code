@@ -208,6 +208,73 @@ export type TrajectorySample = Readonly<{
 }>
 
 /* -------------------------------------------------------------------------- *
+ * Launch provenance
+ * -------------------------------------------------------------------------- */
+
+/** The operational-log subset the runner uses to prove renderer ownership. */
+export type TrajectoryLogRecord = Readonly<{
+  timestamp: string
+  event: string
+  launchId: string | null
+  fields: Readonly<Record<string, unknown>>
+}>
+
+export const RENDERER_PID_EVENTS = [
+  'window.created',
+  'renderer.recovery.succeeded',
+] as const
+
+export type PackagedRendererSelection =
+  | Readonly<{ ok: true; launchId: string; rendererPid: number | null }>
+  | Readonly<{ ok: false; reason: string }>
+
+function numericField(record: TrajectoryLogRecord, key: string): number | null {
+  const value = record.fields[key]
+  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
+    ? value
+    : null
+}
+
+/**
+ * Select the renderer records belonging to the current packaged launch.
+ *
+ * The packaged requirement is an evidence boundary, not a label attached to an
+ * arbitrary pid. The operational sink gives every app launch a distinct
+ * launchId, so the latest app.start and its renderer records must share that
+ * id. A mixed log whose newest launch is development, or whose records lack the
+ * id, is rejected before any process is sampled.
+ */
+export function selectPackagedRenderer(
+  records: readonly TrajectoryLogRecord[],
+): PackagedRendererSelection {
+  let latestStartIndex = -1
+  for (let index = 0; index < records.length; index++) {
+    if (records[index].event === 'app.start') latestStartIndex = index
+  }
+  if (latestStartIndex < 0) {
+    return { ok: false, reason: 'no app.start record was found' }
+  }
+
+  const start = records[latestStartIndex]
+  if (start.fields.packaged !== true) {
+    return { ok: false, reason: 'the latest app.start record is not packaged' }
+  }
+  if (start.launchId === null || start.launchId.length === 0) {
+    return { ok: false, reason: 'the packaged app.start record has no launchId' }
+  }
+
+  let rendererPid: number | null = null
+  for (let index = latestStartIndex + 1; index < records.length; index++) {
+    const record = records[index]
+    if (record.launchId !== start.launchId) continue
+    if (!(RENDERER_PID_EVENTS as readonly string[]).includes(record.event)) continue
+    const pid = numericField(record, 'pid')
+    if (pid !== null) rendererPid = pid
+  }
+  return { ok: true, launchId: start.launchId, rendererPid }
+}
+
+/* -------------------------------------------------------------------------- *
  * Series arithmetic
  * -------------------------------------------------------------------------- */
 

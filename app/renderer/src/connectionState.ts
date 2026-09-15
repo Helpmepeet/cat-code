@@ -312,6 +312,11 @@ export function reduceConnectionState(
     // moves the session to `starting`, because that one is minted only while a
     // child is genuinely spawning — which is exactly the unpark in progress.
     const existing = state.sessions[frame.sessionId]
+    // A resume-failed exit is terminal evidence that the saved conversation
+    // could not be loaded. Late replies to work queued before that exit carry no
+    // new recovery information and must not turn the honest loss into a
+    // retryable-looking state (which would reintroduce Restart).
+    if (existing?.status === 'restore_failed') return state
     if (
       existing?.status === 'parked' &&
       (frame.code === 'session_disconnected' || frame.code === 'session_not_found')

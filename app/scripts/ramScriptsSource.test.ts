@@ -18,6 +18,7 @@ const read = (name: string): string =>
 const fleet = read('ram-fleet.ts')
 const probe = read('ram-probe.ts')
 const trajectory = read('renderer-memory-trajectory.ts')
+const trajectoryCore = read('rendererMemoryTrajectory.ts')
 
 test('ram-fleet kills fleet members by handle, never by a recycled pid', () => {
   expect(fleet).not.toContain('killTree')
@@ -126,8 +127,12 @@ test('ram-probe bounds evidence and verifies exact cleanup ownership', () => {
 
 test('renderer trajectories can require an isolated packaged launch record', () => {
   expect(trajectory).toContain('--require-packaged')
-  expect(trajectory).toContain("record.event === 'app.start' && record.fields.packaged === true")
-  expect(trajectory).toContain("args['require-packaged'] === 'true' && !packagedObserved")
+  expect(trajectory).toContain("const requirePackaged = args['require-packaged'] === 'true'")
+  expect(trajectory).toContain('selectPackagedRenderer(startupRecords)')
+  expect(trajectory).toContain('--pid cannot be combined with --require-packaged')
+  expect(trajectory).toContain('record.launchId !== selectedLaunchId')
+  expect(trajectoryCore).toContain("records[index].event === 'app.start'")
+  expect(trajectoryCore).toContain('record.launchId !== start.launchId')
   expect(trajectory).toContain(
     'Run this against a freshly launched packaged artifact and its isolated CLAUDE_CONFIG_DIR.',
   )
