@@ -17,6 +17,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -375,11 +376,12 @@ async function run(): Promise<void> {
   if (!configDir) throw new Error('config directory resolution failed')
   if (ownedConfigDir) activeOwnedTempDirs.push(ownedConfigDir)
   if (realTurn) {
+    const trustedCwd = realpathSync(cwdDir)
     writeFileSync(
       join(configDir, '.cat-code.json'),
       `${JSON.stringify({
         projects: {
-          [cwdDir]: { hasTrustDialogAccepted: true },
+          [trustedCwd]: { hasTrustDialogAccepted: true },
         },
       })}\n`,
       { mode: 0o600 },

@@ -94,7 +94,8 @@ test('ram-probe owns real-turn state and routes synthetic auth only to localhost
 test('ram-probe proves a normal submitted turn in frame order', () => {
   expect(probe).toContain('new FrameDecoder(MAX_OUTBOUND_FRAME_BYTES)')
   expect(probe).toContain("payload.kind === 'sidecar.delivery-envelope'")
-  expect(probe).toContain("[cwdDir]: { hasTrustDialogAccepted: true }")
+  expect(probe).toContain("const trustedCwd = realpathSync(cwdDir)")
+  expect(probe).toContain("[trustedCwd]: { hasTrustDialogAccepted: true }")
   expect(probe).toContain(
     "'packaged sidecar did not read the isolated trusted-workspace fixture'",
   )
