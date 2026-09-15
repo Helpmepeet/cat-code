@@ -2575,13 +2575,9 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
             : 'Session created'
         }
       />
-      {availability === 'unavailable' ? (
-        <span className="shrink-0 text-[11px] text-text-muted">Unavailable</span>
-      ) : (
-        <span className="shrink-0 text-[11px] text-text-muted group-hover:text-peer">
-          Open →
-        </span>
-      )}
+      <span className="shrink-0 text-[11px] text-text-muted group-hover:text-peer">
+        Open →
+      </span>
     </>
   )
 
@@ -2589,7 +2585,18 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
     <div className={TOOL_CARD_SHELL_CLASS[style]}>
       <div className={headerClass}>
         {availability === 'unavailable' ? (
-          <div className={mainClass}>
+          <button
+            type="button"
+            className={mainClass}
+            aria-controls={detailsId}
+            aria-expanded={expanded}
+            aria-label={
+              expanded
+                ? `Hide creation details for ${created.name}`
+                : `Show creation details for ${created.name}`
+            }
+            onClick={() => setExpanded(!expanded)}
+          >
             <span className="w-4 shrink-0 text-center text-[13px] text-peer" aria-hidden>
               +
             </span>
@@ -2597,8 +2604,8 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
               Peer
             </span>
             <span className="min-w-0 flex-1 truncate text-xs">{target}</span>
-            {state}
-          </div>
+            <span className="shrink-0 text-[11px] text-text-muted">Unavailable</span>
+          </button>
         ) : (
           <button
             type="button"
@@ -2616,20 +2623,22 @@ function CreatedPeerCard({ row }: { row: ToolUseNestedRow }) {
             {state}
           </button>
         )}
-        <button
-          type="button"
-          className={detailsClass}
-          aria-controls={detailsId}
-          aria-expanded={expanded}
-          aria-label={
-            expanded
-              ? `Hide creation details for ${created.name}`
-              : `Show creation details for ${created.name}`
-          }
-          onClick={() => setExpanded(!expanded)}
-        >
-          Details <span aria-hidden>⌄</span>
-        </button>
+        {availability === 'unavailable' ? null : (
+          <button
+            type="button"
+            className={detailsClass}
+            aria-controls={detailsId}
+            aria-expanded={expanded}
+            aria-label={
+              expanded
+                ? `Hide creation details for ${created.name}`
+                : `Show creation details for ${created.name}`
+            }
+            onClick={() => setExpanded(!expanded)}
+          >
+            Details <span aria-hidden>⌄</span>
+          </button>
+        )}
       </div>
       {partialNote !== null ? <div className={noteClass}>{partialNote}</div> : null}
       {expanded ? (

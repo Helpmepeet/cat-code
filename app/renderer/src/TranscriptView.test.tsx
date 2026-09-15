@@ -2106,6 +2106,9 @@ test('an unavailable created peer never substitutes a same-named destination', (
   expect(html).toContain('>Unavailable</span>')
   expect(html).not.toContain('aria-label="Open session Bear"')
   expect(html).toContain('aria-label="Show creation details for Bear"')
+  expect(html).toContain('aria-expanded="false"')
+  expect(html).not.toContain('>Details ')
+  expect(html).not.toContain('aria-label="Session created"')
 })
 
 test('a roster listing says what it listed instead of its own tool name', () => {
