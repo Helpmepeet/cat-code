@@ -854,6 +854,7 @@ export function resolvePendingSubmit(connection: {
     case 'parked':
       return 'restore'
     case 'dead':
+    case 'restore_failed':
     case 'disconnected':
     case 'failed':
     case 'exited':

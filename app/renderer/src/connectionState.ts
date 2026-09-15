@@ -1,4 +1,7 @@
-import { PARKED_EXIT_CODE } from '../../shared/limits.js'
+import {
+  PARKED_EXIT_CODE,
+  RESUME_FAILED_EXIT_CODE,
+} from '../../shared/limits.js'
 import type {
   LifecycleFrame,
   ReadyFrame,
@@ -12,6 +15,12 @@ export type ConnectionSnapshot = {
     | 'starting'
     | 'ready'
     | 'dead'
+    /**
+     * The sidecar proved that the requested saved conversation could not be
+     * loaded. Renderer-local classification of the existing lifecycle exit code:
+     * no protocol or persisted state is added.
+     */
+    | 'restore_failed'
     /**
      * IDLE-PARK (decisions/IDLE-PARK.md) — the engine process behind this session
      * was reclaimed ON PURPOSE because the session sat idle, and the transcript is
@@ -83,6 +92,7 @@ export function isTerminalConnectionStatus(
     case 'parked':
       return false
     case 'dead':
+    case 'restore_failed':
     case 'disconnected':
     case 'failed':
     case 'exited':
@@ -121,6 +131,7 @@ export function connectionHasEngine(
       return true
     case 'parked':
     case 'dead':
+    case 'restore_failed':
     case 'disconnected':
     case 'failed':
     case 'exited':
@@ -173,6 +184,8 @@ export function connectionRecoveryMessage(
       return null
     case 'dead':
       return 'This session is no longer available. Restart it to keep working.'
+    case 'restore_failed':
+      return 'The saved conversation is unavailable. This session cannot be restarted.'
     case 'disconnected':
       return 'This session lost its connection. Restart it to reconnect.'
     case 'failed':
@@ -198,14 +211,20 @@ export function connectionRecoveryMessage(
  *
  * Only an `exited` frame is reclassified. A `disconnected` or `failed` frame is a
  * transport/spawn failure with no exit code behind it and stays exactly as honest
- * as it was; so does an `exited` frame carrying any other code, including the
- * `RESUME_FAILED_EXIT_CODE` death of a restore that could not load its transcript.
+ * as it was. The two classified exit codes remain distinct because a park is
+ * recoverable and a resume failure is not.
  */
 function lifecycleConnectionStatus(
   frame: LifecycleFrame,
 ): ConnectionSnapshot['status'] {
   if (frame.status === 'exited' && frame.exit?.code === PARKED_EXIT_CODE) {
     return 'parked'
+  }
+  if (
+    frame.status === 'exited' &&
+    frame.exit?.code === RESUME_FAILED_EXIT_CODE
+  ) {
+    return 'restore_failed'
   }
   return frame.status
 }

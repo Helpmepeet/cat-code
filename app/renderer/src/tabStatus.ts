@@ -108,7 +108,10 @@ export function deriveTabVisualState(args: {
     }
   }
 
-  if (descriptor.status === 'ready' && connectionDead) {
+  if (connection.status === 'restore_failed') {
+    label = 'unavailable'
+    tone = 'dead'
+  } else if (descriptor.status === 'ready' && connectionDead) {
     // Host still says ready, but the connection view saw a send fail — escalate.
     label = 'disconnected'
     tone = 'dead'
@@ -117,7 +120,7 @@ export function deriveTabVisualState(args: {
     descriptor.status === 'disconnected' ||
     descriptor.status === 'exited'
   ) {
-    // A terminal tab offers the dead-tab restart affordance (CH_RESTART).
+    // A retryable terminal tab offers the dead-tab restart affordance.
     restartable = true
   }
 
