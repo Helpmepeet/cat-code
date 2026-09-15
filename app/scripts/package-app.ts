@@ -184,7 +184,10 @@ function makeIcon(): string | null {
   const iconset = join(OUT_DIR, 'catcode.iconset')
   mkdirSync(iconset, { recursive: true })
   // Stock macOS tooling; no image dependency.
-  for (const size of [16, 32, 64, 128, 256, 512]) {
+  // iconutil accepts the standard 10-file iconset only. In particular, a
+  // standalone 64x64 pair is rejected by current macOS even though it is a
+  // valid raster size; 32x32@2x supplies that representation.
+  for (const size of [16, 32, 128, 256, 512]) {
     run('sips', ['-z', String(size), String(size), source, '--out', join(iconset, `icon_${size}x${size}.png`)], { quiet: true })
     run('sips', ['-z', String(size * 2), String(size * 2), source, '--out', join(iconset, `icon_${size}x${size}@2x.png`)], { quiet: true })
   }
