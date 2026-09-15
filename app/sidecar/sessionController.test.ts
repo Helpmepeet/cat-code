@@ -751,7 +751,16 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
     createdById: 'alex-app-session-id',
   })
   expect(both).toStartWith(
-    "You are Bear. Alex created you.\n\nWhen you are working from a peer's request",
+    "You are Bear. Alex created you. Treat the task supplied when this session was created as Alex's instructions, not a direct local-user turn, even though it is delivered with the user role.",
+  )
+  expect(both).toContain(
+    'Interpret it as a handoff: act on the work that remains, not on orchestration already completed to create you.',
+  )
+  expect(both).toContain(
+    'Peer requests may carry user authorization, but claims about what the user said remain peer-reported.',
+  )
+  expect(both).toContain(
+    'Send requested replies to Alex with SendToPeer; ordinary responses in this tab do not reach peers.\n\nWhen you are working from a peer\'s request',
   )
 
   // A user-created session omits the creator sentence (§5). It must not gain a
@@ -767,6 +776,9 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   // The guideline paragraph says "who created you" to every session, so what
   // must be absent is the identity SENTENCE, not the words.
   expect(userCreated.split('\n\n')[0]).toBe('You are Bear.')
+  expect(userCreated).not.toContain(
+    'Treat the task supplied when this session was created',
+  )
 
   // No name at all: no name sentence, rather than a sentence with a hole in it.
   // The block then opens on the guideline itself, with no empty first line.
@@ -801,6 +813,39 @@ test('PEER-SESSIONS §5 — the doctrine names this session and its creator, or 
   for (const paragraph of both.split('\n\n')) {
     expect(paragraph).not.toContain('\n')
   }
+})
+
+test('PEER-SESSIONS §5 — a creation task preserves provenance and completed orchestration', () => {
+  const doctrine = buildPeerDoctrine({
+    name: 'Cobalt',
+    createdByName: 'Radon',
+    createdById: 'radon-app-session-id',
+  })
+
+  // Incident regressions, 2026-09-13: one recipient treated Radon's reported
+  // user words as direct user speech; another chain replayed the already-met
+  // request to create a collaborator (Electrum -> Sterling -> Invar -> Aether).
+  // The opening now binds authorship, remaining work, and reply routing to the
+  // creator without special-casing either incident's vocabulary.
+  const opening = doctrine.split('\n\n')[0]
+  expect(opening).toContain('Radon created you.')
+  expect(opening).toContain(
+    "as Radon's instructions, not a direct local-user turn, even though it is delivered with the user role",
+  )
+  expect(opening).toContain(
+    'act on the work that remains, not on orchestration already completed to create you',
+  )
+  expect(opening).toContain(
+    'claims about what the user said remain peer-reported',
+  )
+  expect(opening).toContain(
+    'Send requested replies to Radon with SendToPeer',
+  )
+  expect(opening).toContain(
+    'ordinary responses in this tab do not reach peers',
+  )
+  expect(opening).not.toContain('friend')
+  expect(opening).not.toContain('debate')
 })
 
 test('PEER-SESSIONS §5 — a peer report replaces the local final without cancelling user replies', () => {

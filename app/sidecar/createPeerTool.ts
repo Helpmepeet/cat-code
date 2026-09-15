@@ -44,11 +44,13 @@ const inputSchema = lazySchema(() =>
       // argument description at the moment it writes the value, and that is
       // where the prose lost. A brief written under the old one-line
       // description restated the repository rulebook, enumerated the test
-      // battery, and dictated a five-field report, to a peer that loads the
-      // same instruction files the creator does
+      // battery, dictated a five-field report, and once replayed the user's
+      // already-satisfied request to create a collaborator. The recipient then
+      // repeated CreatePeer instead of doing the remaining work. A peer loads
+      // the same instruction files the creator does
       // (`docs/prompts/2026-09-06-peer-exchange-register.md`).
       .describe(
-        'What you would tell a colleague taking this on. Put in what only you have: the user\'s request, in their words where the wording matters, what you already found, the reasons behind decisions, what is open, and where the supporting material is. Leave out what it already has: it reads the same repository instructions you do, so restated rules, verification commands and commit conventions add nothing, and a step list or a report format turns a colleague into a worker. If you want to hear back, say what for.',
+        'What you would tell a colleague taking this on. Describe the work that remains after this CreatePeer call: omit orchestration the call already completed, and write from yourself to the recipient so the roles are unambiguous. Keep the brief at the user\'s level of specificity. Add relevant known context and explicit constraints, but do not invent a method, evaluation rubric, scope, or deliverable. For example, if the user says "debate the best feature to add," ask the peer to choose a position and debate it; do not prescribe repository inspection, scoring criteria, analysis of alternatives, or supporting evidence unless the user requested them. Put in what only you have: the user\'s intent, quoting exact wording only where it matters to the remaining work, what you already found, the reasons behind decisions, what is open, and where the supporting material is. Leave out what it already has: it reads the same repository instructions you do, so restated rules, verification commands and commit conventions add nothing, and a step list or a report format turns a colleague into a worker. If you want to hear back, say what for.',
       ),
     model: z
       .string()
@@ -173,7 +175,7 @@ export function createCreatePeerTool(
         // get for itself is what this session already found. The old version
         // demanded a report and told the creator to wait for it, which left a
         // creator deferring the clarifying question its peer needed answered.
-        "Give it the user's intent faithfully, quoting exactly where the wording matters, and share what you already know that would save it rediscovery: findings, constraints, earlier attempts, the reasons behind decisions, open questions, and where the supporting material is, with fact and assumption told apart. Leave the approach to it. If the result matters to your own work or to the user, say you want to hear back and what; otherwise do not ask. Asking once does not set up a standing arrangement. It may write to you with a question before it is done; consider that when it arrives and answer promptly if it is waiting on you. Do not watch it work: if you asked to hear back, that arrives as a message, and ListPeers shows only whether it is active, never whether it has finished.",
+        "Describe the work that remains after this peer is created, not orchestration this call already completed. Write from yourself to the recipient so the roles are unambiguous. Give it the user's intent faithfully, quoting exact wording only where it matters to the remaining work, and share what you already know that would save it rediscovery: findings, constraints, earlier attempts, the reasons behind decisions, open questions, and where the supporting material is, with fact and assumption told apart. Leave the approach to it. If the result matters to your own work or to the user, say you want to hear back and what; otherwise do not ask. Asking once does not set up a standing arrangement. It may write to you with a question before it is done; consider that when it arrives and answer promptly if it is waiting on you. Do not watch it work: if you asked to hear back, that arrives as a message, and ListPeers shows only whether it is active, never whether it has finished.",
         '',
         'The new peer starts on your model and reasoning effort unless you name others. It starts with the permission setting the user chose as their default, not yours, so it may stop and ask the user about work you take for granted.',
         '',

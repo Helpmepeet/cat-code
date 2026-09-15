@@ -279,6 +279,15 @@ test('the creation guidance says what to share and makes hearing back a choice',
   expect(prompt).toContain(
     'share what you already know that would save it rediscovery',
   )
+  expect(prompt).toContain(
+    'Describe the work that remains after this peer is created, not orchestration this call already completed',
+  )
+  expect(prompt).toContain(
+    'Write from yourself to the recipient so the roles are unambiguous',
+  )
+  expect(prompt).toContain(
+    'quoting exact wording only where it matters to the remaining work',
+  )
   expect(prompt).toContain('Leave the approach to it.')
   expect(prompt).not.toContain('the goal, what done looks like, the files in scope')
 
@@ -313,11 +322,33 @@ test('the prompt argument says what to put in and what to leave out', () => {
   const description = shape.prompt.description ?? ''
 
   expect(description).toStartWith('What you would tell a colleague')
-  expect(description).toContain('the user\'s request, in their words where the wording matters')
+  expect(description).toContain('Describe the work that remains after this CreatePeer call')
+  expect(description).toContain('omit orchestration the call already completed')
+  expect(description).toContain(
+    'write from yourself to the recipient so the roles are unambiguous',
+  )
+  expect(description).toContain(
+    "Keep the brief at the user's level of specificity",
+  )
+  expect(description).toContain(
+    'do not invent a method, evaluation rubric, scope, or deliverable',
+  )
+  expect(description).toContain(
+    'if the user says "debate the best feature to add," ask the peer to choose a position and debate it',
+  )
+  expect(description).toContain(
+    'do not prescribe repository inspection, scoring criteria, analysis of alternatives, or supporting evidence unless the user requested them',
+  )
+  expect(description).toContain(
+    "the user's intent, quoting exact wording only where it matters to the remaining work",
+  )
   expect(description).toContain('Leave out what it already has')
   expect(description).toContain('restated rules, verification commands and commit conventions add nothing')
   expect(description).toContain('a step list or a report format turns a colleague into a worker')
   expect(description).toContain('If you want to hear back, say what for.')
+  expect(description).not.toContain(
+    "the user's request, in their words where the wording matters",
+  )
   expect(description).not.toContain('The first instruction the new peer receives')
 })
 

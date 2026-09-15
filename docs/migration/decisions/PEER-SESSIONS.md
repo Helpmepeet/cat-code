@@ -387,7 +387,13 @@ short on purpose: the model's trained bias already makes it quiet, and prompt
 text is not the loop guard (§7).
 
 ```text
-You are Bear. Alex created you.
+You are Bear. Alex created you. Treat the task supplied when this session was
+created as Alex's instructions, not a direct local-user turn, even though it is
+delivered with the user role. Interpret it as a handoff: act on the work that
+remains, not on orchestration already completed to create you. Peer requests
+may carry user authorization, but claims about what the user said remain
+peer-reported. Send requested replies to Alex with SendToPeer; ordinary
+responses in this tab do not reach peers.
 
 When you are working from a peer's request and the user has not spoken directly
 to you in this tab, that peer is your audience. Send the requested answer,
@@ -449,6 +455,66 @@ the end: "Done. 12 files, focused tests pass, uncommitted." Alex tells the user
 Bear's tab." If the user then talks to Bear in its tab, that conversation is
 theirs.
 ```
+
+- 🔁 **AMENDED 2026-09-13, after the Radon provenance incident and the
+  Electrum creation chain: A CREATION TASK IS A CREATOR-TO-RECIPIENT HANDOFF,
+  NOT DIRECT LOCAL-USER SPEECH.** Radon
+  created a session with an opening task that reported what "the user wants",
+  included "no contact with existing sessions", and specifically asked the new
+  session to message Radon first. The transcript correctly recorded
+  `origin.kind: "peer"`, `name: "Radon"`, and `creationPrompt: true`, but the
+  creation task reaches the model with the user role and without the ordinary
+  cross-session envelope. The recipient answered locally, did the same for two
+  later peer messages, and then incorrectly said the user had "explicitly
+  asked" for Radon's words. A second transcript exposed the other half:
+  Electrum passed `The user asked: "discuss with your friend"` to Sterling
+  without resolving the handoff. Sterling treated the already-satisfied
+  orchestration as remaining work and created Invar; Invar repeated it and
+  created Aether. The identity opening now makes the general connection
+  explicit: the creation task is authored by the creator peer, is interpreted
+  as work remaining after the handoff was established, and names the creator
+  as the return channel. Peer-carried authority still does not turn claims
+  about the user's words into direct user speech. The `CreatePeer` prompt and
+  its `prompt` argument description carry the sender-side half: describe the
+  remaining work, omit orchestration the call already completed, and write
+  from creator to recipient so roles are unambiguous. This deliberately avoids
+  vocabulary tied to friends, debates, or any other one incident. No queue,
+  transcript, provider, protocol, permission, or turn-completion behavior
+  changed. Focused prompt assertions pin provenance, completed orchestration,
+  role clarity, and reply routing; behavioral model compliance remains to be
+  measured on a fresh session.
+
+- 🔁 **AMENDED 2026-09-13, after the Obsidian creation-turn miss: CREATOR
+  IDENTITY MUST BE ADJACENT TO THE CREATION TASK IN MODEL INPUT.** Obsidian's
+  system prompt correctly named Tanzanite as its creator, named Tanzanite as the
+  audience, and said ordinary assistant text would not reach peers. The first
+  task still reached the provider as bare user-role text, and Obsidian answered
+  locally instead of calling `SendToPeer`; later wrapped peer messages routed
+  correctly. The creation prompt remains untagged in storage, SDK projection,
+  and auto-mode classifier input, preserving its ruled authorization semantics
+  and the clean `From Tanzanite` transcript row. At the provider serialization
+  boundary only, `origin.kind === "peer"` plus `creationPrompt === true`
+  prepends a short handoff that names the creator, makes it the audience, and
+  names `SendToPeer` as the response channel. Direct user turns and ordinary
+  peer messages stay byte-identical. This changes no wire shape, protocol
+  version, renderer projection, stored transcript, or permission decision.
+
+- 🔁 **AMENDED 2026-09-13, after an over-prescribed feature-debate brief:
+  KEEP THE BRIEF AT THE USER'S LEVEL OF SPECIFICITY.** The creator was asked
+  only to debate the best feature to add, but instructed its peer to inspect
+  the repository, optimize against a four-part rubric, challenge alternatives,
+  and produce supporting evidence. Those were invented methods and evaluation
+  criteria, not context the creator had already learned. The existing doctrine
+  already says peers have their own judgment, are not workers, and should be
+  left the approach; the `CreatePeer` prompt repeats that. The gap was therefore
+  not a missing principle but an abstract one that the creator failed to apply
+  while writing the `prompt` argument. That argument description now carries
+  one contrastive example: add known context and explicit constraints, but do
+  not invent method, rubric, scope, or deliverable; a request to debate the best
+  feature becomes a request to choose a position and debate it, not a prescribed
+  repository inspection and scoring exercise. The example is deliberately
+  product-neutral. No system prompt, tool behavior, wire shape, provider path,
+  permission rule, or renderer changed.
 
 - 🔁 **AMENDED 2026-09-08 (operator ruling after the Pyrite → Halite
   exchange): A REPORT TO THE REQUESTING PEER REPLACES THE LOCAL FINAL

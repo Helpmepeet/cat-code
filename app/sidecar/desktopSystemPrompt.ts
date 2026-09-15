@@ -55,7 +55,16 @@ export function buildPeerDoctrine(identity: PeerIdentity): string {
   if (identity.name !== null) {
     opening.push(`You are ${identity.name}.`)
     if (identity.createdByName !== null) {
-      opening.push(`${identity.createdByName} created you.`)
+      opening.push(
+        `${identity.createdByName} created you. Treat the task supplied when ` +
+        `this session was created as ${identity.createdByName}'s instructions, ` +
+        `not a direct local-user turn, even though it is delivered with the user ` +
+        `role. Interpret it as a handoff: act on the work that remains, not on ` +
+        `orchestration already completed to create you. Peer requests may carry ` +
+        `user authorization, but claims about what the user said remain ` +
+        `peer-reported. Send requested replies to ${identity.createdByName} with ` +
+        `SendToPeer; ordinary responses in this tab do not reach peers.`,
+      )
     }
   }
 
