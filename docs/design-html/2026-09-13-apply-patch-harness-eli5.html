@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apply Patch Harness — ELI5</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #20252b;
+      --muted: #6d747d;
+      --paper: #fbfaf7;
+      --line: #d9d7d0;
+      --stop: #d65245;
+      --go: #2e8b70;
+      --sun: #efb84e;
+      --blue: #5188c7;
+      --violet: #8469ad;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+    }
+
+    .x-page {
+      width: min(1180px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 28px 0 40px;
+    }
+
+    .x-kicker,
+    .x-label {
+      color: var(--muted);
+      font-family: ui-monospace, "SFMono-Regular", monospace;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .18em;
+      text-transform: uppercase;
+    }
+
+    .x-kicker {
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .x-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 44px;
+      margin-top: 34px;
+    }
+
+    .x-label { margin-bottom: 16px; }
+
+    .scene {
+      min-height: 590px;
+      display: grid;
+      grid-template-rows: repeat(3, 1fr) auto;
+      gap: 14px;
+    }
+
+    .lane {
+      position: relative;
+      display: grid;
+      grid-template-columns: 112px 46px 1fr 52px;
+      align-items: center;
+      min-height: 156px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .name {
+      align-self: start;
+      padding-top: 22px;
+      color: var(--muted);
+      font-family: ui-monospace, "SFMono-Regular", monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .arrow {
+      color: #aaa79f;
+      font-size: 32px;
+      text-align: center;
+    }
+
+    .result {
+      width: 44px;
+      height: 44px;
+      display: grid;
+      place-items: center;
+      border: 3px solid currentColor;
+      border-radius: 50%;
+      font-size: 24px;
+      font-weight: 900;
+    }
+
+    .bad { color: var(--stop); }
+    .good { color: var(--go); }
+
+    .patch {
+      position: relative;
+      width: 96px;
+      height: 112px;
+      padding: 16px 12px;
+      background: #fff;
+      border: 3px solid var(--ink);
+      border-radius: 8px;
+      box-shadow: 6px 6px 0 #ddd9ce;
+    }
+
+    .patch::before,
+    .patch::after {
+      content: "";
+      display: block;
+      height: 7px;
+      margin-bottom: 10px;
+      border-radius: 2px;
+      background: var(--blue);
+    }
+
+    .patch::after { width: 60%; background: var(--violet); }
+
+    .leak {
+      position: absolute;
+      right: -35px;
+      bottom: -17px;
+      color: var(--stop);
+      font-family: ui-monospace, monospace;
+      font-size: 22px;
+      font-weight: 900;
+      transform: rotate(8deg);
+    }
+
+    .wide-slot,
+    .shape-slot {
+      width: 100%;
+      min-height: 104px;
+      display: grid;
+      place-items: center;
+      background: #ece9e1;
+      border: 3px solid var(--ink);
+      border-radius: 12px;
+    }
+
+    .wide-slot::after {
+      content: "";
+      width: 80%;
+      height: 62px;
+      border: 4px dashed var(--stop);
+      border-radius: 18px;
+    }
+
+    .shape-slot::after {
+      content: "";
+      width: 90px;
+      height: 78px;
+      background: #fff;
+      border: 4px solid var(--go);
+      clip-path: polygon(0 0, 100% 0, 100% 72%, 72% 72%, 72% 100%, 0 100%);
+    }
+
+    .copies {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+    }
+
+    .copy {
+      width: 62px;
+      height: 76px;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      border: 3px solid var(--ink);
+      border-radius: 8px;
+      font: 900 25px ui-monospace, monospace;
+    }
+
+    .path {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+    }
+
+    .pin {
+      width: 55px;
+      height: 70px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--blue);
+      border: 3px solid var(--ink);
+      border-radius: 50% 50% 50% 8px;
+      font: 900 25px ui-monospace, monospace;
+      transform: rotate(-8deg);
+    }
+
+    .pin span { transform: rotate(8deg); }
+
+    .path-arrow {
+      color: var(--go);
+      font-size: 34px;
+      font-weight: 900;
+    }
+
+    .tape {
+      position: relative;
+      height: 58px;
+      background: repeating-linear-gradient(90deg, #fff 0 22px, #d4d1c8 22px 25px);
+      border: 3px solid var(--ink);
+      border-radius: 7px;
+    }
+
+    .tiny-x {
+      position: absolute;
+      right: 18px;
+      top: 8px;
+      color: var(--stop);
+      font-size: 31px;
+      font-weight: 950;
+    }
+
+    .cut {
+      position: absolute;
+      left: 46px;
+      top: -22px;
+      color: var(--muted);
+      font-size: 38px;
+    }
+
+    .zoom {
+      position: relative;
+      height: 104px;
+      display: grid;
+      place-items: center;
+      background: #fff;
+      border: 3px solid var(--ink);
+      border-radius: 12px;
+      font: 800 22px ui-monospace, monospace;
+    }
+
+    .zoom strong { color: var(--stop); }
+
+    .glass {
+      position: absolute;
+      right: 16px;
+      bottom: 11px;
+      width: 51px;
+      height: 51px;
+      border: 6px solid var(--sun);
+      border-radius: 50%;
+    }
+
+    .glass::after {
+      content: "";
+      position: absolute;
+      width: 27px;
+      height: 6px;
+      right: -21px;
+      bottom: -10px;
+      background: var(--sun);
+      border-radius: 5px;
+      transform: rotate(48deg);
+    }
+
+    .score {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 76px;
+      font: 900 clamp(23px, 3vw, 38px) ui-monospace, monospace;
+      letter-spacing: -.05em;
+    }
+
+    .score.bad { border-top: 7px solid var(--stop); }
+    .score.good { border-top: 7px solid var(--go); }
+
+    @media (max-width: 780px) {
+      .x-grid { grid-template-columns: 1fr; gap: 54px; }
+      .scene { min-height: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main class="x-page">
+    <div class="x-kicker">Apply_patch · picture explainer</div>
+    <div class="x-grid">
+      <section>
+        <div class="x-label">Now</div>
+        <div class="scene">
+          <div class="lane">
+            <div class="name">Loose grammar</div>
+            <div class="arrow">→</div>
+            <div class="wide-slot">
+              <div class="patch"><span class="leak">blah!</span></div>
+            </div>
+            <div class="result bad">×</div>
+          </div>
+          <div class="lane">
+            <div class="name">Three matches</div>
+            <div class="arrow">→</div>
+            <div class="copies">
+              <div class="copy">A</div>
+              <div class="copy">A</div>
+              <div class="copy">A</div>
+            </div>
+            <div class="result bad">×</div>
+          </div>
+          <div class="lane">
+            <div class="name">Long error</div>
+            <div class="arrow">→</div>
+            <div class="tape"><span class="cut">✂</span><span class="tiny-x">×</span></div>
+            <div class="result bad">?</div>
+          </div>
+          <div class="score bad">18 / 68 STOPS</div>
+        </div>
+      </section>
+
+      <section>
+        <div class="x-label">Fix</div>
+        <div class="scene">
+          <div class="lane">
+            <div class="name">Real grammar</div>
+            <div class="arrow">→</div>
+            <div class="shape-slot"><div class="patch"></div></div>
+            <div class="result good">✓</div>
+          </div>
+          <div class="lane">
+            <div class="name">First + next</div>
+            <div class="arrow">→</div>
+            <div class="path">
+              <div class="pin"><span>1</span></div>
+              <div class="path-arrow">→</div>
+              <div class="pin"><span>2</span></div>
+            </div>
+            <div class="result good">✓</div>
+          </div>
+          <div class="lane">
+            <div class="name">Mismatch zoom</div>
+            <div class="arrow">→</div>
+            <div class="zoom">side<strong>Nen</strong><span class="glass"></span></div>
+            <div class="result good">✓</div>
+          </div>
+          <div class="score good">SAFE + HELPFUL</div>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

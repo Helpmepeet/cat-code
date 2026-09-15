@@ -30,3 +30,6 @@ ds-bundle/
 
 # Self-created auto-mode corpus verification probe (regenerable via scripts/auto-mode-corpus.ts)
 fixtures/auto-mode-corpus-probe/
+
+# Local review and test evidence
+/tmp/

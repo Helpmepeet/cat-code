@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cat Code settings · Proposed design</title>
+<style>
+@font-face{font-family:"DM Sans";font-style:normal;font-weight:100 1000;font-display:swap;src:url("../../app/renderer/src/assets/fonts/DMSans-Variable.woff2") format("woff2")}
+@font-face{font-family:"DM Mono";font-style:normal;font-weight:400;font-display:swap;src:url("../../app/renderer/src/assets/fonts/DMMono-Regular.woff2") format("woff2")}
+html,body{margin:0;padding:0}
+.x-label{height:28px;box-sizing:border-box;padding:8px 20px;background:#e8e8ea;color:#67676c;font:10px/12px ui-monospace,monospace;letter-spacing:.12em}
+.settings{--accent:#f472b6;--accent-soft:#f9a8d4;--accent-wash:rgba(244,114,182,.1);--app-bg:#09090b;--shell-chrome:#070709;--surface-raised:#111113;--surface-panel:#0a0a0c;--shell-seam:rgba(255,255,255,.06);--shell-hover:rgba(255,255,255,.045);--text-primary:#f4f4f5;--text-muted:#a1a1aa;--text-subtle:#98989f;--on-fill:#09090b;color-scheme:dark;display:grid;grid-template-columns:224px minmax(0,1fr);min-height:calc(100vh - 28px);background:var(--app-bg);color:var(--text-primary);font:14px/1.5 "DM Sans",-apple-system,BlinkMacSystemFont,sans-serif}
+.settings[data-appearance="light"]{color-scheme:light;--app-bg:#fcfcfd;--shell-chrome:#f1f1f4;--surface-raised:#fff;--surface-panel:#f7f7f9;--shell-seam:rgba(9,9,11,.1);--shell-hover:rgba(9,9,11,.04);--text-primary:#18181b;--text-muted:#52525b;--text-subtle:#575761;--on-fill:#fff;--accent:#bb3e84;--accent-soft:#bb3e84;--accent-wash:rgba(187,62,132,.08)}
+.settings *{box-sizing:border-box}
+.settings [hidden]{display:none!important}
+.settings button,.settings input,.settings select{font:inherit;color:inherit}
+.settings button,.settings select{cursor:pointer}
+.settings button{background:transparent;border:0}
+.settings button:disabled,.settings select:disabled{cursor:default;color:var(--text-subtle)}
+.settings :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.settings svg{width:17px;height:17px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0}
+.settings h1,.settings h2,.settings h3,.settings p{margin:0}
+.settings code{font:11px/1.5 "DM Mono",monospace;color:var(--text-subtle)}
+.settings .sidebar{padding:24px 16px 24px 20px;background:var(--shell-chrome);border-right:1px solid var(--shell-seam);position:sticky;top:0;height:100vh;overflow:auto}
+.settings .sidebar h1{font-size:20px;line-height:28px;letter-spacing:-.55px;font-weight:650;margin:0 10px 22px}
+.settings .nav-group{margin-top:23px}
+.settings .nav-group:first-child{margin-top:0}
+.settings .nav-label{font-size:11px;font-weight:550;color:var(--text-subtle);padding:0 10px;margin:0 0 7px}
+.settings .nav-item{display:flex;align-items:center;gap:9px;text-align:left;width:100%;height:33px;padding:0 10px;border-radius:5px;color:var(--text-muted);font-size:13px;white-space:nowrap}
+.settings .nav-item:hover{background:var(--shell-hover);color:var(--text-primary)}
+.settings .nav-item[aria-current="page"]{color:var(--accent-soft);background:var(--accent-wash);font-weight:600}
+.settings .nav-item svg{width:14px;height:14px;margin-left:auto}
+.settings .workspace{min-width:0;padding:24px 48px 72px}
+.settings .column{max-width:760px}
+.settings .search{height:38px;width:100%;display:flex;align-items:center;gap:10px;padding:0 11px;border:1px solid var(--shell-seam);background:var(--surface-raised);border-radius:6px;color:var(--text-subtle);margin-bottom:35px}
+.settings .search:focus-within{border-color:var(--accent)}
+.settings .search input{border:0;outline:0;background:transparent;min-width:0;flex:1;font-size:13px}
+.settings .search input::placeholder{color:var(--text-subtle)}
+.settings .search input::-webkit-search-cancel-button{display:none}
+.settings .search kbd{font:10px/1 "DM Mono",monospace;white-space:nowrap;color:var(--text-subtle)}
+.settings .search button{padding:4px;display:flex;color:var(--text-subtle)}
+.settings .page-heading{display:flex;gap:20px;align-items:center;justify-content:space-between;margin-bottom:6px}
+.settings h2{font-size:25px;line-height:34px;letter-spacing:-.8px;font-weight:600}
+.settings .page-subtitle{font-size:13px;line-height:20px;color:var(--text-muted);max-width:65ch}
+.settings .scope-area{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-top:24px;padding-bottom:18px;border-bottom:1px solid var(--shell-seam)}
+.settings .scope-select{height:31px;border:1px solid var(--shell-seam);border-radius:5px;background:var(--surface-raised);padding:0 25px 0 9px;font-size:12px;max-width:100%}
+.settings .scope-label{display:flex;gap:7px;align-items:center;color:var(--text-muted);font-size:12px}
+.settings .scope-label svg{width:13px;height:13px}
+.settings .file-target{margin-left:auto;overflow-wrap:anywhere}
+.settings .scope-note{margin-top:10px;color:var(--text-subtle);font-size:12px;line-height:19px}
+.settings .section{margin-top:29px}
+.settings h3{font-weight:600;font-size:13px;margin-bottom:7px}
+.settings .row{min-height:69px;display:grid;grid-template-columns:minmax(0,1fr) 192px;gap:32px;align-items:center;padding:16px 0;border-bottom:1px solid var(--shell-seam);scroll-margin:30px}
+.settings .row:last-child{border-bottom:0}
+.settings .row-title{font-size:14px;font-weight:500;line-height:21px}
+.settings .row-desc{font-size:13px;line-height:20px;color:var(--text-subtle);margin-top:3px;max-width:58ch}
+.settings .row-source{display:flex;gap:8px;align-items:center;font-size:11px;line-height:17px;color:var(--text-subtle);margin-top:5px}
+.settings .reset{font-size:11px;text-decoration:underline;text-underline-offset:3px;padding:0;color:var(--text-muted)}
+.settings .control{display:flex;justify-content:flex-end;align-items:center;gap:10px}
+.settings .control select{width:192px;height:33px;padding:0 8px;border:1px solid var(--shell-seam);border-radius:5px;background:var(--surface-raised);font-size:12px}
+.settings .control input[type="number"]{width:82px;height:33px;padding:0 9px;border:1px solid var(--shell-seam);border-radius:5px;background:var(--surface-raised);font-size:12px}
+.settings .switch{width:31px;height:18px;border:1px solid var(--shell-seam);border-radius:10px;background:var(--shell-hover);padding:2px;display:flex;align-items:center;justify-content:flex-start}
+.settings .switch::after{content:"";display:block;width:12px;height:12px;border-radius:50%;background:var(--text-subtle)}
+.settings .switch[aria-checked="true"]{background:var(--accent);border-color:var(--accent);justify-content:flex-end}
+.settings .switch[aria-checked="true"]::after{background:var(--on-fill)}
+.settings .switch-state{font-size:11px;color:var(--text-subtle);min-width:18px}
+.settings .swatches{display:flex;align-items:center;gap:9px}
+.settings .swatch{width:21px;height:21px;border-radius:50%;border:3px solid var(--app-bg);outline:1px solid transparent}
+.settings .swatch[aria-checked="true"]{outline-color:var(--text-primary)}
+.settings .swatch[data-value="pink"]{background:#f472b6}.settings .swatch[data-value="blue"]{background:#60a5fa}.settings .swatch[data-value="green"]{background:#4ade80}.settings .swatch[data-value="purple"]{background:#c084fc}.settings .swatch[data-value="amber"]{background:#fbbf24}
+.settings .detail{margin-top:15px}
+.settings .detail summary{cursor:pointer;color:var(--text-muted);font-size:12px;width:max-content}
+.settings .detail p{font-size:12px;color:var(--text-subtle);line-height:20px;padding-top:11px}
+.settings .code-sample{padding:18px 20px;margin:14px 0 0;border:1px solid var(--shell-seam);border-radius:5px;background:var(--surface-panel);color:var(--text-primary);font:12px/1.9 "DM Mono",monospace;overflow:auto;white-space:pre}
+.settings .code-keyword{color:light-dark(#a3144d,#ff79c6)}.settings .code-string{color:light-dark(#846e15,#f1fa8c)}.settings .code-function{color:light-dark(#14710a,#50fa7b)}
+.settings [data-theme="oneDark"] .code-keyword{color:light-dark(#a626a4,#c678dd)}.settings [data-theme="oneDark"] .code-string{color:light-dark(#468a45,#98c379)}.settings [data-theme="oneDark"] .code-function{color:light-dark(#4078f2,#61afef)}
+.settings [data-theme="nord"] .code-keyword{color:light-dark(#2e6b8f,#81a1c1)}.settings [data-theme="nord"] .code-string{color:light-dark(#4f7a3a,#a3be8c)}.settings [data-theme="nord"] .code-function{color:light-dark(#2f7d92,#88c0d0)}
+.settings .quiet-value{font-size:12px;color:var(--text-muted);text-align:right}
+.settings .quiet-block{padding:22px 0;border-bottom:1px solid var(--shell-seam)}
+.settings .quiet-block h3{font-size:14px;font-weight:500;margin-bottom:5px}
+.settings .quiet-block p{font-size:12px;line-height:20px;color:var(--text-subtle);max-width:65ch}
+.settings .empty-state{padding:36px 0;border-bottom:1px solid var(--shell-seam)}
+.settings .empty-state h3{font-size:14px;font-weight:500;margin-bottom:6px}
+.settings .empty-state p{font-size:12px;color:var(--text-subtle);max-width:60ch}
+.settings .result-count{font-size:12px;color:var(--text-subtle);margin:15px 0 10px}
+.settings .result{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;text-align:left;width:100%;padding:19px 0;border-bottom:1px solid var(--shell-seam)}
+.settings .result:hover .row-title{color:var(--accent-soft)}
+.settings .result-path{display:flex;gap:7px;align-items:center;color:var(--text-subtle);font-size:11px;margin-bottom:5px}
+.settings .result-path svg{width:10px;height:10px}
+.settings .result-value{font-size:12px;color:var(--text-subtle);align-self:center;max-width:190px;text-align:right}
+.settings mark{background:var(--accent-wash);color:var(--text-primary);padding:0}
+.settings .notice{display:flex;align-items:flex-start;gap:9px;padding:18px 0;color:var(--text-muted);font-size:12px;line-height:20px;border-bottom:1px solid var(--shell-seam)}
+.settings .notice svg{width:15px;height:15px;margin-top:2px}
+.settings .visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(min-width:1500px){.settings .workspace{padding-left:56px}}
+@media(max-width:950px){.settings{grid-template-columns:204px minmax(0,1fr)}.settings .sidebar{padding-left:12px;padding-right:12px}.settings .workspace{padding-left:28px;padding-right:28px}.settings .row{gap:20px;grid-template-columns:minmax(0,1fr) 168px}.settings .control select{width:168px}.settings .file-target{margin-left:0;width:100%;padding-top:2px}}
+@media(max-width:700px){.settings{display:block}.settings .sidebar{position:static;height:auto;padding:15px 18px 10px;border-right:0;border-bottom:1px solid var(--shell-seam);overflow:visible}.settings .sidebar h1{margin:0 0 11px;font-size:18px}.settings nav{display:flex;overflow:auto;gap:5px;padding:2px 0}.settings .nav-group{display:flex;gap:3px;margin:0}.settings .nav-label{display:none}.settings .nav-item{width:auto;flex:none;padding:0 10px;height:32px;font-size:12px}.settings .nav-item svg{display:none}.settings .workspace{padding:22px 22px 50px}.settings .search{margin-bottom:27px}.settings h2{font-size:23px}.settings .row{grid-template-columns:minmax(0,1fr) 150px;gap:14px}.settings .control select{width:150px}.settings .page-heading{align-items:start}.settings .search kbd{display:none}}
+@media(max-width:430px){.settings .row{grid-template-columns:minmax(0,1fr) 118px;gap:12px}.settings .control select{width:118px}.settings .row-title{font-size:13px}.settings .swatches{gap:4px}.settings .swatch{width:18px;height:18px}.settings .workspace{padding-left:17px;padding-right:17px}.settings .result-value{max-width:110px}}
+</style>
+</head>
+<body>
+<div class="x-label">PROPOSED</div>
+<div class="settings" id="settings" data-appearance="dark">
+  <aside class="sidebar"><h1>Settings</h1><nav aria-label="Settings categories" id="navigation"></nav></aside>
+  <main class="workspace"><div class="column">
+    <div class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg><input type="search" id="search" aria-label="Search all settings" placeholder="Search all settings" autocomplete="off"><kbd id="search-hint">⌘ K</kbd><button type="button" id="clear-search" aria-label="Clear search" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"></path></svg></button></div>
+    <div id="page"></div>
+    <div id="status" role="status" class="visually-hidden"></div>
+  </div></main>
+</div>
+<script>
+"use strict";
+const lockIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>';
+const arrowIcon='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"></path></svg>';
+const pages={
+  general:{title:'General',subtitle:'Everyday behavior for new sessions.',kind:'engine'},
+  appearance:{title:'Appearance',subtitle:'The window and the way your conversations look.',kind:'app'},
+  model:{title:'Model & reasoning',subtitle:'The model and reasoning defaults for new sessions.',kind:'engine'},
+  permissions:{title:'Permissions',subtitle:'Saved permissions for new sessions.',kind:'engine'},
+  privacy:{title:'Privacy & data',subtitle:'Your saved conversations and retention preferences.',kind:'engine'},
+  memory:{title:'Memory',subtitle:'Instruction files and automatic memories.',kind:'engine'},
+  agents:{title:'Agents',subtitle:'Specialized agents available to your conversations.',kind:'engine'},
+  skills:{title:'Skills',subtitle:'Reusable instructions and commands.',kind:'engine'},
+  plugins:{title:'Plugins',subtitle:'Installed plugins and their capabilities.',kind:'engine'},
+  mcp:{title:'MCP servers',subtitle:'Connections to tools and data.',kind:'engine'},
+  hooks:{title:'Hooks',subtitle:'Commands attached to agent events.',kind:'engine'},
+  remote:{title:'Remote',subtitle:'Remote Control and direct connections.',kind:'remote'},
+  diagnostics:{title:'Diagnostics',subtitle:'App information and troubleshooting.',kind:'app'},
+  policy:{title:'Policies',subtitle:'Enforced settings and their sources.',kind:'policy'}
+};
+const groups=[{label:'',ids:['general','appearance','model','permissions','privacy','memory']},{label:'Extensions',ids:['agents','skills','plugins','mcp','hooks']},{label:'Advanced',ids:['remote','diagnostics','policy']}];
+const rows=[
+ {id:'respectGitignore',page:'general',section:'Files & workflow',label:'Respect .gitignore',desc:'Keep ignored files out of the file picker.',kind:'toggle',value:true},
+ {id:'includeGitInstructions',page:'general',section:'Files & workflow',label:'Git workflow instructions',desc:'Include the built-in guidance for commits and pull requests.',kind:'toggle',value:true},
+ {id:'outputStyle',page:'general',section:'Responses',label:'Output style',desc:'The instructions that shape how the assistant responds.',kind:'select',options:[['default','Default'],['Explanatory','Explanatory'],['Learning','Learning']],value:'default'},
+ {id:'promptSuggestionEnabled',page:'general',section:'Responses',label:'Prompt suggestions',desc:'Offer suggested follow-up prompts.',kind:'toggle',value:true},
+ {id:'autoUpdatesChannel',page:'general',section:'Updates',label:'Update channel',desc:'The release channel used for updates.',kind:'select',options:[['latest','Latest'],['stable','Stable']],value:'latest'},
+ {id:'scheme',page:'appearance',section:'Window',label:'Appearance',desc:'Light or dark for the whole window.',kind:'select',options:[['system','Match system'],['light','Light'],['dark','Dark']],value:'dark'},
+ {id:'accent',page:'appearance',section:'Window',label:'Accent color',desc:'Active navigation, selections, and switches.',kind:'swatches',value:'pink'},
+ {id:'arrival',page:'appearance',section:'Conversation',label:'Text arrival',desc:'How newly delivered text appears.',kind:'select',options:[['instant','Instant'],['smooth','Smooth'],['flowing','Flowing']],value:'smooth'},
+ {id:'toolStyle',page:'appearance',section:'Conversation',label:'Tool calls',desc:'Display tool calls as cards or compact lines.',kind:'select',options:[['cards','Cards'],['lines','Lines']],value:'cards'},
+ {id:'toolsExpanded',page:'appearance',section:'Conversation',label:'Tools open by default',desc:'Expand tool details when a call arrives.',kind:'toggle',value:false},
+ {id:'layout',page:'appearance',section:'Conversation',label:'Reasoning layout',desc:'The visual layout of reasoning summaries.',kind:'select',options:[['trail','Trail'],['blocks','Blocks']],value:'trail'},
+ {id:'codeTheme',page:'appearance',section:'Code',label:'Code theme',desc:'Colors for code blocks in your conversations.',kind:'select',options:[['dracula','Dracula'],['oneDark','One Dark'],['nord','Nord']],value:'dracula'},
+ {id:'model',page:'model',section:'Model',label:'Default model',desc:'Let Cat Code choose the model for the account.',kind:'select',options:[['default','Cat Code default'],['example-model','Example model']],value:'default'},
+ {id:'alwaysThinkingEnabled',page:'model',section:'Reasoning',label:'Always-on thinking',desc:'Enable extended thinking for models that support it.',kind:'toggle',value:true},
+ {id:'fastMode',page:'model',section:'Reasoning',label:'Fast mode',desc:'Prefer lower latency when the selected model supports it.',kind:'toggle',value:false},
+ {id:'reasoningDisplay',page:'model',section:'Reasoning',label:'Reasoning display',desc:'Which reasoning from Codex or GPT models is shown.',kind:'select',options:[['off','Off'],['summary','Summary'],['raw','Raw trace']],value:'summary'},
+ {id:'cleanupPeriodDays',page:'privacy',section:'Saved conversations',label:'Transcript retention',desc:'Days to keep transcripts. Set to 0 to stop saving new sessions.',kind:'number',value:30},
+ {id:'autoMemoryEnabled',page:'memory',section:'Automatic memory',label:'Auto memory',desc:'Allow new sessions to read and write automatic memories.',kind:'toggle',value:true}
+];
+const defaults=Object.fromEntries(rows.map(row=>[row.id,row.value]));
+const memory={user:{},shared:{},personal:{},app:{}};
+let currentPage='general',scope='user',projectLayer='shared',query='';
+const root=document.getElementById('settings'),page=document.getElementById('page'),search=document.getElementById('search');
+function escapeHTML(value){return String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));}
+function bucket(row){return pages[row.page].kind==='app'?'app':scope==='project'?projectLayer:'user';}
+function valueFor(row){const own=memory[bucket(row)];if(Object.hasOwn(own,row.id))return own[row.id];if(pages[row.page].kind==='engine'&&scope==='project'){if(projectLayer==='personal'&&Object.hasOwn(memory.shared,row.id))return memory.shared[row.id];if(Object.hasOwn(memory.user,row.id))return memory.user[row.id];}return defaults[row.id];}
+function inheritedSource(row){return scope==='project'&&projectLayer==='personal'&&Object.hasOwn(memory.shared,row.id)?'Shared project settings':'My defaults';}
+function isModified(row){return Object.hasOwn(memory[bucket(row)],row.id);}
+function scopeName(meta=pages[currentPage]){return meta.kind==='app'?'This app':meta.kind==='remote'?'This machine':meta.kind==='policy'?'Enforced':scope==='user'?'My defaults':`Sample project · ${projectLayer==='shared'?'Shared':'Just me'}`;}
+function displayValue(row){const value=valueFor(row);if(row.kind==='toggle')return value?'On':'Off';if(row.options)return row.options.find(option=>option[0]===value)?.[1]||value;return row.kind==='number'?`${value} days`:String(value[0]).toUpperCase()+String(value).slice(1);}
+function navigation(){document.getElementById('navigation').innerHTML=groups.map(group=>`<div class="nav-group">${group.label?`<div class="nav-label">${group.label}</div>`:''}${group.ids.map(id=>`<button class="nav-item" type="button" data-page="${id}" ${currentPage===id&&!query?'aria-current="page"':''}>${pages[id].title}${id==='policy'?lockIcon:''}</button>`).join('')}</div>`).join('');}
+function control(row){const value=valueFor(row),label=escapeHTML(row.label);if(row.kind==='toggle')return `<span class="switch-state">${value?'On':'Off'}</span><button type="button" class="switch" role="switch" aria-label="${label}" aria-checked="${value}" data-toggle="${row.id}"></button>`;if(row.kind==='number')return `<input type="number" aria-label="${label} in days" data-setting="${row.id}" min="0" max="3650" value="${value}"><span class="quiet-value">days</span>`;if(row.kind==='swatches')return `<div class="swatches" role="radiogroup" aria-label="Accent color">${['pink','blue','green','purple','amber'].map(color=>`<button type="button" class="swatch" role="radio" aria-label="${color[0].toUpperCase()+color.slice(1)}" aria-checked="${value===color}" data-accent="${color}" data-value="${color}"></button>`).join('')}</div>`;return `<select aria-label="${label}" data-setting="${row.id}">${row.options.map(option=>`<option value="${option[0]}" ${value===option[0]?'selected':''}>${option[1]}</option>`).join('')}</select>`;}
+function settingRow(row){const modified=isModified(row),inherited=pages[row.page].kind==='engine'&&scope==='project'&&!modified;return `<div class="row" id="row-${row.id}" tabindex="-1"><div><div class="row-title">${row.label}</div><p class="row-desc">${row.desc}</p>${modified||inherited?`<div class="row-source">${inherited?'From '+inheritedSource(row):bucket(row)==='app'?'Custom':scope==='project'?'Project override':'Custom default'}${modified?`<button class="reset" type="button" data-reset="${row.id}">${scope==='project'&&pages[row.page].kind==='engine'?'Use inherited value':'Reset'}</button>`:''}</div>`:''}</div><div class="control">${control(row)}</div></div>`;}
+function scopeArea(meta){if(meta.kind==='app')return `<div class="scope-area"><span class="scope-label">This app</span><span class="file-target quiet-value">${currentPage==='diagnostics'?'Read-only':'Desktop preferences'}</span></div>`;if(meta.kind==='remote')return '<div class="scope-area"><span class="scope-label">This machine</span><span class="file-target quiet-value">Remote Control</span></div>';if(meta.kind==='policy')return `<div class="scope-area"><span class="scope-label">${lockIcon} Enforced</span><span class="file-target quiet-value">Read-only</span></div>`;return `<div class="scope-area"><select class="scope-select" id="scope" aria-label="Settings scope"><option value="user" ${scope==='user'?'selected':''}>My defaults</option><option value="project" ${scope==='project'?'selected':''}>Project: Sample project</option></select>${scope==='project'?`<select class="scope-select" id="project-layer" aria-label="Project settings file"><option value="shared" ${projectLayer==='shared'?'selected':''}>Shared</option><option value="personal" ${projectLayer==='personal'?'selected':''}>Just me</option></select>`:''}<code class="file-target">${scope==='user'?'~/.cat-code/settings.json':projectLayer==='shared'?'Sample project/.cat-code/settings.json':'Sample project/.cat-code/settings.local.json'}</code></div><p class="scope-note">${currentPage==='privacy'?'Stopping new session saves takes effect immediately. Existing transcripts are removed later during cleanup.':'Changes apply to new sessions.'}${scope==='project'?projectLayer==='shared'?' Shared settings can be checked in with the project.':' Personal settings stay on this machine.':''}</p>`;}
+function staticRow(title,desc,value){return `<div class="row"><div><div class="row-title">${title}</div><p class="row-desc">${desc}</p></div><div class="quiet-value">${value}</div></div>`;}
+function supplementary(){switch(currentPage){
+ case 'appearance':return `<details class="detail" id="code-preview" open><summary>Code preview</summary><pre class="code-sample" data-theme="${valueFor(rows.find(row=>row.id==='codeTheme'))}"><span class="code-keyword">def</span> <span class="code-function">greet</span>(name):
+    <span class="code-keyword">return</span> <span class="code-string">f"Hello, {name}"</span>
+
+greet(<span class="code-string">"Mochi"</span>)</pre></details>`;
+ case 'model':return '<details class="detail"><summary>Reasoning effort</summary><p>Set effort beside the model in a conversation. Available levels depend on that model.</p></details>';
+ case 'permissions':return `<section class="section"><h3>New sessions</h3>${staticRow('Default permission mode','The saved starting mode. A running conversation keeps its own permissions.','Not set')}<p class="scope-note">Change the saved mode from the command line.</p></section><section class="section"><h3>Permission rules</h3><div class="empty-state"><h3>No rules in this scope</h3><p>Rules from other sources can still apply.</p></div></section>`;
+ case 'memory':return '<section class="section"><h3>Instruction files</h3><details class="detail"><summary>CLAUDE.md</summary><p>Example instruction file</p><p>Keep changes focused. Verify the behavior you change.</p></details></section>';
+ case 'agents':return '<section class="section"><h3>Agent definitions</h3><div class="empty-state"><h3>No agents in this scope</h3><p>Agent definitions from other sources remain available in conversations.</p></div></section>';
+ case 'skills':return '<section class="section"><h3>Available skills</h3><details class="quiet-block"><summary>Example review skill</summary><p>A sample skill definition for reviewing a change.</p></details></section>';
+ case 'plugins':return '<section class="section"><h3>Installed plugins</h3><div class="empty-state"><h3>No plugins in this scope</h3><p>Plugins can provide skills, commands, and tools.</p></div></section>';
+ case 'mcp':return '<section class="section"><h3>Configured servers</h3><div class="empty-state"><h3>No MCP servers in this scope</h3><p>Configured servers connect conversations to external tools and data.</p></div></section>';
+ case 'hooks':return '<section class="section"><h3>Event hooks</h3><div class="empty-state"><h3>No hooks in this scope</h3><p>Hooks run configured commands when an agent event occurs.</p></div></section>';
+ case 'remote':return `<section class="section"><h3>Remote Control</h3>${staticRow('Bridge','Connect a remote client to this machine.','Not connected')}</section><section class="section"><h3>Direct connection</h3><div class="empty-state"><h3>No remote session</h3><p>A direct connection needs a session address and token.</p></div></section>`;
+ case 'diagnostics':return `<section class="section"><h3>App information</h3>${staticRow('Build','The installed app version.','Example build')}${staticRow('Diagnostics','Saved diagnostic bundles and app logs.','No report selected')}</section><details class="detail"><summary>Diagnostic contents</summary><p>App version, system information, and diagnostic logs.</p></details>`;
+ case 'policy':return `<div class="notice">${lockIcon}<p>Enforced values take precedence over your defaults and project settings.</p></div><div class="empty-state"><h3>No enforced settings</h3><p>No policy values are present in this example.</p></div>`;
+ default:return '';
+}}
+function renderPage(){const meta=pages[currentPage];page.innerHTML=`<header><div class="page-heading"><h2>${meta.title}</h2></div><p class="page-subtitle">${meta.subtitle}</p></header>${scopeArea(meta)}${Array.from(new Set(rows.filter(row=>row.page===currentPage).map(row=>row.section))).map(section=>`<section class="section"><h3>${section}</h3>${rows.filter(row=>row.page===currentPage&&row.section===section).map(settingRow).join('')}</section>`).join('')}${supplementary()}`;}
+function highlighted(value){const at=value.toLowerCase().indexOf(query.toLowerCase());return at<0?escapeHTML(value):escapeHTML(value.slice(0,at))+'<mark>'+escapeHTML(value.slice(at,at+query.length))+'</mark>'+escapeHTML(value.slice(at+query.length));}
+function renderSearch(){const terms=query.toLowerCase().split(/\s+/).filter(Boolean);const results=rows.filter(row=>terms.every(term=>`${row.label} ${row.desc} ${row.section} ${pages[row.page].title} ${scopeName(pages[row.page])}`.toLowerCase().includes(term)));page.innerHTML=`<header><h2>Search results</h2><p class="result-count">${results.length} ${results.length===1?'setting':'settings'} for “${escapeHTML(query)}”</p></header>${results.length?results.map(row=>`<button type="button" class="result" data-result="${row.id}"><span><span class="result-path">${pages[row.page].title}${arrowIcon}${scopeName(pages[row.page])}</span><span class="row-title">${highlighted(row.label)}</span><span class="row-desc" style="display:block">${highlighted(row.desc)}</span></span><span class="result-value">${escapeHTML(displayValue(row))}</span></button>`).join(''):'<div class="empty-state"><h3>No matching settings</h3><p>Try a setting name such as “code theme”, “retention”, or “model”.</p></div>'}`;}
+function render(){navigation();query?renderSearch():renderPage();document.getElementById('clear-search').hidden=!query;document.getElementById('search-hint').hidden=!!query;}
+function appearance(){const scheme=valueFor(rows.find(row=>row.id==='scheme'));root.dataset.appearance=scheme==='system'?(matchMedia('(prefers-color-scheme: light)').matches?'light':'dark'):scheme;const light=root.dataset.appearance==='light';const color=valueFor(rows.find(row=>row.id==='accent'));const colors=light?{pink:'#bb3e84',blue:'#2563eb',green:'#15803d',purple:'#7c3aed',amber:'#a35f00'}:{pink:'#f472b6',blue:'#60a5fa',green:'#4ade80',purple:'#c084fc',amber:'#fbbf24'};root.style.setProperty('--accent',colors[color]);root.style.setProperty('--accent-soft',color==='pink'&&!light?'#f9a8d4':colors[color]);root.style.setProperty('--accent-wash',colors[color]+'1a');}
+function update(id,value){const row=rows.find(candidate=>candidate.id===id);if(!row)return;memory[bucket(row)][id]=value;const previewOpen=document.getElementById('code-preview')?.open;render();appearance();if(previewOpen===false&&document.getElementById('code-preview'))document.getElementById('code-preview').open=false;document.getElementById('status').textContent=`${row.label}: ${displayValue(row)}`;const target=page.querySelector(`[data-setting="${id}"], [data-toggle="${id}"], [data-accent="${value}"]`);target?.focus({preventScroll:true});}
+document.addEventListener('click',event=>{const button=event.target.closest('button');if(!button)return;if(button.dataset.page){currentPage=button.dataset.page;query='';search.value='';render();window.scrollTo(0,0);}else if(button.dataset.toggle){const row=rows.find(candidate=>candidate.id===button.dataset.toggle);update(row.id,!valueFor(row));}else if(button.dataset.accent){update('accent',button.dataset.accent);}else if(button.dataset.reset){const row=rows.find(candidate=>candidate.id===button.dataset.reset);delete memory[bucket(row)][row.id];render();appearance();document.getElementById(`row-${row.id}`)?.focus({preventScroll:true});}else if(button.dataset.result){const row=rows.find(candidate=>candidate.id===button.dataset.result);currentPage=row.page;query='';search.value='';render();const target=document.getElementById(`row-${row.id}`);target?.scrollIntoView({block:'center'});target?.focus({preventScroll:true});}});
+page.addEventListener('change',event=>{const target=event.target;if(target.id==='scope'){scope=target.value;render();document.getElementById('scope')?.focus({preventScroll:true});}else if(target.id==='project-layer'){projectLayer=target.value;render();document.getElementById('project-layer')?.focus({preventScroll:true});}else if(target.dataset.setting){if(target.type==='number'&&!target.checkValidity()){target.reportValidity();return;}update(target.dataset.setting,target.type==='number'?Number(target.value):target.value);}});
+search.addEventListener('input',()=>{query=search.value.trim();render();});
+document.getElementById('clear-search').addEventListener('click',()=>{query='';search.value='';render();search.focus();});
+document.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'){event.preventDefault();search.focus();search.select();}if(event.key==='Escape'&&query){query='';search.value='';render();search.focus();}});
+matchMedia('(prefers-color-scheme: light)').addEventListener('change',appearance);
+render();appearance();
+</script>
+</body>
+</html>

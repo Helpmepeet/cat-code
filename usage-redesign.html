@@ -1,0 +1,586 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cat Code · Usage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Tabular numbers for alignment */
+    .tabular {
+      font-variant-numeric: tabular-nums;
+      font-feature-settings: "tnum" 1;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    /* Minimal scrollbar */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 4px;
+    }
+    /* Bar hover */
+    .chart-bar-group:hover rect.bar-seg {
+      opacity: 0.9;
+      filter: brightness(1.2);
+    }
+    .chart-bar-group:hover rect.bar-bg {
+      fill: rgba(255, 255, 255, 0.04);
+    }
+  </style>
+</head>
+<body class="bg-[#09090b] text-[#f4f4f5] antialiased min-h-screen py-8 px-4 sm:px-6">
+
+  <!-- Main Usage Container (Matches desktop max-width) -->
+  <main class="max-w-[1040px] mx-auto space-y-5">
+
+    <!-- Header & Range Controls -->
+    <header class="flex flex-wrap items-center justify-between gap-4 pb-1 border-b border-white/[0.06]">
+      <div>
+        <h1 class="text-lg font-semibold tracking-tight text-white">Usage</h1>
+        <p class="text-xs text-zinc-400 mt-0.5 flex items-center gap-2">
+          <span id="range-dates-text">2026-08-15 to 2026-09-13 UTC</span>
+          <span class="text-zinc-600">·</span>
+          <span>Updated 12:41 UTC</span>
+        </p>
+      </div>
+
+      <!-- Segmented Range Switcher -->
+      <div class="inline-flex p-0.5 rounded-md bg-[#111113] border border-white/[0.08] text-xs">
+        <button id="btn-range-7d" onclick="setRange('7d')" class="px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 transition font-medium">
+          7 days
+        </button>
+        <button id="btn-range-30d" onclick="setRange('30d')" class="px-2.5 py-1 rounded bg-[#1c1c20] text-white shadow-xs border border-white/[0.08] font-medium transition">
+          30 days
+        </button>
+      </div>
+    </header>
+
+    <!-- 4 KPI Stat Cards -->
+    <section class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+
+      <!-- Total Tokens -->
+      <div class="p-3.5 rounded-xl bg-[#111113] border border-white/[0.07] space-y-1">
+        <div class="text-[11px] text-zinc-400 font-medium">Total tokens</div>
+        <div id="kpi-total-tokens" class="text-xl font-semibold tracking-tight text-white tabular">1683.9M</div>
+        <div id="kpi-daily-tokens" class="text-[11px] text-zinc-400 tabular">56.1M / active day</div>
+      </div>
+
+      <!-- Cached Input Share -->
+      <div class="p-3.5 rounded-xl bg-[#111113] border border-white/[0.07] space-y-1">
+        <div class="text-[11px] text-zinc-400 font-medium">Cached input share</div>
+        <div id="kpi-cache-share" class="text-xl font-semibold tracking-tight text-[#2dd4bf] tabular">96.3%</div>
+        <div id="kpi-cache-sub" class="text-[11px] text-zinc-400 tabular">1,615.4M cached of 1,677.2M prompt</div>
+      </div>
+
+      <!-- Active Sessions -->
+      <div class="p-3.5 rounded-xl bg-[#111113] border border-white/[0.07] space-y-1">
+        <div class="text-[11px] text-zinc-400 font-medium">Active sessions</div>
+        <div id="kpi-sessions" class="text-xl font-semibold tracking-tight text-white tabular">293</div>
+        <div id="kpi-sessions-sub" class="text-[11px] text-zinc-400 tabular">9.8 sessions / day</div>
+      </div>
+
+      <!-- Tool Requests -->
+      <div class="p-3.5 rounded-xl bg-[#111113] border border-white/[0.07] space-y-1">
+        <div class="text-[11px] text-zinc-400 font-medium">Recorded tool requests</div>
+        <div id="kpi-requests" class="text-xl font-semibold tracking-tight text-white tabular">43,772</div>
+        <div id="kpi-requests-sub" class="text-[11px] text-zinc-400 tabular">149.4 calls / session</div>
+      </div>
+
+    </section>
+
+    <!-- Main Analytics Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-3.5">
+
+      <!-- Daily Token Usage (8 cols) -->
+      <section class="lg:col-span-8 p-4 rounded-xl bg-[#111113] border border-white/[0.07] flex flex-col justify-between space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+          <h2 class="text-xs font-semibold text-zinc-200">Daily token usage</h2>
+
+          <!-- Compact Model Legend -->
+          <div class="flex items-center gap-3 text-[11px] text-zinc-400">
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-xs bg-[#f472b6]"></span>gpt-5.6-luna</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-xs bg-[#38bdf8]"></span>gpt-5.6-sol</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-xs bg-[#2dd4bf]"></span>gpt-5.6-terra</span>
+            <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-xs bg-[#4ade80]"></span>gpt-6-astra</span>
+          </div>
+        </div>
+
+        <!-- SVG Stacked Chart -->
+        <div class="relative w-full h-[175px]">
+          <!-- Minimal Tooltip -->
+          <div id="chart-tooltip" class="absolute z-20 pointer-events-none opacity-0 transition-opacity duration-100 px-2.5 py-1.5 rounded-lg bg-[#18181c] border border-white/[0.12] text-[11px] shadow-lg space-y-0.5">
+            <div class="flex justify-between gap-3 text-zinc-300 font-medium">
+              <span id="tt-date" class="tabular">2026-09-12</span>
+              <span id="tt-total" class="text-white font-semibold tabular">279.5M</span>
+            </div>
+            <div id="tt-details" class="text-[10px] text-zinc-400 tabular space-y-0.5 pt-0.5 border-t border-white/[0.06]"></div>
+          </div>
+
+          <svg id="daily-svg" class="w-full h-full" viewBox="0 0 680 175" preserveAspectRatio="none">
+            <!-- Y-axis reference line -->
+            <line x1="32" y1="15" x2="675" y2="15" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3"/>
+            <line x1="32" y1="80" x2="675" y2="80" stroke="rgba(255,255,255,0.06)" stroke-dasharray="3 3"/>
+            <line x1="32" y1="145" x2="675" y2="145" stroke="rgba(255,255,255,0.1)"/>
+
+            <text x="26" y="18" fill="#71717a" font-size="9" text-anchor="end" class="tabular">280M</text>
+            <text x="26" y="83" fill="#71717a" font-size="9" text-anchor="end" class="tabular">140M</text>
+            <text x="26" y="148" fill="#71717a" font-size="9" text-anchor="end" class="tabular">0</text>
+
+            <g id="daily-bars-layer"></g>
+          </svg>
+        </div>
+
+        <div class="text-[10px] text-zinc-400 flex justify-between pt-1 border-t border-white/[0.04]">
+          <span>Hover column for detailed breakdown</span>
+          <span class="tabular">Peak: 279.5M (Sep 12)</span>
+        </div>
+      </section>
+
+      <!-- Model Mix (4 cols) -->
+      <section class="lg:col-span-4 p-4 rounded-xl bg-[#111113] border border-white/[0.07] flex flex-col justify-between space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+          <h2 class="text-xs font-semibold text-zinc-200">Model mix</h2>
+          <span class="text-[10px] text-zinc-400 tabular">4 models</span>
+        </div>
+
+        <div class="space-y-3" id="model-mix-rows">
+          <!-- Luna -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="text-zinc-300 font-mono text-[11px]">gpt-5.6-luna</span>
+              <span class="text-zinc-400 text-[11px] tabular">790.5M · 46.9%</span>
+            </div>
+            <div class="w-full h-1.5 rounded-xs bg-white/[0.06] overflow-hidden">
+              <div class="h-full bg-[#f472b6]" style="width: 46.94%"></div>
+            </div>
+          </div>
+
+          <!-- Sol -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="text-zinc-300 font-mono text-[11px]">gpt-5.6-sol</span>
+              <span class="text-zinc-400 text-[11px] tabular">613.4M · 36.4%</span>
+            </div>
+            <div class="w-full h-1.5 rounded-xs bg-white/[0.06] overflow-hidden">
+              <div class="h-full bg-[#38bdf8]" style="width: 36.43%"></div>
+            </div>
+          </div>
+
+          <!-- Terra -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="text-zinc-300 font-mono text-[11px]">gpt-5.6-terra</span>
+              <span class="text-zinc-400 text-[11px] tabular">270.2M · 16.1%</span>
+            </div>
+            <div class="w-full h-1.5 rounded-xs bg-white/[0.06] overflow-hidden">
+              <div class="h-full bg-[#2dd4bf]" style="width: 16.05%"></div>
+            </div>
+          </div>
+
+          <!-- Astra -->
+          <div class="space-y-1">
+            <div class="flex justify-between text-xs">
+              <span class="text-zinc-300 font-mono text-[11px]">gpt-6-astra</span>
+              <span class="text-zinc-400 text-[11px] tabular">9.87M · 0.6%</span>
+            </div>
+            <div class="w-full h-1.5 rounded-xs bg-white/[0.06] overflow-hidden">
+              <div class="h-full bg-[#4ade80]" style="width: 0.59%"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="text-[10px] text-zinc-400 pt-1 border-t border-white/[0.04] flex justify-between">
+          <span>Primary reasoning: Luna</span>
+          <span class="tabular">1.68B total</span>
+        </div>
+      </section>
+
+      <!-- Prompt Cache (6 cols) -->
+      <section class="lg:col-span-6 p-4 rounded-xl bg-[#111113] border border-white/[0.07] space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+          <h2 class="text-xs font-semibold text-zinc-200">Prompt cache performance</h2>
+          <span class="text-xs font-medium text-[#2dd4bf] tabular">96.3% share</span>
+        </div>
+
+        <!-- Daily cache share sparkline -->
+        <div class="space-y-1">
+          <div class="flex justify-between text-[10px] text-zinc-400">
+            <span>Daily cached input share (85%–100%)</span>
+            <span class="tabular">Mean: 96.3%</span>
+          </div>
+
+          <div class="h-16 w-full">
+            <svg class="w-full h-full overflow-visible" viewBox="0 0 450 60" preserveAspectRatio="none">
+              <line x1="0" y1="20" x2="450" y2="20" stroke="rgba(255,255,255,0.06)" stroke-dasharray="2 2"/>
+              <!-- Trend Line -->
+              <path d="M 0 25 Q 35 15 70 20 T 140 18 T 210 28 T 280 14 T 350 16 T 420 12 L 450 18" fill="none" stroke="#2dd4bf" stroke-width="1.75" stroke-linecap="round"/>
+              <circle cx="450" cy="18" r="2.5" fill="#2dd4bf"/>
+            </svg>
+          </div>
+        </div>
+
+        <!-- Segmented bar -->
+        <div class="space-y-2 pt-1 border-t border-white/[0.05]">
+          <div class="w-full h-2 rounded-xs bg-white/[0.06] overflow-hidden flex">
+            <div class="h-full bg-[#38bdf8]" style="width: 3.67%" title="Fresh Input (3.67%)"></div>
+            <div class="h-full bg-[#2dd4bf]" style="width: 96.33%" title="Cache Reads (96.33%)"></div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <div class="p-2 rounded bg-black/25 border border-white/[0.04]">
+              <div class="text-[10px] text-zinc-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-[#38bdf8]"></span>Fresh input
+              </div>
+              <div class="font-medium text-white text-[11px] tabular mt-0.5">61,795,134</div>
+            </div>
+
+            <div class="p-2 rounded bg-black/25 border border-white/[0.04]">
+              <div class="text-[10px] text-zinc-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-[#2dd4bf]"></span>Cache reads
+              </div>
+              <div class="font-medium text-[#2dd4bf] text-[11px] tabular mt-0.5">1,615,431,744</div>
+            </div>
+
+            <div class="p-2 rounded bg-black/25 border border-white/[0.04]">
+              <div class="text-[10px] text-zinc-400 flex items-center gap-1">
+                <span class="w-1.5 h-1.5 rounded-full bg-zinc-500"></span>Cache writes
+              </div>
+              <div class="font-medium text-zinc-400 text-[11px] tabular mt-0.5">0</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Most-Used Tools (6 cols) -->
+      <section class="lg:col-span-6 p-4 rounded-xl bg-[#111113] border border-white/[0.07] space-y-3">
+        <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+          <h2 class="text-xs font-semibold text-zinc-200">Most-used tools</h2>
+          <span class="text-[10px] text-zinc-400 tabular">43,772 total requests</span>
+        </div>
+
+        <div class="space-y-2" id="tools-container">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- Daily Activity (Full width) -->
+      <section class="lg:col-span-12 p-4 rounded-xl bg-[#111113] border border-white/[0.07] space-y-2.5">
+        <div class="flex items-center justify-between pb-2 border-b border-white/[0.05]">
+          <h2 class="text-xs font-semibold text-zinc-200">Daily activity</h2>
+          <div class="flex items-center gap-3 text-[10px] text-zinc-400">
+            <span class="flex items-center gap-1"><span class="w-2 h-1.5 bg-[#38bdf8] rounded-xs"></span>Active sessions (0–38)</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-1.5 bg-zinc-500 rounded-xs"></span>Tool requests (0–5,820)</span>
+          </div>
+        </div>
+
+        <div class="space-y-2 pt-0.5">
+          <!-- Sessions Track -->
+          <div>
+            <div class="text-[10px] text-zinc-400 mb-1 flex justify-between">
+              <span>Active sessions</span>
+              <span class="tabular">293 across period</span>
+            </div>
+            <div id="activity-sessions-track" class="flex gap-1 h-5 items-end w-full"></div>
+          </div>
+
+          <!-- Tool Requests Track -->
+          <div>
+            <div class="text-[10px] text-zinc-400 mb-1 flex justify-between">
+              <span>Tool requests</span>
+              <span class="tabular">43,772 across period</span>
+            </div>
+            <div id="activity-tools-track" class="flex gap-1 h-5 items-end w-full"></div>
+          </div>
+        </div>
+
+        <div class="flex justify-between text-[9px] text-zinc-400 pt-1 border-t border-white/[0.04] tabular">
+          <span>08-15</span>
+          <span>08-22</span>
+          <span>08-29</span>
+          <span>09-05</span>
+          <span>09-13</span>
+        </div>
+      </section>
+
+    </div>
+
+    <!-- Accessible Values Table (Clean Disclosure) -->
+    <details class="rounded-xl bg-[#111113] border border-white/[0.07] text-xs">
+      <summary class="p-3.5 cursor-pointer text-zinc-300 hover:text-white font-medium flex items-center justify-between">
+        <span>Accessible values table</span>
+        <span class="text-[10px] text-zinc-400">30 daily records</span>
+      </summary>
+      <div class="p-4 pt-0 border-t border-white/[0.05] overflow-x-auto">
+        <table class="w-full text-left text-[11px]">
+          <thead class="text-zinc-400 uppercase text-[9px] border-b border-white/[0.06]">
+            <tr>
+              <th class="py-2 px-3">Date (UTC)</th>
+              <th class="py-2 px-3 text-right">Fresh Input</th>
+              <th class="py-2 px-3 text-right">Cache Reads</th>
+              <th class="py-2 px-3 text-right">Output</th>
+              <th class="py-2 px-3 text-right">Total Tokens</th>
+              <th class="py-2 px-3 text-right">Cache Share</th>
+              <th class="py-2 px-3 text-right">Sessions</th>
+              <th class="py-2 px-3 text-right">Requests</th>
+            </tr>
+          </thead>
+          <tbody id="table-body" class="divide-y divide-white/[0.03] tabular"></tbody>
+        </table>
+      </div>
+    </details>
+
+  </main>
+
+  <script>
+    const data30d = [
+      { date: '2026-08-15', luna: 1.2, sol: 8.5, terra: 3.2, astra: 0.1, fresh: 1200000, read: 11500000, write: 0, output: 300000, sessions: 6, requests: 420 },
+      { date: '2026-08-16', luna: 2.1, sol: 12.4, terra: 4.1, astra: 0.15, fresh: 1500000, read: 16800000, write: 0, output: 450000, sessions: 8, requests: 680 },
+      { date: '2026-08-17', luna: 1.5, sol: 9.8, terra: 3.5, astra: 0.08, fresh: 1100000, read: 13500000, write: 0, output: 280000, sessions: 5, requests: 510 },
+      { date: '2026-08-18', luna: 3.4, sol: 14.2, terra: 5.2, astra: 0.2, fresh: 1900000, read: 20600000, write: 0, output: 500000, sessions: 9, requests: 840 },
+      { date: '2026-08-19', luna: 2.8, sol: 11.5, terra: 4.8, astra: 0.12, fresh: 1400000, read: 17500000, write: 0, output: 320000, sessions: 7, requests: 620 },
+      { date: '2026-08-20', luna: 1.8, sol: 10.2, terra: 3.9, astra: 0.09, fresh: 1300000, read: 14400000, write: 0, output: 290000, sessions: 6, requests: 540 },
+      { date: '2026-08-21', luna: 4.5, sol: 18.6, terra: 6.2, astra: 0.25, fresh: 2100000, read: 27000000, write: 0, output: 450000, sessions: 11, requests: 1120 },
+      { date: '2026-08-22', luna: 5.2, sol: 21.0, terra: 7.1, astra: 0.31, fresh: 2400000, read: 30800000, write: 0, output: 410000, sessions: 12, requests: 1380 },
+      { date: '2026-08-23', luna: 6.8, sol: 28.4, terra: 9.5, astra: 0.4, fresh: 3100000, read: 41500000, write: 0, output: 500000, sessions: 15, requests: 1820 },
+      { date: '2026-08-24', luna: 4.2, sol: 19.8, terra: 6.8, astra: 0.28, fresh: 2200000, read: 28400000, write: 0, output: 480000, sessions: 10, requests: 1290 },
+      { date: '2026-08-25', luna: 14.2, sol: 58.9, terra: 18.5, astra: 0.65, fresh: 4800000, read: 86500000, write: 0, output: 950000, sessions: 21, requests: 2780 },
+      { date: '2026-08-26', luna: 18.5, sol: 74.2, terra: 24.1, astra: 0.82, fresh: 5900000, read: 110500000, write: 0, output: 1220000, sessions: 25, requests: 3410 },
+      { date: '2026-08-27', luna: 22.1, sol: 89.4, terra: 31.2, astra: 0.98, fresh: 6800000, read: 135400000, write: 0, output: 1480000, sessions: 28, requests: 4120 },
+      { date: '2026-08-28', luna: 19.8, sol: 81.2, terra: 28.4, astra: 0.89, fresh: 6100000, read: 123000000, write: 0, output: 1190000, sessions: 24, requests: 3650 },
+      { date: '2026-08-29', luna: 8.5, sol: 34.2, terra: 11.5, astra: 0.41, fresh: 3100000, read: 51000000, write: 0, output: 510000, sessions: 14, requests: 1690 },
+      { date: '2026-08-30', luna: 9.2, sol: 38.1, terra: 12.9, astra: 0.45, fresh: 3300000, read: 56800000, write: 0, output: 550000, sessions: 15, requests: 1840 },
+      { date: '2026-08-31', luna: 7.1, sol: 29.8, terra: 10.2, astra: 0.38, fresh: 2800000, read: 44200000, write: 0, output: 480000, sessions: 12, requests: 1430 },
+      { date: '2026-09-01', luna: 11.2, sol: 39.4, terra: 14.1, astra: 0.49, fresh: 3400000, read: 61200000, write: 0, output: 590000, sessions: 16, requests: 1980 },
+      { date: '2026-09-02', luna: 12.8, sol: 42.1, terra: 15.8, astra: 0.52, fresh: 3600000, read: 67000000, write: 0, output: 620000, sessions: 17, requests: 2110 },
+      { date: '2026-09-03', luna: 9.4, sol: 31.2, terra: 11.8, astra: 0.39, fresh: 2900000, read: 49400000, write: 0, output: 490000, sessions: 13, requests: 1580 },
+      { date: '2026-09-04', luna: 8.1, sol: 27.9, terra: 10.5, astra: 0.34, fresh: 2600000, read: 43800000, write: 0, output: 440000, sessions: 11, requests: 1390 },
+      { date: '2026-09-05', luna: 14.5, sol: 44.2, terra: 16.9, astra: 0.56, fresh: 3800000, read: 71600000, write: 0, output: 760000, sessions: 18, requests: 2280 },
+      { date: '2026-09-06', luna: 6.8, sol: 21.4, terra: 8.9, astra: 0.29, fresh: 2100000, read: 35000000, write: 0, output: 290000, sessions: 9, requests: 1080 },
+      { date: '2026-09-07', luna: 5.9, sol: 19.8, terra: 7.6, astra: 0.26, fresh: 1900000, read: 31400000, write: 0, output: 260000, sessions: 8, requests: 940 },
+      { date: '2026-09-08', luna: 8.9, sol: 24.1, terra: 9.8, astra: 0.34, fresh: 2500000, read: 40300000, write: 0, output: 340000, sessions: 11, requests: 1280 },
+      { date: '2026-09-09', luna: 98.4, sol: 18.2, terra: 6.4, astra: 0.41, fresh: 4100000, read: 118200000, write: 0, output: 710000, sessions: 26, requests: 3560 },
+      { date: '2026-09-10', luna: 162.1, sol: 29.4, terra: 8.9, astra: 0.52, fresh: 5200000, read: 194400000, write: 0, output: 1320000, sessions: 31, requests: 4680 },
+      { date: '2026-09-11', luna: 195.4, sol: 34.8, terra: 10.2, astra: 0.61, fresh: 6100000, read: 233400000, write: 0, output: 1510000, sessions: 35, requests: 5240 },
+      { date: '2026-09-12', luna: 228.9, sol: 39.1, terra: 10.9, astra: 0.60, fresh: 6800000, read: 271200000, write: 0, output: 1500000, sessions: 38, requests: 5820 },
+      { date: '2026-09-13', luna: 85.2, sol: 15.4, terra: 4.8, astra: 0.28, fresh: 2900000, read: 102100000, write: 0, output: 680000, sessions: 22, requests: 3120 }
+    ];
+
+    const tools = [
+      { name: 'Read', calls: 15393, pct: 35.2 },
+      { name: 'Bash', calls: 10807, pct: 24.7 },
+      { name: 'Grep', calls: 10782, pct: 24.6 },
+      { name: 'Apply_patch', calls: 3648, pct: 8.3 },
+      { name: 'Glob', calls: 873, pct: 2.0 },
+      { name: 'Other', calls: 706, pct: 1.6 },
+      { name: 'Skill', calls: 687, pct: 1.6 },
+      { name: 'TodoWrite', calls: 218, pct: 0.5 },
+      { name: 'Agent', calls: 198, pct: 0.5 },
+      { name: 'WebFetch', calls: 156, pct: 0.4 },
+      { name: 'SendToPeer', calls: 149, pct: 0.3 }
+    ];
+
+    let currentRange = '30d';
+
+    function setRange(range) {
+      currentRange = range;
+      const b7 = document.getElementById('btn-range-7d');
+      const b30 = document.getElementById('btn-range-30d');
+      if (range === '7d') {
+        b7.className = 'px-2.5 py-1 rounded bg-[#1c1c20] text-white shadow-xs border border-white/[0.08] font-medium transition';
+        b30.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 transition font-medium';
+        document.getElementById('range-dates-text').innerText = '2026-09-07 to 2026-09-13 UTC';
+        document.getElementById('kpi-total-tokens').innerText = '790.2M';
+        document.getElementById('kpi-daily-tokens').innerText = '112.9M / active day';
+        document.getElementById('kpi-sessions').innerText = '154';
+        document.getElementById('kpi-sessions-sub').innerText = '22.0 sessions / day';
+        document.getElementById('kpi-requests').innerText = '24,680';
+        document.getElementById('kpi-requests-sub').innerText = '160.2 calls / session';
+      } else {
+        b30.className = 'px-2.5 py-1 rounded bg-[#1c1c20] text-white shadow-xs border border-white/[0.08] font-medium transition';
+        b7.className = 'px-2.5 py-1 rounded text-zinc-400 hover:text-zinc-200 transition font-medium';
+        document.getElementById('range-dates-text').innerText = '2026-08-15 to 2026-09-13 UTC';
+        document.getElementById('kpi-total-tokens').innerText = '1683.9M';
+        document.getElementById('kpi-daily-tokens').innerText = '56.1M / active day';
+        document.getElementById('kpi-sessions').innerText = '293';
+        document.getElementById('kpi-sessions-sub').innerText = '9.8 sessions / day';
+        document.getElementById('kpi-requests').innerText = '43,772';
+        document.getElementById('kpi-requests-sub').innerText = '149.4 calls / session';
+      }
+      render();
+    }
+
+    function render() {
+      const activeData = currentRange === '7d' ? data30d.slice(-7) : data30d;
+
+      // Render Daily Chart
+      const layer = document.getElementById('daily-bars-layer');
+      layer.innerHTML = '';
+      const maxTokens = 280;
+      const chartWidth = 635;
+      const chartHeight = 130;
+      const step = chartWidth / activeData.length;
+      const barWidth = Math.max(3, step - (currentRange === '7d' ? 20 : 4));
+
+      activeData.forEach((d, i) => {
+        const total = d.luna + d.sol + d.terra + d.astra;
+        const x = 36 + i * step + (step - barWidth) / 2;
+
+        const astraH = (d.astra / maxTokens) * chartHeight;
+        const terraH = (d.terra / maxTokens) * chartHeight;
+        const solH = (d.sol / maxTokens) * chartHeight;
+        const lunaH = (d.luna / maxTokens) * chartHeight;
+
+        let curY = 145;
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.setAttribute('class', 'chart-bar-group cursor-pointer');
+
+        // Hover target
+        const hit = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        hit.setAttribute('x', 36 + i * step);
+        hit.setAttribute('y', 10);
+        hit.setAttribute('width', step);
+        hit.setAttribute('height', 140);
+        hit.setAttribute('fill', 'transparent');
+        hit.setAttribute('class', 'bar-bg transition');
+        g.appendChild(hit);
+
+        const segments = [
+          { fill: '#4ade80', h: astraH },
+          { fill: '#2dd4bf', h: terraH },
+          { fill: '#38bdf8', h: solH },
+          { fill: '#f472b6', h: lunaH }
+        ];
+
+        segments.forEach(seg => {
+          if (seg.h > 0.4) {
+            curY -= seg.h;
+            const r = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            r.setAttribute('x', x);
+            r.setAttribute('y', curY);
+            r.setAttribute('width', barWidth);
+            r.setAttribute('height', seg.h);
+            r.setAttribute('fill', seg.fill);
+            r.setAttribute('class', 'bar-seg');
+            g.appendChild(r);
+          }
+        });
+
+        // Date labels
+        if (currentRange === '7d' || i === 0 || i === Math.floor(activeData.length / 2) || i === activeData.length - 1) {
+          const txt = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+          txt.setAttribute('x', x + barWidth / 2);
+          txt.setAttribute('y', 162);
+          txt.setAttribute('text-anchor', 'middle');
+          txt.setAttribute('fill', '#71717a');
+          txt.setAttribute('font-size', '9');
+          txt.setAttribute('class', 'tabular');
+          txt.textContent = d.date.slice(5);
+          g.appendChild(txt);
+        }
+
+        g.addEventListener('mouseenter', (e) => {
+          const tt = document.getElementById('chart-tooltip');
+          document.getElementById('tt-date').innerText = d.date + ' UTC';
+          document.getElementById('tt-total').innerText = total.toFixed(1) + 'M';
+          document.getElementById('tt-details').innerHTML = `
+            <div>luna: ${d.luna.toFixed(1)}M (${((d.luna/total)*100).toFixed(0)}%)</div>
+            <div>sol: ${d.sol.toFixed(1)}M (${((d.sol/total)*100).toFixed(0)}%)</div>
+            <div>terra: ${d.terra.toFixed(1)}M (${((d.terra/total)*100).toFixed(0)}%)</div>
+            <div>astra: ${d.astra.toFixed(2)}M</div>
+          `;
+          tt.style.opacity = '1';
+          const rect = document.getElementById('daily-svg').getBoundingClientRect();
+          let left = e.clientX - rect.left - 40;
+          if (left < 10) left = 10;
+          if (left > rect.width - 150) left = rect.width - 150;
+          tt.style.left = left + 'px';
+          tt.style.top = '15px';
+        });
+
+        g.addEventListener('mouseleave', () => {
+          document.getElementById('chart-tooltip').style.opacity = '0';
+        });
+
+        layer.appendChild(g);
+      });
+
+      // Render Concurrency Tracks
+      const sTrack = document.getElementById('activity-sessions-track');
+      const tTrack = document.getElementById('activity-tools-track');
+      sTrack.innerHTML = '';
+      tTrack.innerHTML = '';
+      const maxSess = Math.max(...activeData.map(d => d.sessions));
+      const maxReq = Math.max(...activeData.map(d => d.requests));
+
+      activeData.forEach(d => {
+        const sDiv = document.createElement('div');
+        sDiv.className = 'flex-1 bg-[#38bdf8]/40 hover:bg-[#38bdf8] transition-all rounded-xs';
+        sDiv.style.height = Math.max(15, (d.sessions / maxSess) * 100) + '%';
+        sDiv.title = `${d.date}: ${d.sessions} sessions`;
+        sTrack.appendChild(sDiv);
+
+        const tDiv = document.createElement('div');
+        tDiv.className = 'flex-1 bg-zinc-600 hover:bg-zinc-400 transition-all rounded-xs';
+        tDiv.style.height = Math.max(15, (d.requests / maxReq) * 100) + '%';
+        tDiv.title = `${d.date}: ${d.requests.toLocaleString()} tool requests`;
+        tTrack.appendChild(tDiv);
+      });
+
+      // Render Table
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+      activeData.forEach(d => {
+        const tot = ((d.luna + d.sol + d.terra + d.astra) * 1e6);
+        const prompt = d.fresh + d.read + d.write;
+        const cacheShare = prompt > 0 ? ((d.read / prompt) * 100).toFixed(1) + '%' : '0.0%';
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-white/[0.02]';
+        tr.innerHTML = `
+          <td class="py-1.5 px-3 text-zinc-300">${d.date}</td>
+          <td class="py-1.5 px-3 text-right text-zinc-400">${d.fresh.toLocaleString()}</td>
+          <td class="py-1.5 px-3 text-right text-[#2dd4bf]">${d.read.toLocaleString()}</td>
+          <td class="py-1.5 px-3 text-right text-zinc-400">${d.output.toLocaleString()}</td>
+          <td class="py-1.5 px-3 text-right text-white font-medium">${Math.round(tot).toLocaleString()}</td>
+          <td class="py-1.5 px-3 text-right text-[#2dd4bf]">${cacheShare}</td>
+          <td class="py-1.5 px-3 text-right text-zinc-400">${d.sessions}</td>
+          <td class="py-1.5 px-3 text-right text-zinc-400">${d.requests.toLocaleString()}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    // Render Tools list
+    function renderToolsList() {
+      const tc = document.getElementById('tools-container');
+      tc.innerHTML = '';
+      const max = tools[0].calls;
+      tools.forEach(t => {
+        const row = document.createElement('div');
+        row.className = 'space-y-1';
+        row.innerHTML = `
+          <div class="flex justify-between text-[11px]">
+            <span class="text-zinc-300 font-mono">${t.name}</span>
+            <span class="text-zinc-400 tabular">${t.calls.toLocaleString()}</span>
+          </div>
+          <div class="w-full h-1.5 rounded-xs bg-white/[0.06] overflow-hidden">
+            <div class="h-full bg-[#38bdf8]" style="width: ${(t.calls/max)*100}%"></div>
+          </div>
+        `;
+        tc.appendChild(row);
+      });
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      render();
+      renderToolsList();
+    });
+  </script>
+</body>
+</html>
