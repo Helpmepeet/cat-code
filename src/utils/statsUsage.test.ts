@@ -224,3 +224,56 @@ test('daily outcomes follow matched request dates across midnight and All bucket
         expect(range.days.reduce((sum, day) => sum + day.errors, 0)).toBe(range.tools.reduce((sum, tool) => sum + tool.errors, 0));
     }
 });
+
+test('previous periods use equal elapsed UTC bounds and canonical distinct-session accounting', async () => {
+    const path = await file([
+        { type: 'user', sessionId: 'thirty-anchor', uuid: 'thirty-anchor', timestamp: '2026-07-15T00:00:00.000Z' },
+        msg('2026-07-16T00:00:00.000Z', 'thirty-open', 5, 'thirty-open', 'thirty'),
+        msg('2026-08-14T12:00:00.000Z', 'thirty-cutoff', 6, 'thirty-close', 'thirty'),
+        { type: 'user', sessionId: 'anchor', uuid: 'anchor', timestamp: '2026-08-30T00:00:00.000Z' },
+        msg('2026-08-31T00:00:00.000Z', 'baseline-open', 10, 'open', 'same'),
+        msg('2026-09-06T12:00:00.000Z', 'baseline-cutoff', 20, 'close', 'same'),
+        msg('2026-09-06T12:00:00.001Z', 'baseline-after', 100, 'after', 'same'),
+        msg('2026-09-07T00:00:00.000Z', 'current-open', 30, 'current-open', 'same'),
+        msg(asOf, 'current-cutoff', 40, 'current-close', 'other'),
+    ]);
+    const previous = (await collectRetainedUsage([path], asOf)).ranges['7d'].previousPeriod!;
+    expect(previous).toMatchObject({
+        startInclusive: '2026-08-31T00:00:00.000Z', endInclusive: '2026-09-06T12:00:00.000Z',
+        tokens: { fresh: 30, read: 6, write: 8, output: 4 }, sessions: 1, records: 2, requests: 2, activeDays: 2,
+    });
+    expect(previous.cachedInputShare).toBe(6 / 44 * 100);
+    expect((await collectRetainedUsage([path], asOf)).ranges['30d'].previousPeriod).toMatchObject({
+        startInclusive: '2026-07-16T00:00:00.000Z', endInclusive: '2026-08-14T12:00:00.000Z',
+        tokens: { fresh: 11, read: 6, write: 8, output: 4 }, sessions: 1, requests: 2, activeDays: 2,
+    });
+    expect((await collectRetainedUsage([path], asOf)).ranges.all.previousPeriod).toBeUndefined();
+});
+
+test('previous-period active days include subagent-only request and token activity', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'usage-period-subagent-'));
+    roots.push(project);
+    const session = '123e4567-e89b-42d3-a456-426614174000';
+    const main = join(project, `${session}.jsonl`), subagents = join(project, session, 'subagents');
+    await mkdir(subagents, { recursive: true });
+    await writeFile(main, JSON.stringify({ type: 'user', sessionId: session, uuid: 'anchor', timestamp: '2026-08-30T00:00:00.000Z' }));
+    await writeFile(join(subagents, 'agent.jsonl'), JSON.stringify(msg('2026-09-02T08:00:00.000Z', 'subagent', 9, 'subagent-tool', session)));
+    const previous = (await collectRetainedUsage([main, join(subagents, 'agent.jsonl')], asOf)).ranges['7d'].previousPeriod!;
+    expect(previous).toMatchObject({ records: 0, sessions: 0, requests: 1, activeDays: 1, tokens: { fresh: 9, read: 3, write: 4, output: 2 } });
+});
+
+test('previous periods suppress unknown or partial history but retain a known zero baseline', async () => {
+    const currentOnly = await file([msg(asOf, 'current', 10)]);
+    expect((await collectRetainedUsage([currentOnly], asOf)).ranges['7d'].previousPeriod).toBeUndefined();
+    const knownZero = await file([
+        { type: 'user', sessionId: 'anchor', uuid: 'anchor', timestamp: '2026-08-30T00:00:00.000Z' },
+        { type: 'user', sessionId: 'zero', uuid: 'zero', timestamp: '2026-09-02T12:00:00.000Z' },
+        msg(asOf, 'current', 10),
+    ]);
+    const baseline = (await collectRetainedUsage([knownZero], asOf)).ranges['7d'].previousPeriod!;
+    expect(baseline.tokens).toEqual({ fresh: 0, read: 0, write: 0, output: 0 });
+    expect(baseline.cachedInputShare).toBeNull();
+    const partial = await file([msg('2026-08-30T00:00:00.000Z', 'anchor', 1), msg(asOf, 'current', 10)]);
+    await writeFile(partial, 'broken');
+    expect((await collectRetainedUsage([partial], asOf)).ranges['7d'].previousPeriod).toBeUndefined();
+});

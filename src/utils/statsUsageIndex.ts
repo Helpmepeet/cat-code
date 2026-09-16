@@ -135,10 +135,21 @@ async function collectIndexedUsageLocked(files: readonly string[], asOf: string,
                 // Missing/unreadable sources are retried and counted by aggregation.
             }
         }
-        const newlyEligible = saved && db.query('SELECT 1 FROM records WHERE timestamp > ? AND timestamp <= ? LIMIT 1').get(Date.parse(saved.asOf), Date.parse(asOf));
+        const hasRecordBetween = (start: number, end: number) => db.query('SELECT 1 FROM records WHERE timestamp > ? AND timestamp <= ? LIMIT 1').get(start, end);
+        const newlyEligible = saved && hasRecordBetween(Date.parse(saved.asOf), Date.parse(asOf));
+        const newlyEligibleComparison = saved && ([7, 30] as const).some(days => hasRecordBetween(Date.parse(saved.asOf) - days * 86400000, Date.parse(asOf) - days * 86400000));
         let snapshot: UsageDashboardSnapshot;
-        if (!changed && saved && asOf >= saved.asOf && asOf.slice(0, 10) === saved.asOf.slice(0, 10) && !newlyEligible) {
-            snapshot = { ...saved, asOf, computedAt: new Date().toISOString(), snapshotId: randomUUID() };
+        // Within one UTC day, totals remain valid until a record crosses either
+        // the current or shifted prior cutoff. Preserve the warm path otherwise.
+        if (!changed && saved && asOf >= saved.asOf && asOf.slice(0, 10) === saved.asOf.slice(0, 10) && !newlyEligible && !newlyEligibleComparison) {
+            snapshot = structuredClone(saved);
+            snapshot.asOf = asOf;
+            snapshot.computedAt = new Date().toISOString();
+            snapshot.snapshotId = randomUUID();
+            for (const [days, range] of [[7, '7d'], [30, '30d']] as const) {
+                const previous = snapshot.ranges[range].previousPeriod;
+                if (previous) previous.endInclusive = new Date(Date.parse(asOf) - days * 86400000).toISOString();
+            }
         } else {
             const get = db.query<{ value: string }, [string, string]>('SELECT value FROM identities WHERE kind=? AND key=?');
             const put = db.query('INSERT OR REPLACE INTO identities VALUES (?,?,?)');

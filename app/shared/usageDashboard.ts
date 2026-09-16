@@ -75,6 +75,17 @@ export type UsageDay = {
     requests: number;
     contributors: UsageDayContributors;
 };
+/** Bounded accounting for the equal elapsed UTC interval immediately before a recent range. */
+export type UsagePreviousPeriod = {
+    startInclusive: string;
+    endInclusive: string;
+    tokens: UsageTokens;
+    sessions: number;
+    records: number;
+    requests: number;
+    activeDays: number;
+    cachedInputShare: number | null;
+};
 export type UsageRangeSummary = {
     range: UsageWindow;
     /** All uses sparse UTC buckets; absent means one calendar day. */
@@ -89,6 +100,8 @@ export type UsageRangeSummary = {
     fallbackRequests: number;
     activeDays: number;
     cachedInputShare: number | null;
+    /** Omitted when retained history cannot establish a complete prior interval. */
+    previousPeriod?: UsagePreviousPeriod;
     cacheWriteReporting: 'reported' | 'partial' | 'unreported' | 'unavailable';
     days: UsageDay[];
     models: UsageModel[];
@@ -116,7 +129,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 4;
+    countingVersion: 5;
     snapshotId: string;
     scope: 'retained-transcripts';
     timezone: 'UTC';

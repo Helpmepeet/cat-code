@@ -1,4 +1,4 @@
-import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
+import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -95,10 +95,23 @@ function day(v: unknown): v is UsageDay {
         total: number;
     }).total, 0) === tokenSum(v.tokens);
 }
+function previousPeriod(v: unknown, range: '7d' | '30d', asOf: string): v is UsagePreviousPeriod {
+    if (!obj(v) || !ownKeys(v, ['startInclusive', 'endInclusive', 'tokens', 'sessions', 'records', 'requests', 'activeDays', 'cachedInputShare']) || !instant(v.startInclusive) || !instant(v.endInclusive) || !tokens(v.tokens) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.activeDays) || v.sessions > v.records)
+        return false;
+    const days = range === '7d' ? 7 : 30;
+    const start = Date.parse(`${addDays(asOf.slice(0, 10), -(days * 2 - 1))}T00:00:00.000Z`);
+    const end = Date.parse(asOf) - days * 86400000;
+    if (v.startInclusive !== new Date(start).toISOString() || v.endInclusive !== new Date(end).toISOString() || v.activeDays > days || (v.activeDays === 0 && (v.records !== 0 || v.requests !== 0 || tokenSum(v.tokens) !== 0)))
+        return false;
+    const prompt = v.tokens.fresh + v.tokens.read + v.tokens.write;
+    return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
+}
 function range(v: unknown, asOf: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
+    if (all && v.previousPeriod !== undefined) return false;
+    if (v.range !== 'all' && v.previousPeriod !== undefined && !previousPeriod(v.previousPeriod, v.range, asOf)) return false;
     const n = v.range === '7d' ? 7 : 30;
     const bucketDays = v.bucketDays ?? 1;
     if (!safe(bucketDays) || bucketDays < 1 || (!all && v.bucketDays !== undefined)) return false;
@@ -157,7 +170,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 4 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 5 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'identityConflicts'];
@@ -167,7 +180,14 @@ function snapshot(v: unknown): v is UsageDashboardSnapshot {
     if (c.state === 'complete' && ((c.sourcesRead as number) !== (c.sourcesDiscovered as number) || losses.some(k => c[k] !== 0)))
         return false;
     const ranges = v.ranges as Record<string, unknown>;
-    return range(ranges.all, v.asOf) && (ranges.all as UsageRangeSummary).range === 'all' && range(ranges['7d'], v.asOf) && range(ranges['30d'], v.asOf) && (ranges['7d'] as UsageRangeSummary).range === '7d' && (ranges['30d'] as UsageRangeSummary).range === '30d';
+    if (!range(ranges.all, v.asOf) || (ranges.all as UsageRangeSummary).range !== 'all' || !range(ranges['7d'], v.asOf) || !range(ranges['30d'], v.asOf) || (ranges['7d'] as UsageRangeSummary).range !== '7d' || (ranges['30d'] as UsageRangeSummary).range !== '30d') return false;
+    const all = ranges.all as UsageRangeSummary;
+    for (const range of [ranges['7d'], ranges['30d']] as UsageRangeSummary[]) {
+        const previous = range.previousPeriod;
+        if (!previous) continue;
+        if (c.state !== 'complete' || previous.sessions > all.sessions || previous.records > all.records || previous.requests > all.requests || previous.activeDays > all.activeDays || (['fresh', 'read', 'write', 'output'] as const).some(key => previous.tokens[key] > all.tokens[key])) return false;
+    }
+    return true;
 }
 function parseUsageCollectionValue(value: unknown): UsageCollectionResult | null {
     if (!obj(value) || value.version !== USAGE_DASHBOARD_VERSION || typeof value.type !== 'string')

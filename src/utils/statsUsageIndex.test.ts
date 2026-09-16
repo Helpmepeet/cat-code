@@ -24,7 +24,10 @@ test('cold accounting matches direct scan; warm restart reads no transcripts; ch
     expect(readSavedUsage(path)).toEqual(first);
     let reads = 0;
     const warm = await collectIndexedUsage(files, '2026-09-13T12:01:00.000Z', { ...opts(path), onReadSource: () => { reads++; } });
-    expect(reads).toBe(0); expect(warm.ranges).toEqual(first.ranges);
+    expect(reads).toBe(0);
+    const expectedWarm = structuredClone(first.ranges);
+    expectedWarm['7d'].previousPeriod!.endInclusive = '2026-09-06T12:01:00.000Z';
+    expect(warm.ranges).toEqual(expectedWarm);
     await appendFile(file, JSON.stringify(row('c')) + '\n');
     const updated = await collectIndexedUsage(files, cutoff, { ...opts(path), onReadSource: () => { reads++; } });
     expect(reads).toBe(1); expect(updated.ranges).toEqual((await collectRetainedUsage(files, cutoff)).ranges);
@@ -44,6 +47,22 @@ test('future records and UTC rollover recalculate from index without rereading s
     expect(next.ranges['30d'].tokens.fresh).toBe(10);
     expect(next.ranges.all.tokens.fresh).toBe(10);
     expect(next.ranges.all.startInclusive).toBe('2026-09-13T00:00:00.000Z');
+});
+test('warm indexed collection advances previous-period cutoffs without rereading sources', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, [
+        row('anchor', '2026-08-30T00:00:00.000Z', 1),
+        row('baseline-early', '2026-09-06T11:30:00.000Z', 9),
+        row('baseline-late', '2026-09-06T12:30:00.000Z', 9),
+        row('current', cutoff, 3),
+    ].map(value => JSON.stringify(value)).join('\n'));
+    const first = await collectIndexedUsage([file], cutoff, opts(path));
+    expect(first.ranges['7d'].previousPeriod!.tokens.fresh).toBe(9);
+    let reads = 0;
+    const advanced = await collectIndexedUsage([file], '2026-09-13T13:00:00.000Z', { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(advanced.ranges['7d'].previousPeriod!.tokens.fresh).toBe(18);
+    expect(advanced.ranges).toEqual((await collectRetainedUsage([file], '2026-09-13T13:00:00.000Z')).ranges);
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
     const { path, file } = await fixture(); await writeFile(file, JSON.stringify(row('a')));
@@ -173,6 +192,24 @@ test('legacy two-window cache rebuilds All from indexed records without reading 
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
     expect(rebuilt.ranges.all.tokens.fresh).toBe(18);
+    expect(rebuilt.ranges).toEqual(original.ranges);
+});
+
+test('v4 saved snapshots are rejected and rebuilt from unchanged indexed records', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('a', cutoff, 18)));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const legacy = structuredClone(original) as any;
+    legacy.countingVersion = 4;
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0;
+    const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(rebuilt.countingVersion).toBe(5);
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 

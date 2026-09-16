@@ -179,3 +179,17 @@ rows stay absent; cards size independently. Existing local typography and glass
 preference remain. Live Dev inspection was performed, but the local reference URL
 was blocked by browser security, so rendered side-by-side acceptance remains open.
 See the follow-up evidence in the linked preview-graphs report.
+
+
+### 2026-09-16 previous-period indicators
+
+The operator approved actual 7-day/30-day comparisons beside the summary-card
+sparklines. Each baseline is the current observed UTC interval shifted back the
+selected number of days, ending at the same time of day. Counts and tokens per
+active day use relative change; Cached input uses percentage points. All,
+incomplete coverage, insufficient retained history and zero count baselines omit
+indicators. No demo percentages or inferred Thinking share are introduced.
+
+Bounded `previousPeriod` totals retain exact unique sessions and active days.
+Counting version 5 invalidates older derived snapshots while reusing indexed
+source records. See [period delta semantics and evidence](../../reports/2026-09-16-usage-period-deltas.md).

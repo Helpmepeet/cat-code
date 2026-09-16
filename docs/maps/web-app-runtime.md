@@ -165,7 +165,8 @@ active desktop app stack, not older dedicated-app design docs.
 `App.tsx`'s Open/Restore route. App owns period/date selection across navigation.
 `UsageOverviewDetails.tsx` and `usageOverviewDetails.css` own the interactive model
 donut, cache/tool headers, and aligned count/share summaries.
-`UsageMetrics.tsx` renders the summary strip; `usageGraphState.ts` derives live
+`UsageMetrics.tsx` renders the summary strip and previous-period indicators via
+`usageMetricDelta.ts`; `usageGraphState.ts` derives live
 type/model flow series. `UsageActivityCharts.tsx` renders the fixed seven-day token
 heatmap from `UsageDay.hourlyTokens`, independently of the page period.
 `UsageAreaTrend.tsx` and `usageTrendState.ts` share shaded cache/request trends,

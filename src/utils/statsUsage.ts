@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
 import { usageWindow, usageTimestampEligible } from './usageWindow.js';
-import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay } from '../../app/shared/usageDashboard.js';
+import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { MAX_USAGE_ALL_BUCKETS, usageProjectId } from '../../app/shared/usageDashboard.js';
 export const MAX_USAGE_IDENTITIES = 250000;
@@ -49,6 +49,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     if (files.length > MAX_USAGE_IDENTITIES)
         throw new UsageResourceError('Usage source budget exceeded');
+    type ComparisonState = {
+        days: number;
+        start: number;
+        end: number;
+        summary: UsagePreviousPeriod;
+        sessions: Set<string>;
+        activeDays: Set<string>;
+    };
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
         if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
@@ -58,6 +66,17 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 total: number;
             }>() };
     });
+    const comparisons: ComparisonState[] = ([7, 30] as const).map(days => {
+        const current = usageWindow(days, asOf);
+        const start = Date.parse(current.startInclusive) - days * 86400000;
+        const end = cutoff - days * 86400000;
+        return { days, start, end, sessions: new Set(), activeDays: new Set(), summary: {
+            startInclusive: new Date(start).toISOString(), endInclusive: new Date(end).toISOString(),
+            tokens: zero(), sessions: 0, records: 0, requests: 0, activeDays: 0, cachedInputShare: null,
+        } };
+    });
+    const eligibleComparisons = (timestamp: number) => comparisons.filter(s => timestamp >= s.start && timestamp <= s.end);
+    let earliestUsableMainRecord = Number.POSITIVE_INFINITY;
     const ensureDay = (s: typeof states[number], date: string): UsageDay => {
         let day = s.dayMap.get(date);
         if (!day) {
@@ -143,6 +162,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const project = isSubagent ? dirname(dirname(dirname(file))) : dirname(file);
         const mainId = nonempty(row.sessionId) ? row.sessionId : isSubagent ? basename(dirname(dirname(file))) : basename(file, '.jsonl');
         const session = JSON.stringify([project, mainId]);
+        if (!isSubagent)
+            earliestUsableMainRecord = Math.min(earliestUsableMainRecord, timestamp);
         const rawCwd = nonempty(row.cwd) && isAbsolute(row.cwd) ? row.cwd : null;
         const candidateLabel = rawCwd ? basename(rawCwd) : null;
         const cwdLabel = candidateLabel && new TextEncoder().encode(candidateLabel).byteLength <= 160 ? candidateLabel : null;
@@ -177,6 +198,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     day.sessions++;
                 }
             }
+        }
+        if (!isSubagent && !alreadyRecorded) for (const s of eligibleComparisons(timestamp)) {
+            s.summary.records = plus(s.summary.records, 1);
+            if (!s.sessions.has(session)) {
+                reserve(session);
+                s.sessions.add(session);
+                s.summary.sessions = plus(s.summary.sessions, 1);
+            }
+            s.activeDays.add(date);
         }
         if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
             for (const block of row.message.content) {
@@ -236,6 +266,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         contributor.requests = plus(contributor.requests, 1);
                     }
                 }
+                for (const s of eligibleComparisons(timestamp)) {
+                    s.summary.requests = plus(s.summary.requests, 1);
+                    s.activeDays.add(date);
+                }
                 countResult(key);
             }
         if (!record(message.usage) || message.model === '<synthetic>')
@@ -291,6 +325,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         usage.set(key, { tokens: maximum, model: cat.id });
         if (total(delta) === 0)
             return;
+        for (const s of eligibleComparisons(timestamp)) {
+            addTokens(s.summary.tokens, delta);
+            s.activeDays.add(date);
+        }
         for (const s of eligibleStates) {
             const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
@@ -366,6 +404,16 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     : reporting.reported ? 'reported' : 'unreported';
         }
     }
+    // A retained source starting after the prior interval gives no evidence that
+    // the omitted time was zero. This is deliberately conservative and cannot
+    // prove that deleted transcripts never existed.
+    if (coverage.state === 'complete') for (const s of comparisons) {
+        s.summary.activeDays = s.activeDays.size;
+        const prompt = s.summary.tokens.fresh + s.summary.tokens.read + s.summary.tokens.write;
+        s.summary.cachedInputShare = prompt > 0 ? s.summary.tokens.read / prompt * 100 : null;
+        if (earliestUsableMainRecord <= s.start)
+            states[s.days === 7 ? 0 : 1]!.summary.previousPeriod = s.summary;
+    }
     // Keep the entire retained timeline within the outbound frame budget. Sparse
     // daily data avoids allocating empty history; larger histories use explicit
     // UTC buckets while activeDays remains the exact count of individual days.
@@ -404,5 +452,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
     }
-    return { version: 1, metricVersion: 1, countingVersion: 4, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 5, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }
