@@ -167,3 +167,15 @@ The reference's generated Thinking share, comparisons and cache-TTL details are
 not live data. Cached input remains the available summary metric instead of
 Thinking share. No demo values or remote font loading are introduced. See
 [verification and visual gate](../../reports/2026-09-16-usage-preview-graphs.md).
+
+
+### 2026-09-16 visual correction
+
+The supplied reference further defines narrow capped bars, regular chart ticks,
+inline headline metrics, vertical value/share rows, separated interactive donut
+arcs, and hour labels above the fixed seven-day grid. These now replace the first
+approximation. Tool Requests remains alongside Error rate; unreported cache-write
+rows stay absent; cards size independently. Existing local typography and glass
+preference remain. Live Dev inspection was performed, but the local reference URL
+was blocked by browser security, so rendered side-by-side acceptance remains open.
+See the follow-up evidence in the linked preview-graphs report.

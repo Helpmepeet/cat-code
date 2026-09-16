@@ -21,12 +21,12 @@ function UsageIcon({ kind }: { kind: UsageAccent }) {
     return <svg className={`usage-icon usage-${kind}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
 }
 function UsagePanel({ title, children, wide = false, accent = 'tokens' }: {
-    title: string;
+    title?: string;
     children: ReactNode;
     wide?: boolean;
     accent?: UsageAccent;
 }) {
-    return <section className={`usage-panel${wide ? ' usage-wide' : ''}`}><h2 className="usage-panel-heading"><UsageIcon kind={accent}/>{title}</h2>{children}</section>;
+    return <section className={`usage-panel${wide ? ' usage-wide' : ''}`}>{title && <h2 className="usage-panel-heading"><UsageIcon kind={accent}/>{title}</h2>}{children}</section>;
 }
 export function UsagePage({ state, selection, onSelectionChange, sessionRows = [], onOpenSession }: {
     state: UsageDashboardState;
@@ -48,7 +48,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const partial = snapshot?.coverage.state === 'partial';
     const stale = !!snapshot && (state.status === 'error' || now - Date.parse(snapshot.asOf) > 10 * 60000);
     const selected = summary?.days.find(d => d.date === selectedDate);
-    const colors = usageGraphColors([...new Set(snapshot ? Object.values(snapshot.ranges).flatMap(r => r.models.map(m => m.id)) : [])]);
+    const colors = usageGraphColors([...new Set(snapshot ? [snapshot.ranges.all, snapshot.ranges['30d'], snapshot.ranges['7d']].flatMap(r => [...r.models].sort((a, b) => usageTotal(b.tokens) - usageTotal(a.tokens)).map(m => m.id)) : [])]);
     const unknown = state.status === 'loading' ? 'Loading' : 'Unavailable';
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0;
     return <main className="usage-page" aria-labelledby="usage-title"><div className="usage-content">
@@ -60,15 +60,15 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
   <UsageMetrics summary={unavailable ? undefined : summary} unknown={unknown} partial={!!partial}/>
   {summary && snapshot && !unavailable && <>
    <div className="usage-panels">
-    <UsagePanel title="Token flow" wide>
+    <UsagePanel wide>
      <UsageDailyColumns summary={summary} colors={colors} selected={selected?.date ?? ''} onSelect={setSelectedDate} partial={!!partial}/>
      {usageBucketDays(summary) > 1 && <p className="usage-note">{usageBucketDays(summary)}-day totals</p>}
     </UsagePanel>
     <div className="usage-secondary-panels usage-wide">
-     <UsagePanel title="Prompt cache" accent="cache"><UsageCacheSummary key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
-     <UsagePanel title="Tool activity" accent="tools"><UsageToolActivity key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
+     <UsagePanel accent="cache"><UsageCacheSummary key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
+     <UsagePanel accent="tools"><UsageToolActivity key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
     </div>
-    <div className="usage-secondary-panels usage-wide">
+    <div className="usage-secondary-panels usage-model-tools-panels usage-wide">
      <UsagePanel title="Model usage" accent="sessions"><UsageModelDonut summary={summary} colors={colors}/>{summary.detail.omittedModels > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedModels)} model names.</p>}</UsagePanel>
      <UsagePanel title="Tools" accent="tools"><UsageToolBreakdown summary={summary}/></UsagePanel>
     </div>
@@ -77,7 +77,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     </UsagePanel>
     {selected && <section className="usage-panel usage-wide usage-day-detail" aria-label={`Usage for ${usageBucketLabel(summary, selected.date)}`}>
      <header className="usage-detail-header"><h2>{usageBucketLabel(summary, selected.date)} UTC</h2><button type="button" onClick={() => setSelectedDate('')}>Clear selection</button></header>
-     <div className="usage-day-readout" aria-live="polite">{usageCompact(usageTotal(selected.tokens))} tokens · {usageNumber(selected.sessions)} sessions · {usageNumber(selected.requests)} tool requests{partial ? ' · partial history' : ''}</div>
+     <div className="usage-day-readout usage-day-figures" aria-live="polite"><div><strong>{usageCompact(usageTotal(selected.tokens))}</strong>{' '}<span>tokens</span></div><div><strong>{usageNumber(selected.sessions)}</strong>{' '}<span>sessions</span></div><div><strong>{usageNumber(selected.requests)}</strong>{' '}<span>tool requests</span></div><div><strong>{usageNumber(selected.errors)}</strong>{' '}<span>errors</span></div>{partial && <span>Partial history</span>}</div>
      {range !== 'all' && <UsageSessionContributors key={selected.date} contributors={selected.contributors ?? { state: 'unavailable', omitted: 0, items: [] }} rows={sessionRows} onOpenRow={onOpenSession}/>}
     </section>}
    </div>

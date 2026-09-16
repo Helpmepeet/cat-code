@@ -163,7 +163,8 @@ active desktop app stack, not older dedicated-app design docs.
 `UsageSessionContributors.tsx` renders bounded UTC-day contributors, and
 `usageSessionNavigation.ts` joins them to the existing catalog before using
 `App.tsx`'s Open/Restore route. App owns period/date selection across navigation.
-`UsageOverviewDetails.tsx` owns compact model, cache, and tool summaries.
+`UsageOverviewDetails.tsx` and `usageOverviewDetails.css` own the interactive model
+donut, cache/tool headers, and aligned count/share summaries.
 `UsageMetrics.tsx` renders the summary strip; `usageGraphState.ts` derives live
 type/model flow series. `UsageActivityCharts.tsx` renders the fixed seven-day token
 heatmap from `UsageDay.hourlyTokens`, independently of the page period.

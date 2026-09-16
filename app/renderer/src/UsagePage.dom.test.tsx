@@ -15,6 +15,7 @@ test('range controls and chart keyboard selection expose matching UTC values wit
     await act(async () => button.click());
     expect(button.getAttribute('aria-pressed')).toBe('true');
     expect(tree.container.textContent).toContain('2026-08-15 to 2026-09-13');
+    expect(tree.container.querySelector('.usage-flow-chart')?.textContent).toContain('Sep 13');
     const day = tree.container.querySelector('g[role="button"]')!;
     await act(async () => day.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2026-08-15');
@@ -39,6 +40,7 @@ test('heatmap keyboard selection, error modes, and model donut expose recorded v
     await act(async () => cells[7]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2026-09-07');
     expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('240 tokens');
+    expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('4 tool requests');
     const errorRows = () => Array.from(tree.container.querySelectorAll<HTMLButtonElement>('.usage-error-row'));
     expect(errorRows()[0]!.textContent).toContain('Bash');
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Rate')!.click());
@@ -180,4 +182,30 @@ test('reference controls change chart values without changing accounting; hourly
         expect(heat().querySelector('[aria-label*="04:00 UTC: 105 tokens"]')).not.toBeNull();
     }
     for (const excluded of ['Work produced', 'Response latency', 'Context window pressure', 'Thinking share']) expect(tree.container.textContent).not.toContain(excluded);
+});
+
+test('reference chart proportions keep weekly bars narrow and model slices keyboard operable', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    summary.tokens.fresh = 10000;
+    summary.days[0]!.tokens.fresh = 10000;
+    summary.models = [
+        { id: 'tiny', kind: 'named', label: 'Tiny', tokens: { fresh: 1, read: 0, write: 0, output: 0 } },
+        { id: 'large', kind: 'named', label: 'Large', tokens: { fresh: 9999, read: 0, write: 0, output: 0 } },
+    ];
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const chart = tree.container.querySelector('.usage-flow-chart')!;
+    expect(chart.querySelectorAll('.usage-grid-line')).toHaveLength(5);
+    expect([...chart.querySelectorAll('.usage-axis')].filter(label => label.textContent?.startsWith('Sep '))).toHaveLength(7);
+    const shape = chart.querySelector('.usage-flow-segment')!.getAttribute('d')!;
+    const left = Number(shape.match(/^M([^,]+)/)![1]);
+    const right = Number(shape.match(/H[^ ]+ Q([^,]+)/)![1]);
+    expect(right - left).toBeLessThanOrEqual(34);
+    const slices = tree.container.querySelectorAll('.usage-model-donut [role="button"]');
+    expect(slices).toHaveLength(2);
+    await act(async () => slices[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(slices[0]!.getAttribute('aria-pressed')).toBe('true');
+    expect(tree.container.querySelector('.usage-details-donut-center')?.textContent).toContain('Tiny');
+    await act(async () => slices[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(slices[0]!.getAttribute('aria-pressed')).toBe('false');
 });

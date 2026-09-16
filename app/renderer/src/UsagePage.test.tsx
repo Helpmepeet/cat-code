@@ -65,8 +65,9 @@ test('tiny model geometry uses real fractional shares; palette has distinct colo
     range.tokens.fresh = 10000;
     range.models = [{ id: 'a', kind: 'named', label: 'Tiny', tokens: { fresh: 1, read: 0, write: 0, output: 0 } }, { id: 'b', kind: 'named', label: 'Large', tokens: { fresh: 9999, read: 0, write: 0, output: 0 } }];
     const html = renderToStaticMarkup(<UsageModelDonut summary={range} colors={usageColors(['a', 'b'])}/>);
-    expect(html).toContain('stroke-dasharray="0.01 99.99"');
-    expect(html).toContain('stroke-dasharray="99.99 ');
+    expect(html.match(/<path[^>]+role="button"/g)).toHaveLength(2);
+    expect(html).toContain('Tiny: 1 tokens');
+    expect(html).toContain('Large: 9,999 tokens');
     expect(new Set(Object.values(usageColors(Array.from({ length: 10 }, (_, i) => String(i))))).size).toBe(10);
 });
 test('specific failure reason is visible while keeping saved values', () => {
@@ -93,8 +94,7 @@ test('cache-write availability distinguishes unreported from a measured zero', a
     expect(html).not.toContain('usage-cache-with-writes');
     range.cacheWriteReporting = 'reported';
     const measured = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
-    expect(measured).toContain('<dt>Cache writes</dt><dd>0</dd>');
-    expect(measured).toContain('usage-cache-with-writes');
+    expect(measured).toContain('Cache writes</dt><dd>0<small>0.0%</small></dd>');
     expect(usageCacheWrites(0, 'reported')).toBe('0');
     expect(usageCacheWrites(1200, 'partial')).toBe('1,200 reported');
     expect(usageCacheWrites(0, 'unavailable')).toBe('Not applicable');
@@ -107,7 +107,7 @@ test('missing and unavailable contributor details do not erase recorded daily to
     day.contributors = { state: 'unavailable', omitted: 0, items: [] };
     const render = () => renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }} selection={{ range: '7d', date: day.date }}/>);
     expect(render()).toContain('Session details are unavailable for this day.');
-    expect(render()).toContain('123 tokens');
+    expect(render().replace(/<[^>]+>/g, '')).toContain('123 tokens');
     // A renderer hot reload can temporarily retain an older host's snapshot.
     Reflect.deleteProperty(day, 'contributors');
     expect(render()).toContain('Session details are unavailable for this day.');

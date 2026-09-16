@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { usageChartDate } from './usageGraphState.js';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { useUsageChartWidth, usageNumber, usagePercent, usageCompact } from './usageDashboardState.js';
 
@@ -15,10 +16,10 @@ export function UsageHeatmap({ summary, asOf, onSelect, partial, metric = 'reque
     const max = Math.max(1, ...summary.days.flatMap(d => values(d) ?? []));
     const compact = columns <= 7;
     const chart = useUsageChartWidth();
-    const left = compact ? 48 : 36, top = 8;
-    const width = compact ? Math.max(384, chart.width) : left + columns * 13 + 10;
-    const step = compact ? Math.floor((width - left - 8) / 24) : 13;
-    const size = step - 3, height = (compact ? columns : 24) * step + 38;
+    const left = compact ? 62 : 36, top = compact ? 24 : 8;
+    const width = compact ? Math.max(580, chart.width) : left + columns * 13 + 10;
+    const step = compact ? (width - left) / 24 : 13;
+    const size = step - 2, height = (compact ? columns : 24) * step + (compact ? 26 : 38);
     const xFor = (col: number, hour: number) => left + (compact ? hour : col) * step;
     const yFor = (col: number, hour: number) => top + (compact ? col : hour) * step;
     const shown = hovered ?? pinned;
@@ -30,12 +31,12 @@ export function UsageHeatmap({ summary, asOf, onSelect, partial, metric = 'reque
         <div className="usage-chart-toolbar"><span>{metric === 'tokens' ? 'Last 7 days · UTC' : 'Tool requests · UTC'}</span><div className="usage-heat-key" aria-label={`Intensity from fewer to more ${noun}`}><span>Less</span>{(metric === 'tokens' ? [0,1,2,3,4,5,6,7,8] : [0,1,2,3,4]).map(n => <i key={n} className={`usage-heat-${n}`}/>)}<span>{metric === 'tokens' ? usageCompact(max) : 'More'}</span></div></div>
         <div className="usage-heat-scroll">
         <svg ref={chart.ref} className={`usage-heatmap${compact ? ' usage-heatmap-week' : ''}`} width={width} height={height} viewBox={`0 0 ${width} ${height}`} aria-label={`Hourly ${noun} by day, UTC`} onMouseLeave={() => setHovered(null)}>
-            {compact ? summary.days.map((day, col) => <text key={day.date} x="0" y={yFor(col, 0) + size / 2 + 4} className="usage-axis">{day.date.slice(5)}</text>) : [0,6,12,18,23].map(hour => <text key={hour} x="0" y={top + hour * step + 9} className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
+            {compact ? summary.days.map((day, col) => <text key={day.date} x={left - 8} textAnchor="end" y={yFor(col, 0) + size / 2 + 4} className="usage-axis">{usageChartDate(day.date)}</text>) : [0,6,12,18,23].map(hour => <text key={hour} x="0" y={top + hour * step + 9} className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
             {Array.from({ length: 24 }, (_, hour) => summary.days.map((day, col) => {
                 const index = hour * columns + col, value = values(day)![hour]!;
                 const future = isFuture(day.date, hour);
                 const level = value === 0 ? 0 : metric === 'tokens' ? Math.min(8, Math.max(1, Math.ceil(Math.sqrt(value / max) * 8))) : Math.min(4, Math.max(1, Math.ceil(value / max * 4)));
-                const label = `${day.date} ${String(hour).padStart(2, '0')}:00 UTC: ${future ? 'not yet recorded' : `${usageNumber(value)} ${noun}${partial ? ', partial history' : ''}`}`;
+                const label = `${day.date} ${String(hour).padStart(2, '0')}:00 UTC: ${future ? 'not yet recorded' : `${usageNumber(value)} ${noun}${metric === 'tokens' ? `, ${usageNumber(day.hourlyRequests[hour]!)} tool requests` : ''}${partial ? ', partial history' : ''}`}`;
                 return <g key={index} role="button" tabIndex={active === index ? 0 : -1} aria-label={label} aria-pressed={pinned === index}
                     onMouseEnter={() => setHovered(index)} onFocus={() => { setActive(index); setHovered(index); }} onBlur={() => setHovered(null)}
                     onClick={() => { setPinned(pinned === index ? null : index); onSelect(day.date); }}
@@ -53,13 +54,13 @@ export function UsageHeatmap({ summary, asOf, onSelect, partial, metric = 'reque
                     <rect x={xFor(col, hour)} y={yFor(col, hour)} width={size} height={size} rx="1.5" className={`${future ? 'usage-heat-future' : `usage-heat-${level}`} ${shown === index ? 'usage-heat-selected' : ''}`}/>
                 </g>;
             }))}
-            {cell && shown !== null && <g className="usage-heat-tooltip" aria-hidden="true" pointerEvents="none" transform={`translate(${Math.min(width - 190, xFor(shown % columns, cell.hour) + 12)},${yFor(shown % columns, cell.hour) > height - 70 ? yFor(shown % columns, cell.hour) - 54 : yFor(shown % columns, cell.hour) + size + 6})`}>
-                <rect width="180" height="48" rx="6"/><text x="10" y="18">{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00</text><text x="10" y="36">{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</text>
+            {cell && shown !== null && <g className="usage-heat-tooltip" aria-hidden="true" pointerEvents="none" transform={`translate(${Math.min(width - 210, xFor(shown % columns, cell.hour) + 12)},${yFor(shown % columns, cell.hour) > height - 85 ? yFor(shown % columns, cell.hour) - 72 : yFor(shown % columns, cell.hour) + size + 6})`}>
+                <rect width="200" height={metric === 'tokens' ? 66 : 48} rx="6"/><text x="10" y="18">{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00</text><text x="10" y="36">{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</text>{metric === 'tokens' && !isFuture(cell.day.date, cell.hour) && <text x="10" y="54">{usageNumber(cell.day.hourlyRequests[cell.hour]!)} tool requests</text>}
             </g>}
-            {compact && [0,6,12,18,23].map(hour => <text key={hour} x={xFor(0, hour)} y={height - 8} className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
+            {compact && [0,3,6,9,12,15,18,21].map(hour => <text key={hour} x={xFor(0, hour) + size / 2} y="12" textAnchor="middle" className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
             {!compact && summary.days.map((day, col) => labels.has(col) && <text key={day.date} x={left + col * step + (col === columns - 1 ? size : 0)} y={height - 8} textAnchor={col === columns - 1 ? 'end' : 'start'} className="usage-axis">{day.date.slice(5)}</text>)}
         </svg></div>
-        {cell && <div className="usage-interaction-readout" role="status"><strong>{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00 UTC</strong><span>{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</span></div>}
+        {cell && <div className="usage-interaction-readout usage-visually-hidden" role="status"><strong>{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00 UTC</strong><span>{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(values(cell.day)![cell.hour]!)} ${noun}`}</span></div>}
     </>;
 }
 

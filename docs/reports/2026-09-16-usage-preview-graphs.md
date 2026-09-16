@@ -82,3 +82,54 @@ Wait for `[main] renderer ready`, open Usage without starting a chat, and check:
 
 Scope flags: operator-directed layout adaptations and three cuts; unrecorded
 mock fields omitted; live visual acceptance and installed-app update deferred.
+
+
+## Follow-up: live app layout correction
+
+The operator rejected the first visual approximation and requested opening both
+surfaces. Source comparison with the supplied HTML and live Cat Code Dev
+inspection identified oversized weekly bars, too few axis labels, mismatched
+header/metric alignment, horizontal cache values, thin contiguous donut slices,
+and bottom-aligned hourly labels. These are corrected:
+
+- Token bars capped at 34 px (18 px on narrower charts), five grid ticks, adaptive
+  date labels including both endpoints, separated stacked segments and a small
+  selection highlight. Details use tooltips rather than a reserved footer row.
+- Cache and tool cards have right-aligned headline metrics, four chart grid ticks,
+  flat shaded cache/request areas, and vertical value/share rows. Card heights
+  remain independent; absent cache-write rows leave no empty column.
+- Thick separated model arcs, readable center values, aligned legend counts and
+  shares, keyboard activation and pinning. Even a 1-in-10,000 slice remains in
+  the interactive geometry. Colors use all-history volume order consistently
+  across periods. No fabricated model data.
+- Hour labels above the seven-by-24 heatmap; cell details include tokens and tool
+  requests. Selected-day figures show tokens, sessions, tool requests and errors.
+- Existing glass-mode behavior and bundled fonts remain. No remote font loading,
+  mock comparisons, thinking share, or excluded panels were introduced.
+
+### Evidence and limits
+
+Final verification: **46 focused tests / 241 assertions passed**, including the
+conditional tool subtitle and header wrapping adjustment. Desktop typecheck, Fast
+Refresh lint, renderer build, maps lint and diff check passed. Scope remains
+renderer-only. Full app/sidecar suites were not rerun for this visual follow-up.
+Logs: `/tmp/cat-usage-visual-final-{tests,types,build}.log` and
+`/tmp/cat-usage-visual-maps.log`.
+
+Live native AX/screenshot checks in Cat Code Dev at 1,100 × 720 confirmed:
+
+- Seven-day bars and all seven date labels; 30-day chart density and five ticks.
+- Prompt cache 96.3% and Tool activity 4.3% share one header row with their
+  respective labels; vertical summary rows and independent bottoms.
+- Model arcs/legend and tool bars; activating Bash shows its recorded outcomes.
+- With 30 days selected, the hourly grid still shows Sep 10 through Sep 16.
+- Activating Sep 11 at 21:00 shows 85,509,125 tokens and 748 tool requests,
+  then the real selected-day summary and contributor rows. No session was opened.
+
+The live check also caught crowded final line-chart date labels; endpoint spacing
+was corrected afterward. The reference file URL was denied by browser security;
+Chrome inspection did not find the user-opened reference. No alternate serving or
+browser route was used. Full rendered side-by-side fidelity, narrow/light-mode
+GUI checks, and final operator design acceptance remain OPEN. This replaces the
+previous statement that no actual app inspection occurred; it does not imply a
+reference fidelity pass or an installed-app update.
