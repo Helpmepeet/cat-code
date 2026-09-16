@@ -14,7 +14,7 @@ export function UsageSessionContributors({ contributors, rows, onOpenRow }: {
     if (!contributors.items.length) return <p className="usage-note">No contributing sessions were recorded for this day.</p>;
     const items = [...contributors.items].sort((a, b) => (sort === 'tokens' ? usageTotal(b.tokens) - usageTotal(a.tokens) : b[sort] - a[sort]) || a.id.localeCompare(b.id));
     return <>
-        <div className="usage-contributors-toolbar"><p className="usage-note">Usage on this day, including delegated work.</p><label>Sort shown sessions <select value={sort} onChange={event => setSort(event.target.value as typeof sort)}><option value="tokens">Tokens</option><option value="requests">Tool requests</option><option value="errors">Recorded errors</option></select></label></div>
+        <div className="usage-contributors-toolbar"><label>Sort shown sessions <select value={sort} onChange={event => setSort(event.target.value as typeof sort)}><option value="tokens">Tokens</option><option value="requests">Tool requests</option><option value="errors">Recorded errors</option></select></label></div>
         <div className="usage-table-scroll"><table className="usage-session-table"><thead><tr><th scope="col">Session</th><th scope="col">Models</th><th scope="col">Tokens</th><th scope="col">Tool requests</th><th scope="col">Errors</th><th scope="col"><span className="sr-only">Open session</span></th></tr></thead>
             <tbody>{items.map(item => {
                 const row = findUsageSessionRow(item, rows);

@@ -17,7 +17,6 @@
 .usage-sessions { --usage-color:#438fff; }
 .usage-tools { --usage-color:#f5af48; }
 .usage-overview { margin-bottom:16px; }
-.usage-page .usage-overview-title { margin-bottom:10px; color:var(--usage-secondary); font-size:12px; font-weight:500; }
 .usage-cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
 .usage-metric { display:grid; grid-template-columns:32px minmax(0,1fr); gap:12px; align-items:center; min-width:0; min-height:100px; padding:16px; border:1px solid var(--color-shell-seam); border-radius:8px; background:var(--usage-panel); }
 .usage-metric > .usage-icon { box-sizing:content-box; padding:5px; border-radius:6px; background:color-mix(in srgb,var(--usage-color) 17%,transparent); }
@@ -29,7 +28,6 @@
 .usage-panels { display:grid; align-items:stretch; grid-template-columns:minmax(0,1.9fr) minmax(280px,1fr); gap:12px; }
 .usage-panel { min-width:0; padding:18px; border:1px solid var(--color-shell-seam); border-radius:8px; background:var(--usage-panel); }
 .usage-page .usage-panel-heading { display:flex; align-items:center; gap:8px; margin-bottom:12px; }
-.usage-panel-subtitle { margin:-4px 0 16px; color:var(--usage-secondary); font-size:12px; }
 .usage-wide { grid-column:1 / -1; }
 .usage-chart { width:100%; height:190px; display:block; overflow:visible; }
 .usage-axis { fill:var(--usage-secondary); font-size:10px; font-variant-numeric:tabular-nums; }
@@ -41,7 +39,6 @@
 .usage-legend svg { flex-shrink:0; }
 .usage-day-detail { border-color:#8970ff; }
 .usage-detail-header { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
-.usage-selected-label { display:inline-block; margin-left:8px; padding:3px 7px; border-radius:4px; font-size:11px; font-weight:400; color:var(--color-text-primary); background:color-mix(in srgb,#8970ff 25%,transparent); }
 .usage-detail-header button,.usage-session-open { border:1px solid var(--color-shell-seam); border-radius:5px; padding:5px 10px; color:var(--color-text-primary); font-size:12px; cursor:pointer; }
 .usage-detail-header button:hover,.usage-session-open:hover { background:var(--color-surface-hover); }
 .usage-day-readout { color:var(--usage-secondary); font-size:12px; line-height:1.5; margin:10px 0 16px; font-variant-numeric:tabular-nums; }
@@ -66,15 +63,13 @@
 .usage-cache-chart { height:140px; margin:12px 0; }
 .usage-cache-grid { stroke:#8970ff; stroke-opacity:.25; stroke-width:1; stroke-dasharray:4 4; }
 .usage-cache-point { fill:#f4f0ff; stroke:#8970ff; stroke-width:2; }
-.usage-footer { margin-top:14px; }
 .usage-disclosure { margin-top:14px; font-size:12px; }
 .usage-disclosure > summary,.usage-values > summary { cursor:pointer; color:var(--usage-secondary); padding:5px 0; }
 .usage-disclosure[open] > summary { margin-bottom:14px; }
 .usage-activity-details { border-top:1px solid var(--color-shell-seam); padding-top:8px; }
 .usage-values { margin-top:14px; border-top:1px solid var(--color-shell-seam); padding-top:12px; font-size:12px; }
 .usage-table-scroll { overflow-x:auto; }
-.usage-contributors-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
-.usage-contributors-toolbar p { margin:0; }
+.usage-contributors-toolbar { display:flex; justify-content:flex-end; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:10px; }
 .usage-contributors-toolbar label { display:flex; align-items:center; gap:8px; font-size:12px; color:var(--usage-secondary); }
 .usage-contributors-toolbar select { padding:5px 8px; background:var(--color-surface-panel); color:var(--color-text-primary); border:1px solid var(--color-shell-seam); border-radius:5px; }
 .usage-session-table { min-width:640px; }

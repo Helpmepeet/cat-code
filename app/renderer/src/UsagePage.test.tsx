@@ -21,6 +21,26 @@ test('loading, failure and confirmed empty history are distinct; zero prompt is 
     expect(html).not.toContain('Tokens per Session');
     expect(html).not.toContain('Daily Average');
 });
+test('normal usage omits redundant period labels, coaching and accounting diagnostics', () => {
+    const copy = structuredClone(snapshot);
+    copy.coverage.identityConflicts = 2;
+    copy.ranges['7d'].fallbackRequests = 3;
+    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    for (const text of [
+        '7-day overview',
+        '7-day totals',
+        'Conflicting records found',
+        'requests have uncertain identification',
+        'Select a day to see its sessions',
+        'Select a cell to show sessions',
+        'Based on retained local sessions',
+        'Zoomed to the recorded range',
+        'Hover to inspect',
+        'Click a tool for its result breakdown',
+        'Error rates use matched tool results',
+    ]) expect(html).not.toContain(text);
+    expect(html).toContain('Errors / results');
+});
 test('partial zero history cannot be presented as confirmed inactivity or an unqualified ratio', () => {
     const partial = structuredClone(snapshot);
     partial.coverage.state = 'partial';

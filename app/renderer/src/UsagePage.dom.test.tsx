@@ -73,6 +73,8 @@ test('day drilldown opens its matched catalog session and does not change on hov
     await act(async () => bars[0]!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('123 tokens');
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2 more are not shown');
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).not.toContain('Selected day');
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).not.toContain('Usage on this day');
     await act(async () => bars[1]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain(day.date);
     await act(async () => tree.container.querySelector<HTMLButtonElement>('.usage-session-open')!.click());
@@ -96,5 +98,5 @@ test('controlled period and day restore on remount and clear when the period cha
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2026-08-15');
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === '7 days')!.click());
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
-    expect(tree.container.querySelector('.usage-overview-title')?.textContent).toBe('7-day overview');
+    expect(tree.container.querySelector('.usage-overview-title')).toBeNull();
 });

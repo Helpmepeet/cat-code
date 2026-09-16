@@ -55,7 +55,7 @@ export function UsageHeatmap({ summary, asOf, onSelect, partial }: {
             {compact && [0,6,12,18,23].map(hour => <text key={hour} x={xFor(0, hour)} y={height - 8} className="usage-axis">{String(hour).padStart(2, '0')}</text>)}
             {!compact && summary.days.map((day, col) => labels.has(col) && <text key={day.date} x={left + col * step + (col === columns - 1 ? size : 0)} y={height - 8} textAnchor={col === columns - 1 ? 'end' : 'start'} className="usage-axis">{day.date.slice(5)}</text>)}
         </svg></div>
-        <div className="usage-interaction-readout" role="status">{cell ? <><strong>{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00 UTC</strong><span>{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(cell.day.hourlyRequests[cell.hour]!)} tool requests`}</span></> : <span>Hover to inspect · Click to keep · Arrow keys to explore</span>}</div>
+        {cell && <div className="usage-interaction-readout" role="status"><strong>{cell.day.date} · {String(cell.hour).padStart(2, '0')}:00 UTC</strong><span>{isFuture(cell.day.date, cell.hour) ? 'Not yet recorded' : `${usageNumber(cell.day.hourlyRequests[cell.hour]!)} tool requests`}</span></div>}
     </>;
 }
 
@@ -73,6 +73,6 @@ export function UsageToolErrors({ summary }: { summary: UsageRangeSummary }) {
             <span>{tool.label}</span><svg className="usage-error-bar" viewBox="0 0 100 8" preserveAspectRatio="none" aria-hidden="true"><rect width="100" height="8" rx="2" className="usage-track"/><rect width={(mode === 'count' ? tool.errors : rate(tool)) / max * 100} height="8" rx="2" className="usage-error-fill"/></svg>
             <span className="usage-tool-count">{usageNumber(tool.errors)} / {usageNumber(tool.results)}</span><span className="usage-tool-count">{tool.results ? usagePercent(rate(tool)) : 'N/A'}</span>
         </button>)}</div>
-        <div className="usage-interaction-readout" role="status">{detail ? <><strong>{detail.label}</strong><span>{usageNumber(detail.results - detail.errors)} successful · {usageNumber(detail.errors)} errors · {usageNumber(detail.requests - detail.results)} without a matched result</span></> : <span>Click a tool for its result breakdown</span>}</div>
+        {detail && <div className="usage-interaction-readout" role="status"><strong>{detail.label}</strong><span>{usageNumber(detail.results - detail.errors)} successful · {usageNumber(detail.errors)} errors · {usageNumber(detail.requests - detail.results)} without a matched result</span></div>}
     </>;
 }

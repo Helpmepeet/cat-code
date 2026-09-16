@@ -35,16 +35,15 @@ export function UsageCacheSummary({ summary, partial }: { summary: UsageRangeSum
             <div><dt>Fresh input</dt><dd title={usageNumber(summary.tokens.fresh)}>{usageCompact(summary.tokens.fresh)}</dd></div>
             <div><dt>Cache writes</dt><dd>{usageCacheWrites(summary.tokens.write, summary.cacheWriteReporting)}</dd></div>
         </dl>
-        <details className="usage-disclosure"><summary>Daily cache trend</summary><p className="usage-note">Zoomed to the recorded range. Select a point to inspect its daily share.</p><UsageCacheChart summary={summary} partial={partial} selected={summary.days.some(day => day.date === selected) ? selected : ''} onSelect={setSelected}/></details>
+        <details className="usage-disclosure"><summary>Daily cache trend</summary><UsageCacheChart summary={summary} partial={partial} selected={summary.days.some(day => day.date === selected) ? selected : ''} onSelect={setSelected}/></details>
     </>;
 }
 
 export function UsageToolActivity({ summary }: { summary: UsageRangeSummary }) {
     return <>
-        <table className="usage-tool-table"><thead><tr><th scope="col">Tool</th><th scope="col">Requests</th><th scope="col">Recorded errors</th></tr></thead>
+        <table className="usage-tool-table"><thead><tr><th scope="col">Tool</th><th scope="col">Requests</th><th scope="col">Errors / results</th></tr></thead>
             <tbody>{summary.tools.slice(0, 4).map(tool => <tr key={tool.id}><th scope="row">{tool.label}</th><td>{usageNumber(tool.requests)}</td><td title={`${usageNumber(tool.errors)} errors / ${usageNumber(tool.results)} matched results`}>{tool.results ? usagePercent(tool.errors / tool.results * 100) : 'Not available'}</td></tr>)}</tbody>
         </table>
-        <p className="usage-note">Error rates use matched tool results, not task outcomes.</p>
         <details className="usage-disclosure"><summary>All tools and result breakdown</summary><UsageToolErrors summary={summary}/></details>
         {summary.detail.omittedTools > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedTools)} tool names.</p>}
     </>;
