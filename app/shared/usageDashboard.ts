@@ -19,7 +19,8 @@ export function usageProjectId(cwd: string): string {
     }
     return [a, b, c, d].map(n => (n >>> 0).toString(16).padStart(8, '0')).join('');
 }
-export type UsageWindow = '7d' | '30d';
+export type UsageWindow = '7d' | '30d' | 'all';
+export const MAX_USAGE_ALL_BUCKETS = 180;
 export type UsageTokens = {
     fresh: number;
     read: number;
@@ -71,6 +72,8 @@ export type UsageDay = {
 };
 export type UsageRangeSummary = {
     range: UsageWindow;
+    /** All uses sparse UTC buckets; absent means one calendar day. */
+    bucketDays?: number;
     startInclusive: string;
     endExclusive: string;
     tokens: UsageTokens;

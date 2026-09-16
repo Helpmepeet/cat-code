@@ -42,6 +42,8 @@ test('future records and UTC rollover recalculate from index without rereading s
     const next = await collectIndexedUsage([file], '2026-09-21T00:00:00.000Z', options);
     expect(reads).toBe(0); expect(next.ranges['7d'].tokens.fresh).toBe(0);
     expect(next.ranges['30d'].tokens.fresh).toBe(10);
+    expect(next.ranges.all.tokens.fresh).toBe(10);
+    expect(next.ranges.all.startInclusive).toBe('2026-09-13T00:00:00.000Z');
 });
 test('failed refresh rolls back and preserves the last committed snapshot', async () => {
     const { path, file } = await fixture(); await writeFile(file, JSON.stringify(row('a')));
@@ -153,4 +155,23 @@ test('indexed result flags match direct accounting without persisting result con
     const { Database } = await import('bun:sqlite');
     const db = new Database(path, { readonly: true });
     try { expect(JSON.stringify(db.query('SELECT value FROM records').all())).not.toContain('PRIVATE RESULT BODY'); } finally { db.close(); }
+});
+
+
+test('legacy two-window cache rebuilds All from indexed records without reading unchanged sources', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, [row('old', '2020-01-01T00:00:00.000Z', 7), row('recent', cutoff, 11)].map(item => JSON.stringify(item)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const legacy = structuredClone(original) as any;
+    delete legacy.ranges.all;
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0;
+    const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(rebuilt.ranges.all.tokens.fresh).toBe(18);
+    expect(rebuilt.ranges).toEqual(original.ranges);
 });

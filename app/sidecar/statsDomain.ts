@@ -233,10 +233,11 @@ export async function collectUsageDashboard(): Promise<import('../shared/usageDa
   try {
     const snapshot = await aggregateUsageDashboard(undefined, { finalize: snapshot => {
       const raw = snapshot.ranges
-      for (const limit of [8, 4, 0]) {
+      for (const [limit, contributors] of [[8, 20], [4, 10], [0, 5], [0, 0]] as const) {
         snapshot.ranges = {
-          '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit, limit === 8 ? 20 : limit === 4 ? 10 : 5),
-          '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit, limit === 8 ? 20 : limit === 4 ? 10 : 5),
+          '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit, contributors),
+          '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit, contributors),
+          all: groupUsageSummary(raw.all, limit, limit === 8 ? 10 : limit, 0),
         }
         const result = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })
         if (result?.type === 'usage') return result.snapshot

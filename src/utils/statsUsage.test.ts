@@ -133,3 +133,51 @@ test('day contributors merge subagent work into its owning session and expose on
     });
     expect(day.sessions).toBe(1);
 });
+
+
+test('All includes old retained history, stays sparse across gaps, and excludes future records', async () => {
+    const path = await file([
+        msg('2020-01-01T10:00:00.000Z', 'old', 7, 'old'),
+        msg(asOf, 'today', 11, 'today'),
+        msg('2027-01-01T10:00:00.000Z', 'future', 999, 'future'),
+    ]);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    expect(snapshot.ranges.all.tokens.fresh).toBe(18);
+    expect(snapshot.ranges['30d'].tokens.fresh).toBe(11);
+    expect(snapshot.ranges.all.startInclusive).toBe('2020-01-01T00:00:00.000Z');
+    expect(snapshot.ranges.all.days.map(day => day.date)).toEqual(['2020-01-01', '2026-09-13']);
+    expect(snapshot.ranges.all.days.every(day => day.contributors.state === 'unavailable')).toBe(true);
+    expect(snapshot.ranges.all.activeDays).toBe(2);
+    expect(snapshot.ranges.all.sessions).toBe(1);
+    const empty = await collectRetainedUsage([], asOf);
+    expect(empty.ranges.all.startInclusive).toBe('2026-09-13T00:00:00.000Z');
+    expect(empty.ranges.all.days).toEqual([]);
+});
+
+test('All buckets long history without truncating totals or double-counting bucket sessions', async () => {
+    const rows = Array.from({ length: 400 }, (_, index) => msg(new Date(Date.UTC(2020, 0, index + 1, 10)).toISOString(), `m${index}`, 1, `t${index}`));
+    const path = await file(rows);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    const all = snapshot.ranges.all;
+    expect(all.tokens.fresh).toBe(400);
+    expect(all.records).toBe(400);
+    expect(all.requests).toBe(400);
+    expect(all.activeDays).toBe(400);
+    expect(all.bucketDays).toBeGreaterThan(1);
+    expect(all.days.length).toBeLessThanOrEqual(180);
+    expect(all.days.every(day => day.sessions === 1)).toBe(true);
+    expect(all.days.reduce((sum, day) => sum + day.requests, 0)).toBe(400);
+    expect(all.days.reduce((sum, day) => sum + day.tokens.fresh, 0)).toBe(400);
+    const { groupUsageSummary } = await import('../../app/sidecar/usageSummary.js');
+    const { parseUsageCollectionResult } = await import('../../app/shared/usageStatsWorker.js');
+    for (const range of ['7d', '30d', 'all'] as const) snapshot.ranges[range] = groupUsageSummary(snapshot.ranges[range]);
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })).not.toBeNull();
+});
+
+test('ancient timestamps do not allocate intervening calendar days and out-of-contract years are rejected', async () => {
+    const path = await file([msg('0000-01-01T10:00:00.000Z', 'ancient', 1, 'ancient'), msg(asOf, 'current', 2, 'current'), msg('-000001-01-01T10:00:00.000Z', 'invalid', 100, 'invalid')]);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    expect(snapshot.ranges.all.days).toHaveLength(2);
+    expect(snapshot.ranges.all.tokens.fresh).toBe(3);
+    expect(snapshot.coverage.invalidTimestamps).toBe(1);
+});

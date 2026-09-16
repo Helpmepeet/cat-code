@@ -22,7 +22,7 @@ test('range controls and chart keyboard selection expose matching UTC values wit
     expect(tree.container.querySelector('.usage-values table')?.querySelectorAll('tbody tr')).toHaveLength(30);
 });
 
-test('heatmap keyboard selection, error modes, and model bars expose recorded values', async () => {
+test('heatmap keyboard selection, error modes, and model donut expose recorded values', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
     summary.days[0]!.hourlyRequests[1] = 4;
@@ -44,8 +44,8 @@ test('heatmap keyboard selection, error modes, and model bars expose recorded va
     expect(errorRows()[0]!.textContent).toContain('Read');
     await act(async () => errorRows()[1]!.click());
     expect(tree.container.textContent).toContain('6 successful · 2 errors · 2 without a matched result');
-    expect(tree.container.querySelector('.usage-model-bars')?.textContent).toContain('Model A');
-    expect(tree.container.querySelector('.usage-model-bars')?.textContent).toContain('33.3%');
+    expect(tree.container.querySelector('.usage-model-key')?.textContent).toContain('Model A');
+    expect(tree.container.querySelector('.usage-model-key')?.textContent).toContain('33.3%');
 });
 
 test('day drilldown opens its matched catalog session and does not change on hover', async () => {
@@ -99,4 +99,46 @@ test('controlled period and day restore on remount and clear when the period cha
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === '7 days')!.click());
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
     expect(tree.container.querySelector('.usage-overview-title')).toBeNull();
+});
+
+test('All includes older retained history, keeps the cutoff date, and shows both trends without disclosures', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const dir = await mkdtemp(`${tmpdir()}/usage-all-ui-`);
+    try {
+        const file = `${dir}/session.jsonl`;
+        await writeFile(file, JSON.stringify({ type: 'assistant', uuid: 'old', timestamp: '2020-01-02T12:00:00.000Z', message: { id: 'old', model: 'gpt-test', usage: { input_tokens: 15, output_tokens: 2 }, content: [{ type: 'tool_use', id: 't', name: 'Read' }] } }) + '\n');
+        const snapshot = await collectRetainedUsage([file], '2026-09-13T12:00:00.000Z');
+        const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+        const all = Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'All')!;
+        await act(async () => all.click());
+        expect(all.getAttribute('aria-pressed')).toBe('true');
+        expect(tree.container.querySelector('.usage-freshness')?.textContent).toContain('2020-01-02 to 2026-09-13');
+        expect(tree.container.querySelector('.usage-metric.usage-tokens strong')?.textContent).toBe('17');
+        expect(tree.container.querySelector('.usage-area-cache')?.closest('details')).toBeNull();
+        expect(tree.container.querySelector('.usage-area-requests')?.closest('details')).toBeNull();
+        expect(tree.container.querySelector('.usage-model-donut')).not.toBeNull();
+        expect(tree.container.querySelector('.usage-activity-details')).toBeNull();
+        expect(tree.container.querySelector('.usage-cache-values')?.children).toHaveLength(2);
+        expect(tree.container.querySelector('.usage-values')?.textContent).not.toContain('Cache writes');
+        await act(async () => tree.container.querySelector('.usage-chart g[role="button"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+        expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('17 tokens');
+        expect(tree.container.querySelector('.usage-session-table')).toBeNull();
+        expect(tree.container.querySelectorAll('.usage-area-requests g[role="button"]')).toHaveLength(3);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('tool trend hover previews counts; activation selects and clear removes selection', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    snapshot.ranges['7d'].days[0]!.requests = 17;
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const point = tree.container.querySelector('.usage-area-requests g[role="button"]')!;
+    await act(async () => point.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    expect(tree.container.querySelector('.usage-area-requests .usage-trend-readout')?.textContent).toContain('17 tool requests');
+    expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
+    await act(async () => point.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
+    expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('17 tool requests');
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Clear selection')!.click());
+    expect(point.getAttribute('aria-pressed')).toBe('false');
+    expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
 });

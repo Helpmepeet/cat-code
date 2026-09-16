@@ -1,5 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
-import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, } from './usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -91,16 +91,22 @@ function day(v: unknown): v is UsageDay {
     }).total, 0) === tokenSum(v.tokens);
 }
 function range(v: unknown, asOf: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['range', 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'detail']) || (v.range !== '7d' && v.range !== '30d') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
+    const all = v.range === 'all';
     const n = v.range === '7d' ? 7 : 30;
-    const start = `${addDays(asOf.slice(0, 10), -(n - 1))}T00:00:00.000Z`;
+    const bucketDays = v.bucketDays ?? 1;
+    if (!safe(bucketDays) || bucketDays < 1 || (!all && v.bucketDays !== undefined)) return false;
+    const start = all ? v.startInclusive : `${addDays(asOf.slice(0, 10), -(n - 1))}T00:00:00.000Z`;
     const end = `${addDays(asOf.slice(0, 10), 1)}T00:00:00.000Z`;
-    if (v.startInclusive !== start || v.endExclusive !== end || v.days.length !== n || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
+    if (v.startInclusive !== start || v.endExclusive !== end || start >= end || bucketDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000) || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
         return false;
-    for (let i = 0; i < n; i++)
-        if ((v.days[i] as UsageDay).date !== addDays(v.startInclusive.slice(0, 10), i))
-            return false;
+    for (let i = 0; i < v.days.length; i++) {
+        const d = v.days[i] as UsageDay;
+        if (!all && d.date !== addDays(v.startInclusive.slice(0, 10), i)) return false;
+        if (all && (d.date < start.slice(0, 10) || d.date >= end.slice(0, 10) || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
+    }
+    if (all && (v.days.length === 0 ? start !== `${asOf.slice(0, 10)}T00:00:00.000Z` : (v.days[0] as UsageDay).date !== start.slice(0, 10))) return false;
     const days = v.days as UsageDay[];
     const sum = (key: keyof UsageTokens): number => days.reduce((n: number, d: UsageDay) => n + d.tokens[key], 0);
     if (v.tokens.fresh !== sum('fresh') || v.tokens.read !== sum('read') || v.tokens.write !== sum('write') || v.tokens.output !== sum('output'))
@@ -113,10 +119,10 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
             : dayStates.has('reported') ? 'reported' : 'unreported';
     if (v.cacheWriteReporting !== reporting)
         return false;
-    if (days.some(d => d.date === asOf.slice(0, 10) && d.hourlyRequests.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
+    if (bucketDays === 1 && days.some(d => d.date === asOf.slice(0, 10) && d.hourlyRequests.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
     const dailyRecords = days.reduce((n, d) => n + d.records, 0);
     const dailySessions = days.reduce((n, d) => n + d.sessions, 0);
-    if (v.requests !== v.identifiedRequests + v.fallbackRequests || v.requests !== days.reduce((n, d) => n + d.requests, 0) || v.records !== dailyRecords || v.sessions > v.records || v.sessions > dailySessions || v.sessions < Math.max(...days.map(d => d.sessions), 0) || days.some(d => d.sessions > d.records) || v.activeDays !== days.filter((d: UsageDay) => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length)
+    if (v.requests !== v.identifiedRequests + v.fallbackRequests || v.requests !== days.reduce((n, d) => n + d.requests, 0) || v.records !== dailyRecords || v.sessions > v.records || v.sessions > dailySessions || v.sessions < Math.max(...days.map(d => d.sessions), 0) || days.some(d => d.sessions > d.records) || (bucketDays === 1 ? v.activeDays !== days.filter((d: UsageDay) => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length : v.activeDays < days.filter(d => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length || v.activeDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000)))
         return false;
     const modelTotals = v.models.map(m => tokenSum(m.tokens));
     const toolTotals = v.tools.map(t => t.requests);
@@ -141,7 +147,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 4 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 4 || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'identityConflicts'];
@@ -151,7 +157,7 @@ function snapshot(v: unknown): v is UsageDashboardSnapshot {
     if (c.state === 'complete' && ((c.sourcesRead as number) !== (c.sourcesDiscovered as number) || losses.some(k => c[k] !== 0)))
         return false;
     const ranges = v.ranges as Record<string, unknown>;
-    return range(ranges['7d'], v.asOf) && range(ranges['30d'], v.asOf) && (ranges['7d'] as UsageRangeSummary).range === '7d' && (ranges['30d'] as UsageRangeSummary).range === '30d';
+    return range(ranges.all, v.asOf) && (ranges.all as UsageRangeSummary).range === 'all' && range(ranges['7d'], v.asOf) && range(ranges['30d'], v.asOf) && (ranges['7d'] as UsageRangeSummary).range === '7d' && (ranges['30d'] as UsageRangeSummary).range === '30d';
 }
 function parseUsageCollectionValue(value: unknown): UsageCollectionResult | null {
     if (!obj(value) || value.version !== USAGE_DASHBOARD_VERSION || typeof value.type !== 'string')

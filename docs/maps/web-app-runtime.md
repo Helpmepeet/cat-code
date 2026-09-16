@@ -164,6 +164,8 @@ active desktop app stack, not older dedicated-app design docs.
 `usageSessionNavigation.ts` joins them to the existing catalog before using
 `App.tsx`'s Open/Restore route. App owns period/date selection across navigation.
 `UsageOverviewDetails.tsx` owns compact model, cache, and tool summaries.
+`UsageAreaTrend.tsx` and `usageTrendState.ts` share shaded cache/request trends,
+calendar spacing, and explicit multi-day labels for the All-history range.
 See [day-to-session implementation](../reports/2026-09-16-usage-session-drilldown.md).
 `main/usageStatsRunner.ts` owns bounded delivery; `sidecar/usageStatsWorker.ts` calls
 `statsDomain.collectUsageDashboard`, which reuses the stats discovery owner and the

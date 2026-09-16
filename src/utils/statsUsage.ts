@@ -3,9 +3,9 @@ import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
 import { usageWindow, usageTimestampEligible } from './usageWindow.js';
-import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor } from '../../app/shared/usageDashboard.js';
+import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
-import { usageProjectId } from '../../app/shared/usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, usageProjectId } from '../../app/shared/usageDashboard.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -49,14 +49,26 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     if (files.length > MAX_USAGE_IDENTITIES)
         throw new UsageResourceError('Usage source budget exceeded');
-    const states = (['7d', '30d'] as const).map(range => {
+    const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
+        if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
         const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
-        return { summary, start: Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
+        return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
             }>() };
     });
+    const ensureDay = (s: typeof states[number], date: string): UsageDay => {
+        let day = s.dayMap.get(date);
+        if (!day) {
+            reserve(date, 1024);
+            day = { date, hourlyRequests: Array(24).fill(0), tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
+            s.dayMap.set(date, day);
+            s.summary.days.push(day);
+            if (`${date}T00:00:00.000Z` < s.summary.startInclusive) s.summary.startInclusive = `${date}T00:00:00.000Z`;
+        }
+        return day;
+    };
     type UsageValue = {
         tokens: UsageTokens;
         model: string;
@@ -84,7 +96,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             contributor = { id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), requests: 0, results: 0, errors: 0, models: [], modelDetail: { state: 'full', omitted: 0 } };
             contributorSessions.set(contributor.id, session);
             s.dailyContributors.set(key, contributor);
-            s.summary.days.find(d => d.date === date)!.contributors.items.push(contributor);
+            ensureDay(s, date).contributors.items.push(contributor);
         }
         return contributor;
     };
@@ -102,9 +114,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const tool = s.tools.get(category(request.name).id)!;
             tool.results = plus(tool.results, 1);
             if (result.error) tool.errors = plus(tool.errors, 1);
-            const contributor = ensureContributor(s, request.session, request.date);
-            contributor.results = plus(contributor.results, 1);
-            if (result.error) contributor.errors = plus(contributor.errors, 1);
+            if (s.summary.range !== 'all') {
+                const contributor = ensureContributor(s, request.session, request.date);
+                contributor.results = plus(contributor.results, 1);
+                if (result.error) contributor.errors = plus(contributor.errors, 1);
+            }
         }
     };
     const readOne = async (file: string, item: StatsRecord) => {
@@ -117,7 +131,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!isSubagent && row.isSidechain === true)
             return;
         const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
-        if (!Number.isFinite(timestamp)) {
+        if (!Number.isFinite(timestamp) || timestamp < Date.parse('0000-01-01T00:00:00.000Z') || timestamp >= Date.parse('+010000-01-01T00:00:00.000Z')) {
             coverage.invalidTimestamps++;
             return;
         }
@@ -144,7 +158,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const eligibleStates = states.filter(s => usageTimestampEligible(timestamp, s.start, s.end, cutoff));
         const date = new Date(timestamp).toISOString().slice(0, 10);
         for (const s of eligibleStates) {
-            const day = s.summary.days.find(d => d.date === date)!;
+            const day = ensureDay(s, date);
             if (!isSubagent && !alreadyRecorded) {
                 s.summary.records = plus(s.summary.records, 1);
                 day.records = plus(day.records, 1);
@@ -198,7 +212,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 toolLedger.set(key, { name, timestamp, session, date });
                 const cat = category(name);
                 for (const s of eligibleStates) {
-                    const day = s.summary.days.find(d => d.date === date)!;
+                    const day = ensureDay(s, date);
                     s.summary.requests = plus(s.summary.requests, 1);
                     day.requests = plus(day.requests, 1);
                     const hour = new Date(timestamp).getUTCHours();
@@ -214,8 +228,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         s.tools.set(cat.id, tool);
                     }
                     tool.requests = plus(tool.requests, 1);
-                    const contributor = ensureContributor(s, session, date);
-                    contributor.requests = plus(contributor.requests, 1);
+                    if (s.summary.range !== 'all') {
+                        const contributor = ensureContributor(s, session, date);
+                        contributor.requests = plus(contributor.requests, 1);
+                    }
                 }
                 countResult(key);
             }
@@ -273,11 +289,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (total(delta) === 0)
             return;
         for (const s of eligibleStates) {
-            const day = s.summary.days.find(d => d.date === date)!;
+            const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
             addTokens(day.tokens, delta);
-            const contributor = ensureContributor(s, session, date);
-            addTokens(contributor.tokens, delta);
+            const contributor = s.summary.range === 'all' ? null : ensureContributor(s, session, date);
+            if (contributor) addTokens(contributor.tokens, delta);
             let model = s.models.get(cat.id);
             if (!model) {
                 reserve(cat.id);
@@ -285,12 +301,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 s.models.set(cat.id, model);
             }
             addTokens(model.tokens, delta);
-            const contributorKey = JSON.stringify([date, session]);
-            let contributorModelMap = s.contributorModels.get(contributorKey);
-            if (!contributorModelMap) { reserve(contributorKey, 256); contributorModelMap = new Map(); s.contributorModels.set(contributorKey, contributorModelMap); }
-            let contributorModel = contributorModelMap.get(cat.id);
-            if (!contributorModel) { reserve(`${contributorKey}:${cat.id}`, 384); contributorModel = { ...cat, tokens: zero() }; contributorModelMap.set(cat.id, contributorModel); contributor.models.push(contributorModel); }
-            addTokens(contributorModel.tokens, delta);
+            if (contributor) {
+                const contributorKey = JSON.stringify([date, session]);
+                let contributorModelMap = s.contributorModels.get(contributorKey);
+                if (!contributorModelMap) { reserve(contributorKey, 256); contributorModelMap = new Map(); s.contributorModels.set(contributorKey, contributorModelMap); }
+                let contributorModel = contributorModelMap.get(cat.id);
+                if (!contributorModel) { reserve(`${contributorKey}:${cat.id}`, 384); contributorModel = { ...cat, tokens: zero() }; contributorModelMap.set(cat.id, contributorModel); contributor.models.push(contributorModel); }
+                addTokens(contributorModel.tokens, delta);
+            }
             const dk = `${date}:${cat.id}`;
             let daily = s.dailyModels.get(dk);
             if (!daily) {
@@ -318,6 +336,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     }
     coverage.state = coverage.sourcesRead !== coverage.sourcesDiscovered || [coverage.parseErrors, coverage.oversizedRecords, coverage.pendingTailBytes, coverage.shortReads, coverage.changedSources, coverage.readErrors, coverage.invalidTimestamps, coverage.invalidUsage].some(Boolean) ? 'partial' : 'complete';
     for (const s of states) {
+        s.summary.days.sort((a, b) => a.date.localeCompare(b.date));
         s.summary.models = [...s.models.values()];
         s.summary.tools = [...s.tools.values()];
         s.summary.activeDays = s.summary.days.filter(d => total(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length;
@@ -340,5 +359,41 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     : reporting.reported ? 'reported' : 'unreported';
         }
     }
-    return { version: 1, metricVersion: 1, countingVersion: 4, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary } };
+    // Keep the entire retained timeline within the outbound frame budget. Sparse
+    // daily data avoids allocating empty history; larger histories use explicit
+    // UTC buckets while activeDays remains the exact count of individual days.
+    const all = states[2]!;
+    if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS) {
+        const start = Date.parse(all.summary.startInclusive);
+        const span = Math.ceil((Date.parse(all.summary.endExclusive) - start) / 86400000);
+        const bucketDays = Math.ceil(span / MAX_USAGE_ALL_BUCKETS);
+        const bucketDate = (date: string) => new Date(start + Math.floor((Date.parse(`${date}T00:00:00.000Z`) - start) / (bucketDays * 86400000)) * bucketDays * 86400000).toISOString().slice(0, 10);
+        const buckets = new Map<string, UsageDay>();
+        const bucketSessions = new Map<string, Set<string>>();
+        for (const key of all.sessionDays) {
+            const [session, date] = JSON.parse(key) as [string, string];
+            const bucket = bucketDate(date);
+            let sessions = bucketSessions.get(bucket);
+            if (!sessions) { sessions = new Set(); bucketSessions.set(bucket, sessions); }
+            sessions.add(session);
+        }
+        for (const day of all.summary.days) {
+            const date = bucketDate(day.date);
+            let bucket = buckets.get(date);
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
+            addTokens(bucket.tokens, day.tokens);
+            bucket.requests = plus(bucket.requests, day.requests);
+            bucket.records = plus(bucket.records, day.records);
+            for (let hour = 0; hour < 24; hour++) bucket.hourlyRequests[hour] = plus(bucket.hourlyRequests[hour]!, day.hourlyRequests[hour]!);
+            for (const model of day.models) {
+                const existing = bucket.models.find(item => item.id === model.id);
+                if (existing) existing.total = plus(existing.total, model.total);
+                else bucket.models.push({ ...model });
+            }
+            if (day.cacheWriteReporting !== 'unavailable') bucket.cacheWriteReporting = bucket.cacheWriteReporting === 'unavailable' ? day.cacheWriteReporting : bucket.cacheWriteReporting === day.cacheWriteReporting ? bucket.cacheWriteReporting : 'partial';
+        }
+        all.summary.days = [...buckets.values()];
+        all.summary.bucketDays = bucketDays;
+    }
+    return { version: 1, metricVersion: 1, countingVersion: 4, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

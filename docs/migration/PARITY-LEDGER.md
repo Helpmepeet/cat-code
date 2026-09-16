@@ -2647,3 +2647,15 @@ costs, or task-success metrics were added. The mockup's View all action is adapt
 to explicit bounded top contributors and omitted counts. Visual acceptance remains
 open because browser policy blocked the isolated local preview; headless checks
 passed. [Evidence](../reports/2026-09-16-usage-session-drilldown.md).
+
+
+## Usage All and visible trends amendment · 2026-09-16
+
+The operator's five-point follow-up supersedes the earlier model bars and collapsed
+cache trend. Restored: model donut and always-visible cache chart. Real-added:
+All retained history and shaded daily tool-request trend. Adapted: two equal trend
+panels and two cache-value columns when writes are unreported; measured write zero
+remains visible. All uses bounded, explicitly labeled multi-day buckets for long
+histories, with session contributors/hourly detail limited to recent views.
+Headless behavior and builds passed; live visual acceptance remains open.
+[Evidence](../reports/2026-09-16-usage-all-and-trends.md).

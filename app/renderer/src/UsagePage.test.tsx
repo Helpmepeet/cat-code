@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { UsagePage } from './UsagePage.js';
 import { collectRetainedUsage } from '../../../src/utils/statsUsage.js';
 import { initialUsageDashboardState, reduceUsageDashboard, usageColors } from './usageDashboardState.js';
-import { UsageModelBars } from './UsageOverviewDetails.js';
+import { UsageModelDonut } from './UsageOverviewDetails.js';
 const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
 test('loading, failure and confirmed empty history are distinct; zero prompt is not applicable', () => {
     const loading = renderToStaticMarkup(<UsagePage state={initialUsageDashboardState}/>);
@@ -64,9 +64,9 @@ test('tiny model geometry uses real fractional shares; palette has distinct colo
     const range = structuredClone(snapshot.ranges['7d']);
     range.tokens.fresh = 10000;
     range.models = [{ id: 'a', kind: 'named', label: 'Tiny', tokens: { fresh: 1, read: 0, write: 0, output: 0 } }, { id: 'b', kind: 'named', label: 'Large', tokens: { fresh: 9999, read: 0, write: 0, output: 0 } }];
-    const html = renderToStaticMarkup(<UsageModelBars summary={range} colors={usageColors(['a', 'b'])}/>);
-    expect(html).toContain('width="0.01"');
-    expect(html).toContain('width="99.99"');
+    const html = renderToStaticMarkup(<UsageModelDonut summary={range} colors={usageColors(['a', 'b'])}/>);
+    expect(html).toContain('stroke-dasharray="0.01 99.99"');
+    expect(html).toContain('stroke-dasharray="99.99 ');
     expect(new Set(Object.values(usageColors(Array.from({ length: 10 }, (_, i) => String(i))))).size).toBe(10);
 });
 test('specific failure reason is visible while keeping saved values', () => {
@@ -89,7 +89,12 @@ test('cache-write availability distinguishes unreported from a measured zero', a
     const range = structuredClone(snapshot.ranges['7d']);
     range.cacheWriteReporting = 'unreported';
     const html = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
-    expect(html).toContain('<dt>Cache writes</dt><dd>Not reported</dd>');
+    expect(html).not.toContain('<dt>Cache writes</dt>');
+    expect(html).not.toContain('usage-cache-with-writes');
+    range.cacheWriteReporting = 'reported';
+    const measured = renderToStaticMarkup(<UsageCacheSummary summary={range} partial={false}/>);
+    expect(measured).toContain('<dt>Cache writes</dt><dd>0</dd>');
+    expect(measured).toContain('usage-cache-with-writes');
     expect(usageCacheWrites(0, 'reported')).toBe('0');
     expect(usageCacheWrites(1200, 'partial')).toBe('1,200 reported');
     expect(usageCacheWrites(0, 'unavailable')).toBe('Not applicable');

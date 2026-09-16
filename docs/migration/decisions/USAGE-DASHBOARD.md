@@ -124,3 +124,24 @@ App and survives navigation; all surrounding aggregates remain explicitly labele
 as period totals. Hourly selection opens the whole day's contributors.
 
 See [implementation and verification](../../reports/2026-09-16-usage-session-drilldown.md).
+
+
+## All-history and visible trends amendment, 2026-09-16
+
+The operator requested All beside 7/30 days, the model donut, always-visible cache
+trend, a matching shaded daily tool-request trend, and omission of unreported
+cache writes with a rebalanced layout. The two trend panels now share a row;
+cache values use two columns unless writes have reported coverage. Measured zero
+writes remain visible. No evaluation or cost system is added.
+
+All covers every eligible retained record through the existing cutoff. Its daily
+series is sparse and limited to 180 occupied points; larger histories use explicit
+`bucketDays` with exact totals and unique sessions per bucket. Calendar spacing,
+zero-request gaps, cache-share gaps, bucket labels, and cutoff dates remain
+truthful. All does not expose session contributors or the hourly heatmap; those
+remain available in 7/30-day views. Payload fallback may reduce recent contributor
+lists to zero with truthful omitted counts. Strict validation rejects old two-range
+saved snapshots so they rebuild from the existing index without a transcript
+reread; no index-format or account-state migration is required.
+
+See [implementation evidence](../../reports/2026-09-16-usage-all-and-trends.md).
