@@ -58,6 +58,11 @@ export type UsageDayContributors = {
 };
 export type UsageDay = {
     hourlyRequests: number[];
+    /** Exclusive token totals per UTC hour, supplied only for the seven-day window. */
+    hourlyTokens?: number[];
+    /** Recorded outcomes matched to requests in this day or bucket. */
+    results: number;
+    errors: number;
     date: string;
     tokens: UsageTokens;
     cacheWriteReporting: 'reported' | 'partial' | 'unreported' | 'unavailable';

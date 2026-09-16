@@ -181,3 +181,46 @@ test('ancient timestamps do not allocate intervening calendar days and out-of-co
     expect(snapshot.ranges.all.tokens.fresh).toBe(3);
     expect(snapshot.coverage.invalidTimestamps).toBe(1);
 });
+
+
+test('seven-day hourly tokens credit normalized exclusive deltas once in the record hour', async () => {
+    const before = msg('2026-09-06T23:00:00.000Z', 'cumulative', 10, 'seed');
+    const first = msg('2026-09-07T01:00:00.000Z', 'cumulative', 20, 'seed');
+    const later = msg('2026-09-07T04:00:00.000Z', 'cumulative', 30, 'seed');
+    const native = { ...msg(asOf, 'native', 0, 'native'), message: { id: 'native', model: 'gpt-model', usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 80 }, output_tokens: 5 }, content: [] } };
+    const future = msg('2026-09-13T13:00:00.000Z', 'future', 999, 'future');
+    const path = await file([before, first, first, later, native, future]);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    const seven = snapshot.ranges['7d'];
+    expect(seven.days[0]!.hourlyTokens).toEqual(Array.from({ length: 24 }, (_, hour) => hour === 1 || hour === 4 ? 10 : 0));
+    expect(seven.days.at(-1)!.hourlyTokens![12]).toBe(105);
+    expect(seven.days.at(-1)!.hourlyTokens![13]).toBe(0);
+    expect(seven.days.flatMap(day => day.hourlyTokens!).reduce((sum, value) => sum + value, 0)).toBe(125);
+    expect(snapshot.ranges['30d'].days.every(day => day.hourlyTokens === undefined)).toBe(true);
+    expect(snapshot.ranges.all.days.every(day => day.hourlyTokens === undefined)).toBe(true);
+});
+
+test('daily outcomes follow matched request dates across midnight and All bucket aggregation', async () => {
+    const rows = Array.from({ length: 200 }, (_, index) => {
+        const requestTime = new Date(Date.UTC(2020, 0, index + 1, 23)).toISOString();
+        const resultTime = new Date(Date.UTC(2020, 0, index + 2, 1)).toISOString();
+        return [
+            { type: 'user', sessionId: 's', uuid: `r${index}`, timestamp: resultTime, message: { content: [{ type: 'tool_result', tool_use_id: `t${index}`, is_error: index % 2 === 0 }] } },
+            msg(requestTime, `m${index}`, 1, `t${index}`),
+        ];
+    }).flat();
+    const recent = msg('2026-09-12T23:00:00.000Z', 'recent', 1, 'recent');
+    const recentResult = { type: 'user', sessionId: 's', uuid: 'recent-result', timestamp: asOf, message: { content: [{ type: 'tool_result', tool_use_id: 'recent', is_error: true }] } };
+    const path = await file([...rows, recentResult, recent, recentResult]);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    const yesterday = snapshot.ranges['7d'].days.find(day => day.date === '2026-09-12')!;
+    expect(yesterday).toMatchObject({ requests: 1, results: 1, errors: 1 });
+    expect(snapshot.ranges['7d'].days.at(-1)).toMatchObject({ requests: 0, results: 0, errors: 0 });
+    expect(snapshot.ranges.all.bucketDays).toBeGreaterThan(1);
+    expect(snapshot.ranges.all.days.reduce((sum, day) => sum + day.results, 0)).toBe(201);
+    expect(snapshot.ranges.all.days.reduce((sum, day) => sum + day.errors, 0)).toBe(101);
+    for (const range of Object.values(snapshot.ranges)) {
+        expect(range.days.reduce((sum, day) => sum + day.results, 0)).toBe(range.tools.reduce((sum, tool) => sum + tool.results, 0));
+        expect(range.days.reduce((sum, day) => sum + day.errors, 0)).toBe(range.tools.reduce((sum, tool) => sum + tool.errors, 0));
+    }
+});

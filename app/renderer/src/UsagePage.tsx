@@ -1,12 +1,14 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { UsageWindow } from '../../shared/usageDashboard.js';
-import { type UsageDashboardState, initialUsageSelection, type UsageSelection, usageCompact, usageColors, usageCacheWrites, usageFailureMessage, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
-import { UsageActivityRows, UsageDailyColumns } from './UsageDashboardCharts.js';
+import { type UsageDashboardState, initialUsageSelection, type UsageSelection, usageCompact, usageCacheWrites, usageFailureMessage, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
+import { UsageDailyColumns } from './UsageDashboardCharts.js';
 import { UsageHeatmap } from './UsageActivityCharts.js';
-import { UsageCacheSummary, UsageModelDonut, UsageToolActivity } from './UsageOverviewDetails.js';
+import { UsageCacheSummary, UsageModelDonut, UsageToolActivity, UsageToolBreakdown } from './UsageOverviewDetails.js';
 import { UsageSessionContributors } from './UsageSessionContributors.js';
 import type { MergedSessionRow } from './sessionsCatalogState.js';
 import { usageBucketDays, usageBucketLabel, usageHasCacheWrites } from './usageTrendState.js';
+import { UsageMetrics } from './UsageMetrics.js';
+import { usageGraphColors } from './usageGraphState.js';
 import './usageDashboard.css';
 type UsageAccent = 'tokens' | 'cache' | 'sessions' | 'tools';
 function UsageIcon({ kind }: { kind: UsageAccent }) {
@@ -46,7 +48,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
     const partial = snapshot?.coverage.state === 'partial';
     const stale = !!snapshot && (state.status === 'error' || now - Date.parse(snapshot.asOf) > 10 * 60000);
     const selected = summary?.days.find(d => d.date === selectedDate);
-    const colors = usageColors([...new Set(snapshot ? Object.values(snapshot.ranges).flatMap(r => r.models.map(m => m.id)) : [])]);
+    const colors = usageGraphColors([...new Set(snapshot ? Object.values(snapshot.ranges).flatMap(r => r.models.map(m => m.id)) : [])]);
     const unknown = state.status === 'loading' ? 'Loading' : 'Unavailable';
     const empty = summary && usageTotal(summary.tokens) === 0 && summary.records === 0 && summary.requests === 0;
     return <main className="usage-page" aria-labelledby="usage-title"><div className="usage-content">
@@ -55,35 +57,30 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
   <div className="usage-status" role="status">
    {unavailable ? 'Usage is unavailable.' : !snapshot ? (state.status === 'loading' ? 'Loading recorded usage…' : usageFailureMessage(state.errorCode)) : <>{state.status === 'loading' && <p>Refreshing recorded usage…</p>}{stale && <p>Showing an older snapshot. {state.status === 'error' ? usageFailureMessage(state.errorCode) : 'Waiting for a fresh update.'}</p>}{partial && <p>Partial history. Totals may be incomplete.</p>}{!partial && empty && <p>No recorded usage in available history.</p>}</>}
   </div>
-  <section className="usage-overview" aria-label="Usage overview">
-  <div className="usage-cards">
-   <section className="usage-metric usage-tokens"><UsageIcon kind="tokens"/><div><h2>Total tokens</h2><strong>{summary && !unavailable ? usageCompact(usageTotal(summary.tokens)) : unknown}</strong>{summary && !unavailable && <p>{usageCompact(summary.activeDays ? usageTotal(summary.tokens) / summary.activeDays : 0)} / active day</p>}</div></section>
-   <section className="usage-metric usage-sessions"><UsageIcon kind="sessions"/><div><h2>Sessions used</h2><strong>{summary && !unavailable ? usageNumber(summary.sessions) : unknown}</strong></div></section>
-   <section className="usage-metric usage-tools"><UsageIcon kind="tools"/><div><h2>Tool requests</h2><strong>{summary && !unavailable ? usageNumber(summary.requests) : unknown}</strong></div></section>
-   <section className="usage-metric usage-cache"><UsageIcon kind="cache"/><div><h2>Cached input</h2><strong>{summary && !unavailable ? (partial ? 'Unavailable' : usagePercent(summary.cachedInputShare)) : unknown}</strong><p>Share of input tokens</p></div></section>
-  </div></section>
+  <UsageMetrics summary={unavailable ? undefined : summary} unknown={unknown} partial={!!partial}/>
   {summary && snapshot && !unavailable && <>
    <div className="usage-panels">
-    <UsagePanel title={usageBucketDays(summary) > 1 ? "Token usage" : "Daily token usage"}>
+    <UsagePanel title="Token flow" wide>
      <UsageDailyColumns summary={summary} colors={colors} selected={selected?.date ?? ''} onSelect={setSelectedDate} partial={!!partial}/>
      {usageBucketDays(summary) > 1 && <p className="usage-note">{usageBucketDays(summary)}-day totals</p>}
-     <ul className="usage-legend" aria-label="Model legend">{summary.models.map(model => <li key={model.id}><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2" fill={colors[model.id]}/></svg><span>{model.label}</span></li>)}</ul>
     </UsagePanel>
-    <UsagePanel title="Model usage" accent="sessions"><UsageModelDonut summary={summary} colors={colors}/>{summary.detail.omittedModels > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedModels)} model names.</p>}</UsagePanel>
+    <div className="usage-secondary-panels usage-wide">
+     <UsagePanel title="Prompt cache" accent="cache"><UsageCacheSummary key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
+     <UsagePanel title="Tool activity" accent="tools"><UsageToolActivity key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
+    </div>
+    <div className="usage-secondary-panels usage-wide">
+     <UsagePanel title="Model usage" accent="sessions"><UsageModelDonut summary={summary} colors={colors}/>{summary.detail.omittedModels > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedModels)} model names.</p>}</UsagePanel>
+     <UsagePanel title="Tools" accent="tools"><UsageToolBreakdown summary={summary}/></UsagePanel>
+    </div>
+    <UsagePanel title="Token volume by hour" wide>
+     <UsageHeatmap summary={snapshot.ranges['7d']} metric="tokens" asOf={snapshot.asOf} partial={!!partial} onSelect={date => updateSelection({ range: '7d', date })}/>
+    </UsagePanel>
     {selected && <section className="usage-panel usage-wide usage-day-detail" aria-label={`Usage for ${usageBucketLabel(summary, selected.date)}`}>
      <header className="usage-detail-header"><h2>{usageBucketLabel(summary, selected.date)} UTC</h2><button type="button" onClick={() => setSelectedDate('')}>Clear selection</button></header>
      <div className="usage-day-readout" aria-live="polite">{usageCompact(usageTotal(selected.tokens))} tokens · {usageNumber(selected.sessions)} sessions · {usageNumber(selected.requests)} tool requests{partial ? ' · partial history' : ''}</div>
      {range !== 'all' && <UsageSessionContributors key={selected.date} contributors={selected.contributors ?? { state: 'unavailable', omitted: 0, items: [] }} rows={sessionRows} onOpenRow={onOpenSession}/>}
     </section>}
-    <div className="usage-secondary-panels usage-wide">
-     <UsagePanel title="Prompt cache" accent="cache"><UsageCacheSummary key={range} summary={summary} partial={!!partial}/></UsagePanel>
-     <UsagePanel title="Tool activity" accent="tools"><UsageToolActivity key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
-    </div>
    </div>
-   {range !== 'all' && <details className="usage-disclosure usage-activity-details"><summary>Daily and hourly activity</summary>
-    <UsageActivityRows summary={summary} selected={selected?.date ?? ''} onSelect={setSelectedDate} partial={!!partial}/>
-    <UsageHeatmap key={range} summary={summary} asOf={snapshot.asOf} onSelect={setSelectedDate} partial={!!partial}/>
-   </details>}
    <details className="usage-values"><summary>Accessible values table</summary><p className="usage-note">{partial ? 'All values below describe partial history. A zero does not establish inactivity.' : 'Transcript records include user, assistant, system and attachment records in main sessions.'}</p><div className="usage-table-scroll"><table><caption>{usageBucketDays(summary) > 1 ? `${usageBucketDays(summary)}-day` : 'Daily'} recorded usage, UTC</caption><thead><tr>{['Date', 'Fresh input', 'Cache reads', ...(usageHasCacheWrites(summary) ? ['Cache writes'] : []), 'Output', 'Total tokens', 'Cached input share', 'Sessions used', 'Transcript records', 'Tool requests'].map(h => <th key={h} scope="col">{h}</th>)}</tr></thead><tbody>{summary.days.map(d => <tr key={d.date}><th scope="row">{usageBucketLabel(summary, d.date)}</th><td>{usageNumber(d.tokens.fresh)}</td><td>{usageNumber(d.tokens.read)}</td>{usageHasCacheWrites(summary) && <td>{usageCacheWrites(d.tokens.write, d.cacheWriteReporting)}</td>}<td>{usageNumber(d.tokens.output)}</td><td>{usageNumber(usageTotal(d.tokens))}</td><td>{partial ? 'Unavailable' : usagePercent(usageShare(d.tokens))}</td><td>{usageNumber(d.sessions)}</td><td>{usageNumber(d.records)}</td><td>{usageNumber(d.requests)}</td></tr>)}</tbody></table></div>
     <div className="usage-table-scroll"><table><caption>{usageBucketDays(summary) > 1 ? `${usageBucketDays(summary)}-day` : 'Daily'} tokens by model</caption><thead><tr><th scope="col">Date</th>{summary.models.map(m => <th scope="col" key={m.id}>{m.label}</th>)}</tr></thead><tbody>{summary.days.map(d => <tr key={d.date}><th scope="row">{usageBucketLabel(summary, d.date)}</th>{summary.models.map(m => <td key={m.id}>{usageNumber(d.models.find(v => v.id === m.id)?.total ?? 0)}</td>)}</tr>)}</tbody></table></div>
     <table><caption>Recorded tool requests</caption><thead><tr><th scope="col">Tool</th><th scope="col">Requests</th></tr></thead><tbody>{summary.tools.map(t => <tr key={t.id}><th scope="row">{t.label}</th><td>{usageNumber(t.requests)}</td></tr>)}</tbody></table>

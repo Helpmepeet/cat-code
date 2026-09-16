@@ -52,7 +52,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
         if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
@@ -62,7 +62,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         let day = s.dayMap.get(date);
         if (!day) {
             reserve(date, 1024);
-            day = { date, hourlyRequests: Array(24).fill(0), tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
+            day = { date, hourlyRequests: Array(24).fill(0), results: 0, errors: 0, tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
             s.dayMap.set(date, day);
             s.summary.days.push(day);
             if (`${date}T00:00:00.000Z` < s.summary.startInclusive) s.summary.startInclusive = `${date}T00:00:00.000Z`;
@@ -114,6 +114,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const tool = s.tools.get(category(request.name).id)!;
             tool.results = plus(tool.results, 1);
             if (result.error) tool.errors = plus(tool.errors, 1);
+            const day = ensureDay(s, request.date);
+            day.results = plus(day.results, 1);
+            if (result.error) day.errors = plus(day.errors, 1);
             if (s.summary.range !== 'all') {
                 const contributor = ensureContributor(s, request.session, request.date);
                 contributor.results = plus(contributor.results, 1);
@@ -292,6 +295,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const day = ensureDay(s, date);
             addTokens(s.summary.tokens, delta);
             addTokens(day.tokens, delta);
+            if (day.hourlyTokens) {
+                const hour = new Date(timestamp).getUTCHours();
+                day.hourlyTokens[hour] = plus(day.hourlyTokens[hour]!, total(delta));
+            }
             const contributor = s.summary.range === 'all' ? null : ensureContributor(s, session, date);
             if (contributor) addTokens(contributor.tokens, delta);
             let model = s.models.get(cat.id);
@@ -380,9 +387,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const day of all.summary.days) {
             const date = bucketDate(day.date);
             let bucket = buckets.get(date);
-            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
             addTokens(bucket.tokens, day.tokens);
             bucket.requests = plus(bucket.requests, day.requests);
+            bucket.results = plus(bucket.results, day.results);
+            bucket.errors = plus(bucket.errors, day.errors);
             bucket.records = plus(bucket.records, day.records);
             for (let hour = 0; hour < 24; hour++) bucket.hourlyRequests[hour] = plus(bucket.hourlyRequests[hour]!, day.hourlyRequests[hour]!);
             for (const model of day.models) {

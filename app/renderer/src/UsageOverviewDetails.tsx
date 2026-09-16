@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { UsageAreaTrend } from './UsageAreaTrend.js';
-import { usageBucketDays, usageHasCacheWrites } from './usageTrendState.js';
+import { usageHasCacheWrites } from './usageTrendState.js';
 import { UsageCacheChart } from './UsageDashboardCharts.js';
 import { UsageToolErrors } from './UsageActivityCharts.js';
 import { usageCacheWrites, usageCompact, usageNumber, usagePercent, usageTotal } from './usageDashboardState.js';
@@ -29,38 +29,40 @@ export function UsageModelDonut({ summary, colors }: { summary: UsageRangeSummar
     </div>;
 }
 
-export function UsageCacheSummary({ summary, partial }: { summary: UsageRangeSummary; partial: boolean }) {
-    const [selected, setSelected] = useState('');
+export function UsageCacheSummary({ summary, partial, selected = '', onSelect }: { summary: UsageRangeSummary; partial: boolean; selected?: string; onSelect?: (date: string) => void }) {
     const showWrites = usageHasCacheWrites(summary);
-    const input = summary.tokens.fresh + summary.tokens.read + summary.tokens.write;
-    const readShare = input ? summary.tokens.read / input * 100 : 0;
-    const freshShare = input ? summary.tokens.fresh / input * 100 : 0;
     return <>
-        <h3 className="usage-trend-heading">{usageBucketDays(summary) > 1 ? 'Cache trend' : 'Daily cache trend'}</h3>
-        <UsageCacheChart summary={summary} partial={partial} selected={summary.days.some(day => day.date === selected) ? selected : ''} onSelect={setSelected}/>
-        <div className="usage-cache-summary-line"><span>Input served from cache</span><strong>{partial ? 'Unavailable' : usagePercent(summary.cachedInputShare)}</strong></div>
-        {!partial && input > 0 && <svg className="usage-cache-composition" viewBox="0 0 100 6" preserveAspectRatio="none" role="img" aria-label={`${usagePercent(readShare)} of recorded input served from cache`}>
-            <rect width="100" height="6" className="usage-track"/>
-            <rect width={readShare} height="6" fill="#8970ff"/>
-            <rect x={readShare} width={freshShare} height="6" fill="#727982"/>
-            {summary.tokens.write > 0 && <rect x={readShare + freshShare} width={summary.tokens.write / input * 100} height="6" fill="#d69b47"/>}
-        </svg>}
+        <div className="usage-chart-summary"><span>Share of input tokens served from cache</span><strong>{partial ? 'Unavailable' : usagePercent(summary.cachedInputShare)}</strong></div>
+        <UsageCacheChart summary={summary} partial={partial} selected={selected} onSelect={onSelect}/>
         <dl className={`usage-cache-values${showWrites ? ' usage-cache-with-writes' : ''}`}>
             <div><dt>Cache reads</dt><dd title={usageNumber(summary.tokens.read)}>{usageCompact(summary.tokens.read)}</dd></div>
             <div><dt>Fresh input</dt><dd title={usageNumber(summary.tokens.fresh)}>{usageCompact(summary.tokens.fresh)}</dd></div>
             {showWrites && <div><dt>Cache writes</dt><dd>{usageCacheWrites(summary.tokens.write, summary.cacheWriteReporting)}</dd></div>}
         </dl>
-
     </>;
 }
 
 export function UsageToolActivity({ summary, partial = false, selected = '', onSelect }: { summary: UsageRangeSummary; partial?: boolean; selected?: string; onSelect?: (date: string) => void }) {
+    const [metric, setMetric] = useState<'errors' | 'requests'>('errors');
+    const results = summary.tools.reduce((sum, tool) => sum + tool.results, 0);
+    const errors = summary.tools.reduce((sum, tool) => sum + tool.errors, 0);
     return <>
-        <h3 className="usage-trend-heading">{usageBucketDays(summary) > 1 ? 'Tool requests trend' : 'Daily tool requests'}</h3>
-        <UsageAreaTrend summary={summary} metric="requests" partial={partial} selected={selected} onSelect={onSelect}/>
-        <table className="usage-tool-table"><thead><tr><th scope="col">Tool</th><th scope="col">Requests</th><th scope="col">Errors / results</th></tr></thead>
-            <tbody>{summary.tools.slice(0, 4).map(tool => <tr key={tool.id}><th scope="row">{tool.label}</th><td>{usageNumber(tool.requests)}</td><td title={`${usageNumber(tool.errors)} errors / ${usageNumber(tool.results)} matched results`}>{tool.results ? usagePercent(tool.errors / tool.results * 100) : 'Not available'}</td></tr>)}</tbody>
-        </table>
+        <div className="usage-chart-summary"><div className="usage-range" role="group" aria-label="Tool trend measure"><button type="button" aria-pressed={metric === 'errors'} onClick={() => setMetric('errors')}>Error rate</button><button type="button" aria-pressed={metric === 'requests'} onClick={() => setMetric('requests')}>Requests</button></div><strong>{metric === 'errors' ? results ? usagePercent(errors / results * 100) : 'Not available' : usageCompact(summary.requests)}</strong></div>
+        <UsageAreaTrend key={metric} summary={summary} metric={metric} partial={partial} selected={selected} onSelect={onSelect}/>
+        <dl className="usage-outcome-values"><div><dt>Successful</dt><dd>{usageNumber(results - errors)}</dd></div><div><dt>Errors / results</dt><dd>{usageNumber(errors)} / {usageNumber(results)}</dd></div><div><dt>No matched result</dt><dd>{usageNumber(summary.requests - results)}</dd></div></dl>
+    </>;
+}
+
+export function UsageToolBreakdown({ summary }: { summary: UsageRangeSummary }) {
+    const [selected, setSelected] = useState('');
+    const max = Math.max(1, ...summary.tools.map(tool => tool.requests));
+    const detail = summary.tools.find(tool => tool.id === selected);
+    return <>
+        <div className="usage-legend usage-tool-legend"><span><i className="usage-tool-ok"/>Successful</span><span><i className="usage-tool-error"/>Error</span><span><i className="usage-tool-unmatched"/>Unmatched</span></div>
+        <div className="usage-tool-bars">{summary.tools.map(tool => <button key={tool.id} type="button" aria-pressed={selected === tool.id} onClick={() => setSelected(selected === tool.id ? '' : tool.id)} aria-label={`${tool.label}: ${usageNumber(tool.requests)} requests, ${usageNumber(tool.errors)} errors, ${usageNumber(tool.requests - tool.results)} unmatched`}>
+            <span>{tool.label}</span><svg viewBox="0 0 100 10" preserveAspectRatio="none" aria-hidden="true"><rect width={(tool.results - tool.errors) / max * 100} height="10" rx="1" className="usage-tool-ok"/><rect x={(tool.results - tool.errors) / max * 100} width={tool.errors / max * 100} height="10" rx="1" className="usage-tool-error"/><rect x={tool.results / max * 100} width={(tool.requests - tool.results) / max * 100} height="10" rx="1" className="usage-tool-unmatched"/></svg><b>{usageCompact(tool.requests)}</b>
+        </button>)}</div>
+        {detail && <p className="usage-note" role="status">{detail.label}: {usageNumber(detail.results - detail.errors)} successful · {usageNumber(detail.errors)} errors · {usageNumber(detail.requests - detail.results)} without a matched result</p>}
         <details className="usage-disclosure"><summary>All tools and result breakdown</summary><UsageToolErrors summary={summary}/></details>
         {summary.detail.omittedTools > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedTools)} tool names.</p>}
     </>;

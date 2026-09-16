@@ -71,16 +71,21 @@ function contributor(v: unknown): boolean {
     return items.every((m) => tokenSum(m.tokens) <= tokenSum(v.tokens as UsageTokens)) && (['fresh', 'read', 'write', 'output'] as const).every(key => items.reduce((n, m) => n + m.tokens[key], 0) === (v.tokens as UsageTokens)[key]);
 }
 function day(v: unknown): v is UsageDay {
-    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
+    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', ...(v.hourlyTokens === undefined ? [] : ['hourlyTokens']), 'results', 'errors', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
         return false;
     if ((v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && (v.tokens as UsageTokens).write !== 0)
         return false;
     if (!Array.isArray(v.hourlyRequests) || v.hourlyRequests.length !== 24 || !v.hourlyRequests.every(safe) || !sumsSafe(...v.hourlyRequests) || v.hourlyRequests.reduce((n, x) => n + x, 0) !== v.requests) return false;
+    if (v.hourlyTokens !== undefined && (!Array.isArray(v.hourlyTokens) || v.hourlyTokens.length !== 24 || !v.hourlyTokens.every(safe) || !sumsSafe(...v.hourlyTokens) || v.hourlyTokens.reduce((n, x) => n + x, 0) !== tokenSum(v.tokens))) return false;
     const contributorIds = new Set<string>();
     const contributors = v.contributors.items as Record<string, unknown>[];
     const contributorTokenBuckets = (['fresh', 'read', 'write', 'output'] as const).map(key => contributors.reduce((n, c) => n + (c.tokens as UsageTokens)[key], 0));
     const dayTokenBuckets = (['fresh', 'read', 'write', 'output'] as const).map(key => (v.tokens as UsageTokens)[key]);
     const contributorRequests = contributors.reduce((n, c) => n + (c.requests as number), 0);
+    for (const key of ['results', 'errors'] as const) {
+        const count = contributors.reduce((n, c) => n + (c[key] as number), 0);
+        if (count > (v[key] as number) || v.contributors.state === 'full' && count !== v[key]) return false;
+    }
     if (contributors.some(c => contributorIds.has(c.id as string) || !contributorIds.add(c.id as string)) || v.contributors.state === 'full' && v.contributors.omitted !== 0 || v.contributors.state === 'truncated' && v.contributors.omitted === 0 || v.contributors.state === 'unavailable' && (v.contributors.items.length !== 0 || v.contributors.omitted !== 0) || contributorTokenBuckets.some((value, index) => value > dayTokenBuckets[index]!) || contributorRequests > (v.requests as number) || v.contributors.state === 'full' && (contributorTokenBuckets.some((value, index) => value !== dayTokenBuckets[index]) || contributorRequests !== v.requests)) return false;
     const ids = new Set<string>();
     const models = v.models;
@@ -103,6 +108,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
         return false;
     for (let i = 0; i < v.days.length; i++) {
         const d = v.days[i] as UsageDay;
+        if ((v.range === '7d') !== (d.hourlyTokens !== undefined)) return false;
         if (!all && d.date !== addDays(v.startInclusive.slice(0, 10), i)) return false;
         if (all && (d.date < start.slice(0, 10) || d.date >= end.slice(0, 10) || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
     }
@@ -120,6 +126,10 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     if (v.cacheWriteReporting !== reporting)
         return false;
     if (bucketDays === 1 && days.some(d => d.date === asOf.slice(0, 10) && d.hourlyRequests.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
+    if (days.some(d => d.date === asOf.slice(0, 10) && d.hourlyTokens?.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
+    for (const key of ['results', 'errors'] as const) {
+        if (days.reduce((n, d) => n + d[key], 0) !== v.tools.reduce((n, t) => n + t[key], 0)) return false;
+    }
     const dailyRecords = days.reduce((n, d) => n + d.records, 0);
     const dailySessions = days.reduce((n, d) => n + d.sessions, 0);
     if (v.requests !== v.identifiedRequests + v.fallbackRequests || v.requests !== days.reduce((n, d) => n + d.requests, 0) || v.records !== dailyRecords || v.sessions > v.records || v.sessions > dailySessions || v.sessions < Math.max(...days.map(d => d.sessions), 0) || days.some(d => d.sessions > d.records) || (bucketDays === 1 ? v.activeDays !== days.filter((d: UsageDay) => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length : v.activeDays < days.filter(d => tokenSum(d.tokens) > 0 || d.requests > 0 || d.records > 0 || d.sessions > 0).length || v.activeDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000)))

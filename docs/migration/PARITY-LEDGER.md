@@ -2659,3 +2659,17 @@ remains visible. All uses bounded, explicitly labeled multi-day buckets for long
 histories, with session contributors/hourly detail limited to recent views.
 Headless behavior and builds passed; live visual acceptance remains open.
 [Evidence](../reports/2026-09-16-usage-all-and-trends.md).
+
+
+## Usage preview graph amendment · 2026-09-16
+
+Operator reference `/Users/pt/Downloads/preview.html` supersedes the preceding
+layout: full-width token flow, pink/wine/graphite series, paired trends, then model
+and tool breakdowns. Token volume by hour is always the latest seven UTC days,
+including when global All or 30 days is selected. Real-added: per-day matched error
+trend and hourly exclusive token accounting. Operator-directed cuts: Work produced,
+Response latency, Context window pressure. Adapted for real data: Cached input
+replaces unreported Thinking share; mock comparisons and TTL splits omitted.
+Independent card heights, requested tool-request trend, cache-write omission and
+session navigation remain. Engineering checks pass; live visual acceptance remains
+open. [Evidence](../reports/2026-09-16-usage-preview-graphs.md).

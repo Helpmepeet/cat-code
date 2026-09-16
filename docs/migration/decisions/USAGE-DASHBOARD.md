@@ -145,3 +145,25 @@ saved snapshots so they rebuild from the existing index without a transcript
 reread; no index-format or account-state migration is required.
 
 See [implementation evidence](../../reports/2026-09-16-usage-all-and-trends.md).
+
+
+## Preview graph design amendment, 2026-09-16
+
+The operator supplied `preview.html` as the next graph reference, explicitly
+excluding Work produced, Response latency and Context window pressure. The
+renderer adopts full-width token flow with By type/By model and Hide cache reads,
+paired cache/tool trends, model donut and stacked tool outcome bars, and a
+permanently seven-day token heatmap. Error rate uses matched results and the
+Requests toggle preserves the previously requested daily call trend. Card heights
+remain independent. Shared UTC accounting stays unchanged.
+
+`UsageDay` now carries required matched `results`/`errors` attributed to request
+dates; seven-day rows also require 24 hourly exclusive token totals. Totals,
+future-hour exclusions and result/error reconciliation are validated. Existing
+saved snapshots without those fields rebuild from the index, with no additional
+transcript projection or database migration. The 256 KiB cap remains unchanged.
+
+The reference's generated Thinking share, comparisons and cache-TTL details are
+not live data. Cached input remains the available summary metric instead of
+Thinking share. No demo values or remote font loading are introduced. See
+[verification and visual gate](../../reports/2026-09-16-usage-preview-graphs.md).

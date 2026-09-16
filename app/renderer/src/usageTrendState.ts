@@ -14,8 +14,8 @@ export function usageDatePosition(summary: UsageRangeSummary, date: string): num
     const first = Date.parse(summary.startInclusive), last = Date.parse(summary.endExclusive) - DAY_MS;
     return last === first ? 0.5 : (Date.parse(`${date}T00:00:00.000Z`) - first) / (last - first);
 }
-export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'requests'): UsageTrendPoint[] {
-    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? usageShare(day.tokens) : day.requests]));
+export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | 'requests' | 'errors'): UsageTrendPoint[] {
+    const values = new Map(summary.days.map(day => [day.date, metric === 'cache' ? usageShare(day.tokens) : metric === 'errors' ? day.results ? day.errors / day.results * 100 : null : day.requests]));
     const step = usageBucketDays(summary) * DAY_MS;
     const first = Date.parse(summary.startInclusive), last = Date.parse(summary.endExclusive) - DAY_MS;
     // Two boundary points describe even very long empty spans without allocating every day.
@@ -23,13 +23,13 @@ export function usageTrendPoints(summary: UsageRangeSummary, metric: 'cache' | '
     for (const day of summary.days) {
         const time = Date.parse(`${day.date}T00:00:00.000Z`);
         if (time - previous > step) {
-            for (const boundary of [previous + step, time - step]) values.set(new Date(boundary).toISOString().slice(0, 10), metric === 'cache' ? null : 0);
+            for (const boundary of [previous + step, time - step]) values.set(new Date(boundary).toISOString().slice(0, 10), metric === 'requests' ? 0 : null);
         }
         previous = time;
     }
     const finalBucket = first + Math.floor((last - first) / step) * step;
     if (previous < finalBucket) {
-        for (const boundary of [previous + step, finalBucket]) values.set(new Date(boundary).toISOString().slice(0, 10), metric === 'cache' ? null : 0);
+        for (const boundary of [previous + step, finalBucket]) values.set(new Date(boundary).toISOString().slice(0, 10), metric === 'requests' ? 0 : null);
     }
     return [...values].sort(([a], [b]) => a.localeCompare(b)).map(([date, value]) => ({ date, value }));
 }

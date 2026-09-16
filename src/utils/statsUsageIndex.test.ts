@@ -175,3 +175,32 @@ test('legacy two-window cache rebuilds All from indexed records without reading 
     expect(rebuilt.ranges.all.tokens.fresh).toBe(18);
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
+
+
+test('older snapshots rebuild hourly tokens and daily outcomes from the index, then reuse them warm', async () => {
+    const { path, file } = await fixture();
+    const result = { type: 'user', sessionId: 's', uuid: 'result', timestamp: cutoff, message: { content: [{ type: 'tool_result', tool_use_id: 'request', is_error: true }] } };
+    await writeFile(file, [row('request', '2026-09-12T23:00:00.000Z', 25), result].map(item => JSON.stringify(item)).join('\n'));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const legacy = structuredClone(original);
+    for (const range of Object.values(legacy.ranges)) for (const day of range.days) {
+        delete day.hourlyTokens;
+        delete (day as Partial<typeof day>).results;
+        delete (day as Partial<typeof day>).errors;
+    }
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0;
+    const options = { ...opts(path), onReadSource() { reads++; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(rebuilt.ranges).toEqual(original.ranges);
+    expect(rebuilt.ranges['7d'].days.at(-2)).toMatchObject({ results: 1, errors: 1 });
+    expect(rebuilt.ranges['7d'].days.at(-2)!.hourlyTokens![23]).toBe(25);
+    const warm = await collectIndexedUsage([file], '2026-09-13T12:01:00.000Z', options);
+    expect(reads).toBe(0);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
+});

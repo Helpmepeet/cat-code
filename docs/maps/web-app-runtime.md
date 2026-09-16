@@ -164,6 +164,9 @@ active desktop app stack, not older dedicated-app design docs.
 `usageSessionNavigation.ts` joins them to the existing catalog before using
 `App.tsx`'s Open/Restore route. App owns period/date selection across navigation.
 `UsageOverviewDetails.tsx` owns compact model, cache, and tool summaries.
+`UsageMetrics.tsx` renders the summary strip; `usageGraphState.ts` derives live
+type/model flow series. `UsageActivityCharts.tsx` renders the fixed seven-day token
+heatmap from `UsageDay.hourlyTokens`, independently of the page period.
 `UsageAreaTrend.tsx` and `usageTrendState.ts` share shaded cache/request trends,
 calendar spacing, and explicit multi-day labels for the All-history range.
 See [day-to-session implementation](../reports/2026-09-16-usage-session-drilldown.md).

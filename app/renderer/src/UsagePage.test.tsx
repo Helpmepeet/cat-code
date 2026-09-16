@@ -16,7 +16,7 @@ test('loading, failure and confirmed empty history are distinct; zero prompt is 
     expect(html).toContain('No recorded usage in available history.');
     expect(html).toContain('Not applicable');
     expect(html).toContain('Accessible values table');
-    for (const panel of ['Daily token usage', 'Model usage', 'Prompt cache', 'Tool activity', 'Daily and hourly activity'])
+    for (const panel of ['Token flow', 'Model usage', 'Prompt cache', 'Tool activity', 'Token volume by hour'])
         expect(html).toContain(panel);
     expect(html).not.toContain('Tokens per Session');
     expect(html).not.toContain('Daily Average');

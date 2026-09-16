@@ -26,6 +26,7 @@ test('heatmap keyboard selection, error modes, and model donut expose recorded v
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
     summary.days[0]!.hourlyRequests[1] = 4;
+    summary.days[0]!.hourlyTokens![1] = 240;
     summary.tools = [{ id: 'bash', kind: 'named', label: 'Bash', requests: 10, results: 8, errors: 2 }, { id: 'read', kind: 'named', label: 'Read', requests: 2, results: 1, errors: 1 }];
     summary.models = [{ id: 'a', kind: 'named', label: 'Model A', tokens: { fresh: 10, read: 0, write: 0, output: 0 } }, { id: 'b', kind: 'named', label: 'Model B', tokens: { fresh: 20, read: 0, write: 0, output: 0 } }];
     summary.tokens.fresh = 30;
@@ -37,7 +38,7 @@ test('heatmap keyboard selection, error modes, and model donut expose recorded v
     expect(cells[7]!.getAttribute('tabindex')).toBe('0');
     await act(async () => cells[7]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2026-09-07');
-    expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('4 tool requests');
+    expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('240 tokens');
     const errorRows = () => Array.from(tree.container.querySelectorAll<HTMLButtonElement>('.usage-error-row'));
     expect(errorRows()[0]!.textContent).toContain('Bash');
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Rate')!.click());
@@ -114,9 +115,9 @@ test('All includes older retained history, keeps the cutoff date, and shows both
         await act(async () => all.click());
         expect(all.getAttribute('aria-pressed')).toBe('true');
         expect(tree.container.querySelector('.usage-freshness')?.textContent).toContain('2020-01-02 to 2026-09-13');
-        expect(tree.container.querySelector('.usage-metric.usage-tokens strong')?.textContent).toBe('17');
+        expect(tree.container.querySelector('.usage-metric strong')?.textContent).toBe('17');
         expect(tree.container.querySelector('.usage-area-cache')?.closest('details')).toBeNull();
-        expect(tree.container.querySelector('.usage-area-requests')?.closest('details')).toBeNull();
+        expect(tree.container.querySelector('.usage-area-errors')?.closest('details')).toBeNull();
         expect(tree.container.querySelector('.usage-model-donut')).not.toBeNull();
         expect(tree.container.querySelector('.usage-activity-details')).toBeNull();
         expect(tree.container.querySelector('.usage-cache-values')?.children).toHaveLength(2);
@@ -124,7 +125,9 @@ test('All includes older retained history, keeps the cutoff date, and shows both
         await act(async () => tree.container.querySelector('.usage-chart g[role="button"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })));
         expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('17 tokens');
         expect(tree.container.querySelector('.usage-session-table')).toBeNull();
+        await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Requests')!.click());
         expect(tree.container.querySelectorAll('.usage-area-requests g[role="button"]')).toHaveLength(3);
+        expect(tree.container.querySelectorAll('.usage-heatmap g[role="button"]')).toHaveLength(168);
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
@@ -132,6 +135,7 @@ test('tool trend hover previews counts; activation selects and clear removes sel
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     snapshot.ranges['7d'].days[0]!.requests = 17;
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Requests')!.click());
     const point = tree.container.querySelector('.usage-area-requests g[role="button"]')!;
     await act(async () => point.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
     expect(tree.container.querySelector('.usage-area-requests .usage-trend-readout')?.textContent).toContain('17 tool requests');
@@ -141,4 +145,39 @@ test('tool trend hover previews counts; activation selects and clear removes sel
     await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Clear selection')!.click());
     expect(point.getAttribute('aria-pressed')).toBe('false');
     expect(tree.container.querySelector('.usage-day-detail')).toBeNull();
+});
+
+test('reference controls change chart values without changing accounting; hourly tokens remain seven days', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    summary.tokens = { fresh: 10, read: 90, write: 0, output: 5 };
+    summary.cacheWriteReporting = 'unreported';
+    summary.days[0]!.tokens = { ...summary.tokens };
+    summary.days[0]!.hourlyTokens![4] = 105;
+    summary.days[0]!.requests = 12;
+    summary.days[0]!.results = 10;
+    summary.days[0]!.errors = 2;
+    summary.models = [{ id: 'a', label: 'Model A', kind: 'named', tokens: { ...summary.tokens } }];
+    summary.days[0]!.models = [{ id: 'a', total: 105 }];
+    const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
+    const button = (text: string) => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === text)!;
+    const bar = () => tree.container.querySelector('.usage-flow-chart g[role="button"]')!;
+    expect(bar().getAttribute('aria-label')).toContain('105 recorded tokens');
+    await act(async () => button('Hide cache reads').click());
+    expect(bar().getAttribute('aria-label')).toContain('15 recorded tokens');
+    expect(tree.container.querySelector('.usage-metric strong')?.textContent).toBe('105');
+    expect(tree.container.querySelector('.usage-flow-toolbar')?.textContent).not.toContain('Cache writes');
+    await act(async () => button('By model').click());
+    expect(bar().getAttribute('aria-label')).toContain('105 recorded tokens');
+    expect(button('Hide cache reads').disabled).toBe(true);
+    expect(tree.container.querySelector('.usage-area-errors g[role="button"]')?.getAttribute('aria-label')).toContain('20.0% errors / matched results');
+    const heat = () => tree.container.querySelector('.usage-heatmap')!;
+    const before = heat().getAttribute('aria-label');
+    for (const period of ['30 days', 'All', '7 days']) {
+        await act(async () => button(period).click());
+        expect(heat().getAttribute('aria-label')).toBe(before);
+        expect(heat().querySelectorAll('g[role="button"]')).toHaveLength(168);
+        expect(heat().querySelector('[aria-label*="04:00 UTC: 105 tokens"]')).not.toBeNull();
+    }
+    for (const excluded of ['Work produced', 'Response latency', 'Context window pressure', 'Thinking share']) expect(tree.container.textContent).not.toContain(excluded);
 });
