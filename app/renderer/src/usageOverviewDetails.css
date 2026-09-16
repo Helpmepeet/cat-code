@@ -25,9 +25,9 @@
 .usage-page .usage-details-values dt i { width:9px; height:9px; flex:none; border-radius:2.5px; }
 .usage-page .usage-details-values dd { margin:0; font:400 12px var(--font-mono); white-space:nowrap; }
 .usage-page .usage-details-values dd small { margin-left:8px; color:var(--usage-secondary); font-size:11px; }
-.usage-details-cache-read { background:var(--usage-pink); }
-.usage-details-fresh { background:var(--usage-graphite); }
-.usage-details-cache-write { background:var(--usage-pale); }
+.usage-details-cache-read { background:var(--usage-cache); }
+.usage-details-fresh { background:var(--usage-fresh); }
+.usage-details-cache-write { background:var(--usage-writes); }
 .usage-tool-legend.usage-details-tool-legend { justify-content:flex-end; margin:0 0 4px; }
 .usage-tool-bars.usage-details-tool-bars { margin-top:10px; }
 .usage-tool-bars.usage-details-tool-bars button { grid-template-columns:76px minmax(0,1fr) 58px; gap:11px; padding:6px 5px; margin-inline:-5px; border-radius:5px; }

@@ -193,3 +193,20 @@ indicators. No demo percentages or inferred Thinking share are introduced.
 Bounded `previousPeriod` totals retain exact unique sessions and active days.
 Counting version 5 invalidates older derived snapshots while reusing indexed
 source records. See [period delta semantics and evidence](../../reports/2026-09-16-usage-period-deltas.md).
+
+### 2026-09-16 metric colors
+
+Operator rejected the repeated pink chart palette. The dashboard now uses blue
+for total tokens/fresh input and hourly intensity, teal for cache and successful
+tool outcomes, amber for requests/cache writes, coral for errors, and violet for
+sessions/output. Model stacks and donut share a distinct categorical palette.
+Legend swatches, sparklines and trend markers follow those same roles. Percentage
+changes remain neutral because increased consumption is not inherently good or bad.
+Light theme uses darker series colors; dark theme uses lighter colors. Labels,
+exact values and keyboard controls remain available alongside color.
+
+Adapted with operator authorization: this supersedes the supplied reference's
+pink/wine palette. Native Cat Code Dev observations confirmed the token, cache,
+error, model, tool and heatmap colors in dark mode; light-mode visual acceptance
+remains open. Existing focused renderer checks: 33 passed, 0 failed. Renderer
+build passed. No data, backend or layout behavior changed.

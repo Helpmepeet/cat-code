@@ -25,12 +25,12 @@ export function usageChartTicks(start: string, endExclusive: string, width: numb
     return dates;
 }
 export function usageGraphColors(ids: readonly string[]): Record<string, string> {
-    const palette = ['var(--usage-pink)', 'var(--usage-wine)', 'var(--usage-pale)', 'var(--usage-graphite)', 'var(--usage-other)', 'color-mix(in srgb,var(--usage-pink) 65%,var(--usage-graphite))', 'color-mix(in srgb,var(--usage-wine) 65%,var(--usage-graphite))', 'color-mix(in srgb,var(--usage-pale) 50%,var(--usage-other))', 'color-mix(in srgb,var(--usage-pink) 35%,var(--usage-graphite))', 'color-mix(in srgb,var(--usage-wine) 35%,var(--usage-other))'];
+    const palette = ['var(--usage-blue)', 'var(--usage-amber)', 'var(--usage-teal)', 'var(--usage-violet)', 'var(--usage-cyan)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-other)'];
     return Object.fromEntries([...new Set(ids)].map((id, i) => [id, palette[i % palette.length]!]));
 }
 export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
     if (mode === 'model') return summary.models.map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
-    return ([['output', 'Output', 'var(--usage-graphite)'], ['fresh', 'Fresh input', 'var(--usage-wine)'], ['read', 'Cache reads', 'var(--usage-pink)'], ['write', 'Cache writes', 'var(--usage-pale)']] as const)
+    return ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
         .filter(([key]) => !(key === 'read' && hideReads) && !(key === 'write' && !usageHasCacheWrites(summary)))
         .map(([id, label, color]) => ({ id, label, color, total: summary.tokens[id], value: (day: UsageDay) => day.tokens[id] }));
 }

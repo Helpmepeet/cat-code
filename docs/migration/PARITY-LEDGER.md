@@ -2673,3 +2673,13 @@ replaces unreported Thinking share; mock comparisons and TTL splits omitted.
 Independent card heights, requested tool-request trend, cache-write omission and
 session navigation remain. Engineering checks pass; live visual acceptance remains
 open. [Evidence](../reports/2026-09-16-usage-preview-graphs.md).
+
+
+## Usage metric colors amendment · 2026-09-16
+
+Operator explicitly rejected the supplied preview's repetitive pink palette.
+Adapted with authorization: metric-specific blue, teal, amber, coral and violet,
+shared categorical colors for model stacks/donut, blue hourly intensity scale,
+and neutral comparison deltas. Layout and accounting remain unchanged. Native
+Dev dark-mode charts checked; light-mode visual acceptance remains open.
+[Color decision](decisions/USAGE-DASHBOARD.md#2026-09-16-metric-colors).
