@@ -85,3 +85,9 @@ hover and visual checks remain operator-driven.
 - 🔁 Adapted for bounded All history: explicit multi-day buckets and recent-only
   session/hourly detail.
 - ⬜ Deferred: live visual acceptance; installed app has not been updated.
+
+## Card-height follow-up
+
+The operator flagged Prompt cache stretching to match expanded Tool activity.
+The supporting grid now top-aligns each card at its intrinsic content height.
+Renderer build and diff check passed; live visual verification remains pending.
