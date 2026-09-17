@@ -1,197 +1,192 @@
 # Interactive Run for command blocks
 
 Date: 2026-09-17
-Status: Implementation plan. The feature is not implemented.
+Status: Revised after source-based review. Proposed contracts are concrete;
+implementation and runtime verification have not started.
 
-## Agreed behavior
+## User-visible behavior
 
-Reuse the existing assistant code block. Add a Run icon beside Copy.
-Clicking Run starts the displayed command in the conversation's project and
-opens an interactive terminal immediately below that code block. The user can
-type answers, use arrow keys, and press Enter through multiple prompts.
-All terminal output is automatically shared with the owning agent.
+Reuse the existing assistant code block and add a Run icon beside Copy.
+Run starts its command in the conversation's project and opens an interactive
+terminal immediately below the block. The user can type answers, use arrow
+keys, and press Enter through multiple prompts. All admitted terminal output
+is automatically shared with the owning agent, including output produced while
+a command waits for input. There is no manual sharing step.
 
-No separate terminal page, output-sharing toggle, or “Ask agent” button.
+Run becomes Stop while active. Ctrl+C interrupts the foreground program; Stop
+terminates this run's owned processes. Completion leaves the exit result and
+retained output beside Run again. Tab changes and scrolling do not end a run.
+The terminal lasts for the selected command, rather than leaving an unrestricted
+persistent shell after that command exits.
 
-## User flow
+“All output” does not mean unlimited memory, disk, or model context. There is
+no summary/tail-only sharing policy. Explicit resource limits stop a runaway
+command with an `output_limit` result and identify the last retained output.
+Nothing is silently omitted and presented as a complete successful run.
 
-1. A completed shell code block shows Copy and Run. An incomplete streaming
-   block cannot run.
-2. Run opens the terminal beneath the block and starts the entire command once.
-   The working directory is visible. Existing session permission policy applies.
-3. The user interacts directly with the running program. Output appears in the
-   terminal and enters the agent's session automatically, including output
-   produced before the command finishes.
-4. Ctrl+C sends the terminal interrupt. Stop terminates this run and its owned
-   child processes. Run stays disabled while this run is active.
-5. On completion, keep the output and show the exit status. Run again creates a
-   fresh run. Keep earlier runs available under the same block.
+## Contracts to implement
 
-The terminal is for the selected command's lifetime. Multi-step installers and
-interactive CLIs are supported; a persistent general-purpose shell after the
-command exits is outside this initial scope.
+These three proposed decision records replace the unresolved assumptions in
+the first plan. They describe the intended implementation, not existing behavior
+or a silently approved change to the current security baseline.
 
-## Implementation
+| Contract | Concrete choice |
+| --- | --- |
+| [Candidates and authorization](../migration/decisions/TERMINAL-RUN-CANDIDATES.md) | Renderer selects an opaque engine-minted candidate; full Bash validation, hooks, permissions, and sandbox path applies |
+| [Journal, bounds, and recovery](../migration/decisions/TERMINAL-RUN-JOURNAL.md) | Sidecar-owned durable run journal; host recovery after confirmed owner exit; paginated reattachment; separate resource caps |
+| [Passive agent delivery](../migration/decisions/TERMINAL-AGENT-DELIVERY.md) | New non-waking attachment source; ordered ranges; watermark advances only after durable canonical-input acceptance |
 
-### 1. Prove interactive process support
+Keep the existing Unix-socket transport, one engine per session, raw session
+events, two session identities, and application lifetime rules. Document the
+bounded interactive-input capability in the security baseline before shipping.
+Dependency additions still require the repository's dependency approval.
 
-Build a small isolated PTY integration fixture before wiring the UI. A PTY is
-the process connection needed for terminal input, prompts, cursor movement,
-and resizing. The existing pipe-based runner is useful reference code but is
-not a substitute for a PTY.
+## Implementation sequence
 
-Verify launch, output, typed input, arrow keys, resize, Ctrl+C, exit status, and
-cleanup under the real Bun sidecar runtime. Also verify development and packaged
-app loading. Select the terminal renderer and PTY backend after this check;
-request approval before adding dependencies, as required by `CLAUDE.md`.
+### 1. Isolated PTY and packaging proof
 
-Keep ownership in the session sidecar, with an engine runtime entry point for
-execution. Reuse the session's actual workspace, environment setup, permission
-context, and applicable sandbox behavior. Do not create a renderer-accessible
-raw process-spawn API or call CLI bash mode as a permission bypass.
+Prove the proposed terminal backend under the real Bun sidecar runtime, with an
+isolated interactive fixture. Cover launch, typed answers, arrows, resize,
+Ctrl+C, Stop, actual exit status, and process-group cleanup after sidecar SIGKILL.
+Verify loading in development and the packaged app. A parent-liveness mechanism
+must clean up children even when JavaScript exit handlers never run.
 
-Record the bounded interactive capability in a decision document: initial
-launch goes through the engine's gate, and subsequent keyboard input addresses
-only that authorized run. The input contract must explicitly cover interactive
-programs that themselves accept commands. Preserve the existing architecture
-and resolve this against the security baseline before enabling the feature.
+This proof can proceed independently. Production bridge/UI wiring must follow
+the three contracts rather than turn the experiment into a raw `exec` channel.
+Select the PTY backend and terminal emulator based on this evidence, then obtain
+any required dependency approval before adding them.
 
-### 2. Add session-owned terminal runs and transport
+### 2. Candidate registry and authorized launch
 
-Give every execution its own run ID, owning session ID, source message/block
-identity, status, output sequence, and exit result. A repeated start request
-must resolve to the same run rather than launch the command twice.
+Extract candidates only from finalized, persisted assistant messages. Persist
+the exact source and canonical message/content-block/fence identity. Return
+opaque candidate IDs to the renderer. Both ordinary and windowed code blocks
+must carry the same stable source identity; matching by command text is invalid.
 
-Add fixed bridge actions for start, input, resize, and stop, and outbound events
-for output and state. Route them through the existing preload, main, supervisor,
-and Unix-socket path. Validate closed schemas, sizes, ownership, and run state
-at the sidecar. Resolve cwd and environment there, not from renderer paths.
+The start payload contains only `candidateId` and `startRequestId` inside the
+session envelope. Persist its run reservation before effects. Retries reuse the
+request ID; Run again gets a new one. Keep dedupe tombstones after output expiry;
+an uncertain pre-spawn record becomes interrupted and is never auto-reexecuted.
 
-Batch output into bounded transport chunks without discarding content. Support
-reattaching to an existing run after renderer reload without re-executing it.
+Use `runToolUse` and the real session tool context. Add the PTY backend after
+the existing validation/hook/permission steps and before the normal sandboxed
+spawn. Give terminal runs their own permission-handler and cancellation scope
+so concurrent agent turns cannot overwrite it. Preserve user-terminal provenance.
 
-Likely owners:
+### 3. Durable runs, bounded output, and recovery
 
-- `app/shared/protocol.ts` and the existing IPC-channel declarations.
-- `app/preload/preload.ts` and `app/main/main.ts`.
-- A new terminal domain beside `app/sidecar/taskControlDomain.ts`.
-- A corresponding real engine entry point under `src/app-runtime/`.
+Implement the journal and quota accounting before routing live output. It owns
+run metadata, sequences, output, receipts, and retry identity. Main's 16 MiB
+replay ring is not a terminal history store.
 
-### 3. Reuse the existing code-block UI
+Initial bounds include 64 MiB of journal per run, 256 MiB per session, 1 GiB
+across terminal journals, 2 MiB/10,000-row UI scrollback, 1 MiB transport backlog,
+and 4 MiB of unaccepted model text per session. The journal contract also fixes
+completed-run retention, paging, active-run limits, and overflow behavior.
+These are proposed defaults, not claims about current settings.
 
-Extend `CodeBlock` with an optional Run action, supplied only for assistant
-shell blocks. Preserve Copy, source text, and existing styling. Cover both
-ordinary and windowed code-block rendering paths.
+Use a single live writer with generation fencing. Main seals unfinished runs
+after confirmed sidecar death, under the same session lock. Renderer reload
+requests metadata and output pages/checkpoints from the journal. Active runs
+prevent parking; passive output survives parking on disk. Close stops owned
+processes without deleting unconsumed output. Restore never reruns commands.
 
-Start with explicit `bash`, `sh`, `shell`, and `zsh` fences. Preserve the command
-text; do not strip prompt markers or guess commands from arbitrary prose.
-Treat the language label as eligibility metadata and execute with a documented,
-compatible session-shell policy.
+### 4. Automatic, non-waking agent context
 
-Mount the terminal directly beneath the source block. Focus it on an explicit
-Run click and route keyboard input only while it is focused. Store run state
-outside mounted code-block components so scrolling, virtualization, and tab
-switches cannot restart or lose a process. Existing session attachment handles
-restorable sessions before a start is sent.
+Introduce the passive `terminal-output` source separately from prompt and task-
+notification queues. Those existing queues can start new turns at the boundary.
+Output and exit must not wake an idle agent or create an AI turn per chunk.
 
-Primary files: `app/renderer/src/TranscriptView.tsx`,
-`app/renderer/src/markdownRenderPlan.ts`, and `app/renderer/src/SessionPane.tsx`.
-Add a terminal component and a separate `.ts` state module.
+Sample ordered pending ranges at an eligible existing model-input boundary or
+the next user submission. Persist a typed untrusted-output attachment before
+provider dispatch and only then advance the accepted watermark. Reconcile
+transcript receipts on restart before trusting a stale journal cursor. Test
+both provider input paths, including crash windows and compaction.
 
-### 4. Share all output with the agent automatically
+Use bounded batches without summarizing or dropping the pending suffix. If no
+model context space is available, keep output pending; its explicit pending
+quota prevents unbounded accumulation. This cannot change an in-flight request.
 
-Fork each run's output stream to both the terminal view and the owning engine
-session. Include the command, cwd, ordered output, and final exit status. Keep
-the complete output record; do not add a feature-specific tail-only policy,
-summary filter, or manual sharing step.
+### 5. Existing code block plus an embedded terminal
 
-Use the session's existing input/attachment delivery mechanism for model
-context, with explicit terminal-output provenance. If a model request is
-already in flight, new output becomes available at its next supported input
-boundary. If the agent is idle, retain it for the next turn. Sharing output
-does not start a new AI response for every chunk.
+Add optional Run to `CodeBlock`, enabled only where the engine has supplied a
+valid candidate. Preserve Copy, source text, and existing styling. Explicit
+shell fences are eligible; arbitrary prose and settings previews are not.
 
-Use per-run output sequence numbers to avoid duplicate context after reconnect
-or replay. Batch deltas rather than repeatedly appending the full accumulated
-log. Preserve textual output while interpreting terminal control sequences for
-the agent-facing representation. Terminal control bytes are not instructions.
-Existing context limits, compaction, and secret-handling rules still apply;
-sharing all output does not imply an unlimited model context window.
+Mount the interactive terminal immediately below the block and focus it on the
+user's Run click. State belongs outside windowed React components. Input is
+accepted only from explicit keyboard/paste actions in the focused terminal.
+Disable emulator-generated replies and output-triggered clipboard, navigation,
+title, hyperlink, or DOM actions. Terminal escape parsing is bounded too.
 
-Verify delivery through both supported provider paths. The renderer transcript
-alone is not proof that the model received the output. This is a dedicated
-command-output stream, not diagnostic-log injection.
+### 6. Protocol integration and verification
 
-### 5. Complete lifecycle handling
+Add fixed, session-scoped start/input/resize/stop and journal-read actions with
+closed schemas at the receiving boundary. Main's read-only history path can
+serve a dead session without starting an engine. Mutation always routes to the
+owning live sidecar. Neither path accepts arbitrary filesystem paths.
 
-Keep a run alive across scrolling, tab changes, and renderer reattachment while
-its sidecar is alive. Register live runs with the existing live-work/parking
-gate so idle parking cannot terminate a waiting interactive command.
+For every new frame and type:
 
-Keep command ownership separate from the agent turn: stopping a terminal run
-must not abort an unrelated model response, and stopping the agent must not
-silently kill a user-controlled terminal. Output joins a busy agent only at
-supported input boundaries.
+- Review wire compatibility; keep additive changes compatible and bump
+  `PROTOCOL_VERSION` for any breaking shape or behavior.
+- Update `FRAME_RETENTION` exhaustively. Only bounded catalog invalidation is
+  sticky; output and request replies are evictable, with journal gap recovery.
+- Update projector/reducer handling and SDK/display fixtures exhaustively.
+  Document tolerant no-ops for control-only frames rather than ignoring them
+  accidentally. Preserve existing raw `AppSessionEvent` forwarding.
+- Regenerate affected engine/SDK snapshots from their owning sources and
+  generators. Never hand-edit `app/shared/engine-types.snapshot.d.ts`,
+  `app/shared/sdk-types.snapshot.d.ts`, or generated SDK core types.
+- Register any persisted-format migration through the existing engine migration
+  owner; the journal itself has an explicit schema version.
 
-On explicit session close or app shutdown, clean up owned processes. On sidecar
-failure, retain available output and mark the run interrupted. Never auto-rerun
-a command during restore. Reuse existing process-tree and task lifecycle
-helpers wherever they cover the PTY backend correctly.
+## Acceptance evidence
 
-## Acceptance checks
+| Area | Required checks |
+| --- | --- |
+| Run identity | Ordinary/windowed/identical adjacent fences, source changes, foreign candidate, double-click, lost ack, Run again, restart before/after spawn |
+| Authorization | Real validation/hook/permission/sandbox ordering, denied spawn, hook-modified command, concurrent permission ownership, rejected extra fields |
+| Interactive behavior | Multiple prompts, arrow selection, multiline/heredoc command, resize, Ctrl+C, Stop, exit code |
+| Output hardening | OSC clipboard/link/title, CSI/DCS queries, oversized escapes, HTML and printable prompt injection; no external side effects or automatic PTY writes |
+| Bounds | Flood output with injected small quotas; bounded memory/disk/backlog; explicit limit reason; admitted prefix remains available |
+| Reattachment | Replay eviction, paged catch-up during output, checkpoint restore, torn journal tail, generation fencing, expired output with retained dedupe |
+| Agent delivery | Idle never wakes; active boundary consumes; turn-end leaves pending; durable acceptance/retry crash windows; both provider inputs and compaction |
+| Lifetime | Scroll/tab/reload keeps the same run; active run prevents parking; close and sidecar SIGKILL clean up owned children; no automatic rerun |
 
-- A simple command runs once and shows its output and actual exit status.
-- A multiline block executes as one script with intact quoting and heredocs.
-- An interactive fixture completes multiple question/answer exchanges and an
-  arrow-key selection in the same process.
-- Output is available to the owning agent while the program is waiting for
-  input and after completion, without a sharing click.
-- Busy-agent delivery and idle-agent delivery preserve order without creating
-  unsolicited turns or duplicate output. Cover both provider paths.
-- Stop/Ctrl+C behave correctly and do not affect unrelated sessions or turns.
-- Double-click, tab switch, scrolling, and renderer reload do not start another
-  process. Sidecar restart does not rerun an old command.
-- Large/rapid output is transported in bounded chunks without silent loss;
-  exit cannot overtake undelivered output.
-- Invalid frames, cross-session run IDs, disallowed launches, and input to
-  finished runs are rejected at the receiving boundary.
-- Live runs prevent idle parking; closing their session cleans up children.
+Use isolated test state and fake provider transports; do not consume live account
+quota. Run affected engine tests and `bun run build:dev:full`, desktop tests,
+both desktop typechecks, and the renderer build. Run hardening and Cat Code Dev
+GUI checks when authorized for those runs. Record packaged PTY evidence too.
+Documentation changes require whitespace, link, and map-lint checks.
 
-Use isolated process fixtures for execution tests. Run the affected engine
-tests and dev build, desktop tests and both typechecks, and the renderer build.
-Run the desktop hardening check and Cat Code Dev GUI verification when
-authorized for those runs. Exercise the packaged PTY loading path too.
+## Source owners
 
-## Delivery order and effort
+- UI: `app/renderer/src/{TranscriptView,SessionPane}.tsx` and
+  `app/renderer/src/markdownRenderPlan.ts`, plus terminal component/state files.
+- Bridge: `app/shared/protocol.ts`, existing IPC declarations,
+  `app/preload/preload.ts`, and `app/main/main.ts`.
+- Runtime: `app/sidecar/sidecarServer.ts`, a terminal domain, and a real run-owned
+  execution adapter under `src/app-runtime/`.
+- Execution: `src/services/tools/toolExecution.ts`, the Bash tool, and shell/
+  process helpers. Reuse the real machinery, not a parallel permission model.
+- Context: `src/QueryEngine.ts`, `src/query.ts`, attachment/provenance types,
+  durable transcript acceptance, and provider normalization.
+- Recovery: `app/main/replayBuffer.ts`, host/supervisor lifecycle, and a shared
+  Electron-free versioned journal with single-writer/generation rules.
 
-1. PTY/backend and packaging proof.
-2. One vertical slice: Run → interactive input/output → exit, in an isolated
-   session.
-3. Automatic agent-context delivery, including delivery during active turns.
-4. Reattachment, persistence, lifecycle integration, and verification.
+## Review disposition and effort
 
-The visible UI change is small. Most work is terminal integration and reliable
-session delivery. Budget roughly **1–2 weeks of focused implementation** for
-this interactive scope, with the PTY/packaging proof refining the estimate.
-The earlier 2–3 day estimate covered a noninteractive command runner and no
-longer describes the requested feature.
+All seven findings are addressed in the proposed contracts: candidate-only
+launch, explicit resource limits, a non-waking source, authoritative recovery,
+stable identities, terminal-output hardening, and protocol/generation coverage.
+Two earlier assumptions were incorrect: existing queued input can wake the
+agent, and replay-buffer retention cannot guarantee terminal history recovery.
 
-## Source anchors
+The UI remains small. Reliable interactive execution is the larger part.
+The previous 1–2 week estimate is provisional until the isolated PTY/packaging
+proof; it is not a promise that the reviewed runtime contracts are already built.
 
-- [Repository constraints](../../CLAUDE.md)
-- [Desktop runtime map](../maps/web-app-runtime.md)
-- [Security minimum](../migration/decisions/SECURITY-MINIMUM.md)
-- [Permission boundary](../migration/decisions/PERMISSION-BOUNDARY.md)
-- [Code-block rendering](../../app/renderer/src/TranscriptView.tsx)
-- [Markdown planning](../../app/renderer/src/markdownRenderPlan.ts)
-- [Desktop protocol](../../app/shared/protocol.ts)
-- [Sidecar dispatch and lifecycle](../../app/sidecar/sidecarServer.ts)
-- [Engine session controller](../../src/app-runtime/AppSessionController.ts)
-- [Permission-aware tool execution](../../src/services/tools/toolExecution.ts)
-- [Existing shell runner](../../src/utils/Shell.ts)
-- [Existing process lifecycle](../../src/utils/ShellCommand.ts)
-- [Engine progress conversion](../../src/utils/queryHelpers.ts)
-
-Planning evidence: source inspection plus 63 passing existing tests across
-Markdown rendering, output projection, session control, and sidecar boundaries.
-These validate existing building blocks, not the proposed interactive feature.
+Evidence: the initial investigation ran 63 existing tests successfully. This
+revision rechecked the cited source paths and updates documents only. Those
+63 tests were not rerun for this revision and do not prove the new contracts.
