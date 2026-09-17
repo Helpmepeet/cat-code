@@ -5,7 +5,8 @@ import { readStatsRecords, type StatsRecord } from './statsReader.js';
 import { usageWindow, usageTimestampEligible } from './usageWindow.js';
 import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
-import { MAX_USAGE_ALL_BUCKETS, usageProjectId } from '../../app/shared/usageDashboard.js';
+import { getConfiguredStandardModelCosts } from './modelCostRates.js';
+import { MAX_USAGE_ALL_BUCKETS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -16,7 +17,22 @@ export interface UsageIdentityStore {
     set(name: string): { has(key: string): boolean; add(key: string): unknown };
 }
 const zero = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
+const zeroCost = (): UsageTokenCostEstimate => ({ usd: 0, pricedTokens: 0 });
 const total = (t: UsageTokens) => t.fresh + t.read + t.write + t.output;
+function standardTokenCost(model: string | null, tokens: UsageTokens): UsageTokenCostEstimate {
+    if (!model) return zeroCost();
+    const rates = getConfiguredStandardModelCosts(model);
+    if (!rates) return zeroCost();
+    return {
+        usd: (tokens.fresh * rates.inputTokens + tokens.read * rates.promptCacheReadTokens + tokens.output * rates.outputTokens) / 1_000_000,
+        // The index does not retain cache-write TTL, so writes cannot be priced.
+        pricedTokens: tokens.fresh + tokens.read + tokens.output,
+    };
+}
+function addCost(target: UsageTokenCostEstimate, value: UsageTokenCostEstimate) {
+    target.usd += value.usd;
+    target.pricedTokens = plus(target.pricedTokens, value.pricedTokens);
+}
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const nonempty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
@@ -112,7 +128,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!contributor) {
             reserve(key, 768);
             const meta = sessionMetadata.get(session)!;
-            contributor = { id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), requests: 0, results: 0, errors: 0, models: [], modelDetail: { state: 'full', omitted: 0 } };
+            contributor = { id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), requests: 0, results: 0, errors: 0, tokenCost: zeroCost(), models: [], modelDetail: { state: 'full', omitted: 0 } };
             contributorSessions.set(contributor.id, session);
             s.dailyContributors.set(key, contributor);
             ensureDay(s, date).contributors.items.push(contributor);
@@ -288,16 +304,16 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             return;
         }
         const current = raw as UsageTokens;
-        const model = nonempty(message.model) ? message.model : null;
+        const modelName = nonempty(message.model) ? message.model : null;
         // GPT requests route through the OpenAI adapter, whose upstream usage
         // exposes cached reads but no cache-creation count. Its persisted zero
         // is a normalization placeholder, not a provider measurement.
         const hasCacheWrite = Object.prototype.hasOwnProperty.call(u, 'cache_creation_input_tokens');
         const writeReporting = current.write > 0
             ? 'reported'
-            : getProviderForModel(model) === 'openai'
+            : getProviderForModel(modelName) === 'openai'
                 ? 'unreported'
-                : hasCacheWrite && model?.toLowerCase().startsWith('claude-')
+                : hasCacheWrite && modelName?.toLowerCase().startsWith('claude-')
                     ? 'reported'
                     : 'unknown';
         for (const s of eligibleStates) {
@@ -308,7 +324,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             daily[writeReporting] = true;
             s.dailyCacheWriteReporting.set(date, daily);
         }
-        const cat = category(model);
+        const cat = category(modelName);
         const key = JSON.stringify([scope, nonempty(message.id) ? ['api', message.id] : ['record', recordId]]);
         const prior = usage.get(key);
         if (prior && prior.model !== cat.id) {
@@ -342,17 +358,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             let model = s.models.get(cat.id);
             if (!model) {
                 reserve(cat.id);
-                model = { ...cat, tokens: zero() };
+                model = { ...cat, tokens: zero(), tokenCost: zeroCost() };
                 s.models.set(cat.id, model);
             }
             addTokens(model.tokens, delta);
+            const tokenCost = standardTokenCost(modelName, delta);
+            addCost(model.tokenCost!, tokenCost);
+            if (contributor) addCost(contributor.tokenCost!, tokenCost);
             if (contributor) {
                 const contributorKey = JSON.stringify([date, session]);
                 let contributorModelMap = s.contributorModels.get(contributorKey);
                 if (!contributorModelMap) { reserve(contributorKey, 256); contributorModelMap = new Map(); s.contributorModels.set(contributorKey, contributorModelMap); }
                 let contributorModel = contributorModelMap.get(cat.id);
-                if (!contributorModel) { reserve(`${contributorKey}:${cat.id}`, 384); contributorModel = { ...cat, tokens: zero() }; contributorModelMap.set(cat.id, contributorModel); contributor.models.push(contributorModel); }
+                if (!contributorModel) { reserve(`${contributorKey}:${cat.id}`, 384); contributorModel = { ...cat, tokens: zero(), tokenCost: zeroCost() }; contributorModelMap.set(cat.id, contributorModel); contributor.models.push(contributorModel); }
                 addTokens(contributorModel.tokens, delta);
+                addCost(contributorModel.tokenCost!, tokenCost);
             }
             const dk = `${date}:${cat.id}`;
             let daily = s.dailyModels.get(dk);
@@ -397,6 +417,24 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const meta = session ? sessionMetadata.get(session) : undefined;
                 if (meta?.projectId && meta.label && !meta.conflicted) contributor.project = { id: meta.projectId, label: meta.label };
                 if (meta?.conflicted) contributor.engineSessionId = null;
+            }
+            if (day.contributors.state !== 'unavailable') {
+                const items = day.contributors.items;
+                const ordered = {
+                    tokens: [...items].sort((a, b) => total(b.tokens) - total(a.tokens) || b.requests - a.requests || b.errors - a.errors || a.id.localeCompare(b.id)),
+                    requests: [...items].sort((a, b) => b.requests - a.requests || total(b.tokens) - total(a.tokens) || b.errors - a.errors || a.id.localeCompare(b.id)),
+                    errors: [...items].sort((a, b) => b.errors - a.errors || total(b.tokens) - total(a.tokens) || b.requests - a.requests || a.id.localeCompare(b.id)),
+                };
+                const ranks = {
+                    tokens: new Map(ordered.tokens.map((item, index) => [item.id, index + 1])),
+                    requests: new Map(ordered.requests.map((item, index) => [item.id, index + 1])),
+                    errors: new Map(ordered.errors.map((item, index) => [item.id, index + 1])),
+                };
+                for (const contributor of items) contributor.rank = {
+                    tokens: ranks.tokens.get(contributor.id)!,
+                    requests: ranks.requests.get(contributor.id)!,
+                    errors: ranks.errors.get(contributor.id)!,
+                };
             }
             const reporting = s.dailyCacheWriteReporting.get(day.date);
             day.cacheWriteReporting = !reporting ? 'unavailable'
@@ -452,5 +490,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
     }
-    return { version: 1, metricVersion: 1, countingVersion: 5, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 6, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

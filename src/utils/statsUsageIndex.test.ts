@@ -195,12 +195,12 @@ test('legacy two-window cache rebuilds All from indexed records without reading 
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 
-test('v4 saved snapshots are rejected and rebuilt from unchanged indexed records', async () => {
+test('v5 saved snapshots are rejected and rebuilt from unchanged indexed records', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('a', cutoff, 18)));
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const legacy = structuredClone(original) as any;
-    legacy.countingVersion = 4;
+    legacy.countingVersion = 5;
     const { Database } = await import('bun:sqlite');
     const db = new Database(path);
     try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
@@ -209,7 +209,25 @@ test('v4 saved snapshots are rejected and rebuilt from unchanged indexed records
     let reads = 0;
     const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(5);
+    expect(rebuilt.countingVersion).toBe(6);
+    expect(rebuilt.ranges).toEqual(original.ranges);
+});
+
+test('pricing-rate revisions invalidate saved summaries without rereading unchanged sources', async () => {
+    const { path, file } = await fixture();
+    await writeFile(file, JSON.stringify(row('a', cutoff, 18)));
+    const original = await collectIndexedUsage([file], cutoff, opts(path));
+    const staleRates = structuredClone(original) as any;
+    staleRates.pricingVersion = 0;
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path);
+    try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(staleRates)); }
+    finally { db.close(); }
+    expect(readSavedUsage(path)).toBeNull();
+    let reads = 0;
+    const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+    expect(rebuilt.pricingVersion).toBe(1);
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 

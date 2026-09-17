@@ -210,3 +210,47 @@ pink/wine palette. Native Cat Code Dev observations confirmed the token, cache,
 error, model, tool and heatmap colors in dark mode; light-mode visual acceptance
 remains open. Existing focused renderer checks: 33 passed, 0 failed. Renderer
 build passed. No data, backend or layout behavior changed.
+
+## Session investigation and configured-rate token cost, 2026-09-17
+
+The user authorized the revised Usage roadmap, starting with existing session
+investigation and qualified token estimates. GPT-5.6 Sol owns implementation.
+The [measurement audit](../../reports/2026-09-17-usage-measurement-audit.md)
+defines timing and retry prerequisites; those later features are not part of
+this amendment.
+
+Counting version 6 adds deterministic ordinal ranks across all contributors in
+each UTC day for tokens, tool requests, and recorded errors. The outbound list
+selects the union of the top `floor(limit / 3)` contributors for those metrics,
+then fills remaining places by token rank. Existing limits remain 20, 10, 5,
+or zero under envelope fallback. This preserves leaders for all three metrics
+without suggesting the bounded list contains every session. Ranks survive
+regrouping; sorting the displayed rows, including by cost, applies only to the
+shown list. All-history contributors remain unavailable.
+
+Models and contributors carry a configured-rate USD subtotal and the number of
+priced tokens. Pricing occurs on canonical usage deltas before model grouping,
+so `Other` preserves priced amounts and coverage. Known exact configured model
+IDs use standard rates for fresh input, cache reads, and output from the shared
+dependency-light `modelCostRates.ts`. Cache-write tokens remain unpriced because
+the index lacks write-duration detail. Unknown models, including GPT models
+without configured rates, remain unpriced.
+The existing live-query calculator retains its separate fallback behavior.
+
+These are API-equivalent token estimates at configured standard rates, not
+provider bills or subscription spend. They exclude non-token service charges
+and do not reconstruct historical prices or speed adjustments. Token pricing
+coverage is not monetary coverage. A partially
+priced amount is displayed as a subtotal, and absent pricing is not displayed
+as zero cost. Existing history and cache-write reporting limitations remain.
+
+The strict snapshot validator requires counting version 6 and pricing version
+1, checks nonnegative finite subtotals and priced-token bounds, reconciles
+contributor/model amounts, and bounds ranks against contributor counts. Bump
+`USAGE_PRICING_VERSION` when configured rates, recognized IDs, or pricing
+semantics change. Old saved summaries rebuild from the existing index-v4
+projection without rereading unchanged transcripts. Cached worker reads remain
+independent of account initialization. No new inbound operation, source
+transcript field, account access, or frame-size allowance is introduced.
+
+See [implementation and verification](../../reports/2026-09-17-usage-investigation-implementation.md).

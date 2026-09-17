@@ -1,7 +1,9 @@
-import type { ModelName } from './model.js'
-import type { APIProvider } from './providers.js'
-
-export type ModelConfig = Record<APIProvider, ModelName>
+/** Keep the model catalog dependency-light: retained-history workers import it
+ * without loading the live auth/settings model graph. */
+export type ModelConfig = Record<
+  'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai',
+  string
+>
 
 // @[MODEL LAUNCH]: Add a new CLAUDE_*_CONFIG constant here. Double check the correct model strings
 // here since the pattern may change.

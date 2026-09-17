@@ -1,5 +1,7 @@
 /** Read-only desktop usage contract. See docs/migration/decisions/USAGE-DASHBOARD.md. */
 export const USAGE_DASHBOARD_VERSION = 1 as const;
+/** Bump whenever configured rates or retained-history pricing semantics change. */
+export const USAGE_PRICING_VERSION = 1 as const;
 export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
@@ -32,8 +34,16 @@ export type UsageCategory = {
     kind: 'named' | 'unknown' | 'other';
     label: string;
 };
+export type UsageTokenCostEstimate = {
+    /** Configured standard-rate subtotal for the priced token categories. */
+    usd: number;
+    /** Token count matched to a configured model rate, not monetary coverage. */
+    pricedTokens: number;
+};
 export type UsageModel = UsageCategory & {
     tokens: UsageTokens;
+    /** Required on validated snapshots; optional only for pre-grouping callers. */
+    tokenCost?: UsageTokenCostEstimate;
 };
 export type UsageTool = UsageCategory & {
     requests: number;
@@ -48,6 +58,10 @@ export type UsageSessionContributor = {
     requests: number;
     results: number;
     errors: number;
+    /** Exact ranks across every contributor in the UTC day. */
+    rank?: { tokens: number; requests: number; errors: number };
+    /** Required on validated snapshots; optional only for pre-grouping callers. */
+    tokenCost?: UsageTokenCostEstimate;
     models: UsageModel[];
     modelDetail: { state: 'full' | 'grouped'; omitted: number };
 };
@@ -129,7 +143,8 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 5;
+    countingVersion: 6;
+    pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';
     timezone: 'UTC';

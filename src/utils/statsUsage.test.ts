@@ -78,6 +78,19 @@ test('cache-write reporting distinguishes measured, unreported, mixed, and unkno
     expect((await collectRetainedUsage([await file([claudeWithoutWrite])], asOf)).ranges['7d'].cacheWriteReporting).toBe('partial');
     expect((await collectRetainedUsage([], asOf)).ranges['7d'].cacheWriteReporting).toBe('unavailable');
 });
+test('standard token estimates price configured models only and report token coverage', async () => {
+    const known = msg(asOf, 'known', 10, 'known-tool');
+    known.message.model = 'claude-sonnet-4-5-20250929';
+    const unknown = msg(asOf, 'unknown-cost', 10, 'unknown-tool');
+    unknown.message.model = 'claude-sonnet-4-99';
+    const summary = (await collectRetainedUsage([await file([known, unknown])], asOf)).ranges['7d'];
+    const priced = summary.models.find(model => model.label === known.message.model)!;
+    const unpriced = summary.models.find(model => model.label === unknown.message.model)!;
+    expect(priced.tokenCost).toEqual({ usd: 60.9 / 1_000_000, pricedTokens: 15 });
+    expect(unpriced.tokenCost).toEqual({ usd: 0, pricedTokens: 0 });
+    expect(summary.days.at(-1)!.contributors.items[0]!.tokenCost).toEqual({ usd: 60.9 / 1_000_000, pricedTokens: 15 });
+    expect(summary.days.at(-1)!.contributors.items[0]!.tokens).toEqual({ fresh: 20, read: 6, write: 8, output: 4 });
+});
 test('state and integer overflow are explicit collection errors', async () => {
     const path = await file([msg(asOf, 'a', 5)]);
     await expect(collectRetainedUsage([path], asOf, { maxIdentities: 1 })).rejects.toBeInstanceOf(UsageResourceError);

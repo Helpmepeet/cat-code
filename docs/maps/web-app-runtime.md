@@ -172,6 +172,11 @@ heatmap from `UsageDay.hourlyTokens`, independently of the page period.
 `UsageAreaTrend.tsx` and `usageTrendState.ts` share shaded cache/request trends,
 calendar spacing, and explicit multi-day labels for the All-history range.
 See [day-to-session implementation](../reports/2026-09-16-usage-session-drilldown.md).
+Day contributor selection now retains leaders across token, request, and error
+rankings. `src/utils/modelCostRates.ts` supplies exact-ID configured token rates;
+priced subtotals and token coverage survive model grouping and appear in the
+session table. Counting v6 and pricing v1 invalidate old summaries while reusing
+the transcript index. See [measurement contract and remaining timing work](../reports/2026-09-17-usage-measurement-audit.md).
 `main/usageStatsRunner.ts` owns bounded delivery; `sidecar/usageStatsWorker.ts` calls
 `statsDomain.collectUsageDashboard`, which reuses the stats discovery owner and the
 streaming retained-history accumulator. The account worker no longer collects
