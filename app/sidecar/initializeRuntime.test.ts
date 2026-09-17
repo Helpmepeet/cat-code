@@ -14,7 +14,7 @@ test('normal sidecar bootstrap enables config reads before the first turn', asyn
           process.stderr.write('MACRO is not initialized')
           process.exit(1)
         }
-        process.stdout.write('runtime-ready')
+        process.stdout.write('runtime-ready:' + MACRO.VERSION)
         process.exit(0)
       `,
     ],
@@ -34,5 +34,7 @@ test('normal sidecar bootstrap enables config reads before the first turn', asyn
 
   expect(exitCode).toBe(0)
   expect(stderr).toBe('')
-  expect(stdout).toBe('runtime-ready')
+  expect(stdout).toMatch(
+    /^runtime-ready:(?:unknown|\d+\.\d+\.\d+-desktop\.sha[0-9a-f]{7,8}(?:-dirty)?)$/,
+  )
 })

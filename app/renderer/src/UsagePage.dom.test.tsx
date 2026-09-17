@@ -23,12 +23,13 @@ test('range controls and chart keyboard selection expose matching UTC values wit
     expect(tree.container.querySelector('.usage-values table')?.querySelectorAll('tbody tr')).toHaveLength(30);
 });
 
-test('heatmap keyboard selection, error modes, and model donut expose recorded values', async () => {
+test('heatmap keyboard selection, tool error graph, and model donut expose recorded values', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
     summary.days[0]!.hourlyRequests[1] = 4;
     summary.days[0]!.hourlyTokens![1] = 240;
     summary.tools = [{ id: 'bash', kind: 'named', label: 'Bash', requests: 10, results: 8, errors: 2 }, { id: 'read', kind: 'named', label: 'Read', requests: 2, results: 1, errors: 1 }];
+    summary.days[0]!.tools = [{ id: 'bash', requests: 10, results: 8, errors: 2 }, { id: 'read', requests: 2, results: 1, errors: 1 }];
     summary.models = [{ id: 'a', kind: 'named', label: 'Model A', tokens: { fresh: 10, read: 0, write: 0, output: 0 } }, { id: 'b', kind: 'named', label: 'Model B', tokens: { fresh: 20, read: 0, write: 0, output: 0 } }];
     summary.tokens.fresh = 30;
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
@@ -41,11 +42,16 @@ test('heatmap keyboard selection, error modes, and model donut expose recorded v
     expect(tree.container.querySelector('.usage-day-detail')?.textContent).toContain('2026-09-07');
     expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('240 tokens');
     expect(tree.container.querySelector('.usage-heatmap')?.textContent).toContain('4 tool requests');
-    const errorRows = () => Array.from(tree.container.querySelectorAll<HTMLButtonElement>('.usage-error-row'));
-    expect(errorRows()[0]!.textContent).toContain('Bash');
-    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === 'Rate')!.click());
-    expect(errorRows()[0]!.textContent).toContain('Read');
-    await act(async () => errorRows()[1]!.click());
+    const errorChart = tree.container.querySelector('.usage-tool-error-chart')!;
+    expect(errorChart.getAttribute('aria-label')).toContain('Days without matched results are gaps');
+    const graphTools = Array.from(tree.container.querySelectorAll<HTMLButtonElement>('.usage-tool-picker button'));
+    expect(graphTools.map(button => button.textContent)).toEqual(['Bash', 'Read']);
+    expect(graphTools.map(button => button.getAttribute('aria-pressed'))).toEqual(['true', 'true']);
+    expect(tree.container.querySelectorAll('.usage-tool-error-values tbody tr')).toHaveLength(2);
+    await act(async () => graphTools[0]!.click());
+    expect(graphTools[0]!.getAttribute('aria-pressed')).toBe('false');
+    expect(tree.container.querySelectorAll('.usage-tool-error-values tbody tr')).toHaveLength(1);
+    await act(async () => tree.container.querySelector<HTMLButtonElement>('.usage-details-tool-bars button')!.click());
     expect(tree.container.textContent).toContain('6 successful · 2 errors · 2 without a matched result');
     expect(tree.container.querySelector('.usage-model-key')?.textContent).toContain('Model A');
     expect(tree.container.querySelector('.usage-model-key')?.textContent).toContain('33.3%');
@@ -69,6 +75,7 @@ test('day drilldown opens its matched catalog session and does not change on hov
         tokens: { fresh: 100, read: 0, write: 0, output: 0 }, requests: 3, results: 2, errors: 1,
         models: [{ id: 'm', kind: 'named', label: 'Model A', tokens: { fresh: 100, read: 0, write: 0, output: 0 } }],
         modelDetail: { state: 'full', omitted: 0 },
+        timeline: { state: 'unavailable', omitted: 0, items: [] },
     }] };
     const opened: string[] = [];
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }} sessionRows={[row]} onOpenSession={r => opened.push(r.sessionId)}/>);

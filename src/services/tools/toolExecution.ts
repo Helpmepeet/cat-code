@@ -98,6 +98,11 @@ import {
   stopSessionActivity,
 } from '../../utils/sessionActivity.js'
 import { jsonStringify } from '../../utils/slowOperations.js'
+import {
+  recordToolExecutionEnd,
+  recordToolExecutionStart,
+  type ModelAttemptOutcome,
+} from '../../utils/sessionStorage.js'
 import { Stream } from '../../utils/stream.js'
 import { logOTelEvent } from '../../utils/telemetry/events.js'
 import {
@@ -147,6 +152,12 @@ export const HOOK_TIMING_DISPLAY_THRESHOLD_MS = 500
 /** Log a debug warning when hooks/permission-decision block for this long. Matches
  * BashTool's PROGRESS_THRESHOLD_MS — the collapsed view feels stuck past this. */
 const SLOW_PHASE_LOG_THRESHOLD_MS = 2000
+
+export function classifyReturnedToolExecution(
+  result: { is_error?: boolean },
+): 'succeeded' | 'failed' {
+  return result.is_error === true ? 'failed' : 'succeeded'
+}
 
 /**
  * Classify a tool execution error into a telemetry-safe string.
@@ -1363,6 +1374,42 @@ async function checkPermissionsAndCallTool(
   // for this toolUseID (addToolResult runs before the PostToolUse hooks, which
   // can throw), and the error path emits its own.
   const preCallMessageCount = resultingMessages.length
+  const executionStarted = performance.now()
+  let executionEnded = false
+  const recordExecutionEnd = (
+    outcome: ModelAttemptOutcome,
+    elapsedMs = performance.now() - executionStarted,
+  ): void => {
+    if (executionEnded) return
+    executionEnded = true
+    try {
+      recordToolExecutionEnd(
+        {
+          schema_version: 1,
+          tool_use_id: toolUseID,
+          outcome,
+          duration_ms: Math.max(
+            0,
+            Math.min(
+              Number.MAX_SAFE_INTEGER,
+              Math.round(elapsedMs),
+            ),
+          ),
+        },
+        toolUseContext.agentId,
+      )
+    } catch {
+      // Measurement must never change tool execution or cancellation.
+    }
+  }
+  try {
+    recordToolExecutionStart(
+      { schema_version: 1, tool_use_id: toolUseID },
+      toolUseContext.agentId,
+    )
+  } catch {
+    // Measurement must never change tool execution or cancellation.
+  }
   try {
     const result = await tool.call(
       callInput,
@@ -1380,6 +1427,7 @@ async function checkPermissionsAndCallTool(
         })
       },
     )
+    const executionDurationMs = performance.now() - executionStarted
     const durationMs = Date.now() - startTime
     addToToolDuration(durationMs)
 
@@ -1452,6 +1500,10 @@ async function checkPermissionsAndCallTool(
     const mappedToolResultBlock = tool.mapToolResultToToolResultBlockParam(
       result.data,
       toolUseID,
+    )
+    recordExecutionEnd(
+      classifyReturnedToolExecution(mappedToolResultBlock),
+      executionDurationMs,
     )
     const mappedContent = mappedToolResultBlock.content
     const toolResultSizeBytes = !mappedContent
@@ -1748,6 +1800,11 @@ async function checkPermissionsAndCallTool(
     }
     return resultingMessages
   } catch (error) {
+    recordExecutionEnd(
+      error instanceof AbortError || toolUseContext.abortController.signal.aborted
+        ? 'cancelled'
+        : 'failed',
+    )
     recordAutoModeOutcome(
       toolUseID,
       error instanceof AbortError ? 'interrupted' : 'error',

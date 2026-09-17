@@ -9,6 +9,7 @@ import type { MergedSessionRow } from './sessionsCatalogState.js';
 import { usageBucketDays, usageBucketLabel, usageHasCacheWrites } from './usageTrendState.js';
 import { UsageMetrics } from './UsageMetrics.js';
 import { usageGraphColors } from './usageGraphState.js';
+import { UsageLatencyPanel } from './UsageTiming.js';
 import './usageDashboard.css';
 type UsageAccent = 'tokens' | 'cache' | 'sessions' | 'tools';
 function UsageIcon({ kind }: { kind: UsageAccent }) {
@@ -68,6 +69,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
      <UsagePanel accent="cache"><UsageCacheSummary key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
      <UsagePanel accent="tools"><UsageToolActivity key={range} summary={summary} partial={!!partial} selected={selected?.date ?? ''} onSelect={setSelectedDate}/></UsagePanel>
     </div>
+    <UsagePanel title="Execution timing" wide accent="sessions"><UsageLatencyPanel timing={summary.timing} invalidTimings={snapshot.coverage.invalidTimings}/></UsagePanel>
     <div className="usage-secondary-panels usage-model-tools-panels usage-wide">
      <UsagePanel title="Model usage" accent="sessions"><UsageModelDonut summary={summary} colors={colors}/>{summary.detail.omittedModels > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedModels)} model names.</p>}</UsagePanel>
      <UsagePanel title="Tools" accent="tools"><UsageToolBreakdown summary={summary}/></UsagePanel>

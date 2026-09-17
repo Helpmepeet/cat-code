@@ -8,7 +8,10 @@ import type {
 } from '../../types/message.js'
 import { createAttachmentMessage } from '../../utils/attachments.js'
 import type { MessageUpdateLazy } from './toolExecution.js'
-import { classifyToolError } from './toolExecution.js'
+import {
+  classifyReturnedToolExecution,
+  classifyToolError,
+} from './toolExecution.js'
 import { runTools } from './toolOrchestration.js'
 import { StreamingToolExecutor } from './StreamingToolExecutor.js'
 import { ASK_PARENT_SESSION_TOOL_NAME } from '../../tools/AskParentSessionTool/prompt.js'
@@ -226,6 +229,14 @@ afterEach(() => {
 })
 
 describe('runToolUse PreToolUse additionalContext', () => {
+  test('classifies returned tool errors as failed executions', () => {
+    expect(classifyReturnedToolExecution({})).toBe('succeeded')
+    expect(classifyReturnedToolExecution({ is_error: false })).toBe(
+      'succeeded',
+    )
+    expect(classifyReturnedToolExecution({ is_error: true })).toBe('failed')
+  })
+
   test('survives a tool call that throws, exactly once, before the error result', async () => {
     stubsActive = true
     injectedContext = [HOOK_TEXT]

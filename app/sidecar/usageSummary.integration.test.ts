@@ -109,3 +109,86 @@ test('multi-metric contributor leaders fit through the existing detail fallback 
             expect(day.contributors.items.some(item => item.rank?.[metric] === 1)).toBe(true);
     } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+test('many daily build markers fall back to exact omitted totals within the envelope', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-build-fallback-'));
+    try {
+        const path = join(dir, 'builds.jsonl');
+        const rows = [];
+        for (let day = 0; day < 180; day++) for (let tool = 0; tool < 10; tool++) for (let build = 0; build < 10; build++) {
+            const timestamp = new Date(Date.UTC(2026, 2, 18 + day, 10)).toISOString();
+            const key = `${day}-${tool}-${build}`;
+            rows.push({
+                type: 'assistant', sessionId: 'session', uuid: key, timestamp,
+                version: `2.1.87-desktop.sha${build.toString(16).padStart(7, 'a')}`,
+                message: { id: key, model: 'model', usage: { input_tokens: 1 }, content: [{ type: 'tool_use', id: key, name: `Tool${tool}` }] },
+            });
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
+        const raw = snapshot.ranges;
+        snapshot.ranges = {
+            '7d': groupUsageSummary(raw['7d']),
+            '30d': groupUsageSummary(raw['30d']),
+            all: groupUsageSummary(raw.all, 8, 10, 0),
+        };
+        expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })).toBeNull();
+
+        snapshot.ranges = {
+            '7d': groupUsageSummary(raw['7d'], 0, 0, 0),
+            '30d': groupUsageSummary(raw['30d'], 0, 0, 0),
+            all: groupUsageSummary(raw.all, 0, 0, 0),
+        };
+        const output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
+        expect(output?.type).toBe('usage');
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        expect(snapshot.ranges.all.requests).toBe(18_000);
+        for (const day of snapshot.ranges.all.days) {
+            const builds = day.tools[0]!.builds!;
+            expect(builds.items).toEqual([]);
+            expect(builds.omitted).toMatchObject({ count: 10, requests: 100 });
+        }
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('busy measured history keeps bounded session timelines after envelope fallback', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'usage-timeline-fallback-'));
+    try {
+        const path = join(dir, 'timelines.jsonl');
+        const rows = [];
+        for (let day = 0; day < 30; day++) for (let session = 0; session < 25; session++) {
+            const date = new Date(Date.UTC(2026, 7, 15 + day, 10));
+            const timestamp = date.toISOString();
+            rows.push({ type: 'assistant', sessionId: `session-${session}`, uuid: `usage-${day}-${session}`, timestamp, message: { id: `usage-${day}-${session}`, model: 'model', usage: { input_tokens: session + 1 }, content: [] } });
+            for (let attempt = 0; attempt < 12; attempt++) {
+                date.setUTCSeconds(attempt + 1);
+                rows.push({
+                    type: 'system', subtype: 'model_attempt_start', sessionId: `session-${session}`,
+                    uuid: `attempt-${day}-${session}-${attempt}`, timestamp: date.toISOString(),
+                    schema_version: 1, call_id: `call-${day}-${session}-${attempt}`,
+                    attempt_id: `attempt-${day}-${session}-${attempt}`, attempt_index: 1,
+                    provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming',
+                });
+            }
+        }
+        await writeFile(path, rows.map(row => JSON.stringify(row)).join('\n'));
+        const snapshot = await collectRetainedUsage([path], '2026-09-13T12:00:00.000Z');
+        const raw = snapshot.ranges;
+        let output = null;
+        for (const [limit, contributors] of [[8, 20], [4, 10], [0, 5], [0, 0]] as const) {
+            snapshot.ranges = {
+                '7d': groupUsageSummary(raw['7d'], limit, limit === 8 ? 10 : limit, contributors),
+                '30d': groupUsageSummary(raw['30d'], limit, limit === 8 ? 10 : limit, contributors),
+                all: groupUsageSummary(raw.all, limit, limit === 8 ? 10 : limit, 0),
+            };
+            output = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot });
+            if (output) break;
+        }
+        expect(output?.type).toBe('usage');
+        expect(Buffer.byteLength(JSON.stringify(output))).toBeLessThan(MAX_USAGE_RECORD_BYTES);
+        const measuredDays = snapshot.ranges['30d'].days.filter(day => day.contributors.items.length > 0);
+        expect(measuredDays).toHaveLength(30);
+        expect(measuredDays.every(day => day.contributors.items.some(item => item.timeline.items.length > 0))).toBe(true);
+        expect(measuredDays.every(day => day.contributors.items.every(item => item.timeline.state === 'truncated'))).toBe(true);
+    } finally { await rm(dir, { recursive: true, force: true }); }
+});

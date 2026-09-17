@@ -1,5 +1,5 @@
 import type { UsageCollectionResult, UsageDashboardSnapshot, UsageDay, UsageModel, UsagePreviousPeriod, UsageRangeSummary, UsageTokens, UsageTool, } from './usageDashboard.js';
-import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TOOLS, USAGE_DASHBOARD_VERSION, USAGE_PRICING_VERSION, } from './usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_LABEL_BYTES, MAX_USAGE_MODELS, MAX_USAGE_RECORD_BYTES, MAX_USAGE_TIMELINE_EVENTS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, USAGE_DASHBOARD_VERSION, USAGE_PRICING_VERSION, type UsageDayTool, } from './usageDashboard.js';
 const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid-output', 'unavailable']);
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
@@ -70,8 +70,72 @@ function model(v: unknown): v is UsageModel {
 function tool(v: unknown): v is UsageTool {
     return obj(v) && category(v) && ownKeys(v, ['id', 'kind', 'label', 'requests', 'results', 'errors']) && safe((v as Record<string, unknown>).requests) && safe((v as Record<string, unknown>).results) && safe((v as Record<string, unknown>).errors) && ((v as Record<string, unknown>).errors as number) <= ((v as Record<string, unknown>).results as number) && ((v as Record<string, unknown>).results as number) <= ((v as Record<string, unknown>).requests as number);
 }
+function dayTool(v: unknown): v is UsageDayTool {
+    if (!obj(v) || !ownKeys(v, ['id', 'requests', 'results', 'errors', ...(v.builds === undefined ? [] : ['builds'])]) || !id(v.id) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests) return false;
+    if (v.builds === undefined) return true;
+    if (!obj(v.builds) || !ownKeys(v.builds, ['items', ...(v.builds.omitted === undefined ? [] : ['omitted'])]) || !Array.isArray(v.builds.items) || v.builds.items.length > MAX_USAGE_TOOL_BUILDS_PER_DAY || v.builds.items.length === 0 && v.builds.omitted === undefined) return false;
+    if (v.builds.omitted !== undefined && (!obj(v.builds.omitted) || !ownKeys(v.builds.omitted, ['count', 'requests', 'results', 'errors']) || !positive(v.builds.omitted.count) || !positive(v.builds.omitted.requests) || !safe(v.builds.omitted.results) || !safe(v.builds.omitted.errors) || v.builds.omitted.errors > v.builds.omitted.results || v.builds.omitted.results > v.builds.omitted.requests)) return false;
+    const seen = new Set<string>();
+    let attributedRequests = 0, attributedResults = 0, attributedErrors = 0;
+    for (const item of v.builds.items) {
+        if (!obj(item) || !ownKeys(item, ['sha', 'dirty', 'requests', 'results', 'errors', 'firstObservedAt']) || typeof item.sha !== 'string' || !/^[0-9a-f]{7,40}$/.test(item.sha) || typeof item.dirty !== 'boolean' || !positive(item.requests) || !safe(item.results) || !safe(item.errors) || item.errors > item.results || item.results > item.requests || !instant(item.firstObservedAt)) return false;
+        const key = `${item.sha}:${item.dirty}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        attributedRequests += item.requests;
+        attributedResults += item.results;
+        attributedErrors += item.errors;
+        if (!safe(attributedRequests) || !safe(attributedResults) || !safe(attributedErrors)) return false;
+    }
+    const omitted = (v.builds.omitted ?? { requests: 0, results: 0, errors: 0 }) as { requests: number; results: number; errors: number };
+    if (!sumsSafe(attributedRequests, omitted.requests) || !sumsSafe(attributedResults, omitted.results) || !sumsSafe(attributedErrors, omitted.errors)) return false;
+    const unknownRequests = v.requests - attributedRequests - omitted.requests;
+    const unknownResults = v.results - attributedResults - omitted.results;
+    const unknownErrors = v.errors - attributedErrors - omitted.errors;
+    return safe(unknownRequests) && safe(unknownResults) && safe(unknownErrors) && unknownErrors <= unknownResults && unknownResults <= unknownRequests;
+}
+function durationSummary(v: unknown): boolean {
+    return obj(v) && ownKeys(v, ['samples', 'p50Ms', 'p95Ms']) && safe(v.samples) && (v.samples === 0
+        ? v.p50Ms === null && v.p95Ms === null
+        : safe(v.p50Ms) && safe(v.p95Ms) && v.p50Ms <= v.p95Ms);
+}
+function outcomes(v: unknown): boolean {
+    return obj(v) && ownKeys(v, ['started', 'succeeded', 'failed', 'cancelled', 'incomplete']) && ['started', 'succeeded', 'failed', 'cancelled', 'incomplete'].every(key => safe(v[key])) && v.started === (v.succeeded as number) + (v.failed as number) + (v.cancelled as number) + (v.incomplete as number);
+}
+function timing(v: unknown): boolean {
+    if (!obj(v) || !ownKeys(v, ['models', 'tools']) || !obj(v.models) || !obj(v.tools)) return false;
+    if (!ownKeys(v.models, ['state', 'logicalCalls', 'retriedCalls', 'streamingAttempts', 'outcomes', 'responseDuration', 'firstText']) || !['available', 'unavailable'].includes(v.models.state as string) || !safe(v.models.logicalCalls) || !safe(v.models.retriedCalls) || !safe(v.models.streamingAttempts) || !outcomes(v.models.outcomes) || !durationSummary(v.models.responseDuration) || !durationSummary(v.models.firstText)) return false;
+    const modelOutcomes = v.models.outcomes as Record<string, number>;
+    const response = v.models.responseDuration as Record<string, number>;
+    const firstText = v.models.firstText as Record<string, number>;
+    if ((v.models.state === 'available') !== (modelOutcomes.started > 0) || (modelOutcomes.started === 0) !== (v.models.logicalCalls === 0) || !sumsSafe(v.models.logicalCalls as number, v.models.retriedCalls as number) || modelOutcomes.started < (v.models.logicalCalls as number) + (v.models.retriedCalls as number) || v.models.retriedCalls > v.models.logicalCalls || v.models.streamingAttempts > modelOutcomes.started || response.samples !== modelOutcomes.succeeded || firstText.samples > v.models.streamingAttempts) return false;
+    if (!ownKeys(v.tools, ['state', 'outcomes', 'duration']) || !['available', 'unavailable'].includes(v.tools.state as string) || !outcomes(v.tools.outcomes) || !durationSummary(v.tools.duration)) return false;
+    const toolOutcomes = v.tools.outcomes as Record<string, number>;
+    const toolDuration = v.tools.duration as Record<string, number>;
+    return (v.tools.state === 'available') === (toolOutcomes.started > 0) && toolDuration.samples === toolOutcomes.succeeded;
+}
+function timeline(v: unknown): boolean {
+    if (!obj(v) || !ownKeys(v, ['state', 'omitted', 'items']) || !['available', 'truncated', 'unavailable'].includes(v.state as string) || !safe(v.omitted) || !Array.isArray(v.items) || v.items.length > MAX_USAGE_TIMELINE_EVENTS) return false;
+    if (v.state === 'unavailable' ? v.omitted !== 0 || v.items.length !== 0 : v.state === 'available' ? v.omitted !== 0 || v.items.length === 0 : v.omitted === 0) return false;
+    const ids = new Set<string>();
+    let previous = '';
+    for (const item of v.items) {
+        if (!obj(item) || !id(item.id) || ids.has(item.id) || !ids.add(item.id) || !instant(item.startedAt) || !['succeeded', 'failed', 'cancelled', 'incomplete'].includes(item.outcome as string) || (item.outcome === 'incomplete' ? item.durationMs !== null : !safe(item.durationMs))) return false;
+        const order = `${item.startedAt}:${item.id}`;
+        if (order < previous) return false;
+        previous = order;
+        if (item.kind === 'model') {
+            if (!ownKeys(item, ['id', 'kind', 'callId', 'startedAt', 'label', 'provider', 'mode', 'attempt', 'outcome', 'durationMs', 'firstTextMs']) || !id(item.callId) || !label(item.label) || !['firstParty', 'bedrock', 'vertex', 'foundry', 'openai'].includes(item.provider as string) || !['streaming', 'non_streaming'].includes(item.mode as string) || !positive(item.attempt) || (item.firstTextMs !== null && !safe(item.firstTextMs)) || item.mode === 'non_streaming' && item.firstTextMs !== null || item.durationMs !== null && item.firstTextMs !== null && (item.firstTextMs as number) > (item.durationMs as number)) return false;
+        }
+        else if (item.kind === 'tool') {
+            if (!ownKeys(item, ['id', 'kind', 'startedAt', 'label', 'outcome', 'durationMs']) || !label(item.label)) return false;
+        }
+        else return false;
+    }
+    return true;
+}
 function contributor(v: unknown): boolean {
-    if (!obj(v) || !ownKeys(v, ['id', 'engineSessionId', 'project', 'tokens', 'requests', 'results', 'errors', 'rank', 'tokenCost', 'models', 'modelDetail']) || !id(v.id) || (v.engineSessionId !== null && (typeof v.engineSessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.engineSessionId))) || !tokens(v.tokens) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || (v.errors as number) > (v.results as number) || (v.results as number) > (v.requests as number) || !obj(v.rank) || !ownKeys(v.rank, ['tokens', 'requests', 'errors']) || !positive(v.rank.tokens) || !positive(v.rank.requests) || !positive(v.rank.errors) || !tokenCost(v.tokenCost, tokenSum(v.tokens as UsageTokens)) || !Array.isArray(v.models) || !uniqueCategories(v.models, MAX_USAGE_CONTRIBUTOR_MODELS) || !v.models.every(model) || !obj(v.modelDetail) || !ownKeys(v.modelDetail, ['state', 'omitted']) || !['full', 'grouped'].includes(v.modelDetail.state as string) || !safe(v.modelDetail.omitted)) return false;
+    if (!obj(v) || !ownKeys(v, ['id', 'engineSessionId', 'project', 'tokens', 'requests', 'results', 'errors', 'rank', 'tokenCost', 'models', 'modelDetail', 'timeline']) || !id(v.id) || (v.engineSessionId !== null && (typeof v.engineSessionId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v.engineSessionId))) || !tokens(v.tokens) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || (v.errors as number) > (v.results as number) || (v.results as number) > (v.requests as number) || !obj(v.rank) || !ownKeys(v.rank, ['tokens', 'requests', 'errors']) || !positive(v.rank.tokens) || !positive(v.rank.requests) || !positive(v.rank.errors) || !tokenCost(v.tokenCost, tokenSum(v.tokens as UsageTokens)) || !Array.isArray(v.models) || !uniqueCategories(v.models, MAX_USAGE_CONTRIBUTOR_MODELS) || !v.models.every(model) || !obj(v.modelDetail) || !ownKeys(v.modelDetail, ['state', 'omitted']) || !['full', 'grouped'].includes(v.modelDetail.state as string) || !safe(v.modelDetail.omitted) || !timeline(v.timeline)) return false;
     if (v.project !== null && (!obj(v.project) || !ownKeys(v.project, ['id', 'label']) || !id(v.project.id) || !label(v.project.label))) return false;
     if ((v.modelDetail.state === 'full') !== (v.modelDetail.omitted === 0) || ((v.modelDetail.omitted as number) > 0) !== v.models.some(m => obj(m) && m.kind === 'other')) return false;
     const items = v.models as UsageModel[];
@@ -79,8 +143,10 @@ function contributor(v: unknown): boolean {
     return items.every((m) => tokenSum(m.tokens) <= tokenSum(v.tokens as UsageTokens)) && (['fresh', 'read', 'write', 'output'] as const).every(key => items.reduce((n, m) => n + m.tokens[key], 0) === (v.tokens as UsageTokens)[key]) && items.reduce((n, m) => n + m.tokenCost!.pricedTokens, 0) === contributorCost.pricedTokens && close(items.reduce((n, m) => n + m.tokenCost!.usd, 0), contributorCost.usd);
 }
 function day(v: unknown): v is UsageDay {
-    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', ...(v.hourlyTokens === undefined ? [] : ['hourlyTokens']), 'results', 'errors', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
+    if (!obj(v) || !ownKeys(v, ['date', 'hourlyRequests', ...(v.hourlyTokens === undefined ? [] : ['hourlyTokens']), 'results', 'errors', 'tools', 'tokens', 'cacheWriteReporting', 'models', 'sessions', 'records', 'requests', 'contributors']) || !date(v.date) || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.results) || !safe(v.errors) || v.errors > v.results || v.results > v.requests || !Array.isArray(v.tools) || v.tools.length > MAX_USAGE_TOOLS + 2 || !v.tools.every(dayTool) || !Array.isArray(v.models) || v.models.length > MAX_USAGE_MODELS + 2 || !obj(v.contributors) || !ownKeys(v.contributors, ['state', 'omitted', 'items']) || !['full', 'truncated', 'unavailable'].includes(v.contributors.state as string) || !safe(v.contributors.omitted) || !Array.isArray(v.contributors.items) || v.contributors.items.length > MAX_USAGE_DAY_CONTRIBUTORS || !v.contributors.items.every(contributor))
         return false;
+    const dayToolIds = new Set<string>();
+    if (v.tools.some(item => dayToolIds.has(item.id) || !dayToolIds.add(item.id)) || v.tools.reduce((sum, item) => sum + item.requests, 0) !== v.requests || v.tools.reduce((sum, item) => sum + item.results, 0) !== v.results || v.tools.reduce((sum, item) => sum + item.errors, 0) !== v.errors) return false;
     if ((v.cacheWriteReporting === 'unreported' || v.cacheWriteReporting === 'unavailable') && (v.tokens as UsageTokens).write !== 0)
         return false;
     if (!Array.isArray(v.hourlyRequests) || v.hourlyRequests.length !== 24 || !v.hourlyRequests.every(safe) || !sumsSafe(...v.hourlyRequests) || v.hourlyRequests.reduce((n, x) => n + x, 0) !== v.requests) return false;
@@ -99,6 +165,7 @@ function day(v: unknown): v is UsageDay {
         const count = contributors.reduce((n, c) => n + (c[key] as number), 0);
         if (count > (v[key] as number) || v.contributors.state === 'full' && count !== v[key]) return false;
     }
+    if (contributors.some(contributor => ((contributor.timeline as { items: { startedAt: string }[] }).items).some(item => item.startedAt.slice(0, 10) !== v.date))) return false;
     if (contributors.some(c => contributorIds.has(c.id as string) || !contributorIds.add(c.id as string)) || v.contributors.state === 'full' && v.contributors.omitted !== 0 || v.contributors.state === 'truncated' && v.contributors.omitted === 0 || v.contributors.state === 'unavailable' && (v.contributors.items.length !== 0 || v.contributors.omitted !== 0) || contributorTokenBuckets.some((value, index) => value > dayTokenBuckets[index]!) || contributorRequests > (v.requests as number) || v.contributors.state === 'full' && (contributorTokenBuckets.some((value, index) => value !== dayTokenBuckets[index]) || contributorRequests !== v.requests)) return false;
     const ids = new Set<string>();
     const models = v.models;
@@ -120,7 +187,7 @@ function previousPeriod(v: unknown, range: '7d' | '30d', asOf: string): v is Usa
     return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
 }
 function range(v: unknown, asOf: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
     if (all && v.previousPeriod !== undefined) return false;
@@ -132,11 +199,17 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     const end = `${addDays(asOf.slice(0, 10), 1)}T00:00:00.000Z`;
     if (v.startInclusive !== start || v.endExclusive !== end || start >= end || bucketDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000) || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
         return false;
+    const rangeToolIds = new Set((v.tools as UsageTool[]).map(item => item.id));
+    const rangeToolsById = new Map((v.tools as UsageTool[]).map(item => [item.id, item]));
     for (let i = 0; i < v.days.length; i++) {
         const d = v.days[i] as UsageDay;
         if ((v.range === '7d') !== (d.hourlyTokens !== undefined)) return false;
         if (!all && d.date !== addDays(v.startInclusive.slice(0, 10), i)) return false;
         if (all && (d.date < start.slice(0, 10) || d.date >= end.slice(0, 10) || i > 0 && d.date <= (v.days[i - 1] as UsageDay).date || (Date.parse(`${d.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || d.contributors.state !== 'unavailable')) return false;
+        const bucketStart = Date.parse(`${d.date}T00:00:00.000Z`);
+        const bucketEnd = Math.min(bucketStart + bucketDays * 86400000, Date.parse(v.endExclusive as string));
+        if (d.tools.some(tool => !rangeToolIds.has(tool.id) || tool.builds?.items.some(build => Date.parse(build.firstObservedAt) < bucketStart || Date.parse(build.firstObservedAt) >= bucketEnd || Date.parse(build.firstObservedAt) > Date.parse(asOf)))) return false;
+        if (d.contributors.items.some(contributor => contributor.timeline.items.some(item => Date.parse(item.startedAt) > Date.parse(asOf)))) return false;
     }
     if (all && (v.days.length === 0 ? start !== `${asOf.slice(0, 10)}T00:00:00.000Z` : (v.days[0] as UsageDay).date !== start.slice(0, 10))) return false;
     const days = v.days as UsageDay[];
@@ -155,6 +228,11 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     if (days.some(d => d.date === asOf.slice(0, 10) && d.hourlyTokens?.some((count, hour) => hour > Number(asOf.slice(11, 13)) && count !== 0))) return false;
     for (const key of ['results', 'errors'] as const) {
         if (days.reduce((n, d) => n + d[key], 0) !== v.tools.reduce((n, t) => n + t[key], 0)) return false;
+    }
+    for (const id of rangeToolIds) {
+        const expected = rangeToolsById.get(id)!;
+        for (const key of ['requests', 'results', 'errors'] as const)
+            if (days.reduce((sum, item) => sum + (item.tools.find(tool => tool.id === id)?.[key] ?? 0), 0) !== expected[key]) return false;
     }
     const dailyRecords = days.reduce((n, d) => n + d.records, 0);
     const dailySessions = days.reduce((n, d) => n + d.sessions, 0);
@@ -183,10 +261,10 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 6 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 8 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
-    const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'identityConflicts'];
+    const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];
     if (!ownKeys(c, coverageKeys) || (c.state !== 'complete' && c.state !== 'partial') || !coverageKeys.slice(1).every(k => safe(c[k])) || (c.sourcesRead as number) > (c.sourcesDiscovered as number))
         return false;
     const losses = ['parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage'];

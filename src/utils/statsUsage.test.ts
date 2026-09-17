@@ -147,6 +147,76 @@ test('day contributors merge subagent work into its owning session and expose on
     expect(day.sessions).toBe(1);
 });
 
+test('model attempts and tool calls produce retry-aware latency and a bounded session timeline', async () => {
+    const timestamp = '2026-09-13T10:00:00.000Z';
+    const system = (subtype: string, fields: Record<string, unknown>, second: number) => ({ type: 'system', subtype, sessionId: 's', uuid: `${subtype}-${second}-${String(fields.attempt_id ?? fields.tool_use_id)}`, timestamp: `2026-09-13T10:00:${String(second).padStart(2, '0')}.000Z`, ...fields });
+    const identity = (call: string, attempt: string) => ({ schema_version: 1, call_id: call, attempt_id: attempt });
+    const toolRequest = msg(timestamp, 'api', 1, 'tool-a');
+    const rows = [
+        toolRequest,
+        system('model_attempt_start', { ...identity('call-a', 'attempt-a1'), attempt_index: 1, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming' }, 1),
+        system('model_attempt_end', { ...identity('call-a', 'attempt-a1'), outcome: 'failed', duration_ms: 100 }, 2),
+        system('model_attempt_start', { ...identity('call-a', 'attempt-a2'), attempt_index: 2, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming' }, 3),
+        system('model_attempt_first_text', { ...identity('call-a', 'attempt-a2'), duration_ms: 50 }, 4),
+        system('model_attempt_end', { ...identity('call-a', 'attempt-a2'), outcome: 'succeeded', duration_ms: 300 }, 5),
+        system('model_attempt_start', { ...identity('call-b', 'attempt-b1'), attempt_index: 1, provider: 'openai', model: 'gpt-5.6-sol', mode: 'streaming' }, 6),
+        system('tool_execution_start', { schema_version: 1, tool_use_id: 'tool-a' }, 7),
+        system('tool_execution_end', { schema_version: 1, tool_use_id: 'tool-a', outcome: 'succeeded', duration_ms: 80 }, 8),
+        system('tool_execution_start', { schema_version: 1, tool_use_id: 'tool-b' }, 9),
+    ];
+    const snapshot = await collectRetainedUsage([await file(rows)], asOf);
+    const timing = snapshot.ranges['7d'].timing;
+    expect(timing.models).toEqual({
+        state: 'available', logicalCalls: 2, retriedCalls: 1, streamingAttempts: 3,
+        outcomes: { started: 3, succeeded: 1, failed: 1, cancelled: 0, incomplete: 1 },
+        responseDuration: { samples: 1, p50Ms: 300, p95Ms: 300 },
+        firstText: { samples: 1, p50Ms: 50, p95Ms: 50 },
+    });
+    expect(timing.tools).toEqual({
+        state: 'available',
+        outcomes: { started: 2, succeeded: 1, failed: 0, cancelled: 0, incomplete: 1 },
+        duration: { samples: 1, p50Ms: 80, p95Ms: 80 },
+    });
+    const timeline = snapshot.ranges['7d'].days.at(-1)!.contributors.items[0]!.timeline;
+    expect(timeline).toMatchObject({ state: 'available', omitted: 0 });
+    expect(timeline.items).toHaveLength(5);
+    const attempts = timeline.items.filter(item => item.kind === 'model');
+    expect(attempts.map(item => item.kind === 'model' ? item.attempt : 0)).toEqual([1, 2, 1]);
+    expect(new Set(attempts.slice(0, 2).map(item => item.kind === 'model' ? item.callId : ''))).toHaveLength(1);
+    expect(attempts[2]!.outcome).toBe('incomplete');
+    expect(timeline.items.find(item => item.kind === 'tool')).toMatchObject({ label: 'Bash', outcome: 'succeeded', durationMs: 80 });
+    expect(snapshot.coverage.invalidTimings).toBe(0);
+});
+
+test('invalid, orphan, and duplicate timing rows are excluded without degrading usage coverage', async () => {
+    const path = await file([
+        { type: 'system', subtype: 'model_attempt_first_text', sessionId: 's', uuid: 'orphan', timestamp: asOf, schema_version: 1, call_id: 'call', attempt_id: 'missing', duration_ms: 20 },
+        { type: 'system', subtype: 'tool_execution_start', sessionId: 's', uuid: 'invalid', timestamp: asOf, schema_version: 2, tool_use_id: 'tool' },
+        { type: 'system', subtype: 'model_attempt_start', sessionId: 's', uuid: 'first', timestamp: asOf, schema_version: 1, call_id: 'duplicate-call', attempt_id: 'duplicate-attempt', attempt_index: 1, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming' },
+        { type: 'system', subtype: 'model_attempt_start', sessionId: 's', uuid: 'duplicate', timestamp: asOf, schema_version: 1, call_id: 'duplicate-call', attempt_id: 'duplicate-attempt', attempt_index: 1, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming' },
+        { type: 'system', subtype: 'tool_execution_start', sessionId: 's', uuid: 'tool-first', timestamp: asOf, schema_version: 1, tool_use_id: 'duplicate-tool' },
+        { type: 'system', subtype: 'tool_execution_start', sessionId: 's', uuid: 'tool-duplicate', timestamp: asOf, schema_version: 1, tool_use_id: 'duplicate-tool' },
+    ]);
+    const snapshot = await collectRetainedUsage([path], asOf);
+    expect(snapshot.coverage).toMatchObject({ state: 'complete', invalidTimings: 4, identityConflicts: 0 });
+    expect(snapshot.ranges['7d'].timing.models.state).toBe('available');
+    expect(snapshot.ranges['7d'].timing.tools.state).toBe('available');
+});
+
+test('session timelines retain the latest twelve measured events with an omission count', async () => {
+    const rows = Array.from({ length: 14 }, (_, index) => ({
+        type: 'system', subtype: 'model_attempt_start', sessionId: 's',
+        uuid: `start-${index}`,
+        timestamp: `2026-09-13T10:00:${String(index).padStart(2, '0')}.000Z`,
+        schema_version: 1, call_id: 'call', attempt_id: `attempt-${index}`,
+        attempt_index: index + 1, provider: 'firstParty', model: 'claude-sonnet-4-6', mode: 'streaming',
+    }));
+    const timeline = (await collectRetainedUsage([await file(rows)], asOf)).ranges['7d'].days.at(-1)!.contributors.items[0]!.timeline;
+    expect(timeline).toMatchObject({ state: 'truncated', omitted: 2 });
+    expect(timeline.items).toHaveLength(12);
+    expect(timeline.items.map(item => item.kind === 'model' ? item.attempt : 0)).toEqual(Array.from({ length: 12 }, (_, index) => index + 3));
+});
+
 
 test('All includes old retained history, stays sparse across gaps, and excludes future records', async () => {
     const path = await file([

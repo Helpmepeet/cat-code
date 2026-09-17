@@ -175,8 +175,17 @@ See [day-to-session implementation](../reports/2026-09-16-usage-session-drilldow
 Day contributor selection now retains leaders across token, request, and error
 rankings. `src/utils/modelCostRates.ts` supplies exact-ID configured token rates;
 priced subtotals and token coverage survive model grouping and appear in the
-session table. Counting v6 and pricing v1 invalidate old summaries while reusing
-the transcript index. See [measurement contract and remaining timing work](../reports/2026-09-17-usage-measurement-audit.md).
+session table. `UsageToolErrorTrend.tsx` replaces the expanded result breakdown;
+`usageToolErrorTrendState.ts` derives selected-tool series and preserves gaps.
+Per-day tool/build outcomes follow request time through `statsUsage.ts` and
+`usageSummary.ts`. `buildProvenance.ts` and transcript serialization preserve
+recorded Cat Code versions rather than reading the user's project commit.
+`modelAttemptRecorder.ts`, `toolExecution.ts`, and `usageTiming.ts` supply
+metadata-only execution measurements and individual-sample latency summaries.
+`UsageTiming.tsx` renders the Execution timing panel and recent session timelines;
+`usageTimingState.ts` handles interval layout, retry connections, and formatting.
+See [tool trends and timing](../reports/2026-09-17-usage-tool-trends-and-timing.md)
+and the [measurement audit](../reports/2026-09-17-usage-measurement-audit.md).
 `main/usageStatsRunner.ts` owns bounded delivery; `sidecar/usageStatsWorker.ts` calls
 `statsDomain.collectUsageDashboard`, which reuses the stats discovery owner and the
 streaming retained-history accumulator. The account worker no longer collects

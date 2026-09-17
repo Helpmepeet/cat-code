@@ -17,6 +17,7 @@ test('partial estimates stay priced subtotals and distinguish tiny positive valu
         rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { usd: 0.000004, pricedTokens: 9996 },
         models: [{ id: 'model-a', kind: 'named', label: 'Model A', tokens: { fresh: 9996, read: 0, write: 4, output: 0 }, tokenCost: { usd: 0.000004, pricedTokens: 9996 } }],
         modelDetail: { state: 'full', omitted: 0 },
+        timeline: { state: 'unavailable', omitted: 0, items: [] },
     }] };
     const html = renderToStaticMarkup(<UsageSessionContributors contributors={contributors} rows={[]}/>);
     expect(html).toContain('&lt;$0.00001');

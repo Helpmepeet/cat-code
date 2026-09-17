@@ -254,3 +254,41 @@ independent of account initialization. No new inbound operation, source
 transcript field, account access, or frame-size allowance is introduced.
 
 See [implementation and verification](../../reports/2026-09-17-usage-investigation-implementation.md).
+
+## Tool error trends and measured execution, 2026-09-17
+
+The operator subsequently authorized implementing both the execution timeline
+and latency metrics, and replacing the Tools panel's expandable result breakdown
+with selectable tool error-rate lines. Commit markers refer to recorded Cat Code
+builds, not commits in the session's working project.
+
+Per-tool rates retain the existing errors / matched-results denominator and
+request-date attribution. Build-level outcomes also follow the original request,
+including results that arrive on a later day. Several builds may occupy a bucket;
+an observed build marker is neither a deployment timestamp nor proof of causation.
+Unknown versions and bounded omissions remain explicit. The graph preserves
+range-wide category grouping instead of changing the meaning of Other each day.
+
+Fresh transcript records carry running-build provenance, and copied messages
+retain their recorded source version while sessionId/cwd continue to be stamped
+for their destination. SHA-bearing versions identify the recorded base commit;
+dirty builds include local edits beyond that commit. Already-relabelled historical
+copies cannot be repaired retrospectively, so legacy versions are recorded
+provenance rather than independent evidence of the executing binary.
+
+Model measurements cover individual attempts through the shared provider request
+path. Logical-call and attempt identities are newly generated; the conversation's
+previous request ID does not identify retries. First text means the first nonempty
+streamed text delta consumed by that path, not response startup, reasoning, tool
+input, or renderer paint. Nonstreaming requests do not contribute first-text
+latency. Adapter-internal transport activity remains inside the measured attempt.
+Tool intervals cover tool.call, excluding permission and hook waits. A returned
+error result remains an error even when the function resolved normally.
+
+Metadata-only starts and terminal records support measured durations; a retained
+start without an end does not imply success. Monotonic durations remain separate
+from wall-clock placement. Concurrent intervals are not summed into session wall
+time, and latency statistics are derived from individual eligible measurements
+with population/sample information rather than averages of daily percentiles.
+
+See [implementation scope and verification](../../reports/2026-09-17-usage-tool-trends-and-timing.md).

@@ -1,6 +1,26 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { getSessionId, onSessionSwitch } from '../../src/bootstrap/state.js'
 import { init } from '../../src/entrypoints/init.js'
 import { setCodexPromptCacheKey } from '../../src/services/api/codex-fetch-adapter.js'
+import { readSourceBuildId } from '../../src/utils/buildProvenance.js'
+
+const repoRoot = fileURLToPath(new URL('../..', import.meta.url))
+
+function directSourceEngineVersion(): string {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    ) as { version?: unknown }
+    if (typeof pkg.version !== 'string') return 'unknown'
+    const buildId = readSourceBuildId(repoRoot)
+    return buildId === 'unknown'
+      ? 'unknown'
+      : `${pkg.version}-desktop.sha${buildId}`
+  } catch {
+    return 'unknown'
+  }
+}
 
 /**
  * Define the engine's build-metadata global when it is absent, WITHOUT running
@@ -26,7 +46,7 @@ export function ensureEngineMacro(): void {
         }
       }
     ).MACRO = {
-      VERSION: '2.1.87-dev',
+      VERSION: directSourceEngineVersion(),
       BUILD_TIME: new Date().toISOString(),
       PACKAGE_URL: 'claude-code-source-snapshot',
       FEEDBACK_CHANNEL: 'github',

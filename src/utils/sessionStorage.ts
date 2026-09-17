@@ -109,9 +109,49 @@ import type { ContentReplacementRecord } from './toolResultStorage.js'
 import { parseThreadGoal, type ThreadGoal } from './threadGoal.js'
 import { validateUuid } from './uuid.js'
 
-// Cache MACRO.VERSION at module level to work around bun --define bug in async contexts
-// See: https://github.com/oven-sh/bun/issues/26168
-const VERSION = typeof MACRO !== 'undefined' ? MACRO.VERSION : 'unknown'
+// Capture build-time defines at module evaluation to work around bun --define
+// in async contexts (https://github.com/oven-sh/bun/issues/26168). Direct-source
+// desktop sidecars have no define, so their runtime MACRO is resolved lazily
+// instead of freezing `unknown` before initialization.
+function readBundledBuildVersion(): string | undefined {
+  try {
+    // Bun replaces this property access with the build-time literal even
+    // though it does not define a runtime MACRO object.
+    return MACRO.VERSION || undefined
+  } catch {
+    return undefined
+  }
+}
+const bundledBuildVersion = readBundledBuildVersion()
+let runningBuildVersion: string | undefined
+function getRunningBuildVersion(): string {
+  if (runningBuildVersion !== undefined) return runningBuildVersion
+  const runtimeVersion = (
+    globalThis as typeof globalThis & { MACRO?: { VERSION?: string } }
+  ).MACRO?.VERSION
+  const resolved = bundledBuildVersion ?? runtimeVersion
+  if (!resolved) return 'unknown'
+  runningBuildVersion = resolved
+  return runningBuildVersion
+}
+
+function transcriptMessageVersion(message: Message): string {
+  const source = message as Partial<SerializedMessage>
+  if (typeof source.version === 'string' && source.version !== '') {
+    return source.version
+  }
+  // A loaded serialized row is historical even when a legacy/corrupt source
+  // omitted its version. Do not relabel it as if the current build executed it.
+  if (
+    'version' in message ||
+    'sessionId' in message ||
+    'cwd' in message ||
+    'userType' in message
+  ) {
+    return 'unknown'
+  }
+  return getRunningBuildVersion()
+}
 
 type Transcript = (
   | UserMessage
@@ -574,6 +614,7 @@ function appendSystemDiagnostic(
       uuid: randomUUID(),
       timestamp: new Date().toISOString(),
       ...entry,
+      version: getRunningBuildVersion(),
     })
   } catch {
     // Best-effort — don't let diagnostic writes crash the API path.
@@ -681,6 +722,90 @@ export function recordCodexStreamSurface(entry: {
   fallback_error_name?: string
 }): void {
   appendSystemDiagnostic('codex_stream_surface', entry)
+}
+
+export type ModelAttemptMode = 'streaming' | 'non_streaming'
+export type ModelAttemptOutcome =
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+
+type ModelAttemptIdentity = {
+  schema_version: 1
+  call_id: string
+  attempt_id: string
+}
+
+/** Metadata-only provider-attempt start. A retained start without a matching
+ * terminal record is deliberately interpreted as incomplete. */
+export function recordModelAttemptStart(
+  entry: ModelAttemptIdentity & {
+    attempt_index: number
+    provider: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai'
+    model: string
+    mode: ModelAttemptMode
+  },
+  agentId?: AgentId,
+): void {
+  appendSystemDiagnostic('model_attempt_start', entry, {
+    agentId,
+    includeSessionId: true,
+  })
+}
+
+/** First non-empty model text observed by the shared provider stream. */
+export function recordModelAttemptFirstText(
+  entry: ModelAttemptIdentity & { duration_ms: number },
+  agentId?: AgentId,
+): void {
+  appendSystemDiagnostic('model_attempt_first_text', entry, {
+    agentId,
+    includeSessionId: true,
+  })
+}
+
+/** Terminal provider-attempt result. Durations come from a monotonic clock. */
+export function recordModelAttemptEnd(
+  entry: ModelAttemptIdentity & {
+    outcome: ModelAttemptOutcome
+    duration_ms: number
+  },
+  agentId?: AgentId,
+): void {
+  appendSystemDiagnostic('model_attempt_end', entry, {
+    agentId,
+    includeSessionId: true,
+  })
+}
+
+type ToolExecutionIdentity = {
+  schema_version: 1
+  tool_use_id: string
+}
+
+/** Actual tool.call boundary; permission and hook waits are intentionally
+ * outside this interval. A start without an end remains incomplete. */
+export function recordToolExecutionStart(
+  entry: ToolExecutionIdentity,
+  agentId?: AgentId,
+): void {
+  appendSystemDiagnostic('tool_execution_start', entry, {
+    agentId,
+    includeSessionId: true,
+  })
+}
+
+export function recordToolExecutionEnd(
+  entry: ToolExecutionIdentity & {
+    outcome: ModelAttemptOutcome
+    duration_ms: number
+  },
+  agentId?: AgentId,
+): void {
+  appendSystemDiagnostic('tool_execution_end', entry, {
+    agentId,
+    includeSessionId: true,
+  })
 }
 
 /**
@@ -1059,6 +1184,7 @@ export function resetProjectFlushStateForTesting(): void {
  */
 export function resetProjectForTesting(): void {
   project = null
+  runningBuildVersion = undefined
 }
 
 export function setSessionFileForTesting(path: string): void {
@@ -1746,7 +1872,9 @@ class Project {
           entrypoint: getEntrypoint(),
           cwd: getCwd(),
           sessionId,
-          version: VERSION,
+          // Loaded/forked messages carry their source build. Preserve it while
+          // re-stamping session-local identity fields such as cwd/sessionId.
+          version: transcriptMessageVersion(message),
           gitBranch,
           slug,
         }

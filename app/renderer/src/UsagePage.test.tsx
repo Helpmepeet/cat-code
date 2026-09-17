@@ -16,7 +16,7 @@ test('loading, failure and confirmed empty history are distinct; zero prompt is 
     expect(html).toContain('No recorded usage in available history.');
     expect(html).toContain('Not applicable');
     expect(html).toContain('Accessible values table');
-    for (const panel of ['Token flow', 'Model usage', 'Prompt cache', 'Tool activity', 'Token volume by hour'])
+    for (const panel of ['Token flow', 'Model usage', 'Prompt cache', 'Tool activity', 'Execution timing', 'Token volume by hour'])
         expect(html).toContain(panel);
     expect(html).not.toContain('Tokens per Session');
     expect(html).not.toContain('Daily Average');
@@ -50,6 +50,13 @@ test('partial zero history cannot be presented as confirmed inactivity or an unq
     expect(html).not.toContain('No recorded usage in available history');
     expect(html).toContain('Cache share is unavailable');
     expect(html).toContain('A zero does not establish inactivity');
+});
+test('invalid timing records are scoped to timing without making usage history partial', () => {
+    const copy = structuredClone(snapshot);
+    copy.coverage.invalidTimings = 2;
+    const html = renderToStaticMarkup(<UsagePage state={{ snapshot: copy, status: 'ready' }}/>);
+    expect(html).toContain('2 invalid timing records were excluded');
+    expect(html).not.toContain('Partial history');
 });
 test('refresh failure retains original cutoff and range and recovery replaces it', () => {
     const good = reduceUsageDashboard(initialUsageDashboardState, { type: 'usage', version: 1, snapshot });

@@ -12,7 +12,7 @@ import { createAttachmentMessage, getQueuedCommandAttachments } from './attachme
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
 import { releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
 function createRewindContinuationFixture(
   sessionId: string,
@@ -225,6 +225,108 @@ describe('session storage', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'session-storage-'))
     sessionId = randomUUID()
     switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  test('fresh rows use the running build while copied history keeps source provenance', async () => {
+    const macroState = globalThis as typeof globalThis & {
+      MACRO?: { VERSION: string }
+    }
+    const originalMacro = macroState.MACRO
+    delete macroState.MACRO
+    resetProjectForTesting()
+    const beforeRuntimeInitialization = createUserMessage({
+      content: 'before-runtime-initialization',
+    })
+    await recordTranscript([beforeRuntimeInitialization])
+
+    macroState.MACRO = {
+      VERSION: '2.1.87-desktop.shacccccccc-dirty',
+    }
+
+    try {
+      const fresh = createUserMessage({ content: 'fresh' })
+      const copiedWithSource = {
+        ...createUserMessage({ content: 'copied-source' }),
+        cwd: '/source/project',
+        sessionId: 'source-session',
+        userType: 'external',
+        version: '2.1.86-desktop.shaaaaaaaaa',
+      }
+      const copiedGeneric = {
+        ...createUserMessage({ content: 'copied-generic' }),
+        cwd: '/source/project',
+        sessionId: 'source-session',
+        userType: 'external',
+        version: '2.1.87-dev',
+      }
+      const copiedUnknown = {
+        ...createUserMessage({ content: 'copied-unknown' }),
+        cwd: '/source/project',
+        sessionId: 'source-session',
+        userType: 'external',
+        version: 'unknown',
+      }
+      const copiedWithoutVersion = {
+        ...createUserMessage({ content: 'copied-without-version' }),
+        cwd: '/source/project',
+        sessionId: 'source-session',
+        userType: 'external',
+      }
+
+      await recordTranscript([
+        fresh,
+        copiedWithSource,
+        copiedGeneric,
+        copiedUnknown,
+        copiedWithoutVersion,
+      ])
+      recordCodexStreamSurface({
+        transport: 'http',
+        transport_path: 'http',
+        conversation_id_prefix: null,
+        account_id_prefix: null,
+        model: 'gpt-5.6-sol',
+        raw_event_count: 0,
+        raw_event_types: {},
+        had_visible_output: false,
+        had_tool_calls: false,
+        completed: true,
+      })
+      await flushCurrentTranscriptDurably()
+
+      const rows = readFileSync(
+        getTranscriptPathForSession(sessionId),
+        'utf8',
+      )
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      const byUuid = new Map(rows.map(row => [row.uuid, row]))
+
+      expect(byUuid.get(beforeRuntimeInitialization.uuid)?.version).toBe(
+        'unknown',
+      )
+      expect(byUuid.get(fresh.uuid)?.version).toBe(
+        '2.1.87-desktop.shacccccccc-dirty',
+      )
+      expect(byUuid.get(copiedWithSource.uuid)).toMatchObject({
+        version: '2.1.86-desktop.shaaaaaaaaa',
+        sessionId,
+      })
+      expect(byUuid.get(copiedWithSource.uuid)?.cwd).not.toBe(
+        '/source/project',
+      )
+      expect(byUuid.get(copiedGeneric.uuid)?.version).toBe('2.1.87-dev')
+      expect(byUuid.get(copiedUnknown.uuid)?.version).toBe('unknown')
+      expect(byUuid.get(copiedWithoutVersion.uuid)?.version).toBe('unknown')
+      expect(
+        rows.find(row => row.subtype === 'codex_stream_surface')?.version,
+      ).toBe('2.1.87-desktop.shacccccccc-dirty')
+    } finally {
+      if (originalMacro === undefined) delete macroState.MACRO
+      else macroState.MACRO = originalMacro
+      resetProjectForTesting()
+    }
   })
 
   afterEach(async () => {
@@ -1792,6 +1894,104 @@ describe('session storage', () => {
       expect(text).toContain('"subtype":"codex_stream_surface"')
       expect(text).toContain('abc123')
       expect(text).toContain('gpt-5.6-luna')
+    })
+  })
+
+  describe('execution timing diagnostics', () => {
+    test('do not create an orphan transcript', () => {
+      recordModelAttemptStart({
+        schema_version: 1,
+        call_id: 'call-1',
+        attempt_id: 'attempt-1',
+        attempt_index: 1,
+        provider: 'firstParty',
+        model: 'claude-sonnet-4-6',
+        mode: 'streaming',
+      })
+      recordToolExecutionStart({
+        schema_version: 1,
+        tool_use_id: 'tool-1',
+      })
+
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+      expect(readdirSync(tempDir)).toHaveLength(0)
+    })
+
+    test('persist closed metadata-only rows in an owned transcript', async () => {
+      await recordTranscript([
+        createUserMessage({ content: 'real turn', uuid: randomUUID() }),
+      ])
+      await flushSessionStorage()
+
+      const identity = {
+        schema_version: 1 as const,
+        call_id: 'call-1',
+        attempt_id: 'attempt-1',
+      }
+      recordModelAttemptStart({
+        ...identity,
+        attempt_index: 1,
+        provider: 'firstParty',
+        model: 'claude-sonnet-4-6',
+        mode: 'streaming',
+      })
+      recordModelAttemptFirstText({ ...identity, duration_ms: 125 })
+      recordModelAttemptEnd({
+        ...identity,
+        outcome: 'succeeded',
+        duration_ms: 480,
+      })
+      recordToolExecutionStart({
+        schema_version: 1,
+        tool_use_id: 'tool-1',
+      })
+      recordToolExecutionEnd({
+        schema_version: 1,
+        tool_use_id: 'tool-1',
+        outcome: 'failed',
+        duration_ms: 37,
+      })
+
+      const rows = (await Bun.file(
+        getTranscriptPathForSession(sessionId),
+      ).text())
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      const timingRows = rows.filter(row =>
+        String(row.subtype).startsWith('model_attempt_') ||
+        String(row.subtype).startsWith('tool_execution_'),
+      )
+
+      expect(timingRows).toHaveLength(5)
+      expect(timingRows.map(row => row.subtype)).toEqual([
+        'model_attempt_start',
+        'model_attempt_first_text',
+        'model_attempt_end',
+        'tool_execution_start',
+        'tool_execution_end',
+      ])
+      expect(timingRows[0]).toMatchObject({
+        ...identity,
+        attempt_index: 1,
+        provider: 'firstParty',
+        model: 'claude-sonnet-4-6',
+        mode: 'streaming',
+        sessionId,
+      })
+      expect(timingRows[1]).toMatchObject({ ...identity, duration_ms: 125 })
+      expect(timingRows[2]).toMatchObject({
+        ...identity,
+        outcome: 'succeeded',
+        duration_ms: 480,
+      })
+      expect(timingRows[4]).toMatchObject({
+        schema_version: 1,
+        tool_use_id: 'tool-1',
+        outcome: 'failed',
+        duration_ms: 37,
+      })
+      expect(JSON.stringify(timingRows)).not.toContain('real turn')
     })
   })
 

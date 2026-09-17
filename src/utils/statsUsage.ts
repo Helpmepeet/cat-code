@@ -3,10 +3,11 @@ import { basename, dirname, isAbsolute, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { readStatsRecords, type StatsRecord } from './statsReader.js';
 import { usageWindow, usageTimestampEligible } from './usageWindow.js';
-import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod } from '../../app/shared/usageDashboard.js';
+import type { UsageCoverage, UsageDashboardSnapshot, UsageTokens, UsageRangeSummary, UsageSessionContributor, UsageDay, UsagePreviousPeriod, UsageDayTool, UsageToolBuildObservation, UsageExecutionOutcome, UsageTimelineEvent } from '../../app/shared/usageDashboard.js';
 import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
-import { MAX_USAGE_ALL_BUCKETS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
+import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
+import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -36,12 +37,17 @@ function addCost(target: UsageTokenCostEstimate, value: UsageTokenCostEstimate) 
 const record = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const nonempty = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
 const safe = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const buildVersion = (value: unknown): Pick<UsageToolBuildObservation, 'sha' | 'dirty'> | null => {
+    if (typeof value !== 'string') return null;
+    const match = /^\d+\.\d+\.\d+(?:-dev(?:\.\d{8}\.t\d{6})?|-desktop)?\.sha([0-9a-f]{7,40})(-dirty)?$/i.exec(value);
+    return match ? { sha: match[1]!.toLowerCase(), dirty: match[2] === '-dirty' } : null;
+};
 function plus(a: number, b: number): number { const n = a + b; if (!safe(n))
     throw new UsageResourceError('Usage count overflow'); return n; }
 function addTokens(a: UsageTokens, b: UsageTokens) { for (const key of Object.keys(a) as (keyof UsageTokens)[])
     a[key] = plus(a[key], b[key]); if (!safe(total(a)))
     throw new UsageResourceError('Usage total overflow'); }
-export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, identityConflicts: 0 });
+export const emptyUsageCoverage = (): UsageCoverage => ({ state: 'complete', sourcesDiscovered: 0, sourcesRead: 0, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 });
 /** Desktop retained-history accounting; never reads or rewrites legacy aggregate caches. */
 export async function collectRetainedUsage(files: readonly string[], asOf: string, options: {
     deadline?: number;
@@ -76,7 +82,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
         if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], timing: unavailableUsageTiming(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
@@ -97,7 +103,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         let day = s.dayMap.get(date);
         if (!day) {
             reserve(date, 1024);
-            day = { date, hourlyRequests: Array(24).fill(0), results: 0, errors: 0, tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
+            day = { date, hourlyRequests: Array(24).fill(0), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'unavailable', omitted: 0, items: [] } };
             s.dayMap.set(date, day);
             s.summary.days.push(day);
             if (`${date}T00:00:00.000Z` < s.summary.startInclusive) s.summary.startInclusive = `${date}T00:00:00.000Z`;
@@ -110,17 +116,64 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     type ToolValue = {
         name: string | null;
+        build: Pick<UsageToolBuildObservation, 'sha' | 'dirty'> | null;
         timestamp: number;
         session: string;
         date: string;
     };
+    const ensureDayTool = (day: UsageDay, id: string): UsageDayTool => {
+        let tool = day.tools.find(item => item.id === id);
+        if (!tool) {
+            reserve(`${day.date}:${id}:day-tool`, 384);
+            tool = { id, requests: 0, results: 0, errors: 0 };
+            day.tools.push(tool);
+        }
+        return tool;
+    };
+    const addBuildRequest = (tool: UsageDayTool, build: ToolValue['build'], timestamp: number) => {
+        if (!build) return;
+        tool.builds ??= { items: [] };
+        let item = tool.builds.items.find(value => value.sha === build.sha && value.dirty === build.dirty);
+        if (!item) {
+            reserve(`${tool.id}:${build.sha}:${build.dirty}`, 192);
+            item = { ...build, requests: 0, results: 0, errors: 0, firstObservedAt: new Date(timestamp).toISOString() };
+            tool.builds.items.push(item);
+        }
+        item.requests = plus(item.requests, 1);
+        const observed = new Date(timestamp).toISOString();
+        if (observed < item.firstObservedAt) item.firstObservedAt = observed;
+    };
     const usage = options.identities?.map<UsageValue>('usage') ?? new Map<string, UsageValue>();
     const toolLedger = options.identities?.map<ToolValue>('tools') ?? new Map<string, ToolValue>();
     const results = options.identities?.map<{ timestamp: number; error: boolean; counted: boolean }>('results') ?? new Map<string, { timestamp: number; error: boolean; counted: boolean }>();
+    type ModelTiming = MeasuredModelAttempt & {
+        id: string;
+        scope: string;
+        session: string;
+        startedAt: number;
+        date: string;
+        attempt: number;
+        provider: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai';
+        label: string;
+    };
+    type ToolTiming = MeasuredToolExecution & {
+        id: string;
+        scope: string;
+        session: string;
+        startedAt: number;
+        date: string;
+        toolUseId: string;
+    };
+    const modelTimings = new Map<string, ModelTiming>();
+    const toolTimings = new Map<string, ToolTiming>();
     const recordIds = options.identities?.set('records') ?? new Set<string>();
     const sessionMetadata = new Map<string, { projectId: string | null; label: string | null; conflicted: boolean; engineSessionId: string | null }>();
     const contributorSessions = new Map<string, string>();
     const opaqueId = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 32);
+    const timingId = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 16);
+    const timingIdentity = (value: unknown): value is string => nonempty(value) && new TextEncoder().encode(value).byteLength <= 128;
+    const timingOutcome = (value: unknown): value is Exclude<UsageExecutionOutcome, 'incomplete'> => value === 'succeeded' || value === 'failed' || value === 'cancelled';
+    const duration = (value: unknown): value is number => safe(value);
     const sessionUuid = (value: string) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value) ? value : null;
     const ensureContributor = (s: typeof states[number], session: string, date: string): UsageSessionContributor => {
         const key = JSON.stringify([date, session]);
@@ -128,7 +181,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!contributor) {
             reserve(key, 768);
             const meta = sessionMetadata.get(session)!;
-            contributor = { id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), requests: 0, results: 0, errors: 0, tokenCost: zeroCost(), models: [], modelDetail: { state: 'full', omitted: 0 } };
+            contributor = { id: opaqueId(session), engineSessionId: meta.engineSessionId, project: null, tokens: zero(), requests: 0, results: 0, errors: 0, tokenCost: zeroCost(), models: [], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } };
             contributorSessions.set(contributor.id, session);
             s.dailyContributors.set(key, contributor);
             ensureDay(s, date).contributors.items.push(contributor);
@@ -152,6 +205,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const day = ensureDay(s, request.date);
             day.results = plus(day.results, 1);
             if (result.error) day.errors = plus(day.errors, 1);
+            const dayTool = ensureDayTool(day, category(request.name).id);
+            dayTool.results = plus(dayTool.results, 1);
+            if (result.error) dayTool.errors = plus(dayTool.errors, 1);
+            if (request.build) {
+                const build = dayTool.builds!.items.find(item => item.sha === request.build!.sha && item.dirty === request.build!.dirty)!;
+                build.results = plus(build.results, 1);
+                if (result.error) build.errors = plus(build.errors, 1);
+            }
             if (s.summary.range !== 'all') {
                 const contributor = ensureContributor(s, request.session, request.date);
                 contributor.results = plus(contributor.results, 1);
@@ -224,6 +285,89 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
             s.activeDays.add(date);
         }
+        if (row.type === 'system') {
+            if (alreadyRecorded) return;
+            if (row.subtype === 'model_attempt_start') {
+                const valid = row.schema_version === 1 &&
+                    timingIdentity(row.call_id) &&
+                    timingIdentity(row.attempt_id) &&
+                    safe(row.attempt_index) && row.attempt_index > 0 &&
+                    ['firstParty', 'bedrock', 'vertex', 'foundry', 'openai'].includes(String(row.provider)) &&
+                    nonempty(row.model) &&
+                    (row.mode === 'streaming' || row.mode === 'non_streaming');
+                if (!valid) { coverage.invalidTimings++; return; }
+                const key = JSON.stringify([scope, row.attempt_id]);
+                if (modelTimings.has(key)) { coverage.invalidTimings++; return; }
+                reserve(key, 640);
+                modelTimings.set(key, {
+                    id: timingId(`model:${key}`),
+                    scope,
+                    session,
+                    startedAt: timestamp,
+                    date,
+                    callId: row.call_id as string,
+                    attempt: row.attempt_index as number,
+                    provider: row.provider as ModelTiming['provider'],
+                    mode: row.mode as ModelTiming['mode'],
+                    label: category(row.model as string).label,
+                    outcome: 'incomplete',
+                    durationMs: null,
+                    firstTextMs: null,
+                });
+                return;
+            }
+            if (row.subtype === 'model_attempt_first_text') {
+                if (row.schema_version !== 1 || !timingIdentity(row.attempt_id) || !timingIdentity(row.call_id) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
+                const timing = modelTimings.get(JSON.stringify([scope, row.attempt_id]));
+                if (!timing || timing.callId !== row.call_id || timing.mode !== 'streaming' || timing.firstTextMs !== null || timing.durationMs !== null && row.duration_ms > timing.durationMs) {
+                    coverage.invalidTimings++;
+                    return;
+                }
+                timing.firstTextMs = row.duration_ms;
+                return;
+            }
+            if (row.subtype === 'model_attempt_end') {
+                if (row.schema_version !== 1 || !timingIdentity(row.attempt_id) || !timingIdentity(row.call_id) || !timingOutcome(row.outcome) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
+                const timing = modelTimings.get(JSON.stringify([scope, row.attempt_id]));
+                if (!timing || timing.callId !== row.call_id || timing.outcome !== 'incomplete') {
+                    coverage.invalidTimings++;
+                    return;
+                }
+                timing.outcome = row.outcome;
+                timing.durationMs = row.duration_ms;
+                if (timing.firstTextMs !== null && timing.firstTextMs > row.duration_ms) {
+                    timing.firstTextMs = null;
+                    coverage.invalidTimings++;
+                }
+                return;
+            }
+            if (row.subtype === 'tool_execution_start') {
+                if (row.schema_version !== 1 || !timingIdentity(row.tool_use_id)) { coverage.invalidTimings++; return; }
+                const key = JSON.stringify([scope, row.tool_use_id]);
+                if (toolTimings.has(key)) { coverage.invalidTimings++; return; }
+                reserve(key, 448);
+                toolTimings.set(key, {
+                    id: timingId(`tool:${key}`),
+                    scope,
+                    session,
+                    startedAt: timestamp,
+                    date,
+                    toolUseId: row.tool_use_id,
+                    outcome: 'incomplete',
+                    durationMs: null,
+                });
+                return;
+            }
+            if (row.subtype === 'tool_execution_end') {
+                if (row.schema_version !== 1 || !timingIdentity(row.tool_use_id) || !timingOutcome(row.outcome) || !duration(row.duration_ms)) { coverage.invalidTimings++; return; }
+                const timing = toolTimings.get(JSON.stringify([scope, row.tool_use_id]));
+                if (!timing || timing.outcome !== 'incomplete') { coverage.invalidTimings++; return; }
+                timing.outcome = row.outcome;
+                timing.durationMs = row.duration_ms;
+                return;
+            }
+            return;
+        }
         if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
             for (const block of row.message.content) {
                 if (!record(block) || block.type !== 'tool_result' || !nonempty(block.tool_use_id)) continue;
@@ -258,12 +402,16 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     continue;
                 }
                 reserveIdentity(key, 512 + (name?.length ?? 0) * 2 + session.length * 2);
-                toolLedger.set(key, { name, timestamp, session, date });
+                const build = buildVersion(row.version);
+                toolLedger.set(key, { name, build, timestamp, session, date });
                 const cat = category(name);
                 for (const s of eligibleStates) {
                     const day = ensureDay(s, date);
                     s.summary.requests = plus(s.summary.requests, 1);
                     day.requests = plus(day.requests, 1);
+                    const dayTool = ensureDayTool(day, cat.id);
+                    dayTool.requests = plus(dayTool.requests, 1);
+                    addBuildRequest(dayTool, build, timestamp);
                     const hour = new Date(timestamp).getUTCHours();
                     day.hourlyRequests[hour] = plus(day.hourlyRequests[hour]!, 1);
                     if (identified)
@@ -399,6 +547,45 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             coverage.readErrors++;
         }
     }
+    for (const s of states) {
+        const models = [...modelTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
+        const tools = [...toolTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
+        s.summary.timing = summarizeUsageTiming(
+            models.map(timing => ({ ...timing, callId: `${timing.scope}:${timing.callId}` })),
+            tools,
+        );
+        if (s.summary.range === 'all') continue;
+        for (const timing of models) {
+            const contributor = ensureContributor(s, timing.session, timing.date);
+            const event: UsageTimelineEvent = {
+                id: timing.id,
+                kind: 'model',
+                callId: timingId(`${timing.scope}:${timing.callId}`),
+                startedAt: new Date(timing.startedAt).toISOString(),
+                label: timing.label,
+                provider: timing.provider,
+                mode: timing.mode,
+                attempt: timing.attempt,
+                outcome: timing.outcome,
+                durationMs: timing.durationMs,
+                firstTextMs: timing.firstTextMs,
+            };
+            contributor.timeline.items.push(event);
+        }
+        for (const timing of tools) {
+            const contributor = ensureContributor(s, timing.session, timing.date);
+            const request = toolLedger.get(JSON.stringify([timing.scope, ['id', timing.toolUseId]]));
+            const event: UsageTimelineEvent = {
+                id: timing.id,
+                kind: 'tool',
+                startedAt: new Date(timing.startedAt).toISOString(),
+                label: category(request?.name ?? null).label,
+                outcome: timing.outcome,
+                durationMs: timing.durationMs,
+            };
+            contributor.timeline.items.push(event);
+        }
+    }
     coverage.state = coverage.sourcesRead !== coverage.sourcesDiscovered || [coverage.parseErrors, coverage.oversizedRecords, coverage.pendingTailBytes, coverage.shortReads, coverage.changedSources, coverage.readErrors, coverage.invalidTimestamps, coverage.invalidUsage].some(Boolean) ? 'partial' : 'complete';
     for (const s of states) {
         s.summary.days.sort((a, b) => a.date.localeCompare(b.date));
@@ -417,6 +604,13 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const meta = session ? sessionMetadata.get(session) : undefined;
                 if (meta?.projectId && meta.label && !meta.conflicted) contributor.project = { id: meta.projectId, label: meta.label };
                 if (meta?.conflicted) contributor.engineSessionId = null;
+                contributor.timeline.items.sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.id.localeCompare(b.id));
+                if (contributor.timeline.items.length > MAX_USAGE_TIMELINE_EVENTS) {
+                    contributor.timeline.omitted = contributor.timeline.items.length - MAX_USAGE_TIMELINE_EVENTS;
+                    contributor.timeline.items = contributor.timeline.items.slice(-MAX_USAGE_TIMELINE_EVENTS);
+                    contributor.timeline.state = 'truncated';
+                }
+                else if (contributor.timeline.items.length > 0) contributor.timeline.state = 'available';
             }
             if (day.contributors.state !== 'unavailable') {
                 const items = day.contributors.items;
@@ -473,12 +667,37 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const day of all.summary.days) {
             const date = bucketDate(day.date);
             let bucket = buckets.get(date);
-            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
+            if (!bucket) { bucket = { ...day, date, tokens: zero(), requests: 0, results: 0, errors: 0, tools: [], records: 0, sessions: bucketSessions.get(date)?.size ?? 0, hourlyRequests: Array(24).fill(0), models: [], cacheWriteReporting: 'unavailable' }; buckets.set(date, bucket); }
             addTokens(bucket.tokens, day.tokens);
             bucket.requests = plus(bucket.requests, day.requests);
             bucket.results = plus(bucket.results, day.results);
             bucket.errors = plus(bucket.errors, day.errors);
             bucket.records = plus(bucket.records, day.records);
+            for (const tool of day.tools) {
+                const grouped = ensureDayTool(bucket, tool.id);
+                grouped.requests = plus(grouped.requests, tool.requests);
+                grouped.results = plus(grouped.results, tool.results);
+                grouped.errors = plus(grouped.errors, tool.errors);
+                if (!tool.builds) continue;
+                grouped.builds ??= { items: [] };
+                if (tool.builds.omitted) {
+                    grouped.builds.omitted ??= { count: 0, requests: 0, results: 0, errors: 0 };
+                    grouped.builds.omitted.count = plus(grouped.builds.omitted.count, tool.builds.omitted.count);
+                    grouped.builds.omitted.requests = plus(grouped.builds.omitted.requests, tool.builds.omitted.requests);
+                    grouped.builds.omitted.results = plus(grouped.builds.omitted.results, tool.builds.omitted.results);
+                    grouped.builds.omitted.errors = plus(grouped.builds.omitted.errors, tool.builds.omitted.errors);
+                }
+                for (const build of tool.builds.items) {
+                    let item = grouped.builds.items.find(value => value.sha === build.sha && value.dirty === build.dirty);
+                    if (!item) { item = { ...build }; grouped.builds.items.push(item); }
+                    else {
+                        item.requests = plus(item.requests, build.requests);
+                        item.results = plus(item.results, build.results);
+                        item.errors = plus(item.errors, build.errors);
+                        if (build.firstObservedAt < item.firstObservedAt) item.firstObservedAt = build.firstObservedAt;
+                    }
+                }
+            }
             for (let hour = 0; hour < 24; hour++) bucket.hourlyRequests[hour] = plus(bucket.hourlyRequests[hour]!, day.hourlyRequests[hour]!);
             for (const model of day.models) {
                 const existing = bucket.models.find(item => item.id === model.id);
@@ -490,5 +709,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
     }
-    return { version: 1, metricVersion: 1, countingVersion: 6, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 8, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

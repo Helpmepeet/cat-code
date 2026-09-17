@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import type { UsageDayContributors } from '../../shared/usageDashboard.js';
 import { resolveSessionOpenRoute, type MergedSessionRow } from './sessionsCatalogState.js';
 import { usageCompact, usageNumber, usageTotal } from './usageDashboardState.js';
 import { findUsageSessionRow } from './usageSessionNavigation.js';
+import { UsageSessionTimelineView } from './UsageTiming.js';
 
 type ContributorSort = 'tokens' | 'requests' | 'errors' | 'cost';
 
@@ -37,6 +38,7 @@ export function UsageSessionContributors({ contributors, rows, onOpenRow }: {
     onOpenRow?: (row: MergedSessionRow) => void;
 }) {
     const [sort, setSort] = useState<ContributorSort>('tokens');
+    const [expandedTimeline, setExpandedTimeline] = useState<string | null>(null);
     if (contributors.state === 'unavailable') return <p className="usage-note">Session details are unavailable for this day.</p>;
     if (contributors.state === 'truncated' && !contributors.items.length) return <p className="usage-note">Details for {usageNumber(contributors.omitted)} contributing sessions are unavailable. Day totals include their usage.</p>;
     if (!contributors.items.length) return <p className="usage-note">No contributing sessions were recorded for this day.</p>;
@@ -44,19 +46,22 @@ export function UsageSessionContributors({ contributors, rows, onOpenRow }: {
     const leaderCount = guaranteedLeaders(contributors);
     return <>
         <div className="usage-contributors-toolbar"><label>Sort shown sessions <select value={sort} onChange={event => setSort(event.target.value as ContributorSort)}><option value="tokens">Tokens</option><option value="requests">Tool requests</option><option value="errors">Recorded errors</option><option value="cost">Est. token cost</option></select></label></div>
-        <div className="usage-table-scroll"><table className="usage-session-table"><thead><tr><th scope="col">Session</th><th scope="col">Models</th><th scope="col">Tokens</th><th scope="col">Est. token cost</th><th scope="col">Tool requests</th><th scope="col">Errors</th><th scope="col"><span className="sr-only">Open session</span></th></tr></thead>
-            <tbody>{items.map(item => {
+        <div className="usage-table-scroll"><table className="usage-session-table"><thead><tr><th scope="col">Session</th><th scope="col">Models</th><th scope="col">Tokens</th><th scope="col">Est. token cost</th><th scope="col">Tool requests</th><th scope="col">Errors</th><th scope="col"><span className="sr-only">Session actions</span></th></tr></thead>
+            <tbody>{items.map((item, index) => {
                 const row = findUsageSessionRow(item, rows);
                 const openable = row && onOpenRow && resolveSessionOpenRoute(row).kind !== 'none';
-                return <tr key={item.id}>
+                const timelineId = `usage-session-timeline-${index}`;
+                const timeline = item.timeline ?? { state: 'unavailable' as const, omitted: 0, items: [] };
+                const expanded = expandedTimeline === item.id;
+                return <Fragment key={item.id}><tr>
                     <th scope="row"><span className="usage-session-title">{row?.displayLabel ?? (item.engineSessionId ? `Session ${item.engineSessionId.slice(0, 8)}` : 'Unidentified session')}</span><small className="usage-session-project">{item.project?.label ?? 'Project unavailable'}</small></th>
                     <td>{item.models.length ? <details className="usage-session-models"><summary>{item.models.length === 1 ? item.models[0]!.label : `${item.models.length} model groups`}</summary>{item.models.map(model => <p key={model.id}>{model.label}: {usageCompact(usageTotal(model.tokens))} · <TokenCost usd={model.tokenCost?.usd} pricedTokens={model.tokenCost?.pricedTokens} totalTokens={usageTotal(model.tokens)}/></p>)}{item.modelDetail.omitted > 0 && <p>Other includes {item.modelDetail.omitted} model names.</p>}</details> : <span className="usage-note">No model tokens</span>}</td>
                     <td title={`${usageNumber(usageTotal(item.tokens))} tokens`}>{usageCompact(usageTotal(item.tokens))}</td>
                     <td><TokenCost usd={item.tokenCost?.usd} pricedTokens={item.tokenCost?.pricedTokens} totalTokens={usageTotal(item.tokens)}/></td>
                     <td>{usageNumber(item.requests)}</td>
                     <td title={`${usageNumber(item.results)} matched results`}>{usageNumber(item.errors)}</td>
-                    <td>{openable ? <button className="usage-session-open" type="button" aria-label={`Open ${row.displayLabel}`} onClick={() => onOpenRow(row)}>Open</button> : <span className="usage-note" title="This session could not be matched to an available conversation.">Unavailable</span>}</td>
-                </tr>;
+                    <td><div className="usage-session-actions"><button className="usage-session-timeline-toggle" type="button" aria-expanded={expanded} aria-controls={timelineId} onClick={() => setExpandedTimeline(expanded ? null : item.id)}>Timeline</button>{openable ? <button className="usage-session-open" type="button" aria-label={`Open ${row.displayLabel}`} onClick={() => onOpenRow(row)}>Open</button> : <span className="usage-note" title="This session could not be matched to an available conversation.">Unavailable</span>}</div></td>
+                </tr>{expanded && <tr className="usage-session-timeline-row"><td colSpan={7}><div id={timelineId}><UsageSessionTimelineView timeline={timeline}/></div></td></tr>}</Fragment>;
             })}</tbody></table></div>
         {contributors.state === 'truncated' && <p className="usage-note">Showing {items.length} sessions{leaderCount > 0 ? `, including the top ${leaderCount} by tokens, tool requests, and recorded errors` : ''}. Sorting applies to shown sessions. {usageNumber(contributors.omitted)} more are not shown; day totals include all recorded usage.</p>}
         <p className="usage-note">Estimated token costs use configured standard API rates for recorded fresh input, cache reads, and output. Cache writes, unknown models, speed premiums, and server search charges are excluded; estimates are not actual spend.</p>

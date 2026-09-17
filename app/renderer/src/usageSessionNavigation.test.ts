@@ -7,6 +7,7 @@ const contributor: UsageSessionContributor = {
     id: 'a', engineSessionId: 'session', project: { id: usageProjectId('/work/project'), label: 'project' },
     tokens: { fresh: 1, read: 0, write: 0, output: 0 }, requests: 0, results: 0, errors: 0,
     models: [], modelDetail: { state: 'full', omitted: 0 },
+    timeline: { state: 'unavailable', omitted: 0, items: [] },
 };
 test('session attribution joins project and session, never the first imported copy', () => {
     const correct = { sessionId: 'session', cwd: '/work/project' };

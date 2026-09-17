@@ -6,8 +6,10 @@ export const MAX_USAGE_RECORD_BYTES = 256 * 1024;
 export const MAX_USAGE_LABEL_BYTES = 160;
 export const MAX_USAGE_MODELS = 8;
 export const MAX_USAGE_TOOLS = 10;
+export const MAX_USAGE_TOOL_BUILDS_PER_DAY = 8;
 export const MAX_USAGE_DAY_CONTRIBUTORS = 20;
 export const MAX_USAGE_CONTRIBUTOR_MODELS = 4;
+export const MAX_USAGE_TIMELINE_EVENTS = 12;
 /** Stable join key for a canonical cwd already present in the session catalog. */
 export function usageProjectId(cwd: string): string {
     const value = cwd.replace(/[\\/]+$/, '');
@@ -50,6 +52,79 @@ export type UsageTool = UsageCategory & {
     results: number;
     errors: number;
 };
+export type UsageToolBuildObservation = {
+    /** Commit recorded by the Cat Code build that wrote the tool request. */
+    sha: string;
+    dirty: boolean;
+    requests: number;
+    results: number;
+    errors: number;
+    /** First retained request observed for this build in the day or bucket. */
+    firstObservedAt: string;
+};
+export type UsageDayTool = {
+    id: string;
+    requests: number;
+    results: number;
+    errors: number;
+    /** Absent when no SHA-bearing build identity was retained. */
+    builds?: {
+        items: UsageToolBuildObservation[];
+        omitted?: { count: number; requests: number; results: number; errors: number };
+    };
+};
+export type UsageExecutionOutcome = 'succeeded' | 'failed' | 'cancelled' | 'incomplete';
+export type UsageTimelineEvent = {
+    id: string;
+    startedAt: string;
+    outcome: UsageExecutionOutcome;
+    durationMs: number | null;
+} & ({
+    kind: 'model';
+    /** Opaque per-session correlation key shared by replay attempts. */
+    callId: string;
+    label: string;
+    provider: 'firstParty' | 'bedrock' | 'vertex' | 'foundry' | 'openai';
+    mode: 'streaming' | 'non_streaming';
+    attempt: number;
+    firstTextMs: number | null;
+} | {
+    kind: 'tool';
+    label: string;
+});
+export type UsageSessionTimeline = {
+    state: 'available' | 'truncated' | 'unavailable';
+    omitted: number;
+    items: UsageTimelineEvent[];
+};
+export type UsageDurationSummary = {
+    samples: number;
+    p50Ms: number | null;
+    p95Ms: number | null;
+};
+export type UsageTimingOutcomes = {
+    started: number;
+    succeeded: number;
+    failed: number;
+    cancelled: number;
+    incomplete: number;
+};
+export type UsageTimingSummary = {
+    models: {
+        state: 'available' | 'unavailable';
+        logicalCalls: number;
+        retriedCalls: number;
+        streamingAttempts: number;
+        outcomes: UsageTimingOutcomes;
+        responseDuration: UsageDurationSummary;
+        firstText: UsageDurationSummary;
+    };
+    tools: {
+        state: 'available' | 'unavailable';
+        outcomes: UsageTimingOutcomes;
+        duration: UsageDurationSummary;
+    };
+};
 export type UsageSessionContributor = {
     id: string;
     engineSessionId: string | null;
@@ -64,6 +139,7 @@ export type UsageSessionContributor = {
     tokenCost?: UsageTokenCostEstimate;
     models: UsageModel[];
     modelDetail: { state: 'full' | 'grouped'; omitted: number };
+    timeline: UsageSessionTimeline;
 };
 export type UsageDayContributors = {
     state: 'full' | 'truncated' | 'unavailable';
@@ -77,6 +153,8 @@ export type UsageDay = {
     /** Recorded outcomes matched to requests in this day or bucket. */
     results: number;
     errors: number;
+    /** Per-tool outcomes attributed to request time, after range-wide grouping. */
+    tools: UsageDayTool[];
     date: string;
     tokens: UsageTokens;
     cacheWriteReporting: 'reported' | 'partial' | 'unreported' | 'unavailable';
@@ -120,6 +198,7 @@ export type UsageRangeSummary = {
     days: UsageDay[];
     models: UsageModel[];
     tools: UsageTool[];
+    timing: UsageTimingSummary;
     detail: {
         state: 'full' | 'grouped' | 'summary-only';
         omittedModels: number;
@@ -138,12 +217,13 @@ export type UsageCoverage = {
     readErrors: number;
     invalidTimestamps: number;
     invalidUsage: number;
+    invalidTimings: number;
     identityConflicts: number;
 };
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 6;
+    countingVersion: 8;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';

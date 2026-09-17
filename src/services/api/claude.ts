@@ -112,6 +112,11 @@ import {
 } from './instructionAssembly.js'
 import { CodexResponseFailedError } from './codex-fetch-adapter.js'
 import {
+  createModelCallRecorder,
+  type ModelAttempt,
+  type ModelCallRecorder,
+} from './modelAttemptRecorder.js'
+import {
   CodexPartialStreamReplaySkippedError,
   isCodexPartialStreamReplaySkippedError,
 } from './errorUtils.js'
@@ -995,6 +1000,8 @@ export async function* executeNonStreamingRequest(
   paramsFromContext: (context: RetryContext) => BetaMessageStreamParams,
   onAttempt: (attempt: number, start: number, maxOutputTokens: number) => void,
   captureRequest: (params: BetaMessageStreamParams) => void,
+  modelCallRecorder: ModelCallRecorder,
+  requestProvider: APIProvider,
   /**
    * Request ID of the failed streaming attempt this fallback is recovering
    * from. Emitted in tengu_nonstreaming_fallback_error for funnel correlation.
@@ -1018,6 +1025,11 @@ export async function* executeNonStreamingRequest(
       const retryParams = paramsFromContext(context)
       captureRequest(retryParams)
       onAttempt(attempt, start, retryParams.max_tokens)
+      const recordedAttempt = modelCallRecorder.startAttempt({
+        model: context.model,
+        provider: requestProvider,
+        mode: 'non_streaming',
+      })
 
       const adjustedParams = adjustParamsForNonStreaming(
         retryParams,
@@ -1026,7 +1038,7 @@ export async function* executeNonStreamingRequest(
 
       try {
         // biome-ignore lint/plugin: non-streaming API call
-        return await anthropic.beta.messages.create(
+        const result = await anthropic.beta.messages.create(
           {
             ...adjustedParams,
             model: normalizeModelStringForAPI(adjustedParams.model),
@@ -1036,7 +1048,14 @@ export async function* executeNonStreamingRequest(
             timeout: fallbackTimeoutMs,
           },
         )
+        recordedAttempt.end('succeeded')
+        return result
       } catch (err) {
+        recordedAttempt.end(
+          err instanceof APIUserAbortError || retryOptions.signal.aborted
+            ? 'cancelled'
+            : 'failed',
+        )
         // User aborts are not errors — re-throw immediately without logging
         if (err instanceof APIUserAbortError) throw err
 
@@ -1228,6 +1247,7 @@ async function* queryModel(
   const previousRequestId = getPreviousRequestIdFromMessages(messages)
 
   const requestProvider = resolveRequestProvider(options.model, options.provider)
+  const modelCallRecorder = createModelCallRecorder({ agentId: options.agentId })
   const registeredQueryLease =
     requestProvider === 'openai' &&
     options.agentId &&
@@ -1746,6 +1766,7 @@ async function* queryModel(
   let clientRequestId: string | undefined = undefined
   // eslint-disable-next-line eslint-plugin-n/no-unsupported-features/node-builtins -- Response is available in Node 18+ and is used by the SDK
   let streamResponse: Response | undefined = undefined
+  let activeStreamingAttempt: ModelAttempt | undefined
 
   // Release all stream resources to prevent native memory leaks.
   // The Response object holds native TLS/socket buffers that live outside the
@@ -2094,21 +2115,38 @@ async function* queryModel(
             ? randomUUID()
             : undefined
 
+        const recordedAttempt = modelCallRecorder.startAttempt({
+          model: context.model,
+          provider: requestProvider,
+          mode: 'streaming',
+        })
+        activeStreamingAttempt = recordedAttempt
+
         // Use raw stream instead of BetaMessageStream to avoid O(n²) partial JSON parsing
         // BetaMessageStream calls partialParse() on every input_json_delta, which we don't need
         // since we handle tool input accumulation ourselves
         // biome-ignore lint/plugin: main conversation loop handles attribution separately
-        const result = await anthropic.beta.messages
-          .create(
-            { ...params, stream: true },
-            {
-              signal,
-              ...(clientRequestId && {
-                headers: { [CLIENT_REQUEST_ID_HEADER]: clientRequestId },
-              }),
-            },
+        let result
+        try {
+          result = await anthropic.beta.messages
+            .create(
+              { ...params, stream: true },
+              {
+                signal,
+                ...(clientRequestId && {
+                  headers: { [CLIENT_REQUEST_ID_HEADER]: clientRequestId },
+                }),
+              },
+            )
+            .withResponse()
+        } catch (error) {
+          recordedAttempt.end(
+            error instanceof APIUserAbortError || signal.aborted
+              ? 'cancelled'
+              : 'failed',
           )
-          .withResponse()
+          throw error
+        }
         queryCheckpoint('query_response_headers_received')
         streamRequestId = result.request_id
         streamResponse = result.response
@@ -2444,6 +2482,7 @@ async function* queryModel(
                     throw new Error('Content block is not a text block')
                   }
                   noteFirstVisibleOutput('content_block_delta', 'text')
+                  activeStreamingAttempt?.noteFirstText(delta.text)
                   contentBlock.text += delta.text
                   break
                 case 'signature_delta':
@@ -2765,7 +2804,13 @@ async function* queryModel(
         // Store headers for gateway detection
         responseHeaders = resp.headers
       }
+      activeStreamingAttempt?.end('succeeded')
     } catch (streamingError) {
+      activeStreamingAttempt?.end(
+        streamingError instanceof APIUserAbortError || signal.aborted
+          ? 'cancelled'
+          : 'failed',
+      )
       // Clear the idle timeout watchdog on error path too
       clearStreamIdleTimers()
 
@@ -2956,6 +3001,8 @@ async function* queryModel(
           maxOutputTokens = tokens
         },
         params => captureAPIRequest(params, options.querySource),
+        modelCallRecorder,
+        requestProvider,
         streamRequestId,
       )
 
@@ -3066,6 +3113,8 @@ async function* queryModel(
             maxOutputTokens = tokens
           },
           params => captureAPIRequest(params, options.querySource),
+          modelCallRecorder,
+          requestProvider,
           failedRequestId,
         )
 
@@ -3223,6 +3272,9 @@ async function* queryModel(
       return
     }
   } finally {
+    if (activeStreamingAttempt && !activeStreamingAttempt.isEnded()) {
+      activeStreamingAttempt.end('cancelled')
+    }
     stopSessionActivity('api_call')
     // Must be in the finally block: if the generator is terminated early
     // via .return() (e.g. consumer breaks out of for-await-of, or query.ts

@@ -1,5 +1,7 @@
 import { chmodSync, existsSync, mkdirSync } from 'fs'
 import { dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { readSourceBuildId } from '../src/utils/buildProvenance.js'
 
 const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() as {
   name: string
@@ -9,6 +11,7 @@ const pkg = await Bun.file(new URL('../package.json', import.meta.url)).json() a
 const args = process.argv.slice(2)
 const compile = args.includes('--compile')
 const dev = args.includes('--dev')
+const repoRoot = fileURLToPath(new URL('..', import.meta.url))
 
 const fullExperimentalFeatures = [
   'AGENT_MEMORY_SNAPSHOT',
@@ -54,7 +57,7 @@ const fullExperimentalFeatures = [
 function runCommand(cmd: string[]): string | null {
   const proc = Bun.spawnSync({
     cmd,
-    cwd: process.cwd(),
+    cwd: repoRoot,
     stdout: 'pipe',
     stderr: 'pipe',
   })
@@ -70,8 +73,8 @@ function getDevVersion(baseVersion: string): string {
   const timestamp = new Date().toISOString()
   const date = timestamp.slice(0, 10).replaceAll('-', '')
   const time = timestamp.slice(11, 19).replaceAll(':', '')
-  const sha = runCommand(['git', 'rev-parse', '--short=8', 'HEAD']) ?? 'unknown'
-  return `${baseVersion}-dev.${date}.t${time}.sha${sha}`
+  const buildId = readSourceBuildId(repoRoot)
+  return `${baseVersion}-dev.${date}.t${time}.sha${buildId}`
 }
 
 function getVersionChangelog(): string {

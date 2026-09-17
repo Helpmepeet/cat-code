@@ -3,21 +3,27 @@ import { MAX_USAGE_LABEL_BYTES, MAX_USAGE_RECORD_BYTES } from './usageDashboard.
 import { parseUsageCollectionLine, parseUsageCollectionResult } from './usageStatsWorker.js';
 const tokens = { fresh: 4, read: 2, write: 1, output: 3 };
 const tokenCost = { usd: 0.00006, pricedTokens: 10 };
+const timing = { models: { state: 'unavailable', logicalCalls: 0, retriedCalls: 0, streamingAttempts: 0, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, responseDuration: { samples: 0, p50Ms: null, p95Ms: null }, firstText: { samples: 0, p50Ms: null, p95Ms: null } }, tools: { state: 'unavailable', outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, duration: { samples: 0, p50Ms: null, p95Ms: null } } };
 function snapshot(label = 'Model'): Record<string, unknown> {
     const usageTokens = { ...tokens };
     const days = Array.from({ length: 30 }, (_, i) => {
         const d = new Date('2026-08-15T00:00:00.000Z');
         d.setUTCDate(d.getUTCDate() + i);
-        return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, hourlyRequests: Array.from({ length: 24 }, (_, hour) => i === 29 && hour === 12 ? 3 : 0), tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 } }] : [] } };
+        return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], hourlyRequests: Array.from({ length: 24 }, (_, hour) => i === 29 && hour === 12 ? 3 : 0), tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
     });
-    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
-    return { version: 1, metricVersion: 1, countingVersion: 6, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hourlyTokens: Array.from({ length: 24 }, (_, hour) => index === 6 && hour === 12 ? 10 : 0) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
+    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
+    return { version: 1, metricVersion: 1, countingVersion: 8, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hourlyTokens: Array.from({ length: 24 }, (_, hour) => index === 6 && hour === 12 ? 10 : 0) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
 }
 function usage(over: Record<string, unknown> = {}) { return { type: 'usage', version: 1, snapshot: { ...snapshot(), ...over } }; }
 test('accepts a valid three-range snapshot and JSON line', () => {
     const value = usage();
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
     expect(parseUsageCollectionLine(JSON.stringify(value))?.type).toBe('usage');
+});
+test('accepts excluded timing records without marking token and tool coverage partial', () => {
+    const value = usage();
+    (value.snapshot as any).coverage.invalidTimings = 2;
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
 });
 test('rejects unknown keys, versions, counts, ratios, and grouping collisions', () => {
     const base = usage();
@@ -105,6 +111,42 @@ test('rejects inconsistent hourly cells and impossible tool outcomes', () => {
         mutate(value);
         expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })).toBeNull();
     }
+});
+
+test('rejects impossible residual outcomes after build attribution', () => {
+    const value = snapshot() as any;
+    value.ranges['7d'].days.at(-1).tools[0].builds = { items: [{
+        sha: 'abcdef1', dirty: false, requests: 2, results: 2, errors: 0,
+        firstObservedAt: '2026-09-13T12:00:00.000Z',
+    }] };
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })).toBeNull();
+});
+
+test('accepts bounded timing data and rejects contradictory timeline measurements', () => {
+    const value = snapshot() as any;
+    value.ranges['7d'].timing.models = {
+        state: 'available', logicalCalls: 1, retriedCalls: 0, streamingAttempts: 1,
+        outcomes: { started: 1, succeeded: 1, failed: 0, cancelled: 0, incomplete: 0 },
+        responseDuration: { samples: 1, p50Ms: 300, p95Ms: 300 },
+        firstText: { samples: 1, p50Ms: 50, p95Ms: 50 },
+    };
+    value.ranges['7d'].days.at(-1).contributors.items[0].timeline = {
+        state: 'available', omitted: 0, items: [{
+            id: 'attempt-a', kind: 'model', callId: 'call-a',
+            startedAt: '2026-09-13T12:00:00.000Z', label: 'Model',
+            provider: 'firstParty', mode: 'streaming', attempt: 1,
+            outcome: 'succeeded', durationMs: 300, firstTextMs: 50,
+        }],
+    };
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })?.type).toBe('usage');
+    const impossibleAggregate = structuredClone(value);
+    impossibleAggregate.ranges['7d'].timing.models.logicalCalls = 0;
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: impossibleAggregate })).toBeNull();
+    const misplaced = structuredClone(value);
+    misplaced.ranges['7d'].days.at(-1).contributors.items[0].timeline.items[0].startedAt = '2026-09-12T12:00:00.000Z';
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: misplaced })).toBeNull();
+    value.ranges['7d'].days.at(-1).contributors.items[0].timeline.items[0].mode = 'non_streaming';
+    expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })).toBeNull();
 });
 
 test('validates contributor bounds, reconciliation, and truthful truncation metadata', () => {
