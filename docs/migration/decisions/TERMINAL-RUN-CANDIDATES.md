@@ -1,8 +1,9 @@
 # Terminal Run: candidates and authorization
 
 Date: 2026-09-17
-Status: Proposed implementation contract. Not implemented and not an amendment
-to the active security baseline by itself.
+Status: Historical interactive proposal, superseded for the first release by the
+[non-interactive plan](../../plans/2026-09-17-non-interactive-code-block-run.md).
+Not implemented; not an amendment to the active security baseline.
 
 Parent: [implementation plan](../../plans/2026-09-17-interactive-code-block-run.md).
 

@@ -1,8 +1,9 @@
 # Terminal Run: journal, limits, and recovery
 
 Date: 2026-09-17
-Status: Proposed implementation contract. Values below are initial engineering
-defaults, not existing application settings. Not implemented.
+Status: Historical interactive proposal, superseded for the first release by the
+[non-interactive plan](../../plans/2026-09-17-non-interactive-code-block-run.md).
+Values below are proposed defaults, not existing settings. Not implemented.
 
 Parent: [implementation plan](../../plans/2026-09-17-interactive-code-block-run.md).
 

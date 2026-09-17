@@ -1,7 +1,9 @@
 # Terminal Run: non-waking agent output
 
 Date: 2026-09-17
-Status: Proposed implementation contract. Not implemented.
+Status: Historical interactive proposal, superseded for the first release by the
+[non-interactive plan](../../plans/2026-09-17-non-interactive-code-block-run.md).
+Not implemented.
 
 Parent: [implementation plan](../../plans/2026-09-17-interactive-code-block-run.md).
 

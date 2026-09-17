@@ -1,8 +1,9 @@
 # Interactive Run for command blocks
 
 Date: 2026-09-17
-Status: Revised after source-based review. Proposed contracts are concrete;
-implementation and runtime verification have not started.
+Status: Superseded for the first release by the
+[non-interactive plan](2026-09-17-non-interactive-code-block-run.md).
+Retained as a historical interactive proposal; not implemented.
 
 ## User-visible behavior
 
