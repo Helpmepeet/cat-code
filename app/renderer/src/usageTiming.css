@@ -6,11 +6,7 @@
 .usage-latency-metric dt { color:var(--usage-muted); font:10px var(--font-mono); text-transform:uppercase; }
 .usage-latency-metric dd,.usage-latency-metric > strong { margin:0; color:var(--color-text-primary); font:500 20px var(--font-mono); letter-spacing:-.025em; }
 .usage-latency-metric > strong { display:block; font-size:14px; }
-.usage-latency-metric p { margin:10px 0 0; color:var(--usage-muted); font-size:11px; }
-.usage-timing-accounting { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr); gap:12px 24px; margin:14px 0 8px; }
-.usage-timing-accounting p { display:flex; flex-wrap:wrap; gap:5px 14px; margin:0; color:var(--usage-secondary); font-size:11px; }
-.usage-timing-accounting strong { color:var(--color-text-primary); font-weight:500; }
-.usage-timing-outcomes { grid-column:1; }
+.usage-latency-samples { margin:10px 0 0; color:var(--usage-muted); font-size:11px; }
 .usage-session-actions { display:flex; align-items:center; justify-content:flex-end; gap:6px; }
 .usage-session-actions .usage-session-open { white-space:nowrap; }
 .usage-session-timeline-toggle { border:1px solid var(--color-shell-seam); border-radius:5px; padding:5px 10px; color:var(--color-text-primary); font-size:12px; cursor:pointer; white-space:nowrap; }
@@ -35,4 +31,4 @@
 .usage-timeline-list strong { font-weight:500; }
 .usage-timeline-list small { display:block; margin-top:3px; color:var(--usage-muted); font:10px var(--font-mono); overflow-wrap:anywhere; }
 .usage-timeline-key { width:8px; height:8px; margin-top:3px; border-radius:3px; }
-@media(max-width:760px) { .usage-latency-grid,.usage-timing-accounting,.usage-timeline-list { grid-template-columns:minmax(0,1fr); } .usage-timing-outcomes { grid-column:auto; } }
+@media(max-width:760px) { .usage-latency-grid,.usage-timeline-list { grid-template-columns:minmax(0,1fr); } }

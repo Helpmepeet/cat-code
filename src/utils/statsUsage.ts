@@ -709,5 +709,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
     }
-    return { version: 1, metricVersion: 1, countingVersion: 8, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 9, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

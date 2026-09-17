@@ -25,17 +25,20 @@ const timeline: UsageSessionTimeline = {
     ],
 };
 
-test('latency panel names populations and reports retained outcomes', () => {
+test('latency panel keeps populations accurate without explanatory clutter', () => {
     const html = renderToStaticMarkup(<UsageLatencyPanel timing={timing} invalidTimings={2}/>);
     expect(html).toContain('First text');
-    expect(html).toContain('Nonempty streamed text · 2 samples');
-    expect(html).toContain('Successful model attempts only · 3 samples');
-    expect(html).toContain('Successful tool runs only · 2 samples');
-    expect(html).toContain('6 model attempts');
-    expect(html).toContain('1 no end recorded');
-    expect(html).toContain('1 retried');
+    expect(html).toContain('2 samples');
+    expect(html).toContain('3 samples');
+    expect(html).toContain('p50');
+    expect(html).toContain('p95');
+    expect(html).toContain('Successful model attempts only');
+    expect(html).toContain('Transport retries within one attempt are not counted separately');
     expect(html).toContain('2 invalid timing records were excluded');
-    expect(html).toContain('Transport retries within an attempt are not counted separately');
+    expect(html).not.toContain('6 model attempts');
+    expect(html).not.toContain('logical calls');
+    expect(html).not.toContain('streaming attempts');
+    expect(html).not.toContain('First text measures');
 });
 
 test('session timeline shows retries, incomplete starts, overlap scale and omissions without raw ids', () => {
@@ -58,9 +61,10 @@ test('unavailable timing states and timeline stay unavailable instead of renderi
     unavailable.tools.state = 'unavailable';
     unavailable.tools.duration = { samples: 0, p50Ms: null, p95Ms: null };
     const latencyHtml = renderToStaticMarkup(<UsageLatencyPanel timing={unavailable}/>);
-    expect(latencyHtml).toContain('No recorded samples');
-    expect(latencyHtml).toContain('Model timing is unavailable');
-    expect(latencyHtml).toContain('Tool timing is unavailable');
+    expect(latencyHtml.match(/No data/g)).toHaveLength(3);
+    expect(latencyHtml).not.toContain('0 samples');
+    expect(latencyHtml).not.toContain('Model timing is unavailable');
+    expect(latencyHtml).not.toContain('Tool timing is unavailable');
     expect(latencyHtml).not.toContain('0 ms');
     expect(renderToStaticMarkup(<UsageSessionTimelineView timeline={{ state: 'unavailable', omitted: 0, items: [] }}/>)).toContain('Timeline unavailable for this selected day');
 });

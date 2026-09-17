@@ -292,3 +292,17 @@ time, and latency statistics are derived from individual eligible measurements
 with population/sample information rather than averages of daily percentiles.
 
 See [implementation scope and verification](../../reports/2026-09-17-usage-tool-trends-and-timing.md).
+
+### Display correction, 2026-09-17
+
+The operator requested a compact Execution timing panel. Its default surface now
+shows only metric labels, values, meaningful sample counts, and a nonzero invalid
+record notice. Measurement definitions move to titles; repeated unavailable
+paragraphs and outcome prose are removed. The underlying measurements and
+session timelines remain unchanged.
+
+Named models and tools must not disappear merely because session detail exceeds
+the output budget. The production finalizer reduces optional session/build
+information independently before collapsing named categories. Counting v9
+invalidates earlier saved summaries while reusing index-v5 records. The 256 KiB
+limit and exact totals remain unchanged. See [correction evidence](../../reports/2026-09-17-usage-display-corrections.md).

@@ -1,7 +1,6 @@
 import type {
     UsageDurationSummary,
     UsageSessionTimeline,
-    UsageTimingOutcomes,
     UsageTimingSummary,
 } from '../../shared/usageDashboard.js';
 import {
@@ -12,38 +11,26 @@ import {
 } from './usageTimingState.js';
 import './usageTiming.css';
 
-function DurationMetric({ label, detail, value }: {
+function DurationMetric({ label, title, value }: {
     label: string;
-    detail: string;
+    title: string;
     value: UsageDurationSummary;
 }) {
     const available = value.samples > 0 && value.p50Ms !== null && value.p95Ms !== null;
-    return <div className="usage-latency-metric">
+    return <div className="usage-latency-metric" title={title}>
         <h3>{label}</h3>
-        {available ? <dl><div><dt>p50</dt><dd>{usageDuration(value.p50Ms)}</dd></div><div><dt>p95</dt><dd>{usageDuration(value.p95Ms)}</dd></div></dl> : <strong>No recorded samples</strong>}
-        <p>{detail} · {value.samples} {value.samples === 1 ? 'sample' : 'samples'}</p>
+        {available ? <dl><div><dt>p50</dt><dd>{usageDuration(value.p50Ms)}</dd></div><div><dt>p95</dt><dd>{usageDuration(value.p95Ms)}</dd></div></dl> : <strong>No data</strong>}
+        {available && <p className="usage-latency-samples">{value.samples} {value.samples === 1 ? 'sample' : 'samples'}</p>}
     </div>;
-}
-
-function OutcomeSummary({ label, outcomes }: { label: string; outcomes: UsageTimingOutcomes }) {
-    return <p className="usage-timing-outcomes"><strong>{outcomes.started} {label}</strong><span>{outcomes.succeeded} succeeded</span><span>{outcomes.failed} failed</span><span>{outcomes.cancelled} cancelled</span><span>{outcomes.incomplete} no end recorded</span></p>;
 }
 
 export function UsageLatencyPanel({ timing, invalidTimings = 0 }: { timing: UsageTimingSummary; invalidTimings?: number }) {
     return <div className="usage-latency">
         <div className="usage-latency-grid">
-            <DurationMetric label="First text" detail="Nonempty streamed text" value={timing.models.firstText}/>
-            <DurationMetric label="Response duration" detail="Successful model attempts only" value={timing.models.responseDuration}/>
-            <DurationMetric label="Tool duration" detail="Successful tool runs only" value={timing.tools.duration}/>
+            <DurationMetric label="First text" title="Time from dispatch to the first nonempty streamed text." value={timing.models.firstText}/>
+            <DurationMetric label="Response duration" title="Successful model attempts only. Transport retries within one attempt are not counted separately." value={timing.models.responseDuration}/>
+            <DurationMetric label="Tool duration" title="Successful tool runs only." value={timing.tools.duration}/>
         </div>
-        <div className="usage-timing-accounting">
-            {timing.models.state === 'available' ? <>
-                <OutcomeSummary label="model attempts" outcomes={timing.models.outcomes}/>
-                <p><strong>{timing.models.logicalCalls} logical calls</strong><span>{timing.models.retriedCalls} retried</span><span>{timing.models.streamingAttempts} streaming attempts</span></p>
-            </> : <p className="usage-note">Model timing is unavailable for this period.</p>}
-            {timing.tools.state === 'available' ? <OutcomeSummary label="tool runs" outcomes={timing.tools.outcomes}/> : <p className="usage-note">Tool timing is unavailable for this period.</p>}
-        </div>
-        <p className="usage-note">First text measures dispatch to the first nonempty streamed text. Response and tool duration percentiles include successful executions only. Transport retries within an attempt are not counted separately.</p>
         {invalidTimings > 0 && <p className="usage-note">{invalidTimings} invalid timing {invalidTimings === 1 ? 'record was' : 'records were'} excluded.</p>}
     </div>;
 }

@@ -1,4 +1,5 @@
-import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
+import { MAX_USAGE_CONTRIBUTOR_MODELS, MAX_USAGE_DAY_CONTRIBUTORS, MAX_USAGE_MODELS, MAX_USAGE_TOOLS, MAX_USAGE_TOOL_BUILDS_PER_DAY, MAX_USAGE_TIMELINE_EVENTS, type UsageTokens, type UsageCategory, type UsageDashboardSnapshot, type UsageRangeSummary, type UsageSessionContributor, type UsageTokenCostEstimate, type UsageDayTool, type UsageSessionTimeline, } from '../shared/usageDashboard.js';
+import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js';
 export { usageCategory } from '../../src/utils/usageCategory.js';
 export const tokenTotal = (t: UsageTokens): number => t.fresh + t.read + t.write + t.output;
 export const emptyTokens = (): UsageTokens => ({ fresh: 0, read: 0, write: 0, output: 0 });
@@ -26,11 +27,9 @@ function withDayRanks(items: UsageSessionContributor[]): UsageSessionContributor
     } }));
 }
 /** Group only after complete accounting. The same model selection applies to every day. */
-export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_USAGE_MODELS, toolLimit = MAX_USAGE_TOOLS, contributorLimit = MAX_USAGE_DAY_CONTRIBUTORS): UsageRangeSummary {
-    const buildLimit = toolLimit >= MAX_USAGE_TOOLS ? MAX_USAGE_TOOL_BUILDS_PER_DAY : toolLimit >= 4 ? 4 : 0;
-    const timelineLimit = contributorLimit <= 5
+export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_USAGE_MODELS, toolLimit = MAX_USAGE_TOOLS, contributorLimit = MAX_USAGE_DAY_CONTRIBUTORS, buildLimit = toolLimit >= MAX_USAGE_TOOLS ? MAX_USAGE_TOOL_BUILDS_PER_DAY : toolLimit >= 4 ? 4 : 0, timelineLimit = contributorLimit <= 5
         ? Math.min(1, contributorLimit)
-        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6));
+        : Math.min(MAX_USAGE_TIMELINE_EVENTS, Math.ceil(contributorLimit * 0.6))): UsageRangeSummary {
     const boundedTimeline = (timeline: UsageSessionTimeline): UsageSessionTimeline => {
         if (timeline.state === 'unavailable') return { ...timeline, items: [] };
         const omitted = timeline.omitted + Math.max(0, timeline.items.length - timelineLimit);
@@ -139,4 +138,26 @@ export function groupUsageSummary(summary: UsageRangeSummary, modelLimit = MAX_U
         }),
         detail: { state: omittedModels.length || omittedTools.length ? (modelLimit || toolLimit ? 'grouped' : 'summary-only') : 'full', omittedModels: omittedModels.length, omittedTools: omittedTools.length },
     };
+}
+
+/** Fit one validated worker record while preserving useful categories ahead of optional detail. */
+export function fitUsageDashboardSnapshot(snapshot: UsageDashboardSnapshot): UsageDashboardSnapshot {
+    const raw = snapshot.ranges;
+    const tiers = [
+        { models: 8, tools: 10, contributors: 20, builds: 8, timeline: 12 },
+        { models: 8, tools: 10, contributors: 10, builds: 4, timeline: 3 },
+        { models: 8, tools: 10, contributors: 5, builds: 2, timeline: 1 },
+        { models: 8, tools: 10, contributors: 0, builds: 0, timeline: 0 },
+        { models: 4, tools: 4, contributors: 0, builds: 0, timeline: 0 },
+        { models: 0, tools: 0, contributors: 0, builds: 0, timeline: 0 },
+    ] as const;
+    for (const tier of tiers) {
+        snapshot.ranges = {
+            '7d': groupUsageSummary(raw['7d'], tier.models, tier.tools, tier.contributors, tier.builds, tier.timeline),
+            '30d': groupUsageSummary(raw['30d'], tier.models, tier.tools, tier.contributors, tier.builds, tier.timeline),
+            all: groupUsageSummary(raw.all, tier.models, tier.tools, 0, tier.builds, 0),
+        };
+        if (parseUsageCollectionResult({ type: 'usage', version: 1, snapshot })?.type === 'usage') return snapshot;
+    }
+    throw new Error('Invalid usage summary');
 }

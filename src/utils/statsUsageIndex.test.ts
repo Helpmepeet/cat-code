@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { collectIndexedUsage, readSavedUsage } from './statsUsageIndex.js';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
 import { usageProjectId } from '../../app/shared/usageDashboard.js';
+import { fitUsageDashboardSnapshot, groupUsageSummary } from '../../app/sidecar/usageSummary.js';
 const roots: string[] = [];
 afterEach(async () => { for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 const cutoff = '2026-09-13T12:00:00.000Z';
@@ -195,22 +196,32 @@ test('legacy two-window cache rebuilds All from indexed records without reading 
     expect(rebuilt.ranges).toEqual(original.ranges);
 });
 
-test('v7 saved snapshots are rejected and rebuilt for timing from unchanged indexed records', async () => {
+test('v8 grouped snapshots rebuild named categories from indexed records without rereading sources', async () => {
     const { path, file } = await fixture();
     await writeFile(file, JSON.stringify(row('a', cutoff, 18)));
     const original = await collectIndexedUsage([file], cutoff, opts(path));
     const legacy = structuredClone(original) as any;
-    legacy.countingVersion = 7;
+    legacy.countingVersion = 8;
+    legacy.ranges = {
+        '7d': groupUsageSummary(legacy.ranges['7d'], 0, 0, 0),
+        '30d': groupUsageSummary(legacy.ranges['30d'], 0, 0, 0),
+        all: groupUsageSummary(legacy.ranges.all, 0, 0, 0),
+    };
     const { Database } = await import('bun:sqlite');
     const db = new Database(path);
     try { db.query('UPDATE snapshot SET value=? WHERE id=1').run(JSON.stringify(legacy)); }
     finally { db.close(); }
     expect(readSavedUsage(path)).toBeNull();
     let reads = 0;
-    const rebuilt = await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+    const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
+    const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(8);
-    expect(rebuilt.ranges).toEqual(original.ranges);
+    expect(rebuilt.countingVersion).toBe(9);
+    expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
+    expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
+    const warm = await collectIndexedUsage([file], cutoff, options);
+    expect(reads).toBe(0);
+    expect(warm.ranges).toEqual(rebuilt.ranges);
 });
 
 test('pricing-rate revisions invalidate saved summaries without rereading unchanged sources', async () => {

@@ -223,7 +223,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 8;
+    countingVersion: 9;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';
