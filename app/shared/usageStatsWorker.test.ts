@@ -219,6 +219,9 @@ test('validates auto-mode category and route totals', () => {
     summary.routes = [{ route: 'stage1', outcome: 'allowed', count: 1 }, { route: 'stage2', outcome: 'policy_blocked', count: 1 }];
     summary.categories = [{ key: 'built_in:filesystem', kind: 'named', label: 'filesystem', count: 1 }];
     expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    const wrongCommands = structuredClone(value);
+    wrongCommands.snapshot.ranges['7d'].autoMode.buckets[0].commands.outcomes.allowed = 0;
+    expect(parseUsageCollectionResult(wrongCommands)).toBeNull();
     value.snapshot.ranges['7d'].autoMode.routes[0].count = 2;
     expect(parseUsageCollectionResult(value)).toBeNull();
 });

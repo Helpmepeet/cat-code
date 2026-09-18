@@ -34,6 +34,8 @@ export type AutoModeUsageSource = Readonly<{
   sourceScope: string
   allTools: CoverageState
   commands: CoverageState
+  /** First retained Start that proves this source can emit prospective records. */
+  supportedFrom?: string
 }>
 
 export type AutoModeUsageReductionInput = Readonly<{
@@ -225,8 +227,21 @@ function cloneCoverage(coverage: AutoModeUsageCoverage): AutoModeUsageCoverage {
   return { ...coverage }
 }
 
-function sourceCoverage(sources: readonly AutoModeUsageSource[], population: 'allTools' | 'commands'): CoverageState {
-  const states = sources.map(source => source[population])
+function sourceCoverage(
+  sources: readonly AutoModeUsageSource[],
+  population: 'allTools' | 'commands',
+  rangeStart?: number,
+  rangeEnd?: number,
+): CoverageState {
+  const states = sources.map(source => {
+    const state = source[population]
+    if (state === 'unavailable' || source.supportedFrom === undefined) return state
+    const supportedFrom = validTime(source.supportedFrom)
+    if (supportedFrom === null || rangeStart === undefined || rangeEnd === undefined) return state
+    if (rangeEnd < supportedFrom) return 'unavailable'
+    if (rangeStart < supportedFrom) return 'partial'
+    return state
+  })
   if (states.length === 0 || states.every(state => state === 'unavailable')) return 'unavailable'
   if (states.every(state => state === 'complete')) return 'complete'
   return 'partial'
@@ -235,9 +250,11 @@ function sourceCoverage(sources: readonly AutoModeUsageSource[], population: 'al
 function coverageFor(
   sources: readonly AutoModeUsageSource[],
   population: 'allTools' | 'commands',
+  rangeStart?: number,
+  rangeEnd?: number,
 ): AutoModeUsageCoverage {
   return {
-    state: sourceCoverage(sources, population),
+    state: sourceCoverage(sources, population, rangeStart, rangeEnd),
     invalidRecords: 0,
     orphanRecords: 0,
   }
@@ -373,7 +390,8 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
   for (const source of input.sources) {
     if (!boundedId(source.sourceScope) ||
       !['complete', 'partial', 'unavailable'].includes(source.allTools) ||
-      !['complete', 'partial', 'unavailable'].includes(source.commands)) {
+      !['complete', 'partial', 'unavailable'].includes(source.commands) ||
+      (source.supportedFrom !== undefined && validTime(source.supportedFrom) === null)) {
       sourceConflict = true
       continue
     }
@@ -385,8 +403,8 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
     sourcesByScope.set(source.sourceScope, source)
   }
   const sources = [...sourcesByScope.values()]
-  const allTools = population(coverageFor(sources, 'allTools'))
-  const commands = population(coverageFor(sources, 'commands'))
+  const allTools = population(coverageFor(sources, 'allTools', rangeStart, rangeEnd))
+  const commands = population(coverageFor(sources, 'commands', rangeStart, rangeEnd))
   const buckets = new Map<string, AutoModeUsageBucket>()
   const routes = new Map<string, number>()
   const categories = new Map<string, { category: AutoModePrimaryCategory; count: number }>()
@@ -541,10 +559,12 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
       continue
     }
 
+    const bucketStart = Date.parse(`${attempt.date}T00:00:00.000Z`)
+    const bucketEnd = Math.min(bucketStart + 86400000 - 1, rangeEnd)
     const bucket = buckets.get(attempt.date) ?? {
       date: attempt.date,
-      allTools: population(cloneCoverage(allTools.coverage)),
-      commands: population(cloneCoverage(commands.coverage)),
+      allTools: population(coverageFor(sources, 'allTools', bucketStart, bucketEnd)),
+      commands: population(coverageFor(sources, 'commands', bucketStart, bucketEnd)),
     }
     buckets.set(attempt.date, bucket)
     const outcome = resolvedOutcome(attempt)

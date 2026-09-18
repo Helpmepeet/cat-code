@@ -48,6 +48,7 @@ function autoMode(value: unknown, start: string, end: string, maxBuckets: number
     const all = allPopulation.outcomes as Record<string, number>, commands = commandPopulation.outcomes as Record<string, number>;
     if (AUTO_OUTCOMES.some(key => commands[key]! > all[key]!)) return false;
     const bucketCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
+    const bucketCommandCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
     const dates = new Set<string>();
     for (const bucket of value.buckets) {
         if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < start.slice(0, 10) || bucket.date >= end.slice(0, 10) || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
@@ -55,9 +56,12 @@ function autoMode(value: unknown, start: string, end: string, maxBuckets: number
         const bucketAll = bucket.allTools as Record<string, unknown>, bucketCommands = bucket.commands as Record<string, unknown>;
         const outcomes = bucketAll.outcomes as Record<string, number>, commandOutcomes = bucketCommands.outcomes as Record<string, number>;
         if (AUTO_OUTCOMES.some(key => commandOutcomes[key]! > outcomes[key]!)) return false;
-        for (const key of AUTO_OUTCOMES) bucketCounts[key]! += outcomes[key]!;
+        for (const key of AUTO_OUTCOMES) {
+            bucketCounts[key]! += outcomes[key]!;
+            bucketCommandCounts[key]! += commandOutcomes[key]!;
+        }
     }
-    if (AUTO_OUTCOMES.some(key => bucketCounts[key]! !== all[key]!)) return false;
+    if (AUTO_OUTCOMES.some(key => bucketCounts[key]! !== all[key]! || bucketCommandCounts[key]! !== commands[key]!)) return false;
     const routeCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
     for (const route of value.routes) {
         if (!obj(route) || !ownKeys(route, ['route', 'outcome', 'count']) || !AUTO_ROUTES.includes(route.route as string) || !AUTO_OUTCOMES.includes(route.outcome as string) || !positive(route.count)) return false;
@@ -66,8 +70,10 @@ function autoMode(value: unknown, start: string, end: string, maxBuckets: number
     }
     if (AUTO_OUTCOMES.some(key => routeCounts[key]! !== all[key]!)) return false;
     let categories = 0;
+    const categoryKeys = new Set<string>();
     for (const category of value.categories) {
-        if (!obj(category) || !ownKeys(category, ['key', 'kind', 'label', 'count']) || typeof category.key !== 'string' || !label(category.label) || !['named', 'other', 'uncategorized'].includes(category.kind as string) || !positive(category.count)) return false;
+        if (!obj(category) || !ownKeys(category, ['key', 'kind', 'label', 'count']) || typeof category.key !== 'string' || new TextEncoder().encode(category.key).byteLength > MAX_USAGE_LABEL_BYTES || categoryKeys.has(category.key) || !label(category.label) || !['named', 'other', 'uncategorized'].includes(category.kind as string) || !positive(category.count)) return false;
+        categoryKeys.add(category.key);
         categories += category.count as number;
     }
     return categories === all.policy_blocked;

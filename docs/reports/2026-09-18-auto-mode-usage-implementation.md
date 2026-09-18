@@ -11,7 +11,7 @@
 | 04 | Complete | Permission caller matrix, occurrence context, core/classifier wiring, and focused tests | 65 focused tests passed with `TRANSCRIPT_CLASSIFIER`; engine dev build and diff check passed | Project diagnostics into the Usage index |
 | 05 | Complete | Pure reducer and deterministic fixtures | 11 focused tests passed; engine dev build passed | Wire production routes and indexed projection |
 | 06 | Complete | Retained diagnostic adapter, index projection, accounting/recovery exclusions, and focused tests | 55 focused tests passed; engine dev build and diff check passed | Extend the bounded summary contract |
-| 07 | Complete | Retained auto-mode range summaries, strict worker validation, bounded fitting, and cache-version tests | 60 focused tests passed; desktop/sidecar typechecks and engine dev build passed | Implement frontend selectors |
+| 07 | Complete | Retained auto-mode range summaries, strict worker validation, bounded fitting, and cache-version tests | 73 focused tests passed; desktop/sidecar typechecks and engine dev build passed | Implement frontend selectors |
 
 ## Task 00 evidence map
 
@@ -66,8 +66,8 @@
 
 ## Task 07 bounded summary contract
 
-- Every Usage range now carries an `autoMode` aggregate. The collector feeds parser-normalized retained metadata into the pure reducer with per-source prospective capability: a source without an observed auto-mode diagnostic is unavailable rather than measured as zero; mixed sources are partial.
-- The strict worker contract validates closed outcomes/routes, safe counts, command-subset invariants, bucket/range and route/range reconciliation, category totals, UTC range containment, and known allow-only route restrictions. The existing optional-detail fitter retains this aggregate verbatim while reducing unrelated optional detail, preserving totals and worst coverage.
+- Every Usage range now carries an `autoMode` aggregate. The collector feeds parser-normalized retained metadata into the pure reducer with a time-bounded prospective capability marker from the first retained Start. A pre-capability interval is unavailable, an interval crossing that marker is partial, and only later evidence is complete; no source is retrospectively counted as a measured zero.
+- The strict worker contract validates closed outcomes/routes, safe counts, command-subset invariants including bucket-to-range command totals, bucket/range and route/range reconciliation, bounded unique category keys and category totals, UTC range containment, and known allow-only route restrictions. All-history auto buckets coarsen onto the existing UTC grid with exact outcome sums and worst coverage before the bounded envelope is parsed.
 - Counting version 10 invalidates older saved snapshots while pricing remains version 1. The existing index rebuild path reconstructs the new summary from retained projections without rereading unchanged sources.
 
 ## Task 05 retained-record reduction
@@ -84,7 +84,7 @@
 - `bun test src/utils/autoModeUsage.test.ts`: 11 passed, 0 failed.
 - `bun test --feature=TRANSCRIPT_CLASSIFIER src/utils/permissions/autoModeObservation.test.ts src/utils/permissions/permissions.observation.test.ts src/utils/permissions/yoloClassifier.test.ts src/utils/permissions/permissions.test.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/utils/swarm/inProcessRunner.test.ts`: 65 passed, 0 failed. Covers forced allow/deny, base/guard/fast paths, both classifier stages, review fallback, context limit, user abort, recheck omission, and desktop occurrence-context forwarding without changing the base result.
 - `bun test src/utils/autoModeUsage.test.ts src/utils/statsUsage.test.ts src/utils/statsUsageIndex.test.ts src/utils/conversationRecovery.test.ts`: 55 passed, 0 failed. Covers sanitized valid/malformed metadata, unchanged ordinary accounting, indexed/direct reduction equivalence, warm cache, replacement/deletion, truncated input, index-version advance, and model-message exclusion.
-- `bun test src/utils/statsUsage.test.ts src/utils/statsUsageIndex.test.ts app/shared/usageStatsWorker.test.ts app/sidecar/usageSummary.test.ts app/sidecar/usageSummary.integration.test.ts`: 60 passed, 0 failed. Covers retained collection, cache rebuild, strict auto-mode parsing, bounded sidecar fitting, and the 256 KiB envelope.
+- `bun test src/utils/autoModeUsage.test.ts src/utils/statsUsage.test.ts src/utils/statsUsageIndex.test.ts app/shared/usageStatsWorker.test.ts app/sidecar/usageSummary.test.ts app/sidecar/usageSummary.integration.test.ts`: 73 passed, 0 failed. Covers time-bounded capability, command-bucket reconciliation, bounded category keys, retained collection, cache rebuild, strict auto-mode parsing, bounded sidecar fitting, and the 256 KiB envelope.
 - `bun run --cwd app typecheck`: passed.
 - `bun run --cwd app typecheck:sidecar`: passed.
 - `bun run --cwd app typecheck`: passed.

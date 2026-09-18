@@ -331,3 +331,19 @@ test('keeps known dispositions when only route or category detail is invalid', (
     count: 1,
   })
 })
+
+test('does not treat pre-capability intervals as measured zero', () => {
+  const summary = reduceAutoModeUsage({
+    records: [start('prospective', '2026-09-11T12:00:00.000Z')],
+    sources: [{
+      ...source,
+      supportedFrom: '2026-09-11T12:00:00.000Z',
+    }],
+    rangeStart: '2026-09-10T00:00:00.000Z',
+    rangeEnd: '2026-09-11T23:59:59.999Z',
+    cutoff: '2026-09-12T00:00:00.000Z',
+  })
+
+  expect(summary.allTools.coverage.state).toBe('partial')
+  expect(summary.buckets[0]!.allTools.coverage.state).toBe('partial')
+})

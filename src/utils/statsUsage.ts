@@ -264,11 +264,20 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     diagnosticKind: 'auto_mode_observation',
                     payload: autoModePayload,
                 });
-                autoModeSources.set(sourceScope, {
-                    sourceScope,
-                    allTools: 'complete',
-                    commands: 'complete',
-                });
+                if (autoModePayload.subtype === 'auto_permission_start') {
+                    const previous = autoModeSources.get(sourceScope);
+                    const supportedFrom =
+                        previous?.supportedFrom === undefined ||
+                        observedAt < previous.supportedFrom
+                            ? observedAt
+                            : previous.supportedFrom;
+                    autoModeSources.set(sourceScope, {
+                        sourceScope,
+                        allTools: 'complete',
+                        commands: 'complete',
+                        supportedFrom,
+                    });
+                }
             }
             return;
         }
@@ -759,6 +768,33 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
+        if (all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
+            const grouped = new Map<string, typeof all.summary.autoMode.buckets[number]>();
+            const worse = (left: 'complete' | 'partial' | 'unavailable', right: 'complete' | 'partial' | 'unavailable') =>
+                left === 'unavailable' || right === 'unavailable' ? 'unavailable'
+                    : left === 'partial' || right === 'partial' ? 'partial' : 'complete';
+            for (const bucket of all.summary.autoMode.buckets) {
+                const date = bucketDate(bucket.date);
+                let target = grouped.get(date);
+                if (!target) {
+                    target = structuredClone(bucket);
+                    target.date = date;
+                    for (const population of [target.allTools, target.commands]) {
+                        for (const key of Object.keys(population.outcomes) as (keyof typeof population.outcomes)[])
+                            population.outcomes[key] = 0;
+                    }
+                    grouped.set(date, target);
+                }
+                for (const [from, to] of [[bucket.allTools, target.allTools], [bucket.commands, target.commands]] as const) {
+                    for (const key of Object.keys(to.outcomes) as (keyof typeof to.outcomes)[])
+                        to.outcomes[key] += from.outcomes[key];
+                    to.coverage.state = worse(to.coverage.state, from.coverage.state);
+                    to.coverage.invalidRecords += from.coverage.invalidRecords;
+                    to.coverage.orphanRecords += from.coverage.orphanRecords;
+                }
+            }
+            all.summary.autoMode.buckets = [...grouped.values()].sort((left, right) => left.date.localeCompare(right.date));
+        }
     }
     return { version: 1, metricVersion: 1, countingVersion: 10, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }
