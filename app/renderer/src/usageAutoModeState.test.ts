@@ -34,6 +34,7 @@ test('keeps unavailable and provisional points out of confirmed segments', () =>
   })
   expect(points.map(point => point.state)).toEqual(['confirmed', 'unavailable', 'provisional'])
   expect(confirmedRateSegments(points)).toEqual([[points[0]]])
+  expect(confirmedRateSegments([points[0]!, { ...points[0]!, date: '2026-09-12' }])).toHaveLength(2)
 })
 
 test('uses stable outcome/category order and conserves route edges', () => {
@@ -43,4 +44,5 @@ test('uses stable outcome/category order and conserves route edges', () => {
   expect(sortedAutoModeCategories(summary)).toEqual([...summary.categories].sort((a, b) => b.count - a.count || a.key.localeCompare(b.key)))
   const edges = autoModeRouteEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts').reduce((total, edge) => total + edge.count, 0)).toBe(100)
+  expect(edges.filter(edge => edge.to === 'allowed' || edge.to === 'policy_blocked' || edge.to === 'review_required' || edge.to === 'operational_error').reduce((total, edge) => total + edge.count, 0)).toBe(100)
 })

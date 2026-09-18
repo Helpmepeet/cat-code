@@ -51,13 +51,21 @@ export function autoModeCommandRateHeadline(summary: AutoModeUsageSummary): Omit
   return rateFor(summary.commands)
 }
 
-export function confirmedRateSegments(points: readonly AutoModeRatePoint[]): AutoModeRatePoint[][] {
+export function confirmedRateSegments(
+  points: readonly AutoModeRatePoint[],
+  bucketDays = 1,
+): AutoModeRatePoint[][] {
   const segments: AutoModeRatePoint[][] = []
   let current: AutoModeRatePoint[] = []
   for (const point of points) {
-    if (point.state !== 'confirmed' || point.rate === null) {
+    const previous = current.at(-1)
+    const contiguous = previous === undefined ||
+      Date.parse(`${point.date}T00:00:00.000Z`) -
+        Date.parse(`${previous.date}T00:00:00.000Z`) === bucketDays * 86400000
+    if (point.state !== 'confirmed' || point.rate === null || !contiguous) {
       if (current.length) segments.push(current)
       current = []
+      if (point.state === 'confirmed' && point.rate !== null) current.push(point)
       continue
     }
     current.push(point)
@@ -93,13 +101,21 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
 }
 
 export function autoModeRouteEdges(summary: AutoModeUsageSummary) {
-  return summary.routes.flatMap(route => {
+  const edges = new Map<string, { from: string; to: string; outcome: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
+  for (const route of summary.routes) {
     const path = AUTO_MODE_ROUTE_EDGES[route.route]
-    return path.slice(1).map((to, index) => ({
-      from: path[index]!,
-      to,
-      outcome: route.outcome,
-      count: route.count,
-    }))
-  })
+    const links = [...path.slice(1).map((to, index) => ({ from: path[index]!, to })), {
+      from: path.at(-1)!,
+      to: route.outcome,
+    }]
+    for (const link of links) {
+      const key = JSON.stringify([link.from, link.to, route.outcome])
+      const edge = edges.get(key)
+      if (edge) edge.count += route.count
+      else edges.set(key, { ...link, outcome: route.outcome, count: route.count })
+    }
+  }
+  return [...edges.values()].sort((left, right) =>
+    left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.outcome.localeCompare(right.outcome),
+  )
 }
