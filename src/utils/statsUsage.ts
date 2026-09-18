@@ -8,6 +8,7 @@ import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
+import { projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -228,6 +229,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             return;
         const isSubagent = file.includes(`${sep}subagents${sep}`);
         if (!isSubagent && row.isSidechain === true)
+            return;
+        // These retained metadata records belong solely to the prospective
+        // auto-mode reducer. Exclude valid and data-quality markers before any
+        // generic activity/session/day accounting.
+        if (row.type === 'system' && projectAutoModeDiagnosticPayload(row) !== null)
             return;
         const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
         if (!Number.isFinite(timestamp) || timestamp < Date.parse('0000-01-01T00:00:00.000Z') || timestamp >= Date.parse('+010000-01-01T00:00:00.000Z')) {

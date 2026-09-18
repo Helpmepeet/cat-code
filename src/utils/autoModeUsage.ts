@@ -44,6 +44,16 @@ export type AutoModeUsageReductionInput = Readonly<{
   cutoff: string
 }>
 
+export type ProjectedAutoModeDiagnosticPayload =
+  | AutoModeObservationEvent
+  | Readonly<{
+      subtype: 'auto_permission_end'
+      attempt_id: string
+    }>
+  | Readonly<{
+      subtype: 'auto_permission_invalid'
+    }>
+
 export type AutoModeCommandRate = Readonly<{
   numerator: number
   denominator: number
@@ -96,6 +106,96 @@ const OUTCOMES: readonly AutoModeUsageOutcome[] = [
 
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const AUTO_MODE_EVENT_FIELDS = [
+  'schema_version',
+  'subtype',
+  'attempt_id',
+  'tool_use_id',
+  'tool_kind',
+  'auto_mode',
+  'initial',
+  'stage',
+  'phase',
+  'should_block',
+  'failure',
+  'raw_result',
+  'disposition',
+  'route',
+  'cause',
+  'primary_category',
+] as const
+const SYSTEM_ENVELOPE_FIELDS = new Set([
+  'type',
+  'sessionId',
+  'uuid',
+  'timestamp',
+  'cwd',
+  'version',
+  'isSidechain',
+  'parentUuid',
+])
+
+function rawEventPayload(value: Record<string, unknown>): Record<string, unknown> | null {
+  if (
+    Object.keys(value).some(
+      key =>
+        !SYSTEM_ENVELOPE_FIELDS.has(key) &&
+        !(AUTO_MODE_EVENT_FIELDS as readonly string[]).includes(key),
+    )
+  ) {
+    return null
+  }
+  return Object.fromEntries(
+    AUTO_MODE_EVENT_FIELDS.flatMap(key =>
+      Object.prototype.hasOwnProperty.call(value, key)
+        ? [[key, value[key]]]
+        : [],
+    ),
+  )
+}
+
+function minimalInvalidTerminal(value: Record<string, unknown>): ProjectedAutoModeDiagnosticPayload {
+  return value.subtype === 'auto_permission_end' && boundedId(value.attempt_id)
+    ? { subtype: 'auto_permission_end', attempt_id: value.attempt_id }
+    : { subtype: 'auto_permission_invalid' }
+}
+
+/**
+ * Removes all raw diagnostic content before it reaches the retained Usage
+ * index. A malformed End retains only its trusted join identity so the reducer
+ * can classify a matching Start as Unknown rather than Incomplete.
+ */
+export function projectAutoModeDiagnosticPayload(
+  value: unknown,
+): ProjectedAutoModeDiagnosticPayload | null {
+  if (!object(value)) return null
+  if (value.subtype === 'auto_mode_observation') {
+    const payload = value.auto_mode
+    if (!object(payload)) return { subtype: 'auto_permission_invalid' }
+    const parsed = parseAutoModeObservationEvent(payload)
+    if (parsed !== null) return parsed
+    if (
+      payload.subtype === 'auto_permission_invalid' &&
+      Object.keys(payload).length === 1
+    ) {
+      return { subtype: 'auto_permission_invalid' }
+    }
+    return minimalInvalidTerminal(payload)
+  }
+  if (
+    value.subtype !== 'auto_permission_start' &&
+    value.subtype !== 'auto_permission_stage' &&
+    value.subtype !== 'auto_permission_end'
+  ) {
+    return null
+  }
+  const payload = rawEventPayload(value)
+  return (
+    (payload === null ? null : parseAutoModeObservationEvent(payload)) ??
+    minimalInvalidTerminal(value)
+  )
 }
 
 function boundedId(value: unknown): value is string {

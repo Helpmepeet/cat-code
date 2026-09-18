@@ -64,6 +64,32 @@ describe('manual compact recovery', () => {
     expect(recovered.turnInterruptionState.message.message.content).toBe(prompt)
   })
 
+  test('keeps auto-mode diagnostics out of resumed model messages', () => {
+    const prompt = createUserMessage({ content: 'continue safely' })
+    const diagnostic = {
+      type: 'system',
+      subtype: 'auto_permission_start',
+      uuid: randomUUID(),
+      timestamp: '2026-09-18T00:00:00.000Z',
+      schema_version: 1,
+      attempt_id: 'attempt-private',
+      tool_use_id: 'tool-private',
+      tool_kind: 'bash',
+      auto_mode: 'auto',
+      initial: true,
+    } as never
+
+    const recovered = deserializeMessagesWithInterruptDetection([
+      prompt,
+      diagnostic,
+    ])
+
+    expect(recovered.turnInterruptionState.kind).toBe('interrupted_prompt')
+    expect(JSON.stringify(normalizeMessagesForAPI(recovered.messages))).not.toContain(
+      'attempt-private',
+    )
+  })
+
   test('jsonl-path resume honors the durable active tip', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'conversation-recovery-'))
     tempDirs.push(tempDir)

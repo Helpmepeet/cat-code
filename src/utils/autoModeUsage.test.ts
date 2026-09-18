@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
   autoModeCommandRate,
+  projectAutoModeDiagnosticPayload,
   reduceAutoModeUsage,
   type AutoModeUsageSource,
   type RetainedAutoModeRecord,
@@ -60,6 +61,49 @@ function reduce(records: readonly RetainedAutoModeRecord[], sources: readonly Au
     cutoff: '2026-09-11T00:00:00.000Z',
   })
 }
+
+test('projects only validated events or minimal data-quality markers', () => {
+  const valid = projectAutoModeDiagnosticPayload({
+    type: 'system',
+    subtype: 'auto_permission_start',
+    schema_version: 1,
+    attempt_id: 'attempt-1',
+    tool_use_id: 'tool-1',
+    tool_kind: 'bash',
+    auto_mode: 'auto',
+    initial: true,
+  })
+  const malformedEnd = projectAutoModeDiagnosticPayload({
+    type: 'system',
+    subtype: 'auto_permission_end',
+    attempt_id: 'attempt-1',
+    raw_result: 'deny',
+    disposition: 'not-valid',
+    route: 'base',
+    command: 'DO NOT RETAIN',
+  })
+  const untrustedEnd = projectAutoModeDiagnosticPayload({
+    type: 'system',
+    subtype: 'auto_permission_end',
+    attempt_id: '',
+    command: 'DO NOT RETAIN',
+  })
+
+  expect(valid).toEqual({
+    subtype: 'auto_permission_start',
+    schema_version: 1,
+    attempt_id: 'attempt-1',
+    tool_use_id: 'tool-1',
+    tool_kind: 'bash',
+    auto_mode: 'auto',
+    initial: true,
+  })
+  expect(malformedEnd).toEqual({
+    subtype: 'auto_permission_end',
+    attempt_id: 'attempt-1',
+  })
+  expect(untrustedEnd).toEqual({ subtype: 'auto_permission_invalid' })
+})
 
 test('reconciles the deterministic 100-attempt fixture and command-only rate', () => {
   const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture())

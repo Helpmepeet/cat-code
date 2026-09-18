@@ -56,6 +56,21 @@ test('C4/C5/M1: old mtime still read, inclusive input normalized, malformed inpu
     expect(partial.coverage.state).toBe('partial');
     expect(partial.ranges['7d'].tokens.fresh).toBe(0);
 });
+
+test('auto-permission diagnostics do not enter ordinary retained-usage accounting', async () => {
+    const assistant = msg(asOf, 'ordinary', 10, 'ordinary-tool');
+    const diagnostics = [
+        { type: 'system', subtype: 'auto_permission_start', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
+        { type: 'system', subtype: 'auto_permission_end', attempt_id: 'attempt', raw_result: 'deny', disposition: 'not-valid', route: 'base', command: 'DO NOT ACCOUNT' },
+        { type: 'system', subtype: 'auto_permission_end', attempt_id: '', command: 'DO NOT ACCOUNT' },
+    ];
+    const path = await file([assistant]);
+    const baseline = await collectRetainedUsage([path], asOf);
+    await writeFile(path, [assistant, ...diagnostics, diagnostics[0]].map(row => JSON.stringify(row)).join('\n'));
+    const observed = await collectRetainedUsage([path], asOf);
+    expect(observed.ranges).toEqual(baseline.ranges);
+    expect(observed.coverage).toEqual(baseline.coverage);
+});
 test('cache-write reporting distinguishes measured, unreported, mixed, and unknown records', async () => {
     const openai = msg(asOf, 'openai', 10);
     openai.message.model = 'gpt-5.6-sol';

@@ -2,8 +2,9 @@ import { afterEach, expect, test } from 'bun:test';
 import { mkdtemp, writeFile, appendFile, rm, copyFile, mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { collectIndexedUsage, readSavedUsage } from './statsUsageIndex.js';
+import { collectIndexedUsage, readSavedUsage, usageIndexPath } from './statsUsageIndex.js';
 import { collectRetainedUsage, UsageResourceError } from './statsUsage.js';
+import { projectAutoModeDiagnosticPayload, reduceAutoModeUsage, type RetainedAutoModeRecord } from './autoModeUsage.js';
 import { usageProjectId } from '../../app/shared/usageDashboard.js';
 import { fitUsageDashboardSnapshot, groupUsageSummary } from '../../app/sidecar/usageSummary.js';
 const roots: string[] = [];
@@ -12,6 +13,30 @@ const cutoff = '2026-09-13T12:00:00.000Z';
 const row = (id: string, timestamp = cutoff, tokens = 10) => ({ type: 'assistant', sessionId: 's', uuid: id, timestamp, message: { id, model: 'model', usage: { input_tokens: tokens }, content: [{ type: 'text', text: 'DO NOT INDEX PROMPT TEXT' }, { type: 'tool_use', id, name: 'Bash', input: { secret: 'DO NOT INDEX TOOL INPUT' } }] } });
 async function fixture() { const root = await mkdtemp(join(tmpdir(), 'usage-index-')); roots.push(root); return { path: join(root, 'cache.sqlite'), file: join(root, 's.jsonl') }; }
 const opts = (path: string) => ({ path, deadline: Date.now() + 60000 });
+const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
+function autoModeRecords(values: unknown[], sourceScope: string): RetainedAutoModeRecord[] {
+    return values.flatMap((value, index) => {
+        if (!object(value) || typeof value.timestamp !== 'string') return [];
+        const payload = projectAutoModeDiagnosticPayload(value);
+        if (payload === null) return [];
+        return [{
+            sourceScope,
+            recordId: typeof value.uuid === 'string' ? value.uuid : `record-${index}`,
+            observedAt: value.timestamp,
+            diagnosticKind: 'auto_mode_observation',
+            payload,
+        }];
+    });
+}
+function reducedAutoMode(records: RetainedAutoModeRecord[], sourceScope: string, state: 'complete' | 'partial' = 'complete') {
+    return reduceAutoModeUsage({
+        records,
+        sources: [{ sourceScope, allTools: state, commands: state }],
+        rangeStart: '2026-09-07T00:00:00.000Z',
+        rangeEnd: cutoff,
+        cutoff,
+    });
+}
 test('cold accounting matches direct scan; warm restart reads no transcripts; changed files and deletion reconcile', async () => {
     const { path, file } = await fixture();
     const rows = [row('a', '2026-08-01T00:00:00.000Z'), row('a', cutoff, 20), row('b')];
@@ -101,6 +126,62 @@ test('index excludes text and tool input, retaining missing-ID block positions',
     const { Database } = await import('bun:sqlite'); const db = new Database(path, { readonly: true });
     try { expect(JSON.stringify(db.query('SELECT value FROM records').all())).not.toContain('DO NOT INDEX'); }
     finally { db.close(); }
+});
+test('projects auto-mode diagnostics without ordinary accounting or raw payload retention', async () => {
+    const { path, file } = await fixture();
+    const start = { type: 'system', uuid: 'start', timestamp: '2026-09-12T10:00:00.000Z', subtype: 'auto_permission_start', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'tool', tool_kind: 'bash', auto_mode: 'auto', initial: true };
+    const end = { type: 'system', uuid: 'end', timestamp: '2026-09-12T10:01:00.000Z', subtype: 'auto_permission_end', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' };
+    const malformedStart = { ...start, uuid: 'bad-start', attempt_id: 'bad-attempt', tool_use_id: 'bad-tool' };
+    const malformedEnd = { type: 'system', uuid: 'bad-end', timestamp: '2026-09-12T10:03:00.000Z', subtype: 'auto_permission_end', attempt_id: 'bad-attempt', raw_result: 'deny', disposition: 'not-valid', route: 'base', command: 'DO NOT INDEX AUTO INPUT' };
+    await writeFile(file, [row('ordinary'), start, end, start, malformedStart, malformedEnd].map(value => JSON.stringify(value)).join('\n') + '\n');
+
+    const indexed = await collectIndexedUsage([file], cutoff, opts(path));
+    const direct = await collectRetainedUsage([file], cutoff);
+    expect(indexed.ranges).toEqual(direct.ranges);
+    expect(indexed.coverage).toEqual(direct.coverage);
+    const directValues = (await Bun.file(file).text()).trim().split('\n').map(line => JSON.parse(line));
+    const { Database } = await import('bun:sqlite');
+    const db = new Database(path, { readonly: true });
+    let indexedValues: unknown[];
+    try {
+        indexedValues = db.query<{ value: string }, []>('SELECT value FROM records ORDER BY offset').all().map(row => JSON.parse(row.value));
+        const projected = JSON.stringify(indexedValues);
+        expect(projected).not.toContain('DO NOT INDEX AUTO INPUT');
+        expect(projected).not.toContain('not-valid');
+    } finally { db.close(); }
+    expect(reducedAutoMode(autoModeRecords(indexedValues!, file), file)).toEqual(
+        reducedAutoMode(autoModeRecords(directValues, file), file),
+    );
+    expect(reducedAutoMode(autoModeRecords(indexedValues!, file), file).allTools.outcomes).toMatchObject({
+        allowed: 1,
+        unknown_outcome: 1,
+    });
+
+    let reads = 0;
+    await collectIndexedUsage([file], cutoff, { ...opts(path), onReadSource() { reads++; } });
+    expect(reads).toBe(0);
+
+    await appendFile(file, '{"type":"system"');
+    const indexedPartial = await collectIndexedUsage([file], cutoff, opts(path));
+    const directPartial = await collectRetainedUsage([file], cutoff);
+    expect(indexedPartial.ranges).toEqual(directPartial.ranges);
+    expect(indexedPartial.coverage).toEqual(directPartial.coverage);
+
+    await writeFile(file, [malformedStart, malformedEnd].map(value => JSON.stringify(value)).join('\n'));
+    await collectIndexedUsage([file], cutoff, opts(path));
+    const replacement = new Database(path, { readonly: true });
+    try {
+        const values = replacement.query<{ value: string }, []>('SELECT value FROM records ORDER BY offset').all().map(row => JSON.parse(row.value));
+        expect(reducedAutoMode(autoModeRecords(values, file), file).allTools.outcomes.unknown_outcome).toBe(1);
+    } finally { replacement.close(); }
+
+    await collectIndexedUsage([], cutoff, opts(path));
+    const removed = new Database(path, { readonly: true });
+    try { expect(removed.query('SELECT value FROM records').all()).toEqual([]); }
+    finally { removed.close(); }
+});
+test('uses a successor index path when auto-mode metadata enters the projection', () => {
+    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v6.sqlite');
 });
 test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
     const { path, file } = await fixture();

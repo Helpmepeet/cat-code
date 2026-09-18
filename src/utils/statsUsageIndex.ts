@@ -5,11 +5,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality } from './statsReader.js';
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
+import { projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v5.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v6.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -37,6 +38,12 @@ function projectRecord(v: unknown): unknown {
             : null) };
     }
     if (v.type === 'system' && typeof v.subtype === 'string') {
+        const autoMode = projectAutoModeDiagnosticPayload(v);
+        if (autoMode !== null) {
+            row.subtype = 'auto_mode_observation';
+            row.auto_mode = autoMode;
+            return row;
+        }
         const fields: Record<string, readonly string[]> = {
             model_attempt_start: ['schema_version', 'call_id', 'attempt_id', 'attempt_index', 'provider', 'model', 'mode'],
             model_attempt_first_text: ['schema_version', 'call_id', 'attempt_id', 'duration_ms'],
