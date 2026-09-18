@@ -16,11 +16,11 @@ test('lays out the aggregated route edges with conservation and a stable node or
     'allowed', 'policy_blocked', 'review_required', 'operational_error',
   ])
   expect(layout!.nodes.map(node => [node.id, node.column])).toEqual([
-    ['Attempts', 0], ['Base checks', 1], ['Stage 1', 2], ['Stage 2', 3],
-    ['allowed', 4], ['policy_blocked', 4], ['review_required', 4], ['operational_error', 4],
+    ['Attempts', 0], ['Base checks', 1], ['Stage 1', 3], ['Stage 2', 4],
+    ['allowed', 5], ['policy_blocked', 5], ['review_required', 5], ['operational_error', 5],
   ])
   expect(layout!.links.every(link => link.height === link.count * layout!.scale)).toBe(true)
-  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 4)) {
+  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 5)) {
     expect(node.incoming).toBe(node.outgoing)
   }
   expect(layoutAutoModeFlow([...edges].reverse())!.nodes.map(node => node.id)).toEqual(layout!.nodes.map(node => node.id))

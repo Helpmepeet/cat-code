@@ -38,12 +38,14 @@ function percent(count: number, total: number): string {
 function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
     const series = outcomeSeries(summary);
     const buckets = [...summary.buckets].sort((left, right) => left.date.localeCompare(right.date));
-    const plotWidth = 640, height = 220, left = 42, right = 12, top = 18, bottom = 32;
+    const plotWidth = Math.max(640, buckets.length * 64), height = 220, left = 42, right = 12, top = 18, bottom = 32;
     const innerWidth = plotWidth - left - right, innerHeight = height - top - bottom;
     const totals = buckets.map(bucket => AUTO_MODE_OUTCOMES.reduce((total, outcome) => total + bucket.allTools.outcomes[outcome], 0));
     const maximum = usageAxisCeiling(Math.max(0, ...totals));
     const barWidth = Math.max(10, Math.min(38, innerWidth / Math.max(1, buckets.length) * .68));
-    const x = (index: number) => left + innerWidth * (index + .5) / Math.max(1, buckets.length);
+    const first = Date.parse(`${buckets[0]?.date ?? '1970-01-01'}T00:00:00.000Z`);
+    const last = Date.parse(`${buckets.at(-1)?.date ?? '1970-01-01'}T00:00:00.000Z`);
+    const x = (index: number) => last === first ? left + innerWidth / 2 : left + innerWidth * (Date.parse(`${buckets[index]!.date}T00:00:00.000Z`) - first) / (last - first);
     const y = (value: number) => top + innerHeight - value / maximum * innerHeight;
     const allUnavailable = summary.allTools.coverage.state === 'unavailable';
 
@@ -77,7 +79,7 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
                                             <title>{`${bucket.date}: ${OUTCOME_LABELS[item.outcome]}, ${usageNumber(count)}`}</title>
                                         </rect>;
                                     })}
-                                    {total === 0 && <line className="usage-auto-zero-bar" x1={x(index) - barWidth / 2} x2={x(index) + barWidth / 2} y1={y(0)} y2={y(0)}/>}
+                                    {total === 0 && bucket.allTools.coverage.state === 'complete' && <line className="usage-auto-zero-bar" x1={x(index) - barWidth / 2} x2={x(index) + barWidth / 2} y1={y(0)} y2={y(0)}/>}
                                     <text className="usage-axis" x={x(index)} y={height - 9} textAnchor="middle">{bucket.date}</text>
                                 </g>;
                             })}

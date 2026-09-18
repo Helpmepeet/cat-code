@@ -57,9 +57,9 @@ const NODE_COLUMNS: Record<string, number> = {
   'Review/safety guard': 2,
   'Workspace edits': 2,
   'Tool allowlist': 2,
-  'Stage 1': 2,
-  'Stage 2': 3,
-  ...Object.fromEntries(Object.keys(OUTCOME_LABELS).map(outcome => [outcome, 4])),
+  'Stage 1': 3,
+  'Stage 2': 4,
+  ...Object.fromEntries(Object.keys(OUTCOME_LABELS).map(outcome => [outcome, 5])),
 }
 
 const NODE_ORDER = [
@@ -149,7 +149,7 @@ export function layoutAutoModeFlow(
   const availableHeight = MAX_FLOW_HEIGHT
   const scale = Math.min(...[...columns.values()].map(items => {
     const count = items.reduce((total, id) => total + Math.max(incoming.get(id) ?? 0, outgoing.get(id) ?? 0), 0)
-    return availableHeight / (count + Math.max(0, items.length - 1) * NODE_GAP)
+    return (availableHeight - Math.max(0, items.length - 1) * NODE_GAP) / count
   }))
   const nodeWidth = 14
   const height = TOP + availableHeight + BOTTOM
@@ -167,7 +167,7 @@ export function layoutAutoModeFlow(
         id,
         label: usageAutoModeFlowNodeLabel(id),
         column,
-        x: left + column / 4 * (innerWidth - nodeWidth),
+        x: left + column / 5 * (innerWidth - nodeWidth),
         y,
         width: nodeWidth,
         height: value * scale,

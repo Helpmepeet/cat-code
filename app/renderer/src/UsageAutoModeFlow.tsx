@@ -87,6 +87,8 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
             <path
               className="usage-auto-flow-hit"
               d={link.path}
+              fill="transparent"
+              pointerEvents="all"
               tabIndex={0}
               role="img"
               aria-label={label}
