@@ -11,8 +11,8 @@ import type { AssistantMessage } from '../types/message.js'
 import { createAttachmentMessage, getQueuedCommandAttachments } from './attachments.js'
 import { registerActiveSubagent, unregisterActiveSubagent } from './cleanupRegistry.js'
 import { createUserMessage } from './messages.js'
-import { releaseActiveTranscriptLease } from './transcriptLease.js'
-import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
+import { activateTranscriptLease, releaseActiveTranscriptLease } from './transcriptLease.js'
+import { clearSessionMessagesCache, enrichLogs, flushCurrentTranscriptDurably, flushSessionStorage, getAgentTranscriptPath, getLastSessionLog, getSessionFilesLite, getTranscriptPathForSession, loadDisplayTranscriptFromJsonlPath, loadTranscriptFile, loadTranscriptFromFile, markActiveConversationTip, recordAutoModeObservation, recordCodexSendPath, recordCodexStreamSurface, recordDeferredContinuationResult, recordModelAttemptEnd, recordModelAttemptFirstText, recordModelAttemptStart, recordPostTurnStall, recordPromptCacheBreak, recordRunFacts, recordToolExecutionEnd, recordToolExecutionStart, recordTranscript, removeTranscriptMessage, resetProjectForTesting, resetRunFactsDedupeForTest, setSessionArchived, setSessionFileForTesting } from './sessionStorage.js'
 
 function createRewindContinuationFixture(
   sessionId: string,
@@ -2298,5 +2298,74 @@ describe('attachment persistence', () => {
     expect(attachments[0]).toMatchObject({
       attachment: { stdout: 'noisy hook\n' },
     })
+  })
+})
+
+describe('auto-mode observation diagnostics', () => {
+  const originalSessionId = getSessionId()
+  const originalProjectDir = getSessionProjectDir()
+  let tempDir: string
+  let sessionId: UUID
+
+  beforeEach(async () => {
+    process.env.TEST_ENABLE_SESSION_PERSISTENCE = '1'
+    await releaseActiveTranscriptLease()
+    resetProjectForTesting()
+    tempDir = mkdtempSync(join(tmpdir(), 'auto-mode-observation-'))
+    sessionId = randomUUID()
+    switchSession(asSessionId(sessionId), tempDir)
+  })
+
+  afterEach(async () => {
+    clearSessionMessagesCache()
+    resetProjectForTesting()
+    await releaseActiveTranscriptLease()
+    switchSession(asSessionId(originalSessionId), originalProjectDir)
+    rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  const startEvent = {
+    subtype: 'auto_permission_start',
+    schema_version: 1,
+    attempt_id: 'attempt-1',
+    tool_use_id: 'tool-1',
+    tool_kind: 'bash' as const,
+    auto_mode: 'auto' as const,
+    initial: true as const,
+  }
+
+  test('does not create a transcript when no owner exists', () => {
+    const transcriptPath = getTranscriptPathForSession(sessionId)
+
+    recordAutoModeObservation(startEvent)
+
+    expect(existsSync(transcriptPath)).toBe(false)
+  })
+
+  test('appends validated metadata to an owned transcript', async () => {
+    await recordTranscript([createUserMessage({ content: 'owned transcript' })])
+    await flushCurrentTranscriptDurably()
+
+    recordAutoModeObservation(startEvent)
+
+    const entries = readFileSync(getTranscriptPathForSession(sessionId), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+    expect(entries.at(-1)).toMatchObject({
+      type: 'system',
+      subtype: 'auto_mode_observation',
+      ...startEvent,
+    })
+    expect(entries.at(-1)).not.toHaveProperty('prompt')
+    expect(entries.at(-1)).not.toHaveProperty('response')
+  })
+
+  test('keeps transcript lease failures outside the best-effort writer catch', async () => {
+    await activateTranscriptLease(asSessionId(randomUUID()))
+
+    expect(() => recordAutoModeObservation(startEvent)).toThrow(
+      `No active transcript lease for session ${sessionId}`,
+    )
   })
 })

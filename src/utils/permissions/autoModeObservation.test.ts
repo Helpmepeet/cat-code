@@ -1,8 +1,10 @@
 import { expect, test } from 'bun:test'
 import {
   MAX_AUTO_MODE_OBSERVATION_ID_BYTES,
+  createAutoModePermissionObserver,
   mapAutoModeDisposition,
   parseAutoModeObservationEvent,
+  resolveInitialPermissionOccurrence,
 } from './autoModeObservation.js'
 
 const start = {
@@ -120,4 +122,158 @@ test('preserves review-required when a Stage 2 block or unavailable classifier h
   expect(
     mapAutoModeDisposition('ask', { failure: 'unavailable' }),
   ).toEqual({ disposition: 'review_required', cause: 'unavailable' })
+})
+
+test('records one initial occurrence and only its first finish', () => {
+  const events: unknown[] = []
+  expect(
+    createAutoModePermissionObserver({
+      writer: event => events.push(event),
+      toolUseId: 'tool-1',
+      toolKind: 'bash',
+      effectiveAutoMode: null,
+      createAttemptId: () => 'unused-attempt',
+    }),
+  ).toBeNull()
+  expect(events).toEqual([])
+
+  const observer = createAutoModePermissionObserver({
+    writer: event => events.push(event),
+    toolUseId: 'tool-1',
+    toolKind: 'bash',
+    effectiveAutoMode: 'auto',
+    createAttemptId: () => 'attempt-1',
+  })
+
+  observer?.enterStage('fast')
+  // A provider fallback remains one stage, even if it needed internal retries.
+  observer?.resolveStage('fast', { should_block: false })
+  observer?.finish({
+    raw_result: 'allow',
+    route: 'stage1',
+  })
+  observer?.finish({
+    raw_result: 'deny',
+    route: 'stage2',
+    evidence: { policy: 'classifier_policy' },
+  })
+
+  expect(events).toEqual([
+    start,
+    {
+      subtype: 'auto_permission_stage',
+      schema_version: 1,
+      attempt_id: 'attempt-1',
+      stage: 'fast',
+      phase: 'entered',
+    },
+    {
+      subtype: 'auto_permission_stage',
+      schema_version: 1,
+      attempt_id: 'attempt-1',
+      stage: 'fast',
+      phase: 'resolved',
+      should_block: false,
+    },
+    {
+      subtype: 'auto_permission_end',
+      schema_version: 1,
+      attempt_id: 'attempt-1',
+      raw_result: 'allow',
+      disposition: 'allowed',
+      route: 'stage1',
+    },
+  ])
+})
+
+test('uses no observer for rechecks and creates a fresh attempt per occurrence', async () => {
+  const events: unknown[] = []
+  const attemptIds = ['attempt-1', 'attempt-2']
+  const createObserver = () =>
+    createAutoModePermissionObserver({
+      writer: event => events.push(event),
+      toolUseId: 'tool-1',
+      toolKind: 'bash',
+      effectiveAutoMode: 'plan_auto',
+      createAttemptId: () => attemptIds.shift()!,
+    })
+
+  const initial = createObserver()
+  const initialDecision = { behavior: 'allow' }
+  expect(
+    await resolveInitialPermissionOccurrence({
+      observer: initial,
+      forceDecision: initialDecision,
+      getPermissionResult: async () => {
+        throw new Error('forced decisions do not call the checker')
+      },
+      finishResult: () => ({ raw_result: 'allow', route: 'forced' }),
+      finishError: () => ({ raw_result: 'throw', route: 'forced' }),
+    }),
+  ).toBe(initialDecision)
+
+  const recheckDecision = { behavior: 'ask' }
+  expect(
+    await resolveInitialPermissionOccurrence({
+      observer: null,
+      getPermissionResult: async () => recheckDecision,
+      finishResult: () => {
+        throw new Error('rechecks do not map an observation')
+      },
+      finishError: () => {
+        throw new Error('rechecks do not map an observation')
+      },
+    }),
+  ).toBe(recheckDecision)
+
+  const nextOccurrence = createObserver()
+  nextOccurrence?.finish({ raw_result: 'ask', route: 'unknown' })
+
+  expect(events.filter(event => (event as { subtype: string }).subtype === 'auto_permission_start')).toEqual([
+    {
+      ...start,
+      attempt_id: 'attempt-1',
+      auto_mode: 'plan_auto',
+    },
+    {
+      ...start,
+      attempt_id: 'attempt-2',
+      auto_mode: 'plan_auto',
+    },
+  ])
+})
+
+test('preserves the original thrown error identity', async () => {
+  const events: unknown[] = []
+  const observer = createAutoModePermissionObserver({
+    writer: event => events.push(event),
+    toolUseId: 'tool-1',
+    toolKind: 'other',
+    effectiveAutoMode: 'auto',
+    createAttemptId: () => 'attempt-1',
+  })
+  const failure = new Error('existing permission failure')
+
+  await expect(
+    resolveInitialPermissionOccurrence({
+      observer,
+      getPermissionResult: async () => {
+        throw failure
+      },
+      finishResult: () => ({ raw_result: 'allow', route: 'unknown' }),
+      finishError: error => {
+        expect(error).toBe(failure)
+        return {
+          raw_result: 'throw',
+          route: 'unknown',
+          evidence: { failure: 'internal_error' },
+        }
+      },
+    }),
+  ).rejects.toBe(failure)
+  expect(events.at(-1)).toMatchObject({
+    subtype: 'auto_permission_end',
+    raw_result: 'throw',
+    disposition: 'operational_error',
+  })
 })

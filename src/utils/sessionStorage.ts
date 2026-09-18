@@ -90,6 +90,10 @@ import { parseJSONL } from './json.js'
 import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
+import {
+  parseAutoModeObservationEvent,
+  type AutoModeObservationEvent,
+} from './permissions/autoModeObservation.js'
 import { writeFileSyncAndFlush_DEPRECATED } from './file.js'
 import {
   activateTranscriptLease,
@@ -619,6 +623,17 @@ function appendSystemDiagnostic(
   } catch {
     // Best-effort — don't let diagnostic writes crash the API path.
   }
+}
+
+/**
+ * Persist one validated, metadata-only auto-mode permission observation.
+ * Invalid input is ignored before the transcript appender sees it.
+ */
+export function recordAutoModeObservation(entry: unknown): void {
+  const parsed: AutoModeObservationEvent | null =
+    parseAutoModeObservationEvent(entry)
+  if (parsed === null) return
+  appendSystemDiagnostic('auto_mode_observation', parsed)
 }
 
 /**

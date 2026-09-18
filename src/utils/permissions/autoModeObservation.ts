@@ -1,3 +1,5 @@
+import { randomUUID } from 'crypto'
+
 /**
  * Metadata-only records for prospective auto-mode Usage accounting.
  *
@@ -203,6 +205,133 @@ export function mapAutoModeDisposition(
   return {
     disposition: 'unknown_outcome',
     ...(evidence.failure ? { cause: evidence.failure } : {}),
+  }
+}
+
+export type AutoModeObservationWriter = (
+  event: AutoModeObservationEvent,
+) => void
+
+export type AutoModePermissionObserver = {
+  enterStage(stage: AutoModeStage): void
+  resolveStage(
+    stage: AutoModeStage,
+    resolution:
+      | { should_block: boolean }
+      | { failure: AutoModeFailure },
+  ): void
+  finish(input: {
+    raw_result: AutoModeRawPermissionResult
+    route: AutoModeRoute
+    evidence?: Readonly<AutoModeDispositionEvidence>
+    primary_category?: AutoModePrimaryCategory
+  }): void
+}
+
+export type CreateAutoModePermissionObserverOptions = {
+  writer: AutoModeObservationWriter
+  toolUseId: string
+  toolKind: AutoModeToolKind
+  effectiveAutoMode: 'auto' | 'plan_auto' | null
+  createAttemptId?: () => string
+}
+
+/**
+ * Creates the observer for one initial logical permission occurrence.
+ *
+ * A recheck deliberately supplies no observer. The occurrence owner keeps this
+ * short-lived object rather than using process-global tool-use ID state.
+ */
+export function createAutoModePermissionObserver(
+  options: CreateAutoModePermissionObserverOptions,
+): AutoModePermissionObserver | null {
+  if (options.effectiveAutoMode === null) return null
+
+  const attemptId = (options.createAttemptId ?? randomUUID)()
+  const start = parseAutoModeObservationEvent({
+    subtype: 'auto_permission_start',
+    schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+    attempt_id: attemptId,
+    tool_use_id: options.toolUseId,
+    tool_kind: options.toolKind,
+    auto_mode: options.effectiveAutoMode,
+    initial: true,
+  })
+  if (start === null) return null
+
+  options.writer(start)
+  let finished = false
+
+  function emit(event: unknown): void {
+    const parsed = parseAutoModeObservationEvent(event)
+    if (parsed !== null) options.writer(parsed)
+  }
+
+  return {
+    enterStage(stage) {
+      if (finished) return
+      emit({
+        subtype: 'auto_permission_stage',
+        schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+        attempt_id: attemptId,
+        stage,
+        phase: 'entered',
+      })
+    },
+    resolveStage(stage, resolution) {
+      if (finished) return
+      emit({
+        subtype: 'auto_permission_stage',
+        schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+        attempt_id: attemptId,
+        stage,
+        phase: 'resolved',
+        ...resolution,
+      })
+    },
+    finish({ raw_result, route, evidence, primary_category }) {
+      if (finished) return
+      finished = true
+      const disposition = mapAutoModeDisposition(raw_result, evidence)
+      emit({
+        subtype: 'auto_permission_end',
+        schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+        attempt_id: attemptId,
+        raw_result,
+        route,
+        ...disposition,
+        ...(primary_category ? { primary_category } : {}),
+      })
+    },
+  }
+}
+
+/**
+ * The outer logical-occurrence seam. It selects an initial forced decision
+ * before the ordinary checker, records only through the supplied observer, and
+ * preserves the exact result or thrown error from the existing permission path.
+ */
+export async function resolveInitialPermissionOccurrence<T>(options: {
+  observer: AutoModePermissionObserver | null
+  forceDecision?: T
+  getPermissionResult: () => Promise<T>
+  finishResult: (result: T) => Parameters<AutoModePermissionObserver['finish']>[0]
+  finishError: (error: unknown) => Parameters<AutoModePermissionObserver['finish']>[0]
+}): Promise<T> {
+  try {
+    const result =
+      options.forceDecision === undefined
+        ? await options.getPermissionResult()
+        : options.forceDecision
+    if (options.observer) {
+      options.observer.finish(options.finishResult(result))
+    }
+    return result
+  } catch (error) {
+    if (options.observer) {
+      options.observer.finish(options.finishError(error))
+    }
+    throw error
   }
 }
 
