@@ -787,7 +787,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
-        if (all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
+        if (all.summary.autoMode.buckets.length > 0) {
             const grouped = new Map<string, typeof all.summary.autoMode.buckets[number]>();
             const worse = (left: 'complete' | 'partial' | 'unavailable', right: 'complete' | 'partial' | 'unavailable') =>
                 left === 'unavailable' || right === 'unavailable' ? 'unavailable'

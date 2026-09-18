@@ -375,3 +375,17 @@ test('previous periods suppress unknown or partial history but retain a known ze
     await writeFile(partial, 'broken');
     expect((await collectRetainedUsage([partial], asOf)).ranges['7d'].previousPeriod).toBeUndefined();
 });
+
+test('coarsens sparse auto buckets onto the published All grid', async () => {
+    const rows = Array.from({ length: 181 }, (_, index) =>
+        msg(new Date(Date.UTC(2026, 2, index + 1, 10)).toISOString(), `ordinary-${index}`, 1, `tool-${index}`));
+    rows.push(
+        { type: 'system', uuid: 'auto-start', timestamp: '2026-03-01T10:00:00.000Z', subtype: 'auto_permission_start', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
+        { type: 'system', uuid: 'auto-end', timestamp: '2026-03-01T10:01:00.000Z', subtype: 'auto_permission_end', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' },
+    );
+    const snapshot = await collectRetainedUsage([await file(rows)], asOf);
+    const all = snapshot.ranges.all;
+    expect(all.bucketDays).toBeGreaterThan(1);
+    expect(all.autoMode.buckets.every(bucket =>
+        (Date.parse(`${bucket.date}T00:00:00.000Z`) - Date.parse(all.startInclusive)) / 86400000 % all.bucketDays! === 0)).toBe(true);
+});

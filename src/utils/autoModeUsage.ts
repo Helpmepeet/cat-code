@@ -401,7 +401,11 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
       (source.observedFrom !== undefined && validTime(source.observedFrom) === null) ||
       (source.observedThrough !== undefined && validTime(source.observedThrough) === null) ||
       (source.observedFrom !== undefined && source.observedThrough !== undefined &&
-        Date.parse(source.observedFrom) > Date.parse(source.observedThrough))) {
+        Date.parse(source.observedFrom) > Date.parse(source.observedThrough)) ||
+      (source.supportedFrom !== undefined && source.observedFrom !== undefined &&
+        Date.parse(source.supportedFrom) < Date.parse(source.observedFrom)) ||
+      (source.supportedFrom !== undefined && source.observedThrough !== undefined &&
+        Date.parse(source.supportedFrom) > Date.parse(source.observedThrough))) {
       sourceConflict = true
       continue
     }
