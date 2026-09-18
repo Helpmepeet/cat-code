@@ -209,14 +209,53 @@ about why the earlier turn stopped.
 ## What the model sees when a skill is loaded
 
 A tool is an executable capability. A skill is a reusable playbook, usually
-stored in `SKILL.md`, that teaches the model how to perform a kind of task. Cat
-Code exposes a `Skill` tool that loads the selected playbook.
+stored in `SKILL.md`, that teaches the model how to perform a kind of task.
+There are two invocation paths.
+
+### The user invokes `/skill-name`
+
+Cat Code recognizes the slash command before sending anything to the model. It
+resolves the skill, calls `getPromptForCommand()` to load and expand its
+instructions and arguments, and constructs the messages for the next model
+request.
+
+```text
+User types /pdf report.pdf
+  -> Cat Code intercepts the slash command
+  -> Cat Code loads and expands the pdf skill
+  -> Cat Code injects the playbook into the request
+  -> model receives the expanded playbook and starts following it
+```
+
+The model does **not** receive `/pdf` and then decide whether to call the
+`Skill` tool. The harness has already performed the loading. It adds command
+metadata, the expanded skill content, relevant attachments, and a permission
+attachment carrying any allowed tools or model configured by the skill. The
+request can also adopt the skill's configured effort setting.
+
+This direct route is available only for a user-invocable skill. If its metadata
+sets `userInvocable: false`, Cat Code refuses direct slash invocation and tells
+the user to ask the assistant to use the skill.
+
+### The model chooses a skill
+
+Cat Code also exposes a `Skill` tool and a catalog of skills the model may
+invoke. In that path, the model must first emit a structured tool call:
 
 ```text
 Model calls Skill({ skill: "pdf" })
-  -> Cat Code loads the skill instructions
-  -> Cat Code injects them into the conversation
-  -> model follows the instructions and may use normal tools
+  -> Cat Code validates the requested skill
+  -> Cat Code loads and expands its instructions
+  -> Cat Code injects the playbook into the conversation
+  -> model continues with the loaded instructions
+```
+
+Both paths eventually use essentially the same prompt-expansion machinery for
+ordinary local skills. The difference is who made the decision:
+
+```text
+/skill-name typed by user -> harness loads it immediately
+Skill tool called by model -> model requests it, then harness loads it
 ```
 
 The injected playbook is internally constructed as a `user` message with
@@ -232,8 +271,13 @@ createUserMessage({
 `isMeta` means that Cat Code considers it a synthetic metadata or control
 message rather than text typed directly by the human. The provider generally
 does not receive an `isMeta` field; it receives the playbook content under the
-`user` role. The model knows the playbook came from a skill because it follows
-the model's own `Skill` call and loading result.
+`user` role. Cat Code also includes command or skill-loading metadata so the
+content is framed as an invoked playbook. In the model-invoked path, the model
+additionally sees that this content follows its own `Skill` call.
+
+There is a coordinator-mode exception: the main coordinator receives a short
+delegation description instead of the complete playbook and tells a worker to
+invoke the skill. The worker then receives the actual skill content.
 
 This leads to an important design rule:
 
