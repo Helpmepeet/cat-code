@@ -45,6 +45,27 @@ export const AUTO_MODE_FAILURES = [
 ] as const
 export type AutoModeFailure = (typeof AUTO_MODE_FAILURES)[number]
 
+export type AutoModeRawPermissionResult = 'allow' | 'deny' | 'ask' | 'throw'
+
+export type AutoModePolicyEvidence =
+  | 'base_rule'
+  | 'safety_policy'
+  | 'classifier_policy'
+
+export type AutoModeDispositionEvidence = {
+  /**
+   * A typed observed failure wins over a classifier's fail-closed verdict.
+   * This avoids interpreting unavailable/invalid responses as policy blocks.
+   */
+  failure?: AutoModeFailure
+  policy?: AutoModePolicyEvidence
+}
+
+export type AutoModeDispositionMetadata = {
+  disposition: AutoModeDisposition
+  cause?: AutoModeFailure
+}
+
 export type AutoModePrimaryCategory = {
   kind: 'built_in' | 'custom' | 'permission_rule'
   id: string
@@ -139,6 +160,50 @@ function category(value: unknown): value is AutoModePrimaryCategory {
 
 function hasReservedEnvelopeKey(value: Record<string, unknown>): boolean {
   return Object.keys(value).some(key => RESERVED_ENVELOPE_KEYS.has(key))
+}
+
+const OPERATIONAL_FAILURES = new Set<AutoModeFailure>([
+  'unavailable',
+  'invalid_response',
+  'context_limit',
+  'internal_error',
+])
+
+/**
+ * Maps the initial permission pipeline result using only structured evidence.
+ * It observes a decision without changing its behavior or inspecting messages.
+ */
+export function mapAutoModeDisposition(
+  result: AutoModeRawPermissionResult,
+  evidence: Readonly<AutoModeDispositionEvidence> = {},
+): AutoModeDispositionMetadata {
+  if (result === 'allow') return { disposition: 'allowed' }
+  if (result === 'ask') {
+    return {
+      disposition: 'review_required',
+      ...(evidence.failure ? { cause: evidence.failure } : {}),
+    }
+  }
+  if (result === 'deny') {
+    if (evidence.failure && OPERATIONAL_FAILURES.has(evidence.failure)) {
+      return { disposition: 'operational_error', cause: evidence.failure }
+    }
+    if (evidence.policy) return { disposition: 'policy_blocked' }
+    return {
+      disposition: 'unknown_outcome',
+      ...(evidence.failure ? { cause: evidence.failure } : {}),
+    }
+  }
+  if (evidence.failure && OPERATIONAL_FAILURES.has(evidence.failure)) {
+    return { disposition: 'operational_error', cause: evidence.failure }
+  }
+  if (evidence.failure === 'interrupted') {
+    return { disposition: 'cancelled', cause: evidence.failure }
+  }
+  return {
+    disposition: 'unknown_outcome',
+    ...(evidence.failure ? { cause: evidence.failure } : {}),
+  }
 }
 
 /**

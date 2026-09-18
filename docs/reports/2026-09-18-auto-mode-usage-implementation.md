@@ -6,6 +6,7 @@
 | --- | --- | --- | --- | --- |
 | 00 | Complete | This report | Source inspection complete | Define closed event and aggregate contracts |
 | 01 | Complete | `autoModeObservation.ts`, `usageAutoMode.ts`, their tests | 4 focused tests passed; desktop typecheck and engine dev build passed | Implement pure disposition mapper |
+| 02 | Complete | `autoModeObservation.ts` and its test | 5 focused tests passed; engine dev build passed | Run Tasks 03 and 05 in parallel |
 
 ## Task 00 evidence map
 
@@ -32,9 +33,16 @@
 - Record identifiers are UTF-8 bounded to 160 bytes. Category IDs are bounded identifiers, not rule text or free-form labels. The event parser rejects unknown kinds/enums, conflicting stage payloads, oversized IDs, and envelope fields the trusted diagnostic writer owns.
 - `AutoModeUsageSummary` is the renderer-safe aggregate vocabulary only: outcomes, population coverage, UTC buckets, route/outcome counts, and bounded categories. It imports no engine writer or transcript data.
 
+## Task 02 disposition mapping
+
+- The mapper consumes only the initial raw result and structured observed failure/policy evidence. A typed unavailable, invalid-response, context-limit, or internal failure takes precedence over a classifier's fail-closed block result.
+- `ask` is always Review required, including Stage 2 block and unavailable paths that hand off. A recorded interruption only maps a thrown initial check to Cancelled after stronger operational failures have been ruled out.
+- Rule/safety/classifier policy evidence maps a deny to Policy-blocked; missing cause maps it to Unknown outcome. The mapper has no I/O and does not inspect or mutate permission results.
+
 ## Verification
 
 - `bun test src/utils/permissions/autoModeObservation.test.ts app/shared/usageAutoMode.test.ts`: 4 passed, 0 failed.
+- `bun test src/utils/permissions/autoModeObservation.test.ts`: 5 passed, 0 failed. Covers every disposition-table row, Stage 2 block to Review required, unavailable to Review required, and input immutability.
 - `bun run --cwd app typecheck`: passed.
 - `bun run build:dev:full`: passed. Workspace-map lint reported 7 existing recommended-section warnings; undefined-name lint passed with 0 diagnostics.
 - `git diff --check`: passed.
