@@ -1,0 +1,27 @@
+.usage-auto-mode-block-rate { margin-top:18px; padding-top:15px; border-top:1px solid var(--color-shell-seam); }
+.usage-auto-mode-block-rate > header { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; }
+.usage-auto-mode-block-rate h3 { margin:0; font-size:13px; font-weight:550; }
+.usage-auto-mode-block-rate header p { margin:3px 0 0; color:var(--usage-secondary); font-size:11.5px; }
+.usage-auto-mode-block-rate-headline { display:flex; flex-direction:column; align-items:flex-end; gap:2px; min-width:0; color:var(--usage-secondary); font:11px var(--font-mono); text-align:right; }
+.usage-auto-mode-block-rate-headline strong { color:var(--color-text-primary); font-size:14px; font-weight:550; }
+.usage-auto-mode-rate-provisional strong { color:var(--usage-amber); }
+.usage-auto-mode-rate-unavailable strong { color:var(--usage-secondary); }
+.usage-auto-mode-block-rate-chart { display:block; width:100%; min-height:150px; margin-top:12px; overflow:visible; }
+.usage-auto-mode-block-rate-grid { stroke:var(--color-shell-seam); stroke-width:1; }
+.usage-auto-mode-block-rate-line { fill:none; stroke:var(--usage-coral); stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+.usage-auto-mode-block-rate-point { cursor:pointer; }
+.usage-auto-mode-block-rate-point:focus { outline:none; }
+.usage-auto-mode-block-rate-dot { fill:var(--usage-coral); stroke:var(--usage-panel); stroke-width:2; }
+.usage-auto-mode-block-rate-dot.usage-auto-mode-rate-provisional { fill:var(--usage-panel); stroke:var(--usage-coral); stroke-width:2; }
+.usage-auto-mode-block-rate-point:focus-visible .usage-auto-mode-block-rate-dot { stroke:var(--color-text-primary); stroke-width:2.5; }
+.usage-auto-mode-block-rate-readout { display:flex; flex-wrap:wrap; gap:4px 12px; min-height:18px; margin-top:4px; font-size:11px; }
+.usage-auto-mode-block-rate-readout span { color:var(--usage-secondary); font-family:var(--font-mono); }
+.usage-auto-mode-block-rate-values { margin-top:10px; }
+.usage-auto-mode-block-rate-values > summary { color:var(--usage-secondary); font-size:11px; cursor:pointer; }
+.usage-auto-mode-block-rate-values table { margin-top:8px; }
+@media(max-width:520px) {
+  .usage-auto-mode-block-rate > header { display:block; }
+  .usage-auto-mode-block-rate-headline { align-items:flex-start; margin-top:10px; text-align:left; }
+  .usage-auto-mode-block-rate-readout { display:block; }
+  .usage-auto-mode-block-rate-readout span { display:block; margin-top:3px; }
+}
