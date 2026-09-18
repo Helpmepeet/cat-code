@@ -2912,6 +2912,22 @@ test('FIX-5 wiring tripwire: the inspector, the meta strip, the accounts page an
   expect(paneSource).toContain('pendingCaretRef.current = {')
 })
 
+test('slash completion restores the composer caret after replacing its query', () => {
+  // The pane's keyboard handler runs before the controlled draft rewrite. Its
+  // replacement must enter the same caret path as paste/history rewrites so the
+  // contentEditable does not retain the old query offset.
+  const source = readFileSync(new URL('./SessionPane.tsx', import.meta.url), 'utf8')
+  const start = source.indexOf('const pickSlashCommand =')
+  const body = source.slice(start, source.indexOf('// @-mention', start))
+
+  expect(body).toContain('pendingCaretRef.current = {')
+  expect(body).toContain('base: prompt.length')
+  expect(body).toContain('prevLength: prompt.length')
+  expect(body.indexOf('pendingCaretRef.current = {')).toBeLessThan(
+    body.indexOf('setPrompt(completeSlashDraft(name))'),
+  )
+})
+
 /**
  * PEER-SESSIONS §6 — the two peer surfaces App itself owns. Both live in the
  * pane's render body, which this SSR-only file never reaches, so their logic is

@@ -370,6 +370,13 @@ export function SessionPane({
   }, [slashQuery])
 
   const pickSlashCommand = (name: string): void => {
+    // Slash completion replaces the in-progress query with a longer command.
+    // Preserve the old end as the base so the shared rewrite effect places the
+    // caret at the end of the completed draft.
+    pendingCaretRef.current = {
+      base: prompt.length,
+      prevLength: prompt.length,
+    }
     setPrompt(completeSlashDraft(name))
     setSlashDismissed(false)
     setSlashActiveIndex(0)
@@ -495,11 +502,11 @@ export function SessionPane({
       setPickingFile(false)
     }
   }
-  // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (at-caret
-  // paste, whole-token Backspace). A rewritten draft rebuilds the field's nodes,
-  // so without this the next keystroke lands at the end of the draft instead of
-  // where the edit happened — and a second Backspace eats the last character
-  // rather than continuing.
+  // P4-24 — where the caret belongs after a PROGRAMMATIC draft rewrite (slash
+  // completion, at-caret paste, whole-token Backspace). A rewritten draft rebuilds
+  // the field's nodes, so without this the next keystroke lands at the end of the
+  // draft instead of where the edit happened — and a second Backspace eats the
+  // last character rather than continuing.
   // `base` is the offset the edit ends at in the OLD draft; the new caret is that
   // offset shifted by however much the rewrite changed the length.
   const pendingCaretRef = useRef<{ base: number; prevLength: number } | null>(
