@@ -103,10 +103,67 @@ import {
 import {
   classifyYoloAction,
   formatActionForClassifier,
+  type YoloClassifierStageObserver,
 } from './yoloClassifier.js'
 import { recordAutoModeOutcome } from './autoModeMeta.js'
+import {
+  createAutoModePermissionObservationContext,
+  type AutoModePermissionObservationContext,
+} from './autoModeObservation.js'
+import { recordAutoModeObservation } from '../sessionStorage.js'
 
 const CLASSIFIER_FAIL_CLOSED_REFRESH_MS = 30 * 60 * 1000 // 30 minutes
+
+export function getEffectiveAutoMode(
+  permissionContext: ToolPermissionContext,
+): 'auto' | 'plan_auto' | null {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) return null
+  if (permissionContext.mode === 'auto') return 'auto'
+  if (
+    permissionContext.mode === 'plan' &&
+    (autoModeStateModule?.isAutoModeActive() ?? false)
+  ) {
+    return 'plan_auto'
+  }
+  return null
+}
+
+export function createInitialAutoModePermissionObservation(
+  tool: Pick<Tool, 'name'>,
+  context: ToolUseContext,
+  toolUseId: string,
+): AutoModePermissionObservationContext | null {
+  if (typeof context.getAppState !== 'function') return null
+  return createAutoModePermissionObservationContext({
+    writer: recordAutoModeObservation,
+    toolUseId,
+    toolKind:
+      tool.name === BASH_TOOL_NAME
+        ? 'bash'
+        : tool.name === POWERSHELL_TOOL_NAME
+          ? 'powershell'
+          : 'other',
+    effectiveAutoMode: getEffectiveAutoMode(
+      context.getAppState().toolPermissionContext,
+    ),
+  })
+}
+
+function createYoloClassifierStageObserver(
+  observation: AutoModePermissionObservationContext | null | undefined,
+): YoloClassifierStageObserver | undefined {
+  if (observation === null || observation === undefined) return undefined
+  return {
+    enterStage(stage) {
+      observation.markRoute(stage === 'fast' ? 'stage1' : 'stage2')
+      observation.enterStage(stage)
+    },
+    resolveStage(stage, resolution) {
+      observation.resolveStage(stage, resolution)
+      if ('failure' in resolution) observation.markFailure(resolution.failure)
+    },
+  }
+}
 
 const PERMISSION_RULE_SOURCES = [
   ...SETTING_SOURCES,
@@ -495,8 +552,22 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
   context,
   assistantMessage,
   toolUseID,
+  _forceDecision,
+  observation,
 ): Promise<PermissionDecision> => {
-  const result = await hasPermissionsToUseToolInner(tool, input, context)
+  const result = await hasPermissionsToUseToolInner(
+    tool,
+    input,
+    context,
+    observation ?? null,
+  )
+  observation?.markRoute('base')
+  if (
+    result.behavior === 'deny' &&
+    result.decisionReason?.type === 'rule'
+  ) {
+    observation?.markPolicy('base_rule')
+  }
 
 
   // Reset consecutive denials on any allowed tool use in auto mode.
@@ -536,12 +607,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
     }
     // Apply auto mode: use AI classifier instead of prompting user
     // Check this BEFORE shouldAvoidPermissionPrompts so classifiers work in headless mode
-    if (
-      feature('TRANSCRIPT_CLASSIFIER') &&
-      (appState.toolPermissionContext.mode === 'auto' ||
-        (appState.toolPermissionContext.mode === 'plan' &&
-          (autoModeStateModule?.isAutoModeActive() ?? false)))
-    ) {
+    if (getEffectiveAutoMode(appState.toolPermissionContext) !== null) {
       // Non-classifier-approvable safetyCheck decisions stay immune to ALL
       // auto-approve paths: the acceptEdits fast-path, the safe-tool allowlist,
       // and the classifier. Step 1g only guards bypassPermissions; this guards
@@ -552,6 +618,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         result.decisionReason?.type === 'safetyCheck' &&
         !result.decisionReason.classifierApprovable
       ) {
+        observation?.markRoute('guard')
+        observation?.markPolicy('safety_policy')
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           return {
             behavior: 'deny',
@@ -566,6 +634,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         return result
       }
       if (tool.requiresUserInteraction?.() && result.behavior === 'ask') {
+        observation?.markRoute('guard')
         return result
       }
 
@@ -591,6 +660,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         tool.name === POWERSHELL_TOOL_NAME &&
         !feature('POWERSHELL_AUTO_MODE')
       ) {
+        observation?.markRoute('guard')
         if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
           return {
             behavior: 'deny',
@@ -636,6 +706,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
             },
           })
           if (acceptEditsResult.behavior === 'allow') {
+            observation?.markRoute('accept_edits')
             const newDenialState = recordSuccess(denialState)
             persistDenialState(context, newDenialState)
             logForDebugging(
@@ -676,6 +747,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
       // Allowlisted tools are safe and don't need YOLO classification.
       // This uses the safe-tool allowlist to skip unnecessary classifier API calls.
       if (classifierDecisionModule!.isAutoModeAllowlistedTool(tool.name)) {
+        observation?.markRoute('allowlist')
         const newDenialState = recordSuccess(denialState)
         persistDenialState(context, newDenialState)
         logForDebugging(
@@ -716,6 +788,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
           context.options.tools,
           appState.toolPermissionContext,
           context.abortController.signal,
+          createYoloClassifierStageObserver(observation),
         )
       } finally {
         clearClassifierChecking(toolUseID)
@@ -845,6 +918,7 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         // error, won't recover on retry. Skip iron_gate and fall back to
         // normal prompting so the user can approve/deny manually.
         if (classifierResult.transcriptTooLong) {
+          observation?.markFailure('context_limit')
           if (appState.toolPermissionContext.shouldAvoidPermissionPrompts) {
             // Permanent condition (transcript only grows) — deny-retry-deny
             // wastes tokens without ever hitting the denial-limit abort.
@@ -868,6 +942,11 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         // When classifier is unavailable (API error), behavior depends on
         // the tengu_iron_gate_closed gate.
         if (classifierResult.unavailable) {
+          observation?.markFailure(
+            context.abortController.signal.aborted
+              ? 'interrupted'
+              : 'unavailable',
+          )
           if (
             getFeatureValue_CACHED_WITH_REFRESH(
               'tengu_iron_gate_closed',
@@ -901,6 +980,8 @@ export const hasPermissionsToUseTool: CanUseToolFn = async (
         }
 
         // Update denial tracking and check limits
+        observation?.markPolicy('classifier_policy')
+        observation?.markCategory(classifierResult.category)
         const newDenialState = recordDenial(denialState)
         persistDenialState(context, newDenialState)
 
@@ -1193,6 +1274,7 @@ async function hasPermissionsToUseToolInner(
   tool: Tool,
   input: { [key: string]: unknown },
   context: ToolUseContext,
+  _observation: AutoModePermissionObservationContext | null,
 ): Promise<PermissionDecision> {
   if (context.abortController.signal.aborted) {
     throw new AbortError()

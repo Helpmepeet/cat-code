@@ -7,7 +7,11 @@ import {
   permissionPromptToolResultToPermissionDecision,
   type Output as PermissionToolOutput,
 } from '../utils/permissions/PermissionPromptToolResultSchema.js'
-import { hasPermissionsToUseTool } from '../utils/permissions/permissions.js'
+import {
+  createInitialAutoModePermissionObservation,
+  hasPermissionsToUseTool,
+} from '../utils/permissions/permissions.js'
+import { resolveInitialPermissionOccurrence } from '../utils/permissions/autoModeObservation.js'
 import type {
   AppPermissionRequest,
   AppPermissionResponse,
@@ -36,15 +40,28 @@ export function createAppRuntimeCanUseTool({
     toolUseID: string,
     forceDecision?: PermissionDecision,
   ): Promise<PermissionDecision> => {
-    const permissionResult =
-      forceDecision ??
-      (await baseCanUseTool(
-        tool,
-        input,
-        toolUseContext,
-        assistantMessage,
-        toolUseID,
-      ))
+    const observation = createInitialAutoModePermissionObservation(
+      tool,
+      toolUseContext,
+      toolUseID,
+    )
+    if (forceDecision !== undefined) observation?.markRoute('forced')
+    const permissionResult = await resolveInitialPermissionOccurrence({
+      observer: observation?.observer ?? null,
+      forceDecision,
+      getPermissionResult: () =>
+        baseCanUseTool(
+          tool,
+          input,
+          toolUseContext,
+          assistantMessage,
+          toolUseID,
+          undefined,
+          observation,
+        ),
+      finishResult: result => observation!.finishResult(result.behavior),
+      finishError: () => observation!.finishError(),
+    })
 
     if (
       permissionResult.behavior === 'allow' ||

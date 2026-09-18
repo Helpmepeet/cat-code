@@ -380,6 +380,7 @@ export class QueryEngine {
       assistantMessage,
       toolUseID,
       forceDecision,
+      observation,
     ) => {
       const result = await canUseTool(
         tool,
@@ -388,6 +389,7 @@ export class QueryEngine {
         assistantMessage,
         toolUseID,
         forceDecision,
+        observation,
       )
 
       // Track denials for SDK reporting

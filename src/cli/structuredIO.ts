@@ -34,7 +34,11 @@ import type {
   PermissionDecision,
   PermissionDecisionReason,
 } from 'src/utils/permissions/PermissionResult.js'
-import { hasPermissionsToUseTool } from 'src/utils/permissions/permissions.js'
+import {
+  createInitialAutoModePermissionObservation,
+  hasPermissionsToUseTool,
+} from 'src/utils/permissions/permissions.js'
+import { resolveInitialPermissionOccurrence } from 'src/utils/permissions/autoModeObservation.js'
 import { writeToStdout } from 'src/utils/process.js'
 import { jsonStringify } from 'src/utils/slowOperations.js'
 import { z } from 'zod/v4'
@@ -541,15 +545,28 @@ export class StructuredIO {
       toolUseID: string,
       forceDecision?: PermissionDecision,
     ): Promise<PermissionDecision> => {
-      const mainPermissionResult =
-        forceDecision ??
-        (await hasPermissionsToUseTool(
-          tool,
-          input,
-          toolUseContext,
-          assistantMessage,
-          toolUseID,
-        ))
+      const observation = createInitialAutoModePermissionObservation(
+        tool,
+        toolUseContext,
+        toolUseID,
+      )
+      if (forceDecision !== undefined) observation?.markRoute('forced')
+      const mainPermissionResult = await resolveInitialPermissionOccurrence({
+        observer: observation?.observer ?? null,
+        forceDecision,
+        getPermissionResult: () =>
+          hasPermissionsToUseTool(
+            tool,
+            input,
+            toolUseContext,
+            assistantMessage,
+            toolUseID,
+            undefined,
+            observation,
+          ),
+        finishResult: result => observation!.finishResult(result.behavior),
+        finishError: () => observation!.finishError(),
+      })
       // If the tool is allowed or denied, return the result
       if (
         mainPermissionResult.behavior === 'allow' ||

@@ -1,3 +1,4 @@
+import { feature } from 'bun:bundle'
 import { describe, expect, test } from 'bun:test'
 import type { CanUseToolFn } from '../hooks/useCanUseTool.js'
 import type { Tool, ToolUseContext } from '../Tool.js'
@@ -6,6 +7,46 @@ import type { PermissionDecision } from '../utils/permissions/PermissionResult.j
 import { createAppRuntimeCanUseTool } from './appRuntimeCanUseTool.js'
 
 describe('createAppRuntimeCanUseTool', () => {
+  test('forwards an in-memory occurrence context without changing the base decision', async () => {
+    const decision: PermissionDecision = {
+      behavior: 'allow',
+      updatedInput: { command: 'pwd' },
+    }
+    const calls: unknown[][] = []
+    const baseCanUseTool: CanUseToolFn = async (...args) => {
+      calls.push(args)
+      return decision
+    }
+    const canUseTool = createAppRuntimeCanUseTool({
+      baseCanUseTool,
+      getPermissionRequestHandler: () => undefined,
+    })
+
+    await expect(
+      canUseTool(
+        { name: 'Bash' } as Tool,
+        { command: 'pwd' },
+        {
+          getAppState: () => ({
+            toolPermissionContext: { mode: 'auto' },
+          }),
+        } as ToolUseContext,
+        {} as AssistantMessage,
+        'toolu_observed',
+      ),
+    ).resolves.toBe(decision)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.[5]).toBeUndefined()
+    if (feature('TRANSCRIPT_CLASSIFIER')) {
+      expect(calls[0]?.[6]).toMatchObject({
+        observer: expect.any(Object),
+      })
+    } else {
+      expect(calls[0]?.[6]).toBeNull()
+    }
+  })
+
   test('turns ask decisions into app permission requests', async () => {
     const baseCanUseTool: CanUseToolFn = async () => ({
       behavior: 'ask',

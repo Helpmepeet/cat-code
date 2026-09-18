@@ -8,6 +8,7 @@
 | 01 | Complete | `autoModeObservation.ts`, `usageAutoMode.ts`, their tests | 4 focused tests passed; desktop typecheck and engine dev build passed | Implement pure disposition mapper |
 | 02 | Complete | `autoModeObservation.ts` and its test | 5 focused tests passed; engine dev build passed | Run Tasks 03 and 05 in parallel |
 | 03 | Complete | Observer lifecycle, owned diagnostic writer, and focused tests | 61 focused tests passed; engine dev build passed | Wire production routes |
+| 04 | Complete | Permission caller matrix, occurrence context, core/classifier wiring, and focused tests | 65 focused tests passed with `TRANSCRIPT_CLASSIFIER`; engine dev build and diff check passed | Project diagnostics into the Usage index |
 | 05 | Complete | Pure reducer and deterministic fixtures | 11 focused tests passed; engine dev build passed | Wire production routes and indexed projection |
 
 ## Task 00 evidence map
@@ -47,6 +48,13 @@
 - The observer accepts only its first terminal result and retains one entered/resolved record per completed classifier stage. The reusable outer seam preserves the original forced result or thrown error identity while Task 04 remains responsible for production route/cause mapping.
 - `recordAutoModeObservation` uses the established transcript lease/owner path. Invalid payloads do not reach the writer; no transcript owner writes no file; a lease violation still throws; ordinary append failures remain best effort.
 
+## Task 04 production permission wiring
+
+- `CanUseToolFn` now accepts one final optional, engine-owned occurrence context. `QueryEngine` forwards it without changing denial tracking. The verified initial wrappers create it before their forced/core choice: React terminal, desktop app runtime, structured output, both print variants, and in-process swarm. Same-ID interactive and swarm rechecks call the core checker directly without a context; special-purpose permission callbacks remain compatible because the new parameter is optional.
+- `getEffectiveAutoMode` is the single predicate used to freeze a Start and decide whether the core applies auto mode: `TRANSCRIPT_CLASSIFIER` with `auto`, or `plan` while the engine-owned auto-mode state is active. The context is in-memory, metadata-only, and is passed only to the core and its optional classifier stage callback.
+- The core records base, forced, guard, accept-edits, allowlist, Stage 1, and Stage 2 routes. It supplies structured rule, safety, classifier, unavailable, invalid-response, context-limit, and interruption evidence without parsing diagnostic or error text. Context-limit/internal evidence retains precedence over a later interruption.
+- The classifier callback emits exactly one entry/resolution pair per reached stage, including provider fallback retries as a single stage. It has no Usage writer import or access to renderer, IPC, prompt, tool-input, or model-output channels.
+
 ## Task 05 retained-record reduction
 
 - `reduceAutoModeUsage` is pure and accepts synthetic metadata-only retained records plus explicit source population support. It performs two-layer event/terminal validation, source-scoped joins, canonical record de-duplication, stable UTC start-bucket attribution, malformed-terminal salvage, orphan handling, and conservative coverage state.
@@ -59,6 +67,7 @@
 - `bun test src/utils/permissions/autoModeObservation.test.ts`: 5 passed, 0 failed. Covers every disposition-table row, Stage 2 block to Review required, unavailable to Review required, and input immutability.
 - `bun test src/utils/permissions/autoModeObservation.test.ts src/utils/sessionStorage.test.ts`: 61 passed, 0 failed.
 - `bun test src/utils/autoModeUsage.test.ts`: 11 passed, 0 failed.
+- `bun test --feature=TRANSCRIPT_CLASSIFIER src/utils/permissions/autoModeObservation.test.ts src/utils/permissions/permissions.observation.test.ts src/utils/permissions/yoloClassifier.test.ts src/utils/permissions/permissions.test.ts src/app-runtime/appRuntimeCanUseTool.test.ts src/utils/swarm/inProcessRunner.test.ts`: 65 passed, 0 failed. Covers forced allow/deny, base/guard/fast paths, both classifier stages, review fallback, context limit, user abort, recheck omission, and desktop occurrence-context forwarding without changing the base result.
 - `bun run --cwd app typecheck`: passed.
 - `bun run build:dev:full`: passed. Workspace-map lint reported 7 existing recommended-section warnings; undefined-name lint passed with 0 diagnostics.
 - `git diff --check`: passed.

@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
   MAX_AUTO_MODE_OBSERVATION_ID_BYTES,
+  createAutoModePermissionObservationContext,
   createAutoModePermissionObserver,
   mapAutoModeDisposition,
   parseAutoModeObservationEvent,
@@ -98,6 +99,7 @@ test('maps initial permission results from structured evidence without mutation'
     ['deny', { failure: 'invalid_response' }, { disposition: 'operational_error', cause: 'invalid_response' }],
     ['deny', { failure: 'context_limit' }, { disposition: 'operational_error', cause: 'context_limit' }],
     ['deny', { failure: 'internal_error' }, { disposition: 'operational_error', cause: 'internal_error' }],
+    ['deny', { failure: 'interrupted' }, { disposition: 'cancelled', cause: 'interrupted' }],
     ['deny', { policy: 'base_rule' }, { disposition: 'policy_blocked' }],
     ['deny', { policy: 'safety_policy' }, { disposition: 'policy_blocked' }],
     ['deny', { policy: 'classifier_policy' }, { disposition: 'policy_blocked' }],
@@ -122,6 +124,27 @@ test('preserves review-required when a Stage 2 block or unavailable classifier h
   expect(
     mapAutoModeDisposition('ask', { failure: 'unavailable' }),
   ).toEqual({ disposition: 'review_required', cause: 'unavailable' })
+})
+
+test('keeps context-limit evidence when a later abort is observed', () => {
+  const events: unknown[] = []
+  const observation = createAutoModePermissionObservationContext({
+    writer: event => events.push(event),
+    toolUseId: 'tool-1',
+    toolKind: 'bash',
+    effectiveAutoMode: 'auto',
+    createAttemptId: () => 'attempt-1',
+  })
+
+  observation?.markFailure('context_limit')
+  observation?.markFailure('interrupted')
+  observation?.observer.finish(observation.finishError())
+
+  expect(events.at(-1)).toMatchObject({
+    subtype: 'auto_permission_end',
+    disposition: 'operational_error',
+    cause: 'context_limit',
+  })
 })
 
 test('records one initial occurrence and only its first finish', () => {
@@ -241,6 +264,38 @@ test('uses no observer for rechecks and creates a fresh attempt per occurrence',
       auto_mode: 'plan_auto',
     },
   ])
+})
+
+test('records a forced deny without calling the checker', async () => {
+  const events: unknown[] = []
+  const observer = createAutoModePermissionObserver({
+    writer: event => events.push(event),
+    toolUseId: 'tool-1',
+    toolKind: 'bash',
+    effectiveAutoMode: 'auto',
+    createAttemptId: () => 'attempt-1',
+  })
+  const decision = { behavior: 'deny' }
+
+  await expect(
+    resolveInitialPermissionOccurrence({
+      observer,
+      forceDecision: decision,
+      getPermissionResult: async () => {
+        throw new Error('forced decisions do not call the checker')
+      },
+      finishResult: result => {
+        expect(result).toBe(decision)
+        return { raw_result: 'deny', route: 'forced' }
+      },
+      finishError: () => ({ raw_result: 'throw', route: 'forced' }),
+    }),
+  ).resolves.toBe(decision)
+  expect(events.at(-1)).toMatchObject({
+    subtype: 'auto_permission_end',
+    raw_result: 'deny',
+    route: 'forced',
+  })
 })
 
 test('preserves the original thrown error identity', async () => {

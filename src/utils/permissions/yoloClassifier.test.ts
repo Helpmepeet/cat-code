@@ -472,6 +472,9 @@ describe('two-stage upstream classifier', () => {
 
   const classify = (
     fakeSideQuery: (...args: Parameters<typeof sideQuery>) => unknown,
+    observation?: Parameters<
+      typeof _forTest.classifyYoloActionWithSideQuery
+    >[6],
   ) => {
     const signal = new AbortController().signal
     return _forTest.classifyYoloActionWithSideQuery(
@@ -481,6 +484,7 @@ describe('two-stage upstream classifier', () => {
       context,
       signal,
       fakeSideQuery as typeof sideQuery,
+      observation,
     )
   }
 
@@ -537,6 +541,23 @@ describe('two-stage upstream classifier', () => {
     expect(JSON.parse(getAutoModeClassifierTranscript() ?? 'null')).toHaveLength(
       1,
     )
+  })
+
+  test('reports one resolved stage for a stage 1 allow', async () => {
+    const stages: unknown[] = []
+    await classify(
+      async () => response('msg_fast', 'req_fast', { shouldBlock: false }),
+      {
+        enterStage: stage => stages.push({ phase: 'entered', stage }),
+        resolveStage: (stage, resolution) =>
+          stages.push({ phase: 'resolved', stage, ...resolution }),
+      },
+    )
+
+    expect(stages).toEqual([
+      { phase: 'entered', stage: 'fast' },
+      { phase: 'resolved', stage: 'fast', should_block: false },
+    ])
   })
 
   test('escalates to stage 2 and combines usage and identifiers', async () => {

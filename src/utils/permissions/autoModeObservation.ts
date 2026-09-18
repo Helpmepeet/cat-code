@@ -190,6 +190,9 @@ export function mapAutoModeDisposition(
     if (evidence.failure && OPERATIONAL_FAILURES.has(evidence.failure)) {
       return { disposition: 'operational_error', cause: evidence.failure }
     }
+    if (evidence.failure === 'interrupted') {
+      return { disposition: 'cancelled', cause: evidence.failure }
+    }
     if (evidence.policy) return { disposition: 'policy_blocked' }
     return {
       disposition: 'unknown_outcome',
@@ -234,6 +237,21 @@ export type CreateAutoModePermissionObserverOptions = {
   toolKind: AutoModeToolKind
   effectiveAutoMode: 'auto' | 'plan_auto' | null
   createAttemptId?: () => string
+}
+
+export type AutoModePermissionObservationContext = {
+  readonly observer: AutoModePermissionObserver
+  markRoute(route: AutoModeRoute): void
+  markFailure(failure: AutoModeFailure): void
+  markPolicy(policy: AutoModePolicyEvidence): void
+  markCategory(category: AutoModePrimaryCategory | undefined): void
+  enterStage(stage: AutoModeStage): void
+  resolveStage(
+    stage: AutoModeStage,
+    resolution: Parameters<AutoModePermissionObserver['resolveStage']>[1],
+  ): void
+  finishResult(result: AutoModeRawPermissionResult): Parameters<AutoModePermissionObserver['finish']>[0]
+  finishError(): Parameters<AutoModePermissionObserver['finish']>[0]
 }
 
 /**
@@ -302,6 +320,54 @@ export function createAutoModePermissionObserver(
         ...disposition,
         ...(primary_category ? { primary_category } : {}),
       })
+    },
+  }
+}
+
+export function createAutoModePermissionObservationContext(
+  options: CreateAutoModePermissionObserverOptions,
+): AutoModePermissionObservationContext | null {
+  const observer = createAutoModePermissionObserver(options)
+  if (observer === null) return null
+  let route: AutoModeRoute = 'unknown'
+  let evidence: AutoModeDispositionEvidence = {}
+  let category: AutoModePrimaryCategory | undefined
+  return {
+    observer,
+    markRoute(next) {
+      route = next
+    },
+    markFailure(failure) {
+      if (
+        evidence.failure === 'context_limit' ||
+        evidence.failure === 'internal_error'
+      ) {
+        return
+      }
+      evidence = { ...evidence, failure }
+    },
+    markPolicy(policy) {
+      evidence = { ...evidence, policy }
+    },
+    markCategory(next) {
+      category = next
+    },
+    enterStage(stage) {
+      observer.enterStage(stage)
+    },
+    resolveStage(stage, resolution) {
+      observer.resolveStage(stage, resolution)
+    },
+    finishResult(result) {
+      return {
+        raw_result: result,
+        route,
+        evidence,
+        ...(category ? { primary_category: category } : {}),
+      }
+    },
+    finishError() {
+      return { raw_result: 'throw', route, evidence }
     },
   }
 }

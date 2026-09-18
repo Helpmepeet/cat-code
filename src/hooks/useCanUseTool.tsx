@@ -18,14 +18,16 @@ import { logForDebugging } from '../utils/debug.js';
 import { AbortError } from '../utils/errors.js';
 import { logError } from '../utils/log.js';
 import type { PermissionDecision } from '../utils/permissions/PermissionResult.js';
-import { hasPermissionsToUseTool } from '../utils/permissions/permissions.js';
+import type { AutoModePermissionObservationContext } from '../utils/permissions/autoModeObservation.js';
+import { createInitialAutoModePermissionObservation, hasPermissionsToUseTool } from '../utils/permissions/permissions.js';
+import { resolveInitialPermissionOccurrence } from '../utils/permissions/autoModeObservation.js';
 import { jsonStringify } from '../utils/slowOperations.js';
 import { handleCoordinatorPermission } from './toolPermission/handlers/coordinatorHandler.js';
 import { handleInteractivePermission } from './toolPermission/handlers/interactiveHandler.js';
 import { handleSwarmWorkerPermission } from './toolPermission/handlers/swarmWorkerHandler.js';
 import { createPermissionContext, createPermissionQueueOps } from './toolPermission/PermissionContext.js';
 import { logPermissionDecision } from './toolPermission/permissionLogging.js';
-export type CanUseToolFn<Input extends Record<string, unknown> = Record<string, unknown>> = (tool: ToolType, input: Input, toolUseContext: ToolUseContext, assistantMessage: AssistantMessage, toolUseID: string, forceDecision?: PermissionDecision<Input>) => Promise<PermissionDecision<Input>>;
+export type CanUseToolFn<Input extends Record<string, unknown> = Record<string, unknown>> = (tool: ToolType, input: Input, toolUseContext: ToolUseContext, assistantMessage: AssistantMessage, toolUseID: string, forceDecision?: PermissionDecision<Input>, observation?: AutoModePermissionObservationContext | null) => Promise<PermissionDecision<Input>>;
 function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
   const $ = _c(3);
   let t0;
@@ -35,7 +37,15 @@ function useCanUseTool(setToolUseConfirmQueue, setToolPermissionContext) {
       if (ctx.resolveIfAborted(resolve)) {
         return;
       }
-      const decisionPromise = forceDecision !== undefined ? Promise.resolve(forceDecision) : hasPermissionsToUseTool(tool, input, toolUseContext, assistantMessage, toolUseID);
+      const observation = createInitialAutoModePermissionObservation(tool, toolUseContext, toolUseID);
+      if (forceDecision !== undefined) observation?.markRoute('forced');
+      const decisionPromise = resolveInitialPermissionOccurrence({
+        observer: observation?.observer ?? null,
+        forceDecision,
+        getPermissionResult: () => hasPermissionsToUseTool(tool, input, toolUseContext, assistantMessage, toolUseID, undefined, observation),
+        finishResult: result => observation!.finishResult(result.behavior),
+        finishError: () => observation!.finishError(),
+      });
       return decisionPromise.then(async result => {
         if (result.behavior === "allow") {
           if (ctx.resolveIfAborted(resolve)) {

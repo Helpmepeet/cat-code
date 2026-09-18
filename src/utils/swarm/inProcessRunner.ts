@@ -82,7 +82,11 @@ import {
   persistPermissionUpdates,
 } from '../permissions/PermissionUpdate.js'
 import type { PermissionUpdate } from '../permissions/PermissionUpdateSchema.js'
-import { hasPermissionsToUseTool } from '../permissions/permissions.js'
+import {
+  createInitialAutoModePermissionObservation,
+  hasPermissionsToUseTool,
+} from '../permissions/permissions.js'
+import { resolveInitialPermissionOccurrence } from '../permissions/autoModeObservation.js'
 import { emitTaskTerminatedSdk } from '../sdkEventQueue.js'
 import { sleep } from '../sleep.js'
 import { jsonStringify } from '../slowOperations.js'
@@ -164,15 +168,28 @@ function createInProcessCanUseTool(
     toolUseID,
     forceDecision,
   ) => {
-    const result =
-      forceDecision ??
-      (await hasPermissionsToUseTool(
-        tool,
-        input,
-        toolUseContext,
-        assistantMessage,
-        toolUseID,
-      ))
+    const observation = createInitialAutoModePermissionObservation(
+      tool,
+      toolUseContext,
+      toolUseID,
+    )
+    if (forceDecision !== undefined) observation?.markRoute('forced')
+    const result = await resolveInitialPermissionOccurrence({
+      observer: observation?.observer ?? null,
+      forceDecision,
+      getPermissionResult: () =>
+        hasPermissionsToUseTool(
+          tool,
+          input,
+          toolUseContext,
+          assistantMessage,
+          toolUseID,
+          undefined,
+          observation,
+        ),
+      finishResult: decision => observation!.finishResult(decision.behavior),
+      finishError: () => observation!.finishError(),
+    })
 
     // Pass through allow/deny decisions directly
     if (result.behavior !== 'ask') {

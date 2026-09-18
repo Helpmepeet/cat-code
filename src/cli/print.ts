@@ -143,7 +143,11 @@ import { buildBridgeConnectUrl } from 'src/bridge/bridgeStatusUtil.js'
 import { extractInboundMessageFields } from 'src/bridge/inboundMessages.js'
 import { resolveAndPrepend } from 'src/bridge/inboundAttachments.js'
 import type { CanUseToolFn } from 'src/hooks/useCanUseTool.js'
-import { hasPermissionsToUseTool } from 'src/utils/permissions/permissions.js'
+import {
+  createInitialAutoModePermissionObservation,
+  hasPermissionsToUseTool,
+} from 'src/utils/permissions/permissions.js'
+import { resolveInitialPermissionOccurrence } from 'src/utils/permissions/autoModeObservation.js'
 import { safeParseJSON } from 'src/utils/json.js'
 import {
   outputSchema as permissionToolOutputSchema,
@@ -4299,15 +4303,28 @@ export function createCanUseToolWithPermissionPrompt(
     toolUseId,
     forceDecision,
   ) => {
-    const mainPermissionResult =
-      forceDecision ??
-      (await hasPermissionsToUseTool(
-        tool,
-        input,
-        toolUseContext,
-        assistantMessage,
-        toolUseId,
-      ))
+    const observation = createInitialAutoModePermissionObservation(
+      tool,
+      toolUseContext,
+      toolUseId,
+    )
+    if (forceDecision !== undefined) observation?.markRoute('forced')
+    const mainPermissionResult = await resolveInitialPermissionOccurrence({
+      observer: observation?.observer ?? null,
+      forceDecision,
+      getPermissionResult: () =>
+        hasPermissionsToUseTool(
+          tool,
+          input,
+          toolUseContext,
+          assistantMessage,
+          toolUseId,
+          undefined,
+          observation,
+        ),
+      finishResult: result => observation!.finishResult(result.behavior),
+      finishError: () => observation!.finishError(),
+    })
 
     // If the tool is allowed or denied, return the result
     if (
@@ -4423,15 +4440,30 @@ export function getCanUseToolFn(
       assistantMessage,
       toolUseId,
       forceDecision,
-    ) =>
-      forceDecision ??
-      (await hasPermissionsToUseTool(
+    ) => {
+      const observation = createInitialAutoModePermissionObservation(
         tool,
-        input,
         toolUseContext,
-        assistantMessage,
         toolUseId,
-      ))
+      )
+      if (forceDecision !== undefined) observation?.markRoute('forced')
+      return resolveInitialPermissionOccurrence({
+        observer: observation?.observer ?? null,
+        forceDecision,
+        getPermissionResult: () =>
+          hasPermissionsToUseTool(
+            tool,
+            input,
+            toolUseContext,
+            assistantMessage,
+            toolUseId,
+            undefined,
+            observation,
+          ),
+        finishResult: result => observation!.finishResult(result.behavior),
+        finishError: () => observation!.finishError(),
+      })
+    }
   }
   // Lazy lookup: MCP connects are per-server incremental in print mode, so
   // the tool may not be in appState yet at init time. Resolve on first call

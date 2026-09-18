@@ -1034,12 +1034,29 @@ type ClassifierOverrides = {
   sideQuery?: typeof sideQuery
 }
 
+export type YoloClassifierStageObserver = {
+  enterStage(stage: 'fast' | 'thinking'): void
+  resolveStage(
+    stage: 'fast' | 'thinking',
+    resolution:
+      | { should_block: boolean }
+      | {
+          failure:
+            | 'unavailable'
+            | 'invalid_response'
+            | 'context_limit'
+            | 'interrupted'
+        },
+  ): void
+}
+
 export async function classifyYoloAction(
   messages: Message[],
   action: TranscriptEntry,
   tools: Tools,
   context: ToolPermissionContext,
   signal: AbortSignal,
+  observation?: YoloClassifierStageObserver,
 ): Promise<YoloClassifierResult> {
   return classifyYoloActionWithOverrides(
     messages,
@@ -1047,6 +1064,8 @@ export async function classifyYoloAction(
     tools,
     context,
     signal,
+    undefined,
+    observation,
   )
 }
 
@@ -1057,6 +1076,7 @@ async function classifyYoloActionWithOverrides(
   context: ToolPermissionContext,
   signal: AbortSignal,
   overrides?: ClassifierOverrides,
+  observation?: YoloClassifierStageObserver,
 ): Promise<YoloClassifierResult> {
   const runSideQuery = overrides?.sideQuery ?? sideQuery
   const lookup = buildToolLookup(tools)
@@ -1174,6 +1194,7 @@ async function classifyYoloActionWithOverrides(
       }
 
   const requestStage = async (stage: StageName): Promise<StageRequestResult> => {
+    observation?.enterStage(stage)
     let model = getClassifierModel()
     const gatedAttempts = getAutoModeClassifierAttempts(
       model,
@@ -1307,6 +1328,7 @@ async function classifyYoloActionWithOverrides(
     stage: StageName,
   ): Promise<YoloClassifierResult> => {
     if (failed.aborted) {
+      observation?.resolveStage(stage, { failure: 'interrupted' })
       logForDebugging('Auto mode classifier: aborted by user')
       logAutoModeOutcome('interrupted', failed.model, {
         classifierType: stage,
@@ -1323,6 +1345,9 @@ async function classifyYoloActionWithOverrides(
     }
     logForDebugging(`Auto mode classifier error: ${errorMessage(failed.error)}`, {
       level: 'warn',
+    })
+    observation?.resolveStage(stage, {
+      failure: failed.tooLong ? 'context_limit' : 'unavailable',
     })
     const stageSystemPrompt =
       stage === 'fast' ? systemPrompt + STAGE1_PROMPT_SUFFIX : systemPrompt
@@ -1392,6 +1417,7 @@ async function classifyYoloActionWithOverrides(
     stage1MsgId: fast.result.id,
   }
   if (!stage1Parsed) {
+    observation?.resolveStage('fast', { failure: 'invalid_response' })
     logForDebugging('Auto mode classifier: Invalid stage 1 response', {
       level: 'warn',
     })
@@ -1423,6 +1449,7 @@ async function classifyYoloActionWithOverrides(
     ),
   })
   if (!stage1Parsed.shouldBlock) {
+    observation?.resolveStage('fast', { should_block: false })
     return {
       shouldBlock: false,
       reason: 'No block rule could apply',
@@ -1431,6 +1458,7 @@ async function classifyYoloActionWithOverrides(
     }
   }
 
+  observation?.resolveStage('fast', { should_block: true })
   const adjudication = await requestStage('thinking')
   if (!adjudication.ok) {
     const failure = await failedStageResult(adjudication, 'thinking')
@@ -1487,6 +1515,7 @@ async function classifyYoloActionWithOverrides(
   }
 
   if (!toolUseBlock) {
+    observation?.resolveStage('thinking', { failure: 'invalid_response' })
     logForDebugging('Auto mode classifier: No tool use block found', {
       level: 'warn',
     })
@@ -1511,6 +1540,7 @@ async function classifyYoloActionWithOverrides(
     yoloClassifierResponseSchema(),
   )
   if (!parsed) {
+    observation?.resolveStage('thinking', { failure: 'invalid_response' })
     logForDebugging('Auto mode classifier: Invalid response schema', {
       level: 'warn',
     })
@@ -1530,6 +1560,7 @@ async function classifyYoloActionWithOverrides(
   }
 
   if (!isAutoModeVerdictCategoryValid(parsed.shouldBlock, toolUseBlock.input)) {
+    observation?.resolveStage('thinking', { failure: 'invalid_response' })
     logForDebugging(
       'Auto mode classifier: allow verdict included a category',
       { level: 'warn' },
@@ -1572,6 +1603,7 @@ async function classifyYoloActionWithOverrides(
     promptLengths,
     ...stageTelemetry,
   }
+  observation?.resolveStage('thinking', { should_block: parsed.shouldBlock })
   // Context-delta telemetry: chart classifierInputTokens / mainLoopTokens
   // in Datadog. Expect ~0.6-0.8 steady state; alert on p95 > 1.0 (means
   // classifier is bigger than main loop — auto-compact won't save us).
@@ -1596,6 +1628,7 @@ export const _forTest = {
     context: ToolPermissionContext,
     signal: AbortSignal,
     fakeSideQuery: typeof sideQuery,
+    observation?: YoloClassifierStageObserver,
   ): Promise<YoloClassifierResult> {
     return classifyYoloActionWithOverrides(
       messages,
@@ -1604,6 +1637,7 @@ export const _forTest = {
       context,
       signal,
       { sideQuery: fakeSideQuery },
+      observation,
     )
   },
 }
