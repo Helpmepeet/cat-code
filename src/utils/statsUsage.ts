@@ -79,6 +79,19 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             commands: 'unavailable',
         });
     }
+    const observeAutoModeSource = (file: string, observedAt: string) => {
+        const sourceScope = autoModeSourceScope(file);
+        const previous = autoModeSources.get(sourceScope)!;
+        autoModeSources.set(sourceScope, {
+            ...previous,
+            observedFrom: previous.observedFrom === undefined || observedAt < previous.observedFrom
+                ? observedAt
+                : previous.observedFrom,
+            observedThrough: previous.observedThrough === undefined || observedAt > previous.observedThrough
+                ? observedAt
+                : previous.observedThrough,
+        });
+    };
     let identities = 0, stateBytes = 0;
     const reserve = (key: string, payloadBytes = 512) => {
         identities++;
@@ -257,6 +270,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             const observed = Date.parse(observedAt);
             const sourceScope = autoModeSourceScope(file);
             if (Number.isFinite(observed) && observed <= cutoff) {
+                observeAutoModeSource(file, observedAt);
+                const observedDay = `${observedAt.slice(0, 10)}T00:00:00.000Z`;
+                if (observedDay < states[2]!.summary.startInclusive)
+                    states[2]!.summary.startInclusive = observedDay;
                 autoModeRecords.push({
                     sourceScope,
                     recordId: nonempty(row.uuid) ? row.uuid : `${item.generation}:${item.offset}`,
@@ -272,6 +289,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                             ? observedAt
                             : previous.supportedFrom;
                     autoModeSources.set(sourceScope, {
+                        ...previous,
                         sourceScope,
                         allTools: 'complete',
                         commands: 'complete',
@@ -288,6 +306,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
         if (timestamp > cutoff)
             return;
+        observeAutoModeSource(file, row.timestamp as string);
         const project = isSubagent ? dirname(dirname(dirname(file))) : dirname(file);
         const mainId = nonempty(row.sessionId) ? row.sessionId : isSubagent ? basename(dirname(dirname(file))) : basename(file, '.jsonl');
         const session = JSON.stringify([project, mainId]);
@@ -710,7 +729,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     // daily data avoids allocating empty history; larger histories use explicit
     // UTC buckets while activeDays remains the exact count of individual days.
     const all = states[2]!;
-    if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS) {
+    if (all.summary.days.length > MAX_USAGE_ALL_BUCKETS || all.summary.autoMode.buckets.length > MAX_USAGE_ALL_BUCKETS) {
         const start = Date.parse(all.summary.startInclusive);
         const span = Math.ceil((Date.parse(all.summary.endExclusive) - start) / 86400000);
         const bucketDays = Math.ceil(span / MAX_USAGE_ALL_BUCKETS);
@@ -782,6 +801,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     for (const population of [target.allTools, target.commands]) {
                         for (const key of Object.keys(population.outcomes) as (keyof typeof population.outcomes)[])
                             population.outcomes[key] = 0;
+                        population.coverage.invalidRecords = 0;
+                        population.coverage.orphanRecords = 0;
                     }
                     grouped.set(date, target);
                 }

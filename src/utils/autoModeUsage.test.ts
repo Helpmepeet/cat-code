@@ -347,3 +347,28 @@ test('does not treat pre-capability intervals as measured zero', () => {
   expect(summary.allTools.coverage.state).toBe('partial')
   expect(summary.buckets[0]!.allTools.coverage.state).toBe('partial')
 })
+
+test('ignores non-overlapping sources but retains overlapping unavailable evidence', () => {
+  const records = [start('current', '2026-09-11T12:00:00.000Z')]
+  const base = {
+    records,
+    rangeStart: '2026-09-11T00:00:00.000Z',
+    rangeEnd: '2026-09-11T23:59:59.999Z',
+    cutoff: '2026-09-12T00:00:00.000Z',
+  }
+  expect(reduceAutoModeUsage({
+    ...base,
+    sources: [
+      { ...source, supportedFrom: '2026-09-11T12:00:00.000Z', observedFrom: '2026-09-11T00:00:00.000Z', observedThrough: '2026-09-11T23:59:59.999Z' },
+      { sourceScope: 'old', allTools: 'unavailable', commands: 'unavailable', observedFrom: '2020-01-01T00:00:00.000Z', observedThrough: '2020-01-02T00:00:00.000Z' },
+      { sourceScope: 'future', allTools: 'unavailable', commands: 'unavailable', observedFrom: '2026-09-13T00:00:00.000Z', observedThrough: '2026-09-14T00:00:00.000Z' },
+    ],
+  }).allTools.coverage.state).toBe('partial')
+  expect(reduceAutoModeUsage({
+    ...base,
+    sources: [
+      { ...source, supportedFrom: '2026-09-11T00:00:00.000Z', observedFrom: '2026-09-11T00:00:00.000Z', observedThrough: '2026-09-11T23:59:59.999Z' },
+      { sourceScope: 'overlap', allTools: 'unavailable', commands: 'unavailable', observedFrom: '2026-09-11T00:00:00.000Z', observedThrough: '2026-09-11T23:59:59.999Z' },
+    ],
+  }).allTools.coverage.state).toBe('partial')
+})

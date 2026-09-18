@@ -36,6 +36,9 @@ export type AutoModeUsageSource = Readonly<{
   commands: CoverageState
   /** First retained Start that proves this source can emit prospective records. */
   supportedFrom?: string
+  /** Bounded retained interval used to ignore sources outside a queried range. */
+  observedFrom?: string
+  observedThrough?: string
 }>
 
 export type AutoModeUsageReductionInput = Readonly<{
@@ -233,14 +236,17 @@ function sourceCoverage(
   rangeStart?: number,
   rangeEnd?: number,
 ): CoverageState {
-  const states = sources.map(source => {
+  const states = sources.flatMap(source => {
+    const observedFrom = source.observedFrom === undefined ? null : validTime(source.observedFrom)
+    const observedThrough = source.observedThrough === undefined ? null : validTime(source.observedThrough)
+    if (observedFrom !== null && observedThrough !== null && rangeStart !== undefined && rangeEnd !== undefined && (rangeEnd < observedFrom || rangeStart > observedThrough)) return []
     const state = source[population]
-    if (state === 'unavailable' || source.supportedFrom === undefined) return state
+    if (state === 'unavailable' || source.supportedFrom === undefined) return [state]
     const supportedFrom = validTime(source.supportedFrom)
-    if (supportedFrom === null || rangeStart === undefined || rangeEnd === undefined) return state
-    if (rangeEnd < supportedFrom) return 'unavailable'
-    if (rangeStart < supportedFrom) return 'partial'
-    return state
+    if (supportedFrom === null || rangeStart === undefined || rangeEnd === undefined) return [state]
+    if (rangeEnd < supportedFrom) return ['unavailable']
+    if (rangeStart < supportedFrom) return ['partial']
+    return [state]
   })
   if (states.length === 0 || states.every(state => state === 'unavailable')) return 'unavailable'
   if (states.every(state => state === 'complete')) return 'complete'
@@ -391,7 +397,11 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
     if (!boundedId(source.sourceScope) ||
       !['complete', 'partial', 'unavailable'].includes(source.allTools) ||
       !['complete', 'partial', 'unavailable'].includes(source.commands) ||
-      (source.supportedFrom !== undefined && validTime(source.supportedFrom) === null)) {
+      (source.supportedFrom !== undefined && validTime(source.supportedFrom) === null) ||
+      (source.observedFrom !== undefined && validTime(source.observedFrom) === null) ||
+      (source.observedThrough !== undefined && validTime(source.observedThrough) === null) ||
+      (source.observedFrom !== undefined && source.observedThrough !== undefined &&
+        Date.parse(source.observedFrom) > Date.parse(source.observedThrough))) {
       sourceConflict = true
       continue
     }
