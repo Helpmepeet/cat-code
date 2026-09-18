@@ -101,21 +101,22 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
 }
 
 export function autoModeRouteEdges(summary: AutoModeUsageSummary) {
-  const edges = new Map<string, { from: string; to: string; outcome: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
+  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
   for (const route of summary.routes) {
     const path = AUTO_MODE_ROUTE_EDGES[route.route]
     const links = [...path.slice(1).map((to, index) => ({ from: path[index]!, to })), {
       from: path.at(-1)!,
       to: route.outcome,
     }]
-    for (const link of links) {
-      const key = JSON.stringify([link.from, link.to, route.outcome])
+    for (const [index, link] of links.entries()) {
+      const sink = index === links.length - 1
+      const key = JSON.stringify([link.from, link.to])
       const edge = edges.get(key)
       if (edge) edge.count += route.count
-      else edges.set(key, { ...link, outcome: route.outcome, count: route.count })
+      else edges.set(key, { ...link, ...(sink ? { outcome: route.outcome } : {}), count: route.count })
     }
   }
   return [...edges.values()].sort((left, right) =>
-    left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || left.outcome.localeCompare(right.outcome),
+    left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),
   )
 }

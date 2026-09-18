@@ -45,4 +45,10 @@ test('uses stable outcome/category order and conserves route edges', () => {
   const edges = autoModeRouteEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts').reduce((total, edge) => total + edge.count, 0)).toBe(100)
   expect(edges.filter(edge => edge.to === 'allowed' || edge.to === 'policy_blocked' || edge.to === 'review_required' || edge.to === 'operational_error').reduce((total, edge) => total + edge.count, 0)).toBe(100)
+  expect(new Set(edges.map(edge => `${edge.from}:${edge.to}`)).size).toBe(edges.length)
+  for (const node of ['Base checks', 'Stage 1', 'Stage 2']) {
+    expect(edges.filter(edge => edge.to === node).reduce((total, edge) => total + edge.count, 0)).toBe(
+      edges.filter(edge => edge.from === node).reduce((total, edge) => total + edge.count, 0),
+    )
+  }
 })
