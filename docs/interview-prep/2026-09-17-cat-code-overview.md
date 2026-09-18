@@ -81,6 +81,12 @@ The desktop does not replace the coding-agent engine. It runs the real Cat Code
 engine behind a desktop interface while adding session supervision, process
 isolation, persistence, recovery, and UI controls.
 
+For a detailed explanation of model context, messages, tools, interrupts, and
+skills, see [What the Model Sees](./2026-09-17-what-the-model-sees.md).
+
+For the evolution from inherited full-history replacement to Cat Code's current
+prefix-preserving design, see [Compaction](./2026-09-18-compaction.md).
+
 ## Short interview introduction
 
 > Cat Code is my fork of Claude Code. I built it because I wanted to own and
