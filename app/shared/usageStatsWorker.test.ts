@@ -4,6 +4,7 @@ import { parseUsageCollectionLine, parseUsageCollectionResult } from './usageSta
 const tokens = { fresh: 4, read: 2, write: 1, output: 3 };
 const tokenCost = { usd: 0.00006, pricedTokens: 10 };
 const timing = { models: { state: 'unavailable', logicalCalls: 0, retriedCalls: 0, streamingAttempts: 0, outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, responseDuration: { samples: 0, p50Ms: null, p95Ms: null }, firstText: { samples: 0, p50Ms: null, p95Ms: null } }, tools: { state: 'unavailable', outcomes: { started: 0, succeeded: 0, failed: 0, cancelled: 0, incomplete: 0 }, duration: { samples: 0, p50Ms: null, p95Ms: null } } };
+const autoMode = { allTools: { outcomes: { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'unavailable', invalidRecords: 0, orphanRecords: 0 } }, commands: { outcomes: { allowed: 0, policy_blocked: 0, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'unavailable', invalidRecords: 0, orphanRecords: 0 } }, buckets: [], routes: [], categories: [] };
 function snapshot(label = 'Model'): Record<string, unknown> {
     const usageTokens = { ...tokens };
     const days = Array.from({ length: 30 }, (_, i) => {
@@ -11,8 +12,8 @@ function snapshot(label = 'Model'): Record<string, unknown> {
         d.setUTCDate(d.getUTCDate() + i);
         return { date: d.toISOString().slice(0, 10), results: i === 29 ? 2 : 0, errors: i === 29 ? 1 : 0, tools: i === 29 ? [{ id: 'tool-a', requests: 3, results: 2, errors: 1 }] : [], hourlyRequests: Array.from({ length: 24 }, (_, hour) => i === 29 && hour === 12 ? 3 : 0), tokens: i === 29 ? { ...usageTokens } : { fresh: 0, read: 0, write: 0, output: 0 }, cacheWriteReporting: i === 29 ? 'reported' : 'unavailable', models: i === 29 ? [{ id: 'model-a', total: 10 }] : [], sessions: i === 29 ? 1 : 0, records: i === 29 ? 1 : 0, requests: i === 29 ? 3 : 0, contributors: { state: 'full', omitted: 0, items: i === 29 ? [{ id: 'session-a', engineSessionId: null, project: null, tokens: { ...usageTokens }, requests: 3, results: 2, errors: 1, rank: { tokens: 1, requests: 1, errors: 1 }, tokenCost: { ...tokenCost }, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], modelDetail: { state: 'full', omitted: 0 }, timeline: { state: 'unavailable', omitted: 0, items: [] } }] : [] } };
     });
-    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
-    return { version: 1, metricVersion: 1, countingVersion: 9, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hourlyTokens: Array.from({ length: 24 }, (_, hour) => index === 6 && hour === 12 ? 10 : 0) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
+    const makeRange = (range: '7d' | '30d' | 'all', start: string, ds: unknown[]) => ({ range, startInclusive: `${start}T00:00:00.000Z`, endExclusive: '2026-09-14T00:00:00.000Z', tokens: { ...usageTokens }, sessions: 1, records: 1, requests: 3, identifiedRequests: 2, fallbackRequests: 1, activeDays: 1, cachedInputShare: 2 / 7 * 100, cacheWriteReporting: 'reported', days: ds, models: [{ id: 'model-a', kind: 'named', label, tokens: { ...usageTokens }, tokenCost: { ...tokenCost } }], tools: [{ id: 'tool-a', kind: 'named', label: 'Tool', requests: 3, results: 2, errors: 1 }], timing: structuredClone(timing), autoMode: structuredClone(autoMode), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } });
+    return { version: 1, metricVersion: 1, countingVersion: 10, pricingVersion: 1, snapshotId: 'a'.repeat(64), scope: 'retained-transcripts', timezone: 'UTC', asOf: '2026-09-13T12:00:00.000Z', computedAt: '2026-09-13T12:00:01.000Z', coverage: { state: 'complete', sourcesDiscovered: 1, sourcesRead: 1, parseErrors: 0, oversizedRecords: 0, pendingTailBytes: 0, shortReads: 0, changedSources: 0, readErrors: 0, invalidTimestamps: 0, invalidUsage: 0, invalidTimings: 0, identityConflicts: 0 }, ranges: { '7d': makeRange('7d', '2026-09-07', days.slice(23).map((day, index) => ({ ...day, hourlyTokens: Array.from({ length: 24 }, (_, hour) => index === 6 && hour === 12 ? 10 : 0) }))), '30d': makeRange('30d', '2026-08-15', days), all: makeRange('all', '2026-09-13', [{ ...days.at(-1), contributors: { state: 'unavailable', omitted: 0, items: [] } }]) } };
 }
 function usage(over: Record<string, unknown> = {}) { return { type: 'usage', version: 1, snapshot: { ...snapshot(), ...over } }; }
 test('accepts a valid three-range snapshot and JSON line', () => {
@@ -207,4 +208,17 @@ test('validates hourly token and daily outcome reconciliation at the boundary', 
         mutate(value);
         expect(parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: value })).toBeNull();
     }
+});
+
+test('validates auto-mode category and route totals', () => {
+    const value = usage() as any;
+    const summary = value.snapshot.ranges['7d'].autoMode;
+    summary.allTools = { outcomes: { allowed: 1, policy_blocked: 1, review_required: 0, operational_error: 0, cancelled: 0, unknown_outcome: 0, incomplete: 0 }, coverage: { state: 'complete', invalidRecords: 0, orphanRecords: 0 } };
+    summary.commands = structuredClone(summary.allTools);
+    summary.buckets = [{ date: '2026-09-13', allTools: structuredClone(summary.allTools), commands: structuredClone(summary.commands) }];
+    summary.routes = [{ route: 'stage1', outcome: 'allowed', count: 1 }, { route: 'stage2', outcome: 'policy_blocked', count: 1 }];
+    summary.categories = [{ key: 'built_in:filesystem', kind: 'named', label: 'filesystem', count: 1 }];
+    expect(parseUsageCollectionResult(value)?.type).toBe('usage');
+    value.snapshot.ranges['7d'].autoMode.routes[0].count = 2;
+    expect(parseUsageCollectionResult(value)).toBeNull();
 });

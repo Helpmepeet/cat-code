@@ -199,6 +199,8 @@ export type UsageRangeSummary = {
     models: UsageModel[];
     tools: UsageTool[];
     timing: UsageTimingSummary;
+    /** Prospective auto-mode observations; unavailable never means zero attempts. */
+    autoMode: import('./usageAutoMode.js').AutoModeUsageSummary;
     detail: {
         state: 'full' | 'grouped' | 'summary-only';
         omittedModels: number;
@@ -223,7 +225,7 @@ export type UsageCoverage = {
 export type UsageDashboardSnapshot = {
     version: 1;
     metricVersion: 1;
-    countingVersion: 9;
+    countingVersion: 10;
     pricingVersion: 1;
     snapshotId: string;
     scope: 'retained-transcripts';

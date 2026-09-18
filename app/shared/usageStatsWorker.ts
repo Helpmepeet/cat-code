@@ -4,6 +4,8 @@ const ERROR_CODES = new Set(['collection', 'timeout', 'resource-limit', 'invalid
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RESERVED = new Set(['unknown', 'other']);
+const AUTO_OUTCOMES = ['allowed', 'policy_blocked', 'review_required', 'operational_error', 'cancelled', 'unknown_outcome', 'incomplete'];
+const AUTO_ROUTES = ['base', 'forced', 'guard', 'accept_edits', 'allowlist', 'stage1', 'stage2', 'unknown'];
 const ownKeys = (v: object, keys: readonly string[]) => {
     const actual = Object.keys(v).sort();
     return actual.length === keys.length && actual.every((k, i) => k === [...keys].sort()[i]);
@@ -30,6 +32,45 @@ function addDays(s: string, n: number): string {
     const d = new Date(`${s}T00:00:00.000Z`);
     d.setUTCDate(d.getUTCDate() + n);
     return d.toISOString().slice(0, 10);
+}
+function autoCounts(value: unknown): boolean {
+    return obj(value) && ownKeys(value, AUTO_OUTCOMES) && AUTO_OUTCOMES.every(key => safe(value[key]));
+}
+function autoPopulation(value: unknown): boolean {
+    return obj(value) && ownKeys(value, ['outcomes', 'coverage']) && autoCounts(value.outcomes) &&
+        obj(value.coverage) && ownKeys(value.coverage, ['state', 'invalidRecords', 'orphanRecords']) &&
+        ['complete', 'partial', 'unavailable'].includes(value.coverage.state as string) &&
+        safe(value.coverage.invalidRecords) && safe(value.coverage.orphanRecords);
+}
+function autoMode(value: unknown, start: string, end: string, maxBuckets: number): boolean {
+    if (!obj(value) || !ownKeys(value, ['allTools', 'commands', 'buckets', 'routes', 'categories']) || !autoPopulation(value.allTools) || !autoPopulation(value.commands) || !Array.isArray(value.buckets) || !Array.isArray(value.routes) || !Array.isArray(value.categories) || value.buckets.length > maxBuckets || value.routes.length > AUTO_ROUTES.length * AUTO_OUTCOMES.length || value.categories.length > 10) return false;
+    const allPopulation = value.allTools as Record<string, unknown>, commandPopulation = value.commands as Record<string, unknown>;
+    const all = allPopulation.outcomes as Record<string, number>, commands = commandPopulation.outcomes as Record<string, number>;
+    if (AUTO_OUTCOMES.some(key => commands[key]! > all[key]!)) return false;
+    const bucketCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
+    const dates = new Set<string>();
+    for (const bucket of value.buckets) {
+        if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < start.slice(0, 10) || bucket.date >= end.slice(0, 10) || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
+        dates.add(bucket.date);
+        const bucketAll = bucket.allTools as Record<string, unknown>, bucketCommands = bucket.commands as Record<string, unknown>;
+        const outcomes = bucketAll.outcomes as Record<string, number>, commandOutcomes = bucketCommands.outcomes as Record<string, number>;
+        if (AUTO_OUTCOMES.some(key => commandOutcomes[key]! > outcomes[key]!)) return false;
+        for (const key of AUTO_OUTCOMES) bucketCounts[key]! += outcomes[key]!;
+    }
+    if (AUTO_OUTCOMES.some(key => bucketCounts[key]! !== all[key]!)) return false;
+    const routeCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
+    for (const route of value.routes) {
+        if (!obj(route) || !ownKeys(route, ['route', 'outcome', 'count']) || !AUTO_ROUTES.includes(route.route as string) || !AUTO_OUTCOMES.includes(route.outcome as string) || !positive(route.count)) return false;
+        if (['forced', 'accept_edits', 'allowlist'].includes(route.route as string) && route.outcome === 'policy_blocked') return false;
+        routeCounts[route.outcome as string]! += route.count as number;
+    }
+    if (AUTO_OUTCOMES.some(key => routeCounts[key]! !== all[key]!)) return false;
+    let categories = 0;
+    for (const category of value.categories) {
+        if (!obj(category) || !ownKeys(category, ['key', 'kind', 'label', 'count']) || typeof category.key !== 'string' || !label(category.label) || !['named', 'other', 'uncategorized'].includes(category.kind as string) || !positive(category.count)) return false;
+        categories += category.count as number;
+    }
+    return categories === all.policy_blocked;
 }
 function tokens(v: unknown): v is UsageTokens {
     return obj(v) && ownKeys(v, ['fresh', 'read', 'write', 'output']) && safe(v.fresh) && safe(v.read) && safe(v.write) && safe(v.output) && sumsSafe(v.fresh, v.read, v.write, v.output);
@@ -187,7 +228,7 @@ function previousPeriod(v: unknown, range: '7d' | '30d', asOf: string): v is Usa
     return v.cachedInputShare === null ? prompt === 0 : finite(v.cachedInputShare) && prompt > 0 && Math.abs(v.cachedInputShare - v.tokens.read / prompt * 100) <= 1e-9;
 }
 function range(v: unknown, asOf: string): v is UsageRangeSummary {
-    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
+    if (!obj(v) || !ownKeys(v, ['range', ...(v.bucketDays === undefined ? [] : ['bucketDays']), ...(v.previousPeriod === undefined ? [] : ['previousPeriod']), 'startInclusive', 'endExclusive', 'tokens', 'sessions', 'records', 'requests', 'identifiedRequests', 'fallbackRequests', 'activeDays', 'cachedInputShare', 'cacheWriteReporting', 'days', 'models', 'tools', 'timing', 'autoMode', 'detail']) || (v.range !== '7d' && v.range !== '30d' && v.range !== 'all') || !instant(v.startInclusive) || !instant(v.endExclusive) || !(v.startInclusive as string).endsWith('T00:00:00.000Z') || !(v.endExclusive as string).endsWith('T00:00:00.000Z') || !tokens(v.tokens) || !['reported', 'partial', 'unreported', 'unavailable'].includes(v.cacheWriteReporting as string) || !safe(v.sessions) || !safe(v.records) || !safe(v.requests) || !safe(v.identifiedRequests) || !safe(v.fallbackRequests) || !safe(v.activeDays) || !Array.isArray(v.days) || !Array.isArray(v.models) || !Array.isArray(v.tools) || !timing(v.timing) || !obj(v.detail) || !ownKeys(v.detail, ['state', 'omittedModels', 'omittedTools']) || !['full', 'grouped', 'summary-only'].includes(v.detail.state as string) || !safe(v.detail.omittedModels) || !safe(v.detail.omittedTools))
         return false;
     const all = v.range === 'all';
     if (all && v.previousPeriod !== undefined) return false;
@@ -198,6 +239,8 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     const start = all ? v.startInclusive : `${addDays(asOf.slice(0, 10), -(n - 1))}T00:00:00.000Z`;
     const end = `${addDays(asOf.slice(0, 10), 1)}T00:00:00.000Z`;
     if (v.startInclusive !== start || v.endExclusive !== end || start >= end || bucketDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000) || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
+        return false;
+    if (!autoMode(v.autoMode, start, end, all ? MAX_USAGE_ALL_BUCKETS : n))
         return false;
     const rangeToolIds = new Set((v.tools as UsageTool[]).map(item => item.id));
     const rangeToolsById = new Map((v.tools as UsageTool[]).map(item => [item.id, item]));
@@ -261,7 +304,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 9 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 10 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];

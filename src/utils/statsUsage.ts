@@ -8,7 +8,12 @@ import { getProviderForModel } from './model/providerForModel.js';
 import { getConfiguredStandardModelCosts } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
-import { projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
+import {
+    projectAutoModeDiagnosticPayload,
+    reduceAutoModeUsage,
+    type AutoModeUsageSource,
+    type RetainedAutoModeRecord,
+} from './autoModeUsage.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -63,6 +68,17 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         throw new Error('Invalid cutoff');
     const coverage = emptyUsageCoverage();
     coverage.sourcesDiscovered = files.length;
+    const autoModeRecords: RetainedAutoModeRecord[] = [];
+    const autoModeSources = new Map<string, AutoModeUsageSource>();
+    const autoModeSourceScope = (file: string) => createHash('sha256').update(file).digest('hex');
+    for (const file of files) {
+        const sourceScope = autoModeSourceScope(file);
+        autoModeSources.set(sourceScope, {
+            sourceScope,
+            allTools: 'unavailable',
+            commands: 'unavailable',
+        });
+    }
     let identities = 0, stateBytes = 0;
     const reserve = (key: string, payloadBytes = 512) => {
         identities++;
@@ -83,7 +99,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const states = (['7d', '30d', 'all'] as const).map(range => {
         const bounds = usageWindow(range === '7d' ? 7 : 30, asOf);
         if (range === 'all') { bounds.startInclusive = `${asOf.slice(0, 10)}T00:00:00.000Z`; bounds.dates = []; }
-        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], timing: unavailableUsageTiming(), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
+        const summary: UsageRangeSummary = { range, startInclusive: bounds.startInclusive, endExclusive: bounds.endExclusive, tokens: zero(), sessions: 0, records: 0, requests: 0, identifiedRequests: 0, fallbackRequests: 0, activeDays: 0, cachedInputShare: null, cacheWriteReporting: 'unavailable', days: bounds.dates.map(date => ({ date, hourlyRequests: Array(24).fill(0), ...(range === '7d' ? { hourlyTokens: Array(24).fill(0) } : {}), results: 0, errors: 0, tools: [], tokens: zero(), cacheWriteReporting: 'unavailable', models: [], sessions: 0, records: 0, requests: 0, contributors: { state: 'full', omitted: 0, items: [] } })), models: [], tools: [], timing: unavailableUsageTiming(), autoMode: reduceAutoModeUsage({ records: [], sources: [], rangeStart: bounds.startInclusive, rangeEnd: new Date(Math.min(Date.parse(bounds.endExclusive) - 1, cutoff)).toISOString(), cutoff: asOf }), detail: { state: 'full', omittedModels: 0, omittedTools: 0 } };
         return { summary, dayMap: new Map(summary.days.map(day => [day.date, day])), start: range === 'all' ? Date.parse('0000-01-01T00:00:00.000Z') : Date.parse(bounds.startInclusive), end: Date.parse(bounds.endExclusive), cacheWriteReported: false, cacheWriteUnreported: false, cacheWriteUnknown: false, dailyCacheWriteReporting: new Map<string, { reported: boolean; unreported: boolean; unknown: boolean }>(), sessions: new Set<string>(), sessionDays: new Set<string>(), models: new Map<string, typeof summary.models[number]>(), tools: new Map<string, typeof summary.tools[number]>(), dailyContributors: new Map<string, UsageSessionContributor>(), contributorModels: new Map<string, Map<string, typeof summary.models[number]>>(), dailyModels: new Map<string, {
                 id: string;
                 total: number;
@@ -233,8 +249,29 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         // These retained metadata records belong solely to the prospective
         // auto-mode reducer. Exclude valid and data-quality markers before any
         // generic activity/session/day accounting.
-        if (row.type === 'system' && projectAutoModeDiagnosticPayload(row) !== null)
+        const autoModePayload = row.type === 'system'
+            ? projectAutoModeDiagnosticPayload(row)
+            : null;
+        if (autoModePayload !== null) {
+            const observedAt = typeof row.timestamp === 'string' ? row.timestamp : '';
+            const observed = Date.parse(observedAt);
+            const sourceScope = autoModeSourceScope(file);
+            if (Number.isFinite(observed) && observed <= cutoff) {
+                autoModeRecords.push({
+                    sourceScope,
+                    recordId: nonempty(row.uuid) ? row.uuid : `${item.generation}:${item.offset}`,
+                    observedAt,
+                    diagnosticKind: 'auto_mode_observation',
+                    payload: autoModePayload,
+                });
+                autoModeSources.set(sourceScope, {
+                    sourceScope,
+                    allTools: 'complete',
+                    commands: 'complete',
+                });
+            }
             return;
+        }
         const timestamp = typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
         if (!Number.isFinite(timestamp) || timestamp < Date.parse('0000-01-01T00:00:00.000Z') || timestamp >= Date.parse('+010000-01-01T00:00:00.000Z')) {
             coverage.invalidTimestamps++;
@@ -554,6 +591,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
     }
     for (const s of states) {
+        const end = Math.min(Date.parse(s.summary.endExclusive) - 1, cutoff);
+        s.summary.autoMode = reduceAutoModeUsage({
+            records: autoModeRecords,
+            sources: [...autoModeSources.values()],
+            rangeStart: s.summary.startInclusive,
+            rangeEnd: new Date(end).toISOString(),
+            cutoff: asOf,
+        });
         const models = [...modelTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
         const tools = [...toolTimings.values()].filter(timing => usageTimestampEligible(timing.startedAt, s.start, s.end, cutoff));
         s.summary.timing = summarizeUsageTiming(
@@ -715,5 +760,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         all.summary.days = [...buckets.values()];
         all.summary.bucketDays = bucketDays;
     }
-    return { version: 1, metricVersion: 1, countingVersion: 9, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 10, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }
