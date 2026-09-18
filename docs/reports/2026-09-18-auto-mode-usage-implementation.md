@@ -8,7 +8,7 @@
 | 01 | Complete | `autoModeObservation.ts`, `usageAutoMode.ts`, their tests | 4 focused tests passed; desktop typecheck and engine dev build passed | Implement pure disposition mapper |
 | 02 | Complete | `autoModeObservation.ts` and its test | 5 focused tests passed; engine dev build passed | Run Tasks 03 and 05 in parallel |
 | 03 | Complete | Observer lifecycle, owned diagnostic writer, and focused tests | 61 focused tests passed; engine dev build passed | Wire production routes |
-| 05 | In progress | Pure reducer and fixtures | Running in parallel with Task 03 integration | Reduce retained records and coverage |
+| 05 | Complete | Pure reducer and deterministic fixtures | 11 focused tests passed; engine dev build passed | Wire production routes and indexed projection |
 
 ## Task 00 evidence map
 
@@ -47,11 +47,18 @@
 - The observer accepts only its first terminal result and retains one entered/resolved record per completed classifier stage. The reusable outer seam preserves the original forced result or thrown error identity while Task 04 remains responsible for production route/cause mapping.
 - `recordAutoModeObservation` uses the established transcript lease/owner path. Invalid payloads do not reach the writer; no transcript owner writes no file; a lease violation still throws; ordinary append failures remain best effort.
 
+## Task 05 retained-record reduction
+
+- `reduceAutoModeUsage` is pure and accepts synthetic metadata-only retained records plus explicit source population support. It performs two-layer event/terminal validation, source-scoped joins, canonical record de-duplication, stable UTC start-bucket attribution, malformed-terminal salvage, orphan handling, and conservative coverage state.
+- A valid Start with a malformed correlated End produces Unknown outcome rather than Incomplete. Invalid/missing route becomes Unknown route, invalid/missing category becomes Uncategorized, and neither erases an independently valid disposition. Invalid start identities and orphan markers never enter a denominator.
+- Command rate is derived from integer policy-blocked command outcomes over all command outcomes. Partial/unavailable coverage returns an unavailable primary rate; complete coverage with unresolved outcomes returns a provisional numeric rate. Named category ranking is range-wide and namespaced by category kind/id before top-eight grouping.
+
 ## Verification
 
 - `bun test src/utils/permissions/autoModeObservation.test.ts app/shared/usageAutoMode.test.ts`: 4 passed, 0 failed.
 - `bun test src/utils/permissions/autoModeObservation.test.ts`: 5 passed, 0 failed. Covers every disposition-table row, Stage 2 block to Review required, unavailable to Review required, and input immutability.
 - `bun test src/utils/permissions/autoModeObservation.test.ts src/utils/sessionStorage.test.ts`: 61 passed, 0 failed.
+- `bun test src/utils/autoModeUsage.test.ts`: 11 passed, 0 failed.
 - `bun run --cwd app typecheck`: passed.
 - `bun run build:dev:full`: passed. Workspace-map lint reported 7 existing recommended-section warnings; undefined-name lint passed with 0 diagnostics.
 - `git diff --check`: passed.
