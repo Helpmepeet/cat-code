@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { SDKMessage } from '@cat-code/engine/sdk'
 import {
   CONTEXT_REFERENCE_TOKENS,
+  selectContextCapacity,
   selectContextPercent,
   selectContextReferenceFraction,
   selectContextUsage,
@@ -666,4 +667,139 @@ describe('selectContextReferenceFraction', () => {
       ).toBeNull()
     },
   )
+})
+
+describe('logged usage buckets and denominator ratio', () => {
+  test('3,650 uncached + 514,688 cached + 444 output = 518,782 with 980k window yields 53%', () => {
+    // Anthropic turn: 3,650 input, 514,688 cache read, 444 output
+    const messages = anthropicTurn(3_650, 514_688, 444)
+    const usage = selectContextUsage(messages, 'gpt-5.6-luna', 980_000)
+
+    expect(usage.usedTokens).toBe(518_782)
+    expect(usage.contextWindow).toBe(980_000)
+    expect(usage.percentUsed).toBe(53)
+    expect(selectContextPercent(usage)).toBe(53)
+  })
+})
+
+describe('selectContextCapacity', () => {
+  const usage = {
+    usedTokens: 100_000,
+    contextWindow: 200_000,
+    percentUsed: 50,
+  }
+
+  test('derives freeBeforeAutoCompact and reservedRemaining when auto-compact is enabled with matching window', () => {
+    const autoCompact = {
+      enabled: true,
+      threshold: 160_000,
+      warningThreshold: 140_000,
+    }
+    const capacity = selectContextCapacity(usage, autoCompact, 200_000)
+    expect(capacity).toEqual({
+      kind: 'compact',
+      freeBeforeAutoCompact: 60_000,
+      reservedRemaining: 40_000,
+    })
+  })
+
+  test('clamps freeBeforeAutoCompact to 0 when usage enters reserve', () => {
+    const enteredUsage = {
+      usedTokens: 170_000,
+      contextWindow: 200_000,
+      percentUsed: 85,
+    }
+    const autoCompact = {
+      enabled: true,
+      threshold: 160_000,
+      warningThreshold: 140_000,
+    }
+    const capacity = selectContextCapacity(enteredUsage, autoCompact, 200_000)
+    expect(capacity).toEqual({
+      kind: 'compact',
+      freeBeforeAutoCompact: 0,
+      reservedRemaining: 30_000,
+    })
+  })
+
+  test('clamps capacity to 0 when usage exceeds context window', () => {
+    const exceededUsage = {
+      usedTokens: 210_000,
+      contextWindow: 200_000,
+      percentUsed: 105,
+    }
+    const autoCompact = {
+      enabled: true,
+      threshold: 160_000,
+      warningThreshold: 140_000,
+    }
+    const capacity = selectContextCapacity(exceededUsage, autoCompact, 200_000)
+    expect(capacity).toEqual({
+      kind: 'compact',
+      freeBeforeAutoCompact: 0,
+      reservedRemaining: 0,
+    })
+  })
+
+  test('returns single remaining capacity row when auto-compact is disabled', () => {
+    const autoCompact = {
+      enabled: false,
+      threshold: 160_000,
+    }
+    const capacity = selectContextCapacity(usage, autoCompact, 200_000)
+    expect(capacity).toEqual({
+      kind: 'remaining',
+      remaining: 100_000,
+    })
+  })
+
+  test('returns single remaining capacity row when auto-compact threshold is null or unavailable', () => {
+    const autoCompact = {
+      enabled: true,
+      threshold: null,
+    }
+    const capacity = selectContextCapacity(usage, autoCompact, 200_000)
+    expect(capacity).toEqual({
+      kind: 'remaining',
+      remaining: 100_000,
+    })
+  })
+
+  test('returns single remaining capacity row when autoCompact is null or omitted', () => {
+    expect(selectContextCapacity(usage, null, 200_000)).toEqual({
+      kind: 'remaining',
+      remaining: 100_000,
+    })
+    expect(selectContextCapacity(usage)).toEqual({
+      kind: 'remaining',
+      remaining: 100_000,
+    })
+  })
+
+  test('falls back to single remaining row when liveContextWindow does not match usage window', () => {
+    const autoCompact = {
+      enabled: true,
+      threshold: 160_000,
+    }
+    // usage is 200,000, but liveContextWindow is 128,000
+    const capacity = selectContextCapacity(usage, autoCompact, 128_000)
+    expect(capacity).toEqual({
+      kind: 'remaining',
+      remaining: 100_000,
+    })
+  })
+
+  test('returns null when window is fallback or missing', () => {
+    const fallbackUsage = {
+      ...usage,
+      windowIsFallback: true,
+    }
+    expect(selectContextCapacity(fallbackUsage)).toBeNull()
+
+    const zeroWindowUsage = {
+      ...usage,
+      contextWindow: 0,
+    }
+    expect(selectContextCapacity(zeroWindowUsage)).toBeNull()
+  })
 })

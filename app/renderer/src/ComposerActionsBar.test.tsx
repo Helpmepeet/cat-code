@@ -741,7 +741,7 @@ test('ContextUsagePanel never shows Plan usage, only the real Context total', ()
   expect(html).toContain('42k / 200k')
 })
 
-test('ContextUsagePanel draws a per-category donut, legend and Free row', () => {
+test('ContextUsagePanel draws aggregate ring, estimated breakdown and capacity rows', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel
       usage={USAGE}
@@ -768,42 +768,44 @@ test('ContextUsagePanel draws a per-category donut, legend and Free row', () => 
       }}
     />,
   )
-  // The engine's own category names, not the prototype's cosmetic labels.
+  // Headline and ring agree on live usage (42k / 200k = 21%), not the breakdown sum (13%)
+  expect(html).toContain('Context')
+  expect(html).toContain('42k / 200k')
+  expect(countOccurrences(html, '21%')).toBeGreaterThanOrEqual(2)
+  expect(html).not.toContain('13%')
+
+  // Aggregate ring (76px circle with stroke-width 6 and neutral background track)
+  expect(html).toContain('stroke-width="6"')
+  expect(html).toContain('viewBox="0 0 76 76"')
+
+  // Estimated breakdown heading and category items
+  expect(html).toContain('Estimated breakdown')
   expect(html).toContain('System prompt')
   expect(html).toContain('Messages')
   expect(html).toContain('4.2k')
   expect(html).toContain('21k')
-  // Free = window - used.
-  expect(html).toContain('Free')
-  expect(html).toContain('175k')
-  // A deferred category occupies nothing, so it earns neither a row nor a segment.
+  expect(html).toContain('bg-[light-dark(#52525b,#a1a1aa)]')
+  expect(html).toContain('hover:bg-white/5')
+
+  // Deferred category is omitted
   expect(html).not.toContain('MCP tools (deferred)')
-  // The donut ring: one arc per category, coloured by its own hue, an SVG
-  // presentation attribute rather than a Tailwind class. It carries the SAME
-  // light/dark pair the legend swatch does, which is the invariant that keeps a
-  // dot from being a different colour than its own label.
-  expect(html).toContain('stroke="light-dark(#52525b, #a1a1aa)"') // System prompt
-  expect(html).toContain('stroke="light-dark(#7c3aed, #c084fc)"') // Messages
-  // Segments are notched apart, not butted: the ring is drawn at the thinner
-  // stroke that keeps the notches readable, and the first arc already starts a
-  // half-gap in (nothing drawn before it, so the offset is the half-gap alone).
-  expect(html).toContain('stroke-width="6"')
-  expect(html).toContain('stroke-dashoffset="-1.5"')
-  // Center readout: the same percent the header line states — the ACCOUNTED
-  // total (4.2k + 21k = 25.2k of the snapshot's own 200k), not `usage`'s 21%
-  // (42k/200k): once a breakdown exists the header reconciles with the rows
-  // printed below it instead of the composer's separately-clocked live figure.
-  expect(countOccurrences(html, '13%')).toBeGreaterThanOrEqual(2)
+
+  // Remaining capacity row
+  expect(html).toContain('Remaining capacity')
+  expect(html).toContain('158k')
 })
 
-test('ContextUsagePanel without a breakdown keeps the aggregate row alone, no donut', () => {
+test('ContextUsagePanel without a breakdown keeps aggregate ring and capacity without categories', () => {
   const html = renderToStaticMarkup(
     <ContextUsagePanel usage={USAGE} breakdown={null} />,
   )
   expect(html).toContain('42k / 200k')
-  expect(html).not.toContain('Free')
+  expect(html).toContain('21%')
+  expect(html).toContain('<svg')
+  expect(html).toContain('Remaining capacity')
+  expect(html).toContain('158k')
+  expect(html).not.toContain('Estimated breakdown')
   expect(html).not.toContain('System prompt')
-  expect(html).not.toContain('<svg')
 })
 
 /**
@@ -872,25 +874,66 @@ test('the escalated strip states the ask without an em dash', () => {
   expect(html).not.toContain('—')
 })
 
-// The arcs are stroked circles with no fill, so without this the hit area is the
-// whole 76px disc and the topmost segment answers for every pointer position.
-test('donut arcs take the pointer on the stroke, not the disc', () => {
+test('a conflicting breakdown snapshot cannot change the headline, ring, or tone', () => {
+  // Usage: 518,782 / 980,000 = 53%
+  const usage: ContextUsage = {
+    usedTokens: 518_782,
+    contextWindow: 980_000,
+    percentUsed: 53,
+  }
+  // Breakdown accounts for ~317k tokens (32% of 980k)
+  const conflictingBreakdown = {
+    categories: [
+      { label: 'System prompt', tokens: 17_000, colorKey: 'promptBorder', deferred: false },
+      { label: 'Messages', tokens: 300_000, colorKey: 'claude', deferred: false },
+    ],
+    usedTokens: 317_000,
+    freeTokens: 663_000,
+    contextWindow: 980_000,
+    model: 'gpt-5.6-luna',
+  }
+  const html = renderToStaticMarkup(
+    <ContextUsagePanel usage={usage} breakdown={conflictingBreakdown} />,
+  )
+
+  // Headline and donut center both show 53% (never 32%)
+  expect(html).toContain('519k / 980k')
+  expect(countOccurrences(html, '53%')).toBeGreaterThanOrEqual(2)
+  expect(html).not.toContain('32%')
+  expect(html).not.toContain('317k')
+
+  // Categories are rendered under Estimated breakdown
+  expect(html).toContain('Estimated breakdown')
+  expect(html).toContain('300k')
+  expect(html).toContain('17k')
+
+  // Remaining capacity row reflects reported window - reported usage (980k - 519k = 461k)
+  expect(html).toContain('Remaining capacity')
+  expect(html).toContain('461k')
+})
+
+test('ContextUsagePanel displays auto-compact capacity rows when autoCompact is configured', () => {
+  const usage: ContextUsage = {
+    usedTokens: 100_000,
+    contextWindow: 200_000,
+    percentUsed: 50,
+  }
+  const autoCompact = {
+    enabled: true,
+    threshold: 160_000,
+    warningThreshold: 140_000,
+  }
   const html = renderToStaticMarkup(
     <ContextUsagePanel
-      usage={USAGE}
-      breakdown={{
-        categories: [
-          { label: 'System prompt', tokens: 4_200, colorKey: 'promptBorder', deferred: false },
-          { label: 'Messages', tokens: 21_000, colorKey: 'claude', deferred: false },
-        ],
-        usedTokens: 25_200,
-        freeTokens: 174_800,
-        contextWindow: 200_000,
-        model: 'gpt-5.6-luna',
-      }}
+      usage={usage}
+      autoCompact={autoCompact}
+      liveContextWindow={200_000}
     />,
   )
-  expect(html).toContain('[pointer-events:stroke]')
+  expect(html).toContain('Free before auto-compact')
+  expect(html).toContain('60k')
+  expect(html).toContain('Reserved remaining')
+  expect(html).toContain('40k')
 })
 
 // The footer well already pads the panel's bottom edge; a body padding underneath

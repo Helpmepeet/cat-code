@@ -51,7 +51,6 @@ const ATTACH_BURST_KINDS = [
   'workers.snapshot',
   'lease.snapshot',
   'run-controls.snapshot',
-  'context-breakdown.snapshot',
   'accounts.snapshot',
   'stats.usage.snapshot',
   'workspace-trust.snapshot',
@@ -405,6 +404,42 @@ test('the sticky table and the attach burst describe the same set of kinds', () 
   // placed at its real position in the burst above, or the ordering assertions
   // are testing a stale list.
   expect(new Set(STICKY_FRAME_KINDS)).toEqual(new Set(ATTACH_BURST_KINDS))
+})
+
+test('context-breakdown.snapshot is non-retained and never replays', () => {
+  const buffer = new FrameReplayBuffer()
+  buffer.record(SID, readyFrame())
+  buffer.record(
+    SID,
+    attachSnapshotFrame('run-controls.snapshot' as (typeof ATTACH_BURST_KINDS)[number]),
+  )
+
+  const breakdownFrame = {
+    kind: 'context-breakdown.snapshot',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    snapshot: {
+      calculatedAt: Date.now(),
+      model: 'claude-3-5-sonnet',
+      contextWindow: 200_000,
+      totalTokens: 50_000,
+      categories: [],
+      files: [],
+      messages: [],
+    },
+  } as unknown as ServerFrame
+  buffer.record(SID, breakdownFrame)
+
+  // Switching run controls / model without a turn:
+  buffer.record(
+    SID,
+    attachSnapshotFrame('run-controls.snapshot' as (typeof ATTACH_BURST_KINDS)[number], 'v2'),
+  )
+
+  const snapshot = buffer.snapshot()
+  expect(snapshot.some(f => f.kind === 'context-breakdown.snapshot')).toBe(false)
+  const sessionFrames = buffer.snapshotSession(SID)
+  expect(sessionFrames.some(f => f.kind === 'context-breakdown.snapshot')).toBe(false)
 })
 
 test('non-ready frames ring-buffer at the cap; ready is never evicted', () => {

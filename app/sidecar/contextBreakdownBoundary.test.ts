@@ -14,6 +14,7 @@
 import { afterEach, expect, test } from 'bun:test'
 import { AppSessionController } from '../../src/app-runtime/AppSessionController.js'
 import type { AppSessionControllerAdapter } from '../../src/app-runtime/AppSessionController.js'
+import type { AppSessionEvent } from '../../src/app-runtime/sessionEvents.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 import { FrameDecoder, encodeFrame } from '../shared/framing.js'
 import { MAX_FRAME_BYTES } from '../shared/limits.js'
@@ -23,6 +24,8 @@ import {
   type ContextBreakdownSnapshot,
   type ServerFrame,
 } from '../shared/protocol.js'
+import { getDefaultAppState } from '../../src/state/AppStateStore.js'
+import type { SDKMessage } from '../shared/engine-types.snapshot.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
 
 const SESSION = 'test-session'
@@ -67,13 +70,44 @@ function probeAdapter(): AppSessionControllerAdapter {
   }
 }
 
-function makeServer(contextBreakdown?: SidecarContextBreakdownDomain) {
+class TestSessionController {
+  private readonly listeners = new Set<(event: AppSessionEvent) => void>()
+  subscribe(listener: (event: AppSessionEvent) => void): () => void {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+  emit(event: AppSessionEvent): void {
+    for (const listener of this.listeners) listener(event)
+  }
+  getAbortState() {
+    return { status: 'idle' as const }
+  }
+  getGoalSnapshot() {
+    return null
+  }
+  getPendingPermissionRequests() {
+    return []
+  }
+  isTurnActive() {
+    return false
+  }
+  waitUntilIdle() {
+    return Promise.resolve()
+  }
+  abort() {}
+}
+
+function makeServer(
+  contextBreakdown?: SidecarContextBreakdownDomain,
+  overrides?: Partial<ConstructorParameters<typeof SidecarServer>[0]>,
+) {
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
     controller: new AppSessionController(probeAdapter()),
     ...(contextBreakdown ? { contextBreakdown } : {}),
     log: () => {},
+    ...overrides,
   })
   servers.push(server)
   return server
@@ -302,4 +336,262 @@ test('a session with no breakdown domain ignores the request without erroring', 
 
   expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
   expect(received.find(f => f.kind === 'error')).toBeUndefined()
+})
+
+test('turn boundary or compact boundary invalidation bypasses the 15-second freshness floor', async () => {
+  const { domain, calls } = countingDomain()
+  const controller = new TestSessionController()
+  const server = makeServer(domain, { controller: controller as unknown as AppSessionController })
+  const { socket } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+
+  // First request computes snapshot
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls()).toBe(1)
+
+  // Immediate second request uses cache
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls()).toBe(1)
+
+  // Turn status invalidation event occurs
+  controller.emit({ type: 'turn.status', activeTurn: true })
+  await flush()
+
+  // Third request recomputes, bypassing freshness floor
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-3' }),
+  )
+  await flush()
+  expect(calls()).toBe(2)
+
+  // Compact boundary invalidation
+  controller.emit({
+    type: 'message',
+    message: {
+      type: 'system',
+      subtype: 'compact_boundary',
+      parent_tool_use_id: null,
+    } as unknown as SDKMessage,
+  })
+  await flush()
+
+  // Fourth request recomputes again
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-4' }),
+  )
+  await flush()
+  expect(calls()).toBe(3)
+})
+
+test('generation counter discards in-flight analysis if invalidated while computing', async () => {
+  let calls = 0
+  let resolveSnapshot: ((val: ContextBreakdownSnapshot) => void) | null = null
+  const domain: SidecarContextBreakdownDomain = {
+    snapshot: async () => {
+      calls++
+      return new Promise<ContextBreakdownSnapshot>(resolve => {
+        resolveSnapshot = resolve
+      })
+    },
+  }
+  const controller = new TestSessionController()
+  const server = makeServer(domain, { controller: controller as unknown as AppSessionController })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+  received.length = 0
+
+  // Start request 1 (in-flight)
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls).toBe(1)
+  expect(resolveSnapshot).toBeDefined()
+
+  // Invalidation occurs while request 1 is still computing
+  controller.emit({ type: 'turn.status', activeTurn: true })
+  await flush()
+
+  // Resolve the first snapshot with stale data
+  const STALE_BREAKDOWN = { ...BREAKDOWN, usedTokens: 10_000 }
+  resolveSnapshot!(STALE_BREAKDOWN)
+  await flush()
+
+  // The stale snapshot must be discarded: not broadcast, not cached
+  expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
+
+  // Next request recomputes because generation mismatch discarded the stale snapshot
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls).toBe(2)
+
+  // Fresh snapshot resolves
+  const FRESH_BREAKDOWN = { ...BREAKDOWN, usedTokens: 20_000 }
+  resolveSnapshot!(FRESH_BREAKDOWN)
+  await flush()
+
+  const snapshotFrame = received.find(f => f.kind === 'context-breakdown.snapshot') as Extract<
+    ServerFrame,
+    { kind: 'context-breakdown.snapshot' }
+  >
+  expect(snapshotFrame).toBeDefined()
+  expect(snapshotFrame.breakdown).toEqual(FRESH_BREAKDOWN)
+})
+
+test('permission mode change or idle edit-from-message invalidates cached breakdown', async () => {
+  const { domain, calls } = countingDomain()
+  let permMode = 'ask'
+  const permListeners = new Set<(ctx: { mode: string }) => void>()
+  const permissions = {
+    getToolPermissionContext: () => ({
+      ...getDefaultAppState().toolPermissionContext,
+      mode: permMode as any,
+    }),
+    subscribeToolPermissionContext: (cb: (ctx: { mode: string }) => void) => {
+      permListeners.add(cb)
+      return () => permListeners.delete(cb)
+    },
+    getDisplayFacts: () => ({
+      managedRulesOnly: false,
+      permissionClassifierEnabled: false,
+    }),
+  }
+
+  let editCalls = 0
+  const sessionActions = {
+    selectUserMessage: (_id: string) => ({ ok: true as const, selectedPrompt: 'hello' }),
+    editFromMessage: async (_id: string) => {
+      editCalls++
+      return { ok: true as const, retainedMessages: [] }
+    },
+    branchFromMessage: async () => ({ ok: true as const, forkedSessionId: 'fork-1' }),
+  }
+
+  const server = makeServer(domain, {
+    permissions: permissions as any,
+    sessionActions: sessionActions as any,
+    projectHistory: async () => ({ history: [], truncated: false }),
+  })
+  const { socket } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+
+  // Initial request
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls()).toBe(1)
+
+  // Immediate retry is cached
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls()).toBe(1)
+
+  // Permission mode changes
+  permMode = 'auto'
+  for (const listener of permListeners) {
+    listener({ ...getDefaultAppState().toolPermissionContext, mode: 'auto' as any })
+  }
+  await flush()
+
+  // Third request recomputes
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-3' }),
+  )
+  await flush()
+  expect(calls()).toBe(2)
+
+  // Idle edit-from-message arrives
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-1',
+      userMessageId: '11111111-2222-3333-4444-555555555555',
+    }),
+  )
+  await flush()
+  expect(editCalls).toBe(1)
+
+  // Fourth request recomputes after editFromMessage
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-4' }),
+  )
+  await flush()
+  expect(calls()).toBe(3)
+})
+
+test('failed analysis cannot resurrect old data after invalidation', async () => {
+  let calls = 0
+  let shouldFail = false
+  const domain: SidecarContextBreakdownDomain = {
+    snapshot: async () => {
+      calls++
+      if (shouldFail) throw new Error('Analysis failed')
+      return BREAKDOWN
+    },
+  }
+  const controller = new TestSessionController()
+  const server = makeServer(domain, { controller: controller as unknown as AppSessionController })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+
+  // First request succeeds
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls).toBe(1)
+  expect(received.filter(f => f.kind === 'context-breakdown.snapshot')).toHaveLength(1)
+  received.length = 0
+
+  // Invalidation occurs
+  controller.emit({ type: 'turn.status', activeTurn: false })
+  await flush()
+
+  // Second request fails
+  shouldFail = true
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls).toBe(2)
+  // No snapshot sent, old data was not resurrected
+  expect(received.filter(f => f.kind === 'context-breakdown.snapshot')).toHaveLength(0)
+
+  // Third request succeeds again
+  shouldFail = false
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-3' }),
+  )
+  await flush()
+  expect(calls).toBe(3)
+  expect(received.filter(f => f.kind === 'context-breakdown.snapshot')).toHaveLength(1)
 })

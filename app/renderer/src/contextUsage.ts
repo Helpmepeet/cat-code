@@ -437,3 +437,78 @@ export function selectContextUsage(
     ? { usedTokens, contextWindow, percentUsed, windowIsFallback: true }
     : { usedTokens, contextWindow, percentUsed }
 }
+
+/**
+ * Capacity breakdown derived from reported usage and live engine thresholds,
+ * independent of category estimates.
+ */
+export type ContextCapacity =
+  | {
+      kind: 'compact'
+      /** Available headroom before engine auto-compaction triggers. */
+      freeBeforeAutoCompact: number
+      /** Remaining reserve capacity (shrinks if usage enters the reserve). */
+      reservedRemaining: number
+    }
+  | {
+      kind: 'remaining'
+      /** Total remaining headroom in the window when compaction thresholds are not active. */
+      remaining: number
+    }
+
+/**
+ * Derives available capacity rows for the context popover from the effective
+ * window W, reported used tokens U, and current engine auto-compaction threshold T.
+ *
+ * For known effective window W, reported usage U, and valid enabled threshold T:
+ * - remaining = max(0, W - U)
+ * - configured reserve within window = clamp(W - T, 0, W)
+ * - remaining reserved capacity = min(remaining, configured reserve)
+ * - free before autocompaction = remaining - remaining reserved capacity
+ *
+ * If autocompaction is disabled, threshold is unavailable, or liveContextWindow
+ * does not match W, returns single remaining capacity row when W is known.
+ * If W is unknown (fallback), returns null.
+ */
+export function selectContextCapacity(
+  usage: ContextUsage,
+  autoCompact?: {
+    enabled: boolean
+    threshold: number | null
+  } | null,
+  liveContextWindow?: number | null,
+): ContextCapacity | null {
+  if (usage.windowIsFallback === true || usage.contextWindow <= 0) {
+    return null
+  }
+
+  const W = usage.contextWindow
+  const U = usage.usedTokens
+  const remaining = Math.max(0, W - U)
+
+  if (
+    autoCompact != null &&
+    autoCompact.enabled === true &&
+    typeof autoCompact.threshold === 'number' &&
+    Number.isFinite(autoCompact.threshold) &&
+    autoCompact.threshold > 0 &&
+    typeof liveContextWindow === 'number' &&
+    Number.isFinite(liveContextWindow) &&
+    liveContextWindow === W
+  ) {
+    const T = autoCompact.threshold
+    const configuredReserve = Math.min(Math.max(0, W - T), W)
+    const reservedRemaining = Math.min(remaining, configuredReserve)
+    const freeBeforeAutoCompact = remaining - reservedRemaining
+    return {
+      kind: 'compact',
+      freeBeforeAutoCompact,
+      reservedRemaining,
+    }
+  }
+
+  return {
+    kind: 'remaining',
+    remaining,
+  }
+}

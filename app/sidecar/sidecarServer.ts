@@ -544,6 +544,14 @@ export class SidecarServer {
   private contextBreakdownComputedAt = 0
   /** The last snapshot, re-broadcast instead of recomputing inside the floor. */
   private contextBreakdownLast: ContextBreakdownSnapshot | null = null
+  /** Local generation counter to guard against analysis races with invalidations. */
+  private contextBreakdownGeneration = 0
+
+  private invalidateContextBreakdown(): void {
+    this.contextBreakdownLast = null
+    this.contextBreakdownComputedAt = 0
+    this.contextBreakdownGeneration += 1
+  }
   private readonly accounts: SidecarAccountsDomain | null
   private readonly workspaceTrust: SidecarWorkspaceTrustDomain | null
   private readonly onWorkspaceTrusted: (() => void) | null
@@ -831,6 +839,15 @@ export class SidecarServer {
       // Before the broadcast: `broadcastEvent` returns early with no clients
       // attached, and a turn that hangs with the window closed is exactly the
       // case this needs to see.
+      if (
+        event.type === 'turn.status' ||
+        (event.type === 'message' &&
+          event.message.type === 'system' &&
+          event.message.subtype === 'compact_boundary' &&
+          event.message.parent_tool_use_id == null)
+      ) {
+        this.invalidateContextBreakdown()
+      }
       this.observeTurnEvent(event)
       this.broadcastEvent(event)
       this.observeGeneratedImageEvent(event)
@@ -918,8 +935,13 @@ export class SidecarServer {
     // updates applied by the engine's decision path, PermissionRequest hooks
     // applying rules mid-turn).
     if (this.permissions) {
+      let lastPermissionMode = this.permissions.getToolPermissionContext().mode
       this.unsubscribePermissionContext =
         this.permissions.subscribeToolPermissionContext(context => {
+          if (context.mode !== lastPermissionMode) {
+            this.invalidateContextBreakdown()
+            lastPermissionMode = context.mode
+          }
           this.broadcastPermissionContext(context)
         })
     }
@@ -969,7 +991,25 @@ export class SidecarServer {
     // (no per-token storm), so this fires on a `*.set` verb OR any engine path that
     // moves those fields — the faces reflect live with no respawn.
     if (this.runControls) {
+      const initialSnapshot = this.runControls.getSnapshot()
+      let lastModelCurrent = initialSnapshot.model.current
+      let lastModelSelected = initialSnapshot.model.selected
+      let lastContextWindow = initialSnapshot.model.contextWindow
       this.unsubscribeRunControlsSnapshot = this.runControls.subscribe(() => {
+        const snap = this.runControls?.getSnapshot()
+        if (snap) {
+          const { current, selected, contextWindow } = snap.model
+          if (
+            current !== lastModelCurrent ||
+            selected !== lastModelSelected ||
+            contextWindow !== lastContextWindow
+          ) {
+            this.invalidateContextBreakdown()
+            lastModelCurrent = current
+            lastModelSelected = selected
+            lastContextWindow = contextWindow
+          }
+        }
         this.broadcastRunControlsSnapshot()
       })
     }
@@ -3505,6 +3545,7 @@ export class SidecarServer {
           refuse(result.message)
           return
         }
+        this.invalidateContextBreakdown()
         if (
           !result.retainedMessages ||
           !this.projectHistory
@@ -4677,8 +4718,12 @@ export class SidecarServer {
       return
     }
     this.contextBreakdownInFlight = true
+    const generation = this.contextBreakdownGeneration
     try {
       const raw = await this.contextBreakdown.snapshot()
+      if (this.contextBreakdownGeneration !== generation) {
+        return
+      }
       if (!raw) {
         return
       }

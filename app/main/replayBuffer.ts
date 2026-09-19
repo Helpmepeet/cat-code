@@ -120,7 +120,7 @@ export const DEFAULT_MAX_BUFFERED_PREVIEWS = 32
 const PREVIEW_REPLAY_TRUNCATION_REQUEST_ID =
   'catcode.preview-replay-truncated'
 
-type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
+type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview' | 'none'
 
 /**
  * Retention tier per frame kind. Exhaustive by construction — a
@@ -142,6 +142,10 @@ type FrameRetention = 'head' | 'sticky' | 'ring' | 'preview'
  * relays it to the durable registry, `main.ts:674`) and `sessions.snapshot`
  * (catalog decision #4 — a main-supervised worker owns the catalog, the sidecar
  * no longer emits it on attach).
+ *
+ * `none` covers frames forwarded live only and never retained for replay
+ * (`context-breakdown.snapshot`: an expensive, on-demand estimate that reloads
+ * should not replay stale; reopening the popover queries the sidecar cache).
  */
 const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   ready: 'head',
@@ -155,7 +159,8 @@ const FRAME_RETENTION: Record<ServerFrame['kind'], FrameRetention> = {
   'workers.snapshot': 'sticky',
   'lease.snapshot': 'sticky',
   'run-controls.snapshot': 'sticky',
-  'context-breakdown.snapshot': 'sticky',
+  // On-demand snapshot: forwarded live, not retained in replay buffer.
+  'context-breakdown.snapshot': 'none',
   'accounts.snapshot': 'sticky',
   'workspace-trust.snapshot': 'sticky',
   'diagnostics.snapshot': 'sticky',
@@ -304,6 +309,9 @@ export class FrameReplayBuffer {
       this.sessions.set(sessionId, entry)
     }
     const retention = FRAME_RETENTION[frame.kind]
+    if (retention === 'none') {
+      return
+    }
     if (frame.kind === 'transcript.reset') {
       entry.recent = []
       entry.recentBytes = 0

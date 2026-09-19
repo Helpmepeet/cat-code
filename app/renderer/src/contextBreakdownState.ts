@@ -9,7 +9,6 @@
  * requests the popover reads the last snapshot rather than an estimate.
  */
 
-import type { ContextUsage } from './contextUsage.js'
 import type {
   ContextBreakdownSnapshot,
   ServerFrame,
@@ -17,14 +16,24 @@ import type {
 } from '../../shared/protocol.js'
 
 export type ContextBreakdownState = {
-  /** Latest snapshot per session; null once reset by a lifecycle frame. */
+  /** Latest snapshot per session; null once reset or invalidated. */
   sessions: Record<SessionId, ContextBreakdownSnapshot | null>
+  /** Tracked control state per session to detect actual changes */
+  controls: Record<
+    SessionId,
+    {
+      currentModel?: string | null
+      selectedModel?: string | null
+      contextWindow?: number | null
+      permissionMode?: string | null
+    }
+  >
 }
 
 export type ContextBreakdownAction = { type: 'frame'; frame: ServerFrame }
 
 export function createContextBreakdownState(): ContextBreakdownState {
-  return { sessions: {} }
+  return { sessions: {}, controls: {} }
 }
 
 export function reduceContextBreakdownState(
@@ -47,6 +56,113 @@ export function reduceContextBreakdownState(
     return {
       ...state,
       sessions: { ...state.sessions, [frame.sessionId]: null },
+    }
+  }
+
+  if (frame.kind === 'transcript.reset') {
+    if (!(frame.sessionId in state.sessions)) return state
+    return {
+      ...state,
+      sessions: { ...state.sessions, [frame.sessionId]: null },
+    }
+  }
+
+  if (frame.kind === 'event') {
+    if (frame.event.type === 'turn.status') {
+      if (!(frame.sessionId in state.sessions)) return state
+      return {
+        ...state,
+        sessions: { ...state.sessions, [frame.sessionId]: null },
+      }
+    }
+    if (
+      frame.event.type === 'message' &&
+      frame.event.message.type === 'system' &&
+      frame.event.message.subtype === 'compact_boundary' &&
+      frame.event.message.parent_tool_use_id == null
+    ) {
+      if (!(frame.sessionId in state.sessions)) return state
+      return {
+        ...state,
+        sessions: { ...state.sessions, [frame.sessionId]: null },
+      }
+    }
+    return state
+  }
+
+  if (frame.kind === 'run-controls.snapshot') {
+    const prev = state.controls[frame.sessionId]
+    const nextCurrent = frame.runControls.model.current
+    const nextSelected = frame.runControls.model.selected
+    const nextWindow = frame.runControls.model.contextWindow
+
+    if (prev !== undefined) {
+      const changed =
+        prev.currentModel !== nextCurrent ||
+        prev.selectedModel !== nextSelected ||
+        prev.contextWindow !== nextWindow
+      if (changed) {
+        return {
+          ...state,
+          sessions: { ...state.sessions, [frame.sessionId]: null },
+          controls: {
+            ...state.controls,
+            [frame.sessionId]: {
+              ...prev,
+              currentModel: nextCurrent,
+              selectedModel: nextSelected,
+              contextWindow: nextWindow,
+            },
+          },
+        }
+      }
+      return state
+    }
+
+    return {
+      ...state,
+      controls: {
+        ...state.controls,
+        [frame.sessionId]: {
+          currentModel: nextCurrent,
+          selectedModel: nextSelected,
+          contextWindow: nextWindow,
+        },
+      },
+    }
+  }
+
+  if (frame.kind === 'permission.context') {
+    const prev = state.controls[frame.sessionId]
+    const nextMode = frame.context.mode
+
+    if (
+      prev !== undefined &&
+      prev.permissionMode !== undefined &&
+      prev.permissionMode !== nextMode
+    ) {
+      return {
+        ...state,
+        sessions: { ...state.sessions, [frame.sessionId]: null },
+        controls: {
+          ...state.controls,
+          [frame.sessionId]: {
+            ...prev,
+            permissionMode: nextMode,
+          },
+        },
+      }
+    }
+
+    return {
+      ...state,
+      controls: {
+        ...state.controls,
+        [frame.sessionId]: {
+          ...prev,
+          permissionMode: nextMode,
+        },
+      },
     }
   }
 
@@ -177,12 +293,11 @@ const RESERVED_CATEGORY_LABELS = new Set(['Compact buffer'])
  * possibility of a future counter failing in a way that empties categories again.
  *
  * The threshold is deliberately FAR below 1, because the two numbers have
- * different bases and are expected to disagree: `usedTokens` is the API's
- * fresh-input count (input + cache_creation, EXCLUDING cache reads,
- * `analyzeContext.ts` → `getFreshInputTokens`), while the categories may be local
- * estimates. An earlier 0.5 sat right where a Codex session legitimately lands,
- * so a correct breakdown flickered in and out depending on how JSON-heavy the
- * transcript was. Only a near-total collapse should suppress the panel.
+ * different bases and are expected to disagree: `usedTokens` is reported
+ * usage, while the categories may be local estimates. An earlier 0.5 sat right
+ * where a Codex session legitimately lands, so a correct breakdown flickered in
+ * and out depending on how JSON-heavy the transcript was. Only a near-total
+ * collapse should suppress the panel.
  */
 const MIN_ACCOUNTED_SHARE = 0.15
 
@@ -237,173 +352,10 @@ export function selectBreakdownRows(
 }
 
 /**
- * The popover's own aggregate — the sum of the SAME rows the legend prints,
- * over the snapshot's OWN `contextWindow`. Never the composer's live `usage`
- * (refreshed on every message): the breakdown is a coarse, throttled snapshot
- * (attach + on popover-open, 15s floor — `sidecarServer.ts`
- * `CONTEXT_BREAKDOWN_MIN_INTERVAL_MS`), and its category tokens are local
- * estimates on top of that, so pairing it with the live number let the header
- * and the rows drift apart — a header reading "30k" over rows that summed to
- * well over that. `accounted + Free` equals the snapshot's own `contextWindow`
- * exactly, by construction (`analyzeContext.ts`: `freeTokens = contextWindow -
- * actualUsage - reservedTokens`, and the reserved-buffer row, when present, is
- * part of `actualUsage`'s complement, not `accounted`'s), so this is the one
- * total that always reconciles with what is printed below it.
+ * Unoccupied window (`freeTokens`), passed through from the snapshot.
  *
- * Falls back to the live `usage` when there is no trustworthy breakdown yet
- * (`rows` empty) — the aggregate-row-only state, where there is nothing to sum.
- */
-export function selectPanelUsage(
-  usage: ContextUsage,
-  breakdown: ContextBreakdownSnapshot | null,
-): ContextUsage {
-  const rows = selectBreakdownRows(breakdown)
-  if (rows.length === 0 || !breakdown) return usage
-  const accounted = rows.reduce((sum, row) => sum + row.tokens, 0)
-  const contextWindow = breakdown.contextWindow
-  const percentUsed = Math.min(
-    100,
-    Math.max(0, Math.round((accounted / contextWindow) * 100)),
-  )
-  return { usedTokens: accounted, contextWindow, percentUsed }
-}
-
-/* ---------------------------------------------------------------------------
- * The donut's hover view
- *
- * Ring geometry AND hover emphasis live here, not in the component, for one
- * reason: the renderer suite has no DOM (`SettingsEditors.test.tsx:3` — adding
- * happy-dom needs sign-off), so anything left inside the JSX is untestable. The
- * component keeps only the two `onMouseEnter`/`onMouseLeave` wires and paints
- * what this returns.
- *
- * The ring and the legend are ONE hover target set: both call the same setter
- * with the same index, and both read their appearance from this one view, so
- * hovering a legend row emphasises its arc and vice versa without either side
- * knowing about the other.
- * ------------------------------------------------------------------------- */
-
-const DONUT_RADIUS = 30
-const DONUT_CIRCUMFERENCE = 2 * Math.PI * DONUT_RADIUS
-/** Segments are notched apart rather than butted: each arc gives up GAP units of
- * its own length and starts a half-gap later, so the notch sits centred between
- * neighbours and the ring's total sweep still reads as the used fraction. */
-const SEGMENT_GAP = 3
-/** Thin enough that the notches stay legible at 76px, and that the center
- * readout has room. Hover thickens the one arc under the pointer. */
-const SEGMENT_STROKE = 6
-const SEGMENT_STROKE_HOVER = 9
-/** Unhovered arcs and their legend rows recede rather than vanish. */
-const DIMMED_OPACITY = 0.3
-
-export type DonutSegment = {
-  label: string
-  tokens: number
-  colorHex: string
-  /** Dash length in circumference units, already shortened by the gap. */
-  dash: number
-  /** Negative offset that walks each arc to its slot, plus the half-gap. */
-  offset: number
-  strokeWidth: number
-  opacity: number
-}
-
-export type DonutLegendRow = ContextBreakdownRow & {
-  /** Row fill while this row is the hover target. */
-  rowClass: string
-  labelClass: string
-  valueClass: string
-}
-
-export type DonutView = {
-  circumference: number
-  segments: DonutSegment[]
-  legend: DonutLegendRow[]
-  /** The hovered category's hue as a static `text-*` class, null at rest. */
-  centerClass: string | null
-  /**
-   * The hovered category's share of the ACCOUNTED total (`Σ rows[].tokens`,
-   * the same denominator {@link selectPanelUsage} sums the header from), 0-100.
-   * Null at rest, where the caller prints the panel's own overall percent
-   * instead — the arcs still size by share of the full window
-   * ({@link ContextBreakdownRow.percentOfWindow}), so a category can read
-   * "23% of what's used" in the center while its arc still occupies a sliver
-   * of the ring; those are different questions and both are correct.
-   */
-  centerPercent: number | null
-}
-
-/**
- * The ring + legend as they should paint for a given hover target.
- *
- * `hoveredIndex` is null when nothing is hovered; an out-of-range index is
- * treated as null rather than throwing, because it can legitimately go stale for
- * one render when a fresh snapshot arrives with fewer categories than the one
- * the pointer entered.
- */
-export function selectDonutView(
-  rows: readonly ContextBreakdownRow[],
-  hoveredIndex: number | null,
-): DonutView {
-  const hovered =
-    hoveredIndex != null && hoveredIndex >= 0 && hoveredIndex < rows.length
-      ? hoveredIndex
-      : null
-  const accountedTotal = rows.reduce((sum, row) => sum + row.tokens, 0)
-
-  let drawn = 0
-  const segments = rows.map((row, index) => {
-    const arcLength = (row.percentOfWindow / 100) * DONUT_CIRCUMFERENCE
-    const segment: DonutSegment = {
-      label: row.label,
-      tokens: row.tokens,
-      colorHex: row.colorHex,
-      dash: Math.max(0, arcLength - SEGMENT_GAP),
-      offset: -(drawn + SEGMENT_GAP / 2),
-      strokeWidth: hovered === index ? SEGMENT_STROKE_HOVER : SEGMENT_STROKE,
-      opacity: hovered === null || hovered === index ? 1 : DIMMED_OPACITY,
-    }
-    drawn += arcLength
-    return segment
-  })
-
-  const legend = rows.map((row, index) => ({
-    ...row,
-    rowClass: hovered === index ? 'bg-white/5' : 'bg-transparent',
-    labelClass:
-      hovered === null
-        ? 'text-text-muted'
-        : hovered === index
-          ? 'text-text-primary'
-          : 'text-text-ghost',
-    valueClass:
-      hovered === null
-        ? 'text-text-subtle'
-        : hovered === index
-          ? 'text-text-primary'
-          : 'text-text-ghost',
-  }))
-
-  const hoveredRow = hovered === null ? null : (rows[hovered] ?? null)
-  return {
-    circumference: DONUT_CIRCUMFERENCE,
-    segments,
-    legend,
-    centerClass: hoveredRow ? hoveredRow.textClass : null,
-    centerPercent:
-      hoveredRow && accountedTotal > 0
-        ? (hoveredRow.tokens / accountedTotal) * 100
-        : null,
-  }
-}
-
-/**
- * Unoccupied window (`Free`, `Surfaces.jsx:532-535`).
- *
- * The engine's own remainder, passed through — NOT `contextWindow - usedTokens`,
- * which is a different number: `usedTokens` is the API's fresh-input count when
- * one exists, while the bar segments are the category estimates. Subtracting
- * would print a `Free` that fails to reconcile with the bar directly above it.
+ * Note: the composer's context popover derives capacity rows independently from
+ * reported usage and engine thresholds. This helper is retained for compatibility.
  */
 export function selectFreeTokens(
   snapshot: ContextBreakdownSnapshot | null,

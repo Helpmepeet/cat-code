@@ -17,15 +17,14 @@ import { handleMenuRovingKeyDown, usePopover } from './composerPopover.js'
 import { ContextGauge } from './ContextGauge.js'
 import {
   pressureTone,
+  selectContextCapacity,
   selectContextPercent,
+  type ContextCapacity,
   type ContextUsage,
 } from './contextUsage.js'
 import {
   selectBreakdownRows,
-  selectDonutView,
-  selectFreeTokens,
-  selectPanelUsage,
-  type DonutView,
+  type ContextBreakdownRow,
 } from './contextBreakdownState.js'
 import { PermissionModeChip } from './PermissionModeChip.js'
 import { ActionWarningIcon } from './SessionActionIcons.js'
@@ -1024,120 +1023,33 @@ function fmtTokens(n: number): string {
 }
 
 /**
- * The context-breakdown donut (replaces the old stacked bar, operator call
- * 2026-08-05): one ring segment per category, sized by its share of the
- * window, over a faint full-circle track for the unused remainder — the same
- * data {@link selectBreakdownRows} already computed for the bar/legend, drawn
- * as arcs instead of stacked rectangles. Geometry mirrors {@link ContextGauge}
- * (12 o'clock start via `-rotate-90`, `arcLength CIRCUMFERENCE` dash form).
- *
- * `colorHex` rides a plain SVG `stroke` attribute, not a class, so it is
- * exempt from the Tailwind v4 dynamic-class trap the `swatch` classes must
- * dodge (`contextBreakdownState.ts`).
- *
- * Every number this paints — dash, offset, stroke width, opacity, the center
- * readout — comes from `selectDonutView`, so the hover behaviour is testable in
- * a suite with no DOM. All this component owns is the two pointer wires.
- *
- * The center reads two different questions depending on hover state: at rest
- * it is `percentUsed`, the panel's own overall figure (share of the full
- * window); hovering a category swaps it to that category's share of the
- * ACCOUNTED total (`view.centerPercent`, share of what is actually used, not
- * of window capacity) — the arcs underneath never change basis, only the
- * number printed in the middle does.
- */
-function ContextBreakdownDonut({
-  view,
-  percentUsed,
-  tone,
-  onHover,
-}: {
-  view: DonutView
-  percentUsed: number
-  tone: string
-  onHover: (index: number | null) => void
-}) {
-  const radius = 30
-  return (
-    <div className="relative mx-auto my-1 h-[76px] w-[76px] shrink-0">
-      <svg width="76" height="76" viewBox="0 0 76 76" className="-rotate-90" aria-hidden>
-        <circle
-          cx="38"
-          cy="38"
-          r={radius}
-          fill="none"
-          stroke="light-dark(rgba(9,9,11,0.1), rgba(255,255,255,0.06))"
-          strokeWidth="6"
-        />
-        {view.segments.map((segment, index) => (
-          // §0 EXCEPTION: data-driven arc geometry and emphasis, the same class
-          // of computed SVG presentation attribute `ContextGauge`'s own arc
-          // already uses. The values come from `selectDonutView`, not from here.
-          <circle
-            key={segment.label}
-            cx="38"
-            cy="38"
-            r={radius}
-            fill="none"
-            stroke={segment.colorHex}
-            strokeWidth={segment.strokeWidth}
-            strokeLinecap="butt"
-            strokeDasharray={`${segment.dash} ${view.circumference}`}
-            strokeDashoffset={segment.offset}
-            opacity={segment.opacity}
-            // The arc is a stroked circle with no fill, so the default hit area
-            // is the whole 76px disc and every segment would answer for the
-            // pointer. `stroke` narrows the target to the drawn band itself.
-            className="[pointer-events:stroke] transition-[opacity,stroke-width] duration-100"
-            onMouseEnter={() => onHover(index)}
-            onMouseLeave={() => onHover(null)}
-          >
-            <title>{`${segment.label}, ${segment.tokens.toLocaleString()} tokens`}</title>
-          </circle>
-        ))}
-      </svg>
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <span
-          className={`text-[16px] font-semibold tabular-nums ${view.centerClass ?? tone}`}
-        >
-          {view.centerPercent == null
-            ? `${percentUsed}%`
-            : `${Math.round(view.centerPercent)}%`}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-/** The context-donut popover BODY (the prototype's `ContextChip` popover,
+ * The context-donut popover BODY (the prototype's `ContextChip` popover,
  * Surfaces.jsx:497). Exported + pure (open-state-free) for headless coverage, like
- * {@link AccountSwitcherPanel}. Shows the real Context total, from data already on
- * the wire — plan/quota usage is deliberately NOT here (operator call, 2026-08-05:
- * it is visible elsewhere and this popover is about the context WINDOW, not the
- * account's rate limits).
+ * {@link AccountSwitcherPanel}. Shows the real Context total from data already on
+ * the wire.
  *
- * The per-category BREAKDOWN below the aggregate row (the prototype's stacked bar +
- * legend + Free, Surfaces.jsx:517-537, now drawn as {@link ContextBreakdownDonut}) is
- * the `context-breakdown.snapshot` seam, carrying the engine's OWN
- * `analyzeContextUsage` output. It arrives only after this popover is opened, so a
- * session with nothing to analyse yet renders the aggregate row alone — absent,
- * never fabricated.
- *
- * The header row reads {@link selectPanelUsage}, NOT `usage` directly, once a
- * breakdown is present: `usage` is the composer's own live, per-message number,
- * while the rows below are a coarse snapshot recomputed only on open. The
- * two are different pipelines on different cadences, so printing them together
- * could show a header total the rows didn't sum to. `selectPanelUsage` sums the
- * SAME rows the legend prints instead, so the header always reconciles with what
- * is on screen below it. */
+ * Uses the supplied `usage` directly for the headline, 76px aggregate ring,
+ * pressure tone, and Compact-action escalation. Categories provide an estimated
+ * breakdown underneath but do not override the headline or aggregate ring.
+ */
 export function ContextUsagePanel({
   usage,
   breakdown = null,
+  autoCompact = null,
+  liveContextWindow = null,
+  runControls = null,
   onCompact,
 }: {
   usage: ContextUsage
   /** Per-category occupancy, absent until the sidecar has produced one. */
   breakdown?: ContextBreakdownSnapshot | null
+  autoCompact?: {
+    enabled: boolean
+    threshold: number | null
+    warningThreshold?: number | null
+  } | null
+  liveContextWindow?: number | null
+  runControls?: RunControlsSnapshot | null
   /**
    * Submits `/compact` for this session. Absent (and the row unrendered) when no
    * engine can take it: a preview pane, or a spawning, parked, or terminal
@@ -1147,28 +1059,23 @@ export function ContextUsagePanel({
    */
   onCompact?: () => void
 }) {
-  const panelUsage = selectPanelUsage(usage, breakdown)
-  const { percentUsed, usedTokens, contextWindow } = panelUsage
+  const { usedTokens, contextWindow } = usage
   // Null while nothing has reported the window, exactly as on the donut face.
-  // A breakdown carries its own real window, so this is only ever null in the
-  // aggregate-row-only state, where the row prints the token total alone.
-  const percent = selectContextPercent(panelUsage)
+  const percent = selectContextPercent(usage)
   // Context fullness, NOT account quota — the same ladder the donut face reads.
   const tone = pressureTone(percent ?? 0)
   const t = toneClasses(tone)
-  // Past the pressure threshold the panel's action escalates. The threshold is
-  // `pressureTone`'s OWN ladder (warn at 70, danger at 90), deliberately not a
-  // new number of this footer's own: the popover paints every percentage on that
-  // one ladder, so a footer escalating on a separate threshold could shout under
-  // a percent still coloured calm.
   const escalated = tone === 'warn' || tone === 'danger' ? tone : null
   const rows = selectBreakdownRows(breakdown)
-  const freeTokens = selectFreeTokens(breakdown)
-  // ONE hover target for the ring and the legend together, which is why it is
-  // held here rather than inside the donut: a legend row and its arc are the
-  // same category, so they must emphasise as one.
-  const [hovered, setHovered] = useState<number | null>(null)
-  const view = selectDonutView(rows, hovered)
+  const resolvedAutoCompact = autoCompact ?? runControls?.autoCompact
+  const resolvedLiveWindow = liveContextWindow ?? runControls?.model.contextWindow
+  const capacity = selectContextCapacity(usage, resolvedAutoCompact, resolvedLiveWindow)
+
+  const radius = 30
+  const circumference = 2 * Math.PI * radius
+  const clampedPercent = percent == null ? 0 : Math.min(100, Math.max(0, percent))
+  const arcLength = (clampedPercent / 100) * circumference
+
   return (
     // ACCT-3: informational content only (no menu items) — `role="menu"`
     // asserted an arrow-navigable contract this panel never fulfilled.
@@ -1177,9 +1084,7 @@ export function ContextUsagePanel({
         * own, and doubling them left the Free row floating well clear of the
         * seam. Without a footer the body owns the panel's bottom edge again. */}
       <div className={`px-3.5 pt-3 ${onCompact ? '' : 'pb-3.5'}`}>
-        <div
-          className={`flex items-center justify-between ${rows.length > 0 ? 'mb-1' : ''}`}
-        >
+        <div className="flex items-center justify-between">
           <span className="text-[11.5px] text-text-subtle">Context</span>
           <span className="text-[11.5px] tabular-nums text-text-muted">
             {percent == null ? (
@@ -1192,52 +1097,101 @@ export function ContextUsagePanel({
             )}
           </span>
         </div>
-        {rows.length > 0 ? (
-          <>
-            <ContextBreakdownDonut
-              view={view}
-              percentUsed={percentUsed}
-              tone={t.text}
-              onHover={setHovered}
+
+        {/* 76px aggregate ring: neutral full-circle track, used arc, center percentage */}
+        <div className="relative mx-auto my-1 h-[76px] w-[76px] shrink-0">
+          <svg
+            width="76"
+            height="76"
+            viewBox="0 0 76 76"
+            className={`-rotate-90 ${t.text}`}
+            aria-hidden
+          >
+            <circle
+              cx="38"
+              cy="38"
+              r={radius}
+              fill="none"
+              stroke="light-dark(rgba(9,9,11,0.1), rgba(255,255,255,0.06))"
+              strokeWidth="6"
             />
-            {/* Hovering a legend row drives the ring, and vice versa: both ends
-             * write the same index. Pointer-only by design — every label and
-             * value here is already on screen at rest, so the emphasis reveals
-             * nothing a keyboard or touch user would otherwise miss, and making
-             * seven readout rows focusable would bury the Compact button behind
-             * them in the tab order. */}
-            {view.legend.map((row, index) => (
-              <div
-                key={row.label}
-                onMouseEnter={() => setHovered(index)}
-                onMouseLeave={() => setHovered(null)}
-                className={`-mx-1 flex items-center justify-between rounded px-1 py-[2.5px] transition-colors duration-100 ${row.rowClass}`}
-              >
-                <span
-                  className={`flex items-center gap-1.5 text-[11px] transition-colors duration-100 ${row.labelClass}`}
-                >
-                  <span
-                    aria-hidden
-                    className={`size-[7px] shrink-0 rounded-[2px] ${row.swatch}`}
-                  />
-                  {row.label}
-                </span>
-                <span
-                  className={`text-[11px] tabular-nums transition-colors duration-100 ${row.valueClass}`}
-                >
-                  {fmtTokens(row.tokens)}
-                </span>
-              </div>
-            ))}
-            {freeTokens != null ? (
-              <div className="mt-0.5 flex items-center justify-between border-t border-shell-seam py-[2.5px]">
-                <span className="text-[11px] text-text-subtle">Free</span>
-                <span className="text-[11px] tabular-nums text-text-subtle">
-                  {fmtTokens(freeTokens)}
-                </span>
-              </div>
+            {percent != null ? (
+              <circle
+                cx="38"
+                cy="38"
+                r={radius}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="6"
+                strokeLinecap="round"
+                strokeDasharray={`${arcLength} ${circumference}`}
+              />
             ) : null}
-          </>
+          </svg>
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            {percent != null ? (
+              <span className={`text-[16px] font-semibold tabular-nums ${t.text}`}>
+                {percent}%
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        {/* Estimated breakdown */}
+        {rows.length > 0 ? (
+          <div className="mt-2">
+            <div className="mb-1 text-[11px] font-medium text-text-subtle">
+              Estimated breakdown
+            </div>
+            <div className="flex flex-col gap-0.5">
+              {rows.map(row => (
+                <div
+                  key={row.label}
+                  className="-mx-1 flex items-center justify-between rounded px-1 py-[2.5px] transition-colors duration-100 hover:bg-white/5"
+                >
+                  <span className="flex items-center gap-1.5 text-[11px] text-text-muted">
+                    <span
+                      aria-hidden
+                      className={`size-[7px] shrink-0 rounded-[2px] ${row.swatch}`}
+                    />
+                    {row.label}
+                  </span>
+                  <span className="text-[11px] tabular-nums text-text-subtle">
+                    {fmtTokens(row.tokens)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {/* Capacity rows */}
+        {capacity ? (
+          <div className="mt-1.5 border-t border-shell-seam pt-1">
+            {capacity.kind === 'compact' ? (
+              <>
+                <div className="flex items-center justify-between py-[2px]">
+                  <span className="text-[11px] text-text-subtle">Free before auto-compact</span>
+                  <span className="text-[11px] tabular-nums text-text-subtle">
+                    {fmtTokens(capacity.freeBeforeAutoCompact)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-[2px]">
+                  <span className="text-[11px] text-text-subtle">Reserved remaining</span>
+                  <span className="text-[11px] tabular-nums text-text-subtle">
+                    {fmtTokens(capacity.reservedRemaining)}
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="flex items-center justify-between py-[2px]">
+                <span className="text-[11px] text-text-subtle">Remaining capacity</span>
+                <span className="text-[11px] tabular-nums text-text-subtle">
+                  {fmtTokens(capacity.remaining)}
+                </span>
+              </div>
+            )}
+          </div>
         ) : null}
       </div>
       {/* The panel's ONE action, in one of two forms and never both. Outside the
@@ -1391,12 +1345,14 @@ function ContextChip({
   onRequestBreakdown,
   onCompact,
   faceProps,
+  runControls,
 }: {
   usage: ContextUsage
   breakdown: ContextBreakdownSnapshot | null
   onRequestBreakdown?: () => void
   onCompact?: () => void
   faceProps?: ComposerFaceProps
+  runControls?: RunControlsSnapshot | null
 }) {
   const { open, setOpen, close, ref, triggerRef } = usePopover()
   // Null on a fallback window, where the face itself shows no percentage: the
@@ -1433,6 +1389,7 @@ function ContextChip({
         <ContextUsagePanel
           usage={usage}
           breakdown={breakdown}
+          runControls={runControls}
           // Dismiss on submit: the panel is a readout of a number the compaction
           // is about to change, so leaving it open would show a stale one.
           // `close`, not `setOpen(false)` — a selection owes the trigger its
@@ -1832,6 +1789,7 @@ export function ComposerActionsBar({
               onRequestBreakdown={onRequestContextBreakdown}
               onCompact={onCompact}
               faceProps={faceProps('context')}
+              runControls={runControls}
             />
           ) : null}
         </div>
