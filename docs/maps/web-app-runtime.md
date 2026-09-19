@@ -185,10 +185,9 @@ metadata-only execution measurements and individual-sample latency summaries.
 `UsageTiming.tsx` renders the Execution timing panel and recent session timelines;
 `usageTimingState.ts` handles interval layout, retry connections, and formatting.
 `fitUsageDashboardSnapshot` reduces session/build detail independently of named
-models/tools when fitting the worker record. Counting version 12 invalidates
-older saved summaries while `index-v8.sqlite` rebuilds retained projections with
-normalized historical Auto mode hints. Historical reconstruction is always
-partial and retains no result text, tool input, command, or free-form reason.
+models/tools when fitting the worker record. Counting version 13 invalidates
+older saved summaries while `index-v9.sqlite` rebuilds structured capability and
+permission observations. Pre-contract inference is excluded from the charts.
 See [display corrections](../reports/2026-09-17-usage-display-corrections.md),
 [tool trends and timing](../reports/2026-09-17-usage-tool-trends-and-timing.md),
 and the [measurement audit](../reports/2026-09-17-usage-measurement-audit.md).

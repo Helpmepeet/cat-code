@@ -321,27 +321,18 @@ is not established; partial retained observations remain explicitly partial.
 Pre-capability, older, and unsupported transcript intervals are unavailable, not
 measured zeroes. Rechecks are non-counting.
 
-Counting version 12 and `index-v8.sqlite` invalidate older summary/index
+Counting version 13 and `index-v9.sqlite` invalidate older summary/index
 projections so retained auto-mode metadata is reconstructed from transcripts.
 The Usage section presents only the fixed four chart scopes: Decision flow,
 Command block rate, Decisions over time, and Block reasons. No new inbound
 operation, renderer-authored rule, or raw-content boundary is introduced.
 
-### Historical partial reconstruction, 2026-09-19
+### Historical display exclusion, 2026-09-19
 
-The operator requested a conservative reconstruction from retained pre-contract
-transcripts. A historical adapter uses `run_facts.permissionMode`, tool-use IDs
-and names, and exact code-owned Auto mode denial/unavailable result prefixes.
-It projects only normalized outcome enums; result text, tool input, commands,
-classifier content, and free-form reasons never enter the index.
-
-Exact classifier denials become Policy-blocked, exact unavailable failures become
-Operational error, and other correlated Auto mode attempts become Unknown outcome
-or Incomplete. Their route is Unknown and policy blocks are Uncategorized.
-Historical sources are always Partial, so reconstructed attempts can populate
-observed flow and count charts but cannot publish a confirmed historical command
-block rate. Structured Start/Stage/End observations supersede this fallback for
-the same tool-use ID.
+Pre-contract inference is excluded from the charts. The retained evidence cannot
+recover initial routes or outcomes reliably, and its Unknown population obscured
+the measured prospective signal. Only structured capability and Start/Stage/End
+records contribute to Auto mode charts.
 
 Newly materialized main and agent transcripts write a bounded capability marker
 before their first transcript message. That marker proves the observation path
