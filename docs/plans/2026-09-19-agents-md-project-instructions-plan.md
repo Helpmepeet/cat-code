@@ -1,42 +1,39 @@
 # AGENTS.md project-instructions implementation plan
 
 **Date:** 2026-09-19  
-**Status:** Revised after adversarial review. No runtime code is changed by this document.
+**Status:** Simplified v1 plan. No runtime code is changed by this document.
 
-## Summary
+## Goal
 
-Add Claude Code 2.1.277-style `AGENTS.md` support to Cat Code.
+Add the normal project-instruction behavior:
 
-The default behavior should be:
+```text
+if the active project has a Cat Code CLAUDE instruction:
+    use CLAUDE instructions
+else:
+    use AGENTS instructions
+```
 
-- keep using `CLAUDE.md` when the current project has one of Cat Code's own CLAUDE instruction files;
-- otherwise load `AGENTS.md` as project instructions;
-- expose a **Project instructions** picker in `/config`;
-- support the same four mode values as upstream:
-  `claude-md`, `claude-md-or-agents-md`,
-  `claude-md-and-agents-md`, and `managed-only`.
+Also expose the upstream-style **Project instructions** setting in `/config`.
 
-Do this in Cat Code's existing instruction loader instead of porting Claude Code's
-new built-in mod/hook runtime. Cat Code already owns instruction discovery in
-`src/utils/claudemd.ts`, and the upstream `prompt.context` / `tool.call`
-mod interfaces are not present in this tree.
+The implementation should stay inside Cat Code's existing instruction loader. Do
+not port Anthropic's new mod/hook system and do not create a second instruction
+pipeline.
 
-## Upstream reference
+## Scope
 
-This plan was checked against Anthropic's public `mods/agents-md`
-implementation at commit
-`92ec78f288a5c08660c6c5c2689c1a1ef4b76d3b`.
+### In v1
 
-Relevant upstream files:
+Support these four values:
 
-- `mods/agents-md/README.md`
-- `mods/agents-md/.claude-plugin/plugin.json`
-- `mods/agents-md/hooks/register.ts`
-- `mods/agents-md/hooks/modes/*`
-- `mods/agents-md/hooks/names/*`
-- `mods/agents-md/hooks/files/*`
+| Stored value | UI meaning |
+| --- | --- |
+| `claude-md-or-agents-md` | CLAUDE.md or AGENTS.md. Default. |
+| `claude-md` | CLAUDE.md only. |
+| `claude-md-and-agents-md` | CLAUDE.md and AGENTS.md. |
+| `managed-only` | Managed instructions only. |
 
-The important upstream contract is the mode name and setting path:
+Keep the upstream-compatible settings location:
 
 ```json
 {
@@ -50,97 +47,64 @@ The important upstream contract is the mode name and setting path:
 }
 ```
 
-Cat Code should keep that storage shape even though the behavior is implemented
-inside its loader. This gives settings compatibility with current Claude Code and
-keeps a future upstream sync simpler.
+Support these AGENTS filenames:
 
-## Current Cat Code behavior
+- `AGENTS.md`
+- `.claude/AGENTS.md`
 
-The current instruction owner is `src/utils/claudemd.ts`.
-
-It eagerly loads, in priority order:
-
-1. managed CLAUDE instructions and rules;
-2. user CLAUDE instructions and rules;
-3. project `CLAUDE.md`, `.cat-code/CLAUDE.md`,
-   `.claude/CLAUDE.md`, and project rules while walking root to CWD;
-4. `CLAUDE.local.md`;
-5. optional additional-directory CLAUDE instructions;
-6. auto-memory and team-memory indexes.
-
-Nested instruction discovery uses
-`getMemoryFilesForNestedDirectory()`, while
-`isMemoryFilePath()` identifies instruction files already present in read-file
-state.
-
-`processMemoryFile()` already supplies the important common behavior:
-
-- source typing and prompt framing;
-- `@include` handling;
-- circular-include protection;
-- external-include approval;
-- path tracking plus symlink resolution for includes;
-- `claudeMdExcludes` filtering.
-
-One existing edge matters for this feature: `processMemoryFile()` checks the
-spelled path before resolving a symlink, but does not re-check whether the resolved
-path is already in `processedPaths`. Therefore an `AGENTS.md` symlink to an
-already-loaded `CLAUDE.md` can currently be injected twice unless this is fixed.
-The implementation must close that gap before relying on the shared dedupe path.
-
-The AGENTS implementation should reuse this path rather than create a second
-parser.
-
-## Product behavior
-
-### Modes
-
-| Mode | Behavior |
-| --- | --- |
-| `claude-md` | Preserve today's Cat Code behavior. Ignore AGENTS files. |
-| `claude-md-or-agents-md` | Default. If the active project walk has no enabled CLAUDE instruction file of its own, load AGENTS files instead. |
-| `claude-md-and-agents-md` | Load AGENTS files beside the normal CLAUDE instruction files. |
-| `managed-only` | Keep managed instructions and recalled memory, but omit user, project, local, AGENTS, and project/user rules. |
-
-### Files that count as a CLAUDE instruction in Cat Code
-
-For fallback detection, Cat Code should count the instruction files it already
-supports:
+Reuse Cat Code's existing CLAUDE instruction names:
 
 - `CLAUDE.md`
 - `.cat-code/CLAUDE.md`
 - `.claude/CLAUDE.md`
 - `CLAUDE.local.md`
 
-A file only counts when its setting source is enabled. For example,
-`CLAUDE.local.md` should not suppress AGENTS fallback when `localSettings`
-is disabled.
+### Explicitly not in v1
 
-Project rule files do **not** suppress AGENTS fallback. Managed instructions,
-user-global instructions, and additional-directory instructions also do not make
-the current project a CLAUDE project.
+Do not add:
 
-Fallback detection should be based on file presence, not on whether the file later
-produces injected text. This matches upstream's behavior where a project-owned
-CLAUDE file can make the fallback stand down even if another layer later withholds
-it.
+- `.cat-code/AGENTS.md`;
+- AGENTS discovery from `--add-dir`;
+- old upstream `projectInstructions` compatibility;
+- content-based dedupe of separate files that happen to contain identical text;
+- a new nested-instruction generation/cache framework;
+- telemetry for the new setting;
+- provider-specific behavior;
+- a general plugin-settings schema redesign.
 
-### Fallback eligibility invariant
+These can be added later if they solve a real problem.
 
-Fallback eligibility is **project-global for the active root-to-CWD project**.
+## Core semantics
 
-Compute one `hasProjectClaudeClaim` decision from the eligible root-to-CWD walk.
-In `claude-md-or-agents-md` mode:
+### 1. Default fallback is project-global
 
-- if `hasProjectClaudeClaim` is true, AGENTS is disabled for both eager loading
-  and every nested read under that active project;
-- if it is false, the project qualifies for AGENTS fallback, root-to-CWD AGENTS
-  files may load, and only then do directories below CWD arbitrate locally between
-  nested CLAUDE and AGENTS files.
+The important invariant is:
 
-This state must be recomputed when the active project/root changes and whenever the
-instruction-mode/settings cache is invalidated. It must not be inferred separately
-for every nested read.
+> In `claude-md-or-agents-md`, the active root-to-CWD project either qualifies
+> for AGENTS fallback or it does not.
+
+Use one helper that checks the eligible root-to-CWD walk for a Cat Code CLAUDE
+claim.
+
+A CLAUDE claim is one of the four CLAUDE names above, with its corresponding
+setting source enabled. In particular, `CLAUDE.local.md` only counts when
+`localSettings` is enabled.
+
+If a root-to-CWD CLAUDE claim exists:
+
+- load current CLAUDE behavior;
+- do not eagerly load AGENTS;
+- do not load nested AGENTS later under that project.
+
+If no root-to-CWD CLAUDE claim exists:
+
+- load root-to-CWD AGENTS as `Project` instructions;
+- nested directories may contribute AGENTS.
+
+Do not introduce mutable project-fallback state just for this feature. Prefer a
+small helper that computes the claim from the current CWD/worktree using the same
+eligible-directory logic as discovery. This keeps project changes and setting
+changes correct without a new invalidation system.
 
 Critical regression:
 
@@ -148,430 +112,273 @@ Critical regression:
 root/CLAUDE.md
 root/child/AGENTS.md
 Read root/child/file.ts
-=> child/AGENTS.md does not load
+=> child/AGENTS.md is not injected
 ```
 
-The nested local arbitration rule applies only to a project that already qualified
-for fallback.
+### 2. Nested behavior
 
-### AGENTS filenames
+Only a project that qualified for AGENTS fallback may load nested AGENTS.
 
-Match upstream for the first version:
+For each directory below CWD in such a project:
 
-- `AGENTS.md`
-- `.claude/AGENTS.md`
+1. check that directory's enabled CLAUDE candidates;
+2. if the directory has a CLAUDE claim, use its CLAUDE instruction and do not
+   use AGENTS from that directory;
+3. otherwise load `AGENTS.md` and `.claude/AGENTS.md` from that directory.
 
-Do not invent `.cat-code/AGENTS.md` yet. The portable convention is
-`AGENTS.md`, and upstream explicitly supports the two names above.
+A deeper directory is evaluated independently after the project has qualified.
+For example, a nested CLAUDE file can claim one directory while a deeper directory
+without CLAUDE can still supply AGENTS.
 
-Cat Code's existing `.cat-code/CLAUDE.md` still counts as a CLAUDE claim for
-fallback because Cat Code already treats it as a first-class project instruction.
+For `claude-md-and-agents-md`, load both families.
 
-### Initial root-to-CWD load
+For `claude-md`, keep today's nested CLAUDE behavior and ignore AGENTS.
 
-For `claude-md-or-agents-md`:
+For `managed-only`, nested project/local instructions and project rules return
+nothing.
 
-1. Build the same root-to-CWD directory list used today, including the nested
-   worktree skip rule.
-2. Compute `hasProjectClaudeClaim` only from directories that are eligible after
-   that worktree/source filtering.
-3. If the claim is true, use the current CLAUDE project/local loader and mark the
-   active project ineligible for nested AGENTS fallback.
-4. If the claim is false, load `AGENTS.md` and `.claude/AGENTS.md` in each
-   eligible directory as `Project` memory, in root-to-CWD order and mark the
-   active project eligible for nested AGENTS fallback.
-5. Continue loading project rules normally.
+### 3. Managed-only must cover every current project/user entry path
 
-For `claude-md-and-agents-md`, keep the current CLAUDE files and insert AGENTS
-files in the same directory's project-instruction slot.
+`managed-only` keeps managed instructions and recalled memory, but skips:
 
-Pin the exact within-directory order to:
+- user `CLAUDE.md` and user rules;
+- project CLAUDE files;
+- local CLAUDE files;
+- AGENTS files;
+- project rules;
+- CWD-level conditional project rules;
+- nested project/local instructions and rules;
+- additional-directory CLAUDE files and rules.
+
+The additional-directory block needs an explicit mode gate because it currently
+bypasses `isSettingSourceEnabled('projectSettings')`.
+
+### 4. Reuse the existing parser
+
+Load AGENTS through `processMemoryFile()`.
+
+That gives AGENTS the existing:
+
+- `Project` instruction framing;
+- `@include` handling;
+- external-include approval;
+- `claudeMdExcludes` behavior;
+- frontmatter/comment processing;
+- normal path tracking.
+
+Do not make a separate AGENTS parser.
+
+### 5. Fix only the concrete symlink duplicate bug
+
+Before relying on the shared path tracking, fix this existing edge in
+`processMemoryFile()`:
+
+1. check the spelled path as today;
+2. resolve the path;
+3. normalize the resolved path;
+4. if the resolved path is already in `processedPaths`, return early;
+5. otherwise add both spellings and continue.
+
+This is enough to prevent:
+
+```text
+CLAUDE.md
+AGENTS.md -> CLAUDE.md
+```
+
+from producing the same instruction twice in `claude-md-and-agents-md`.
+
+Do not add general same-content dedupe in v1.
+
+### 6. Ordering
+
+Keep Cat Code's current priority shape. Within each directory use:
 
 1. `CLAUDE.md`
 2. `.cat-code/CLAUDE.md`
 3. `.claude/CLAUDE.md`
 4. `AGENTS.md`
 5. `.claude/AGENTS.md`
-6. `.cat-code/rules/*.md` unconditional rules
-7. `.claude/rules/*.md` unconditional rules
+6. `.cat-code/rules/*.md`
+7. `.claude/rules/*.md`
 8. `CLAUDE.local.md`
 
-Then continue to the next deeper directory. This preserves Cat Code's existing
-CLAUDE → rules → local priority while giving AGENTS the same project-instruction
-slot, immediately after the CLAUDE candidates and before rules/local.
+Then continue to the next deeper directory.
 
-### Nested directories
+One regression test should assert the final `MemoryFileInfo.path[]` order.
 
-Update `getMemoryFilesForNestedDirectory()` so a later file read uses the same
-project-global fallback decision as eager discovery.
+## Settings behavior
 
-In fallback mode:
+Create a small helper module, for example:
 
-1. Check the active project's cached/recomputed `hasProjectClaudeClaim`.
-2. If true, return no AGENTS files from nested discovery anywhere under that
-   project. Existing nested CLAUDE behavior remains.
-3. If false, the project is an AGENTS-fallback project. For each directory below
-   CWD, check that directory's CLAUDE candidates first. A CLAUDE claim in that
-   directory suppresses AGENTS for that directory only; a deeper directory with no
-   claim may still contribute AGENTS.
+`src/utils/instructionFiles.ts`
 
-The per-directory nested claim set must explicitly include all Cat Code filenames:
-`CLAUDE.md`, `.cat-code/CLAUDE.md`, `.claude/CLAUDE.md`, and
-`CLAUDE.local.md`. `CLAUDE.local.md` only counts when `localSettings` is
-enabled.
+It should own:
 
-In both mode, attach both families using the same once-per-path/content processing
-and exact ordering rules.
+- `InstructionFilesMode`;
+- the four valid values;
+- the default value;
+- reading the effective mode;
+- updating only the user-owned nested option.
 
-In managed-only mode, nested project/local instructions, project rules, and
-root-to-CWD conditional project rules must not re-enter through any attachment
-path.
+### Source rules
 
-### Includes, excludes, and memory-file identity
+Read only:
 
-AGENTS files should use `processMemoryFile()`. This means they inherit the same
-include parser and the same external-include security checks.
-
-Before adding AGENTS, fix the resolved-path dedupe hole in
-`processMemoryFile()`: after `safeResolvePath()`, normalize the resolved path
-and return early when that canonical path is already processed. Only then add the
-spelled path and canonical path to `processedPaths`. Add a regression where
-`AGENTS.md` is a symlink to an already-loaded `CLAUDE.md` and only one project
-instruction is produced.
-
-For upstream parity in `claude-md-and-agents-md`, also dedupe an AGENTS
-candidate when its trimmed content is identical to an already accepted
-`Project` instruction. Scope this content comparison to AGENTS admission rather
-than globally collapsing unrelated managed/user/local files. Cover both a symlink
-alias and a separate copied file with identical content.
-
-`claudeMdExcludes` should also apply to AGENTS paths. Keep the setting key for
-compatibility, but update its schema description to say it excludes instruction
-files rather than only CLAUDE files.
-
-Do **not** make every manually-read `AGENTS.md` an instruction merely because
-its filename matches. `getAllMemoryFilePaths()` currently supplements eager files
-from `readFileState`; an unconditional AGENTS match would make manually read
-AGENTS appear as instruction/memory tracking in `claude-md`, `managed-only`,
-or fallback projects already claimed by CLAUDE.
-
-Make AGENTS identity admission-aware. Prefer tracking paths that were actually
-accepted by eager/nested instruction discovery, or pass the effective mode plus
-project fallback eligibility into the read-file-state classification. Tests must
-show that a manual AGENTS read is not treated as an instruction in `claude-md`,
-`managed-only`, or an ineligible fallback project.
-
-The existing external-include approval state fields can keep their historical
-`ClaudeMd` names to avoid a persistence migration, but user-facing text should
-say **project instruction file** rather than only `CLAUDE.md`.
-
-### Additional directories
-
-Keep AGENTS loading out of `--add-dir` in the first implementation.
-
-Current upstream 2.1.277 also does not add AGENTS from additional directories.
-Keeping that limit in v1 reduces semantic drift and avoids inventing a second
-fallback scope. A later change can make additional directories fully symmetric
-once the desired rule is explicit.
-
-`managed-only` must explicitly bypass the existing additional-directory CLAUDE
-block as well. That block intentionally ignores
-`isSettingSourceEnabled('projectSettings')`, so managed-only cannot be
-implemented only by disabling normal project/user/local discovery. In
-managed-only, additional-directory `CLAUDE.md`, `.cat-code/CLAUDE.md`,
-`.claude/CLAUDE.md`, `.cat-code/rules/*.md`, and
-`.claude/rules/*.md` must all stay out.
-
-### Provider behavior
-
-Do not add a Bedrock, Vertex, Foundry, Claude, or OpenAI-specific gate.
-
-Cat Code injects instruction files before provider assembly, so this feature can
-remain provider-neutral. Upstream's initial provider limitation comes from its
-delivery mechanism, not from AGENTS file semantics.
-
-## Settings design
-
-### Resolver
-
-Add a small owner module, for example
-`src/utils/instructionFiles.ts`, containing:
-
-- `InstructionFilesMode`
-- `INSTRUCTION_FILES_MODES`
-- `DEFAULT_INSTRUCTION_FILES_MODE`
-- `resolveInstructionFilesMode()`
-- helpers for reading and writing the nested plugin option safely
-
-The resolver should accept only the four current values.
-
-Read this option from the sources Claude Code supports for this built-in option:
-
-1. user settings, but only when `isSettingSourceEnabled('userSettings')` is
-   true;
-2. flag/`--settings` settings;
+1. user settings, when `userSettings` is enabled;
+2. flag/`--settings`;
 3. policy settings.
 
-Flag and policy remain available under Cat Code's current source rules even when
-user/project/local setting sources are narrowed. Ignore project and local settings
-for this option so a repository cannot silently change which instruction-file
-family Cat Code trusts.
+Ignore project and local settings for this option. A repository must not be able
+to change which instruction-file family Cat Code trusts.
 
-Precedence is presence-first, then validation:
+Flag and policy are higher priority than user settings.
 
-- find the highest-priority **present** source;
-- validate only that source's value;
-- a valid value wins;
-- a missing value falls through to the next source;
-- an invalid value at the winning source resolves to the default
-  `claude-md-or-agents-md`; it does **not** expose a lower-priority valid value.
-
-This makes malformed flag/managed input deterministic and avoids unexpectedly
-activating a lower-priority user choice.
-
-The resolver should return source information as well as the mode so `/config`
-can show a managed/session override as read-only instead of letting the user make a
-write that cannot win.
-
-Do not add support for the old upstream `projectInstructions` option in the
-first Cat Code version. Cat Code never shipped that key. Add the compatibility
-alias only if an import/migration path is found that can place it in Cat Code
-settings.
+For an invalid higher-priority present value, use the default instead of falling
+through to a lower-priority source. This gives deterministic behavior without a
+large compatibility layer.
 
 ### /config
 
-Add a `Project instructions` row in
-`src/components/Settings/Config.tsx`.
+Add **Project instructions** to `src/components/Settings/Config.tsx`.
 
-Use a small picker rather than exposing raw enum strings. Suggested labels:
+Display friendly labels:
 
-| Label | Stored value |
-| --- | --- |
-| CLAUDE.md or AGENTS.md | `claude-md-or-agents-md` |
-| CLAUDE.md only | `claude-md` |
-| CLAUDE.md and AGENTS.md | `claude-md-and-agents-md` |
-| Managed instructions only | `managed-only` |
+- **CLAUDE.md or AGENTS.md**
+- **CLAUDE.md only**
+- **CLAUDE.md and AGENTS.md**
+- **Managed instructions only**
 
-The default item should say that AGENTS is used only when the project has no own
-CLAUDE instruction file.
+Write the choice into user settings while preserving the existing
+`pluginConfigs` object.
 
-Write changes to user settings with the updater form of
-`updateSettingsForSource()`. Preserve unrelated plugin config, plugin options,
-and MCP config while changing only
-`pluginConfigs["agents-md@builtin"].options.instructionFiles`.
+If flag or policy settings own the effective value, show that value as read-only.
 
-After a successful write:
+Use Config's existing targeted revert pattern so Escape restores only the original
+user `instructionFiles` option instead of overwriting the whole settings file.
 
-- refresh the Config component's displayed mode;
-- clear `getMemoryFiles` through `clearMemoryFileCaches()`, because internal
-  settings writes are intentionally hidden from the file watcher;
-- make the next context rebuild use the new instruction family.
+## Cache behavior
 
-Add the nested plugin option to Config's Escape/revert snapshot so opening
-`/config`, changing the value, then cancelling restores the exact prior
-user-setting value without overwriting unrelated concurrent plugin changes.
+Keep this simple.
 
-If policy or `--settings` owns the effective mode, show the effective value and
-make the picker read-only with a short source note.
+After `/config` successfully changes the user option:
 
-## File-by-file implementation
+- the settings write already resets the settings cache;
+- call `clearMemoryFileCaches()` so eager instruction discovery is recalculated.
 
-### 1. `src/utils/instructionFiles.ts` and tests
+Do not add a new generation system for `loadedNestedMemoryPaths` in v1.
 
-Create the mode and setting resolver.
+A mode change controls **future instruction discovery**. It does not attempt to
+remove an AGENTS instruction that was already delivered into the current
+conversation history. If a user needs a completely clean context after switching
+modes, `/clear` or a new session is the clean boundary.
 
-Tests:
+This is preferable to adding context-surgery or nested cache machinery just for
+the setting.
 
-- unset value gives fallback mode;
-- each valid value round-trips;
-- invalid value gives fallback mode;
-- user value is ignored when `userSettings` is disabled;
-- project/local values are ignored;
-- flag overrides user;
-- policy overrides flag;
-- invalid flag over valid user resolves to the default, not the user value;
-- invalid policy over valid flag resolves to the default, not the flag value;
-- nested plugin writes preserve sibling plugins, sibling options, MCP config, and
-  an unknown future per-plugin field;
-- deleting/restoring the user option does not remove unrelated plugin state.
+## File changes
+
+### 1. `src/utils/instructionFiles.ts`
+
+Add the mode resolver and targeted user-settings updater.
+
+Expected size: roughly 80-120 lines plus tests.
 
 ### 2. `src/utils/claudemd.ts`
 
-Refactor the repeated project filename logic into small helpers before adding new
-branches. Keep the existing load order stable for `claude-md`.
+Add small helpers for:
 
-Add:
+- eligible root-to-CWD directories;
+- CLAUDE-claim detection;
+- AGENTS candidate loading;
+- mode gates.
 
-- project CLAUDE candidate names;
-- AGENTS candidate names;
-- one project-global fallback eligibility decision for the active root-to-CWD
-  walk;
-- AGENTS loading for eager discovery;
-- AGENTS loading for nested directories only when the active project qualified;
-- explicit managed-only gates for user/project/local instruction paths, eager and
-  conditional rules, nested paths, and additional-directory paths;
-- resolved-path re-check in `processMemoryFile()`;
-- project-content dedupe for AGENTS admission in both mode;
-- admission-aware AGENTS instruction identity for context/memory tracking.
+Wire those helpers into:
 
-Do not fork `processMemoryFile()`.
+- eager project discovery;
+- nested directory discovery;
+- conditional project-rule discovery;
+- additional-directory gating for managed-only.
 
-The `claude-md` mode must produce the same `MemoryFileInfo[]` as before except
-for the resolved-symlink duplicate bug fix, which needs its own regression.
+Also add the resolved-symlink re-check in `processMemoryFile()`.
 
-### 3. Discovery tests
+Avoid a broad refactor. Keep the existing `claude-md` path structurally close to
+today's code.
 
-The current `src/utils/claudemd.test.ts` mostly covers prompt framing, so add a
-focused discovery test file rather than turning the framing test into a large
-filesystem suite.
+### 3. `src/components/Settings/Config.tsx`
 
-Cover this matrix:
+Add the row/picker, write path, read-only override behavior, revert handling, and
+`clearMemoryFileCaches()` call.
 
-| Case | Expected |
-| --- | --- |
-| no CLAUDE, root AGENTS | AGENTS loads by default |
-| root CLAUDE + root AGENTS | CLAUDE loads, AGENTS does not |
-| `.cat-code/CLAUDE.md` + AGENTS | Cat Code CLAUDE path suppresses fallback |
-| `.claude/CLAUDE.md` + AGENTS | CLAUDE suppresses fallback |
-| `CLAUDE.local.md` enabled + AGENTS | local CLAUDE suppresses fallback |
-| local settings disabled + only `CLAUDE.local.md` + AGENTS | AGENTS can load |
-| project rule + AGENTS, no CLAUDE | rule and AGENTS both load |
-| both mode | CLAUDE and AGENTS both load in deterministic order |
-| claude-only mode | byte-for-byte current instruction discovery behavior |
-| managed-only mode | managed + recalled memory only |
-| parent and child AGENTS | root first, child later/higher priority |
-| root CLAUDE + child AGENTS + nested Read | child AGENTS never loads because fallback is project-global |
-| eligible fallback project + nested `CLAUDE.md` + AGENTS | nested CLAUDE wins in that directory |
-| eligible fallback project + nested `.cat-code/CLAUDE.md` + AGENTS | Cat Code CLAUDE path wins in that directory |
-| eligible fallback project + nested `.claude/CLAUDE.md` + AGENTS | legacy CLAUDE path wins in that directory |
-| eligible fallback project + nested `CLAUDE.local.md` + AGENTS | local CLAUDE wins when local settings are enabled |
-| same nested local case with local settings disabled | AGENTS may load |
-| nested read under child AGENTS | child AGENTS attaches once |
-| CLAUDE imports AGENTS in both mode | no duplicate explicit AGENTS entry |
-| AGENTS symlink -> already-loaded CLAUDE in both mode | one project instruction |
-| separate AGENTS copy with identical CLAUDE project content in both mode | one project instruction for upstream parity |
-| AGENTS imports an external file | same approval gate as CLAUDE |
-| `claudeMdExcludes` matches AGENTS | AGENTS is omitted |
-| nested worktree | main-repo duplicate project AGENTS is skipped |
-| nested worktree where skipped main-repo CLAUDE exists but worktree has AGENTS | skipped CLAUDE does not suppress worktree AGENTS fallback |
-| additional directory with AGENTS only | no AGENTS in v1 |
-| managed-only + additional directory with CLAUDE and rules | none of those additional-directory instructions load |
-| manual AGENTS read in claude-only | path is not treated as instruction memory |
-| manual AGENTS read in managed-only | path is not treated as instruction memory |
-| manual AGENTS read in fallback project already claimed by CLAUDE | path is not treated as instruction memory |
-| root + child with CLAUDE, AGENTS, rules, and local | exact full `MemoryFileInfo.path[]` order matches the pinned order above |
+Use an existing picker pattern if possible. Do not create a settings subsystem for
+one enum.
 
-Also assert that loaded AGENTS files have `type: "Project"` so existing framing,
-subagent omission, and context display rules treat them exactly like project
-instructions.
+### 4. External include copy
 
-### 4. `src/components/Settings/Config.tsx`
+Update `src/components/ClaudeMdExternalIncludesDialog.tsx` and the related
+Config label so user-facing text says **project instruction file** rather than
+only `CLAUDE.md`.
 
-Add the row, picker integration, write/revert behavior, and cache invalidation.
+Keep existing persisted field names and analytics names.
 
-Add focused UI tests for:
-
-- default value display;
-- selecting all four modes;
-- persisted nested plugin option;
-- cancel restores the prior value;
-- managed/flag-owned value cannot be overridden from the picker.
-
-### 5. External include UI
-
-Update user-facing copy in
-`src/components/ClaudeMdExternalIncludesDialog.tsx` and the Config row from
-CLAUDE-only wording to project-instruction wording.
-
-Keep persisted field names and existing analytics event names unless a separate
-analytics migration is required.
-
-### 6. Settings schema and preservation
-
-No new option value schema is required because `pluginConfigs.*.options` already
-accepts string values.
-
-However, the current per-plugin `z.object({ mcpServers, options })` is not
-passthrough even though the outer Settings schema is. Parsing can therefore strip
-an unknown future field before an updater writes the object back. Before claiming
-that the Config updater preserves unrelated plugin config, make the per-plugin
-object preserve unknown keys, preferably with `.passthrough()`, and add a
-round-trip regression containing:
-
-- the `agents-md@builtin` option;
-- a sibling option;
-- MCP config;
-- a sibling plugin;
-- an unknown future field on the same plugin object.
+### 5. Settings schema wording
 
 Update the `claudeMdExcludes` description in
-`src/utils/settings/types.ts` so AGENTS paths are documented as supported.
+`src/utils/settings/types.ts` to say it can exclude CLAUDE or AGENTS project
+instruction files.
 
-### 7. Documentation
+Do not change the plugin-config object schema in this patch.
 
-Update:
+### 6. Docs
+
+Update only the maintained instruction/config docs that would otherwise become
+wrong:
 
 - `docs/prompts/2026-04-30-prompt-surfaces.md`
 - `docs/maps/prompt-system.md`
 - `docs/maps/config-persistence.md`
 
-Document:
+## Focused test plan
 
-- the four modes and default;
-- the upstream-compatible settings path;
-- Cat Code's `.cat-code/CLAUDE.md` fallback claim;
-- AGENTS filenames supported in v1;
-- additional-directory limitation;
-- the fact that AGENTS enters the same `Project` instruction framing as CLAUDE.
+Keep the regression set compact and behavior-oriented.
 
-## Cache and context behavior
+### Resolver
 
-Changing the mode in `/config` must not require a process restart.
+1. unset -> `claude-md-or-agents-md`;
+2. each valid mode resolves;
+3. disabled user settings ignores a stored user value;
+4. flag overrides user;
+5. policy overrides flag;
+6. invalid winning value -> default;
+7. targeted user update preserves sibling plugin/options/MCP data.
 
-The write path already resets the settings cache. The Config handler also needs to
-clear the memoized eager memory-file list.
+### Discovery
 
-That is not sufficient for nested instructions. `attachments.ts` dedupes nested
-instruction delivery with both `loadedNestedMemoryPaths` and `readFileState`.
-A mode change must invalidate the instruction-delivery state needed for AGENTS
-without accidentally discarding ordinary file-read state.
+1. AGENTS only -> AGENTS loads by default;
+2. root CLAUDE + AGENTS -> CLAUDE only by default;
+3. each Cat Code CLAUDE name suppresses root fallback;
+4. disabled `localSettings` means `CLAUDE.local.md` does not suppress fallback;
+5. root CLAUDE + child AGENTS + nested Read -> child AGENTS does not load;
+6. fallback project + nested CLAUDE + AGENTS -> nested CLAUDE wins in that directory;
+7. both mode -> CLAUDE and AGENTS load in the pinned order;
+8. claude-only -> current behavior, no AGENTS;
+9. managed-only -> managed/recalled memory only, including no `--add-dir` project instructions;
+10. AGENTS symlink to already-loaded CLAUDE -> one instruction;
+11. `claudeMdExcludes` can exclude AGENTS;
+12. nested worktree eligibility uses the worktree's eligible files, not skipped main-repo files.
 
-Define one mode-change invalidation path that:
+### Config UI
 
-- clears/recomputes the project-global fallback eligibility;
-- clears eager `getMemoryFiles` through `clearMemoryFileCaches()`;
-- removes or generations-invalidates previously delivered nested AGENTS paths so
-  switching back to an AGENTS-enabled mode can deliver them again;
-- prevents stale AGENTS from being considered active after switching to
-  `claude-md` or `managed-only`;
-- does not cause unrelated nested CLAUDE files to be redundantly reinjected unless
-  required by the chosen generation design.
+1. default label;
+2. selecting each mode writes the expected value;
+3. flag/policy-owned mode is read-only;
+4. Escape restores the original user option.
 
-Add transition tests for:
-
-- `claude-md-and-agents-md → claude-md`;
-- `claude-md → claude-md-or-agents-md`;
-- `claude-md-and-agents-md → claude-md → claude-md-and-agents-md`.
-
-The final transition is the regression for stale `loadedNestedMemoryPaths`
-blocking AGENTS re-delivery.
-
-Do not fire a false `InstructionsLoaded` lifecycle event merely because the
-cache was invalidated by Config. Use the existing correctness-only
-`clearMemoryFileCaches()` path for eager state, not the compaction-oriented reset
-path.
-
-## Telemetry
-
-Do not add content, paths, or filenames to analytics.
-
-If product telemetry is wanted, record only the closed mode value when the user
-changes the picker. This is optional for the first implementation and should not
-block the feature.
+Do not add exhaustive tests for intentionally deferred behavior.
 
 ## Verification
 
-Focused checks:
+Run focused checks first:
 
 ```sh
 bun test src/utils/instructionFiles.test.ts
@@ -579,13 +386,13 @@ bun test src/utils/claudemd.test.ts src/utils/claudemd.discovery.test.ts
 bun test src/components/Settings/
 ```
 
-Then run:
+Then:
 
 ```sh
 bun run build:dev:full
 ```
 
-For the documentation-only planning commit:
+For documentation-only edits:
 
 ```sh
 git diff --check
@@ -594,31 +401,22 @@ bun run maps:lint
 
 ## Acceptance criteria
 
-The feature is complete when all of these are true:
+The v1 feature is done when:
 
-1. A fresh project containing only `AGENTS.md` gets those instructions with no
-   user action.
-2. A project with an enabled Cat Code CLAUDE instruction keeps current behavior
-   by default and does not also load AGENTS.
-3. `/config` exposes **Project instructions** and persists the four upstream
-   mode values in the upstream-compatible setting path.
-4. Fallback eligibility is project-global: any eligible root-to-CWD CLAUDE claim
-   disables nested AGENTS fallback for that project.
-5. Both mode loads the two instruction families without path, symlink, import, or
-   upstream-equivalent project-content duplicates.
-6. Managed-only cannot leak user/project/local instructions through eager,
-   conditional-rule, nested-read, or additional-directory paths.
-7. AGENTS uses the same framing, include security, excludes, pinned ordering,
-   worktree handling, and subagent project-instruction semantics as existing
-   CLAUDE files.
-8. Changing the mode takes effect on the next context rebuild without restarting
-   Cat Code, including after nested AGENTS was already delivered earlier in the
-   session.
-9. Manually reading an AGENTS file does not make it instruction memory in modes or
-   projects where AGENTS is not admitted.
-10. Disabled user settings and invalid higher-priority flag/policy values follow
-    the explicit resolver semantics above.
-11. Plugin-setting writes preserve sibling plugins/options/MCP data and unknown
-    future per-plugin fields.
-12. Existing CLAUDE-only behavior remains regression-tested.
-13. No provider-specific prompt assembly change is needed.
+1. A project with no Cat Code CLAUDE claim automatically uses AGENTS.
+2. A project with a root-to-CWD Cat Code CLAUDE claim does not use AGENTS,
+   including nested AGENTS.
+3. A fallback project can use nested AGENTS, with a nested CLAUDE file claiming
+   its own directory.
+4. `/config` exposes the four Project instructions choices using the
+   upstream-compatible storage path.
+5. `managed-only` cannot leak project/user instructions through normal,
+   nested, conditional-rule, or `--add-dir` paths.
+6. AGENTS uses Cat Code's existing project-instruction parser/framing and exclude
+   behavior.
+7. A symlink alias cannot inject the same CLAUDE/AGENTS instruction twice.
+8. Changing the setting affects future discovery without requiring a process
+   restart; a clean historical context after a mode switch uses `/clear` or a
+   new session.
+9. Existing CLAUDE-only behavior remains covered by regression tests.
+10. No provider-specific or plugin-hook architecture is added.
