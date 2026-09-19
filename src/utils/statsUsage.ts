@@ -10,6 +10,7 @@ import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
     classifyHistoricalAutoModeToolResult,
+    projectAutoModeCapability,
     projectAutoModeDiagnosticPayload,
     reduceAutoModeUsage,
     type HistoricalAutoModeOutcome,
@@ -77,6 +78,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     coverage.sourcesDiscovered = files.length;
     const autoModeRecords: RetainedAutoModeRecord[] = [];
     const autoModeSources = new Map<string, AutoModeUsageSource>();
+    const sourceStartedWithCapability = new Set<string>();
     const autoModeSourceScope = (file: string) => createHash('sha256').update(file).digest('hex');
     for (const file of files) {
         const sourceScope = autoModeSourceScope(file);
@@ -89,11 +91,18 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     const observeAutoModeSource = (file: string, observedAt: string) => {
         const sourceScope = autoModeSourceScope(file);
         const previous = autoModeSources.get(sourceScope)!;
+        const candidateFrom =
+            previous.observedFrom === undefined || observedAt < previous.observedFrom
+                ? observedAt
+                : previous.observedFrom;
         autoModeSources.set(sourceScope, {
             ...previous,
-            observedFrom: previous.observedFrom === undefined || observedAt < previous.observedFrom
-                ? observedAt
-                : previous.observedFrom,
+            observedFrom:
+                sourceStartedWithCapability.has(sourceScope) &&
+                previous.supportedFrom !== undefined &&
+                candidateFrom < previous.supportedFrom
+                    ? previous.supportedFrom
+                    : candidateFrom,
             observedThrough: previous.observedThrough === undefined || observedAt > previous.observedThrough
                 ? observedAt
                 : previous.observedThrough,
@@ -161,6 +170,21 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             ...previous,
             allTools: 'partial',
             commands: 'partial',
+        });
+    };
+    const markSupportedSource = (file: string, observedAt: string): void => {
+        const sourceScope = autoModeSourceScope(file);
+        const previous = autoModeSources.get(sourceScope)!;
+        const supportedFrom =
+            previous.supportedFrom === undefined ||
+            observedAt < previous.supportedFrom
+                ? observedAt
+                : previous.supportedFrom;
+        autoModeSources.set(sourceScope, {
+            ...previous,
+            allTools: 'complete',
+            commands: 'complete',
+            supportedFrom,
         });
     };
     let identities = 0, stateBytes = 0;
@@ -331,7 +355,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 candidate.autoAtStart || candidate.result?.outcome !== null &&
                 candidate.result?.outcome !== undefined;
             if (!provenAuto) continue;
-            reserve(`historical-auto:${sourceScope}:${candidate.toolUseId}`, 512);
+            reserve(`historical-auto:${sourceScope}:${candidate.toolUseId}`, 1024);
             markHistoricalSource(file);
             const attemptId = historicalRecordId(sourceScope, candidate.toolUseId, 'attempt');
             autoModeRecords.push({
@@ -392,6 +416,30 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         const isSubagent = file.includes(`${sep}subagents${sep}`);
         if (!isSubagent && row.isSidechain === true)
             return;
+        const autoModeCapability = row.type === 'system'
+            ? projectAutoModeCapability(row)
+            : null;
+        if (autoModeCapability !== null) {
+            const observedAt = typeof row.timestamp === 'string' ? row.timestamp : '';
+            const observed = Date.parse(observedAt);
+            if (Number.isFinite(observed) && observed <= cutoff) {
+                const sourceScope = autoModeSourceScope(file);
+                const capabilityRecordId = nonempty(row.uuid)
+                    ? row.uuid
+                    : `${item.generation}:${item.offset}`;
+                reserve(`auto-mode-capability:${sourceScope}:${capabilityRecordId}`, 256);
+                const previous = autoModeSources.get(sourceScope)!;
+                if (
+                    previous.observedFrom === undefined &&
+                    previous.observedThrough === undefined
+                ) {
+                    sourceStartedWithCapability.add(sourceScope);
+                }
+                markSupportedSource(file, observedAt);
+                observeAutoModeSource(file, observedAt);
+            }
+            return;
+        }
         // These retained metadata records belong solely to the prospective
         // auto-mode reducer. Exclude valid and data-quality markers before any
         // generic activity/session/day accounting.
@@ -407,28 +455,20 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const observedDay = `${observedAt.slice(0, 10)}T00:00:00.000Z`;
                 if (observedDay < states[2]!.summary.startInclusive)
                     states[2]!.summary.startInclusive = observedDay;
+                const autoModeRecordId = nonempty(row.uuid)
+                    ? row.uuid
+                    : `${item.generation}:${item.offset}`;
+                reserve(`auto-mode-record:${sourceScope}:${autoModeRecordId}`, 1024);
                 autoModeRecords.push({
                     sourceScope,
-                    recordId: nonempty(row.uuid) ? row.uuid : `${item.generation}:${item.offset}`,
+                    recordId: autoModeRecordId,
                     observedAt,
                     diagnosticKind: 'auto_mode_observation',
                     payload: autoModePayload,
                 });
                 if (autoModePayload.subtype === 'auto_permission_start') {
                     historicalSource(file).structuredToolUses.add(autoModePayload.tool_use_id);
-                    const previous = autoModeSources.get(sourceScope);
-                    const supportedFrom =
-                        previous?.supportedFrom === undefined ||
-                        observedAt < previous.supportedFrom
-                            ? observedAt
-                            : previous.supportedFrom;
-                    autoModeSources.set(sourceScope, {
-                        ...previous,
-                        sourceScope,
-                        allTools: 'complete',
-                        commands: 'complete',
-                        supportedFrom,
-                    });
+                    markSupportedSource(file, observedAt);
                 }
             }
             return;
@@ -1036,5 +1076,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             all.summary.autoMode.buckets = [...grouped.values()].sort((left, right) => left.date.localeCompare(right.date));
         }
     }
-    return { version: 1, metricVersion: 1, countingVersion: 11, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 12, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

@@ -135,7 +135,7 @@ export function createInitialAutoModePermissionObservation(
 ): AutoModePermissionObservationContext | null {
   if (typeof context.getAppState !== 'function') return null
   return createAutoModePermissionObservationContext({
-    writer: recordAutoModeObservation,
+    writer: event => recordAutoModeObservation(event, context.agentId),
     toolUseId,
     toolKind:
       tool.name === BASH_TOOL_NAME

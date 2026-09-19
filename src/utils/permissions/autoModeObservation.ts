@@ -68,6 +68,27 @@ export type AutoModeDispositionMetadata = {
   cause?: AutoModeFailure
 }
 
+export function isAutoModeRawDispositionValid(
+  rawResult: AutoModeRawPermissionResult,
+  disposition: AutoModeDisposition,
+): boolean {
+  switch (rawResult) {
+    case 'allow':
+      return disposition === 'allowed'
+    case 'ask':
+      return disposition === 'review_required'
+    case 'deny':
+      return disposition === 'policy_blocked' ||
+        disposition === 'operational_error' ||
+        disposition === 'cancelled' ||
+        disposition === 'unknown_outcome'
+    case 'throw':
+      return disposition === 'operational_error' ||
+        disposition === 'cancelled' ||
+        disposition === 'unknown_outcome'
+  }
+}
+
 export type AutoModePrimaryCategory = {
   kind: 'built_in' | 'custom' | 'permission_rule'
   id: string
@@ -468,6 +489,7 @@ export function parseAutoModeObservationEvent(
     if (
       !enumValue(['allow', 'deny', 'ask', 'throw'] as const, value.raw_result) ||
       !enumValue(AUTO_MODE_DISPOSITIONS, value.disposition) ||
+      !isAutoModeRawDispositionValid(value.raw_result, value.disposition) ||
       !enumValue(AUTO_MODE_ROUTES, value.route) ||
       (value.cause !== undefined && !enumValue(AUTO_MODE_FAILURES, value.cause)) ||
       (value.primary_category !== undefined && !category(value.primary_category))

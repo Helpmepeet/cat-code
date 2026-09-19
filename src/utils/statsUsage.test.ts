@@ -123,6 +123,7 @@ test('historical Auto mode records backfill exact outcomes and keep uncertain at
 test('structured permission observations suppress historical fallback for the same tool use', async () => {
     const request = msg('2026-09-13T10:00:00.000Z', 'request', 1, 'prospective-tool');
     const path = await file([
+        { type: 'system', subtype: 'auto_permission_capability', uuid: 'capability', timestamp: '2026-09-13T09:58:00.000Z', schema_version: 1 },
         { type: 'system', subtype: 'run_facts', uuid: 'mode', timestamp: '2026-09-13T09:59:00.000Z', permissionMode: 'auto' },
         request,
         { type: 'system', subtype: 'auto_permission_start', uuid: 'start', timestamp: '2026-09-13T10:00:01.000Z', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'prospective-tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
@@ -135,6 +136,8 @@ test('structured permission observations suppress historical fallback for the sa
         unknown_outcome: 0,
         incomplete: 0,
     });
+    expect(autoMode.allTools.coverage.state).toBe('complete');
+    expect(autoMode.commands.coverage.state).toBe('complete');
     expect(autoMode.routes).toEqual([{ route: 'stage1', outcome: 'allowed', count: 1 }]);
 });
 test('cache-write reporting distinguishes measured, unreported, mixed, and unknown records', async () => {
@@ -183,6 +186,22 @@ test('state and integer overflow are explicit collection errors', async () => {
     const second = msg(asOf, 'b', 1, 't2');
     await writeFile(path, [huge, second].map(row => JSON.stringify(row)).join('\n'));
     await expect(collectRetainedUsage([path], asOf)).rejects.toBeInstanceOf(UsageResourceError);
+    const autoOnly = await file([{
+        type: 'system',
+        subtype: 'auto_permission_start',
+        uuid: 'auto-start',
+        timestamp: asOf,
+        schema_version: 1,
+        attempt_id: 'attempt',
+        tool_use_id: 'tool',
+        tool_kind: 'bash',
+        auto_mode: 'auto',
+        initial: true,
+    }]);
+    await expect(collectRetainedUsage([autoOnly], asOf, {
+        maxIdentities: 0,
+        maxStateBytes: 0,
+    })).rejects.toBeInstanceOf(UsageResourceError);
 });
 
 test('hourly requests and matched errors deduplicate and respect request windows and cutoff', async () => {

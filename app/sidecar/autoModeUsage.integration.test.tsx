@@ -1,14 +1,13 @@
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, expect, mock, test } from 'bun:test'
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { feature } from 'bun:bundle'
-import { createAppRuntimeCanUseTool } from '../../src/app-runtime/appRuntimeCanUseTool.js'
+import { z } from 'zod/v4'
 import { asSessionId } from '../../src/types/ids.js'
 import type { Tool, ToolPermissionContext, ToolUseContext } from '../../src/Tool.js'
-import type { CanUseToolFn } from '../../src/hooks/useCanUseTool.js'
 import { UsageAutoMode } from '../renderer/src/UsageAutoMode.js'
 import { fitUsageDashboardSnapshot } from './usageSummary.js'
 import { parseUsageCollectionResult } from '../shared/usageStatsWorker.js'
@@ -22,6 +21,15 @@ import {
 } from '../../src/utils/sessionStorage.js'
 import { releaseActiveTranscriptLease } from '../../src/utils/transcriptLease.js'
 import { collectIndexedUsage } from '../../src/utils/statsUsageIndex.js'
+
+const classifyYoloAction = mock()
+const actualYoloClassifier = await import('../../src/utils/permissions/yoloClassifier.js')
+mock.module('../../src/utils/permissions/yoloClassifier.js', () => ({
+  ...actualYoloClassifier,
+  classifyYoloAction,
+  formatActionForClassifier: () => ({ role: 'assistant', content: [] }),
+}))
+const { createAppRuntimeCanUseTool } = await import('../../src/app-runtime/appRuntimeCanUseTool.js')
 
 const originalSessionId = getSessionId()
 const originalProjectDir = getSessionProjectDir()
@@ -57,6 +65,7 @@ async function writeOrdinaryAssistantRow(sessionId: string): Promise<void> {
 }
 
 afterEach(async () => {
+  classifyYoloAction.mockReset()
   await releaseActiveTranscriptLease()
   resetProjectForTesting()
   switchSession(asSessionId(originalSessionId), originalProjectDir)
@@ -80,48 +89,49 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   transcript = getTranscriptPathForSession(sessionId)
   await writeOrdinaryAssistantRow(sessionId)
 
-  const indexPath = join(root, 'index-v7.sqlite')
+  const indexPath = join(root, 'index-v8.sqlite')
   const indexOptions = { path: indexPath, deadline: Date.now() + 60_000 }
   const before = await collectIndexedUsage([transcript], new Date().toISOString(), indexOptions)
   const beforeRange = before.ranges['7d']
   const input = { command: 'echo original' }
-  const updatedInput = { command: 'echo normalized' }
-  const decision = { behavior: 'allow' as const, updatedInput }
-  let baseCalls = 0
-  const baseCanUseTool: CanUseToolFn = async (
-    _tool,
-    _input,
-    _context,
-    _assistantMessage,
-    _toolUseId,
-    _forceDecision,
-    observation,
-  ) => {
-    baseCalls++
-    observation?.markRoute('stage1')
-    observation?.enterStage('fast')
-    observation?.resolveStage('fast', { should_block: false })
-    return decision
-  }
+  classifyYoloAction.mockImplementationOnce(async (...args: unknown[]) => {
+    const observer = args[5] as {
+      enterStage(stage: 'fast' | 'thinking'): void
+      resolveStage(stage: 'fast' | 'thinking', result: { should_block: boolean }): void
+    }
+    observer.enterStage('fast')
+    observer.resolveStage('fast', { should_block: false })
+    return { shouldBlock: false, reason: 'fixture safe' }
+  })
   const useTool = createAppRuntimeCanUseTool({
     getPermissionRequestHandler: () => undefined,
-    baseCanUseTool,
   })
+  let appState = { toolPermissionContext: permissionContext() }
   const context = {
     abortController: new AbortController(),
-    getAppState: () => ({ toolPermissionContext: permissionContext() }),
+    getAppState: () => appState,
+    setAppState: (update: (state: typeof appState) => typeof appState) => {
+      appState = update(appState)
+    },
+    messages: [],
+    options: { tools: [] },
   } as unknown as ToolUseContext
+  const testedTool = {
+    name: 'Bash',
+    inputSchema: z.object({ command: z.string() }),
+    checkPermissions: async () => ({ behavior: 'ask' as const, message: 'approval' }),
+  } as unknown as Tool
 
   const result = await useTool(
-    { name: 'Bash' } as Tool,
+    testedTool,
     input,
     context,
     { message: { id: 'assistant-message' } } as never,
     'auto-tool',
   )
-  expect(result).toBe(decision)
-  expect(result.updatedInput).toBe(updatedInput)
-  expect(baseCalls).toBe(1)
+  expect(result).toMatchObject({ behavior: 'allow' })
+  expect(result.updatedInput).toBe(input)
+  expect(classifyYoloAction).toHaveBeenCalledTimes(1)
 
   const persisted = (await readFile(transcript, 'utf8'))
     .trim()
@@ -130,6 +140,12 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   const observationRows = persisted.filter(row =>
     row.type === 'system' &&
     ['auto_permission_start', 'auto_permission_stage', 'auto_permission_end'].includes(row.subtype as string),
+  )
+  const capabilityIndex = persisted.findIndex(row =>
+    row.type === 'system' && row.subtype === 'auto_permission_capability')
+  expect(capabilityIndex).toBeGreaterThanOrEqual(0)
+  expect(capabilityIndex).toBeLessThan(
+    persisted.findIndex(row => row.subtype === 'auto_permission_start'),
   )
   expect(observationRows.map(row => row.subtype)).toEqual([
     'auto_permission_start',
@@ -155,7 +171,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   expect(range.autoMode.allTools.outcomes.allowed).toBe(1)
   expect(range.autoMode.commands.outcomes.allowed).toBe(1)
   expect(range.autoMode.routes).toEqual([{ route: 'stage1', outcome: 'allowed', count: 1 }])
-  expect(range.autoMode.commands.coverage.state).toBe('partial')
+  expect(range.autoMode.commands.coverage.state).toBe('complete')
   expect(range.tokens).toEqual(beforeRange.tokens)
   expect(range.requests).toBe(beforeRange.requests)
   expect(range.sessions).toBe(beforeRange.sessions)
@@ -170,7 +186,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   expect(html).toContain('Stage 1')
   expect(html).toContain('Allowed')
   expect(html).toContain('0 policy-denied / 1 recorded commands')
-  expect(html).toContain('Command block rate is unavailable because complete command coverage is not retained for this period.')
+  expect(html).toContain('0.0%')
 
   await appendFile(transcript, `${observationRows.map(row => JSON.stringify(row)).join('\n')}\n`)
   const replayed = await collectIndexedUsage([transcript], asOf, indexOptions)
@@ -206,7 +222,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
 test('reconstructs retained historical Auto mode evidence as partial observed data', async () => {
   root = await mkdtemp(join(tmpdir(), 'auto-mode-usage-history-'))
   transcript = join(root, 'history.jsonl')
-  const indexPath = join(root, 'index-v7.sqlite')
+  const indexPath = join(root, 'index-v8.sqlite')
   const asOf = '2026-09-13T12:00:00.000Z'
   await writeFile(transcript, [
     {

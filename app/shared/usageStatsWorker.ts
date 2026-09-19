@@ -42,7 +42,13 @@ function autoPopulation(value: unknown): boolean {
         ['complete', 'partial', 'unavailable'].includes(value.coverage.state as string) &&
         safe(value.coverage.invalidRecords) && safe(value.coverage.orphanRecords);
 }
-function autoMode(value: unknown, start: string, end: string, maxBuckets: number): boolean {
+function autoMode(
+    value: unknown,
+    start: string,
+    end: string,
+    maxBuckets: number,
+    bucketDays: number,
+): boolean {
     if (!obj(value) || !ownKeys(value, ['allTools', 'commands', 'buckets', 'routes', 'categories']) || !autoPopulation(value.allTools) || !autoPopulation(value.commands) || !Array.isArray(value.buckets) || !Array.isArray(value.routes) || !Array.isArray(value.categories) || value.buckets.length > maxBuckets || value.routes.length > AUTO_ROUTES.length * AUTO_OUTCOMES.length || value.categories.length > 10) return false;
     const allPopulation = value.allTools as Record<string, unknown>, commandPopulation = value.commands as Record<string, unknown>;
     const all = allPopulation.outcomes as Record<string, number>, commands = commandPopulation.outcomes as Record<string, number>;
@@ -51,7 +57,7 @@ function autoMode(value: unknown, start: string, end: string, maxBuckets: number
     const bucketCommandCounts = Object.fromEntries(AUTO_OUTCOMES.map(key => [key, 0])) as Record<string, number>;
     const dates = new Set<string>();
     for (const bucket of value.buckets) {
-        if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < start.slice(0, 10) || bucket.date >= end.slice(0, 10) || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
+        if (!obj(bucket) || !ownKeys(bucket, ['date', 'allTools', 'commands']) || !date(bucket.date) || bucket.date < start.slice(0, 10) || bucket.date >= end.slice(0, 10) || (Date.parse(`${bucket.date}T00:00:00.000Z`) - Date.parse(start)) / 86400000 % bucketDays !== 0 || dates.has(bucket.date) || !autoPopulation(bucket.allTools) || !autoPopulation(bucket.commands)) return false;
         dates.add(bucket.date);
         const bucketAll = bucket.allTools as Record<string, unknown>, bucketCommands = bucket.commands as Record<string, unknown>;
         const outcomes = bucketAll.outcomes as Record<string, number>, commandOutcomes = bucketCommands.outcomes as Record<string, number>;
@@ -246,7 +252,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     const end = `${addDays(asOf.slice(0, 10), 1)}T00:00:00.000Z`;
     if (v.startInclusive !== start || v.endExclusive !== end || start >= end || bucketDays > Math.ceil((Date.parse(end) - Date.parse(start)) / 86400000) || (all ? v.days.length > MAX_USAGE_ALL_BUCKETS : v.days.length !== n) || !uniqueCategories(v.models, MAX_USAGE_MODELS) || !uniqueCategories(v.tools, MAX_USAGE_TOOLS) || !v.models.every(model) || !v.tools.every(tool) || !v.days.every(day))
         return false;
-    if (!autoMode(v.autoMode, start, end, all ? MAX_USAGE_ALL_BUCKETS : n))
+    if (!autoMode(v.autoMode, start, end, all ? MAX_USAGE_ALL_BUCKETS : n, bucketDays))
         return false;
     const rangeToolIds = new Set((v.tools as UsageTool[]).map(item => item.id));
     const rangeToolsById = new Map((v.tools as UsageTool[]).map(item => [item.id, item]));
@@ -310,7 +316,7 @@ function range(v: unknown, asOf: string): v is UsageRangeSummary {
     return true;
 }
 function snapshot(v: unknown): v is UsageDashboardSnapshot {
-    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 11 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
+    if (!obj(v) || !ownKeys(v, ['version', 'metricVersion', 'countingVersion', 'pricingVersion', 'snapshotId', 'scope', 'timezone', 'asOf', 'computedAt', 'coverage', 'ranges']) || v.version !== 1 || v.metricVersion !== 1 || v.countingVersion !== 12 || v.pricingVersion !== USAGE_PRICING_VERSION || !id(v.snapshotId) || v.scope !== 'retained-transcripts' || v.timezone !== 'UTC' || !instant(v.asOf) || !instant(v.computedAt) || new Date(v.computedAt).getTime() < new Date(v.asOf).getTime() || !obj(v.coverage) || !obj(v.ranges) || !ownKeys(v.ranges, ['7d', '30d', 'all']))
         return false;
     const c = v.coverage as Record<string, unknown>;
     const coverageKeys = ['state', 'sourcesDiscovered', 'sourcesRead', 'parseErrors', 'oversizedRecords', 'pendingTailBytes', 'shortReads', 'changedSources', 'readErrors', 'invalidTimestamps', 'invalidUsage', 'invalidTimings', 'identityConflicts'];

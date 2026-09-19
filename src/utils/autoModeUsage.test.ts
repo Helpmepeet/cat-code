@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test'
 import {
   autoModeCommandRate,
   classifyHistoricalAutoModeToolResult,
+  projectAutoModeCapability,
   projectAutoModeDiagnosticPayload,
   reduceAutoModeUsage,
   type AutoModeUsageSource,
@@ -20,6 +21,25 @@ test('classifies only code-owned historical Auto mode result text', () => {
     'Tool output quoted: Permission for this action has been denied. Reason: policy rule',
   )).toBeNull()
   expect(classifyHistoricalAutoModeToolResult({ content: 'not text' })).toBeNull()
+})
+
+test('accepts only the bounded auto-mode capability marker', () => {
+  expect(projectAutoModeCapability({
+    type: 'system',
+    subtype: 'auto_permission_capability',
+    schema_version: 1,
+    uuid: 'capability',
+    timestamp: '2026-09-19T00:00:00.000Z',
+    version: 'test',
+  })).toEqual({
+    subtype: 'auto_permission_capability',
+    schema_version: 1,
+  })
+  expect(projectAutoModeCapability({
+    subtype: 'auto_permission_capability',
+    schema_version: 1,
+    raw: 'not allowed',
+  })).toBeNull()
 })
 
 const source: AutoModeUsageSource = {
@@ -235,6 +255,25 @@ test('salvages a malformed correlated End as one Unknown instead of Incomplete',
   expect(summary.allTools.coverage.invalidRecords).toBe(1)
 })
 
+test('degrades contradictory raw-result and disposition evidence to Unknown', () => {
+  const contradictory = row('contradictory-end', '2026-09-10T12:01:00.000Z', {
+    schema_version: 1,
+    subtype: 'auto_permission_end',
+    attempt_id: 'contradictory',
+    raw_result: 'deny',
+    disposition: 'allowed',
+    route: 'base',
+  })
+  const summary = reduce([start('contradictory'), contradictory])
+
+  expect(summary.allTools.outcomes.unknown_outcome).toBe(1)
+  expect(summary.allTools.outcomes.allowed).toBe(0)
+  expect(summary.allTools.coverage).toMatchObject({
+    state: 'partial',
+    invalidRecords: 1,
+  })
+})
+
 test('does not create an attempt from a terminal with an untrusted identity', () => {
   const summary = reduce([row('invalid-identity', '2026-09-10T12:01:00.000Z', {
     schema_version: 1,
@@ -360,6 +399,24 @@ test('does not treat pre-capability intervals as measured zero', () => {
 
   expect(summary.allTools.coverage.state).toBe('partial')
   expect(summary.buckets[0]!.allTools.coverage.state).toBe('partial')
+})
+
+test('treats a source-first capability marker as complete for its overlap', () => {
+  const summary = reduceAutoModeUsage({
+    records: [start('capable', '2026-09-11T12:01:00.000Z')],
+    sources: [{
+      ...source,
+      supportedFrom: '2026-09-11T12:00:00.000Z',
+      observedFrom: '2026-09-11T12:00:00.000Z',
+      observedThrough: '2026-09-11T23:59:59.999Z',
+    }],
+    rangeStart: '2026-09-11T00:00:00.000Z',
+    rangeEnd: '2026-09-11T23:59:59.999Z',
+    cutoff: '2026-09-12T00:00:00.000Z',
+  })
+
+  expect(summary.allTools.coverage.state).toBe('complete')
+  expect(summary.buckets[0]!.allTools.coverage.state).toBe('complete')
 })
 
 test('ignores non-overlapping sources but retains overlapping unavailable evidence', () => {

@@ -217,7 +217,7 @@ test('rebuilds historical Auto mode hints without retaining tool-result content'
     } finally { db.close(); }
 });
 test('uses a successor index path when auto-mode metadata enters the projection', () => {
-    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v7.sqlite');
+    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v8.sqlite');
 });
 test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
     const { path, file } = await fixture();
@@ -333,7 +333,7 @@ test('v8 grouped snapshots rebuild named categories from indexed records without
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(11);
+    expect(rebuilt.countingVersion).toBe(12);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);

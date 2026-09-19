@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { feature } from 'bun:bundle'
 import { randomUUID, type UUID } from 'crypto'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { writeFile } from 'fs/promises'
@@ -2359,6 +2360,44 @@ describe('auto-mode observation diagnostics', () => {
     })
     expect(entries.at(-1)).not.toHaveProperty('prompt')
     expect(entries.at(-1)).not.toHaveProperty('response')
+  })
+
+  test('writes subagent observations to the registered agent transcript', async () => {
+    const agentId = asAgentId('observation-agent')
+    const agentPath = getAgentTranscriptPath(agentId)
+    mkdirSync(dirname(agentPath), { recursive: true })
+    writeFileSync(agentPath, '')
+    registerActiveSubagent(agentId, {
+      startedAt: Date.now(),
+      toolUseId: 'parent-tool',
+      transcriptPath: agentPath,
+      agentType: 'general-purpose',
+      description: 'observation fixture',
+      sessionId,
+    })
+    await activateTranscriptLease(asSessionId(sessionId))
+    try {
+      recordAutoModeObservation(startEvent, agentId)
+      const entries = readFileSync(agentPath, 'utf8')
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as Record<string, unknown>)
+      if (feature('TRANSCRIPT_CLASSIFIER')) {
+        expect(entries[0]).toMatchObject({
+          type: 'system',
+          subtype: 'auto_permission_capability',
+          schema_version: 1,
+        })
+      }
+      expect(entries.at(-1)).toMatchObject({
+        type: 'system',
+        subtype: 'auto_mode_observation',
+        ...startEvent,
+      })
+      expect(existsSync(getTranscriptPathForSession(sessionId))).toBe(false)
+    } finally {
+      unregisterActiveSubagent(agentId)
+    }
   })
 
   test('keeps transcript lease failures outside the best-effort writer catch', async () => {

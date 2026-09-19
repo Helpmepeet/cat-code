@@ -66,6 +66,16 @@ test('rejects unknown kinds, invalid enums, and conflicting stage resolutions', 
       phase: 'resolved',
     }),
   ).toBeNull()
+  expect(
+    parseAutoModeObservationEvent({
+      subtype: 'auto_permission_end',
+      schema_version: 1,
+      attempt_id: 'attempt-1',
+      raw_result: 'deny',
+      disposition: 'allowed',
+      route: 'base',
+    }),
+  ).toBeNull()
 })
 
 test('rejects oversized identifiers, unsafe category labels, and writer envelope fields', () => {

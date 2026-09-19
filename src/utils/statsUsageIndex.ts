@@ -5,12 +5,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality } from './statsReader.js';
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
-import { classifyHistoricalAutoModeToolResult, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
+import { classifyHistoricalAutoModeToolResult, projectAutoModeCapability, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v7.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v8.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -43,6 +43,12 @@ function projectRecord(v: unknown): unknown {
             : null) };
     }
     if (v.type === 'system' && typeof v.subtype === 'string') {
+        const capability = projectAutoModeCapability(v);
+        if (capability !== null) {
+            row.subtype = capability.subtype;
+            row.schema_version = capability.schema_version;
+            return row;
+        }
         const autoMode = projectAutoModeDiagnosticPayload(v);
         if (autoMode !== null) {
             row.subtype = 'auto_mode_observation';

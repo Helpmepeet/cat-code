@@ -3,10 +3,12 @@ import {
   AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
   AUTO_MODE_ROUTES,
   MAX_AUTO_MODE_OBSERVATION_ID_BYTES,
+  isAutoModeRawDispositionValid,
   parseAutoModeObservationEvent,
   type AutoModeDisposition,
   type AutoModeObservationEvent,
   type AutoModePrimaryCategory,
+  type AutoModeRawPermissionResult,
   type AutoModeRoute,
   type AutoModeStage,
 } from './permissions/autoModeObservation.js'
@@ -173,6 +175,31 @@ const SYSTEM_ENVELOPE_FIELDS = new Set([
   'parentUuid',
 ])
 
+export type ProjectedAutoModeCapability = Readonly<{
+  subtype: 'auto_permission_capability'
+  schema_version: typeof AUTO_MODE_OBSERVATION_SCHEMA_VERSION
+}>
+
+export function projectAutoModeCapability(
+  value: unknown,
+): ProjectedAutoModeCapability | null {
+  if (
+    !object(value) ||
+    value.subtype !== 'auto_permission_capability' ||
+    value.schema_version !== AUTO_MODE_OBSERVATION_SCHEMA_VERSION ||
+    Object.keys(value).some(key =>
+      !SYSTEM_ENVELOPE_FIELDS.has(key) &&
+      key !== 'subtype' &&
+      key !== 'schema_version')
+  ) {
+    return null
+  }
+  return {
+    subtype: 'auto_permission_capability',
+    schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+  }
+}
+
 function rawEventPayload(value: Record<string, unknown>): Record<string, unknown> | null {
   if (
     Object.keys(value).some(
@@ -276,7 +303,10 @@ function sourceCoverage(
     const supportedFrom = validTime(source.supportedFrom)
     if (supportedFrom === null || rangeStart === undefined || rangeEnd === undefined) return [state]
     if (rangeEnd < supportedFrom) return ['unavailable']
-    if (rangeStart < supportedFrom) return ['partial']
+    const overlapStart = observedFrom === null
+      ? rangeStart
+      : Math.max(rangeStart, observedFrom)
+    if (overlapStart < supportedFrom) return ['partial']
     return [state]
   })
   if (states.length === 0 || states.every(state => state === 'unavailable')) return 'unavailable'
@@ -317,7 +347,11 @@ function parseTerminal(payload: unknown): Terminal | null {
     typeof payload.raw_result !== 'string' ||
     !['allow', 'deny', 'ask', 'throw'].includes(payload.raw_result) ||
     typeof payload.disposition !== 'string' ||
-    !AUTO_MODE_DISPOSITIONS.includes(payload.disposition as AutoModeDisposition)) {
+    !AUTO_MODE_DISPOSITIONS.includes(payload.disposition as AutoModeDisposition) ||
+    !isAutoModeRawDispositionValid(
+      payload.raw_result as AutoModeRawPermissionResult,
+      payload.disposition as AutoModeDisposition,
+    )) {
     return null
   }
 

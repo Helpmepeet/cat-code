@@ -91,6 +91,7 @@ import { logError } from './log.js'
 import { extractTag, isCompactBoundaryMessage } from './messages.js'
 import { sanitizePath } from './path.js'
 import {
+  AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
   parseAutoModeObservationEvent,
   type AutoModeObservationEvent,
 } from './permissions/autoModeObservation.js'
@@ -625,15 +626,59 @@ function appendSystemDiagnostic(
   }
 }
 
+const autoModeCapabilityPaths = new Set<string>()
+
+function appendAutoModeCapabilityToPath(transcriptPath: string): void {
+  if (
+    !feature('TRANSCRIPT_CLASSIFIER') ||
+    autoModeCapabilityPaths.has(transcriptPath)
+  ) {
+    return
+  }
+  try {
+    appendEntryToFile(transcriptPath, {
+      type: 'system',
+      subtype: 'auto_permission_capability',
+      schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+      uuid: randomUUID(),
+      timestamp: new Date().toISOString(),
+      version: getRunningBuildVersion(),
+    })
+    autoModeCapabilityPaths.add(transcriptPath)
+  } catch {
+    // Best-effort metadata must not affect transcript persistence.
+  }
+}
+
+function ensureAutoModeCapability(agentId?: AgentId): void {
+  if (!feature('TRANSCRIPT_CLASSIFIER')) return
+  assertActiveTranscriptLease(getSessionId())
+  try {
+    const transcriptPath = agentId
+      ? getOwnedAgentTranscriptPath(agentId)
+      : getOwnedTranscriptPath()
+    if (transcriptPath === null || autoModeCapabilityPaths.has(transcriptPath)) {
+      return
+    }
+    appendAutoModeCapabilityToPath(transcriptPath)
+  } catch {
+    // Best-effort metadata must not affect permission behavior.
+  }
+}
+
 /**
  * Persist one validated, metadata-only auto-mode permission observation.
  * Invalid input is ignored before the transcript appender sees it.
  */
-export function recordAutoModeObservation(entry: unknown): void {
+export function recordAutoModeObservation(
+  entry: unknown,
+  agentId?: AgentId,
+): void {
   const parsed: AutoModeObservationEvent | null =
     parseAutoModeObservationEvent(entry)
   if (parsed === null) return
-  appendSystemDiagnostic('auto_mode_observation', parsed)
+  ensureAutoModeCapability(agentId)
+  appendSystemDiagnostic('auto_mode_observation', parsed, { agentId })
 }
 
 /**
@@ -1200,6 +1245,7 @@ export function resetProjectFlushStateForTesting(): void {
 export function resetProjectForTesting(): void {
   project = null
   runningBuildVersion = undefined
+  autoModeCapabilityPaths.clear()
 }
 
 export function setSessionFileForTesting(path: string): void {
@@ -1808,6 +1854,7 @@ class Project {
     if (this.shouldSkipPersistence()) return
     await activateTranscriptLease(getSessionId())
     this.ensureCurrentSessionFile()
+    ensureAutoModeCapability()
     // mode/agentSetting are cache-only pre-materialization; write them now.
     this.reAppendSessionMetadata()
     if (this.pendingEntries.length > 0) {
@@ -2079,6 +2126,9 @@ class Project {
         const targetFile = isAgentSidechain
           ? getAgentTranscriptPath(asAgentId(entry.agentId!))
           : sessionFile
+        if (isAgentSidechain) {
+          appendAutoModeCapabilityToPath(targetFile)
+        }
 
         // For message entries, check if UUID already exists in current session.
         // Skip dedup for agent sidechain LOCAL writes — they go to a separate
