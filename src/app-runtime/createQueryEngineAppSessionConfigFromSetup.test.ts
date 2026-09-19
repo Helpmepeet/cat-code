@@ -50,6 +50,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     const setupMcpClients = [mcpClient]
     const setupMcpResource = createNestedMcpResource()
     const expectedMcpResource = createNestedMcpResource()
+    const getPostCompactRuntimeAttachments = async () => []
     const setupMcpResources: Record<string, ServerResource[]> = {
       server: [setupMcpResource],
     }
@@ -79,6 +80,7 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
       taskBudget: { total: 2 },
       jsonSchema,
       replayUserMessages: true,
+      getPostCompactRuntimeAttachments,
       setSDKStatus: () => {},
     })
 
@@ -167,6 +169,9 @@ describe('createQueryEngineAppSessionConfigFromSetup', () => {
     expect(config.taskBudget).toEqual({ total: 2 })
     expect(config.jsonSchema).toEqual(jsonSchema)
     expect(config.replayUserMessages).toBe(true)
+    expect(config.getPostCompactRuntimeAttachments).toBe(
+      getPostCompactRuntimeAttachments,
+    )
     expect(config.includePartialMessages).toBe(true)
     expect(config.setSDKStatus).toBeTypeOf('function')
   })

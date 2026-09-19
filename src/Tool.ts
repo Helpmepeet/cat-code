@@ -234,15 +234,15 @@ export type ToolUseContext = {
     getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
     /** Optional callback to re-run auth-dependent refresh hooks after account changes. */
     onChangeAPIKey?: () => void
-    /**
-     * Supplies runtime-owned attachments after a successful compaction.
-     * The compaction engine creates the AttachmentMessage wrappers and treats
-     * failures as advisory so runtime state cannot make compaction fail.
-     */
-    getPostCompactRuntimeAttachments?: (
-      input: PostCompactRuntimeAttachmentsInput,
-    ) => Promise<Attachment[]>
   }
+  /**
+   * Supplies runtime-owned attachments after a successful compaction.
+   * The compaction engine creates the AttachmentMessage wrappers and treats
+   * failures as advisory so runtime state cannot make compaction fail.
+   */
+  getPostCompactRuntimeAttachments?: (
+    input: PostCompactRuntimeAttachmentsInput,
+  ) => Promise<Attachment[]>
   abortController: AbortController
   /** Internal executor hook fired immediately before a permitted tool effect starts. */
   onToolExecutionStart?: () => void
