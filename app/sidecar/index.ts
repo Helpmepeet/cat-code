@@ -373,6 +373,7 @@ async function main(): Promise<void> {
   } = await createSidecarSessionController({
     probe: args.probeOnAttach,
     cwd: runtimeCwd,
+    appSessionId: args.sessionId,
     // Mutually exclusive by construction: a resume seeds the restored
     // transcript, whose tail already carries its own 'resume' hook messages; a
     // fresh session seeds the 'startup' hook messages computed just above.
@@ -541,7 +542,9 @@ async function main(): Promise<void> {
   // tools were built with the session controller above, before this server
   // existed, so they resolve a requester per call rather than holding one; this
   // is where the one that exists is published.
-  setPeerHostRequester((verb, args) => server.requestHost(verb, args))
+  setPeerHostRequester((verb, args, options) =>
+    server.requestHost(verb, args, options),
+  )
 
   // `Bun.listen({ unix })` is the Unix-domain socket transport (D6 pin 1: a
   // socket FILE, not a listening TCP port — no network surface added).

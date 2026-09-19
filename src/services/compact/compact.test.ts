@@ -365,6 +365,77 @@ describe('compactConversation', () => {
     expect(normalizedText).not.toContain('Read the output file')
     expect(normalizedText).not.toContain(outputFilePath!)
   })
+
+  test('appends runtime attachments once after the selected compaction', async () => {
+    const { appendPostCompactRuntimeAttachments } = await import('./compact.js')
+    const preserved = [createUserMessage({ content: 'preserved context' })]
+    const result = {
+      boundaryMarker: {
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'boundary',
+        timestamp: '2026-05-08T00:00:00.000Z',
+        compactMetadata: {},
+      },
+      summaryMessages: [createUserMessage({ content: 'summary' })],
+      attachments: [],
+      hookResults: [],
+      messagesToKeep: preserved,
+      truePostCompactTokenCount: 10,
+    } as never
+    const calls: unknown[] = []
+    const context = {
+      ...createToolUseContext([]),
+      getPostCompactRuntimeAttachments: async input => {
+        calls.push(input)
+        return [
+          {
+            type: 'peer_coordination_state' as const,
+            asOf: '2026-05-08T00:00:00.000Z',
+            peers: [{ name: 'Bear', status: 'live', presence: 'running' }],
+          },
+        ]
+      },
+    } as ToolUseContext
+
+    const next = await appendPostCompactRuntimeAttachments(result, context)
+
+    expect(calls).toEqual([{ preservedMessages: preserved, agentId: undefined }])
+    expect(next.attachments).toHaveLength(1)
+    expect(next.attachments[0]?.attachment).toEqual({
+      type: 'peer_coordination_state',
+      asOf: '2026-05-08T00:00:00.000Z',
+      peers: [{ name: 'Bear', status: 'live', presence: 'running' }],
+    })
+    expect(next.attachments[0]?.uuid).toBeTruthy()
+    expect(next).not.toBe(result)
+  })
+
+  test('ignores a runtime attachment provider failure', async () => {
+    const { appendPostCompactRuntimeAttachments } = await import('./compact.js')
+    const result = {
+      boundaryMarker: {
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'boundary',
+        timestamp: '2026-05-08T00:00:00.000Z',
+        compactMetadata: {},
+      },
+      summaryMessages: [],
+      attachments: [],
+      hookResults: [],
+    } as never
+    const context = {
+      ...createToolUseContext([]),
+      getPostCompactRuntimeAttachments: async () => {
+        throw new Error('host unavailable')
+      },
+    } as ToolUseContext
+
+    await expect(
+      appendPostCompactRuntimeAttachments(result, context),
+    ).resolves.toBe(result)
+  })
 })
 
 describe('preserved-message boundary metadata', () => {

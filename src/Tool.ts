@@ -88,6 +88,7 @@ import type { DeepImmutable } from './types/utils.js'
 import type { AttributionState } from './utils/commitAttribution.js'
 import type { FileHistoryState } from './utils/fileHistory.js'
 import type { Theme, ThemeName } from './utils/theme.js'
+import type { Attachment } from './utils/attachments.js'
 
 export type QueryChainTracking = {
   chainId: string
@@ -161,6 +162,11 @@ export type CompactProgressEvent =
   | { type: 'compact_start' }
   | { type: 'compact_end' }
 
+export type PostCompactRuntimeAttachmentsInput = {
+  preservedMessages: readonly Message[]
+  agentId?: AgentId
+}
+
 /**
  * One coherent MCP generation: the clients, tools, commands, and resources a
  * live MCP lifecycle published together. Read it whole, never field by field —
@@ -228,6 +234,14 @@ export type ToolUseContext = {
     getMcpRuntimeSnapshot?: () => McpRuntimeSnapshot
     /** Optional callback to re-run auth-dependent refresh hooks after account changes. */
     onChangeAPIKey?: () => void
+    /**
+     * Supplies runtime-owned attachments after a successful compaction.
+     * The compaction engine creates the AttachmentMessage wrappers and treats
+     * failures as advisory so runtime state cannot make compaction fail.
+     */
+    getPostCompactRuntimeAttachments?: (
+      input: PostCompactRuntimeAttachmentsInput,
+    ) => Promise<Attachment[]>
   }
   abortController: AbortController
   /** Internal executor hook fired immediately before a permitted tool effect starts. */

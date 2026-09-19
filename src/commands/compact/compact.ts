@@ -7,6 +7,7 @@ import { getShortcutDisplay } from '../../keybindings/shortcutFormat.js'
 import { notifyCompaction } from '../../services/api/promptCacheBreakDetection.js'
 import {
   type CompactionResult,
+  appendPostCompactRuntimeAttachments,
   compactConversation,
   ERROR_MESSAGE_INCOMPLETE_RESPONSE,
   ERROR_MESSAGE_NOT_ENOUGH_MESSAGES,
@@ -80,7 +81,10 @@ export const call: LocalCommandCall = async (args, context) => {
 
         return {
           type: 'compact',
-          compactionResult: sessionMemoryResult,
+          compactionResult: await appendPostCompactRuntimeAttachments(
+            sessionMemoryResult,
+            context,
+          ),
           displayText: buildDisplayText(context),
         }
       }
@@ -106,7 +110,13 @@ export const call: LocalCommandCall = async (args, context) => {
         reactiveCompact,
       )
       if (reactiveResult) {
-        return reactiveResult
+        return {
+          ...reactiveResult,
+          compactionResult: await appendPostCompactRuntimeAttachments(
+            reactiveResult.compactionResult,
+            context,
+          ),
+        }
       }
     }
 
@@ -138,7 +148,10 @@ export const call: LocalCommandCall = async (args, context) => {
 
     return {
       type: 'compact',
-      compactionResult: result,
+      compactionResult: await appendPostCompactRuntimeAttachments(
+        result,
+        context,
+      ),
       displayText: buildDisplayText(context, result.userDisplayMessage),
     }
   } catch (error) {

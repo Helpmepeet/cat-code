@@ -4927,6 +4927,7 @@ export class SidecarServer {
   async requestHost<V extends HostRequestVerb>(
     verb: V,
     args: HostRequestArgs[V],
+    options?: HostRequestOptions,
   ): Promise<HostRequestOutcome<V>> {
     if (this.connections.size === 0 || this.closed) {
       return {
@@ -4953,7 +4954,7 @@ export class SidecarServer {
           ok: false,
           error: { code: 'timeout', message: 'the host did not answer in time' },
         })
-      }, HOST_REQUEST_TIMEOUT_MS)
+      }, options?.timeoutMs ?? HOST_REQUEST_TIMEOUT_MS)
       timer.unref?.()
       this.pendingHostRequests.set(requestId, {
         // Narrowing is safe and checked: the entry carries the schema for the
@@ -5713,6 +5714,10 @@ function hostRequestErrorCode(value: unknown): HostRequestErrorCode {
 export type HostRequestOutcome<V extends HostRequestVerb> =
   | { ok: true; value: HostRequestValues[V] }
   | { ok: false; error: HostRequestError }
+
+export type HostRequestOptions = {
+  timeoutMs?: number
+}
 
 /**
  * PEER-SESSIONS §5 — the wrapping the decision records as WORK OWED: the tag

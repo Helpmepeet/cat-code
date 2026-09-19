@@ -8,6 +8,7 @@ import {
   createUserMessage,
   dropPreservedMessageDuplicates,
   normalizeMessages,
+  normalizeAttachmentForAPI,
   wrapCommandText,
 } from './messages.js'
 
@@ -222,5 +223,34 @@ describe('normalizeMessages preserves errorDetails', () => {
   test('an ordinary assistant message gains no errorDetails key', () => {
     const [normalized] = normalizeMessages([createAssistantMessage({ content: 'hello' })])
     expect('errorDetails' in normalized!).toBe(false)
+  })
+})
+
+describe('peer coordination attachment normalization', () => {
+  test('preserves status and presence without completion semantics or IDs', () => {
+    const statuses = [
+      { status: 'live' as const, presence: 'running' as const },
+      { status: 'live' as const, presence: 'needs_user' as const },
+      { status: 'live' as const, presence: 'idle' as const },
+      { status: 'live' as const },
+      { status: 'parked' as const },
+      { status: 'closed' as const },
+    ]
+
+    for (const state of statuses) {
+      const [message] = normalizeAttachmentForAPI({
+        type: 'peer_coordination_state',
+        asOf: '2026-05-08T00:00:00.000Z',
+        peers: [{ name: 'Bear', ...state }],
+      })
+      const content = String(message?.message.content)
+
+      expect(content).toContain(`Bear: ${state.status}`)
+      if (state.presence) expect(content).toContain(state.presence)
+      expect(content).not.toMatch(/Bear: (finished|successful|completed)/)
+      expect(content).not.toContain('appSessionId')
+      expect(content).not.toContain('engineSessionId')
+      expect(content).not.toContain('createdBy')
+    }
   })
 })

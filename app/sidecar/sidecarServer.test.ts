@@ -9539,6 +9539,34 @@ test('an unanswered host request resolves with a typed failure instead of hangin
   })
 })
 
+test('a short host timeout removes the pending request before a late result', async () => {
+  const logged: string[] = []
+  const { server, conn, received } = connect(
+    new AppSessionController(probeAdapter()),
+    { log: line => logged.push(line) },
+  )
+
+  const pending = server.requestHost('peers.list', {}, { timeoutMs: 5 })
+  const requestId = (received.find(f => f.kind === 'host.request') as {
+    requestId: string
+  }).requestId
+  expect(await pending).toEqual({
+    ok: false,
+    error: { code: 'timeout', message: 'the host did not answer in time' },
+  })
+
+  server.handleData(
+    conn,
+    hostPlaneFrame({
+      type: 'host.result',
+      requestId,
+      ok: true,
+      value: { peers: [] },
+    }),
+  )
+  expect(logged.some(line => line.includes('unknown request id'))).toBe(true)
+})
+
 test('a host request with no connection open fails fast rather than queueing', async () => {
   const server = makeServer(new AppSessionController(probeAdapter()))
   expect(await server.requestHost('peers.list', {})).toEqual({

@@ -63,6 +63,7 @@ import {
 } from './createPeerTool.js'
 import { createSendToPeerTool } from './sendToPeerTool.js'
 import { createReadPeerTool } from './readPeerTool.js'
+import { createPeerCompactContext } from './peerCompactContext.js'
 import { createProbeAdapter } from './probeAdapter.js'
 import {
   createSidecarPermissionDomain,
@@ -339,10 +340,13 @@ export async function createNormalSidecarQueryEngineConfig(
   cwd: string,
   initialMessages?: readonly Message[],
   {
+    appSessionId,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,
   }: {
+    /** Trusted app-session identity used to filter peer restoration state. */
+    appSessionId?: string
     /** One startup snapshot shared with resume, never a second disk read. */
     agentDefinitions?: AgentDefinitionsResult
     /** Registers sidecar shutdown ownership before asynchronous MCP setup. */
@@ -500,6 +504,13 @@ export async function createNormalSidecarQueryEngineConfig(
           READ_FILE_STATE_CACHE_SIZE,
         ),
         appendSystemPrompt: buildDesktopSystemPrompt(),
+        ...(appSessionId
+          ? {
+              getPostCompactRuntimeAttachments: createPeerCompactContext({
+                appSessionId,
+              }),
+            }
+          : {}),
         handleElicitation: async () => ({ action: 'cancel' }),
       }),
       // F1 (host-plane review 2026-07-05): seed the resumed transcript into the
@@ -641,6 +652,7 @@ export type SidecarSession = {
 export async function createSidecarSessionController({
   probe,
   cwd,
+  appSessionId,
   initialMessages,
   agentDefinitions: suppliedAgentDefinitions,
   onMcpLifecycleCreated,
@@ -649,6 +661,8 @@ export async function createSidecarSessionController({
   probe: boolean
   /** Session root; the engine's QueryEngine is configured here. Ignored in probe mode. */
   cwd: string
+  /** Trusted app-session identity, supplied by the sidecar entrypoint. */
+  appSessionId?: string
   /**
    * The resumed transcript from `resumeEngineSession` (F1): seeds the
    * QueryEngine's turn context so a restored session actually operates on its
@@ -724,6 +738,7 @@ export async function createSidecarSessionController({
     slashCatalog,
     tools,
   } = await createNormalSidecarQueryEngineConfig(cwd, initialMessages, {
+    appSessionId,
     agentDefinitions: suppliedAgentDefinitions,
     onMcpLifecycleCreated,
     resumedInitialState,

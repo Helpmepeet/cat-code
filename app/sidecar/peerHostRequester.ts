@@ -22,7 +22,10 @@ import type {
 } from '../shared/protocol.js'
 // Type-only: erased at runtime, so this does not make an import cycle with the
 // server module that sets the requester below.
-import type { HostRequestOutcome } from './sidecarServer.js'
+import type {
+  HostRequestOptions,
+  HostRequestOutcome,
+} from './sidecarServer.js'
 
 /**
  * Ask main to do one bounded thing. Mirrors `SidecarServer.requestHost`: it
@@ -32,6 +35,7 @@ import type { HostRequestOutcome } from './sidecarServer.js'
 export type PeerHostRequester = <V extends HostRequestVerb>(
   verb: V,
   args: HostRequestArgs[V],
+  options?: HostRequestOptions,
 ) => Promise<HostRequestOutcome<V>>
 
 let liveRequester: PeerHostRequester | null = null
@@ -51,7 +55,7 @@ export function setPeerHostRequester(next: PeerHostRequester | null): void {
  * running in a process that never had one fails closed with the plane's own
  * `unavailable` code rather than throwing into the engine's tool loop.
  */
-export const requestPeerHost: PeerHostRequester = (verb, args) => {
+export const requestPeerHost: PeerHostRequester = (verb, args, options) => {
   if (liveRequester === null) {
     return Promise.resolve({
       ok: false,
@@ -61,7 +65,7 @@ export const requestPeerHost: PeerHostRequester = (verb, args) => {
       },
     })
   }
-  return liveRequester(verb, args)
+  return liveRequester(verb, args, options)
 }
 
 /**

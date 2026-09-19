@@ -37,6 +37,7 @@ import {
   getAgentListingDeltaAttachment,
   getDeferredToolsDeltaAttachment,
   getMcpInstructionsDeltaAttachment,
+  type Attachment,
 } from '../../utils/attachments.js'
 import { getMemoryPath } from '../../utils/config.js'
 import { COMPACT_MAX_OUTPUT_TOKENS } from '../../utils/context.js'
@@ -132,6 +133,12 @@ export const POST_COMPACT_MAX_TOKENS_PER_FILE = 5_000
 // part. Budget sized to hold ~5 skills at the per-skill cap.
 export const POST_COMPACT_MAX_TOKENS_PER_SKILL = 5_000
 export const POST_COMPACT_SKILLS_TOKEN_BUDGET = 25_000
+/**
+ * Reserved room for an optional runtime attachment when session-memory
+ * compaction checks whether its candidate fits under the active threshold.
+ * Runtime providers must keep their output bounded to this small budget.
+ */
+export const POST_COMPACT_RUNTIME_ATTACHMENT_TOKEN_BUDGET = 2_000
 const MAX_COMPACT_STREAMING_RETRIES = 2
 
 /**
@@ -339,6 +346,53 @@ export function buildPostCompactMessages(result: CompactionResult): Message[] {
     ...result.attachments,
     ...result.hookResults,
   ]
+}
+
+/**
+ * Restore runtime-owned state after a compaction strategy has been selected.
+ * Callers invoke this only after a strategy has been selected, so retries and
+ * fallback candidates never query runtime state more than once.
+ */
+export async function appendPostCompactRuntimeAttachments(
+  result: CompactionResult,
+  context: ToolUseContext,
+): Promise<CompactionResult> {
+  const provider = context.getPostCompactRuntimeAttachments
+  if (!provider) return result
+
+  let attachments: Attachment[]
+  try {
+    attachments = await provider({
+      preservedMessages: result.messagesToKeep ?? [],
+      agentId: context.agentId,
+    })
+  } catch (error) {
+    // Runtime state is advisory. A host outage or provider bug must never turn
+    // a successful compaction into a failed turn.
+    logError(error)
+    return result
+  }
+
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return result
+  }
+
+  const nextResult: CompactionResult = {
+    ...result,
+    attachments: [
+      ...result.attachments,
+      ...attachments.map(createAttachmentMessage),
+    ],
+  }
+
+  if (result.truePostCompactTokenCount !== undefined) {
+    nextResult.truePostCompactTokenCount =
+      roughTokenCountEstimationForMessages(
+        buildPostCompactMessages(nextResult),
+      )
+  }
+
+  return nextResult
 }
 
 /**
@@ -1155,7 +1209,7 @@ export async function partialCompactConversation(
       direction === 'up_to'
         ? (summaryMessages.at(-1)?.uuid ?? boundaryMarker.uuid)
         : boundaryMarker.uuid
-    return {
+    const result: CompactionResult = {
       boundaryMarker: annotateBoundaryWithPreservedSegment(
         boundaryMarker,
         anchorUuid,
@@ -1171,6 +1225,7 @@ export async function partialCompactConversation(
       postCompactTokenCount,
       compactionUsage,
     }
+    return appendPostCompactRuntimeAttachments(result, context)
   } catch (error) {
     addErrorNotificationIfNeeded(error, context)
     throw error

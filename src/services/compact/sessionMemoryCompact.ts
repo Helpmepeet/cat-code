@@ -528,6 +528,7 @@ export async function trySessionMemoryCompaction(
   agentId?: AgentId,
   autoCompactThreshold?: number,
   _unused?: null,
+  runtimeAttachmentTokenBudget: number = 0,
 ): Promise<CompactionResult | null> {
   if (!shouldUseSessionMemoryCompaction()) {
     return null
@@ -617,10 +618,12 @@ export async function trySessionMemoryCompaction(
     // Only check threshold if one was provided (for autocompact)
     if (
       autoCompactThreshold !== undefined &&
-      postCompactTokenCount >= autoCompactThreshold
+      postCompactTokenCount + runtimeAttachmentTokenBudget >=
+        autoCompactThreshold
     ) {
       logEvent('tengu_sm_compact_threshold_exceeded', {
         postCompactTokenCount,
+        runtimeAttachmentTokenBudget,
         autoCompactThreshold,
       })
       return null

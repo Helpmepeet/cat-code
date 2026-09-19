@@ -187,6 +187,7 @@ export type QueryEngineConfig = {
   handleElicitation?: ToolUseContext['handleElicitation']
   includePartialMessages?: boolean
   setSDKStatus?: (status: SDKStatus) => void
+  getPostCompactRuntimeAttachments?: ToolUseContext['getPostCompactRuntimeAttachments']
   abortController?: AbortController
   orphanedPermission?: OrphanedPermission
   /** Internal accepted-input gate for the deferred continuation runner. */
@@ -344,6 +345,7 @@ export class QueryEngine {
       includePartialMessages = false,
       agents = [],
       setSDKStatus,
+      getPostCompactRuntimeAttachments,
       orphanedPermission,
       deferredAttemptUuid,
       deferredJobId,
@@ -519,6 +521,7 @@ export class QueryEngine {
         })
       },
       setSDKStatus,
+      getPostCompactRuntimeAttachments,
     }
 
     let systemPrompt = buildEffectiveSystemPrompt({
@@ -733,6 +736,7 @@ export class QueryEngine {
       updateFileHistoryState: processUserInputContext.updateFileHistoryState,
       updateAttributionState: processUserInputContext.updateAttributionState,
       setSDKStatus,
+      getPostCompactRuntimeAttachments,
     }
 
     headlessProfilerCheckpoint('before_skills_plugins')

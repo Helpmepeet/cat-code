@@ -628,6 +628,7 @@ export type Attachment =
       deltaSummary: string | null
       outputFilePath?: string
     }
+  | PeerCoordinationStateAttachment
   | AsyncHookResponseAttachment
   | {
       type: 'token_usage'
@@ -727,6 +728,18 @@ export type Attachment =
       warningCount: number
       sample: string
     }
+
+export type PeerCoordinationStateAttachment = {
+  type: 'peer_coordination_state'
+  asOf: string
+  peers: Array<{
+    name: string
+    status: 'live' | 'parked' | 'closed'
+    presence?: 'running' | 'needs_user' | 'idle'
+  }>
+  /** Number of directly created peers omitted by the attachment budget. */
+  omittedCount?: number
+}
 
 export type TeammateMailboxAttachment = {
   type: 'teammate_mailbox'

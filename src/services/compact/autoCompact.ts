@@ -30,11 +30,13 @@ import { notifyCompaction } from '../api/promptCacheBreakDetection.js'
 import { setLastSummarizedMessageId } from '../SessionMemory/sessionMemoryUtils.js'
 import {
   type CompactionResult,
+  appendPostCompactRuntimeAttachments,
   compactConversation,
   ERROR_MESSAGE_INCOMPLETE_RESPONSE,
   ERROR_MESSAGE_USER_ABORT,
   mergeHookInstructions,
   type RecompactionInfo,
+  POST_COMPACT_RUNTIME_ATTACHMENT_TOKEN_BUDGET,
 } from './compact.js'
 import { runPostCompactCleanup } from './postCompactCleanup.js'
 import { trySessionMemoryCompaction } from './sessionMemoryCompact.js'
@@ -693,6 +695,10 @@ export async function autoCompactIfNeeded(
     toolUseContext.agentId,
     recompactionInfo.autoCompactThreshold,
     null,
+    toolUseContext.agentId === undefined &&
+      toolUseContext.getPostCompactRuntimeAttachments
+      ? POST_COMPACT_RUNTIME_ATTACHMENT_TOKEN_BUDGET
+      : 0,
   )
   if (sessionMemoryResult) {
     // Reset lastSummarizedMessageId since session memory compaction prunes messages
@@ -709,7 +715,10 @@ export async function autoCompactIfNeeded(
     markPostCompaction()
     return {
       wasCompacted: true,
-      compactionResult: sessionMemoryResult,
+      compactionResult: await appendPostCompactRuntimeAttachments(
+        sessionMemoryResult,
+        toolUseContext,
+      ),
     }
   }
 
@@ -723,17 +732,19 @@ export async function autoCompactIfNeeded(
       querySource,
     )
 
-    const compactionResult =
+    const compactionResult = await appendPostCompactRuntimeAttachments(
       reactiveResult ??
-      (await compactConversation(
-        messages,
-        toolUseContext,
-        cacheSafeParams,
-        true, // Suppress user questions for autocompact
-        undefined, // No custom instructions for autocompact
-        true, // isAutoCompact
-        recompactionInfo,
-      ))
+        (await compactConversation(
+          messages,
+          toolUseContext,
+          cacheSafeParams,
+          true, // Suppress user questions for autocompact
+          undefined, // No custom instructions for autocompact
+          true, // isAutoCompact
+          recompactionInfo,
+        )),
+      toolUseContext,
+    )
 
     // Reset lastSummarizedMessageId since legacy compaction replaces all messages
     // and the old message UUID will no longer exist in the new messages array

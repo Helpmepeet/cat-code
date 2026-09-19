@@ -60,6 +60,7 @@ import { roughTokenCountEstimationForMessages } from '../tokenEstimation.js'
 import { isAutoCompactEnabled } from './autoCompact.js'
 import {
   annotateBoundaryWithPreservedSegment,
+  appendPostCompactRuntimeAttachments,
   type CompactionResult,
   compactConversation,
   createAsyncAgentAttachmentsIfNeeded,
@@ -632,7 +633,7 @@ export async function tryReactiveCompact(params: {
       'reactive compact: conversation too short to split — falling back to full compaction',
     )
     try {
-      return await compactConversation(
+      const result = await compactConversation(
         messages,
         context,
         cacheSafeParams,
@@ -640,6 +641,7 @@ export async function tryReactiveCompact(params: {
         undefined,
         true,
       )
+      return await appendPostCompactRuntimeAttachments(result, context)
     } catch (error) {
       logError(error)
       return null
@@ -695,7 +697,10 @@ export async function tryReactiveCompact(params: {
         .filter(Boolean)
         .join('\n') || undefined
 
-    return { ...outcome.result, userDisplayMessage }
+    return appendPostCompactRuntimeAttachments(
+      { ...outcome.result, userDisplayMessage },
+      context,
+    )
   } catch (error) {
     logError(error)
     return null

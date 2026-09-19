@@ -4234,6 +4234,24 @@ You have exited auto mode. The user may now want to interact more directly. You 
         }),
       ]
     }
+    case 'peer_coordination_state': {
+      const peerLines = attachment.peers.map(peer => {
+        const presence = peer.presence ? ` (${peer.presence})` : ''
+        return `- ${peer.name}: ${peer.status}${presence}`
+      })
+      const omitted =
+        attachment.omittedCount && attachment.omittedCount > 0
+          ? `\n\n${attachment.omittedCount} additional created peer${attachment.omittedCount === 1 ? '' : 's'} are not shown here. Use ListPeers for the current roster.`
+          : ''
+      return [
+        createUserMessage({
+          content: wrapInSystemReminder(
+            `Peer coordination snapshot, captured at ${attachment.asOf}.\n\nThis session created these currently addressable peer sessions:\n${peerLines.join('\n')}${omitted}\n\nThese peer sessions already exist. Do not create replacements only because their earlier CreatePeer calls are no longer visible.\n\nThis is a snapshot, not a completion record. Idle, parked, or closed does not mean the peer's work succeeded or finished. Use ListPeers when current status matters.`,
+          ),
+          isMeta: true,
+        }),
+      ]
+    }
     case 'async_hook_response': {
       const response = attachment.response
       const messages: UserMessage[] = []
