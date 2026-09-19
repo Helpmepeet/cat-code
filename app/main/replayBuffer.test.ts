@@ -19,7 +19,12 @@ import {
   isReplayTruncationFrame,
   STICKY_FRAME_KINDS,
 } from './replayBuffer.js'
-import { PROTOCOL_VERSION, type ServerFrame, type SessionId } from '../shared/protocol.js'
+import {
+  type ContextBreakdownSnapshotFrame,
+  PROTOCOL_VERSION,
+  type ServerFrame,
+  type SessionId,
+} from '../shared/protocol.js'
 import type { SDKMessage } from '../shared/engine-types.snapshot.js'
 
 const SID: SessionId = 'sess-1'
@@ -414,20 +419,18 @@ test('context-breakdown.snapshot is non-retained and never replays', () => {
     attachSnapshotFrame('run-controls.snapshot' as (typeof ATTACH_BURST_KINDS)[number]),
   )
 
-  const breakdownFrame = {
+  const breakdownFrame: ContextBreakdownSnapshotFrame = {
     kind: 'context-breakdown.snapshot',
     protocolVersion: PROTOCOL_VERSION,
     sessionId: SID,
-    snapshot: {
-      calculatedAt: Date.now(),
+    breakdown: {
       model: 'claude-3-5-sonnet',
       contextWindow: 200_000,
-      totalTokens: 50_000,
+      usedTokens: 50_000,
+      freeTokens: 150_000,
       categories: [],
-      files: [],
-      messages: [],
     },
-  } as unknown as ServerFrame
+  }
   buffer.record(SID, breakdownFrame)
 
   // Switching run controls / model without a turn:

@@ -23,7 +23,13 @@ import {
   type ClientFrame,
   type ContextBreakdownSnapshot,
   type ServerFrame,
+  type SessionId,
 } from '../shared/protocol.js'
+import {
+  createContextBreakdownState,
+  reduceContextBreakdownState,
+  selectContextBreakdown,
+} from '../renderer/src/contextBreakdownState.js'
 import { getDefaultAppState } from '../../src/state/AppStateStore.js'
 import type { SDKMessage } from '../shared/engine-types.snapshot.js'
 import type { SidecarContextBreakdownDomain } from './contextBreakdownDomain.js'
@@ -594,4 +600,221 @@ test('failed analysis cannot resurrect old data after invalidation', async () =>
   await flush()
   expect(calls).toBe(3)
   expect(received.filter(f => f.kind === 'context-breakdown.snapshot')).toHaveLength(1)
+})
+
+test('in-flight breakdown analysis is discarded if permission mode changes before it resolves', async () => {
+  let calls = 0
+  let resolveSnapshot: ((val: ContextBreakdownSnapshot) => void) | null = null
+  const domain: SidecarContextBreakdownDomain = {
+    snapshot: async () => {
+      calls++
+      return new Promise<ContextBreakdownSnapshot>(resolve => {
+        resolveSnapshot = resolve
+      })
+    },
+  }
+  let permMode = 'ask'
+  const permListeners = new Set<(ctx: { mode: string }) => void>()
+  const permissions = {
+    getToolPermissionContext: () => ({
+      ...getDefaultAppState().toolPermissionContext,
+      mode: permMode as any,
+    }),
+    subscribeToolPermissionContext: (cb: (ctx: { mode: string }) => void) => {
+      permListeners.add(cb)
+      return () => permListeners.delete(cb)
+    },
+    getDisplayFacts: () => ({
+      managedRulesOnly: false,
+      permissionClassifierEnabled: false,
+    }),
+  }
+
+  const server = makeServer(domain, { permissions: permissions as any })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+  received.length = 0
+
+  // Start request 1 (in-flight)
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls).toBe(1)
+  expect(resolveSnapshot).toBeDefined()
+
+  // Permission mode changes while in flight
+  permMode = 'auto'
+  for (const listener of permListeners) {
+    listener({ ...getDefaultAppState().toolPermissionContext, mode: 'auto' as any })
+  }
+  await flush()
+
+  // Resolve request 1 with stale data
+  const STALE_BREAKDOWN = { ...BREAKDOWN, usedTokens: 11_000 }
+  resolveSnapshot!(STALE_BREAKDOWN)
+  await flush()
+
+  // Stale snapshot must NOT be broadcast
+  expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
+
+  // Next request runs fresh analysis
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls).toBe(2)
+
+  const FRESH_BREAKDOWN = { ...BREAKDOWN, usedTokens: 22_000 }
+  resolveSnapshot!(FRESH_BREAKDOWN)
+  await flush()
+
+  const snapshotFrame = received.find(f => f.kind === 'context-breakdown.snapshot') as Extract<
+    ServerFrame,
+    { kind: 'context-breakdown.snapshot' }
+  >
+  expect(snapshotFrame).toBeDefined()
+  expect(snapshotFrame.breakdown).toEqual(FRESH_BREAKDOWN)
+})
+
+test('in-flight breakdown analysis is discarded if idle editFromMessage succeeds before it resolves', async () => {
+  let calls = 0
+  let resolveSnapshot: ((val: ContextBreakdownSnapshot) => void) | null = null
+  const domain: SidecarContextBreakdownDomain = {
+    snapshot: async () => {
+      calls++
+      return new Promise<ContextBreakdownSnapshot>(resolve => {
+        resolveSnapshot = resolve
+      })
+    },
+  }
+  const sessionActions = {
+    selectUserMessage: (_id: string) => ({ ok: true as const, selectedPrompt: 'hello' }),
+    editFromMessage: async (_id: string) => ({ ok: true as const, retainedMessages: [] }),
+    branchFromMessage: async () => ({ ok: true as const, forkedSessionId: 'fork-1' }),
+  }
+
+  const server = makeServer(domain, {
+    sessionActions: sessionActions as any,
+    projectHistory: async () => ({ history: [], truncated: false }),
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+  received.length = 0
+
+  // Start request 1 (in-flight)
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-1' }),
+  )
+  await flush()
+  expect(calls).toBe(1)
+  expect(resolveSnapshot).toBeDefined()
+
+  // Idle editFromMessage succeeds while request 1 is in-flight
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-1',
+      userMessageId: '11111111-2222-3333-4444-555555555555',
+    }),
+  )
+  await flush()
+
+  // Resolve request 1 with stale data
+  const STALE_BREAKDOWN = { ...BREAKDOWN, usedTokens: 12_000 }
+  resolveSnapshot!(STALE_BREAKDOWN)
+  await flush()
+
+  // Stale snapshot must NOT be broadcast
+  expect(received.find(f => f.kind === 'context-breakdown.snapshot')).toBeUndefined()
+
+  // Next request runs fresh analysis
+  server.handleData(
+    connection,
+    clientFrame({ type: 'context-breakdown.request', requestId: 'req-2' }),
+  )
+  await flush()
+  expect(calls).toBe(2)
+
+  const FRESH_BREAKDOWN = { ...BREAKDOWN, usedTokens: 24_000 }
+  resolveSnapshot!(FRESH_BREAKDOWN)
+  await flush()
+
+  const snapshotFrame = received.find(f => f.kind === 'context-breakdown.snapshot') as Extract<
+    ServerFrame,
+    { kind: 'context-breakdown.snapshot' }
+  >
+  expect(snapshotFrame).toBeDefined()
+  expect(snapshotFrame.breakdown).toEqual(FRESH_BREAKDOWN)
+})
+
+test('idle edit succeeds -> projection fails -> renderer breakdown becomes unavailable', async () => {
+  const { domain } = countingDomain()
+  const sessionActions = {
+    selectUserMessage: (_id: string) => ({ ok: true as const, selectedPrompt: 'hello' }),
+    editFromMessage: async (_id: string) => ({ ok: true as const, retainedMessages: [] }),
+    branchFromMessage: async () => ({ ok: true as const, forkedSessionId: 'fork-1' }),
+  }
+
+  const server = makeServer(domain, {
+    sessionActions: sessionActions as any,
+    projectHistory: async () => {
+      throw new Error('History projection failed')
+    },
+  })
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await flush()
+
+  // Renderer state begins with a cached breakdown for this session
+  let rendererState = reduceContextBreakdownState(createContextBreakdownState(), {
+    type: 'frame',
+    frame: {
+      kind: 'context-breakdown.snapshot',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION as SessionId,
+      breakdown: BREAKDOWN,
+    },
+  })
+  expect(selectContextBreakdown(rendererState, SESSION as SessionId)).toEqual(BREAKDOWN)
+
+  received.length = 0
+
+  // Idle editFromMessage succeeds in engine, but projectHistory throws
+  server.handleData(
+    connection,
+    clientFrame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-fail-proj',
+      userMessageId: '11111111-2222-3333-4444-555555555555',
+    }),
+  )
+  await flush()
+
+  // Sidecar must broadcast transcript.reset before refusing
+  const resetFrame = received.find(f => f.kind === 'transcript.reset')
+  expect(resetFrame).toBeDefined()
+
+  const actionResultFrame = received.find(
+    f => f.kind === 'session-action.result' && f.verb === 'editFromMessage',
+  ) as Extract<ServerFrame, { kind: 'session-action.result' }> | undefined
+  expect(actionResultFrame).toBeDefined()
+  expect(actionResultFrame?.ok).toBe(false)
+
+  // Pass all broadcast frames to the renderer state
+  for (const f of received) {
+    rendererState = reduceContextBreakdownState(rendererState, {
+      type: 'frame',
+      frame: f,
+    })
+  }
+
+  // Renderer breakdown state is now cleared (unavailable)
+  expect(selectContextBreakdown(rendererState, SESSION as SessionId)).toBeNull()
 })

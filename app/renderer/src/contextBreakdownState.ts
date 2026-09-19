@@ -67,6 +67,18 @@ export function reduceContextBreakdownState(
     }
   }
 
+  if (
+    frame.kind === 'session-action.result' &&
+    frame.verb === 'editFromMessage' &&
+    frame.ok
+  ) {
+    if (!(frame.sessionId in state.sessions)) return state
+    return {
+      ...state,
+      sessions: { ...state.sessions, [frame.sessionId]: null },
+    }
+  }
+
   if (frame.kind === 'event') {
     if (frame.event.type === 'turn.status') {
       if (!(frame.sessionId in state.sessions)) return state
@@ -180,7 +192,9 @@ export function selectContextBreakdown(
 
 /**
  * One legend row, ready to paint: the engine's label and token count plus the
- * static Tailwind classes for its swatch and bar segment.
+/**
+ * One legend row, ready to paint: the engine's label and token count plus the
+ * static Tailwind class for its swatch.
  *
  * Tailwind v4 dynamic-class trap: the engine ships a terminal theme key
  * (`promptBorder`, `cyan_FOR_SUBAGENTS_ONLY`, …) which has no meaning in the
@@ -190,18 +204,8 @@ export function selectContextBreakdown(
 export type ContextBreakdownRow = {
   label: string
   tokens: number
-  /** Static `bg-*` class for the swatch + its stacked-bar segment. */
+  /** Static `bg-*` class for the category swatch. */
   swatch: string
-  /** Same hue as `swatch`, as a raw value for the donut chart's SVG `stroke`
-   * attribute (an SVG presentation attribute, not a Tailwind class, so it
-   * carries no dynamic-class risk). */
-  colorHex: string
-  /** Same hue again as a static `text-*` class, for the donut's center readout
-   * while this category is hovered. A class rather than an inline colour so the
-   * center number is styled the same way every other label on the panel is. */
-  textClass: string
-  /** Share of the window, 0–100, for the segment's width. */
-  percentOfWindow: number
 }
 
 /**
@@ -234,44 +238,7 @@ const CATEGORY_SWATCH: Record<string, string> = {
   warning: 'bg-[light-dark(#a35f00,#fbbf24)]', // Skills
 }
 
-/** The same hues as {@link CATEGORY_SWATCH}, as raw values for the donut
- * chart's SVG `stroke` (never derived from the class string — that would
- * mean parsing a Tailwind literal back apart, fragile for no reason when the
- * source hex is right here).
- *
- * ALL THREE TABLES CARRY THE SAME PAIR PER KEY, and that is the point: the
- * legend dot, the donut arc and the label are one row of one legend, so a table
- * that moved to light values without the others would draw a dot in a different
- * colour from its own text. The light halves step the 400-level dark hues to
- * 600/700, because a 400 measures around 2.5:1 on a near-white ground. */
-const CATEGORY_COLOR_HEX: Record<string, string> = {
-  promptBorder: 'light-dark(#52525b, #a1a1aa)',
-  inactive: 'light-dark(#2563eb, #60a5fa)',
-  purple_FOR_SUBAGENTS_ONLY: 'light-dark(#bb3e84, #f472b6)',
-  claude: 'light-dark(#7c3aed, #c084fc)',
-  cyan_FOR_SUBAGENTS_ONLY: 'light-dark(#0e7490, #22d3ee)',
-  permission: 'light-dark(#0f766e, #5eead4)',
-  warning: 'light-dark(#a35f00, #fbbf24)',
-}
-
-/** The same pairs once more as static `text-*` classes (see `textClass`). Written
- * out rather than derived from {@link CATEGORY_SWATCH} for the same reason
- * {@link CATEGORY_COLOR_HEX} is: `bg-` → `text-` string surgery on a Tailwind
- * literal is fragile, and the source hex is right here. */
-const CATEGORY_TEXT: Record<string, string> = {
-  promptBorder: 'text-[light-dark(#52525b,#a1a1aa)]',
-  inactive: 'text-[light-dark(#2563eb,#60a5fa)]',
-  purple_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#bb3e84,#f472b6)]',
-  claude: 'text-[light-dark(#7c3aed,#c084fc)]',
-  cyan_FOR_SUBAGENTS_ONLY: 'text-[light-dark(#0e7490,#22d3ee)]',
-  permission: 'text-[light-dark(#0f766e,#5eead4)]',
-  warning: 'text-[light-dark(#a35f00,#fbbf24)]',
-}
-
 const FALLBACK_SWATCH = 'bg-white/25'
-const FALLBACK_COLOR_HEX =
-  'light-dark(rgba(9,9,11,0.28), rgba(255,255,255,0.25))'
-const FALLBACK_TEXT = 'text-white/25'
 
 /**
  * Categories that are RESERVED space rather than a content type. The engine reuses
@@ -338,31 +305,5 @@ export function selectBreakdownRows(
       swatch: RESERVED_CATEGORY_LABELS.has(category.label)
         ? FALLBACK_SWATCH
         : (CATEGORY_SWATCH[category.colorKey] ?? FALLBACK_SWATCH),
-      colorHex: RESERVED_CATEGORY_LABELS.has(category.label)
-        ? FALLBACK_COLOR_HEX
-        : (CATEGORY_COLOR_HEX[category.colorKey] ?? FALLBACK_COLOR_HEX),
-      textClass: RESERVED_CATEGORY_LABELS.has(category.label)
-        ? FALLBACK_TEXT
-        : (CATEGORY_TEXT[category.colorKey] ?? FALLBACK_TEXT),
-      percentOfWindow: Math.min(
-        100,
-        (category.tokens / snapshot.contextWindow) * 100,
-      ),
     }))
-}
-
-/**
- * Unoccupied window (`freeTokens`), passed through from the snapshot.
- *
- * Note: the composer's context popover derives capacity rows independently from
- * reported usage and engine thresholds. This helper is retained for compatibility.
- */
-export function selectFreeTokens(
-  snapshot: ContextBreakdownSnapshot | null,
-): number | null {
-  if (!snapshot || snapshot.freeTokens == null) return null
-  // A collapsed analysis reports a `Free` that contradicts the header; suppress
-  // it with the rows it belongs to.
-  if (!isBreakdownTrustworthy(snapshot)) return null
-  return Math.max(0, snapshot.freeTokens)
 }

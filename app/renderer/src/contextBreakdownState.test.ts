@@ -5,7 +5,6 @@ import {
   reduceContextBreakdownState,
   selectBreakdownRows,
   selectContextBreakdown,
-  selectFreeTokens,
 } from './contextBreakdownState.js'
 import type {
   ContextBreakdownSnapshot,
@@ -93,26 +92,6 @@ test('an unknown colour key falls back to a static swatch class', () => {
   }
 })
 
-test('segment widths are a share of the window, not of the used total', () => {
-  const rows = selectBreakdownRows(BREAKDOWN)
-  const systemPrompt = rows.find(r => r.label === 'System prompt')
-  expect(systemPrompt?.percentOfWindow).toBeCloseTo((4_200 / 200_000) * 100, 6)
-})
-
-// `Free` is the engine's own `Free space` category, passed through the wire —
-// NOT `contextWindow - usedTokens`, which is a different basis (usedTokens is the
-// API fresh-input count when one exists, the segments are estimates).
-test('free space is the engine remainder, never negative, null when absent', () => {
-  expect(selectFreeTokens(BREAKDOWN)).toBe(185_500)
-  // A changed usedTokens must NOT move Free — that was the old subtraction bug.
-  // Kept within the trust guard's range: a usedTokens far above what the
-  // categories account for is, by definition, a collapsed analysis.
-  expect(selectFreeTokens({ ...BREAKDOWN, usedTokens: 20_000 })).toBe(185_500)
-  expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: -5 })).toBe(0)
-  expect(selectFreeTokens({ ...BREAKDOWN, freeTokens: null })).toBeNull()
-  expect(selectFreeTokens(null)).toBeNull()
-})
-
 test('no snapshot yields no rows (the popover keeps its aggregate row alone)', () => {
   expect(selectBreakdownRows(null)).toEqual([])
 })
@@ -133,10 +112,9 @@ const COLLAPSED: ContextBreakdownSnapshot = {
   model: 'gpt-5.6-terra',
 }
 
-test('a collapsed analysis renders no rows and no Free, rather than a wrong panel', () => {
+test('a collapsed analysis renders no rows, rather than a wrong panel', () => {
   expect(isBreakdownTrustworthy(COLLAPSED)).toBe(false)
   expect(selectBreakdownRows(COLLAPSED)).toEqual([])
-  expect(selectFreeTokens(COLLAPSED)).toBeNull()
 })
 
 test('a complete analysis is trusted even when the estimate undershoots the header', () => {
@@ -392,6 +370,71 @@ test('permission.context with identical mode retains the cached snapshot', () =>
       protocolVersion: 2,
       sessionId: SID,
       context: { mode: 'ask' },
+    } as unknown as ServerFrame,
+  })
+  expect(selectContextBreakdown(state, SID)).toEqual(BREAKDOWN)
+})
+
+test('valid Plan-mode runtime-model differences between breakdown and run-controls are accepted', () => {
+  let state = reduceContextBreakdownState(createContextBreakdownState(), {
+    type: 'frame',
+    frame: {
+      kind: 'run-controls.snapshot',
+      protocolVersion: 2,
+      sessionId: SID,
+      runControls: {
+        model: { current: 'claude-3-5-haiku', selected: 'claude-3-5-haiku', contextWindow: 200_000 },
+      },
+    } as unknown as ServerFrame,
+  })
+
+  const planBreakdown: ContextBreakdownSnapshot = {
+    ...BREAKDOWN,
+    model: 'claude-3-5-sonnet',
+  }
+  state = reduceContextBreakdownState(state, {
+    type: 'frame',
+    frame: frame(planBreakdown),
+  })
+
+  expect(selectContextBreakdown(state, SID)).toEqual(planBreakdown)
+})
+
+test('successful editFromMessage session-action.result drops the cached snapshot', () => {
+  let state = reduceContextBreakdownState(createContextBreakdownState(), {
+    type: 'frame',
+    frame: frame(BREAKDOWN),
+  })
+  expect(selectContextBreakdown(state, SID)).toEqual(BREAKDOWN)
+
+  state = reduceContextBreakdownState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'session-action.result',
+      protocolVersion: 2,
+      sessionId: SID,
+      verb: 'editFromMessage',
+      ok: true,
+    } as unknown as ServerFrame,
+  })
+  expect(selectContextBreakdown(state, SID)).toBeNull()
+})
+
+test('failed editFromMessage session-action.result retains the cached snapshot', () => {
+  let state = reduceContextBreakdownState(createContextBreakdownState(), {
+    type: 'frame',
+    frame: frame(BREAKDOWN),
+  })
+  expect(selectContextBreakdown(state, SID)).toEqual(BREAKDOWN)
+
+  state = reduceContextBreakdownState(state, {
+    type: 'frame',
+    frame: {
+      kind: 'session-action.result',
+      protocolVersion: 2,
+      sessionId: SID,
+      verb: 'editFromMessage',
+      ok: false,
     } as unknown as ServerFrame,
   })
   expect(selectContextBreakdown(state, SID)).toEqual(BREAKDOWN)

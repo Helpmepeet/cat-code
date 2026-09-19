@@ -3550,10 +3550,26 @@ export class SidecarServer {
           !result.retainedMessages ||
           !this.projectHistory
         ) {
+          this.history = []
+          this.historySourceTruncated = true
+          this.broadcastTranscriptReset()
           refuse('Conversation history could not be rebuilt after editing.')
           return
         }
-        const projected = await this.projectHistory(result.retainedMessages)
+        let projected: { history: SDKMessage[]; truncated: boolean }
+        try {
+          projected = await this.projectHistory(result.retainedMessages)
+        } catch (error) {
+          this.history = []
+          this.historySourceTruncated = true
+          this.broadcastTranscriptReset()
+          refuse(
+            error instanceof Error
+              ? error.message
+              : 'Conversation history could not be rebuilt after editing.',
+          )
+          return
+        }
         this.history = projected.history
         this.historySourceTruncated = projected.truncated
         this.broadcastTranscriptResetAndReplay()
@@ -3608,6 +3624,16 @@ export class SidecarServer {
         this.inFlightDurableWrites -= 1
         this.scheduleBoundaryDrain()
       })
+  }
+
+  private broadcastTranscriptReset(): void {
+    for (const connection of this.connections) {
+      this.send(connection, {
+        kind: 'transcript.reset',
+        protocolVersion: PROTOCOL_VERSION,
+        sessionId: this.sessionId,
+      })
+    }
   }
 
   private broadcastTranscriptResetAndReplay(): void {

@@ -515,6 +515,34 @@ test('an injected buffer is used (cap/retention delegated to FrameReplayBuffer)'
   expect(out[2]).toMatchObject({ nonce: 'b' })
 })
 
+test('context-breakdown.snapshot is forwarded live when attached and excluded from reload replay', () => {
+  const gate = new AttachmentGate()
+  gate.onFrame(SID, readyFrame())
+  gate.onRendererReady()
+  expect(gate.isAttached).toBe(true)
+
+  const breakdownFrame: ServerFrame = {
+    kind: 'context-breakdown.snapshot',
+    protocolVersion: PROTOCOL_VERSION,
+    sessionId: SID,
+    breakdown: {
+      model: 'claude-3-5-sonnet',
+      contextWindow: 200_000,
+      usedTokens: 50_000,
+      freeTokens: 150_000,
+      categories: [],
+    },
+  }
+
+  const delivered = gate.onFrame(SID, breakdownFrame)
+  expect(delivered).toEqual([breakdownFrame])
+
+  gate.onNavigationStart()
+  const replayed = gate.onRendererReady()
+  expect(replayed.some(f => f.kind === 'context-breakdown.snapshot')).toBe(false)
+  expect(replayed.some(f => f.kind === 'ready')).toBe(true)
+})
+
 function serializedBytes(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength
 }
