@@ -321,8 +321,24 @@ is not established; partial retained observations remain explicitly partial.
 Pre-capability, older, and unsupported transcript intervals are unavailable, not
 measured zeroes. Rechecks are non-counting.
 
-Counting version 10 and `index-v6.sqlite` invalidate older summary/index
+Counting version 11 and `index-v7.sqlite` invalidate older summary/index
 projections so retained auto-mode metadata is reconstructed from transcripts.
 The Usage section presents only the fixed four chart scopes: Decision flow,
 Command block rate, Decisions over time, and Block reasons. No new inbound
 operation, renderer-authored rule, or raw-content boundary is introduced.
+
+### Historical partial reconstruction, 2026-09-19
+
+The operator requested a conservative reconstruction from retained pre-contract
+transcripts. A historical adapter uses `run_facts.permissionMode`, tool-use IDs
+and names, and exact code-owned Auto mode denial/unavailable result prefixes.
+It projects only normalized outcome enums; result text, tool input, commands,
+classifier content, and free-form reasons never enter the index.
+
+Exact classifier denials become Policy-blocked, exact unavailable failures become
+Operational error, and other correlated Auto mode attempts become Unknown outcome
+or Incomplete. Their route is Unknown and policy blocks are Uncategorized.
+Historical sources are always Partial, so reconstructed attempts can populate
+observed flow and count charts but cannot publish a confirmed historical command
+block rate. Structured Start/Stage/End observations supersede this fallback for
+the same tool-use ID.
