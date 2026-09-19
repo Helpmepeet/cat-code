@@ -321,7 +321,7 @@ is not established; partial retained observations remain explicitly partial.
 Pre-capability, older, and unsupported transcript intervals are unavailable, not
 measured zeroes. Rechecks are non-counting.
 
-Counting version 11 and `index-v7.sqlite` invalidate older summary/index
+Counting version 12 and `index-v8.sqlite` invalidate older summary/index
 projections so retained auto-mode metadata is reconstructed from transcripts.
 The Usage section presents only the fixed four chart scopes: Decision flow,
 Command block rate, Decisions over time, and Block reasons. No new inbound
@@ -342,3 +342,8 @@ Historical sources are always Partial, so reconstructed attempts can populate
 observed flow and count charts but cannot publish a confirmed historical command
 block rate. Structured Start/Stage/End observations supersede this fallback for
 the same tool-use ID.
+
+Newly materialized main and agent transcripts write a bounded capability marker
+before their first transcript message. That marker proves the observation path
+was available for the source's entire retained interval, including zero-attempt
+periods. A resumed older source remains Partial before its first marker.
