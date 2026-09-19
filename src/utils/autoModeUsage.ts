@@ -59,6 +59,37 @@ export type ProjectedAutoModeDiagnosticPayload =
       subtype: 'auto_permission_invalid'
     }>
 
+export type HistoricalAutoModeOutcome =
+  | 'policy_blocked'
+  | 'operational_error'
+
+const AUTO_MODE_POLICY_DENIAL_PREFIX =
+  'Permission for this action has been denied. Reason: '
+const AUTO_MODE_UNAVAILABLE_PREFIX = 'The auto mode classifier request using '
+const AUTO_MODE_UNAVAILABLE_MARKER =
+  ' is temporarily unavailable, so auto mode cannot determine the safety of '
+
+/**
+ * Recognizes only code-owned Auto mode result text that predates structured
+ * permission observations. The returned enum is safe to index; raw result text
+ * is never retained.
+ */
+export function classifyHistoricalAutoModeToolResult(
+  content: unknown,
+): HistoricalAutoModeOutcome | null {
+  if (typeof content !== 'string') return null
+  if (content.startsWith(AUTO_MODE_POLICY_DENIAL_PREFIX)) {
+    return 'policy_blocked'
+  }
+  if (
+    content.startsWith(AUTO_MODE_UNAVAILABLE_PREFIX) &&
+    content.includes(AUTO_MODE_UNAVAILABLE_MARKER)
+  ) {
+    return 'operational_error'
+  }
+  return null
+}
+
 export type AutoModeCommandRate = Readonly<{
   numerator: number
   denominator: number

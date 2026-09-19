@@ -5,12 +5,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { getClaudeConfigHomeDir } from './envUtils.js';
 import { readStatsRecords, type StatsReadQuality } from './statsReader.js';
 import { collectRetainedUsage, UsageResourceError, type UsageIdentityStore } from './statsUsage.js';
-import { projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
+import { classifyHistoricalAutoModeToolResult, projectAutoModeDiagnosticPayload } from './autoModeUsage.js';
 import type { UsageDashboardSnapshot } from '../../app/shared/usageDashboard.js';
 import { parseUsageCollectionResult } from '../../app/shared/usageStatsWorker.js';
 
 // Rebuildable derived state, separate from the engine's legacy statistics cache.
-export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v6.sqlite');
+export const usageIndexPath = () => join(getClaudeConfigHomeDir(), 'usage-dashboard', 'index-v7.sqlite');
 const fingerprint = (s: Awaited<ReturnType<typeof stat>>) => JSON.stringify([s.dev, s.ino, s.size, s.mtimeMs, s.ctimeMs, s.birthtimeMs]);
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 /** Persist only fields needed for accounting, never prompts, responses or tool inputs. */
@@ -31,10 +31,15 @@ function projectRecord(v: unknown): unknown {
         if (Array.isArray(m.content)) message.content = m.content.map(b => object(b) && b.type === 'tool_use' ? { type: b.type, id: typeof b.id === 'string' ? b.id : undefined, name: typeof b.name === 'string' ? b.name : undefined } : null);
         row.message = message;
     }
+    if (v.type === 'user' && typeof v.permissionMode === 'string')
+        row.permissionMode = v.permissionMode === 'auto' ? 'auto' : 'other';
     if (v.type === 'user' && object(v.message) && Array.isArray(v.message.content)) {
         row.message = { content: v.message.content.map(b => object(b) && b.type === 'tool_result'
             ? { type: b.type, tool_use_id: typeof b.tool_use_id === 'string' ? b.tool_use_id : undefined,
-                is_error: b.is_error === undefined || typeof b.is_error === 'boolean' ? b.is_error : 'invalid' }
+                is_error: b.is_error === undefined || typeof b.is_error === 'boolean' ? b.is_error : 'invalid',
+                historical_auto_mode_outcome: b.is_error === true
+                    ? classifyHistoricalAutoModeToolResult(b.content) ?? undefined
+                    : undefined }
             : null) };
     }
     if (v.type === 'system' && typeof v.subtype === 'string') {
@@ -42,6 +47,11 @@ function projectRecord(v: unknown): unknown {
         if (autoMode !== null) {
             row.subtype = 'auto_mode_observation';
             row.auto_mode = autoMode;
+            return row;
+        }
+        if (v.subtype === 'run_facts' && typeof v.permissionMode === 'string') {
+            row.subtype = 'run_facts';
+            row.permissionMode = v.permissionMode === 'auto' ? 'auto' : 'other';
             return row;
         }
         const fields: Record<string, readonly string[]> = {

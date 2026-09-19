@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { appendFile, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -80,7 +80,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   transcript = getTranscriptPathForSession(sessionId)
   await writeOrdinaryAssistantRow(sessionId)
 
-  const indexPath = join(root, 'index-v6.sqlite')
+  const indexPath = join(root, 'index-v7.sqlite')
   const indexOptions = { path: indexPath, deadline: Date.now() + 60_000 }
   const before = await collectIndexedUsage([transcript], new Date().toISOString(), indexOptions)
   const beforeRange = before.ranges['7d']
@@ -201,4 +201,81 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   expect(malformedRange.sessions).toBe(beforeRange.sessions)
   expect(malformedRange.records).toBe(beforeRange.records)
   expect(malformedRange.timing).toEqual(beforeRange.timing)
+})
+
+test('reconstructs retained historical Auto mode evidence as partial observed data', async () => {
+  root = await mkdtemp(join(tmpdir(), 'auto-mode-usage-history-'))
+  transcript = join(root, 'history.jsonl')
+  const indexPath = join(root, 'index-v7.sqlite')
+  const asOf = '2026-09-13T12:00:00.000Z'
+  await writeFile(transcript, [
+    {
+      type: 'system',
+      subtype: 'run_facts',
+      uuid: 'mode',
+      timestamp: '2026-09-13T09:00:00.000Z',
+      permissionMode: 'auto',
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant',
+      timestamp: '2026-09-13T09:01:00.000Z',
+      message: {
+        id: 'assistant',
+        model: 'fixture-model',
+        usage: { input_tokens: 1, output_tokens: 1 },
+        content: [
+          { type: 'tool_use', id: 'blocked-tool', name: 'Bash' },
+          { type: 'tool_use', id: 'unknown-tool', name: 'Bash' },
+        ],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'blocked-result',
+      timestamp: '2026-09-13T09:01:01.000Z',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'blocked-tool',
+          is_error: true,
+          content: 'Permission for this action has been denied. Reason: fixture policy',
+        }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'unknown-result',
+      timestamp: '2026-09-13T09:01:02.000Z',
+      message: {
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'unknown-tool',
+          content: 'ordinary result',
+        }],
+      },
+    },
+  ].map(row => JSON.stringify(row)).join('\n'))
+
+  const produced = fitUsageDashboardSnapshot(await collectIndexedUsage(
+    [transcript],
+    asOf,
+    { path: indexPath, deadline: Date.now() + 60_000 },
+  ))
+  const parsed = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: produced })
+  expect(parsed).not.toBeNull()
+  const autoMode = parsed!.snapshot.ranges['7d'].autoMode
+  expect(autoMode.allTools.coverage.state).toBe('partial')
+  expect(autoMode.commands.outcomes).toMatchObject({
+    policy_blocked: 1,
+    unknown_outcome: 1,
+  })
+  expect(autoMode.categories).toEqual([
+    { key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: 1 },
+  ])
+  const html = renderToStaticMarkup(<UsageAutoMode summary={parsed!.snapshot.ranges['7d']}/>)
+  expect(html).toContain('Partial retained history')
+  expect(html).toContain('Policy blocked')
+  expect(html).toContain('Uncategorized')
+  expect(html).toContain('Command block rate is unavailable because complete command coverage is not retained for this period.')
 })

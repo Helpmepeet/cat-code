@@ -1,12 +1,26 @@
 import { expect, test } from 'bun:test'
 import {
   autoModeCommandRate,
+  classifyHistoricalAutoModeToolResult,
   projectAutoModeDiagnosticPayload,
   reduceAutoModeUsage,
   type AutoModeUsageSource,
   type RetainedAutoModeRecord,
 } from './autoModeUsage.js'
 import { hundredAttemptAutoModeFixture } from './autoModeUsage.fixture.js'
+
+test('classifies only code-owned historical Auto mode result text', () => {
+  expect(classifyHistoricalAutoModeToolResult(
+    'Permission for this action has been denied. Reason: policy rule',
+  )).toBe('policy_blocked')
+  expect(classifyHistoricalAutoModeToolResult(
+    'The auto mode classifier request using model is temporarily unavailable, so auto mode cannot determine the safety of Bash right now.',
+  )).toBe('operational_error')
+  expect(classifyHistoricalAutoModeToolResult(
+    'Tool output quoted: Permission for this action has been denied. Reason: policy rule',
+  )).toBeNull()
+  expect(classifyHistoricalAutoModeToolResult({ content: 'not text' })).toBeNull()
+})
 
 const source: AutoModeUsageSource = {
   sourceScope: 'source',

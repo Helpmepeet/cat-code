@@ -9,11 +9,18 @@ import { getConfiguredStandardModelCosts } from './modelCostRates.js';
 import { MAX_USAGE_ALL_BUCKETS, MAX_USAGE_TIMELINE_EVENTS, USAGE_PRICING_VERSION, usageProjectId, type UsageTokenCostEstimate } from '../../app/shared/usageDashboard.js';
 import { summarizeUsageTiming, unavailableUsageTiming, type MeasuredModelAttempt, type MeasuredToolExecution } from './usageTiming.js';
 import {
+    classifyHistoricalAutoModeToolResult,
     projectAutoModeDiagnosticPayload,
     reduceAutoModeUsage,
+    type HistoricalAutoModeOutcome,
     type AutoModeUsageSource,
     type RetainedAutoModeRecord,
 } from './autoModeUsage.js';
+import {
+    AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+    MAX_AUTO_MODE_OBSERVATION_ID_BYTES,
+    type AutoModeToolKind,
+} from './permissions/autoModeObservation.js';
 export const MAX_USAGE_IDENTITIES = 250000;
 export const MAX_USAGE_STATE_BYTES = 64 * 1024 * 1024;
 export const USAGE_COLLECTION_TIMEOUT_MS = 120000;
@@ -90,6 +97,70 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             observedThrough: previous.observedThrough === undefined || observedAt > previous.observedThrough
                 ? observedAt
                 : previous.observedThrough,
+        });
+    };
+    type HistoricalResult = {
+        observedAt: string;
+        recordId: string;
+        outcome: HistoricalAutoModeOutcome | null;
+    };
+    type HistoricalCandidate = {
+        toolUseId: string;
+        toolKind: AutoModeToolKind;
+        observedAt: string;
+        recordId: string;
+        autoAtStart: boolean;
+        result?: HistoricalResult;
+    };
+    type HistoricalSourceState = {
+        mode: 'auto' | 'other' | 'unknown';
+        candidates: Map<string, HistoricalCandidate>;
+        pendingResults: Map<string, HistoricalResult>;
+        structuredToolUses: Set<string>;
+        executedToolUses: Set<string>;
+    };
+    const historicalSources = new Map<string, HistoricalSourceState>();
+    const historicalSource = (file: string): HistoricalSourceState => {
+        let state = historicalSources.get(file);
+        if (!state) {
+            state = {
+                mode: 'unknown',
+                candidates: new Map(),
+                pendingResults: new Map(),
+                structuredToolUses: new Set(),
+                executedToolUses: new Set(),
+            };
+            historicalSources.set(file, state);
+        }
+        return state;
+    };
+    const boundedObservationId = (value: unknown): value is string =>
+        typeof value === 'string' &&
+        value.length > 0 &&
+        new TextEncoder().encode(value).byteLength <= MAX_AUTO_MODE_OBSERVATION_ID_BYTES;
+    const historicalToolKind = (name: string | null): AutoModeToolKind =>
+        name === 'Bash' ? 'bash' : name === 'PowerShell' ? 'powershell' : 'other';
+    const historicalRecordId = (...parts: string[]): string =>
+        createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+    const setHistoricalResult = (
+        current: HistoricalResult | undefined,
+        next: HistoricalResult,
+    ): HistoricalResult => {
+        if (!current || current.outcome === next.outcome) return current ?? next;
+        return {
+            observedAt: current.observedAt < next.observedAt ? current.observedAt : next.observedAt,
+            recordId: historicalRecordId(current.recordId, next.recordId, 'conflict'),
+            outcome: null,
+        };
+    };
+    const markHistoricalSource = (file: string): void => {
+        const sourceScope = autoModeSourceScope(file);
+        const previous = autoModeSources.get(sourceScope)!;
+        if (previous.supportedFrom !== undefined) return;
+        autoModeSources.set(sourceScope, {
+            ...previous,
+            allTools: 'partial',
+            commands: 'partial',
         });
     };
     let identities = 0, stateBytes = 0;
@@ -250,6 +321,68 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             }
         }
     };
+    const finalizeHistoricalSource = (file: string): void => {
+        const state = historicalSources.get(file);
+        if (!state) return;
+        const sourceScope = autoModeSourceScope(file);
+        for (const candidate of state.candidates.values()) {
+            if (state.structuredToolUses.has(candidate.toolUseId)) continue;
+            const provenAuto =
+                candidate.autoAtStart || candidate.result?.outcome !== null &&
+                candidate.result?.outcome !== undefined;
+            if (!provenAuto) continue;
+            reserve(`historical-auto:${sourceScope}:${candidate.toolUseId}`, 512);
+            markHistoricalSource(file);
+            const attemptId = historicalRecordId(sourceScope, candidate.toolUseId, 'attempt');
+            autoModeRecords.push({
+                sourceScope,
+                recordId: historicalRecordId(candidate.recordId, 'start'),
+                observedAt: candidate.observedAt,
+                diagnosticKind: 'auto_mode_observation',
+                payload: {
+                    subtype: 'auto_permission_start',
+                    schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+                    attempt_id: attemptId,
+                    tool_use_id: candidate.toolUseId,
+                    tool_kind: candidate.toolKind,
+                    auto_mode: 'auto',
+                    initial: true,
+                },
+            });
+            if (!candidate.result) continue;
+            const terminal = candidate.result.outcome === 'policy_blocked'
+                ? {
+                    subtype: 'auto_permission_end' as const,
+                    schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+                    attempt_id: attemptId,
+                    raw_result: 'deny' as const,
+                    disposition: 'policy_blocked' as const,
+                    route: 'unknown' as const,
+                }
+                : candidate.result.outcome === 'operational_error'
+                    ? {
+                        subtype: 'auto_permission_end' as const,
+                        schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
+                        attempt_id: attemptId,
+                        raw_result: 'deny' as const,
+                        disposition: 'operational_error' as const,
+                        route: 'unknown' as const,
+                        cause: 'unavailable' as const,
+                    }
+                    : {
+                        subtype: 'auto_permission_end' as const,
+                        attempt_id: attemptId,
+                    };
+            autoModeRecords.push({
+                sourceScope,
+                recordId: historicalRecordId(candidate.result.recordId, 'end'),
+                observedAt: candidate.result.observedAt,
+                diagnosticKind: 'auto_mode_observation',
+                payload: terminal,
+            });
+        }
+        historicalSources.delete(file);
+    };
     const readOne = async (file: string, item: StatsRecord) => {
         if (Date.now() > deadline)
             throw new Error('Usage collection timeout');
@@ -282,6 +415,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     payload: autoModePayload,
                 });
                 if (autoModePayload.subtype === 'auto_permission_start') {
+                    historicalSource(file).structuredToolUses.add(autoModePayload.tool_use_id);
                     const previous = autoModeSources.get(sourceScope);
                     const supportedFrom =
                         previous?.supportedFrom === undefined ||
@@ -326,6 +460,18 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!alreadyRecorded) {
             reserveIdentity(recordId);
             recordIds.add(recordId);
+            const historical = historicalSource(file);
+            if (row.type === 'system' && row.subtype === 'run_facts' && typeof row.permissionMode === 'string') {
+                historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
+            } else if (
+                row.type === 'system' &&
+                row.subtype === 'tool_execution_start' &&
+                boundedObservationId(row.tool_use_id)
+            ) {
+                historical.executedToolUses.add(row.tool_use_id);
+            } else if (row.type === 'user' && typeof row.permissionMode === 'string') {
+                historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
+            }
         }
         const eligibleStates = states.filter(s => usageTimestampEligible(timestamp, s.start, s.end, cutoff));
         const date = new Date(timestamp).toISOString().slice(0, 10);
@@ -440,8 +586,44 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             return;
         }
         if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
-            for (const block of row.message.content) {
+            for (const [index, block] of row.message.content.entries()) {
                 if (!record(block) || block.type !== 'tool_result' || !nonempty(block.tool_use_id)) continue;
+                if (!alreadyRecorded && boundedObservationId(block.tool_use_id)) {
+                    const historical = historicalSource(file);
+                    const projectedOutcome =
+                        block.historical_auto_mode_outcome === 'policy_blocked' ||
+                        block.historical_auto_mode_outcome === 'operational_error'
+                            ? block.historical_auto_mode_outcome
+                            : null;
+                    const outcome = historical.executedToolUses.has(block.tool_use_id)
+                        ? null
+                        : projectedOutcome ??
+                            (block.is_error === true
+                                ? classifyHistoricalAutoModeToolResult(block.content)
+                                : null);
+                    const historicalResult: HistoricalResult = {
+                        observedAt: row.timestamp as string,
+                        recordId: historicalRecordId(recordId, String(index), 'result'),
+                        outcome,
+                    };
+                    const candidate = historical.candidates.get(block.tool_use_id);
+                    if (candidate) {
+                        candidate.result = setHistoricalResult(candidate.result, historicalResult);
+                    } else {
+                        const previous = historical.pendingResults.get(block.tool_use_id);
+                        if (
+                            !previous &&
+                            historical.pendingResults.size >=
+                                (options.maxIdentities ?? MAX_USAGE_IDENTITIES)
+                        ) {
+                            throw new UsageResourceError('Usage historical result budget exceeded');
+                        }
+                        historical.pendingResults.set(
+                            block.tool_use_id,
+                            setHistoricalResult(previous, historicalResult),
+                        );
+                    }
+                }
                 // Anthropic tool_result omits is_error on success. Invalid flags
                 // are not a known outcome and cannot enter the rate denominator.
                 if (block.is_error !== undefined && typeof block.is_error !== 'boolean') continue;
@@ -466,6 +648,40 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const identified = nonempty(block.id);
                 const key = JSON.stringify([scope, identified ? ['id', block.id] : ['record', recordId, index]]);
                 const name = nonempty(block.name) ? block.name : null;
+                if (!alreadyRecorded && identified && boundedObservationId(block.id)) {
+                    const historical = historicalSource(file);
+                    const pending = historical.pendingResults.get(block.id);
+                    const candidate: HistoricalCandidate = {
+                        toolUseId: block.id,
+                        toolKind: historicalToolKind(name),
+                        observedAt: row.timestamp as string,
+                        recordId: historicalRecordId(recordId, String(index), 'tool-use'),
+                        autoAtStart: historical.mode === 'auto',
+                        ...(pending ? { result: pending } : {}),
+                    };
+                    const previous = historical.candidates.get(block.id);
+                    if (!previous) {
+                        if (
+                            historical.candidates.size >=
+                            (options.maxIdentities ?? MAX_USAGE_IDENTITIES)
+                        ) {
+                            throw new UsageResourceError('Usage historical tool budget exceeded');
+                        }
+                        historical.candidates.set(block.id, candidate);
+                    } else {
+                        previous.autoAtStart ||= candidate.autoAtStart;
+                        if (
+                            previous.toolKind !== candidate.toolKind ||
+                            previous.observedAt !== candidate.observedAt
+                        ) {
+                            previous.toolKind = 'other';
+                        }
+                        if (pending) {
+                            previous.result = setHistoricalResult(previous.result, pending);
+                        }
+                    }
+                    historical.pendingResults.delete(block.id);
+                }
                 const old = toolLedger.get(key);
                 if (old) {
                     if (old.name !== name || old.timestamp !== timestamp)
@@ -616,6 +832,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             if (error instanceof UsageResourceError || options.signal?.aborted || Date.now() > deadline)
                 throw error;
             coverage.readErrors++;
+        }
+        finally {
+            finalizeHistoricalSource(file);
         }
     }
     for (const s of states) {
@@ -817,5 +1036,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             all.summary.autoMode.buckets = [...grouped.values()].sort((left, right) => left.date.localeCompare(right.date));
         }
     }
-    return { version: 1, metricVersion: 1, countingVersion: 10, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 11, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

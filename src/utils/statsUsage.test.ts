@@ -71,6 +71,72 @@ test('auto-permission diagnostics do not enter ordinary retained-usage accountin
     expect(observed.ranges).toEqual(baseline.ranges);
     expect(observed.coverage).toEqual(baseline.coverage);
 });
+test('historical Auto mode records backfill exact outcomes and keep uncertain attempts partial', async () => {
+    const system = (timestamp: string, permissionMode: string) => ({
+        type: 'system', subtype: 'run_facts', uuid: `mode-${timestamp}`, timestamp, permissionMode,
+    });
+    const result = (timestamp: string, toolUseId: string, content: string, is_error = true) => ({
+        type: 'user', uuid: `result-${toolUseId}`, timestamp,
+        message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, is_error, content }] },
+    });
+    const blocked = msg('2026-09-13T09:01:00.000Z', 'blocked-call', 1, 'blocked-tool');
+    const uncertain = msg('2026-09-13T09:02:00.000Z', 'uncertain-call', 1, 'uncertain-tool');
+    const unavailable = msg('2026-09-13T09:03:00.000Z', 'unavailable-call', 1, 'unavailable-tool');
+    unavailable.message.content[0]!.name = 'PowerShell';
+    const nonAuto = msg('2026-09-13T09:04:00.000Z', 'non-auto-call', 1, 'non-auto-tool');
+    const path = await file([
+        system('2026-09-13T09:00:00.000Z', 'auto'),
+        blocked,
+        result('2026-09-13T09:01:01.000Z', 'blocked-tool', 'Permission for this action has been denied. Reason: policy rule'),
+        uncertain,
+        result('2026-09-13T09:02:01.000Z', 'uncertain-tool', 'ordinary result', false),
+        system('2026-09-13T09:02:30.000Z', 'default'),
+        unavailable,
+        result('2026-09-13T09:03:01.000Z', 'unavailable-tool', 'The auto mode classifier request using model is temporarily unavailable, so auto mode cannot determine the safety of PowerShell right now.'),
+        nonAuto,
+        result('2026-09-13T09:04:01.000Z', 'non-auto-tool', 'ordinary result', false),
+    ]);
+    const summary = (await collectRetainedUsage([path], asOf)).ranges['7d'];
+    expect(summary.autoMode.allTools.outcomes).toMatchObject({
+        policy_blocked: 1,
+        operational_error: 1,
+        unknown_outcome: 1,
+        allowed: 0,
+    });
+    expect(summary.autoMode.commands.outcomes).toMatchObject({
+        policy_blocked: 1,
+        operational_error: 1,
+        unknown_outcome: 1,
+    });
+    expect(summary.autoMode.allTools.coverage.state).toBe('partial');
+    expect(summary.autoMode.commands.coverage.state).toBe('partial');
+    expect(summary.autoMode.routes).toEqual([
+        { route: 'unknown', outcome: 'operational_error', count: 1 },
+        { route: 'unknown', outcome: 'policy_blocked', count: 1 },
+        { route: 'unknown', outcome: 'unknown_outcome', count: 1 },
+    ]);
+    expect(summary.autoMode.categories).toEqual([
+        { key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: 1 },
+    ]);
+    expect(summary.requests).toBe(4);
+});
+test('structured permission observations suppress historical fallback for the same tool use', async () => {
+    const request = msg('2026-09-13T10:00:00.000Z', 'request', 1, 'prospective-tool');
+    const path = await file([
+        { type: 'system', subtype: 'run_facts', uuid: 'mode', timestamp: '2026-09-13T09:59:00.000Z', permissionMode: 'auto' },
+        request,
+        { type: 'system', subtype: 'auto_permission_start', uuid: 'start', timestamp: '2026-09-13T10:00:01.000Z', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'prospective-tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
+        { type: 'system', subtype: 'auto_permission_end', uuid: 'end', timestamp: '2026-09-13T10:00:02.000Z', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' },
+        { type: 'user', uuid: 'result', timestamp: '2026-09-13T10:00:03.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'prospective-tool', content: 'ordinary result' }] } },
+    ]);
+    const autoMode = (await collectRetainedUsage([path], asOf)).ranges['7d'].autoMode;
+    expect(autoMode.allTools.outcomes).toMatchObject({
+        allowed: 1,
+        unknown_outcome: 0,
+        incomplete: 0,
+    });
+    expect(autoMode.routes).toEqual([{ route: 'stage1', outcome: 'allowed', count: 1 }]);
+});
 test('cache-write reporting distinguishes measured, unreported, mixed, and unknown records', async () => {
     const openai = msg(asOf, 'openai', 10);
     openai.message.model = 'gpt-5.6-sol';
