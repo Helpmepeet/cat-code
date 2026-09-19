@@ -1,0 +1,2 @@
+.usage-auto-mode { display:grid; gap:16px; margin:16px 0; }
+.usage-auto-mode > * { min-width:0; }

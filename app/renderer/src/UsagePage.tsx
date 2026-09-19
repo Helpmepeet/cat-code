@@ -10,6 +10,7 @@ import { usageBucketDays, usageBucketLabel, usageHasCacheWrites } from './usageT
 import { UsageMetrics } from './UsageMetrics.js';
 import { usageGraphColors } from './usageGraphState.js';
 import { UsageLatencyPanel } from './UsageTiming.js';
+import { UsageAutoMode } from './UsageAutoMode.js';
 import './usageDashboard.css';
 type UsageAccent = 'tokens' | 'cache' | 'sessions' | 'tools';
 function UsageIcon({ kind }: { kind: UsageAccent }) {
@@ -74,6 +75,7 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
      <UsagePanel title="Model usage" accent="sessions"><UsageModelDonut summary={summary} colors={colors}/>{summary.detail.omittedModels > 0 && <p className="usage-note">Other includes {usageNumber(summary.detail.omittedModels)} model names.</p>}</UsagePanel>
      <UsagePanel title="Tools" accent="tools"><UsageToolBreakdown summary={summary}/></UsagePanel>
     </div>
+    <UsagePanel wide><UsageAutoMode summary={summary}/></UsagePanel>
     <UsagePanel title="Token volume by hour" wide>
      <UsageHeatmap summary={snapshot.ranges['7d']} metric="tokens" asOf={snapshot.asOf} partial={!!partial} onSelect={date => updateSelection({ range: '7d', date })}/>
     </UsagePanel>

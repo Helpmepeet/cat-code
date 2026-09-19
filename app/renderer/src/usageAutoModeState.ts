@@ -94,7 +94,7 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
   forced: ['Attempts', 'Supplied decision'],
   guard: ['Attempts', 'Base checks', 'Review/safety guard'],
   accept_edits: ['Attempts', 'Base checks', 'Workspace edits'],
-  allowlist: ['Attempts', 'Base checks', 'Tool allowlist'],
+  allowlist: ['Attempts', 'Base checks', 'Allowlist'],
   stage1: ['Attempts', 'Base checks', 'Stage 1'],
   stage2: ['Attempts', 'Base checks', 'Stage 1', 'Stage 2'],
   unknown: ['Attempts', 'Unknown route'],
