@@ -71,7 +71,7 @@ test('auto-permission diagnostics do not enter ordinary retained-usage accountin
     expect(observed.ranges).toEqual(baseline.ranges);
     expect(observed.coverage).toEqual(baseline.coverage);
 });
-test('historical Auto mode records backfill exact outcomes and keep uncertain attempts partial', async () => {
+test('historical Auto mode evidence stays out of decision charts', async () => {
     const system = (timestamp: string, permissionMode: string) => ({
         type: 'system', subtype: 'run_facts', uuid: `mode-${timestamp}`, timestamp, permissionMode,
     });
@@ -97,30 +97,15 @@ test('historical Auto mode records backfill exact outcomes and keep uncertain at
         result('2026-09-13T09:04:01.000Z', 'non-auto-tool', 'Permission for this action has been denied. Reason: non-auto fixture'),
     ]);
     const summary = (await collectRetainedUsage([path], asOf)).ranges['7d'];
-    expect(summary.autoMode.allTools.outcomes).toMatchObject({
-        policy_blocked: 1,
-        operational_error: 1,
-        unknown_outcome: 1,
-        allowed: 0,
-    });
-    expect(summary.autoMode.commands.outcomes).toMatchObject({
-        policy_blocked: 1,
-        operational_error: 1,
-        unknown_outcome: 1,
-    });
-    expect(summary.autoMode.allTools.coverage.state).toBe('partial');
-    expect(summary.autoMode.commands.coverage.state).toBe('partial');
-    expect(summary.autoMode.routes).toEqual([
-        { route: 'unknown', outcome: 'operational_error', count: 1 },
-        { route: 'unknown', outcome: 'policy_blocked', count: 1 },
-        { route: 'unknown', outcome: 'unknown_outcome', count: 1 },
-    ]);
-    expect(summary.autoMode.categories).toEqual([
-        { key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: 1 },
-    ]);
+    expect(Object.values(summary.autoMode.allTools.outcomes).every(count => count === 0)).toBe(true);
+    expect(Object.values(summary.autoMode.commands.outcomes).every(count => count === 0)).toBe(true);
+    expect(summary.autoMode.allTools.coverage.state).toBe('unavailable');
+    expect(summary.autoMode.commands.coverage.state).toBe('unavailable');
+    expect(summary.autoMode.routes).toEqual([]);
+    expect(summary.autoMode.categories).toEqual([]);
     expect(summary.requests).toBe(4);
 });
-test('structured permission observations suppress historical fallback for the same tool use', async () => {
+test('structured permission observations ignore historical fallback records', async () => {
     const request = msg('2026-09-13T10:00:00.000Z', 'request', 1, 'prospective-tool');
     const fallback = msg('2026-09-13T10:01:00.000Z', 'fallback', 1, 'fallback-tool');
     const path = await file([
@@ -136,16 +121,13 @@ test('structured permission observations suppress historical fallback for the sa
     const autoMode = (await collectRetainedUsage([path], asOf)).ranges['7d'].autoMode;
     expect(autoMode.allTools.outcomes).toMatchObject({
         allowed: 1,
-        policy_blocked: 1,
+        policy_blocked: 0,
         unknown_outcome: 0,
         incomplete: 0,
     });
-    expect(autoMode.allTools.coverage.state).toBe('partial');
-    expect(autoMode.commands.coverage.state).toBe('partial');
-    expect(autoMode.routes).toEqual([
-        { route: 'stage1', outcome: 'allowed', count: 1 },
-        { route: 'unknown', outcome: 'policy_blocked', count: 1 },
-    ]);
+    expect(autoMode.allTools.coverage.state).toBe('complete');
+    expect(autoMode.commands.coverage.state).toBe('complete');
+    expect(autoMode.routes).toEqual([{ route: 'stage1', outcome: 'allowed', count: 1 }]);
 });
 test('cache-write reporting distinguishes measured, unreported, mixed, and unknown records', async () => {
     const openai = msg(asOf, 'openai', 10);

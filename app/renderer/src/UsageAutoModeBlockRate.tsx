@@ -47,8 +47,8 @@ function pointDetails(point: AutoModeRatePoint, population: AutoModeUsagePopulat
 
 function pointStateLabel(point: AutoModeRatePoint): string {
   if (point.state === 'confirmed') return 'Confirmed'
-  if (point.state === 'provisional') return 'Provisional due to unresolved outcomes'
-  return 'Unavailable because complete command coverage is not established'
+  if (point.state === 'provisional') return 'Provisional'
+  return 'Incomplete coverage'
 }
 
 export function UsageAutoModeBlockRate({
@@ -85,19 +85,19 @@ export function UsageAutoModeBlockRate({
     ? 'Unavailable'
     : `${headline.state === 'provisional' ? 'Provisional ' : ''}${usagePercent(headline.rate * 100)}`
   const emptyMessage = headline.denominator === 0 && headline.state === 'unavailable' && summary.commands.coverage.state === 'complete'
-    ? 'No recorded command permission attempts in this period.'
-    : 'Command block rate is unavailable because complete command coverage is not retained for this period.'
+    ? 'No command attempts'
+    : 'Complete command coverage is unavailable'
 
   return <section className="usage-auto-mode-block-rate" aria-labelledby="usage-auto-mode-block-rate-title">
     <header>
       <div>
         <h3 id="usage-auto-mode-block-rate-title">Command block rate</h3>
-        <p>Initial automatic policy denials / recorded command permission attempts</p>
+        <p>Policy-denied commands / command attempts</p>
       </div>
-      <div className={`usage-auto-mode-block-rate-headline usage-auto-mode-rate-${headline.state}`}>
+      {headline.rate !== null && <div className={`usage-auto-mode-block-rate-headline usage-auto-mode-rate-${headline.state}`}>
         <strong>{headlineText}</strong>
-        <span>{usageNumber(headline.numerator)} policy-denied / {usageNumber(headline.denominator)} recorded commands</span>
-      </div>
+        <span>{usageNumber(headline.numerator)} / {usageNumber(headline.denominator)} commands</span>
+      </div>}
     </header>
     {numericPoints.length > 0
       ? <svg

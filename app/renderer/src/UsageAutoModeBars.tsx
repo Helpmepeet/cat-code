@@ -14,16 +14,9 @@ const OUTCOME_LABELS: Record<AutoModeUsageOutcome, string> = {
     incomplete: 'Incomplete',
 };
 
-const BASE_OUTCOMES = new Set<AutoModeUsageOutcome>([
-    'allowed',
-    'policy_blocked',
-    'review_required',
-    'operational_error',
-]);
-
 function outcomeSeries(summary: AutoModeUsageSummary) {
     return autoModeOutcomeSeries(summary).filter(series =>
-        BASE_OUTCOMES.has(series.outcome) || summary.allTools.outcomes[series.outcome] > 0,
+        summary.allTools.outcomes[series.outcome] > 0,
     );
 }
 
@@ -52,11 +45,10 @@ function DecisionBars({ summary }: { summary: AutoModeUsageSummary }) {
     return <section className="usage-auto-bars-chart" aria-labelledby="usage-auto-decisions-title">
         <header>
             <h3 id="usage-auto-decisions-title">Decisions over time</h3>
-            <p>Initial automatic permission decisions for all recorded tools.</p>
         </header>
-        {summary.allTools.coverage.state === 'partial' && <p className="usage-auto-bars-note">Observed counts are partial.</p>}
-        {allUnavailable ? <p className="usage-auto-bars-empty">Automatic permission decisions are unavailable for this period.</p> :
-            autoModeAttempts(summary) === 0 ? <p className="usage-auto-bars-empty">No recorded automatic permission decisions in this period.</p> :
+        {summary.allTools.coverage.state === 'partial' && <p className="usage-auto-bars-note">Partial history</p>}
+        {allUnavailable ? <p className="usage-auto-bars-empty">Decision history unavailable</p> :
+            autoModeAttempts(summary) === 0 ? <p className="usage-auto-bars-empty">No decisions</p> :
                 <>
                     <div className="usage-auto-bars-scroll">
                         <svg className="usage-auto-decision-chart" viewBox={`0 0 ${plotWidth} ${height}`} role="img" aria-label="Recorded automatic permission decisions by UTC period. Exact values follow the graph.">
@@ -108,11 +100,10 @@ function BlockReasonBars({ summary }: { summary: AutoModeUsageSummary }) {
     return <section className="usage-auto-bars-chart" aria-labelledby="usage-auto-block-reasons-title">
         <header>
             <h3 id="usage-auto-block-reasons-title">Block reasons</h3>
-            <p>Policy-blocked tool attempts by retained category.</p>
         </header>
-        {summary.allTools.coverage.state === 'partial' && <p className="usage-auto-bars-note">Observed counts are partial.</p>}
-        {summary.allTools.coverage.state === 'unavailable' ? <p className="usage-auto-bars-empty">Automatic permission decisions are unavailable for this period.</p> :
-            blocked === 0 ? <p className="usage-auto-bars-empty">No recorded policy blocks in this period.</p> :
+        {summary.allTools.coverage.state === 'partial' && <p className="usage-auto-bars-note">Partial history</p>}
+        {summary.allTools.coverage.state === 'unavailable' ? <p className="usage-auto-bars-empty">Decision history unavailable</p> :
+            blocked === 0 ? <p className="usage-auto-bars-empty">No policy blocks</p> :
                 <>
                     <ol className="usage-auto-category-bars" aria-label={`${usageNumber(blocked)} recorded policy-blocked tool attempts`}>
                         {categories.map(category => <li key={category.key}>

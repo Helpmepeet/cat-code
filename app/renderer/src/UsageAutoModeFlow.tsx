@@ -47,26 +47,25 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   if (summary.allTools.coverage.state === 'unavailable') {
     return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
       <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-      <p className="usage-note">Decision routes are unavailable for this period.</p>
+      <p className="usage-note">Decision flow unavailable</p>
     </section>
   }
   if (attempts === 0) {
     return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
       <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-      <p className="usage-note">No recorded automatic permission attempts in this period.</p>
+      <p className="usage-note">No decisions</p>
     </section>
   }
   if (!layout) {
     return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
       <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-      <p className="usage-note">Decision routes are unavailable for these recorded attempts.</p>
+      <p className="usage-note">Decision flow unavailable</p>
     </section>
   }
 
   return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
     <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
-    <p className="usage-auto-flow-scope">Initial automatic permission routes for all recorded tool attempts.</p>
-    {summary.allTools.coverage.state === 'partial' && <p className="usage-note">Partial retained history. This flow shows recorded routes only.</p>}
+    {summary.allTools.coverage.state === 'partial' && <p className="usage-note">Partial history</p>}
     <div className="usage-auto-flow-scroll">
       <svg
         ref={chart.ref}
@@ -110,9 +109,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
         })}
       </svg>
     </div>
-    <p className="usage-auto-flow-readout" role="status">{activeLink
-      ? <><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} recorded attempts · {usagePercent(activeLink.count / layout.total * 100)} of all recorded attempts</>
-      : <>{usageNumber(layout.total)} recorded attempts. Ribbon widths show recorded attempt counts.</>}</p>
+    {activeLink && <p className="usage-auto-flow-readout" role="status"><strong>{usageAutoModeFlowNodeLabel(activeLink.from)} to {usageAutoModeFlowNodeLabel(activeLink.to)}</strong> · {usageNumber(activeLink.count)} of {usageNumber(layout.total)} · {usagePercent(activeLink.count / layout.total * 100)}</p>}
     <details className="usage-auto-flow-values">
       <summary>Exact route values</summary>
       <div className="usage-table-scroll"><table>

@@ -89,7 +89,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   transcript = getTranscriptPathForSession(sessionId)
   await writeOrdinaryAssistantRow(sessionId)
 
-  const indexPath = join(root, 'index-v8.sqlite')
+  const indexPath = join(root, 'index-v9.sqlite')
   const indexOptions = { path: indexPath, deadline: Date.now() + 60_000 }
   const before = await collectIndexedUsage([transcript], new Date().toISOString(), indexOptions)
   const beforeRange = before.ranges['7d']
@@ -185,7 +185,7 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   expect(html).toContain('Decision flow for 1 recorded automatic permission attempt')
   expect(html).toContain('Stage 1')
   expect(html).toContain('Allowed')
-  expect(html).toContain('0 policy-denied / 1 recorded commands')
+  expect(html).toContain('0 / 1 commands')
   expect(html).toContain('0.0%')
 
   await appendFile(transcript, `${observationRows.map(row => JSON.stringify(row)).join('\n')}\n`)
@@ -219,10 +219,10 @@ featureTest('persists one production auto-mode occurrence through the index, wor
   expect(malformedRange.timing).toEqual(beforeRange.timing)
 })
 
-test('reconstructs retained historical Auto mode evidence as partial observed data', async () => {
+test('keeps retained historical inference out of Auto mode charts', async () => {
   root = await mkdtemp(join(tmpdir(), 'auto-mode-usage-history-'))
   transcript = join(root, 'history.jsonl')
-  const indexPath = join(root, 'index-v8.sqlite')
+  const indexPath = join(root, 'index-v9.sqlite')
   const asOf = '2026-09-13T12:00:00.000Z'
   await writeFile(transcript, [
     {
@@ -281,17 +281,11 @@ test('reconstructs retained historical Auto mode evidence as partial observed da
   const parsed = parseUsageCollectionResult({ type: 'usage', version: 1, snapshot: produced })
   expect(parsed).not.toBeNull()
   const autoMode = parsed!.snapshot.ranges['7d'].autoMode
-  expect(autoMode.allTools.coverage.state).toBe('partial')
-  expect(autoMode.commands.outcomes).toMatchObject({
-    policy_blocked: 1,
-    unknown_outcome: 1,
-  })
-  expect(autoMode.categories).toEqual([
-    { key: 'uncategorized', kind: 'uncategorized', label: 'Uncategorized', count: 1 },
-  ])
+  expect(autoMode.allTools.coverage.state).toBe('unavailable')
+  expect(Object.values(autoMode.allTools.outcomes).every(count => count === 0)).toBe(true)
+  expect(autoMode.categories).toEqual([])
   const html = renderToStaticMarkup(<UsageAutoMode summary={parsed!.snapshot.ranges['7d']}/>)
-  expect(html).toContain('Partial retained history')
-  expect(html).toContain('Policy blocked')
-  expect(html).toContain('Uncategorized')
-  expect(html).toContain('Command block rate is unavailable because complete command coverage is not retained for this period.')
+  expect(html).toContain('Decision flow unavailable')
+  expect(html).not.toContain('Unknown outcome')
+  expect(html).not.toContain('Uncategorized')
 })

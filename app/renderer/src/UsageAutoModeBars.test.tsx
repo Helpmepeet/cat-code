@@ -9,7 +9,6 @@ const summary = reduceAutoModeUsage(hundredAttemptAutoModeFixture());
 test('renders ordered all-tool decision bars and exact values for the hundred-attempt fixture', () => {
     const html = renderToStaticMarkup(<UsageAutoModeBars summary={summary}/>);
     expect(html).toContain('Decisions over time');
-    expect(html).toContain('Initial automatic permission decisions for all recorded tools.');
     expect(html).toContain('Allowed</span><b>85</b>');
     expect(html).toContain('Policy blocked</span><b>7</b>');
     expect(html).toContain('Review required</span><b>4</b>');
@@ -55,13 +54,13 @@ test('reports unavailable history and a verified no-policy-block state without i
     const unavailable = structuredClone(summary);
     unavailable.allTools.coverage.state = 'unavailable';
     const unavailableHtml = renderToStaticMarkup(<UsageAutoModeBars summary={unavailable}/>);
-    expect(unavailableHtml.match(/Automatic permission decisions are unavailable for this period\./g)).toHaveLength(2);
+    expect(unavailableHtml.match(/Decision history unavailable/g)).toHaveLength(2);
     expect(unavailableHtml).not.toContain('Exact decision values');
 
     const noBlocks = structuredClone(summary);
     noBlocks.allTools.outcomes.policy_blocked = 0;
     noBlocks.categories = [];
     const noBlocksHtml = renderToStaticMarkup(<UsageAutoModeBars summary={noBlocks}/>);
-    expect(noBlocksHtml).toContain('No recorded policy blocks in this period.');
+    expect(noBlocksHtml).toContain('No policy blocks');
     expect(noBlocksHtml).not.toContain('Exact block-reason values');
 });

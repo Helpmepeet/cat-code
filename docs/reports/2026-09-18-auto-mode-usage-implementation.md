@@ -18,7 +18,7 @@
 | 11 | Complete | `UsageAutoModeFlow.tsx`, layout state, and tests | `62021556` and `d0136c3f`; focused flow/layout test passed | Integrate Usage page |
 | 12 | Complete | `UsageAutoMode.tsx`, page integration, CSS, and page-level test | `2bcd94fb`; focused integration/chart/text suite, app typecheck, and renderer build passed | Verify production path |
 | 13 | Complete | `app/sidecar/autoModeUsage.integration.test.tsx` | Production writer-to-renderer fixture passed with 29 assertions | Final validation and documentation |
-| 14 | Complete | Historical retained-record adapter, index/parser version advance, and fixtures | 81 focused tests passed; live retained-history result parsed within the envelope | Final report |
+| 14 | Removed | Historical inference excluded from aggregation and display | Prospective-only fixtures pass; historical JSONL produces no Auto chart rows | Final report |
 | 15 | Complete | Capability, ownership, resource, terminal, grid, and production-fixture corrections | 204 boundary tests passed after independent verification findings | Final report |
 
 ## Task 00 evidence map
@@ -30,9 +30,9 @@
 | What other callers need wiring? | The caller matrix is: React terminal interactive wrapper, print no-prompt/custom prompt wrapper, `StructuredIO.createCanUseTool`, desktop app-runtime wrapper, and in-process swarm wrapper. All can receive `forceDecision`; only the terminal interactive path currently exposes the same-ID recheck. Their common core is `hasPermissionsToUseTool`; headless and subagent behavior is selected by `ToolUseContext` rather than a separate auto-mode permission engine. Unsupported alternate permission engines remain unavailable rather than inferred. |
 | How is effective auto mode computed? | Reuse exactly the core predicate: `TRANSCRIPT_CLASSIFIER` enabled and permission mode `auto`, or mode `plan` with `autoModeStateModule.isAutoModeActive()` ([`src/utils/permissions/permissions.ts:537-544`](../../src/utils/permissions/permissions.ts)). Do not derive it from renderer state. |
 | How do diagnostics stay out of model input? | The existing metadata-only writer is `appendSystemDiagnostic` ([`src/utils/sessionStorage.ts:599-622`](../../src/utils/sessionStorage.ts)); it requires an active transcript lease, writes no file if no owner exists, stamps envelope fields itself, and swallows ordinary I/O failure. Usage dispatches recognized permission system subtypes before ordinary accounting ([`src/utils/statsUsage.ts:230-241`](../../src/utils/statsUsage.ts)); resume keeps non-local system rows out of model normalization ([`src/utils/messages.ts:2149-2166`](../../src/utils/messages.ts)). Writer, projection, and recovery regressions cover those boundaries. |
-| Is complete historical permission metadata retained? | No. `logEvent`/`logEventAsync` are inert ([`src/services/analytics/index.ts:28-38`](../../src/services/analytics/index.ts)); `autoModeMeta` is a bounded process-local map. Retained `run_facts`, tool-use IDs/names, and exact code-owned denial text support a conservative partial reconstruction, but not historical routes, categories, rechecks, or a complete denominator. |
+| Is complete historical permission metadata retained? | No. `logEvent`/`logEventAsync` are inert ([`src/services/analytics/index.ts:28-38`](../../src/services/analytics/index.ts)); `autoModeMeta` is a bounded process-local map. Partial inference is possible, but it is excluded because it cannot recover routes, rechecks, categories, or a complete denominator. |
 | How will each bucket's population support be established? | A valid prospective Start carries frozen `auto_mode` provenance and normalized `tool_kind`; its trusted writer timestamp defines the UTC start bucket. Complete support requires source/schema/build capability evidence for every included source interval plus successful retained reading. Missing starts, unsupported older sources, damaged reads, or unknown source intervals make the relevant population partial/unavailable. Recording enabled alone does not establish complete delivery. |
-| Which versions invalidate indexed records and saved summaries? | The retained-record index is `index-v8.sqlite` ([`src/utils/statsUsageIndex.ts:12-17`](../../src/utils/statsUsageIndex.ts)); v8 rebuilds because earlier projections lacked source capability markers. Snapshots require counting version 12 and pricing version 1 ([`app/shared/usageDashboard.ts:223-244`](../../app/shared/usageDashboard.ts)). Pricing remains 1 because pricing semantics did not change. |
+| Which versions invalidate indexed records and saved summaries? | The retained-record index is `index-v9.sqlite` ([`src/utils/statsUsageIndex.ts:12-17`](../../src/utils/statsUsageIndex.ts)); v9 removes historical inference and rebuilds structured source capability. Snapshots require counting version 13 and pricing version 1 ([`app/shared/usageDashboard.ts:223-244`](../../app/shared/usageDashboard.ts)). Pricing remains 1 because pricing semantics did not change. |
 
 ## Task 00 contract decisions
 
@@ -69,7 +69,7 @@
 
 - The shared retained-system adapter recognizes the actual persisted event subtypes (`auto_permission_start`, `auto_permission_stage`, and `auto_permission_end`) before generic Usage activity accounting. Valid events are parser-normalized. A malformed End with a bounded attempt ID retains only its subtype and ID so the reducer produces Unknown rather than Incomplete; every other malformed event becomes a payload-free invalid marker. No unvalidated event field, tool input, command text, or free-form error survives.
 - Direct retained accounting dispatches recognized diagnostics before timestamp, record, session, active-day, earliest-activity, token, request, comparison, and timing accounting. This preserves existing Usage metrics for valid, malformed, and duplicate diagnostics. Truncated JSON still follows the existing reader's partial-coverage behavior without inventing ordinary activity.
-- The derived index writes only sanitized observation metadata, source capability, and normalized historical hints. `index-v8.sqlite` rebuilds older projections without changing transcripts. Existing source fingerprints, lock/transaction publication, corrupt-index recovery, source replacement/deletion, timeout, and warm-cache paths remain unchanged.
+- The derived index writes only sanitized observation metadata and source capability. `index-v9.sqlite` rebuilds older projections without changing transcripts. Existing source fingerprints, lock/transaction publication, corrupt-index recovery, source replacement/deletion, timeout, and warm-cache paths remain unchanged.
 - Resume uses the established non-local system-message exclusion before model normalization. The regression verifies auto-mode metadata cannot enter resumed model messages or mask an interrupted prompt.
 
 ## Task 07 bounded summary contract
@@ -131,23 +131,12 @@ an observed count, not a claim of complete history.
 - `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar`, and `bun run --cwd app renderer:build`: passed.
 - `bun test app/` is not green because of two existing `sessionController.test.ts` agent-fixture failures and an existing archived `tmp/` renderer-test import error. The final suite reported 5,078 passed, 1 expected feature-disabled skip, 3 failed, and 1 error; both auto-mode integration fixtures passed when explicitly run with `TRANSCRIPT_CLASSIFIER`.
 
-## Task 14 historical partial reconstruction
+## Task 14 historical inference removal
 
-The retained JSONL audit found pre-contract evidence that is useful but not
-complete: Auto `run_facts`, tool-use IDs/names, exact code-owned classifier
-denial/unavailable results, and later tool-execution diagnostics. The historical
-adapter projects only a normalized outcome enum and correlates it with bounded
-tool metadata. Exact denials become Policy-blocked, exact unavailable results
-become Operational error, and other correlated Auto attempts become Unknown or
-Incomplete. No raw result text survives `index-v8.sqlite`.
-
-All reconstructed sources remain Partial. They populate observed counts and
-Unknown routes without producing a confirmed historical command block rate.
-Prospective structured observations suppress the fallback for the same tool-use
-ID. A bounded live retained-history run parsed successfully at 142,071 bytes:
-All contained 397 policy blocks, 169 operational errors, 37,628 unknown outcomes,
-14 incomplete attempts, and 76 calendar buckets. These are reconstructed observed
-counts, not a claim of complete historical activity.
+The retained JSONL audit found partial evidence but not the initial routes and
+outcomes required by these charts. Rendering that evidence produced an
+Unknown-dominated dashboard. Historical inference is disabled; only structured
+capability and Start/Stage/End records enter Auto mode summaries.
 
 ## Independent verification remediation
 

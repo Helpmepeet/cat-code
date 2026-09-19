@@ -30,7 +30,7 @@ test('handles unavailable, partial, and zero auto-mode states locally', () => {
   partial.autoMode.allTools.coverage.state = 'partial'
   const zero = structuredClone(snapshot.ranges['7d'])
   zero.autoMode.allTools.coverage.state = 'complete'
-  expect(renderToStaticMarkup(<UsageAutoMode summary={unavailable}/>)).toContain('Decision routes are unavailable')
-  expect(renderToStaticMarkup(<UsageAutoMode summary={partial}/>)).toContain('Observed counts are partial')
-  expect(renderToStaticMarkup(<UsageAutoMode summary={zero}/>)).toContain('No recorded automatic permission attempts')
+  expect(renderToStaticMarkup(<UsageAutoMode summary={unavailable}/>)).toContain('Decision flow unavailable')
+  expect(renderToStaticMarkup(<UsageAutoMode summary={partial}/>)).toContain('Partial history')
+  expect(renderToStaticMarkup(<UsageAutoMode summary={zero}/>)).toContain('No decisions')
 })

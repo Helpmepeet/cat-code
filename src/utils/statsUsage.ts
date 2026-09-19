@@ -78,19 +78,14 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     coverage.sourcesDiscovered = files.length;
     const autoModeRecords: RetainedAutoModeRecord[] = [];
     const autoModeSources = new Map<string, AutoModeUsageSource>();
+    // Historical records cannot recover the initial route/outcome reliably.
+    const includeHistoricalAutoModeBackfill = false;
     const sourceStartedWithCapability = new Set<string>();
     const autoModeSourceScope = (file: string) => createHash('sha256').update(file).digest('hex');
-    for (const file of files) {
-        const sourceScope = autoModeSourceScope(file);
-        autoModeSources.set(sourceScope, {
-            sourceScope,
-            allTools: 'unavailable',
-            commands: 'unavailable',
-        });
-    }
     const observeAutoModeSource = (file: string, observedAt: string) => {
         const sourceScope = autoModeSourceScope(file);
-        const previous = autoModeSources.get(sourceScope)!;
+        const previous = autoModeSources.get(sourceScope);
+        if (!previous) return;
         const candidateFrom =
             previous.observedFrom === undefined || observedAt < previous.observedFrom
                 ? observedAt
@@ -165,7 +160,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     const markHistoricalSource = (file: string): void => {
         const sourceScope = autoModeSourceScope(file);
-        const previous = autoModeSources.get(sourceScope)!;
+        const previous = autoModeSources.get(sourceScope);
+        if (!previous) return;
         if (previous.supportedFrom !== undefined) return;
         autoModeSources.set(sourceScope, {
             ...previous,
@@ -175,7 +171,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
     };
     const markSupportedSource = (file: string, observedAt: string): void => {
         const sourceScope = autoModeSourceScope(file);
-        const previous = autoModeSources.get(sourceScope)!;
+        const previous = autoModeSources.get(sourceScope) ?? {
+            sourceScope,
+            allTools: 'unavailable' as const,
+            commands: 'unavailable' as const,
+        };
         const supportedFrom =
             previous.supportedFrom === undefined ||
             observedAt < previous.supportedFrom
@@ -347,6 +347,10 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         }
     };
     const finalizeHistoricalSource = (file: string): void => {
+        if (!includeHistoricalAutoModeBackfill) {
+            historicalSources.delete(file);
+            return;
+        }
         const state = historicalSources.get(file);
         if (!state) return;
         const sourceScope = autoModeSourceScope(file);
@@ -434,8 +438,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     ? row.uuid
                     : `${item.generation}:${item.offset}`;
                 reserve(`auto-mode-capability:${sourceScope}:${capabilityRecordId}`, 256);
-                const previous = autoModeSources.get(sourceScope)!;
+                const previous = autoModeSources.get(sourceScope);
                 if (
+                    previous === undefined ||
                     previous.observedFrom === undefined &&
                     previous.observedThrough === undefined
                 ) {
@@ -473,7 +478,9 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                     payload: autoModePayload,
                 });
                 if (autoModePayload.subtype === 'auto_permission_start') {
-                    historicalSource(file).structuredToolUses.add(autoModePayload.tool_use_id);
+                    if (includeHistoricalAutoModeBackfill) {
+                        historicalSource(file).structuredToolUses.add(autoModePayload.tool_use_id);
+                    }
                     markSupportedSource(file, observedAt);
                 }
             }
@@ -506,17 +513,19 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (!alreadyRecorded) {
             reserveIdentity(recordId);
             recordIds.add(recordId);
-            const historical = historicalSource(file);
-            if (row.type === 'system' && row.subtype === 'run_facts' && typeof row.permissionMode === 'string') {
-                historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
-            } else if (
-                row.type === 'system' &&
-                row.subtype === 'tool_execution_start' &&
-                boundedObservationId(row.tool_use_id)
-            ) {
-                historical.executedToolUses.add(row.tool_use_id);
-            } else if (row.type === 'user' && typeof row.permissionMode === 'string') {
-                historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
+            if (includeHistoricalAutoModeBackfill) {
+                const historical = historicalSource(file);
+                if (row.type === 'system' && row.subtype === 'run_facts' && typeof row.permissionMode === 'string') {
+                    historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
+                } else if (
+                    row.type === 'system' &&
+                    row.subtype === 'tool_execution_start' &&
+                    boundedObservationId(row.tool_use_id)
+                ) {
+                    historical.executedToolUses.add(row.tool_use_id);
+                } else if (row.type === 'user' && typeof row.permissionMode === 'string') {
+                    historical.mode = row.permissionMode === 'auto' ? 'auto' : 'other';
+                }
             }
         }
         const eligibleStates = states.filter(s => usageTimestampEligible(timestamp, s.start, s.end, cutoff));
@@ -634,7 +643,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         if (row.type === 'user' && record(row.message) && Array.isArray(row.message.content)) {
             for (const [index, block] of row.message.content.entries()) {
                 if (!record(block) || block.type !== 'tool_result' || !nonempty(block.tool_use_id)) continue;
-                if (!alreadyRecorded && boundedObservationId(block.tool_use_id)) {
+                if (
+                    includeHistoricalAutoModeBackfill &&
+                    !alreadyRecorded &&
+                    boundedObservationId(block.tool_use_id)
+                ) {
                     const historical = historicalSource(file);
                     const projectedOutcome =
                         block.historical_auto_mode_outcome === 'policy_blocked' ||
@@ -694,7 +707,12 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 const identified = nonempty(block.id);
                 const key = JSON.stringify([scope, identified ? ['id', block.id] : ['record', recordId, index]]);
                 const name = nonempty(block.name) ? block.name : null;
-                if (!alreadyRecorded && identified && boundedObservationId(block.id)) {
+                if (
+                    includeHistoricalAutoModeBackfill &&
+                    !alreadyRecorded &&
+                    identified &&
+                    boundedObservationId(block.id)
+                ) {
                     const historical = historicalSource(file);
                     const pending = historical.pendingResults.get(block.id);
                     const candidate: HistoricalCandidate = {
@@ -1091,5 +1109,5 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
             all.summary.autoMode.buckets = [...grouped.values()].sort((left, right) => left.date.localeCompare(right.date));
         }
     }
-    return { version: 1, metricVersion: 1, countingVersion: 12, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
+    return { version: 1, metricVersion: 1, countingVersion: 13, pricingVersion: USAGE_PRICING_VERSION, snapshotId: randomUUID(), scope: 'retained-transcripts', timezone: 'UTC', asOf, computedAt: new Date().toISOString(), coverage, ranges: { '7d': states[0]!.summary, '30d': states[1]!.summary, all: states[2]!.summary } };
 }

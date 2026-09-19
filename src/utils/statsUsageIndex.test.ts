@@ -180,7 +180,7 @@ test('projects auto-mode diagnostics without ordinary accounting or raw payload 
     try { expect(removed.query('SELECT value FROM records').all()).toEqual([]); }
     finally { removed.close(); }
 });
-test('rebuilds historical Auto mode hints without retaining tool-result content', async () => {
+test('excludes historical Auto mode inference and tool-result content', async () => {
     const { path, file } = await fixture();
     const mode = { type: 'system', subtype: 'run_facts', uuid: 'mode', timestamp: '2026-09-12T09:00:00.000Z', permissionMode: 'auto' };
     const blocked = row('historical-blocked', '2026-09-12T09:01:00.000Z');
@@ -200,11 +200,8 @@ test('rebuilds historical Auto mode hints without retaining tool-result content'
     const indexed = await collectIndexedUsage([file], cutoff, opts(path));
     const direct = await collectRetainedUsage([file], cutoff);
     expect(indexed.ranges).toEqual(direct.ranges);
-    expect(indexed.ranges['7d'].autoMode.allTools.outcomes).toMatchObject({
-        policy_blocked: 1,
-        unknown_outcome: 1,
-    });
-    expect(indexed.ranges['7d'].autoMode.allTools.coverage.state).toBe('partial');
+    expect(Object.values(indexed.ranges['7d'].autoMode.allTools.outcomes).every(count => count === 0)).toBe(true);
+    expect(indexed.ranges['7d'].autoMode.allTools.coverage.state).toBe('unavailable');
 
     const { Database } = await import('bun:sqlite');
     const db = new Database(path, { readonly: true });
@@ -212,12 +209,12 @@ test('rebuilds historical Auto mode hints without retaining tool-result content'
         const projected = JSON.stringify(db.query('SELECT value FROM records').all());
         expect(projected).not.toContain('PRIVATE POLICY DETAIL');
         expect(projected).not.toContain('PRIVATE ORDINARY RESULT');
-        expect(projected).toContain('historical_auto_mode_outcome');
-        expect(projected).toContain('policy_blocked');
+        expect(projected).not.toContain('historical_auto_mode_outcome');
+        expect(projected).not.toContain('policy_blocked');
     } finally { db.close(); }
 });
 test('uses a successor index path when auto-mode metadata enters the projection', () => {
-    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v8.sqlite');
+    expect(usageIndexPath()).toEndWith('usage-dashboard/index-v9.sqlite');
 });
 test('cold and warm index snapshots retain owning-session attribution without retaining content', async () => {
     const { path, file } = await fixture();
@@ -333,7 +330,7 @@ test('v8 grouped snapshots rebuild named categories from indexed records without
     const options = { ...opts(path), finalize: fitUsageDashboardSnapshot, onReadSource() { reads++; } };
     const rebuilt = await collectIndexedUsage([file], cutoff, options);
     expect(reads).toBe(0);
-    expect(rebuilt.countingVersion).toBe(12);
+    expect(rebuilt.countingVersion).toBe(13);
     expect(rebuilt.ranges['30d'].models.map(model => model.label)).toContain('model');
     expect(rebuilt.ranges['30d'].tools.map(tool => tool.label)).toContain('Bash');
     const warm = await collectIndexedUsage([file], cutoff, options);
