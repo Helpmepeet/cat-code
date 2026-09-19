@@ -306,3 +306,23 @@ the output budget. The production finalizer reduces optional session/build
 information independently before collapsing named categories. Counting v9
 invalidates earlier saved summaries while reusing index-v5 records. The 256 KiB
 limit and exact totals remain unchanged. See [correction evidence](../../reports/2026-09-17-usage-display-corrections.md).
+
+## Automatic permission Usage amendment, 2026-09-18
+
+Usage records initial automatic permission decisions prospectively through a
+closed Start/Stage/End metadata contract. The retained projection contains only
+bounded IDs, tool kind, effective-auto provenance, route, disposition, and
+category identifiers. It excludes tool input, command text, rule text, model or
+classifier content, credentials, paths, and transcript message bodies.
+
+The command block rate is `policy-blocked initial command attempts / recorded
+initial command attempts`. It is unavailable whenever complete command coverage
+is not established; partial retained observations remain explicitly partial.
+Pre-capability, older, and unsupported transcript intervals are unavailable, not
+measured zeroes. Rechecks are non-counting.
+
+Counting version 10 and `index-v6.sqlite` invalidate older summary/index
+projections so retained auto-mode metadata is reconstructed from transcripts.
+The Usage section presents only the fixed four chart scopes: Decision flow,
+Command block rate, Decisions over time, and Block reasons. No new inbound
+operation, renderer-authored rule, or raw-content boundary is introduced.

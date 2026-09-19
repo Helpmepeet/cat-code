@@ -12,6 +12,7 @@
 | 05 | Complete | Pure reducer and deterministic fixtures | 11 focused tests passed; engine dev build passed | Wire production routes and indexed projection |
 | 06 | Complete | Retained diagnostic adapter, index projection, accounting/recovery exclusions, and focused tests | 55 focused tests passed; engine dev build and diff check passed | Extend the bounded summary contract |
 | 07 | Complete | Retained auto-mode range summaries, strict worker validation, bounded fitting, and cache-version tests | 74 focused tests passed; desktop/sidecar typechecks and engine dev build passed | Implement frontend selectors |
+| 13 | Complete | `app/sidecar/autoModeUsage.integration.test.tsx` | Production writer-to-renderer fixture passed with 29 assertions | Final validation and documentation |
 
 ## Task 00 evidence map
 
@@ -90,3 +91,46 @@
 - `bun run --cwd app typecheck`: passed.
 - `bun run build:dev:full`: passed. Workspace-map lint reported 7 existing recommended-section warnings; undefined-name lint passed with 0 diagnostics.
 - `git diff --check`: passed.
+
+## Task 13 production-path integration
+
+The isolated desktop fixture materializes an owned temporary transcript, calls
+`createAppRuntimeCanUseTool` with a controlled Stage 1 classifier/base decision,
+and retains the production Start, entered/resolved Stage, and End records through
+`recordAutoModeObservation`. It preserves the original allow decision and
+`updatedInput`, calls the base permission path once, indexes and finalizes the
+snapshot, validates the strict worker result, and server-renders `UsageAutoMode`.
+It verifies the Stage 1 Allowed route and the command numerator/denominator.
+
+Replayed diagnostic rows retain one logical attempt, and a cached restart reads
+no transcript source. A later malformed diagnostic is included in the indexed
+collection without changing existing token, request, session, record, or timing
+metrics. The fixture uses no live tool, classifier provider, network, account, or
+user state.
+
+### Recording start and coverage limits
+
+Recording begins only for a prospective initial occurrence after
+`TRANSCRIPT_CLASSIFIER` is enabled and effective auto mode is frozen. A source
+interval that began before its first retained Start is Partial, so its primary
+command block rate is Unavailable rather than a fabricated zero percent. Older
+or unsupported retained history is Unavailable; a valid recorded attempt remains
+an observed count, not a claim of complete history.
+
+### Task 13 verification
+
+- `bun test --feature=TRANSCRIPT_CLASSIFIER app/sidecar/autoModeUsage.integration.test.tsx`: 1 passed, 0 failed, 29 assertions.
+- Boundary-focused permission, reducer, index, parser, summary, and renderer suite: 171 passed, 0 failed, 1,389 assertions.
+- `bun run build:dev:full`: passed; workspace-map lint reported 7 existing recommended-section warnings and undefined-name lint reported 0 diagnostics.
+- `bun run --cwd app typecheck`, `bun run --cwd app typecheck:sidecar`, and `bun run --cwd app renderer:build`: passed.
+- `bun test app/` is not green because of two existing `sessionController.test.ts` agent-fixture failures and an existing archived `tmp/` renderer-test import error. The suite otherwise reported 5,071 passed, 1 expected feature-disabled skip, 3 failed, and 1 error; the new fixture passed when explicitly run with `TRANSCRIPT_CLASSIFIER`.
+
+### Native visual verification
+
+Unperformed: no authorization covered launching or driving Cat Code Dev. An
+operator can launch with
+`ANTHROPIC_MODEL=gpt-5.6-luna CATCODE_TEST_CWD_ALLOWLIST=<isolated-project> CATCODE_DEBUG_STATE=1 bun run --cwd app dev`,
+wait for `[main] renderer ready`, open the isolated project, and select Usage.
+Verify the live labels Decision flow, Command block rate, Decisions over time,
+and Block reasons for 7 days, 30 days, and All; confirm unavailable/partial
+coverage remains local to this section and Execution timing remains visible.
