@@ -3626,8 +3626,15 @@ export class SidecarServer {
       })
   }
 
+  private resetConnectionReplayState(connection: Connection): void {
+    connection.loadEarlierAnchorUuid = null
+    connection.loadEarlierReplayed = false
+    connection.loadEarlierComplete = false
+  }
+
   private broadcastTranscriptReset(): void {
     for (const connection of this.connections) {
+      this.resetConnectionReplayState(connection)
       this.send(connection, {
         kind: 'transcript.reset',
         protocolVersion: PROTOCOL_VERSION,
@@ -3638,6 +3645,7 @@ export class SidecarServer {
 
   private broadcastTranscriptResetAndReplay(): void {
     for (const connection of this.connections) {
+      this.resetConnectionReplayState(connection)
       this.send(connection, {
         kind: 'transcript.reset',
         protocolVersion: PROTOCOL_VERSION,

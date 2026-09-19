@@ -45,7 +45,9 @@ import {
 } from '../shared/protocol.js'
 import { projectResumedHistory } from './historyProjection.js'
 import type { EarlierHistoryRead } from './historyLoadEarlier.js'
+import type { Message } from '../../src/types/message.js'
 import { buildProbeToolUseMessage } from './probeAdapter.js'
+import type { SidecarSessionActionsDomain } from './sessionActionsDomain.js'
 import { SidecarServer, type SidecarSocketLike } from './sidecarServer.js'
 
 const SESSION = 'load-earlier-session'
@@ -75,11 +77,9 @@ function frame(message: unknown, sessionId: unknown = SESSION): Buffer {
 }
 
 let servers: SidecarServer[] = []
-function makeServer(options: {
-  history?: readonly SDKMessage[]
-  historySourceTruncated?: boolean
-  loadEarlierHistory?: () => Promise<EarlierHistoryRead>
-}): SidecarServer {
+function makeServer(
+  options: Partial<ConstructorParameters<typeof SidecarServer>[0]>,
+): SidecarServer {
   const server = new SidecarServer({
     sessionId: SESSION,
     engineSessionId: ENGINE_SESSION,
@@ -88,14 +88,8 @@ function makeServer(options: {
         yield buildProbeToolUseMessage()
       },
     }),
-    ...(options.history ? { history: options.history } : {}),
-    ...(options.historySourceTruncated
-      ? { historySourceTruncated: true }
-      : {}),
-    ...(options.loadEarlierHistory
-      ? { loadEarlierHistory: options.loadEarlierHistory }
-      : {}),
     log: () => {},
+    ...options,
   })
   servers.push(server)
   return server
@@ -1000,4 +994,100 @@ test('an empty sidecar history with no anchor still answers without reading disk
       complete: true,
     },
   ])
+})
+
+test('edit rewinds past old load-earlier anchor and fails projection -> transcript.reset clears connection anchor so loadEarlier recovers mutated history', async () => {
+  const msgOld = historyMessage('uuid-anchor', 'old message')
+  const msgRecent = historyMessage('uuid-recent', 'recent message')
+  const mutatedEarlier = historyMessage('uuid-mutated-earlier', 'mutated earlier message')
+
+  const sessionActions: SidecarSessionActionsDomain = {
+    rename: async () => ({ ok: true, message: 'renamed' }),
+    export: async () => ({ ok: true, message: 'exported' }),
+    branch: async () => ({ ok: true, message: 'branched' }),
+    tag: async () => ({ ok: true, message: 'tagged' }),
+    selectUserMessage: () => ({
+      ok: true,
+      message: 'selected',
+      selectedPrompt: { content: 'test' },
+    }),
+    editFromMessage: async () => ({
+      ok: true,
+      message: 'edited',
+      retainedMessages: [mutatedEarlier as unknown as Message],
+    }),
+    branchFromMessage: async () => ({
+      ok: true,
+      message: 'branched',
+      branchEngineSessionId: 'fork-1',
+    }),
+  }
+
+  const server = makeServer({
+    history: [msgOld, msgRecent],
+    loadEarlierHistory: async () => ({
+      messages: [mutatedEarlier],
+      truncated: false,
+    }),
+    sessionActions,
+    projectHistory: async () => {
+      throw new Error('History projection failed')
+    },
+  })
+
+  const { socket, received } = makeSocket()
+  const connection = server.addConnection(socket)
+  await Bun.sleep(0)
+
+  // 1. Existing connection replayed initial history and has uuid-anchor as its load-earlier anchor
+  expect(connection.loadEarlierAnchorUuid).toBe('uuid-anchor')
+  expect(connection.loadEarlierReplayed).toBe(true)
+
+  // 2. Edit rewinds past that anchor and projection throws
+  server.handleData(
+    connection,
+    frame({
+      type: 'session.editFromMessage',
+      requestId: 'edit-1',
+      userMessageId: '11111111-2222-3333-4444-555555555555',
+    }),
+  )
+  await Bun.sleep(0)
+
+  // 3. Sidecar broadcast transcript.reset and cleared connection replay state
+  expect(received.some(f => f.kind === 'transcript.reset')).toBe(true)
+  expect(connection.loadEarlierAnchorUuid).toBeNull()
+  expect(connection.loadEarlierReplayed).toBe(false)
+  expect(connection.loadEarlierComplete).toBe(false)
+
+  // 4. history.loadEarlier now recovers newly mutated history with a null anchor rather than rejecting
+  const beforeLoadEarlier = received.length
+  server.handleData(
+    connection,
+    frame({ type: 'history.loadEarlier', requestId: 'load-1' }),
+  )
+  await Bun.sleep(0)
+
+  const loadFrames = received.slice(beforeLoadEarlier)
+  expect(results(loadFrames)).toEqual([
+    {
+      kind: 'history.loadEarlier.result',
+      protocolVersion: PROTOCOL_VERSION,
+      sessionId: SESSION,
+      requestId: 'load-1',
+      ok: true,
+      message: 'Earlier messages loaded.',
+      added: 1,
+      complete: true,
+    },
+  ])
+
+  const recovered = loadFrames.filter(
+    f => f.kind === 'event' && (f as { recovered?: boolean }).recovered === true,
+  )
+  expect(recovered).toHaveLength(1)
+  expect(
+    (recovered[0] as unknown as { event: { message: { message: { content: string } } } })
+      .event.message.message.content,
+  ).toBe('mutated earlier message')
 })

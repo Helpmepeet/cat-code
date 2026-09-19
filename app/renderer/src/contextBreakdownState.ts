@@ -192,8 +192,6 @@ export function selectContextBreakdown(
 
 /**
  * One legend row, ready to paint: the engine's label and token count plus the
-/**
- * One legend row, ready to paint: the engine's label and token count plus the
  * static Tailwind class for its swatch.
  *
  * Tailwind v4 dynamic-class trap: the engine ships a terminal theme key
