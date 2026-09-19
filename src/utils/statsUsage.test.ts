@@ -90,11 +90,11 @@ test('historical Auto mode records backfill exact outcomes and keep uncertain at
         result('2026-09-13T09:01:01.000Z', 'blocked-tool', 'Permission for this action has been denied. Reason: policy rule'),
         uncertain,
         result('2026-09-13T09:02:01.000Z', 'uncertain-tool', 'ordinary result', false),
-        system('2026-09-13T09:02:30.000Z', 'default'),
         unavailable,
         result('2026-09-13T09:03:01.000Z', 'unavailable-tool', 'The auto mode classifier request using model is temporarily unavailable, so auto mode cannot determine the safety of PowerShell right now.'),
+        system('2026-09-13T09:03:30.000Z', 'default'),
         nonAuto,
-        result('2026-09-13T09:04:01.000Z', 'non-auto-tool', 'ordinary result', false),
+        result('2026-09-13T09:04:01.000Z', 'non-auto-tool', 'Permission for this action has been denied. Reason: non-auto fixture'),
     ]);
     const summary = (await collectRetainedUsage([path], asOf)).ranges['7d'];
     expect(summary.autoMode.allTools.outcomes).toMatchObject({
@@ -122,6 +122,7 @@ test('historical Auto mode records backfill exact outcomes and keep uncertain at
 });
 test('structured permission observations suppress historical fallback for the same tool use', async () => {
     const request = msg('2026-09-13T10:00:00.000Z', 'request', 1, 'prospective-tool');
+    const fallback = msg('2026-09-13T10:01:00.000Z', 'fallback', 1, 'fallback-tool');
     const path = await file([
         { type: 'system', subtype: 'auto_permission_capability', uuid: 'capability', timestamp: '2026-09-13T09:58:00.000Z', schema_version: 1 },
         { type: 'system', subtype: 'run_facts', uuid: 'mode', timestamp: '2026-09-13T09:59:00.000Z', permissionMode: 'auto' },
@@ -129,16 +130,22 @@ test('structured permission observations suppress historical fallback for the sa
         { type: 'system', subtype: 'auto_permission_start', uuid: 'start', timestamp: '2026-09-13T10:00:01.000Z', schema_version: 1, attempt_id: 'attempt', tool_use_id: 'prospective-tool', tool_kind: 'bash', auto_mode: 'auto', initial: true },
         { type: 'system', subtype: 'auto_permission_end', uuid: 'end', timestamp: '2026-09-13T10:00:02.000Z', schema_version: 1, attempt_id: 'attempt', raw_result: 'allow', disposition: 'allowed', route: 'stage1' },
         { type: 'user', uuid: 'result', timestamp: '2026-09-13T10:00:03.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'prospective-tool', content: 'ordinary result' }] } },
+        fallback,
+        { type: 'user', uuid: 'fallback-result', timestamp: '2026-09-13T10:01:01.000Z', message: { content: [{ type: 'tool_result', tool_use_id: 'fallback-tool', is_error: true, content: 'Permission for this action has been denied. Reason: retained fallback' }] } },
     ]);
     const autoMode = (await collectRetainedUsage([path], asOf)).ranges['7d'].autoMode;
     expect(autoMode.allTools.outcomes).toMatchObject({
         allowed: 1,
+        policy_blocked: 1,
         unknown_outcome: 0,
         incomplete: 0,
     });
-    expect(autoMode.allTools.coverage.state).toBe('complete');
-    expect(autoMode.commands.coverage.state).toBe('complete');
-    expect(autoMode.routes).toEqual([{ route: 'stage1', outcome: 'allowed', count: 1 }]);
+    expect(autoMode.allTools.coverage.state).toBe('partial');
+    expect(autoMode.commands.coverage.state).toBe('partial');
+    expect(autoMode.routes).toEqual([
+        { route: 'stage1', outcome: 'allowed', count: 1 },
+        { route: 'unknown', outcome: 'policy_blocked', count: 1 },
+    ]);
 });
 test('cache-write reporting distinguishes measured, unreported, mixed, and unknown records', async () => {
     const openai = msg(asOf, 'openai', 10);

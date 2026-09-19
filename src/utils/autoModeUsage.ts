@@ -30,6 +30,7 @@ export type RetainedAutoModeRecord = Readonly<{
   observedAt: string
   diagnosticKind: string
   payload: unknown
+  historical?: true
 }>
 
 export type AutoModeUsageSource = Readonly<{
@@ -129,6 +130,7 @@ type Attempt = {
   startConflict: boolean
   stages: AutoModeObservationEvent[]
   invalidRecords: number
+  historical: boolean
 }
 
 const AUTO_MODE_DIAGNOSTIC_KIND = 'auto_mode_observation'
@@ -543,15 +545,19 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
           startConflict: false,
           stages: [],
           invalidRecords: 0,
+          historical: record.historical === true,
         })
-      } else if (
-        previous.timestamp !== timestamp ||
-        previous.toolKind !== parsed.tool_kind ||
-        previous.start.tool_use_id !== parsed.tool_use_id ||
-        previous.start.auto_mode !== parsed.auto_mode
-      ) {
-        previous.invalidRecords++
-        previous.startConflict = true
+      } else {
+        if (
+          previous.timestamp !== timestamp ||
+          previous.toolKind !== parsed.tool_kind ||
+          previous.start.tool_use_id !== parsed.tool_use_id ||
+          previous.start.auto_mode !== parsed.auto_mode
+        ) {
+          previous.invalidRecords++
+          previous.startConflict = true
+        }
+        previous.historical ||= record.historical === true
       }
       continue
     }
@@ -650,9 +656,17 @@ export function reduceAutoModeUsage(input: AutoModeUsageReductionInput): AutoMod
     const route = resolvedRoute(attempt)
     incrementOutcome(allTools, outcome)
     incrementOutcome(bucket.allTools, outcome)
+    if (attempt.historical) {
+      if (allTools.coverage.state === 'complete') allTools.coverage.state = 'partial'
+      if (bucket.allTools.coverage.state === 'complete') bucket.allTools.coverage.state = 'partial'
+    }
     if (attempt.toolKind === 'bash' || attempt.toolKind === 'powershell') {
       incrementOutcome(commands, outcome)
       incrementOutcome(bucket.commands, outcome)
+      if (attempt.historical) {
+        if (commands.coverage.state === 'complete') commands.coverage.state = 'partial'
+        if (bucket.commands.coverage.state === 'complete') bucket.commands.coverage.state = 'partial'
+      }
     }
     routes.set(JSON.stringify([route, outcome]), (routes.get(JSON.stringify([route, outcome])) ?? 0) + 1)
 

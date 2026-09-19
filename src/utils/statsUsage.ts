@@ -118,7 +118,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         toolKind: AutoModeToolKind;
         observedAt: string;
         recordId: string;
-        autoAtStart: boolean;
+        modeAtStart: HistoricalSourceState['mode'];
+        modeConflict: boolean;
         result?: HistoricalResult;
     };
     type HistoricalSourceState = {
@@ -352,8 +353,11 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
         for (const candidate of state.candidates.values()) {
             if (state.structuredToolUses.has(candidate.toolUseId)) continue;
             const provenAuto =
-                candidate.autoAtStart || candidate.result?.outcome !== null &&
-                candidate.result?.outcome !== undefined;
+                !candidate.modeConflict &&
+                (candidate.modeAtStart === 'auto' ||
+                    candidate.modeAtStart === 'unknown' &&
+                    candidate.result?.outcome !== null &&
+                    candidate.result?.outcome !== undefined);
             if (!provenAuto) continue;
             reserve(`historical-auto:${sourceScope}:${candidate.toolUseId}`, 1024);
             markHistoricalSource(file);
@@ -363,6 +367,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 recordId: historicalRecordId(candidate.recordId, 'start'),
                 observedAt: candidate.observedAt,
                 diagnosticKind: 'auto_mode_observation',
+                historical: true,
                 payload: {
                     subtype: 'auto_permission_start',
                     schema_version: AUTO_MODE_OBSERVATION_SCHEMA_VERSION,
@@ -402,6 +407,7 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                 recordId: historicalRecordId(candidate.result.recordId, 'end'),
                 observedAt: candidate.result.observedAt,
                 diagnosticKind: 'auto_mode_observation',
+                historical: true,
                 payload: terminal,
             });
         }
@@ -696,7 +702,8 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         toolKind: historicalToolKind(name),
                         observedAt: row.timestamp as string,
                         recordId: historicalRecordId(recordId, String(index), 'tool-use'),
-                        autoAtStart: historical.mode === 'auto',
+                        modeAtStart: historical.mode,
+                        modeConflict: false,
                         ...(pending ? { result: pending } : {}),
                     };
                     const previous = historical.candidates.get(block.id);
@@ -709,7 +716,15 @@ export async function collectRetainedUsage(files: readonly string[], asOf: strin
                         }
                         historical.candidates.set(block.id, candidate);
                     } else {
-                        previous.autoAtStart ||= candidate.autoAtStart;
+                        if (
+                            previous.modeAtStart !== candidate.modeAtStart &&
+                            previous.modeAtStart !== 'unknown' &&
+                            candidate.modeAtStart !== 'unknown'
+                        ) {
+                            previous.modeConflict = true;
+                        } else if (previous.modeAtStart === 'unknown') {
+                            previous.modeAtStart = candidate.modeAtStart;
+                        }
                         if (
                             previous.toolKind !== candidate.toolKind ||
                             previous.observedAt !== candidate.observedAt
