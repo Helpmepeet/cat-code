@@ -49,7 +49,7 @@ const TERMINAL_PREVIEW_HEIGHT_ROWS = 16
 const DEFAULT_GENERATED_IMAGE_DIR = 'generated-images'
 const ITERM2_FILE_PART_CHARS = 1_000_000
 
-// gpt-image-2-codex chooses its own dimensions and ignores any size asked for,
+// The Codex image backend chooses its own dimensions and ignores any size asked for,
 // so the only truthful size is the one in the bytes it returned.
 function readImageDimensions(bytes: Buffer): string | undefined {
   if (bytes.length > 24 && bytes.toString('ascii', 1, 4) === 'PNG') {
@@ -180,7 +180,7 @@ function normalizeOutputPath(outputPath: string): string {
   return expandPath(outputPath)
 }
 
-// Materializes the GPT Image 2 prompting guide to a stable on-disk path so
+// Materializes the GPT Image prompting guide to a stable on-disk path so
 // the model can opt in via Read only when the user asks for a prompt rewrite.
 // Embedding the guide directly in the tool prompt would inject it into the
 // model's context every turn — defeating the gating goal.
@@ -189,7 +189,7 @@ async function ensurePromptingGuideOnDisk(): Promise<string> {
   if (promptingGuidePromise) return promptingGuidePromise
   promptingGuidePromise = (async () => {
     const dir = join(getXDGDataHome(), 'cat-code')
-    const path = join(dir, 'gpt-image-2-prompting-guide.md')
+    const path = join(dir, 'gpt-image-prompting-guide.md')
     try {
       const existing = await readFile(path, 'utf8')
       if (existing === promptingGuideText) return path
@@ -758,9 +758,9 @@ function summarizeCodexImageResponse(text: string): string {
   return parts.join(' ')
 }
 
-// The ChatGPT backend pins its own image model and overrides the tool spec's
-// `model` field, so the only truthful source for what rendered the image is the
-// resolved tool spec it echoes back on response.created.
+// The Codex subscription backend owns the effective image model, so the only
+// truthful source for what rendered the image is the resolved tool spec it
+// echoes back on response.created.
 function extractCodexImageModel(text: string): string | undefined {
   for (const line of text.split('\n')) {
     const trimmed = line.trim()
@@ -961,15 +961,15 @@ Rules:
 - Do not overwrite existing files unless the user explicitly asks to replace them.
 
 Image model limits:
-- Images are generated on a ChatGPT subscription, which pins its own image model. There is no model to choose.
-- That model also picks its own dimensions from the prompt, so there is no size to request. Describe the framing you want in the prompt instead.
+- Images are generated through the ChatGPT/Codex subscription backend. Codex automatically uses its current image model; do not choose or specify an image model.
+- Codex also picks its own dimensions from the prompt, so there is no size to request. Describe the framing you want in the prompt instead.
 
 Transparent backgrounds:
 - Transparency comes from the prompt, not from a parameter. When the user wants a transparent image, say so in the prompt text, for example "on a fully transparent background, no backdrop", and use .png or .webp.
 - You MUST omit background entirely for those requests. Passing background=opaque suppresses the alpha channel and returns a solid image.
 
 Prompt rewriting:
-- Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image 2 prompts: ${guidePath}
+- Only when the user explicitly asks you to rewrite, improve, expand, or polish the image prompt, first Read this file for guidance on structuring GPT Image prompts: ${guidePath}
 - Treat the guide as a guideline, not a strict template — adapt to the user's request.
 - Do NOT Read the guide for normal pass-through generations.`
   },

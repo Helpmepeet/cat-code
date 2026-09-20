@@ -284,8 +284,8 @@ describe('GenerateImageTool', () => {
       )
     const tool = body.tools[0] as Record<string, unknown>
 
-    // Verified live 2026-08-26: the ChatGPT backend echoes back
-    // model gpt-image-2-codex no matter what the tool spec asks for.
+    // The Codex subscription backend owns the effective image model, so Cat Code
+    // must not send or report a client-selected image model.
     expect(tool).not.toHaveProperty('model')
     expect(tool.background).toBe('transparent')
     expect(body.model).toBe('gpt-5.6-terra')
@@ -308,6 +308,29 @@ describe('GenerateImageTool', () => {
     expect(
       _generateImageToolInternalsForTest.extractCodexImageModel(sse),
     ).toBe('gpt-image-2-codex')
+  })
+
+  test('preserves a newer backend-reported image model unchanged', () => {
+    const sse = [
+      'event: response.created',
+      `data: ${JSON.stringify({
+        type: 'response.created',
+        response: {
+          tools: [
+            {
+              type: 'image_generation',
+              background: 'opaque',
+              model: 'gpt-image-2.5-codex',
+            },
+          ],
+        },
+      })}`,
+      '',
+    ].join('\n')
+
+    expect(
+      _generateImageToolInternalsForTest.extractCodexImageModel(sse),
+    ).toBe('gpt-image-2.5-codex')
   })
 
   test('does not invent an image model when the Codex response omits one', () => {
@@ -1260,12 +1283,26 @@ describe('GenerateImageTool', () => {
       agents: [],
     })
 
-    expect(prompt).toContain('There is no model to choose')
+    expect(prompt).toContain(
+      'Images are generated through the ChatGPT/Codex subscription backend. Codex automatically uses its current image model; do not choose or specify an image model.',
+    )
+    expect(prompt).toContain(
+      'Codex also picks its own dimensions from the prompt, so there is no size to request.',
+    )
+    expect(prompt).toContain('gpt-image-prompting-guide.md')
+    expect(prompt).toContain('structuring GPT Image prompts')
+    expect(prompt).not.toContain('gpt-image-2-prompting-guide.md')
+    expect(prompt).not.toContain('GPT Image 2')
     // Verified live 2026-08-26 with one variable changed: the same prompt with
     // background omitted returned RGBA with 879,347 fully transparent pixels,
     // and with background=opaque returned RGB with none.
     expect(prompt).toContain('Transparency comes from the prompt')
     expect(prompt).toContain('You MUST omit background entirely')
+
+    const guidePath = prompt.match(/(\/\S+gpt-image-prompting-guide\.md)/)?.[1]
+    expect(guidePath).toBeDefined()
+    const guideContent = await readFile(guidePath!, 'utf8')
+    expect(guideContent).toStartWith('# GPT Image Prompting Guide')
   })
 
   test('prompt instructs callers not to rewrite image prompts by default', async () => {

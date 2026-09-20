@@ -1,4 +1,4 @@
-# GPT Image 2 Prompting Guide
+# GPT Image Prompting Guide
 
 Treat this as guidance, not a rigid template. Adapt the structure to the user's request — don't pad short asks into long briefs, and don't strip detail the user explicitly provided.
 
