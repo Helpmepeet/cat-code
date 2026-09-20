@@ -2,7 +2,7 @@
 
 ## Executive summary
 
-A Cat Code session appeared to stop responding after `2026-05-11T17:19:20`. The visible symptom looked like a stalled chat: user prompts were accepted and recorded, but no assistant reply appeared.
+A Cat Code session appeared to stop responding after a later request in the run. The visible symptom looked like a stalled chat: user prompts were accepted and recorded, but no assistant reply appeared.
 
 The first obvious error in the debug log was:
 
@@ -16,22 +16,22 @@ That wording is misleading if read as provider truth. The investigation did **no
 Cat Code converted Anthropic Claude OAuth / small-model connection failures into Codex account-cap state. That poisoned the local in-memory Codex account pool. Later prompts failed account selection, and the REPL logged the error without rendering a visible chat message.
 ```
 
-The session started on Codex profile `main`, successfully routed GPT/Codex requests through `main`, then failed over away from `main` after a Claude OAuth refresh error against `https://platform.claude.com/v1/oauth/token`. Actual routed requests later used `arm`, while the footer continued showing `main` for several minutes. Eventually local pool state reached a point where fresh account selection reported no healthy accounts.
+The session started on Codex profile `account-a`, successfully routed GPT/Codex requests through `account-a`, then failed over away from `account-a` after a Claude OAuth refresh error against `https://platform.claude.com/v1/oauth/token`. Actual routed requests later used `account-e`, while the footer continued showing `account-a` for a while. Eventually local pool state reached a point where fresh account selection reported no healthy accounts.
 
 This document intentionally records only what was observed in the transcript, debug log, and source code during the investigation. Items that remain uncertain are listed separately.
 
 ## Primary artifacts
 
-Debug log:
+Debug log (sanitized placeholder):
 
 ```text
-/Users/pt/.cat-code/debug/92ef8bad-fa56-486b-95b9-0ea200c48a07.txt
+$HOME/project/debug/synthetic-session-a.txt
 ```
 
-Transcript:
+Transcript (sanitized placeholder):
 
 ```text
-/Users/pt/.cat-code/projects/-Users-pt-cat-code/92ef8bad-fa56-486b-95b9-0ea200c48a07.jsonl
+$HOME/project/transcripts/synthetic-session-a.jsonl
 ```
 
 Documentation file created from the investigation:
@@ -43,103 +43,90 @@ docs/codex/2026-05-12-bug-codex-pool-false-cap-on-claude-oauth-failure.md
 ## Glossary for future readers
 
 - **Codex pool**: Cat Code's in-process pool of saved Codex/OpenAI accounts.
-- **Vault profile / account alias**: Human-readable labels such as `main`, `dad`, `hiby`, `oscin`, and `arm` mapped to account UUIDs in the Codex vault.
+- **Vault profile / account alias**: Human-readable labels such as `account-a` through `account-e` mapped to account IDs in the Codex vault.
 - **Main-thread lease**: The Codex lease used by the main chat thread. It can be reassigned across accounts on failover.
 - **Capped**: Cat Code local status for an account believed to have hit a cap. In this bug, generic connection errors appear to have produced this status without a confirmed provider cap.
 - **Existing lease routing**: Existing leases may still point at account IDs and route requests even if later pool health state changes.
 - **Fresh selection**: Code path that picks a healthy account from the pool. This can fail if all pool accounts are marked `capped` or unavailable.
 
-## Account mapping observed from non-secret vault metadata
+## Synthetic account mapping used in this report
 
-The investigation printed only non-secret metadata from the Codex vault. Tokens were not printed.
+The investigation printed only non-secret metadata from the Codex vault. Tokens were not printed. The real labels and IDs are replaced here with neutral names and synthetic IDs.
 
 ```text
-main  -> ca889574-256c-4f04-8d5f-f80004f1a8e1
-dad   -> 2766fbb9-9a6f-460d-860d-73a3d0bddd9c
-hiby  -> 9ed41939-674d-49f7-89cb-1075a396c828
-oscin -> 16513b88-e36e-4b37-a128-c6414cee30db
-arm   -> 0c9b1d6d-f4e4-4673-9aca-79da8dd91165
+account-a -> acct-a-001
+account-b -> acct-b-002
+account-c -> acct-c-003
+account-d -> acct-d-004
+account-e -> acct-e-005
 ```
 
 The old session began with:
 
 ```text
-Switched to main
+Switched to account-a
 ```
 
-So the user was initially on the `main` Codex profile.
+So the user was initially on the `account-a` Codex profile.
 
 ## User-visible symptom
 
-After the last visible assistant response, the user submitted more prompts:
-
-```text
-2026-05-11T17:19:50 do we need to research more...
-2026-05-11T17:20:17 hi
-2026-05-11T17:20:54 hi
-```
-
-The transcript recorded these user messages, but no assistant response followed. From the user's point of view, the session looked stalled or unresponsive.
+After the last visible assistant response, the user submitted several more prompts. The transcript recorded the prompts, but no assistant response followed. From the user's point of view, the session looked stalled or unresponsive.
 
 The debug log shows the prompts did enter the normal query path and failed quickly. This was not proven to be an infinite loop or a blocked query guard.
 
 ## High-level timeline
 
-| Time | What happened | Evidence |
+| Sequence | What happened | Sanitized evidence |
 | --- | --- | --- |
-| `16:31:32` | Local command switched session to `main`. | Transcript local command: `Switched to main` |
-| `16:32:12` onward | GPT/Codex requests successfully routed through `main` / `ca889...`. | `[codex-cache] request account=ca889574-256 model=gpt-5.5` |
-| `17:14:42` | Last confirmed successful main-thread request through `main`. | `[codex-cache] owner=main-thread account=ca889574-256 model=gpt-5.5` |
-| `17:14:56` | Claude small-model path appears in log. | `model 'claude-haiku-4-5-20251001'` |
-| `17:14:57` | Claude OAuth refresh fails with HTTP 400. | `platform.claude.com/v1/oauth/token,status=400` |
-| `17:14:57` | The failure surfaces as generic `Connection error.`. | `API error (attempt 1/6): undefined Connection error.` |
-| `17:14:57-17:14:59` | Codex main-thread lease is reassigned across accounts on connection error. | `main -> dad -> hiby -> oscin -> arm` |
-| `17:14:59-17:19:20` | Actual GPT/Codex routing uses `arm` / `0c9b...`. | `owner=main-thread account=0c9b1d6d-f4e model=gpt-5.5` |
-| Until at least `17:18:25` | Footer still displays `main`. | Screen sample: `GPT 5.5 · high · main` |
-| `17:19:50` | Next user prompt fails account selection. | `All Codex accounts are capped or unavailable` |
-| `17:20:17`, `17:20:54` | Later `hi` prompts fail the same way. | Repeated account-resolution errors |
+| Early in the run | Local command switched the session to `account-a`. | `Switched to account-a` |
+| Before the failure | GPT/Codex requests succeeded through `account-a`. | `owner=main-thread account=acct-a-001 model=gpt-5.5` |
+| Trigger point | Claude small-model OAuth refresh returned HTTP 400. | `platform.claude.com/v1/oauth/token,status=400` |
+| Immediate retry sequence | A generic connection error caused lease reassignment. | `account-a -> account-b -> account-c -> account-d -> account-e` |
+| After failover | GPT/Codex traffic used `account-e`; the footer still displayed `account-a`. | `owner=main-thread account=acct-e-005 model=gpt-5.5` |
+| Later prompts | Fresh account selection failed. | `All Codex accounts are capped or unavailable` |
 
 ## Detailed timeline and evidence
 
-### 1. `main` was used successfully
+### 1. `account-a` was used successfully
 
-The session successfully routed GPT/Codex traffic through `main` / `ca889...` earlier in the run:
-
-```text
-2026-05-11T16:32:12.211Z [codex-cache] request account=ca889574-256 model=gpt-5.5
-2026-05-11T16:32:35.335Z [codex-cache] owner=main-thread account=ca889574-256 model=gpt-5.5
-```
-
-Later successful `main` usage continued:
+The session successfully routed GPT/Codex traffic through `account-a` / `acct-a-001` earlier in the run:
 
 ```text
-2026-05-11T17:14:00.946Z [codex-cache] owner=main-thread account=ca889574-256 model=gpt-5.5
-2026-05-11T17:14:42.550Z [codex-cache] owner=main-thread account=ca889574-256 model=gpt-5.5
+[codex-cache] request account=acct-a-001 model=gpt-5.5
+[codex-cache] owner=main-thread account=acct-a-001 model=gpt-5.5
 ```
 
-A per-account timeline found many `ca889...` routing entries before the failover and no routed `main` requests after the failover line at `17:14:57.838`.
+Later successful `account-a` usage continued:
 
-This means `main` was not dead from session start. It served real GPT/Codex traffic successfully.
+```text
+[codex-cache] owner=main-thread account=acct-a-001 model=gpt-5.5
+[codex-cache] owner=main-thread account=acct-a-001 model=gpt-5.5
+```
+
+A per-account timeline found many `acct-a-001` routing entries before the failover and no routed `account-a` requests after the failover.
+
+This means `account-a` was not dead from session start. It served real GPT/Codex traffic successfully.
 
 ### 2. A Claude small-model / OAuth path failed
 
 Immediately before the failover cascade, the debug log shows a Claude small-model path:
 
 ```text
-2026-05-11T17:14:56.874Z Tool search disabled for model 'claude-haiku-4-5-20251001': model does not support tool_reference blocks.
-2026-05-11T17:14:56.875Z Cached MC gate: enabled=false modelSupported=false model=claude-haiku-4-5-20251001
+Tool search disabled for model 'claude-haiku-4-5-20251001': model does not support tool_reference blocks.
+Cached MC gate: enabled=false modelSupported=false model=claude-haiku-4-5-20251001
 ```
 
 Then Claude OAuth refresh failed:
 
 ```text
-2026-05-11T17:14:57.310Z [ERROR] AxiosError: [url=https://platform.claude.com/v1/oauth/token,status=400] AxiosError: Request failed with status code 400
+[ERROR] AxiosError: [url=https://platform.claude.com/v1/oauth/token,status=400] AxiosError: Request failed with status code 400
 ```
 
 The retry layer then logged a generic connection error:
 
 ```text
-2026-05-11T17:14:57.311Z [ERROR] API error (attempt 1/6): undefined Connection error.
+[ERROR] API error (attempt 1/6): undefined Connection error.
 ```
 
 This is important because the immediate failing endpoint in the log is Anthropic Claude OAuth, not an OpenAI/Codex endpoint.
@@ -149,83 +136,69 @@ This is important because the immediate failing endpoint in the log is Anthropic
 On retry attempts, Cat Code reassigned the main-thread Codex lease across multiple accounts:
 
 ```text
-2026-05-11T17:14:57.838Z [codex-pool] Reassigned lease main-thread from ca889574-256c-4f04-8d5f-f80004f1a8e1 to 2766fbb9-9a6f-460d-860d-73a3d0bddd9c on connection error
-2026-05-11T17:14:58.222Z [codex-pool] Reassigned lease main-thread from 2766fbb9-9a6f-460d-860d-73a3d0bddd9c to 9ed41939-674d-49f7-89cb-1075a396c828 on connection error
-2026-05-11T17:14:58.588Z [codex-pool] Reassigned lease main-thread from 9ed41939-674d-49f7-89cb-1075a396c828 to 16513b88-e36e-4b37-a128-c6414cee30db on connection error
-2026-05-11T17:14:59.102Z [codex-pool] Reassigned lease main-thread from 16513b88-e36e-4b37-a128-c6414cee30db to 0c9b1d6d-f4e4-4673-9aca-79da8dd91165 on connection error
+[codex-pool] Reassigned lease main-thread from acct-a-001 to acct-b-002 on connection error
+[codex-pool] Reassigned lease main-thread from acct-b-002 to acct-c-003 on connection error
+[codex-pool] Reassigned lease main-thread from acct-c-003 to acct-d-004 on connection error
+[codex-pool] Reassigned lease main-thread from acct-d-004 to acct-e-005 on connection error
 ```
 
 Expanded with aliases:
 
 ```text
-17:14:57.838 main  -> dad   on connection error
-17:14:58.222 dad   -> hiby  on connection error
-17:14:58.588 hiby  -> oscin on connection error
-17:14:59.102 oscin -> arm   on connection error
+account-a -> account-b on connection error
+account-b -> account-c on connection error
+account-c -> account-d on connection error
+account-d -> account-e on connection error
 ```
 
 The observed behavior is suspicious because the trigger was a generic connection error immediately following a Claude OAuth refresh failure.
 
-### 4. Actual routing moved from `main` to `arm`
+### 4. Actual routing moved from `account-a` to `account-e`
 
-After the failover cascade, actual routed GPT/Codex traffic moved to `arm` / `0c9b...`:
-
-```text
-2026-05-11T17:18:34.404Z account_id_prefix=0c9b1d6d model=gpt-5.5 completed=true
-2026-05-11T17:19:01.605Z account_id_prefix=0c9b1d6d model=gpt-5.5 completed=true
-2026-05-11T17:19:20.964Z account_id_prefix=0c9b1d6d model=gpt-5.5 completed=true
-```
-
-The debug log also shows main-thread ownership on `arm` near the end of successful operation:
+After the failover cascade, actual routed GPT/Codex traffic moved to `account-e` / `acct-e-005`:
 
 ```text
-2026-05-11T17:19:01.605Z [codex-cache] owner=main-thread account=0c9b1d6d-f4e model=gpt-5.5
-2026-05-11T17:19:05.905Z [codex-cache] owner=main-thread account=0c9b1d6d-f4e model=gpt-5.5
-2026-05-11T17:19:20.963Z [codex-cache] owner=main-thread account=0c9b1d6d-f4e model=gpt-5.5
+account_id=acct-e-005 model=gpt-5.5 completed=true
+account_id=acct-e-005 model=gpt-5.5 completed=true
+account_id=acct-e-005 model=gpt-5.5 completed=true
 ```
 
-This resolves one of the main contradictions in the investigation: if `main` had been marked capped, the same process should stop using it. The logs show exactly that. The process stopped routing through `main` after failover and used `arm` instead.
+The debug log also shows main-thread ownership on `account-e` near the end of successful operation:
+
+```text
+[codex-cache] owner=main-thread account=acct-e-005 model=gpt-5.5
+[codex-cache] owner=main-thread account=acct-e-005 model=gpt-5.5
+[codex-cache] owner=main-thread account=acct-e-005 model=gpt-5.5
+```
+
+This resolves one of the main contradictions in the investigation: if `account-a` had been marked capped, the same process should stop using it. The logs show exactly that. The process stopped routing through `account-a` after failover and used `account-e` instead.
 
 ### 5. The footer/status line was stale or misleading
 
-Even after routing had moved to `arm`, debug screen samples continued to show:
+Even after routing had moved to `account-e`, debug screen samples continued to show:
 
 ```text
-GPT 5.5 · high · main
+GPT 5.5 · high · account-a
 ```
 
-This was visible until at least `17:18:25`, more than three minutes after failover away from `main` at `17:14:57`.
-
-Later the footer dropped the profile label entirely:
-
-```text
-GPT 5.5 · high | ctx: 34%
-```
-
-The footer made it look like the user was still talking through `main`, while actual request-routing logs showed `arm`. For this incident, request-routing logs are more authoritative than footer text.
+The footer made it look like the user was still talking through `account-a`, while actual request-routing logs showed `account-e`. For this incident, request-routing logs are more authoritative than footer text.
 
 ### 6. Later prompts failed without visible assistant output
 
-At `17:19:50`, a user prompt entered normal query handling:
-
-```text
-2026-05-11T17:19:50.831Z [PromptInput:onSubmit] start length=149 slash=false mode=prompt
-2026-05-11T17:19:50.839Z [REPL:onQuery] start messages=1 shouldQuery=true
-2026-05-11T17:19:50.842Z [REPL:query-setup] query start systemPromptSectionCount=14
-```
+A later user prompt entered normal query handling.
 
 Then failed immediately:
 
 ```text
-2026-05-11T17:19:50.842Z [REPL:onQuery] onQueryImpl error: All Codex accounts are capped or unavailable
+[REPL:onQuery] onQueryImpl error: All Codex accounts are capped or unavailable
 ```
 
 The query guard cleaned up:
 
 ```text
-2026-05-11T17:19:50.842Z [QueryGuard] end -> idle generation=21
-2026-05-11T17:19:50.843Z [REPL:onQuery] cleanup for generation=21
-2026-05-11T17:19:50.843Z [REPL:onQuery] finally complete generation=21
+[QueryGuard] end -> idle generation=<synthetic-generation>
+[REPL:onQuery] cleanup for generation=<synthetic-generation>
+[REPL:onQuery] finally complete generation=<synthetic-generation>
 ```
 
 The API retry path also logged:
@@ -234,13 +207,13 @@ The API retry path also logged:
 No valid Codex (OpenAI) account found. All accounts may have hit their usage limit. Use /switch-account to switch to another account, or /accounts to check status.
 ```
 
-The same failure pattern repeated for prompts at `17:20:17` and `17:20:54`.
+The same failure pattern repeated for later prompts.
 
 The session did not appear to be stuck in an infinite running state. It accepted prompts, failed, cleaned up, and returned idle, but did not show the user a useful visible error message.
 
 ## What was not found
 
-A full debug-log scan did not find direct provider-side cap evidence for `main` or all accounts.
+A full debug-log scan did not find direct provider-side cap evidence for `account-a` or all accounts.
 
 No matches were found for real cap markers such as:
 
@@ -266,7 +239,7 @@ That message reflects local account-resolution failure. It is not itself proof t
 
 ### Correction 1: Do not equate local pool exhaustion with real account exhaustion
 
-The initial interpretation was too strong. The evidence does not prove that `main`, or all accounts, were truly exhausted at the provider level.
+The initial interpretation was too strong. The evidence does not prove that `account-a`, or all accounts, were truly exhausted at the provider level.
 
 The precise statement is:
 
@@ -276,13 +249,13 @@ Cat Code's local in-memory Codex pool believed all accounts were capped or unava
 
 That local state appears to have been produced by retry/failover logic.
 
-### Correction 2: The user was not necessarily still talking through `main`
+### Correction 2: The user was not necessarily still talking through `account-a`
 
-The footer showed `main`, but actual routing logs showed traffic moved to `arm`.
+The footer showed `account-a`, but actual routing logs showed traffic moved to `account-e`.
 
-So the statement “we were still talking on main” was true from the UI perspective but not from the request-routing evidence.
+So the statement “we were still talking on account-a” was true from the UI perspective but not from the request-routing evidence.
 
-### Correction 3: `arm` may have been poisoned later even if existing routes still succeeded
+### Correction 3: `account-e` may have been poisoned later even if existing routes still succeeded
 
 A later verifier pointed out an important mechanism:
 
@@ -291,9 +264,9 @@ A later verifier pointed out an important mechanism:
 - Existing leases may still route through stale account IDs even after local pool health says the account is capped.
 - A fresh selection later sees no healthy accounts and fails.
 
-This explains how `arm` could continue serving existing-routed requests and still leave the pool in a poisoned state for the next fresh account selection.
+This explains how `account-e` could continue serving existing-routed requests and still leave the pool in a poisoned state for the next fresh account selection.
 
-This exact moment for `arm` being marked capped was not directly logged as `Account arm capped`; it is inferred from code behavior and the later `All Codex accounts are capped or unavailable` failure. The inference is plausible and consistent with the code, but it is not backed by a direct `markPoolAccountCapped(arm)` log line.
+This exact moment for `account-e` being marked capped was not directly logged as `Account account-e capped`; it is inferred from code behavior and the later `All Codex accounts are capped or unavailable` failure. The inference is plausible and consistent with the code, but it is not backed by a direct `markPoolAccountCapped(account-e)` log line.
 
 ## Code path analysis
 
@@ -497,7 +470,7 @@ if (mainLease) {
 }
 ```
 
-The observed footer stayed on `main` after actual routing had moved to `arm`. The likely issue is not the snapshot calculation itself, but that lease failover did not force a status-line re-render at the right time.
+The observed footer stayed on `account-a` after actual routing had moved to `account-e`. The likely issue is not the snapshot calculation itself, but that lease failover did not force a status-line re-render at the right time.
 
 ## State model that explains the incident
 
@@ -512,25 +485,25 @@ The incident makes more sense if these states are kept separate:
 The bug happened because these states diverged:
 
 - Provider reality did not show a confirmed Codex cap.
-- Vault metadata for `main` did not show a durable cap marker in the non-secret fields inspected.
+- Vault metadata for `account-a` did not show a durable cap marker in the non-secret fields inspected.
 - In-memory pool health was mutated to cap accounts due to connection errors.
-- Lease routing moved from `main` to `arm` and existing routes kept working.
-- Footer display continued to show `main` after actual routing had moved to `arm`.
+- Lease routing moved from `account-a` to `account-e` and existing routes kept working.
+- Footer display continued to show `account-a` after actual routing had moved to `account-e`.
 
-## Why the session could still talk after `main` was marked capped
+## Why the session could still talk after `account-a` was marked capped
 
 The apparent contradiction was:
 
 ```text
-If main was marked capped, why could the user still talk?
+If account-a was marked capped, why could the user still talk?
 ```
 
 The answer from the logs is:
 
-1. The session initially used `main` successfully.
-2. At `17:14:57`, the main-thread lease failed over away from `main`.
-3. After that, actual routing used `arm` / `0c9b...`.
-4. The footer still showed `main`, so it looked like the user was still talking through `main`.
+1. The session initially used `account-a` successfully.
+2. During the failure, the main-thread lease failed over away from `account-a`.
+3. After that, actual routing used `account-e` / `acct-e-005`.
+4. The footer still showed `account-a`, so it looked like the user was still talking through `account-a`.
 5. Existing leases can keep routing through account IDs even if later pool health state changes.
 6. The fatal failure appears when a later fresh selection sees no healthy accounts.
 
@@ -560,7 +533,7 @@ Existing leases can continue routing through account IDs while fresh account sel
 
 ### Bug 6: Footer/profile display can be stale after automatic lease failover
 
-The footer can show `main` after actual request routing has moved to another profile such as `arm`.
+The footer can show `account-a` after actual request routing has moved to another profile such as `account-e`.
 
 ## Rejected or unproven hypotheses
 
@@ -568,17 +541,17 @@ The footer can show `main` after actual request routing has moved to another pro
 
 Not proven. The log did not contain direct provider cap evidence such as `CodexAccountCapError`, `429`, or an upstream Codex usage-limit response.
 
-### Hypothesis: `main` was unusable from the beginning
+### Hypothesis: `account-a` was unusable from the beginning
 
-Rejected. The log shows `main` serving successful GPT/Codex requests earlier in the session.
+Rejected. The log shows `account-a` serving successful GPT/Codex requests earlier in the session.
 
 ### Hypothesis: the UI was stuck in a permanent running state
 
 Not supported. The debug log shows `QueryGuard` returning to idle after the failed prompts.
 
-### Hypothesis: the user was still actually routed through `main` after failover
+### Hypothesis: the user was still actually routed through `account-a` after failover
 
-Rejected by routing logs. The footer showed `main`, but `codex-cache` and `codex_send_path` records show actual routing moved to `arm`.
+Rejected by routing logs. The footer showed `account-a`, but `codex-cache` and `codex_send_path` records show actual routing moved to `account-e`.
 
 ## Remaining uncertainties
 
@@ -586,7 +559,7 @@ The investigation did not prove these points:
 
 1. Whether the Claude OAuth 400 was caused by an expired/invalid Claude token, a profile mismatch, a transient service issue, or another auth-state bug.
 2. Whether the SDK/request layer always wraps that OAuth failure into `APIConnectionError("Connection error.")`, or whether that wrapping was specific to this code path.
-3. The exact timestamp at which `arm` was locally marked capped, because no direct `Account arm capped` log line was found.
+3. The exact point at which `account-e` was locally marked capped, because no direct `Account account-e capped` log line was found.
 4. Whether `/accounts` at the time would have displayed the poisoned pool state clearly.
 5. Whether all accounts were poisoned exclusively by this mechanism or whether some had pre-existing in-memory state before the observed cascade.
 
@@ -670,12 +643,12 @@ Expected:
 
 Setup:
 
-- Status line initially shows `main`.
-- Main-thread lease fails over to `arm`.
+- Status line initially shows `account-a`.
+- Main-thread lease fails over to `account-e`.
 
 Expected:
 
-- Status line refreshes and shows `arm`, or otherwise shows the active routing account accurately.
+- Status line refreshes and shows `account-e`, or otherwise shows the active routing account accurately.
 
 ### Test 6: Existing stale leases do not hide poisoned pool state indefinitely
 
@@ -713,7 +686,7 @@ The key diagnostic need is to distinguish:
 
 ## Final diagnosis
 
-The old session did not prove `main` or all Codex accounts were truly exhausted.
+The old session did not prove `account-a` or all Codex accounts were truly exhausted.
 
 The best-supported diagnosis is:
 

@@ -1,7 +1,7 @@
 # Bug RCA: `gpt-5.6-luna` subagent/side requests die with HTTP 404 "Model not found"
 
 - **Date:** 2026-07-12
-- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fix (1)+(2) committed on `migration` (`9cfed13`, pushed; PR #8 for review) with review follow-ups applied — true per-account sticky storage + streaming-only 404-retry; not yet live-verified. Trigger fix (3) was implemented and automatically verified on 2026-07-15; see `docs/reports/2026-07-15-codex-subagent-single-usable-account-failure.md`. Currency fix (4) and the confirming probe remain open.**
+- **Status:** Diagnosed — root cause + HTTP-refusal mechanism confirmed (source, logs, openai/codex#31967); minimal HTTP fix identified (`version` header only, ~80%, pending a confirming probe). **Durable fixes (1)+(2) are implemented in the migration branch with review follow-ups applied: true per-account sticky storage + streaming-only 404-retry; not yet live-verified. Trigger fix (3) was implemented and automatically verified later. Currency fix (4) and the confirming probe remain open.**
 - **Area:** Engine — Codex transport (`src/services/api/codex-*`), account lease pool.
 - **Severity:** High. Silently kills subagent (Explore) spawns and title-generation
   side queries whenever a WebSocket blip forces the HTTP fallback while the
@@ -16,7 +16,7 @@ token), the pool reassigns the lease to a healthy account — but the stale
 conv-keyed flag makes the retry **skip WS on the healthy account too**, and the
 HTTP fallback channel cannot serve `gpt-5.6-luna`, so the 404 is terminal.
 
-It is **not** account-scoped model availability (both `main`/`onbi` serve luna
+It is **not** account-scoped model availability (both `account-a`/`account-b` serve luna
 fine over WS) and **not** a 5.6-family gap (`gpt-5.6-sol` completes over the same
 HTTP fallback). It is one model, `gpt-5.6-luna`, that the HTTP channel refuses,
 intersected with a fallback path that a lease reassignment fails to unstick. The
@@ -26,7 +26,7 @@ lands in a cohort where luna's slug resolves to a dead engine, while WS's beta
 value reaches the modern cohort.
 
 The subagent correlation is real but **indirect**: subagents cold-connect to
-`spread`-selected, unvalidated non-main accounts, so they trip the bad-account WS
+`spread`-selected, unvalidated non-primary accounts, so they trip the bad-account WS
 failure far more often — and a dead subagent is *visible* while a dead title
 query fails silently.
 
@@ -35,7 +35,7 @@ query fails silently.
 Spawning an Explore subagent from a session on model `gpt-5.6-luna` shows:
 
 ```
-⏺ Explore(Trace stale memory framing)
+⏺ Explore(synthetic task)
   Initializing…
   Tool execution failed
 ```
@@ -47,29 +47,26 @@ Codex API error (404): {"error":{"message":"Model not found gpt-5.6-luna",
   "type":"invalid_request_error","param":"model","code":null}}
 ```
 
-Primary evidence log: `~/.cat-code/debug/4633e2e0-fe25-4a47-a20a-463fe9a5d204.txt`.
+Primary evidence log: `$HOME/project/debug/synthetic-luna-fallback.log`.
 
 ## What is settled (verified this session)
 
 **The failure is transport-bound, and luna-specific — not account/model-availability.**
 
-- Across all ~1,240 debug logs, the string `Model not found` names exactly one
+- Across the debug-log corpus, the string `Model not found` names exactly one
   model, **`gpt-5.6-luna`, 32/32 occurrences** — never sol/terra/5.5/5.4-mini.
-  *(verified: `rg -o "Model not found gpt-…"` over `~/.cat-code/debug`.)*
+  *(verified by searching `$HOME/project/debug` for model-not-found responses.)*
 - Every one of those 32 is immediately preceded by a `falling back to HTTP`
   marker for the same conversation. The 404 never occurs on a WebSocket request.
 - Same account + same model, opposite transports, opposite outcome:
-  - `ca889574` (main) serves luna fine over **WS** (`f8136fb5.txt:160`,
-    `fdd837b0.txt:162`).
-  - `14f2f119` (onbi) — which serves luna over WS in the failing session — **404s**
-    it over **HTTP** in `1302243a.txt:404`.
+  - `account-a` serves luna fine over **WS** in multiple synthetic log entries.
+  - `account-b` — which serves luna over WS in the failing session — **404s**
+    it over **HTTP** in a separate synthetic log entry.
 - `gpt-5.6-sol` (also a 5.6 preview model) **completes over the same sticky HTTP
-  fallback**, same account, same session, ~14s after luna 404'd there:
-  `f2982cc2.txt` `awaiting_initial_output transport=http` →
-  `initial_output_ready transport=http elapsed_ms=3246` (05:28:58→05:29:01).
+  fallback** on the same account and session after luna 404s there.
   So the HTTP channel's rejection is scoped to luna, not the 5.6 family.
 - The HTTP responses even carry `x-codex-safety-buffering-faster-model=gpt-5.6-luna`
-  (`f2982cc2.txt`, `e818b062.txt`) — the HTTP plane *knows* luna and uses it
+  (observed in synthetic log entries) — the HTTP plane *knows* luna and uses it
   internally as its fast drafting model, but will not accept it as a *requested*
   model. This reads as a requestable-model allowlist gap, not "luna absent from
   HTTP infra."
@@ -89,26 +86,26 @@ Both transports POST the identical URL and an identically-built body:
 
 Each link cites source (verified in this pass) and the matching log evidence.
 
-**1. Subagents lease *away* from the main account.**
+**1. Subagents lease *away* from the primary account.**
 `resolveDefaultLeaseStrategy` returns `follow-main` for `ownerType === 'main'`
 and `spread` for every other owner (`codexAccountLeaseManager.ts:593-599`). The
-`spread` comparator explicitly penalizes the main account
+`spread` comparator explicitly penalizes the primary account
 (`codexAccountLeaseManager.ts:520-527`) and otherwise prefers the fewest-live-leases
 account — i.e. the least-recently-exercised pool account, whose latent problems
 (dead token, cold route) are the least likely to have been discovered yet. In the
-observed subagent incidents the subagent was first-leased to `93ce612e` while main
-rode a different, healthy account. *(spread/penalty: verified in source; per-incident
+observed subagent incidents the subagent was first-leased to `account-c` while the primary
+thread rode a different, healthy account. *(spread/penalty: verified in source; per-incident
 lease target: from log-corpus analysis.)*
 
 **2. A fresh conversation key ⇒ a cold WS connect.**
 A subagent's transport conversation id is `${sessionId}/${agentId}`
 (`codex-fetch-adapter.ts:174-175`). WS sessions are keyed by conversation id, so a
 subagent's first request always opens a brand-new socket (no warm reuse). In
-`4633e2e0.txt` the connect to `93ce612e` failed immediately; the HTTP responses
-from that account show why: `x-openai-authorization-error=401`
-`x-openai-ide-error-code=token_invalidated` (lines 459, 462) — the account's token
-was dead in that window. (`93ce612e` is not chronically broken; it has many WS
-successes across the corpus — it was broken *then*.)
+`synthetic-session-a.txt` the connect to `account-c` failed immediately; the HTTP
+responses from that account show why: `x-openai-authorization-error=401`
+`x-openai-ide-error-code=token_invalidated` — the account's token was dead in that
+window. (`account-c` is not chronically broken; it has many WS successes across
+the corpus — it was broken *then*.)
 
 **3. A generic WS failure sets a conv-keyed, account-agnostic sticky flag.**
 `stickyHttpFallback` is a `Map<string, StickyFallbackEntry>` keyed by
@@ -124,7 +121,7 @@ branch: `classifyCodexHttpAccountError` inspects only status + body, never the
 
 **4. Account failover does not clear the sticky flag. (This is the crux.)**
 HTTP on the dead account 401s twice; the pool then reassigns the lease to healthy
-`ca889574` (`4633e2e0.txt:463` "Reassigned lease … on connection error"). But the
+`account-a` (`synthetic-session-a.txt` "Reassigned lease … on connection error"). But the
 retry re-enters the streaming branch at `codex-fetch-adapter.ts:3332`,
 `if (!hasStickyHttpFallback(conversationId))` — finds the still-valid flag for the
 **same conversation key** — and skips WS on the now-healthy account. The design
@@ -138,8 +135,8 @@ The 404 is returned as a plain `Response` (`codex-fetch-adapter.ts:3416-3438`);
 `withRetry`'s classifier has no 404 branch (only 400/401/403/408/429/5xx), so it is
 non-retryable; the streaming→non-streaming degrade in `claude.ts` retries the
 *same* HTTP transport, which 404s again; terminal throw. The "HTTP is equivalent"
-assumption from link 4 held for every model until luna shipped (first seen
-2026-07-10 in the corpus).
+assumption from link 4 held for older models; luna is the model that exposed the
+gap in this corpus.
 
 ## Why only Explorer/subagents die — and a normal session doesn't
 
@@ -151,11 +148,11 @@ independent reasons, and only the subagent hits both at once:
 
 1. **Different, unvalidated account (the primary reason).** The main thread leases
    its own account (`follow-main`); a subagent is deliberately steered to a
-   *different* one by `spread`, which penalizes the main account
+   *different* one by `spread`, which penalizes the primary account
    (`codexAccountLeaseManager.ts:520-527`, `:593-599`) and picks the
    least-recently-used account — precisely the one whose latent problems haven't
    surfaced this session. In all three subagent incidents the subagent was pushed
-   onto `93ce612e`, whose token was dead in that window, while the main thread rode a
+   onto `account-c`, whose token was dead in that window, while the main thread rode a
    healthy account and never touched it. (With an all-healthy pool the subagent's
    connect succeeds like main's — the failure *requires* a bad account in the pool,
    which `spread` is the most likely to expose.)
@@ -168,7 +165,7 @@ independent reasons, and only the subagent hits both at once:
    failure the main thread's warm-socket-to-a-good-account never sees.
 
 That failed WS → sticky HTTP fallback → luna 404 → terminal (links 3–5). The main
-thread of the *same* session — itself luna in `4633e2e0`, on healthy `14f2f119` —
+thread of the *same* session — itself luna on healthy `account-b` —
 never falls to HTTP, so it never meets the 404.
 
 **Two things that are NOT the reason**, to be exact:
@@ -213,7 +210,7 @@ External confirmation — openai/codex#31967, a controlled A/B over this exact H
 | `codex_cli_rs` | `0.144.1` | **Success** |
 
 The failure returns a server-generated engine name (`Model not found
-gpt-5.6-luna-free-1p-codexswic-ev3`) that appears in no client — proof the slug is
+gpt-5.6-luna-<synthetic-server-engine>`) that appears in no client — proof the slug is
 resolved server-side per cohort, not matched against a client-sent list.
 
 This is a near-exact reproduction of cat-code's failing request: cat-code's HTTP
@@ -232,7 +229,7 @@ fails.
 
 **Minimal HTTP fix identified — `version` header only (~80%).** The follow-up
 question ("version-only vs the full responses-lite protocol") is closed by the
-source of the #31967 table: the reporter's client (earendil-works/pi) sends the
+source of the #31967 table: an external client's request sends the
 **same shape cat-code sends** on its HTTP SSE path — `OpenAI-Beta:
 responses=experimental`, plain non-lite body — differing only in `originator`. So
 the Success row (`codex_cli_rs` + `version: 0.144.1`) is cat-code's failing request
@@ -261,7 +258,7 @@ turns a transient blip on a *bad* account into a terminal failure on a *good* on
    fixed all three observed subagent incidents.
 2. **Backstop:** treat HTTP `404 Model not found` as "retry over WS" rather than
    terminal (`codex-fetch-adapter.ts:3416-3438` + `withRetry` classification).
-3. **Implemented 2026-07-15 — removes the trigger:** classify the header-only `token_invalidated` as
+3. **Implemented later — removes the trigger:** classify the header-only `token_invalidated` as
    `CodexAccountAuthError` by inspecting the `x-openai-ide-error-code` /
    `x-openai-authorization-error` response headers in `classifyCodexHttpAccountError`
    so the dead-token WS failure enters account-bound refresh/dead-mark/failover
@@ -304,12 +301,12 @@ Minimal robust PR: (1) + (2).
   HTTP request was found).
 - **For "WS-only / no HTTP shape works":** needs a live probe — a single HTTP `200`
   for luna under any header falsifies it and makes the fix a header change.
-- **For the `spread` link:** a subagent incident whose first lease was the main
-  account. All three observed incidents first-leased `93ce612e`.
+- **For the `spread` link:** a subagent incident whose first lease was the primary
+  account. All three observed incidents first-leased `account-c`.
 
 ## Method & provenance
 
-- Log-corpus triangulation over ~1,240 files in `~/.cat-code/debug/`.
+- Log-corpus triangulation over the debug corpus in `$HOME/project/debug/`.
 - Direct source verification (this pass): the sticky-flag scoping and gate
   (`codex-fetch-adapter.ts:75/104-118/3332/3364-3403`), the 404 return + classifier
   (`:372-392/3416-3438`), the beta headers and URLs, the once-built body, the lease
@@ -321,7 +318,7 @@ Minimal robust PR: (1) + (2).
   counter-fact); (ii) a root-cause pass that produced the five-link chain; (iii) a
   mechanism/external-research pass that resolved (a)-vs-(b) via openai/codex#31967;
   (iv) a closing pass that established the minimal HTTP fix as version-only —
-  anchored on the #31967 reporter's client (earendil-works/pi) sending cat-code's
+  anchored on the #31967 external client's request sending cat-code's
   exact HTTP shape (`responses=experimental`, non-lite), with lite ruled out as an
   availability gate. Aggregate corpus counts (per-incident lease targets, the
   3-subagent/5-title split, WS success totals) are from those passes and were not
@@ -330,4 +327,4 @@ Minimal robust PR: (1) + (2).
   WebFetch — its A/B header table quoted above) were checked directly here.
 - Sources: openai/codex#31967 (header-keyed slug resolution A/B, verified);
   openai/codex#31882; anomalyco/opencode#36140 · PR#36143 (a confirmed luna fix
-  scoped to `{sol,terra,luna}`); openai/codex `client.rs` (main).
+  scoped to `{sol,terra,luna}`); openai/codex `client.rs`.

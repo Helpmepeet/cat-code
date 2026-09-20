@@ -1,16 +1,16 @@
 # Codex Prompt Cache — Debugging Report
 
-**Date:** 2026-04-19 (updated later same day)
+**Date:** 2026-04 (updated during the investigation)
 **Author:** Debug session after Phase 1–4 fix was shipped and tested
 **Intended audience:** A future Claude Code session picking this investigation up cold. Read top-to-bottom; everything you need is here.
 
 **Update log:**
-- 2026-04-19 initial: Documented 1.7% hit rate, identified debug-log gate bug and Phase 3 prepend bug, enumerated hypotheses A–F.
-- 2026-04-19 revision 2: Bugs 4.1 and 4.2 **fixed and built**. Added new hypotheses G/H/I from a deeper read of the request-construction code.
-- 2026-04-19 revision 3: **First controlled test ran.** Result: 0% cache reads across 5 consecutive short-message turns with all inputs byte-stable. See Section 2.5. Hypotheses C, D, E, G ruled out. A and B now primary. New finding: `x-cache=DYNAMIC route=none` on every response. New finding: `session-id` header resets on resume while `conversation-id` persists.
-- 2026-04-19 revision 4: **Hypothesis F (`previous_response_id`) definitively ruled out.** Prototype sent the field; server returned `400 {"detail":"Unsupported parameter: previous_response_id"}`. Prototype reverted. See Section 6 Hypothesis F update and Section 2.6.
-- 2026-04-19 revision 5: **FIX FOUND.** Read openai/codex upstream source (`codex-rs/core/src/client.rs`), found we had wrong header names, wrong header values, wrong originator, fragmented identity across 3+ different UUIDs. Aligned all of them onto a single `conversation_id` per CLI session. Hit rate went from **0% → 47.5%** on identical test protocol. See Section 2.7.
-- 2026-04-19 revision 6 (this version): **Resume cold-start fixed (Plan B).** Registered `onSessionSwitch(id => setCodexPromptCacheKey(id))` in `src/setup.ts` so `--resume`'s late `switchSession(oldSid)` also re-pins the Codex `conversation_id`. Test: first post-resume request was `PARTIAL cached=13568/18245 (74.4%)` instead of COLD. Turn 1 after resume now hits the server-side cache immediately. Debug logs: pre-resume `4a756406-90f4-45e0-8805-9663ec1edd99.txt`, resume-boot `9cdeb61a-a05b-4cb0-bb2c-1b903167ee6d.txt` (88-byte file: contains only the fresh-boot `prompt_cache_key set` — the re-bind fires after `switchSession` and gets routed to the resumed session's log, confirming the listener ran).
+- Initial: Documented 1.7% hit rate, identified the debug-log gate bug and Phase 3 prepend bug, and enumerated hypotheses A–F.
+- Revision 2: Bugs 4.1 and 4.2 **fixed and built**. Added new hypotheses G/H/I from a deeper read of the request-construction code.
+- Revision 3: **First controlled test ran.** Result: 0% cache reads across 5 consecutive short-message turns with all inputs byte-stable. See Section 2.5. Hypotheses C, D, E, G ruled out. A and B became primary. New findings: `x-cache=DYNAMIC route=none` on every response, and `session-id` resets on resume while `conversation-id` persists.
+- Revision 4: **Hypothesis F (`previous_response_id`) definitively ruled out.** Prototype sent the field; server returned `400 {"detail":"Unsupported parameter: previous_response_id"}`. Prototype reverted. See Section 6 Hypothesis F update and Section 2.6.
+- Revision 5: **FIX FOUND.** Read openai/codex upstream source (`codex-rs/core/src/client.rs`), found wrong header names, wrong header values, wrong originator, and fragmented identity across 3+ different UUIDs. Aligned all of them onto a single `conversation_id` per CLI session. Hit rate went from **0% → 47.5%** on an identical test protocol. See Section 2.7.
+- Revision 6 (this version): **Resume cold-start fixed (Plan B).** Registered `onSessionSwitch(id => setCodexPromptCacheKey(id))` in `src/setup.ts` so `--resume`'s late `switchSession(oldSid)` also re-pins the Codex `conversation_id`. The first post-resume request then hit the server-side cache immediately; synthetic debug-log names are omitted here.
 
 ---
 
@@ -24,9 +24,9 @@ If you are a future session continuing this work:
 4. Section 6 (Possible Root Causes) is a ranked hypothesis list. Do not commit to one without the verification step that follows each hypothesis.
 5. Section 11 (What I'm NOT sure about) is honest about what's speculation. Don't treat any of it as fact.
 
-**Working directory:** `/Users/pt/cat-code`
+**Working directory:** `$HOME/project`
 **Build to use:** `bun run build:dev:full` produces `./cli-dev`
-**Config dir:** `~/.cat-code/` (NOT `~/.claude/` — this fork uses its own dir)
+**Config dir:** `$HOME/project/config/`
 
 ---
 
@@ -34,8 +34,8 @@ If you are a future session continuing this work:
 
 The Phase 1–4 cache fix **did not materially improve** cache performance on the ChatGPT Codex endpoint.
 
-- **Baseline session (before fix, `14e2ff6f-465e-463c-94f5-d3b97f0b07cd`):** ~13% hit rate, described in `docs/codex/2026-04-30-cache-fix-plan.md` line 5
-- **Test session (after fix, `9f0c2e25-1c25-4f59-8402-4f07462052f9`):** **1.7% hit rate**
+- **Baseline session (before fix, `session-baseline`):** ~13% hit rate, described in `docs/codex/2026-04-30-cache-fix-plan.md` line 5
+- **Test session (after fix, `session-test`):** **1.7% hit rate**
 - Only 3 out of 22 API calls got any cache read at all; the 19 others were 0-read misses.
 
 The fix mechanically works (stable `prompt_cache_key`, persistent routing map, volatile context split), but the **server-side cache behavior** appears not to respect any of these levers in the way the plan assumed.
@@ -48,40 +48,19 @@ The root cause is **not yet confirmed**. We have strong pattern evidence but no 
 
 ### 2.1 Session metadata
 
-- **Session ID:** `9f0c2e25-1c25-4f59-8402-4f07462052f9`
-- **JSONL path:** `~/.cat-code/projects/-Users-pt-cat-code/9f0c2e25-1c25-4f59-8402-4f07462052f9.jsonl`
-- **Duration:** 13:37:23 → 14:05:16 (about 28 minutes)
+- **Session ID:** `session-test`
+- **JSONL path:** `$HOME/project/transcripts/session-test.jsonl`
 - **Model used:** `gpt-5.4` (Codex path, all 22 calls)
-- **Started via:** `/pickup 14e2ff6f-465e-463c-94f5-d3b97f0b07cd` (continuation of a prior session context via the pickup skill)
+- **Started via:** a synthetic resume of `session-baseline` (continuation of a prior session context via the pickup skill)
 
 ### 2.2 Per-request cache usage
 
-The 22 real API calls and their usage numbers. "Real" = assistant-message record with `input_tokens > 0` (many records are empty tool-use wrappers within a single multi-tool response).
-
-| L#   | Time     | Input   | Read   | Created | Output | Hit%  |
-|------|----------|---------|--------|---------|--------|-------|
-| L5   | 13:37:25 | 1,797   | 16,896 | 0       | 268    | 90%   |
-| L7   | 13:37:42 | 43,675  | 0      | 0       | 735    | 0%    |
-| L20  | 13:38:21 | 44,256  | 0      | 0       | 868    | 0%    |
-| L51  | 13:38:47 | 115,785 | 0      | 0       | 470    | 0%    |
-| L57  | 13:39:32 | 123,202 | 0      | 0       | 2,267  | 0%    |
-| L61  | 13:41:07 | 123,922 | 0      | 0       | 838    | 0%    |
-| L69  | 13:42:33 | 127,631 | 0      | 0       | 2,133  | 0%    |
-| L73  | 13:43:54 | 128,229 | 0      | 0       | 710    | 0%    |
-| L76  | 13:45:02 | 128,557 | 0      | 0       | 1,298  | 0%    |
-| L88  | 13:46:37 | 135,269 | 0      | 0       | 425    | 0%    |
-| L99  | 13:48:27 | 139,759 | 0      | 0       | 467    | 0%    |
-| L119 | 13:51:24 | 141,622 | 16,896 | 0       | 417    | 11%   |
-| L123 | 13:52:43 | 158,942 | 0      | 0       | 215    | 0%    |
-| L126 | 13:53:04 | 159,164 | 0      | 0       | 283    | 0%    |
-| L138 | 13:58:07 | 160,232 | 0      | 0       | 645    | 0%    |
-| L141 | 13:58:41 | 160,478 | 0      | 0       | 436    | 0%    |
-| L144 | 13:59:17 | 160,754 | 0      | 0       | 309    | 0%    |
-| L156 | 14:02:08 | 161,575 | 0      | 0       | 494    | 0%    |
-| L159 | 14:02:59 | 161,888 | 0      | 0       | 188    | 0%    |
-| L162 | 14:03:20 | 162,083 | 0      | 0       | 216    | 0%    |
-| L165 | 14:03:48 | 162,306 | 0      | 0       | 199    | 0%    |
-| L168 | 14:04:41 | 147,664 | 14,848 | 0       | 165    | 9%    |
+The controlled session contained 22 real API calls, defined as assistant-message
+records with `input_tokens > 0` (tool-use wrappers are excluded). Three calls
+reported a cache read; the remaining 19 reported zero cached tokens. The first
+call read about 16.9k tokens, a later partial hit read about 16.9k, and the final
+partial hit read about 14.8k. The other calls grew from roughly 44k to 162k
+input tokens but reported no conversation-history cache read.
 
 Totals:
 - **input=2,848,790**
@@ -95,64 +74,60 @@ Totals:
 
 2. **`cache_creation_input_tokens` is always 0 by design.** `codex-fetch-adapter.ts:1114` hardcodes this to 0 because OpenAI's Responses API doesn't separately report cache-write tokens. **It is not a usable signal — do not draw conclusions from it.**
 
-3. **Hits are time-independent and appear random.** Gaps between hits: 0s → 14min → 13min. Gaps between misses: 17s → 3min → 5min. Time-since-last-request does NOT predict hit/miss.
+3. **Hits are time-independent and appear random.** Short and long gaps both
+   preceded hits and misses; time-since-last-request does NOT predict either
+   outcome.
 
-4. **Routing map persistence works.** `~/.cat-code/codex-cache-routing.json` contains 10 stable account+model → conversation-id entries. Phase 2 is mechanically functional.
+4. **Routing map persistence works.** `$HOME/project/config/codex-cache-routing.json` contains stable account+model → conversation-id entries. Phase 2 is mechanically functional.
 
-5. **Total prompt size grows monotonically.** L5→L168: 18,693 → 162,512 total tokens (input + read). The conversation content IS consistent across turns. So the "cache invalidation" is NOT coming from content churn on our side.
+5. **Total prompt size grows monotonically.** The test grew from roughly 19k to 163k total tokens (input + read). The conversation content IS consistent across turns. So the "cache invalidation" is NOT coming from content churn on our side.
 
-### 2.5 Second test session (2026-04-19, after fixes applied)
+### 2.5 Second controlled test (after fixes applied)
 
-Session: `69cb86a2-9b0e-414f-a3ad-c0d6627de076` (turns 1-3) + `a09c5f37-32ab-4d5f-9d56-28a17b32904f` (resumed turns 4-5)
+Session: `session-controlled-a` (turns 1-3) + `session-controlled-b` (resumed turns 4-5)
 
-Debug log: `~/.cat-code/debug/69cb86a2-9b0e-414f-a3ad-c0d6627de076.txt`
+Debug log: `$HOME/project/debug/synthetic-controlled-session.log`
 
-**Protocol:** 3 short messages (`hi`, `what is 2+2`, `thanks`) → `/exit` → resume → 1 short message → final long-response message. No tool use. No `/pickup`. Clean test.
+**Protocol:** three short synthetic prompts → `/exit` → resume → one short prompt → one longer-response prompt. No tool use. No `/pickup`. Clean test.
 
 **Result — every single call was 0% cache:**
 
-| Turn | Session         | Conv      | Hash     | messages | input | cached | Hit% |
-|-----:|-----------------|-----------|----------|---------:|------:|-------:|-----:|
-| 1    | 69cb86a2        | 245b9394  | ef0d1071 | 1        | 17,390 | 0    | 0%   |
-| 2    | 69cb86a2        | 245b9394  | ef0d1071 | 3        | 17,409 | 0    | 0%   |
-| 3    | 69cb86a2        | 245b9394  | ef0d1071 | 5        | 17,421 | 0    | 0%   |
-| 4    | **a09c5f37**    | 245b9394  | ef0d1071 | 7        | 17,438 | 0    | 0%   |
-| 5    | a09c5f37        | 245b9394  | ef0d1071 | 9        | 17,473 | 0    | 0%   |
+All five calls reported 0% cache reads. The instructions hash was byte-stable
+(`synthetic-stable-hash`), the account remained `account-a`, and the conversation
+identifier (`conversation-a`) persisted across resume.
 
-**Overall hit rate: 0.0%** across the test.
-
-**Every `response` line reported:** `status=200 req_id= x-cache=DYNAMIC route=none`
-
-- `req_id=` was empty — the endpoint does not return `x-request-id` or `openai-request-id` headers
-- `x-cache=DYNAMIC` — this is a Cloudflare value meaning "not served from cache"
-- `route=none` — no `x-served-by` / `x-codex-node` header returned
+Responses were successful but reported `x-cache=DYNAMIC` and `route=none`; no
+request ID or routing header was returned.
 
 **What this confirms:**
 
-1. **Fixes 4.1 and 4.2 are mechanically correct** — logs now work, instructions hash is byte-stable across all turns (`ef0d1071`), Phase 3 is no longer contaminating the prefix.
+1. **Fixes 4.1 and 4.2 are mechanically correct** — logs now work, the instructions hash is byte-stable across all turns, and Phase 3 is no longer contaminating the prefix.
 2. **Hypothesis C (prepend bug) is ruled out** — hash was stable anyway, fix had no effect on hit rate.
 3. **Hypothesis D (body per-turn variation) is ruled out** — hash byte-identical across 5 turns proves the body prefix is deterministic.
-4. **Hypothesis G (account rotation) is ruled out** — `account=902073af-1c0` on every turn, no rotation.
-5. **Hypothesis E (conversation-id format) is ruled out** — `conv=245b9394` (standard UUID) persisted across exit+resume, no change.
+4. **Hypothesis G (account rotation) is ruled out** — `account-a` was used on every turn, with no rotation.
+5. **Hypothesis E (conversation-id format) is ruled out** — `conversation-a` persisted across exit+resume, with no change.
 6. **Hypothesis A (prompt_cache_key ignored) is much stronger** — with everything stable, the server still returns zero cached. The only thing that could cause this and hasn't been ruled out is the server simply not caching.
 7. **Hypothesis B (node affinity) is also stronger** — the `x-cache=DYNAMIC` value and absence of routing headers suggests the endpoint is not integrated with any CDN/edge cache. It's hitting origin every time.
 
 **New finding not previously considered:**
-- `session-id` header changes on `--resume` (from `69cb86a2` to `a09c5f37`) while `conversation-id` stays (`245b9394`). But we got 0% even in turns 1-3 where both were stable, so this isn't the blocker.
+- `session-id` header changes on `--resume` from one synthetic session value to another while
+  `conversation-id` stays `conversation-a`. But we got 0% even while both were stable,
+  so this isn't the blocker.
 
-### 2.6 `previous_response_id` experiment (2026-04-19)
+### 2.6 `previous_response_id` experiment
 
-Prototype: captured `response.id` from SSE `response.completed` events, stored by `${accountId}:${model}`, set on next request as `codexBody.previous_response_id`. Also logged `captured response_id=...` and added `prev_resp=...` to the request log line.
+Prototype: captured the SSE `response.completed` identifier, stored by
+`${accountId}:${model}`, and set it on the next request as
+`codexBody.previous_response_id`.
 
-**Test result:** the very first chained request (turn 2, with `prev_resp=resp_...` set) was rejected by the server:
+**Test result:** the first chained request was rejected by the server:
 
 ```
-API Error: 400 {"type":"error","error":{"type":"api_error",
-"message":"Codex API error (400):
-{\"detail\":\"Unsupported parameter: previous_response_id\"}"}}
+API Error: 400 {"detail":"Unsupported parameter: previous_response_id"}
 ```
 
-Turn 1 (no `prev_resp`) succeeded. Every subsequent turn with `previous_response_id` attached returned 400.
+The unchained control request succeeded. Every subsequent request with
+`previous_response_id` attached returned 400.
 
 **Conclusion:** `https://chatgpt.com/backend-api/codex/responses` does not accept `previous_response_id`. This is different from OpenAI's public Responses API (`api.openai.com/v1/responses`), which does support it. The ChatGPT backend is a stripped-down variant that explicitly rejects the parameter.
 
@@ -160,7 +135,7 @@ Turn 1 (no `prev_resp`) succeeded. Every subsequent turn with `previous_response
 
 Prototype code reverted in the same session. No lingering changes.
 
-### 2.7 Fix test (2026-04-19, upstream-aligned)
+### 2.7 Fix test (upstream-aligned)
 
 After reading `openai/codex` upstream source (`codex-rs/core/src/client.rs`, `codex-rs/codex-api/src/requests/headers.rs`, `codex-rs/login/src/auth/default_client.rs`), the real discrepancies were found and fixed. See Section 6 Hypothesis L for details on what was wrong.
 
@@ -170,30 +145,36 @@ After reading `openai/codex` upstream source (`codex-rs/core/src/client.rs`, `co
 3. `prompt_cache_key` body field set to `conversation_id`.
 4. `originator: 'pi'` → `'codex_cli_rs'` (upstream value).
 
-**Test session:** `3d2fb63c-dbaf-4e70-b243-5f05951f92db` + resumed `c67293db-8522-448f-a4d6-3783f2c3e087`
+**Test session:** `session-aligned-a` plus resumed `session-aligned-b`.
 
-| Turn | conv       | input | cached | % | Status |
-|-----:|------------|------:|-------:|--:|--------|
-| 1    | 3d2fb63c   | 17,390 | 0     | 0% | COLD |
-| 2    | 3d2fb63c   | 17,409 | **13,824** | **79.4%** | PARTIAL |
-| 3    | 3d2fb63c   | 17,488 | **13,824** | **79.0%** | PARTIAL |
-| 4 (resume) | c67293db | 17,510 | 0  | 0% | COLD |
-| 5    | c67293db   | 17,539 | **13,824** | **78.8%** | PARTIAL |
+The first request was cold, the next two were partial hits with about 13.8k
+cached tokens, the first request after resume was cold, and the following request
+was a partial hit with the same ceiling.
 
 **Hit rate: 47.5%** overall (41,472 cached / 87,336 input+read). In-session (turns 1-3) hit rate: **52.9%**.
 
 **Known remaining issues:**
-1. **Resume cold-start.** `conv=` changed from `3d2fb63c` to `c67293db` across `--resume` because `codexPromptCacheKey` is set from the new CLI process's session UUID, not the resumed session's original UUID. One cold turn per resume. Fixable: persist the original conversation_id with the resumed session record.
-2. **13,824-token cache ceiling.** All PARTIAL hits plateau at exactly 13,824 cached tokens (appears to be the server's internal tokenization of the 30,539-byte `instructions` block). Conversation history growth does not cache — the `cached=` count never grows past 13,824 even as total input climbs past 17k. Whether this is a server-side characteristic or something we can influence is unknown.
+1. **Resume cold-start.** The conversation identifier changed across `--resume` because
+   `codexPromptCacheKey` was set from the new CLI process's session UUID, not the
+   resumed session's original UUID. One cold turn per resume. Fixable: persist the
+   original conversation_id with the resumed session record.
+2. **13,824-token cache ceiling.** Partial hits plateau at exactly 13,824 cached
+   tokens, approximately the server's internal tokenization of the stable
+   `instructions` block. Conversation history growth does not cache. Whether this
+   is a server-side characteristic or something we can influence is unknown.
 
-### 2.4 The smoking-gun pattern (L5 → L7)
+### 2.4 The smoking-gun pattern
 
-- **L5:** first API call after session start. Input = 1,797 fresh + 16,896 cached = ~18,693 total prompt. **90% hit.**
-- **L7:** next call, user added a 26k tool_result (pickup briefing file content). Input = 43,675 fresh + 0 cached. **0% hit.**
+- **First call:** the static instructions prefix was partially cached.
+- **Next larger call:** a synthetic tool-result expansion produced no cache read.
 
-If prefix caching worked as the plan assumed, L7 should have read ~18,693 (the entire L5 prompt) and paid for only the ~25k new tokens. Instead it read **zero**.
+If prefix caching worked as the plan assumed, the next call should have reused
+the earlier prompt prefix and paid only for the new content. Instead it read
+**zero**.
 
-This pattern repeats everywhere in the session. The stable `instructions` prefix (~16,896 tokens) is the ONLY thing that ever reads from cache. Conversation-history portions are NEVER read from cache.
+This pattern repeats throughout the session. The stable `instructions` prefix is
+the ONLY thing that ever reads from cache. Conversation-history portions are
+NEVER read from cache.
 
 ---
 
@@ -201,16 +182,14 @@ This pattern repeats everywhere in the session. The stable `instructions` prefix
 
 - **Phase 1 (stable `prompt_cache_key`)**: `setCodexPromptCacheKey(getSessionId())` is called in `src/setup.ts:89` after `switchSession`. The session UUID is reused on `--resume` and across restarts. Mechanically correct.
 
-- **Phase 2 (persistent routing)**: `~/.cat-code/codex-cache-routing.json` exists and is updated on new-conversation allocation. Current content:
+- **Phase 2 (persistent routing)**: `$HOME/project/config/codex-cache-routing.json` exists and is updated on new-conversation allocation. A sanitized shape is:
   ```json
   {
-    "acct_test_streaming:gpt-5.3-codex": "bb6f759d-...",
-    "worker-a:gpt-5.3-codex": "9748a6bd-...",
-    "worker-b:gpt-5.3-codex": "927d3b1c-...",
-    "main-account:gpt-5.3-codex": "129b1e35-...",
-    "main-account:gpt-5.4": "3e1b430d-...",
-    "ca889574-...:gpt-5.4": "9a504a28-...",
-    ... (10 total entries)
+    "account-a:gpt-5.3-codex": "<conversation-a>",
+    "account-b:gpt-5.3-codex": "<conversation-b>",
+    "account-c:gpt-5.3-codex": "<conversation-c>",
+    "account-a:gpt-5.4": "<conversation-d>",
+    "...": "..."
   }
   ```
 
@@ -521,7 +500,7 @@ The plan explicitly skipped this, noting "upstream doesn't use it either." But t
 
 **Verification:** Prototype it. Capture `response.id` from `response.completed` events, store it, send it on the next request as `previous_response_id`. If hit rate jumps, F is confirmed.
 
-**Confidence:** ~~UNKNOWN → HIGH PRIORITY~~ → **RULED OUT (2026-04-19 revision 4).** Prototype tested: server rejects the parameter with 400 "Unsupported parameter: previous_response_id". See Section 2.6. This endpoint is not the same as `api.openai.com/v1/responses`; it's a stripped variant that does not expose this field.
+**Confidence:** ~~UNKNOWN → HIGH PRIORITY~~ → **RULED OUT in revision 4.** Prototype tested: server rejects the parameter with 400 "Unsupported parameter: previous_response_id". See Section 2.6. This endpoint is not the same as `api.openai.com/v1/responses`; it's a stripped variant that does not expose this field.
 
 ---
 
@@ -572,7 +551,7 @@ This is the Python snippet used to extract cache data from a JSONL session file.
 ```python
 import json, sys
 
-path = '/Users/pt/.cat-code/projects/-Users-pt-cat-code/<session-id>.jsonl'
+path = '$HOME/project/transcripts/<session-id>.jsonl'
 with open(path) as f:
     lines = [(i, json.loads(l)) for i, l in enumerate(f, 1) if l.strip()]
 
@@ -584,7 +563,6 @@ for lineno, d in lines:
         if u.get('input_tokens', 0) > 0:
             api_calls.append({
                 'L': lineno,
-                'ts': d.get('timestamp','')[11:19],
                 'model': d.get('message',{}).get('model',''),
                 'input': u['input_tokens'],
                 'read': u.get('cache_read_input_tokens', 0),
@@ -601,7 +579,7 @@ for c in api_calls:
     tot = c['input'] + c['read']
     pct = c['read']/tot*100 if tot else 0
     label = 'HIT' if pct > 50 else 'MISS'
-    print(f'L{c["L"]:<5} {c["ts"]} {label} read={c["read"]} input={c["input"]} ({pct:.0f}%)')
+    print(f'L{c["L"]:<5} {label} read={c["read"]} input={c["input"]} ({pct:.0f}%)')
 ```
 
 Note: `cache_creation_input_tokens` is always 0 on the Codex path — ignore it.
@@ -629,7 +607,10 @@ Note: `cache_creation_input_tokens` is always 0 on the Codex path — ignore it.
 
 **Fix:** Register an `onSessionSwitch` listener in `setup.ts` that re-calls `setCodexPromptCacheKey` whenever the active session ID changes. The `--resume` flow already calls `switchSession(oldSid)` after `setup()`, so this listener catches it automatically without touching the resume path itself.
 
-**Verification (2026-04-19):** Pre-resume session `4a756406` ran 4 turns (peak PARTIAL 77.0%). Resumed via `--cli-dev --resume 4a756406 --debug`. First post-resume request logged `conv=4a756406 ... messages=7` and response was `PARTIAL cached=13568/18245 (74.4%)` — no cold turn. Expected: hit rate on resume-heavy flows should now stay close to the same-session baseline.
+**Verification:** A synthetic pre-resume session ran several turns, then was
+resumed with debug logging enabled. The first post-resume request was a partial
+hit rather than a cold turn. Expected: hit rate on resume-heavy flows should now
+stay close to the same-session baseline.
 
 ### Step B: Understand the 13,824-token cache ceiling
 
@@ -671,15 +652,14 @@ Do not treat the hypotheses section as conclusions. Run the verification steps b
 
 ## 12. Environment Notes For The Picking-Up Session
 
-- Working dir: `/Users/pt/cat-code`
-- User's primary config dir: `~/.cat-code/` (note: NOT `~/.claude/`)
-- Sessions jsonl: `~/.cat-code/projects/-Users-pt-cat-code/<uuid>.jsonl`
-- Debug logs: `~/.cat-code/debug/<uuid>.txt` (only written when `--debug` is on)
-- Cache routing file: `~/.cat-code/codex-cache-routing.json`
+- Working dir: `$HOME/project`
+- Config dir: `$HOME/project/config/`
+- Sessions jsonl: `$HOME/project/transcripts/<session-id>.jsonl`
+- Debug logs: `$HOME/project/debug/<synthetic-id>.txt` (only written when `--debug` is on)
+- Cache routing file: `$HOME/project/config/codex-cache-routing.json`
 - Build: `bun run build:dev:full` → `./cli-dev`
 - Do NOT use `bun run build` — that produces `./cli` (standard build) which omits experimental features
-- User is a solo dev, operates as architect-executor (see `~/.claude/CLAUDE.md`). Read `CLAUDE.md` project file for project conventions.
-- When the user says "sure", "yes", "go ahead" — proceed; don't re-confirm.
+- Read the repository `CLAUDE.md` file for project conventions.
 
 Referenced documents:
 - `docs/codex/2026-04-30-cache-fix-plan.md` — the original fix plan (Phases 1–4)
