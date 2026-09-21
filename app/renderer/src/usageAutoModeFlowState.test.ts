@@ -37,6 +37,29 @@ test('preserves rare route sizes without a visual minimum', () => {
   expect(layout!.links.find(link => link.to === 'allowed')!.height).toBe(layout!.scale * 9)
 })
 
+test('stacks ribbons at each node in the same order as their opposite endpoints', () => {
+  const layout = layoutAutoModeFlow([
+    { from: 'Attempts', to: 'Base checks', count: 100 },
+    { from: 'Base checks', to: 'allowed', outcome: 'allowed', count: 75 },
+    { from: 'Base checks', to: 'Stage 1', count: 25 },
+    { from: 'Stage 1', to: 'allowed', outcome: 'allowed', count: 20 },
+    { from: 'Stage 1', to: 'Stage 2', count: 5 },
+    { from: 'Stage 2', to: 'review_required', outcome: 'review_required', count: 5 },
+  ])
+  expect(layout).not.toBeNull()
+
+  for (const node of layout!.nodes) {
+    const outgoing = layout!.links
+      .filter(link => link.from === node.id)
+      .sort((left, right) => left.toNode.y - right.toNode.y)
+    const incoming = layout!.links
+      .filter(link => link.to === node.id)
+      .sort((left, right) => left.fromNode.y - right.fromNode.y)
+    expect(outgoing.map(link => link.fromY)).toEqual([...outgoing.map(link => link.fromY)].sort((left, right) => left - right))
+    expect(incoming.map(link => link.toY)).toEqual([...incoming.map(link => link.toY)].sort((left, right) => left - right))
+  }
+})
+
 test('rejects route graphs that do not conserve a continued population', () => {
   const invalid = [
     { from: 'Attempts', to: 'Base checks', count: 10 },

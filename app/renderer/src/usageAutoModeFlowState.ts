@@ -180,14 +180,44 @@ export function layoutAutoModeFlow(
 
   const sourceOffsets = new Map<string, number>()
   const targetOffsets = new Map<string, number>()
+  const sourceEdgeIndexes = new Map<string, number[]>()
+  const targetEdgeIndexes = new Map<string, number[]>()
+  for (const [index, edge] of edges.entries()) {
+    sourceEdgeIndexes.set(edge.from, [...(sourceEdgeIndexes.get(edge.from) ?? []), index])
+    targetEdgeIndexes.set(edge.to, [...(targetEdgeIndexes.get(edge.to) ?? []), index])
+  }
+
+  const fromOffsets = new Map<number, number>()
+  const toOffsets = new Map<number, number>()
+  for (const [nodeId, indexes] of sourceEdgeIndexes) {
+    indexes.sort((left, right) => {
+      const leftTarget = nodesById.get(edges[left]!.to)!
+      const rightTarget = nodesById.get(edges[right]!.to)!
+      return leftTarget.y - rightTarget.y || compareEdges(edges[left]!, edges[right]!) || left - right
+    })
+    for (const index of indexes) {
+      fromOffsets.set(index, sourceOffsets.get(nodeId) ?? 0)
+      sourceOffsets.set(nodeId, (sourceOffsets.get(nodeId) ?? 0) + edges[index]!.count * scale)
+    }
+  }
+  for (const [nodeId, indexes] of targetEdgeIndexes) {
+    indexes.sort((left, right) => {
+      const leftSource = nodesById.get(edges[left]!.from)!
+      const rightSource = nodesById.get(edges[right]!.from)!
+      return leftSource.y - rightSource.y || compareEdges(edges[left]!, edges[right]!) || left - right
+    })
+    for (const index of indexes) {
+      toOffsets.set(index, targetOffsets.get(nodeId) ?? 0)
+      targetOffsets.set(nodeId, (targetOffsets.get(nodeId) ?? 0) + edges[index]!.count * scale)
+    }
+  }
+
   const links = edges.map((edge, index) => {
     const fromNode = nodesById.get(edge.from)!
     const toNode = nodesById.get(edge.to)!
     const height = edge.count * scale
-    const fromY = fromNode.y + (sourceOffsets.get(edge.from) ?? 0)
-    const toY = toNode.y + (targetOffsets.get(edge.to) ?? 0)
-    sourceOffsets.set(edge.from, (sourceOffsets.get(edge.from) ?? 0) + height)
-    targetOffsets.set(edge.to, (targetOffsets.get(edge.to) ?? 0) + height)
+    const fromY = fromNode.y + fromOffsets.get(index)!
+    const toY = toNode.y + toOffsets.get(index)!
     const startX = fromNode.x + fromNode.width
     const endX = toNode.x
     const controlX = startX + (endX - startX) / 2
