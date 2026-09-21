@@ -58,37 +58,28 @@ const OUTCOME_LABELS: Record<AutoModeUsageOutcome, string> = {
 
 const NODE_COLUMNS: Record<string, number> = {
   Attempts: 0,
-  'Base checks': 1,
-  'Supplied decision': 1,
-  'Unknown route': 1,
-  'Review/safety guard': 2,
-  'Workspace edits': 2,
-  Allowlist: 2,
-  'Stage 1': 3,
-  'Stage 2': 4,
-  ...Object.fromEntries(Object.keys(OUTCOME_LABELS).map(outcome => [outcome, 5])),
+  'Base paths': 1,
+  'Stage 1': 1,
+  'Stage 2': 1,
+  allowed: 2,
+  policy_blocked: 2,
+  review_required: 2,
+  other: 2,
 }
 
 const NODE_ORDER = [
   'Attempts',
-  'Base checks',
-  'Supplied decision',
-  'Unknown route',
-  'Review/safety guard',
-  'Workspace edits',
-  'Allowlist',
+  'Base paths',
   'Stage 1',
   'Stage 2',
   'allowed',
   'policy_blocked',
   'review_required',
-  'operational_error',
-  'cancelled',
-  'unknown_outcome',
-  'incomplete',
+  'other',
 ]
 
 const NODE_RANK = new Map(NODE_ORDER.map((node, index) => [node, index]))
+const TERMINAL_NODES = new Set(['allowed', 'policy_blocked', 'review_required', 'other'])
 const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20
@@ -123,6 +114,7 @@ function compareEdges(left: UsageAutoModeFlowEdge, right: UsageAutoModeFlowEdge)
 }
 
 export function usageAutoModeFlowNodeLabel(id: string): string {
+  if (id === 'other') return 'Other'
   return OUTCOME_LABELS[id as AutoModeUsageOutcome] ?? id
 }
 
@@ -139,7 +131,7 @@ export function autoModeFlowConserves(edges: readonly UsageAutoModeFlowEdge[]): 
   }
   if ((incoming.get('Attempts') ?? 0) !== 0 || (outgoing.get('Attempts') ?? 0) === 0) return false
   for (const node of new Set([...incoming.keys(), ...outgoing.keys()])) {
-    if (node === 'Attempts' || OUTCOME_LABELS[node as AutoModeUsageOutcome]) continue
+    if (node === 'Attempts' || TERMINAL_NODES.has(node)) continue
     if ((incoming.get(node) ?? 0) !== (outgoing.get(node) ?? 0)) return false
   }
   return true
@@ -185,8 +177,9 @@ export function layoutAutoModeFlow(
   const graph = generator(graphInput)
 
   const innerWidth = Math.max(1, width - LEFT - RIGHT)
+  const maxColumn = Math.max(...graph.nodes.map(node => node.column))
   for (const node of graph.nodes) {
-    node.x0 = LEFT + node.column / 5 * (innerWidth - NODE_WIDTH)
+    node.x0 = LEFT + node.column / maxColumn * (innerWidth - NODE_WIDTH)
     node.x1 = node.x0 + NODE_WIDTH
   }
   generator.update(graph)

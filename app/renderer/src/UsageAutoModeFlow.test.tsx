@@ -10,6 +10,7 @@ test('renders a labelled Sankey and exact route values from aggregated routes', 
   const html = renderToStaticMarkup(<UsageAutoModeFlow summary={summary} />)
   expect(html).toContain('Decision flow')
   expect(html).toContain('Decision flow for 100 recorded automatic permission attempts')
+  expect(html).toContain('Base paths')
   expect(html).toContain('Base checks')
   expect(html).toContain('Policy-blocked')
   expect(html).toContain('Exact route values')

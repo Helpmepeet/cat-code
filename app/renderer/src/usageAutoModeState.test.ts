@@ -5,6 +5,7 @@ import {
   autoModeAttempts,
   autoModeCommandRateHeadline,
   autoModeCommandRatePoints,
+  autoModeOverviewEdges,
   autoModeOutcomeSeries,
   autoModeRouteEdges,
   confirmedRateSegments,
@@ -51,4 +52,17 @@ test('uses stable outcome/category order and conserves route edges', () => {
       edges.filter(edge => edge.from === node).reduce((total, edge) => total + edge.count, 0),
     )
   }
+})
+
+test('reduces the overview to resolution stage and primary outcome', () => {
+  const edges = autoModeOverviewEdges(summary)
+  expect(edges.filter(edge => edge.from === 'Attempts')).toEqual([
+    { from: 'Attempts', to: 'Base paths', count: 60 },
+    { from: 'Attempts', to: 'Stage 1', count: 33 },
+    { from: 'Attempts', to: 'Stage 2', count: 7 },
+  ])
+  expect(edges.filter(edge => edge.to === 'allowed').reduce((total, edge) => total + edge.count, 0)).toBe(85)
+  expect(edges.filter(edge => edge.to === 'policy_blocked').reduce((total, edge) => total + edge.count, 0)).toBe(7)
+  expect(edges.filter(edge => edge.to === 'review_required').reduce((total, edge) => total + edge.count, 0)).toBe(4)
+  expect(edges.filter(edge => edge.to === 'other').reduce((total, edge) => total + edge.count, 0)).toBe(4)
 })

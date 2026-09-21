@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import type { AutoModeUsageOutcome, AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
-import { autoModeAttempts, autoModeRouteEdges } from './usageAutoModeState.js'
+import { autoModeAttempts, autoModeOverviewEdges, autoModeRouteEdges } from './usageAutoModeState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
 import {
   layoutAutoModeFlow,
   usageAutoModeFlowNodeLabel,
+  type UsageAutoModeFlowEdge,
   type UsageAutoModeFlowLayout,
   type UsageAutoModeFlowLink,
 } from './usageAutoModeFlowState.js'
@@ -25,9 +26,9 @@ function linkOutcome(link: UsageAutoModeFlowLink): AutoModeUsageOutcome | null {
   return OUTCOMES.has(link.to as AutoModeUsageOutcome) ? link.to as AutoModeUsageOutcome : null
 }
 
-function usageAutoModeFlowLinkLabel(link: UsageAutoModeFlowLink, total: number): string {
-  const percent = total ? usagePercent(link.count / total * 100) : 'Not applicable'
-  return `${usageAutoModeFlowNodeLabel(link.from)} to ${usageAutoModeFlowNodeLabel(link.to)}: ${usageNumber(link.count)} recorded ${link.count === 1 ? 'attempt' : 'attempts'}, ${percent} of all ${usageNumber(total)} recorded attempts`
+function usageAutoModeFlowLinkLabel(edge: UsageAutoModeFlowEdge, total: number): string {
+  const percent = total ? usagePercent(edge.count / total * 100) : 'Not applicable'
+  return `${usageAutoModeFlowNodeLabel(edge.from)} to ${usageAutoModeFlowNodeLabel(edge.to)}: ${usageNumber(edge.count)} recorded ${edge.count === 1 ? 'attempt' : 'attempts'}, ${percent} of all ${usageNumber(total)} recorded attempts`
 }
 
 function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
@@ -36,7 +37,7 @@ function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
   anchor: 'start' | 'end' | 'middle'
   baseline: 'auto' | 'middle'
 } {
-  if (node.column === 5) {
+  if (node.outgoing === 0) {
     return {
       x: node.x + node.width + 8,
       y: node.y + node.height / 2,
@@ -64,7 +65,8 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   const chart = useUsageChartWidth()
   const attempts = autoModeAttempts(summary)
   const routeEdges = autoModeRouteEdges(summary)
-  const layout = layoutAutoModeFlow(routeEdges, Math.max(760, chart.width))
+  const overviewEdges = autoModeOverviewEdges(summary)
+  const layout = layoutAutoModeFlow(overviewEdges, Math.max(760, chart.width))
   const [activeLinkId, setActiveLinkId] = useState<string | null>(null)
   const activeLink = layout?.links.find(link => link.id === activeLinkId) ?? null
 
@@ -140,7 +142,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
       <div className="usage-table-scroll"><table>
         <caption>Recorded automatic permission routes</caption>
         <thead><tr><th scope="col">From</th><th scope="col">To</th><th scope="col">Attempts</th><th scope="col">Share of all attempts</th></tr></thead>
-        <tbody>{layout.links.map(link => <tr key={link.id}><th scope="row">{usageAutoModeFlowNodeLabel(link.from)}</th><td>{usageAutoModeFlowNodeLabel(link.to)}</td><td>{usageNumber(link.count)}</td><td>{usagePercent(link.count / layout.total * 100)}</td></tr>)}</tbody>
+        <tbody>{routeEdges.map(edge => <tr key={`${edge.from}\u0000${edge.to}`}><th scope="row">{usageAutoModeFlowNodeLabel(edge.from)}</th><td>{usageAutoModeFlowNodeLabel(edge.to)}</td><td>{usageNumber(edge.count)}</td><td>{usagePercent(edge.count / layout.total * 100)}</td></tr>)}</tbody>
       </table></div>
     </details>
   </section>

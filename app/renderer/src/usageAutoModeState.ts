@@ -100,6 +100,43 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
   unknown: ['Attempts', 'Unknown route'],
 }
 
+const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Stage 1' | 'Stage 2'> = {
+  base: 'Base paths',
+  forced: 'Base paths',
+  guard: 'Base paths',
+  accept_edits: 'Base paths',
+  allowlist: 'Base paths',
+  stage1: 'Stage 1',
+  stage2: 'Stage 2',
+  unknown: 'Base paths',
+}
+
+const AUTO_MODE_OVERVIEW_OUTCOMES: Partial<Record<AutoModeUsageOutcome, AutoModeUsageOutcome>> = {
+  allowed: 'allowed',
+  policy_blocked: 'policy_blocked',
+  review_required: 'review_required',
+}
+
+export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
+  const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageOutcome; count: number }>()
+  const add = (from: string, to: string, count: number, outcome?: AutoModeUsageOutcome) => {
+    const key = JSON.stringify([from, to])
+    const edge = edges.get(key)
+    if (edge) edge.count += count
+    else edges.set(key, { from, to, ...(outcome ? { outcome } : {}), count })
+  }
+
+  for (const route of summary.routes) {
+    const routeNode = AUTO_MODE_OVERVIEW_ROUTES[route.route]
+    const outcome = AUTO_MODE_OVERVIEW_OUTCOMES[route.outcome]
+    add('Attempts', routeNode, route.count)
+    add(routeNode, outcome ?? 'other', route.count, outcome)
+  }
+  return [...edges.values()].sort((left, right) =>
+    left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),
+  )
+}
+
 export function autoModeRouteEdges(summary: AutoModeUsageSummary) {
   const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
   for (const route of summary.routes) {
