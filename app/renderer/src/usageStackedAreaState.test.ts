@@ -24,6 +24,7 @@ test('stacked boundaries preserve totals without negative thickness or invalid c
         });
     }
     expect(geometry.paths.every(path => path.includes(' C') && !/NaN|Infinity/.test(path))).toBe(true);
+    expect(geometry.centerPaths).toHaveLength(3);
 });
 
 test('Catmull-Rom curves preserve through-point tangents and do not taper endpoints', () => {
@@ -38,6 +39,21 @@ test('Catmull-Rom curves preserve through-point tangents and do not taper endpoi
     ], 10, 0, 100);
     expect(geometry.paths[0]).toStartWith('M0,50');
     expect(geometry.boundaries[1]!.map(point => point.y)).toEqual([50, 50, 50]);
+});
+
+test('center indicators stop across intervals where a series is absent', () => {
+    const geometry = usageStackedAreaGeometry([
+        { x: 0, values: [0] },
+        { x: 10, values: [5] },
+        { x: 20, values: [0] },
+        { x: 30, values: [0] },
+        { x: 40, values: [5] },
+        { x: 50, values: [0] },
+    ], 10, 0, 100);
+    expect(geometry.centerPaths[0]).toHaveLength(2);
+    expect(geometry.centerPaths[0]![0]).toStartWith('M0,100');
+    expect(geometry.centerPaths[0]![0]).not.toContain('40,75');
+    expect(geometry.centerPaths[0]![1]).toStartWith('M30,100');
 });
 
 test('sparse ranges add only gap boundaries and retain calendar bucket positions', () => {

@@ -41,6 +41,10 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
         ...areaSamples,
         { x: right, values: lastValues },
     ], max, top, bottom);
+    const thinSeries = series.map(item => {
+        const projectedPeak = Math.max(0, ...summary.days.map(day => item.value(day))) / max * plotHeight;
+        return projectedPeak > 0 && projectedPeak < 1;
+    });
     const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
     const tooltipHeight = 32 + series.length * 20 + (hideReads && mode === 'type' ? 20 : 0);
     return <>
@@ -50,7 +54,10 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
     <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hideReads && mode === 'type' ? ', excluding cache reads' : ''}`}>
         <defs><clipPath id={clipId}><rect x={left} y={top} width={width} height={plotHeight}/></clipPath></defs>
         {[0, 1 / 3, 2 / 3, 1].map(fraction => <line key={fraction} x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/>)}
-        <g clipPath={`url(#${clipId})`} className="usage-flow-areas" aria-hidden="true">{geometry.paths.map((path, index) => <path key={series[index]!.id} className="usage-flow-area" fill={series[index]!.color} stroke={series[index]!.color} strokeWidth="0.35" strokeLinejoin="round" d={path}/>)}</g>
+        <g clipPath={`url(#${clipId})`} className="usage-flow-areas" aria-hidden="true">
+            {geometry.paths.map((path, index) => <path key={series[index]!.id} className="usage-flow-area" fill={series[index]!.color} d={path}/>)}
+            {geometry.centerPaths.flatMap((paths, index) => thinSeries[index] ? paths.map((path, part) => <path key={`${series[index]!.id}:${part}`} className="usage-flow-thin-series" fill="none" stroke={series[index]!.color} strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" vectorEffect="non-scaling-stroke" d={path}/>) : [])}
+        </g>
         {summary.days.map((day, i) => {
             return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={0} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens${partial ? ', partial history' : ''}`} onClick={() => onSelect(day.date)} onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }

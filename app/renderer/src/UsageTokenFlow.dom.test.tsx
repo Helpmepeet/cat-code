@@ -37,8 +37,7 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(tree.container.querySelector('.usage-flow-chart')?.getAttribute('shape-rendering')).toBe('geometricPrecision');
     const area = tree.container.querySelector('.usage-flow-area');
     expect(area?.getAttribute('d')).toContain(' C');
-    expect(area?.getAttribute('stroke')).toBe(area?.getAttribute('fill'));
-    expect(area?.getAttribute('stroke-width')).toBe('0.35');
+    expect(area?.hasAttribute('stroke')).toBe(false);
 
     const hits = tree.container.querySelectorAll<SVGGElement>('.usage-flow-hit');
     await act(async () => hits[0]!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
@@ -59,6 +58,28 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(total()).toBe('105');
     expect(button('Hide cache reads').disabled).toBe(true);
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(1);
+});
+
+test('subpixel model areas use a stable centerline without inflating the fill', async () => {
+    const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
+    const summary = snapshot.ranges['7d'];
+    const big = { fresh: 279_000_000, read: 0, write: 0, output: 0 };
+    const tiny = { fresh: 467_000, read: 0, write: 0, output: 0 };
+    summary.tokens = { fresh: big.fresh + tiny.fresh, read: 0, write: 0, output: 0 };
+    summary.days[0]!.tokens = { ...summary.tokens };
+    summary.models = [
+        { id: 'luna', label: 'gpt-5.6-luna', kind: 'named', tokens: big },
+        { id: 'astra', label: 'gpt-6-astra', kind: 'named', tokens: tiny },
+    ];
+    summary.days[0]!.models = [{ id: 'luna', total: big.fresh }, { id: 'astra', total: tiny.fresh }];
+    const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={usageModelColors(summary.models)} selected="" onSelect={() => {}} partial={false}/>);
+    await act(async () => Array.from(tree.container.querySelectorAll('button')).find(button => button.textContent === 'By model')!.click());
+
+    const indicator = tree.container.querySelector('.usage-flow-thin-series');
+    expect(indicator?.getAttribute('stroke')).toBe('var(--usage-model-yellow)');
+    expect(indicator?.getAttribute('stroke-width')).toBe('1');
+    expect(indicator?.getAttribute('stroke-linecap')).toBe('round');
+    expect(tree.container.querySelector('[fill="var(--usage-model-yellow)"]')?.hasAttribute('stroke')).toBe(false);
 });
 
 test('model families keep the reference colors and stacking order', () => {

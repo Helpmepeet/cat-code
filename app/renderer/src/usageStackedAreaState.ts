@@ -20,6 +20,7 @@ export type UsageStackedPoint = {
 
 export type UsageStackedAreaGeometry = {
     boundaries: UsageStackedPoint[][];
+    centerPaths: string[][];
     curves: UsageStackedCurve[][];
     paths: string[];
 };
@@ -146,11 +147,42 @@ export function usageStackedAreaGeometry(
         }
     }
 
+    const centerPaths = Array.from({ length: layerCount }, (_, layer) => {
+        const points = boundaries[layer]!.map((lower, index) => {
+            const upper = boundaries[layer + 1]![index]!;
+            return { x: lower.x, y: (lower.y + upper.y) / 2 };
+        });
+        const centerCurves = curves[layer]!.map((lower, index) => {
+            const upper = curves[layer + 1]![index]!;
+            return {
+                from: points[index]!,
+                control1: { x: lower.control1.x, y: (lower.control1.y + upper.control1.y) / 2 },
+                control2: { x: lower.control2.x, y: (lower.control2.y + upper.control2.y) / 2 },
+                to: points[index + 1]!,
+            };
+        });
+        const paths: string[] = [];
+        let path = '';
+        for (let index = 0; index < centerCurves.length; index++) {
+            const active = (samples[index]?.values[layer] ?? 0) > 0 || (samples[index + 1]?.values[layer] ?? 0) > 0;
+            if (!active) {
+                if (path) paths.push(path);
+                path = '';
+                continue;
+            }
+            const curve = centerCurves[index]!;
+            if (!path) path = `M${coordinate(curve.from.x)},${coordinate(curve.from.y)}`;
+            path += ` C${coordinate(curve.control1.x)},${coordinate(curve.control1.y)} ${coordinate(curve.control2.x)},${coordinate(curve.control2.y)} ${coordinate(curve.to.x)},${coordinate(curve.to.y)}`;
+        }
+        if (path) paths.push(path);
+        return paths;
+    });
+
     const paths = Array.from({ length: layerCount }, (_, layer) => {
         const upper = boundaries[layer + 1]!;
         const lower = boundaries[layer]!;
         if (!upper.length) return '';
         return `${usageCurvePath(upper, curves[layer + 1]!)} ${usageCurvePath(lower, curves[layer]!, true).replace(/^M/, 'L')} Z`;
     });
-    return { boundaries, curves, paths };
+    return { boundaries, centerPaths, curves, paths };
 }
