@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import type { UsageWindow } from '../../shared/usageDashboard.js';
 import { type UsageDashboardState, initialUsageSelection, type UsageSelection, usageCompact, usageCacheWrites, usageFailureMessage, usageNumber, usagePercent, usageShare, usageTotal } from './usageDashboardState.js';
-import { UsageDailyColumns } from './UsageDashboardCharts.js';
+import { UsageTokenFlow } from './UsageDashboardCharts.js';
 import { UsageHeatmap } from './UsageActivityCharts.js';
 import { UsageCacheSummary, UsageModelDonut, UsageToolActivity, UsageToolBreakdown } from './UsageOverviewDetails.js';
 import { UsageSessionContributors } from './UsageSessionContributors.js';
@@ -22,13 +22,14 @@ function UsageIcon({ kind }: { kind: UsageAccent }) {
     };
     return <svg className={`usage-icon usage-${kind}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[kind]}</svg>;
 }
-function UsagePanel({ title, children, wide = false, accent = 'tokens' }: {
+function UsagePanel({ title, children, wide = false, accent = 'tokens', className = '' }: {
     title?: string;
     children: ReactNode;
     wide?: boolean;
     accent?: UsageAccent;
+    className?: string;
 }) {
-    return <section className={`usage-panel${wide ? ' usage-wide' : ''}`}>{title && <h2 className="usage-panel-heading"><UsageIcon kind={accent}/>{title}</h2>}{children}</section>;
+    return <section className={`usage-panel${wide ? ' usage-wide' : ''}${className ? ` ${className}` : ''}`}>{title && <h2 className="usage-panel-heading"><UsageIcon kind={accent}/>{title}</h2>}{children}</section>;
 }
 export function UsagePage({ state, selection, onSelectionChange, sessionRows = [], onOpenSession }: {
     state: UsageDashboardState;
@@ -62,8 +63,8 @@ export function UsagePage({ state, selection, onSelectionChange, sessionRows = [
   <UsageMetrics summary={unavailable ? undefined : summary} unknown={unknown} partial={!!partial}/>
   {summary && snapshot && !unavailable && <>
    <div className="usage-panels">
-    <UsagePanel wide>
-     <UsageDailyColumns summary={summary} colors={colors} selected={selected?.date ?? ''} onSelect={setSelectedDate} partial={!!partial}/>
+    <UsagePanel wide className="usage-token-flow-panel">
+     <UsageTokenFlow summary={summary} colors={colors} selected={selected?.date ?? ''} onSelect={setSelectedDate} partial={!!partial}/>
      {usageBucketDays(summary) > 1 && <p className="usage-note">{usageBucketDays(summary)}-day totals</p>}
     </UsagePanel>
     <div className="usage-secondary-panels usage-wide">

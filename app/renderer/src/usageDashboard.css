@@ -12,6 +12,11 @@
   --usage-violet:light-dark(#7854ba,#b49ae8);
   --usage-cyan:light-dark(#087f9e,#66c7e3);
   --usage-other:light-dark(#7c8492,#8992a1);
+  --usage-model-purple:#8a52ee;
+  --usage-model-blue:#3b84f7;
+  --usage-model-orange:#ee7c38;
+  --usage-model-yellow:#f6c543;
+  --usage-model-pink:#f077af;
   --usage-tokens:var(--usage-blue);
   --usage-cache:var(--usage-teal);
   --usage-requests:var(--usage-amber);
@@ -151,14 +156,30 @@
 @media(max-width:760px) { .usage-panels,.usage-secondary-panels { grid-template-columns:minmax(0,1fr); } }
 @media(max-width:520px) { .usage-page { padding:16px; } .usage-panel { padding:14px; } .usage-metric { padding:12px; gap:8px; grid-template-columns:28px minmax(0,1fr); } .usage-metric > .usage-icon { padding:4px; width:18px; height:18px; } .usage-metric strong { font-size:21px; } .usage-cache-values dd { font-size:12px; } .usage-page th,.usage-page td { padding:8px 5px; } }
 
-.usage-flow-chart { height:auto; margin-top:12px; }
-.usage-flow-toolbar { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:8px; }
+.usage-token-flow-panel { padding:22px 20px 18px; border-radius:14px; }
+.usage-flow-chart { height:auto; margin-top:10px; }
+.usage-flow-toolbar { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:14px 20px; margin-bottom:6px; }
 .usage-flow-toolbar .usage-legend { margin:0; }
+.usage-flow-heading { display:flex; flex-direction:column; align-items:flex-start; gap:3px; }
+.usage-flow-heading > div { display:flex; align-items:baseline; gap:8px; }
+.usage-flow-heading strong { font:600 28px/1.08 var(--font-mono); letter-spacing:-.035em; color:var(--color-text-primary); font-variant-numeric:tabular-nums; }
+.usage-flow-heading span,.usage-flow-heading small { color:var(--usage-secondary); font-size:11px; }
 .usage-legend b { font-family:var(--font-mono); font-size:10px; font-weight:400; }
 .usage-flow-controls { display:flex; gap:8px; flex-wrap:wrap; }
 .usage-toggle { font-size:11px; border:1px solid var(--color-shell-seam); border-radius:7px; padding:6px 10px; }
 .usage-toggle[aria-pressed=true] { color:var(--usage-selection); border-color:var(--usage-selection); }
 .usage-toggle:disabled { opacity:.4; cursor:default; }
+.usage-flow-grid-line { stroke:var(--usage-grid); stroke-width:1; stroke-dasharray:4 5; vector-effect:non-scaling-stroke; }
+.usage-flow-area { pointer-events:none; }
+.usage-flow-selected { fill:var(--usage-selection); fill-opacity:.1; }
+.usage-flow-selection-line { stroke:var(--usage-selection); stroke-width:1; stroke-opacity:.65; stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
+.usage-flow-hit-target { stroke:transparent; stroke-width:2; vector-effect:non-scaling-stroke; }
+.usage-flow-hit:focus { outline:none; }
+.usage-flow-hit:focus-visible .usage-flow-hit-target { stroke:var(--color-text-primary); }
+.usage-flow-legend { margin-top:12px; gap:9px 18px; }
+.usage-flow-legend > span { align-items:flex-start; }
+.usage-flow-legend > span > span { line-height:1.25; }
+.usage-flow-legend b { color:var(--usage-muted); line-height:1.25; }
 .usage-flow-readout { display:flex; flex-wrap:wrap; gap:5px 16px; min-height:18px; margin-top:8px; font-size:11px; color:var(--usage-secondary); }
 .usage-flow-readout b,.usage-flow-readout strong { color:var(--color-text-primary); font-weight:500; }
 .usage-chart-summary { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px; margin-bottom:10px; }
@@ -182,7 +203,7 @@
 .usage-heat-6 { fill:light-dark(#386db8,#609bd8); background:light-dark(#386db8,#609bd8); }
 .usage-heat-7 { fill:light-dark(#25549a,#88b9ed); background:light-dark(#25549a,#88b9ed); }
 .usage-heat-8 { fill:light-dark(#173d78,#b5d8ff); background:light-dark(#173d78,#b5d8ff); }
-@media(max-width:520px) { .usage-model-mix { grid-template-columns:110px minmax(0,1fr); gap:12px; } .usage-flow-chart { height:auto; } .usage-range button { padding:6px 9px; } }
+@media(max-width:520px) { .usage-model-mix { grid-template-columns:110px minmax(0,1fr); gap:12px; } .usage-token-flow-panel { padding:18px 14px 15px; } .usage-flow-chart { height:auto; } .usage-flow-controls { width:100%; justify-content:space-between; } .usage-range button { padding:6px 9px; } }
 
 .usage-page .usage-flow-toolbar .usage-panel-heading { margin:0; }
 .usage-model-tools-panels { grid-template-columns:minmax(0,1fr) minmax(0,1.18fr); }

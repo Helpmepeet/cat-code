@@ -191,7 +191,7 @@ test('reference controls change chart values without changing accounting; hourly
     for (const excluded of ['Work produced', 'Response latency', 'Context window pressure', 'Thinking share']) expect(tree.container.textContent).not.toContain(excluded);
 });
 
-test('reference chart proportions keep weekly bars narrow and model slices keyboard operable', async () => {
+test('token flow uses bounded stacked areas and model slices remain keyboard operable', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
     summary.tokens.fresh = 10000;
@@ -202,12 +202,15 @@ test('reference chart proportions keep weekly bars narrow and model slices keybo
     ];
     const tree = await harness.mount(<UsagePage state={{ snapshot, status: 'ready' }}/>);
     const chart = tree.container.querySelector('.usage-flow-chart')!;
-    expect(chart.querySelectorAll('.usage-grid-line')).toHaveLength(5);
-    expect([...chart.querySelectorAll('.usage-axis')].filter(label => label.textContent?.startsWith('Sep '))).toHaveLength(7);
-    const shape = chart.querySelector('.usage-flow-segment')!.getAttribute('d')!;
-    const left = Number(shape.match(/^M([^,]+)/)![1]);
-    const right = Number(shape.match(/H[^ ]+ Q([^,]+)/)![1]);
-    expect(right - left).toBeLessThanOrEqual(34);
+    expect(chart.querySelectorAll('.usage-flow-grid-line')).toHaveLength(4);
+    expect([...chart.querySelectorAll('.usage-axis')].filter(label => label.textContent?.startsWith('Sep ')).length).toBeLessThanOrEqual(6);
+    const shapes = chart.querySelectorAll('.usage-flow-area');
+    expect(shapes.length).toBeGreaterThan(0);
+    for (const shape of shapes) {
+        const path = shape.getAttribute('d')!;
+        expect(path).toContain(' C');
+        expect(path).not.toMatch(/NaN|Infinity/);
+    }
     const slices = tree.container.querySelectorAll('.usage-model-donut [role="button"]');
     expect(slices).toHaveLength(2);
     await act(async () => slices[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })));

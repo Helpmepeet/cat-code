@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { usageAxisCeiling, usageChartDate, usageChartTicks, usageFlowSeries, type UsageFlowMode } from './usageGraphState.js';
 import { UsageAreaTrend } from './UsageAreaTrend.js';
-import { usageBucketDays, usageBucketLabel } from './usageTrendState.js';
+import { usageBucketDays, usageBucketLabel, usageDatePosition } from './usageTrendState.js';
 import type { UsageRangeSummary } from '../../shared/usageDashboard.js';
 import { useUsageChartWidth, usageCompact, usageNumber, usageTotal } from './usageDashboardState.js';
-export function UsageDailyColumns({ summary, colors, selected, onSelect, partial }: {
+import { usageFlowSamples, usageStackedAreaGeometry } from './usageStackedAreaState.js';
+export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }: {
     summary: UsageRangeSummary;
     colors: Record<string, string>;
     selected: string;
@@ -14,34 +15,44 @@ export function UsageDailyColumns({ summary, colors, selected, onSelect, partial
     const [mode, setMode] = useState<UsageFlowMode>('type');
     const [hideReads, setHideReads] = useState(false);
     const [hovered, setHovered] = useState('');
+    const clipId = `usage-flow-${useId().replaceAll(':', '')}`;
     const series = usageFlowSeries(summary, colors, mode, hideReads);
     const shownTotal = (day: UsageRangeSummary['days'][number]) => series.reduce((sum, item) => sum + item.value(day), 0);
     const detail = summary.days.find(day => day.date === hovered);
     const max = usageAxisCeiling(Math.max(1, ...summary.days.map(shownTotal)));
     const chart = useUsageChartWidth();
-    const narrow = chart.width < 560, left = narrow ? 44 : 56, right = chart.width - 6;
-    const height = narrow ? 230 : 300, bottom = height - 34, top = 10, plotHeight = bottom - top;
+    const narrow = chart.width < 560, left = 0, right = chart.width;
+    const height = narrow ? 250 : 300, bottom = height - 34, top = 10, plotHeight = bottom - top;
     const width = right - left;
     const span = Math.max(1, (Date.parse(summary.endExclusive) - Date.parse(summary.startInclusive)) / 86400000);
     const bucketDays = usageBucketDays(summary);
     const step = width * bucketDays / span;
     const slotX = (date: string) => left + (Date.parse(`${date}T00:00:00.000Z`) - Date.parse(summary.startInclusive)) / 86400000 / span * width;
     const slotWidth = (date: string) => Math.min(step, right - slotX(date));
-    const barWidth = Math.min(narrow ? 18 : 34, step * 0.68);
-    const barX = (date: string) => slotX(date) + (slotWidth(date) - barWidth) / 2;
-    const ticks = usageChartTicks(summary.startInclusive, summary.endExclusive, width);
+    const slotCenter = (date: string) => slotX(date) + slotWidth(date) / 2;
+    const ticks = usageChartTicks(summary.startInclusive, summary.endExclusive, width)
+        .filter((_, index, all) => all.length <= (narrow ? 4 : 6) || index % Math.ceil(all.length / (narrow ? 4 : 6)) === 0 || index === all.length - 1);
+    const samples = usageFlowSamples(summary, series);
+    const areaSamples = samples.map(sample => ({ x: slotCenter(sample.date), values: sample.values }));
+    const firstValues = areaSamples[0]?.values ?? series.map(() => 0);
+    const lastValues = areaSamples.at(-1)?.values ?? firstValues;
+    const geometry = usageStackedAreaGeometry([
+        { x: left, values: firstValues },
+        ...areaSamples,
+        { x: right, values: lastValues },
+    ], max, top, bottom);
+    const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
     const tooltipHeight = 32 + series.length * 20 + (hideReads && mode === 'type' ? 20 : 0);
     return <>
-    <div className="usage-flow-toolbar"><h2 className="usage-panel-heading">Token flow</h2>
+    <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Token flow</h2><div><strong>{usageNumber(displayedTotal)}</strong><span>tokens</span></div>{hideReads && mode === 'type' && <small>Excluding cache reads</small>}</div>
       <div className="usage-flow-controls"><button className="usage-toggle" type="button" disabled={mode === 'model'} aria-pressed={hideReads && mode === 'type'} onClick={() => setHideReads(!hideReads)}>Hide cache reads</button><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
     </div>
-    <div className="usage-legend usage-flow-legend" aria-label="Token flow legend">{series.map(item => <span key={item.id}><svg width="9" height="9" aria-hidden="true"><rect width="9" height="9" rx="2" fill={item.color}/></svg>{item.label}<b>{usageCompact(item.total)}</b></span>)}</div>
     <svg className="usage-chart usage-flow-chart" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hideReads && mode === 'type' ? ', excluding cache reads' : ''}`}>
-        {[0, 0.25, 0.5, 0.75, 1].map(fraction => <g key={fraction}><text x={left - 10} y={bottom - fraction * plotHeight + 4} textAnchor="end" className="usage-axis">{usageCompact(max * fraction)}</text><line x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-grid-line"/></g>)}
+        <defs><clipPath id={clipId}><rect x={left} y={top} width={width} height={plotHeight}/></clipPath></defs>
+        {[0, 1 / 3, 2 / 3, 1].map(fraction => <line key={fraction} x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/>)}
+        <g clipPath={`url(#${clipId})`} className="usage-flow-areas" aria-hidden="true">{geometry.paths.map((path, index) => <path key={series[index]!.id} className="usage-flow-area" fill={series[index]!.color} d={path}/>)}</g>
         {summary.days.map((day, i) => {
-            let y = bottom;
-            const visible = series.filter(item => item.value(day) > 0);
-            return <g key={day.date} role="button" tabIndex={0} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens${partial ? ', partial history' : ''}`} onClick={() => onSelect(day.date)} onKeyDown={event => {
+            return <g key={day.date} className="usage-flow-hit" role="button" tabIndex={0} aria-pressed={selected === day.date} onMouseEnter={() => setHovered(day.date)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered('')} aria-label={`${usageBucketLabel(summary, day.date)}: ${usageNumber(shownTotal(day))} recorded tokens${partial ? ', partial history' : ''}`} onClick={() => onSelect(day.date)} onKeyDown={event => {
                 if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onSelect(day.date); }
                 else if (event.key === 'Escape') setHovered('');
                 else if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
@@ -51,28 +62,20 @@ export function UsageDailyColumns({ summary, colors, selected, onSelect, partial
                     event.currentTarget.ownerSVGElement?.querySelectorAll<SVGGElement>('[role="button"]')[next]?.focus();
                 }
             }}>
-                {selected === day.date && <><rect x={barX(day.date) - 4} y={top} width={barWidth + 8} height={plotHeight + 2} rx="3" className="usage-selected"/><rect x={barX(day.date) - 2} y={bottom + 4} width={barWidth + 4} height="2" rx="1" className="usage-selection-underline"/></>}
-                {visible.map((item, index) => {
-                    const segmentHeight = item.value(day) / max * plotHeight;
-                    y -= segmentHeight;
-                    const gap = index < visible.length - 1 ? Math.min(2, segmentHeight / 3) : 0;
-                    const rounded = index === visible.length - 1 ? Math.min(4, barWidth / 2, segmentHeight / 2) : 0;
-                    const x = barX(day.date), h = Math.max(0.25, segmentHeight - gap);
-                    return <path key={item.id} className="usage-flow-segment" fill={item.color} d={`M${x},${y + h} V${y + rounded} Q${x},${y} ${x + rounded},${y} H${x + barWidth - rounded} Q${x + barWidth},${y} ${x + barWidth},${y + rounded} V${y + h} Z`}/>;
-                })}
-                {!visible.length && <line x1={barX(day.date)} x2={barX(day.date) + barWidth} y1={bottom} y2={bottom} className="usage-zero-bar"/>}
-                {usageTotal(day.tokens) === 0 && partial && <text x={barX(day.date) + barWidth / 2} y={bottom - 8} textAnchor="middle" className="usage-axis">?</text>}
-                <rect x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight + 8} fill="transparent"/>
+                {selected === day.date && <><rect x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight} className="usage-flow-selected"/><line x1={slotCenter(day.date)} x2={slotCenter(day.date)} y1={top} y2={bottom} className="usage-flow-selection-line"/></>}
+                {usageTotal(day.tokens) === 0 && partial && <text x={slotCenter(day.date)} y={bottom - 8} textAnchor="middle" className="usage-axis">?</text>}
+                <rect className="usage-flow-hit-target" x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight + 8} fill="transparent"/>
             </g>;
         })}
-        {ticks.map(date => <text key={date} x={slotX(date) + Math.min(width / span, right - slotX(date)) / 2} y={height - 10} textAnchor="middle" className="usage-axis">{usageChartDate(date, span > 365)}</text>)}
-        {detail && <g className="usage-chart-tooltip" pointerEvents="none" aria-hidden="true" transform={`translate(${Math.max(0, Math.min(chart.width - 230, barX(detail.date) + barWidth + 10))},${top + 6})`}>
+        {ticks.map((date, index) => <text key={date} x={left + usageDatePosition(summary, date) * width} y={height - 9} textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'} className="usage-axis">{usageChartDate(date, span > 365)}</text>)}
+        {detail && <g className="usage-chart-tooltip" pointerEvents="none" aria-hidden="true" transform={`translate(${Math.max(0, Math.min(chart.width - 230, slotCenter(detail.date) + 10))},${top + 6})`}>
             <rect width="230" height={tooltipHeight} rx="7"/>
             <text x="12" y="20" className="usage-tooltip-title">{usageBucketLabel(summary, detail.date)}</text>
             {series.map((item, i) => <g key={item.id}><text x="12" y={42 + i * 20}>{item.label}</text><text x="218" y={42 + i * 20} textAnchor="end">{usageCompact(item.value(detail))}</text></g>)}
             {hideReads && mode === 'type' && <text x="12" y={42 + series.length * 20}>Total incl. cache: {usageCompact(usageTotal(detail.tokens))}</text>}
         </g>}
     </svg>
+    <div className="usage-legend usage-flow-legend" aria-label="Token flow legend">{series.map(item => <span key={item.id}><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill={item.color}/></svg><span>{item.label}</span><b>{usageCompact(item.total)}</b></span>)}</div>
     <div className="usage-flow-readout usage-visually-hidden" role="status">{detail && <><strong>{usageBucketLabel(summary, detail.date)}</strong>{series.map(item => <span key={item.id}>{item.label} <b>{usageCompact(item.value(detail))}</b></span>)}</>}</div>
     </>;
 }

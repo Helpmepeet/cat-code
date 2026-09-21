@@ -25,7 +25,7 @@ export function usageChartTicks(start: string, endExclusive: string, width: numb
     return dates;
 }
 export function usageGraphColors(ids: readonly string[]): Record<string, string> {
-    const palette = ['var(--usage-blue)', 'var(--usage-amber)', 'var(--usage-teal)', 'var(--usage-violet)', 'var(--usage-cyan)', 'var(--usage-coral)', 'light-dark(#697c22,#bbca70)', 'light-dark(#a54e88,#d897c5)', 'light-dark(#956343,#cdaa8b)', 'var(--usage-other)'];
+    const palette = ['var(--usage-model-purple)', 'var(--usage-model-blue)', 'var(--usage-model-orange)', 'var(--usage-model-yellow)', 'var(--usage-model-pink)', 'var(--usage-cyan)', 'light-dark(#2f9d74,#54d2a0)', 'light-dark(#4338ca,#818cf8)', 'var(--usage-coral)', 'var(--usage-other)'];
     return Object.fromEntries([...new Set(ids)].map((id, i) => [id, palette[i % palette.length]!]));
 }
 export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
