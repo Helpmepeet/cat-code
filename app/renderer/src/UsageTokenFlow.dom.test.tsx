@@ -82,15 +82,15 @@ test('subpixel model areas use a stable centerline without inflating the fill', 
     expect(tree.container.querySelector('[fill="var(--usage-model-yellow)"]')?.hasAttribute('stroke')).toBe(false);
 });
 
-test('model families keep the reference colors and stacking order', () => {
-    const tokens = { fresh: 1, read: 0, write: 0, output: 0 };
+test('model families keep reference colors while range totals place small series inward', () => {
+    const tokens = (fresh: number) => ({ fresh, read: 0, write: 0, output: 0 });
     const models = [
-        { id: 'terra', label: 'gpt-5.6-terra', kind: 'named' as const, tokens },
-        { id: 'other', label: 'Other', kind: 'other' as const, tokens },
-        { id: 'astra', label: 'gpt-6-astra', kind: 'named' as const, tokens },
-        { id: 'unknown', label: 'Unknown', kind: 'unknown' as const, tokens },
-        { id: 'sol', label: 'gpt-5.6-sol', kind: 'named' as const, tokens },
-        { id: 'luna', label: 'gpt-5.6-luna', kind: 'named' as const, tokens },
+        { id: 'terra', label: 'gpt-5.6-terra', kind: 'named' as const, tokens: tokens(84_000_000) },
+        { id: 'other', label: 'Other', kind: 'other' as const, tokens: tokens(1_000_000) },
+        { id: 'astra', label: 'gpt-6-astra', kind: 'named' as const, tokens: tokens(3_800_000) },
+        { id: 'unknown', label: 'Unknown', kind: 'unknown' as const, tokens: tokens(2_000_000) },
+        { id: 'sol', label: 'gpt-5.6-sol', kind: 'named' as const, tokens: tokens(34_500_000) },
+        { id: 'luna', label: 'gpt-5.6-luna', kind: 'named' as const, tokens: tokens(28_400_000) },
     ];
     const colors = usageModelColors(models);
     expect(colors).toMatchObject({
@@ -102,15 +102,21 @@ test('model families keep the reference colors and stacking order', () => {
         unknown: 'var(--usage-other)',
     });
     const summary = {
-        models,
+        models: models.filter(model => model.kind === 'named'),
         days: [],
     } as unknown as Parameters<typeof usageFlowSeries>[0];
     expect(usageFlowSeries(summary, colors, 'model', false).map(series => series.label)).toEqual([
-        'gpt-5.6-luna',
-        'gpt-5.6-sol',
         'gpt-5.6-terra',
+        'gpt-5.6-luna',
         'gpt-6-astra',
+        'gpt-5.6-sol',
+    ]);
+    expect(usageFlowSeries({ ...summary, models }, colors, 'model', false).map(series => series.label)).toEqual([
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
         'Unknown',
         'Other',
+        'gpt-6-astra',
+        'gpt-5.6-sol',
     ]);
 });

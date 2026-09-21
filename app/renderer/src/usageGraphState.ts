@@ -53,14 +53,11 @@ export function usageModelColors(models: readonly UsageModelIdentity[]): Record<
 }
 export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
     if (mode === 'model') {
-        const familyOrder: Record<UsageModelFamily, number> = { luna: 0, sol: 1, terra: 2, astra: 3 };
-        return summary.models
-            .map((model, index) => {
-                const family = usageModelFamily(model.label);
-                return { model, index, order: model.kind === 'other' ? 100 : model.kind === 'unknown' ? 99 : family ? familyOrder[family] : 10 };
-            })
-            .sort((a, b) => a.order - b.order || a.index - b.index)
-            .map(({ model }) => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
+        const ranked = [...summary.models].sort((a, b) => usageTotal(b.tokens) - usageTotal(a.tokens) || a.id.localeCompare(b.id));
+        const lower: typeof ranked = [], upper: typeof ranked = [];
+        ranked.forEach((model, index) => (index % 2 === 0 ? lower : upper).push(model));
+        return [...lower, ...upper.reverse()]
+            .map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
     }
     return ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
         .filter(([key]) => !(key === 'read' && hideReads) && !(key === 'write' && !usageHasCacheWrites(summary)))
