@@ -29,7 +29,7 @@ test('stacked boundaries preserve totals without negative thickness or invalid c
 test('Catmull-Rom curves preserve through-point tangents and do not taper endpoints', () => {
     expect(usageSmoothCurve([])).toBe('');
     expect(usageSmoothCurve([{ x: 4, y: 8 }])).toBe('M4,8');
-    expect(usageSmoothCurve([{ x: 0, y: 10 }, { x: 10, y: 0 }, { x: 20, y: 10 }])).toBe('M0,10 C1.333,8.667 7.333,0 10,0 C12.667,0 18.667,8.667 20,10');
+    expect(usageSmoothCurve([{ x: 0, y: 10 }, { x: 10, y: 0 }, { x: 20, y: 10 }])).toBe('M0,10 C2,8 6,0 10,0 C14,0 18,8 20,10');
     expect(usageSmoothCurve([{ x: 0, y: 50 }, { x: 0, y: 40 }, { x: 10, y: 50 }])).not.toMatch(/NaN|Infinity/);
     const geometry = usageStackedAreaGeometry([
         { x: 0, values: [5] },

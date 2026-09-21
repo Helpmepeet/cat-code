@@ -75,7 +75,7 @@ export function usageFlowSamples(summary: UsageRangeSummary, series: readonly Us
         .map(([date, sampleValues]) => ({ date, values: sampleValues }));
 }
 
-function usageCurveSegments(points: readonly UsageStackedPoint[], tension = 0.8): UsageStackedCurve[] {
+function usageCurveSegments(points: readonly UsageStackedPoint[], tension = 1.2): UsageStackedCurve[] {
     return points.slice(0, -1).map((from, index) => {
         const before = points[index - 1] ?? from;
         const to = points[index + 1]!;
@@ -109,7 +109,7 @@ function usageCurvePath(points: readonly UsageStackedPoint[], curves: readonly U
     return path;
 }
 
-export function usageSmoothCurve(points: readonly UsageStackedPoint[], tension = 0.8): string {
+export function usageSmoothCurve(points: readonly UsageStackedPoint[], tension = 1.2): string {
     return usageCurvePath(points, usageCurveSegments(points, tension));
 }
 
