@@ -167,8 +167,8 @@
 .usage-flow-controls { display:flex; gap:8px; flex-wrap:wrap; }
 .usage-flow-grid-line { stroke:var(--usage-grid); stroke-width:1; stroke-dasharray:4 5; vector-effect:non-scaling-stroke; }
 .usage-flow-area { pointer-events:none; }
-.usage-flow-selection-line { stroke:#171719; stroke-width:3; stroke-linecap:round; vector-effect:non-scaling-stroke; }
-.usage-flow-selection-point { stroke:#171719; stroke-width:3; vector-effect:non-scaling-stroke; }
+.usage-flow-hover-line { stroke:#171719; stroke-width:3; stroke-linecap:round; vector-effect:non-scaling-stroke; }
+.usage-flow-hover-point { stroke:#171719; stroke-width:3; vector-effect:non-scaling-stroke; }
 .usage-flow-hit-target { stroke:transparent; stroke-width:2; vector-effect:non-scaling-stroke; }
 .usage-flow-hit:focus { outline:none; }
 .usage-flow-hit:focus-visible .usage-flow-hit-target { stroke:var(--color-text-primary); }
@@ -211,6 +211,9 @@
 .usage-chart-tooltip > rect { fill:var(--usage-panel); stroke:var(--usage-secondary); stroke-width:.6; }
 .usage-chart-tooltip text { fill:var(--usage-secondary); font:11px var(--font-mono); }
 .usage-chart-tooltip .usage-tooltip-title { fill:var(--color-text-primary); font-weight:500; }
+.usage-flow-tooltip > rect { fill:#171719; stroke:#343137; stroke-width:1; }
+.usage-flow-tooltip text { fill:#aaa5ad; font:11px var(--font-sans); }
+.usage-flow-tooltip .usage-tooltip-title,.usage-flow-tooltip .usage-flow-tooltip-value { fill:#f7f5f8; font-weight:600; }
 .usage-page .usage-visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; min-height:0; }
 @media(max-width:760px) { .usage-model-tools-panels { grid-template-columns:minmax(0,1fr); } }
 

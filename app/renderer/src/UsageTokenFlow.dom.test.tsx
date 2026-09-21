@@ -69,7 +69,7 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
 });
 
-test('selected day shows cumulative markers for each active stack', async () => {
+test('hover shows cumulative markers and an attached color-coded card without pinning on selection', async () => {
     const snapshot = await collectRetainedUsage([], '2026-09-13T12:00:00.000Z');
     const summary = snapshot.ranges['7d'];
     summary.tokens = { fresh: 10, read: 90, write: 0, output: 5 };
@@ -77,8 +77,10 @@ test('selected day shows cumulative markers for each active stack', async () => 
     summary.days[0]!.tokens = { ...summary.tokens };
     const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={{}} selected={summary.days[0]!.date} onSelect={() => {}} partial={false}/>);
 
-    const line = tree.container.querySelector('.usage-flow-selection-line');
-    const points = [...tree.container.querySelectorAll('.usage-flow-selection-point')];
+    expect(tree.container.querySelector('.usage-flow-hover-line')).toBeNull();
+    await act(async () => tree.container.querySelector('.usage-flow-hit')!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
+    const line = tree.container.querySelector('.usage-flow-hover-line');
+    const points = [...tree.container.querySelectorAll('.usage-flow-hover-point')];
     expect(line).not.toBeNull();
     expect(points).toHaveLength(3);
     expect(points.map(point => point.getAttribute('fill'))).toEqual([
@@ -88,6 +90,16 @@ test('selected day shows cumulative markers for each active stack', async () => 
     ]);
     expect(new Set(points.map(point => point.getAttribute('cx'))).size).toBe(1);
     expect(points.every(point => point.getAttribute('r') === '5.5')).toBe(true);
+    const tooltip = tree.container.querySelector('.usage-flow-tooltip');
+    expect(tooltip?.textContent).toContain(summary.days[0]!.date);
+    expect(tooltip?.textContent).not.toContain('turns');
+    expect(tooltip?.querySelectorAll('.usage-flow-tooltip-row')).toHaveLength(3);
+    expect([...tooltip!.querySelectorAll('.usage-flow-tooltip-row circle')].map(dot => dot.getAttribute('fill'))).toEqual([
+        'var(--usage-cache)',
+        'var(--usage-output)',
+        'var(--usage-fresh)',
+    ]);
+    expect(tooltip?.getAttribute('transform')).toMatch(/^translate\(\d/);
 });
 
 test('subpixel model areas use a stable centerline without inflating the fill', async () => {

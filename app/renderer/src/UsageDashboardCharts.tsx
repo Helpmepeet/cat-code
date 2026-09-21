@@ -53,15 +53,17 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
         const projectedPeak = Math.max(0, ...summary.days.map(day => item.value(day))) / max * plotHeight;
         return projectedPeak > 0 && projectedPeak < 1;
     });
-    const selectedDay = summary.days.find(day => day.date === selected);
-    let selectedCumulative = 0;
-    const selectedPoints = selectedDay ? series.flatMap(item => {
-        const value = item.value(selectedDay);
-        selectedCumulative += value;
-        return value > 0 ? [{ id: item.id, color: item.color, y: bottom - selectedCumulative / max * plotHeight }] : [];
+    let hoverCumulative = 0;
+    const hoverPoints = detail ? series.flatMap(item => {
+        const value = item.value(detail);
+        hoverCumulative += value;
+        return value > 0 ? [{ id: item.id, label: item.label, color: item.color, value, y: bottom - hoverCumulative / max * plotHeight }] : [];
     }) : [];
     const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
-    const tooltipHeight = 32 + series.length * 20;
+    const tooltipWidth = 190, tooltipHeight = 28 + hoverPoints.length * 18;
+    const hoverX = detail ? slotCenter(detail.date) : 0;
+    const tooltipX = Math.max(0, Math.min(chart.width - tooltipWidth, hoverX > chart.width / 2 ? hoverX - tooltipWidth - 14 : hoverX + 14));
+    const tooltipY = Math.max(top, Math.min(bottom - tooltipHeight, (hoverPoints.length ? Math.min(...hoverPoints.map(point => point.y)) : top) - 18));
     return <>
     <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Token flow</h2><div><strong>{usageNumber(displayedTotal)}</strong><span>tokens</span></div></div>
       <div className="usage-flow-controls"><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
@@ -88,15 +90,19 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
                 <rect className="usage-flow-hit-target" x={slotX(day.date)} y={top} width={slotWidth(day.date)} height={plotHeight + 8} fill="transparent"/>
             </g>;
         })}
-        {selectedDay && selectedPoints.length > 0 && <g className="usage-flow-selection-markers" pointerEvents="none" aria-hidden="true">
-            <line x1={slotCenter(selectedDay.date)} x2={slotCenter(selectedDay.date)} y1={Math.min(...selectedPoints.map(point => point.y))} y2={bottom} className="usage-flow-selection-line"/>
-            {selectedPoints.map(point => <circle key={point.id} cx={slotCenter(selectedDay.date)} cy={point.y} r="5.5" fill={point.color} className="usage-flow-selection-point"/>)}
+        {detail && hoverPoints.length > 0 && <g className="usage-flow-hover-markers" pointerEvents="none" aria-hidden="true">
+            <line x1={hoverX} x2={hoverX} y1={Math.min(...hoverPoints.map(point => point.y))} y2={bottom} className="usage-flow-hover-line"/>
+            {hoverPoints.map(point => <circle key={point.id} cx={hoverX} cy={point.y} r="5.5" fill={point.color} className="usage-flow-hover-point"/>)}
         </g>}
         {ticks.map((date, index) => <text key={date} x={left + usageDatePosition(summary, date) * width} y={height - 9} textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'} className="usage-axis">{usageChartDate(date, span > 365)}</text>)}
-        {detail && <g className="usage-chart-tooltip" pointerEvents="none" aria-hidden="true" transform={`translate(${Math.max(0, Math.min(chart.width - 230, slotCenter(detail.date) + 10))},${top + 6})`}>
-            <rect width="230" height={tooltipHeight} rx="7"/>
-            <text x="12" y="20" className="usage-tooltip-title">{usageBucketLabel(summary, detail.date)}</text>
-            {series.map((item, i) => <g key={item.id}><text x="12" y={42 + i * 20}>{item.label}</text><text x="218" y={42 + i * 20} textAnchor="end">{usageCompact(item.value(detail))}</text></g>)}
+        {detail && <g className="usage-chart-tooltip usage-flow-tooltip" pointerEvents="none" aria-hidden="true" transform={`translate(${tooltipX},${tooltipY})`}>
+            <rect width={tooltipWidth} height={tooltipHeight} rx="8"/>
+            <text x="10" y="17" className="usage-tooltip-title">{usageBucketLabel(summary, detail.date)}</text>
+            {hoverPoints.map((point, index) => <g key={point.id} className="usage-flow-tooltip-row">
+                <circle cx="10" cy={33 + index * 18} r="2.5" fill={point.color}/>
+                <text x="18" y={37 + index * 18}>{point.label}</text>
+                <text x={tooltipWidth - 10} y={37 + index * 18} textAnchor="end" className="usage-flow-tooltip-value">{usageCompact(point.value)}</text>
+            </g>)}
         </g>}
     </svg>
     <div className="usage-legend usage-flow-legend" aria-label="Token flow series">{availableSeries.map(item => {
