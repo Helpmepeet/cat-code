@@ -77,11 +77,9 @@ test('hover shows cumulative markers and an attached color-coded card without pi
     summary.days[0]!.tokens = { ...summary.tokens };
     const tree = await harness.mount(<UsageTokenFlow summary={summary} colors={{}} selected={summary.days[0]!.date} onSelect={() => {}} partial={false}/>);
 
-    expect(tree.container.querySelector('.usage-flow-hover-line')).toBeNull();
+    expect(tree.container.querySelector('.usage-flow-hover-point')).toBeNull();
     await act(async () => tree.container.querySelector('.usage-flow-hit')!.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })));
-    const line = tree.container.querySelector('.usage-flow-hover-line');
     const points = [...tree.container.querySelectorAll('.usage-flow-hover-point')];
-    expect(line).not.toBeNull();
     expect(points).toHaveLength(3);
     expect(points.map(point => point.getAttribute('fill'))).toEqual([
         'var(--usage-cache)',

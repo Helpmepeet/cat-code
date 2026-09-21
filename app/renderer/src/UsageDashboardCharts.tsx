@@ -91,7 +91,6 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
             </g>;
         })}
         {detail && hoverPoints.length > 0 && <g className="usage-flow-hover-markers" pointerEvents="none" aria-hidden="true">
-            <line x1={hoverX} x2={hoverX} y1={Math.min(...hoverPoints.map(point => point.y))} y2={bottom} className="usage-flow-hover-line"/>
             {hoverPoints.map(point => <circle key={point.id} cx={hoverX} cy={point.y} r="5.5" fill={point.color} className="usage-flow-hover-point"/>)}
         </g>}
         {ticks.map((date, index) => <text key={date} x={left + usageDatePosition(summary, date) * width} y={height - 9} textAnchor={index === 0 ? 'start' : index === ticks.length - 1 ? 'end' : 'middle'} className="usage-axis">{usageChartDate(date, span > 365)}</text>)}

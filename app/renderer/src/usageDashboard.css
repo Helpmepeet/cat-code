@@ -167,7 +167,6 @@
 .usage-flow-controls { display:flex; gap:8px; flex-wrap:wrap; }
 .usage-flow-grid-line { stroke:var(--usage-grid); stroke-width:1; stroke-dasharray:4 5; vector-effect:non-scaling-stroke; }
 .usage-flow-area { pointer-events:none; }
-.usage-flow-hover-line { stroke:#171719; stroke-width:3; stroke-linecap:round; vector-effect:non-scaling-stroke; }
 .usage-flow-hover-point { stroke:#171719; stroke-width:3; vector-effect:non-scaling-stroke; }
 .usage-flow-hit-target { stroke:transparent; stroke-width:2; vector-effect:non-scaling-stroke; }
 .usage-flow-hit:focus { outline:none; }
