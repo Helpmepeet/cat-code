@@ -880,6 +880,8 @@ test('expanded destinations are directly available without an intermediary toggl
   expect(html).toContain('data-sidebar-nav-id="sessions"')
   expect(html).not.toContain('data-sidebar-nav-id="chat"')
   expect(html).toContain('data-sidebar-nav-id="settings"')
+  expect(html).toContain('>Analytics</span>')
+  expect(html).not.toContain('>Usage</span>')
 })
 
 test('expanded destinations use the session-row hover treatment', () => {

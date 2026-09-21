@@ -258,7 +258,7 @@ const NAV: NavItem[] = [
   { id: 'sessions', label: 'Sessions', enabled: true, icon: <SessionsIcon /> },
   { id: 'goals', label: 'Goals', enabled: true, icon: <GoalsIcon /> },
   { id: 'accounts', label: 'Accounts', enabled: true, icon: <AccountsIcon /> },
-  { id: 'usage', label: 'Usage', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
+  { id: 'usage', label: 'Analytics', enabled: true, icon: <UsageBarsIcon className="size-4" strokeWidth="1.5" /> },
   { id: 'settings', label: 'Settings', enabled: true, icon: <SettingsIcon /> },
 ]
 
