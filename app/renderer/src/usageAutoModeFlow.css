@@ -1,5 +1,6 @@
 .usage-auto-flow { min-width:0; }
 .usage-auto-flow-heading { margin:0 0 4px; color:var(--color-text-primary); font-size:14px; font-weight:600; }
+.usage-auto-flow-scope { margin:0 0 4px; color:var(--usage-secondary); font:11px var(--font-mono); }
 .usage-auto-flow-scroll { min-width:0; overflow-x:auto; }
 .usage-auto-flow-chart { display:block; min-width:760px; width:100%; height:auto; }
 .usage-auto-flow-ribbon { --usage-auto-flow-color:var(--usage-other); fill:none; stroke:var(--usage-auto-flow-color); stroke-opacity:.23; transition:stroke-opacity .12s ease; }
@@ -10,6 +11,8 @@
 .usage-auto-flow-node { fill:var(--usage-other); }
 .usage-auto-flow-node-label { fill:var(--usage-secondary); font:11px var(--font-mono); paint-order:stroke; pointer-events:none; stroke:var(--usage-panel); stroke-linejoin:round; stroke-width:3px; }
 .usage-auto-flow-node-attempts { fill:var(--usage-selection); }
+.usage-auto-flow-node-approved { fill:var(--usage-success); }
+.usage-auto-flow-node-blocked { fill:var(--usage-errors); }
 .usage-auto-flow-node-allowed,.usage-auto-flow-ribbon-allowed { --usage-auto-flow-color:var(--usage-success); fill:var(--usage-success); }
 .usage-auto-flow-node-policy_blocked,.usage-auto-flow-ribbon-policy_blocked { --usage-auto-flow-color:var(--usage-errors); fill:var(--usage-errors); }
 .usage-auto-flow-node-review_required,.usage-auto-flow-ribbon-review_required { --usage-auto-flow-color:var(--usage-amber); fill:var(--usage-amber); }

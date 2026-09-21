@@ -58,28 +58,22 @@ const OUTCOME_LABELS: Record<AutoModeUsageOutcome, string> = {
 
 const NODE_COLUMNS: Record<string, number> = {
   Attempts: 0,
-  'Base paths': 1,
   'Stage 1': 1,
-  'Stage 2': 1,
-  allowed: 2,
-  policy_blocked: 2,
-  review_required: 2,
-  other: 2,
+  'Stage 2': 2,
+  Approved: 3,
+  Blocked: 3,
 }
 
 const NODE_ORDER = [
   'Attempts',
-  'Base paths',
   'Stage 1',
   'Stage 2',
-  'allowed',
-  'policy_blocked',
-  'review_required',
-  'other',
+  'Approved',
+  'Blocked',
 ]
 
 const NODE_RANK = new Map(NODE_ORDER.map((node, index) => [node, index]))
-const TERMINAL_NODES = new Set(['allowed', 'policy_blocked', 'review_required', 'other'])
+const TERMINAL_NODES = new Set(['Approved', 'Blocked'])
 const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20

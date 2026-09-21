@@ -100,23 +100,6 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
   unknown: ['Attempts', 'Unknown route'],
 }
 
-const AUTO_MODE_OVERVIEW_ROUTES: Record<AutoModeUsageSummary['routes'][number]['route'], 'Base paths' | 'Stage 1' | 'Stage 2'> = {
-  base: 'Base paths',
-  forced: 'Base paths',
-  guard: 'Base paths',
-  accept_edits: 'Base paths',
-  allowlist: 'Base paths',
-  stage1: 'Stage 1',
-  stage2: 'Stage 2',
-  unknown: 'Base paths',
-}
-
-const AUTO_MODE_OVERVIEW_OUTCOMES: Partial<Record<AutoModeUsageOutcome, AutoModeUsageOutcome>> = {
-  allowed: 'allowed',
-  policy_blocked: 'policy_blocked',
-  review_required: 'review_required',
-}
-
 export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageOutcome; count: number }>()
   const add = (from: string, to: string, count: number, outcome?: AutoModeUsageOutcome) => {
@@ -127,14 +110,33 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   }
 
   for (const route of summary.routes) {
-    const routeNode = AUTO_MODE_OVERVIEW_ROUTES[route.route]
-    const outcome = AUTO_MODE_OVERVIEW_OUTCOMES[route.outcome]
-    add('Attempts', routeNode, route.count)
-    add(routeNode, outcome ?? 'other', route.count, outcome)
+    if (route.outcome === 'allowed') {
+      if (route.route === 'stage2') {
+        add('Attempts', 'Stage 1', route.count)
+        add('Stage 1', 'Stage 2', route.count)
+        add('Stage 2', 'Approved', route.count, 'allowed')
+      } else if (route.route === 'stage1') {
+        add('Attempts', 'Stage 1', route.count)
+        add('Stage 1', 'Approved', route.count, 'allowed')
+      } else if (route.route !== 'unknown') {
+        add('Attempts', 'Approved', route.count, 'allowed')
+      }
+    } else if (route.route === 'stage2' && route.outcome === 'policy_blocked') {
+      add('Attempts', 'Stage 1', route.count)
+      add('Stage 1', 'Stage 2', route.count)
+      add('Stage 2', 'Blocked', route.count, 'policy_blocked')
+    }
   }
   return [...edges.values()].sort((left, right) =>
     left.from.localeCompare(right.from) || left.to.localeCompare(right.to) || (left.outcome ?? '').localeCompare(right.outcome ?? ''),
   )
+}
+
+export function autoModeOverviewExcludedAttempts(summary: AutoModeUsageSummary): number {
+  const shown = autoModeOverviewEdges(summary)
+    .filter(edge => edge.from === 'Attempts')
+    .reduce((total, edge) => total + edge.count, 0)
+  return Math.max(0, autoModeAttempts(summary) - shown)
 }
 
 export function autoModeRouteEdges(summary: AutoModeUsageSummary) {

@@ -6,21 +6,19 @@ import { autoModeFlowConserves, layoutAutoModeFlow } from './usageAutoModeFlowSt
 
 const edges = autoModeOverviewEdges(reduceAutoModeUsage(hundredAttemptAutoModeFixture()))
 
-test('lays out the aggregated route edges with conservation and a stable node order', () => {
+test('lays out the canonical decision path with conservation and a stable node order', () => {
   const layout = layoutAutoModeFlow(edges)
   expect(layout).not.toBeNull()
   expect(autoModeFlowConserves(edges)).toBe(true)
-  expect(layout!.total).toBe(100)
+  expect(layout!.total).toBe(87)
   expect(layout!.nodes.map(node => node.id)).toEqual([
-    'Attempts', 'Base paths', 'Stage 1', 'Stage 2',
-    'allowed', 'policy_blocked', 'review_required', 'other',
+    'Attempts', 'Stage 1', 'Stage 2', 'Approved', 'Blocked',
   ])
   expect(layout!.nodes.map(node => [node.id, node.column])).toEqual([
-    ['Attempts', 0], ['Base paths', 1], ['Stage 1', 1], ['Stage 2', 1],
-    ['allowed', 2], ['policy_blocked', 2], ['review_required', 2], ['other', 2],
+    ['Attempts', 0], ['Stage 1', 1], ['Stage 2', 2], ['Approved', 3], ['Blocked', 3],
   ])
   expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
-  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 2)) {
+  for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 3)) {
     expect(node.incoming).toBe(node.outgoing)
   }
   expect(layoutAutoModeFlow([...edges].reverse())!.nodes.map(node => node.id)).toEqual(layout!.nodes.map(node => node.id))
@@ -28,24 +26,24 @@ test('lays out the aggregated route edges with conservation and a stable node or
 
 test('preserves rare route sizes without a visual minimum', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Base paths', count: 10 },
-    { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 9 },
-    { from: 'Base paths', to: 'policy_blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Stage 1', count: 10 },
+    { from: 'Stage 1', to: 'Stage 2', count: 10 },
+    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 9 },
+    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
-  expect(layout!.links.find(link => link.to === 'policy_blocked')!.height).toBe(layout!.scale)
-  expect(layout!.links.find(link => link.to === 'allowed')!.height).toBe(layout!.scale * 9)
+  expect(layout!.links.find(link => link.to === 'Blocked')!.height).toBe(layout!.scale)
+  expect(layout!.links.find(link => link.from === 'Stage 2' && link.to === 'Approved')!.height).toBe(layout!.scale * 9)
 })
 
-test('stacks ribbons at each node in the same order as their opposite endpoints', () => {
+test('stacks the three approval paths without changing their values', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Base paths', count: 75 },
-    { from: 'Attempts', to: 'Stage 1', count: 20 },
-    { from: 'Attempts', to: 'Stage 2', count: 5 },
-    { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 75 },
-    { from: 'Stage 1', to: 'allowed', outcome: 'allowed', count: 15 },
-    { from: 'Stage 1', to: 'review_required', outcome: 'review_required', count: 5 },
-    { from: 'Stage 2', to: 'policy_blocked', outcome: 'policy_blocked', count: 5 },
+    { from: 'Attempts', to: 'Approved', outcome: 'allowed', count: 75 },
+    { from: 'Attempts', to: 'Stage 1', count: 25 },
+    { from: 'Stage 1', to: 'Approved', outcome: 'allowed', count: 20 },
+    { from: 'Stage 1', to: 'Stage 2', count: 5 },
+    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 4 },
+    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
@@ -61,17 +59,16 @@ test('stacks ribbons at each node in the same order as their opposite endpoints'
   }
 })
 
-test('leaves readable vertical space between crowded nodes', () => {
+test('leaves readable vertical space between terminal nodes', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Base paths', count: 100 },
-    { from: 'Base paths', to: 'allowed', outcome: 'allowed', count: 97 },
-    { from: 'Base paths', to: 'policy_blocked', outcome: 'policy_blocked', count: 1 },
-    { from: 'Base paths', to: 'review_required', outcome: 'review_required', count: 1 },
-    { from: 'Base paths', to: 'other', count: 1 },
+    { from: 'Attempts', to: 'Stage 1', count: 100 },
+    { from: 'Stage 1', to: 'Stage 2', count: 100 },
+    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 99 },
+    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
-  const nodes = layout!.nodes.filter(node => node.column === 2)
+  const nodes = layout!.nodes.filter(node => node.column === 3)
   for (let index = 1; index < nodes.length; index += 1) {
     const previous = nodes[index - 1]!
     expect(nodes[index]!.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(20)
@@ -80,8 +77,8 @@ test('leaves readable vertical space between crowded nodes', () => {
 
 test('rejects route graphs that do not conserve a continued population', () => {
   const invalid = [
-    { from: 'Attempts', to: 'Base paths', count: 10 },
-    { from: 'Base paths', to: 'allowed', outcome: 'allowed' as const, count: 9 },
+    { from: 'Attempts', to: 'Stage 1', count: 10 },
+    { from: 'Stage 1', to: 'Approved', outcome: 'allowed' as const, count: 9 },
   ]
   expect(autoModeFlowConserves(invalid)).toBe(false)
   expect(layoutAutoModeFlow(invalid)).toBeNull()
