@@ -59,11 +59,11 @@ test('reduces the overview to the canonical completed decision path', () => {
   const edges = autoModeOverviewEdges(summary)
   expect(edges.filter(edge => edge.from === 'Attempts')).toEqual([
     { from: 'Attempts', to: 'Approved', outcome: 'allowed', count: 50 },
-    { from: 'Attempts', to: 'Stage 1', count: 37 },
+    { from: 'Attempts', to: 'Safety check', count: 37 },
   ])
-  expect(edges).toContainEqual({ from: 'Stage 1', to: 'Approved', outcome: 'allowed', count: 32 })
-  expect(edges).toContainEqual({ from: 'Stage 1', to: 'Stage 2', count: 5 })
-  expect(edges).toContainEqual({ from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 3 })
-  expect(edges).toContainEqual({ from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 2 })
+  expect(edges).toContainEqual({ from: 'Safety check', to: 'Approved', outcome: 'allowed', count: 32 })
+  expect(edges).toContainEqual({ from: 'Safety check', to: 'Context review', count: 5 })
+  expect(edges).toContainEqual({ from: 'Context review', to: 'Approved', outcome: 'allowed', count: 3 })
+  expect(edges).toContainEqual({ from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 2 })
   expect(autoModeOverviewExcludedAttempts(summary)).toBe(13)
 })

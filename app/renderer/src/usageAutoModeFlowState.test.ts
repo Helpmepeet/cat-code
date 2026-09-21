@@ -12,10 +12,10 @@ test('lays out the canonical decision path with conservation and a stable node o
   expect(autoModeFlowConserves(edges)).toBe(true)
   expect(layout!.total).toBe(87)
   expect(layout!.nodes.map(node => node.id)).toEqual([
-    'Attempts', 'Stage 1', 'Stage 2', 'Approved', 'Blocked',
+    'Attempts', 'Safety check', 'Context review', 'Approved', 'Blocked',
   ])
   expect(layout!.nodes.map(node => [node.id, node.column])).toEqual([
-    ['Attempts', 0], ['Stage 1', 1], ['Stage 2', 2], ['Approved', 3], ['Blocked', 3],
+    ['Attempts', 0], ['Safety check', 1], ['Context review', 2], ['Approved', 3], ['Blocked', 3],
   ])
   expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
   for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 3)) {
@@ -26,24 +26,24 @@ test('lays out the canonical decision path with conservation and a stable node o
 
 test('preserves rare route sizes without a visual minimum', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Stage 1', count: 10 },
-    { from: 'Stage 1', to: 'Stage 2', count: 10 },
-    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 9 },
-    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Safety check', count: 10 },
+    { from: 'Safety check', to: 'Context review', count: 10 },
+    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 9 },
+    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
   expect(layout!.links.find(link => link.to === 'Blocked')!.height).toBe(layout!.scale)
-  expect(layout!.links.find(link => link.from === 'Stage 2' && link.to === 'Approved')!.height).toBe(layout!.scale * 9)
+  expect(layout!.links.find(link => link.from === 'Context review' && link.to === 'Approved')!.height).toBe(layout!.scale * 9)
 })
 
 test('stacks the three approval paths without changing their values', () => {
   const layout = layoutAutoModeFlow([
     { from: 'Attempts', to: 'Approved', outcome: 'allowed', count: 75 },
-    { from: 'Attempts', to: 'Stage 1', count: 25 },
-    { from: 'Stage 1', to: 'Approved', outcome: 'allowed', count: 20 },
-    { from: 'Stage 1', to: 'Stage 2', count: 5 },
-    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 4 },
-    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Safety check', count: 25 },
+    { from: 'Safety check', to: 'Approved', outcome: 'allowed', count: 20 },
+    { from: 'Safety check', to: 'Context review', count: 5 },
+    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 4 },
+    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
@@ -61,10 +61,10 @@ test('stacks the three approval paths without changing their values', () => {
 
 test('leaves readable vertical space between terminal nodes', () => {
   const layout = layoutAutoModeFlow([
-    { from: 'Attempts', to: 'Stage 1', count: 100 },
-    { from: 'Stage 1', to: 'Stage 2', count: 100 },
-    { from: 'Stage 2', to: 'Approved', outcome: 'allowed', count: 99 },
-    { from: 'Stage 2', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
+    { from: 'Attempts', to: 'Safety check', count: 100 },
+    { from: 'Safety check', to: 'Context review', count: 100 },
+    { from: 'Context review', to: 'Approved', outcome: 'allowed', count: 99 },
+    { from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 1 },
   ])
   expect(layout).not.toBeNull()
 
@@ -77,8 +77,8 @@ test('leaves readable vertical space between terminal nodes', () => {
 
 test('rejects route graphs that do not conserve a continued population', () => {
   const invalid = [
-    { from: 'Attempts', to: 'Stage 1', count: 10 },
-    { from: 'Stage 1', to: 'Approved', outcome: 'allowed' as const, count: 9 },
+    { from: 'Attempts', to: 'Safety check', count: 10 },
+    { from: 'Safety check', to: 'Approved', outcome: 'allowed' as const, count: 9 },
   ]
   expect(autoModeFlowConserves(invalid)).toBe(false)
   expect(layoutAutoModeFlow(invalid)).toBeNull()

@@ -95,8 +95,8 @@ export const AUTO_MODE_ROUTE_EDGES: Record<AutoModeUsageSummary['routes'][number
   guard: ['Attempts', 'Base checks', 'Review/safety guard'],
   accept_edits: ['Attempts', 'Base checks', 'Workspace edits'],
   allowlist: ['Attempts', 'Base checks', 'Allowlist'],
-  stage1: ['Attempts', 'Base checks', 'Stage 1'],
-  stage2: ['Attempts', 'Base checks', 'Stage 1', 'Stage 2'],
+  stage1: ['Attempts', 'Base checks', 'Safety check'],
+  stage2: ['Attempts', 'Base checks', 'Safety check', 'Context review'],
   unknown: ['Attempts', 'Unknown route'],
 }
 
@@ -112,19 +112,19 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   for (const route of summary.routes) {
     if (route.outcome === 'allowed') {
       if (route.route === 'stage2') {
-        add('Attempts', 'Stage 1', route.count)
-        add('Stage 1', 'Stage 2', route.count)
-        add('Stage 2', 'Approved', route.count, 'allowed')
+        add('Attempts', 'Safety check', route.count)
+        add('Safety check', 'Context review', route.count)
+        add('Context review', 'Approved', route.count, 'allowed')
       } else if (route.route === 'stage1') {
-        add('Attempts', 'Stage 1', route.count)
-        add('Stage 1', 'Approved', route.count, 'allowed')
+        add('Attempts', 'Safety check', route.count)
+        add('Safety check', 'Approved', route.count, 'allowed')
       } else if (route.route !== 'unknown') {
         add('Attempts', 'Approved', route.count, 'allowed')
       }
     } else if (route.route === 'stage2' && route.outcome === 'policy_blocked') {
-      add('Attempts', 'Stage 1', route.count)
-      add('Stage 1', 'Stage 2', route.count)
-      add('Stage 2', 'Blocked', route.count, 'policy_blocked')
+      add('Attempts', 'Safety check', route.count)
+      add('Safety check', 'Context review', route.count)
+      add('Context review', 'Blocked', route.count, 'policy_blocked')
     }
   }
   return [...edges.values()].sort((left, right) =>

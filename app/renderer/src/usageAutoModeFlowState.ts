@@ -58,16 +58,16 @@ const OUTCOME_LABELS: Record<AutoModeUsageOutcome, string> = {
 
 const NODE_COLUMNS: Record<string, number> = {
   Attempts: 0,
-  'Stage 1': 1,
-  'Stage 2': 2,
+  'Safety check': 1,
+  'Context review': 2,
   Approved: 3,
   Blocked: 3,
 }
 
 const NODE_ORDER = [
   'Attempts',
-  'Stage 1',
-  'Stage 2',
+  'Safety check',
+  'Context review',
   'Approved',
   'Blocked',
 ]
