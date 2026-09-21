@@ -84,8 +84,8 @@ const NODE_ORDER = [
 const NODE_RANK = new Map(NODE_ORDER.map((node, index) => [node, index]))
 const TOP = 34
 const BOTTOM = 24
-const NODE_GAP = 12
-const MAX_FLOW_HEIGHT = 300
+const NODE_GAP = 20
+const MAX_FLOW_HEIGHT = 320
 
 function nodeColumn(id: string): number | null {
   return NODE_COLUMNS[id] ?? null

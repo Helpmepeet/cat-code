@@ -60,6 +60,34 @@ test('stacks ribbons at each node in the same order as their opposite endpoints'
   }
 })
 
+test('leaves readable vertical space between crowded nodes', () => {
+  const outcomes = [
+    'allowed',
+    'policy_blocked',
+    'review_required',
+    'operational_error',
+    'cancelled',
+    'unknown_outcome',
+    'incomplete',
+  ] as const
+  const layout = layoutAutoModeFlow([
+    { from: 'Attempts', to: 'Base checks', count: 100 },
+    ...outcomes.map((outcome, index) => ({
+      from: 'Base checks',
+      to: outcome,
+      outcome,
+      count: index === 0 ? 94 : 1,
+    })),
+  ])
+  expect(layout).not.toBeNull()
+
+  const nodes = layout!.nodes.filter(node => node.column === 5)
+  for (let index = 1; index < nodes.length; index += 1) {
+    const previous = nodes[index - 1]!
+    expect(nodes[index]!.y - (previous.y + previous.height)).toBeGreaterThanOrEqual(20)
+  }
+})
+
 test('rejects route graphs that do not conserve a continued population', () => {
   const invalid = [
     { from: 'Attempts', to: 'Base checks', count: 10 },

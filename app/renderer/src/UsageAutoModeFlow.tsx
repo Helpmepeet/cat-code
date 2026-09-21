@@ -30,10 +30,34 @@ function usageAutoModeFlowLinkLabel(link: UsageAutoModeFlowLink, total: number):
   return `${usageAutoModeFlowNodeLabel(link.from)} to ${usageAutoModeFlowNodeLabel(link.to)}: ${usageNumber(link.count)} recorded ${link.count === 1 ? 'attempt' : 'attempts'}, ${percent} of all ${usageNumber(total)} recorded attempts`
 }
 
-function nodeLabelX(node: UsageAutoModeFlowLayout['nodes'][number]): { x: number; anchor: 'start' | 'end' | 'middle' } {
-  if (node.column === 4) return { x: node.x - 8, anchor: 'end' }
-  if (node.column === 0) return { x: node.x + node.width + 8, anchor: 'start' }
-  return { x: node.x + node.width / 2, anchor: 'middle' }
+function nodeLabelPosition(node: UsageAutoModeFlowLayout['nodes'][number]): {
+  x: number
+  y: number
+  anchor: 'start' | 'end' | 'middle'
+  baseline: 'auto' | 'middle'
+} {
+  if (node.column === 5) {
+    return {
+      x: node.x + node.width + 8,
+      y: node.y + node.height / 2,
+      anchor: 'start',
+      baseline: 'middle',
+    }
+  }
+  if (node.column === 0) {
+    return {
+      x: node.x - 8,
+      y: node.y + node.height / 2,
+      anchor: 'end',
+      baseline: 'middle',
+    }
+  }
+  return {
+    x: node.x + node.width / 2,
+    y: node.y - 8,
+    anchor: 'middle',
+    baseline: 'auto',
+  }
 }
 
 export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }) {
@@ -82,7 +106,7 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
           const selected = activeLinkId === link.id
           const label = usageAutoModeFlowLinkLabel(link, layout.total)
           return <g key={link.id}>
-            <path className={`usage-auto-flow-ribbon${outcome ? ` usage-auto-flow-ribbon-${outcome}` : ''}${selected ? ' usage-auto-flow-ribbon-active' : ''}`} d={link.path} aria-hidden="true" />
+            <path className={`usage-auto-flow-ribbon${outcome ? ` usage-auto-flow-ribbon-${outcome}` : ''}${link.height < 2 ? ' usage-auto-flow-ribbon-thin' : ''}${selected ? ' usage-auto-flow-ribbon-active' : ''}`} d={link.path} aria-hidden="true" />
             <path
               className="usage-auto-flow-hit"
               d={link.path}
@@ -98,13 +122,13 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
           </g>
         })}
         {layout.nodes.map(node => {
-          const label = nodeLabelX(node)
+          const label = nodeLabelPosition(node)
           const outcome = OUTCOMES.has(node.id as AutoModeUsageOutcome) ? node.id : ''
           return <g key={node.id}>
             <rect className={`usage-auto-flow-node usage-auto-flow-node-${outcome || node.id.toLowerCase().replaceAll(' ', '-')}`} x={node.x} y={node.y} width={node.width} height={node.height} rx="2">
               <title>{`${node.label}: ${usageNumber(Math.max(node.incoming, node.outgoing))} recorded attempts`}</title>
             </rect>
-            <text className="usage-auto-flow-node-label" x={label.x} y={node.y - 7} textAnchor={label.anchor}>{node.label}</text>
+            <text className="usage-auto-flow-node-label" x={label.x} y={label.y} textAnchor={label.anchor} dominantBaseline={label.baseline}>{node.label}</text>
           </g>
         })}
       </svg>
