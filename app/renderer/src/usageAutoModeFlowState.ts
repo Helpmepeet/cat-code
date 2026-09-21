@@ -1,3 +1,10 @@
+import {
+  sankey,
+  sankeyLinkHorizontal,
+  type SankeyGraph,
+  type SankeyLink,
+  type SankeyNode,
+} from 'd3-sankey'
 import type { AutoModeUsageOutcome } from '../../shared/usageAutoMode.js'
 
 export type UsageAutoModeFlowEdge = {
@@ -86,6 +93,21 @@ const TOP = 34
 const BOTTOM = 24
 const NODE_GAP = 20
 const MAX_FLOW_HEIGHT = 320
+const NODE_WIDTH = 14
+const LEFT = 148
+const RIGHT = 148
+
+type AutoModeSankeyNode = {
+  id: string
+  label: string
+  column: number
+  incoming: number
+  outgoing: number
+}
+
+type AutoModeSankeyLink = UsageAutoModeFlowEdge & {
+  id: string
+}
 
 function nodeColumn(id: string): number | null {
   return NODE_COLUMNS[id] ?? null
@@ -137,109 +159,78 @@ export function layoutAutoModeFlow(
     incoming.set(edge.to, (incoming.get(edge.to) ?? 0) + edge.count)
   }
   const ids = [...new Set(edges.flatMap(edge => [edge.from, edge.to]))].sort(compareNodeIds)
-  const columns = new Map<number, string[]>()
-  for (const id of ids) {
-    const column = nodeColumn(id)!
-    const items = columns.get(column) ?? []
-    items.push(id)
-    columns.set(column, items)
-  }
-  for (const items of columns.values()) items.sort(compareNodeIds)
-
-  const availableHeight = MAX_FLOW_HEIGHT
-  const scale = Math.min(...[...columns.values()].map(items => {
-    const count = items.reduce((total, id) => total + Math.max(incoming.get(id) ?? 0, outgoing.get(id) ?? 0), 0)
-    return (availableHeight - Math.max(0, items.length - 1) * NODE_GAP) / count
-  }))
-  const nodeWidth = 14
-  const height = TOP + availableHeight + BOTTOM
-  const left = 148
-  const right = 148
-  const innerWidth = Math.max(1, width - left - right)
-  const nodesById = new Map<string, UsageAutoModeFlowNode>()
-
-  for (const [column, items] of columns) {
-    const used = items.reduce((total, id) => total + Math.max(incoming.get(id) ?? 0, outgoing.get(id) ?? 0) * scale, 0) + Math.max(0, items.length - 1) * NODE_GAP
-    let y = TOP + (availableHeight - used) / 2
-    for (const id of items) {
-      const value = Math.max(incoming.get(id) ?? 0, outgoing.get(id) ?? 0)
-      nodesById.set(id, {
-        id,
-        label: usageAutoModeFlowNodeLabel(id),
-        column,
-        x: left + column / 5 * (innerWidth - nodeWidth),
-        y,
-        width: nodeWidth,
-        height: value * scale,
-        incoming: incoming.get(id) ?? 0,
-        outgoing: outgoing.get(id) ?? 0,
-      })
-      y += value * scale + NODE_GAP
-    }
-  }
-
-  const sourceOffsets = new Map<string, number>()
-  const targetOffsets = new Map<string, number>()
-  const sourceEdgeIndexes = new Map<string, number[]>()
-  const targetEdgeIndexes = new Map<string, number[]>()
-  for (const [index, edge] of edges.entries()) {
-    sourceEdgeIndexes.set(edge.from, [...(sourceEdgeIndexes.get(edge.from) ?? []), index])
-    targetEdgeIndexes.set(edge.to, [...(targetEdgeIndexes.get(edge.to) ?? []), index])
-  }
-
-  const fromOffsets = new Map<number, number>()
-  const toOffsets = new Map<number, number>()
-  for (const [nodeId, indexes] of sourceEdgeIndexes) {
-    indexes.sort((left, right) => {
-      const leftTarget = nodesById.get(edges[left]!.to)!
-      const rightTarget = nodesById.get(edges[right]!.to)!
-      return leftTarget.y - rightTarget.y || compareEdges(edges[left]!, edges[right]!) || left - right
-    })
-    for (const index of indexes) {
-      fromOffsets.set(index, sourceOffsets.get(nodeId) ?? 0)
-      sourceOffsets.set(nodeId, (sourceOffsets.get(nodeId) ?? 0) + edges[index]!.count * scale)
-    }
-  }
-  for (const [nodeId, indexes] of targetEdgeIndexes) {
-    indexes.sort((left, right) => {
-      const leftSource = nodesById.get(edges[left]!.from)!
-      const rightSource = nodesById.get(edges[right]!.from)!
-      return leftSource.y - rightSource.y || compareEdges(edges[left]!, edges[right]!) || left - right
-    })
-    for (const index of indexes) {
-      toOffsets.set(index, targetOffsets.get(nodeId) ?? 0)
-      targetOffsets.set(nodeId, (targetOffsets.get(nodeId) ?? 0) + edges[index]!.count * scale)
-    }
-  }
-
-  const links = edges.map((edge, index) => {
-    const fromNode = nodesById.get(edge.from)!
-    const toNode = nodesById.get(edge.to)!
-    const height = edge.count * scale
-    const fromY = fromNode.y + fromOffsets.get(index)!
-    const toY = toNode.y + toOffsets.get(index)!
-    const startX = fromNode.x + fromNode.width
-    const endX = toNode.x
-    const controlX = startX + (endX - startX) / 2
-    return {
+  const height = TOP + MAX_FLOW_HEIGHT + BOTTOM
+  const graphInput: SankeyGraph<AutoModeSankeyNode, AutoModeSankeyLink> = {
+    nodes: ids.map(id => ({
+      id,
+      label: usageAutoModeFlowNodeLabel(id),
+      column: nodeColumn(id)!,
+      incoming: incoming.get(id) ?? 0,
+      outgoing: outgoing.get(id) ?? 0,
+    })),
+    links: edges.map((edge, index) => ({
       ...edge,
       id: `${edge.from}\u0000${edge.to}\u0000${index}`,
-      fromNode,
-      toNode,
-      fromY,
-      toY,
+      source: edge.from,
+      target: edge.to,
+      value: edge.count,
+    })),
+  }
+  const generator = sankey<AutoModeSankeyNode, AutoModeSankeyLink>()
+    .nodeId(node => node.id)
+    .nodeWidth(NODE_WIDTH)
+    .nodePadding(NODE_GAP)
+    .extent([[LEFT, TOP], [width - RIGHT, TOP + MAX_FLOW_HEIGHT]])
+    .iterations(32)
+  const graph = generator(graphInput)
+
+  const innerWidth = Math.max(1, width - LEFT - RIGHT)
+  for (const node of graph.nodes) {
+    node.x0 = LEFT + node.column / 5 * (innerWidth - NODE_WIDTH)
+    node.x1 = node.x0 + NODE_WIDTH
+  }
+  generator.update(graph)
+
+  const nodes = graph.nodes.map(node => ({
+    id: node.id,
+    label: node.label,
+    column: node.column,
+    x: node.x0!,
+    y: node.y0!,
+    width: node.x1! - node.x0!,
+    height: node.y1! - node.y0!,
+    incoming: node.incoming,
+    outgoing: node.outgoing,
+  }))
+  const nodesById = new Map(nodes.map(node => [node.id, node]))
+  const linkPath = sankeyLinkHorizontal<AutoModeSankeyNode, AutoModeSankeyLink>()
+  const links = graph.links.map(link => {
+    const source = link.source as SankeyNode<AutoModeSankeyNode, AutoModeSankeyLink>
+    const target = link.target as SankeyNode<AutoModeSankeyNode, AutoModeSankeyLink>
+    const height = link.width!
+    return {
+      from: link.from,
+      to: link.to,
+      ...(link.outcome ? { outcome: link.outcome } : {}),
+      count: link.count,
+      id: link.id,
+      fromNode: nodesById.get(source.id)!,
+      toNode: nodesById.get(target.id)!,
+      fromY: link.y0! - height / 2,
+      toY: link.y1! - height / 2,
       height,
-      path: `M${startX},${fromY}C${controlX},${fromY} ${controlX},${toY} ${endX},${toY}L${endX},${toY + height}C${controlX},${toY + height} ${controlX},${fromY + height} ${startX},${fromY + height}Z`,
+      path: linkPath(link as SankeyLink<AutoModeSankeyNode, AutoModeSankeyLink>) ?? '',
     }
   })
+  const scale = links[0]!.height / links[0]!.count
 
   return {
     width,
     height,
-    nodeWidth,
+    nodeWidth: NODE_WIDTH,
     scale,
     total: outgoing.get('Attempts') ?? 0,
-    nodes: ids.map(id => nodesById.get(id)!),
+    nodes,
     links,
   }
 }

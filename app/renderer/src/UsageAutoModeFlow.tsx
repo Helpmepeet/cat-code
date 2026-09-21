@@ -106,11 +106,12 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
           const selected = activeLinkId === link.id
           const label = usageAutoModeFlowLinkLabel(link, layout.total)
           return <g key={link.id}>
-            <path className={`usage-auto-flow-ribbon${outcome ? ` usage-auto-flow-ribbon-${outcome}` : ''}${link.height < 2 ? ' usage-auto-flow-ribbon-thin' : ''}${selected ? ' usage-auto-flow-ribbon-active' : ''}`} d={link.path} aria-hidden="true" />
+            <path className={`usage-auto-flow-ribbon${outcome ? ` usage-auto-flow-ribbon-${outcome}` : ''}${link.height < 2 ? ' usage-auto-flow-ribbon-thin' : ''}${selected ? ' usage-auto-flow-ribbon-active' : ''}`} d={link.path} strokeWidth={link.height} aria-hidden="true" />
             <path
               className="usage-auto-flow-hit"
               d={link.path}
               fill="transparent"
+              strokeWidth={Math.max(12, link.height)}
               pointerEvents="all"
               tabIndex={0}
               role="img"

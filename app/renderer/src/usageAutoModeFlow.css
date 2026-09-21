@@ -2,10 +2,10 @@
 .usage-auto-flow-heading { margin:0 0 4px; color:var(--color-text-primary); font-size:14px; font-weight:600; }
 .usage-auto-flow-scroll { min-width:0; overflow-x:auto; }
 .usage-auto-flow-chart { display:block; min-width:760px; width:100%; height:auto; }
-.usage-auto-flow-ribbon { --usage-auto-flow-color:var(--usage-other); fill:var(--usage-auto-flow-color); fill-opacity:.23; stroke:var(--usage-auto-flow-color); stroke-opacity:.3; stroke-width:.5px; transition:fill-opacity .12s ease,stroke-opacity .12s ease; }
+.usage-auto-flow-ribbon { --usage-auto-flow-color:var(--usage-other); fill:none; stroke:var(--usage-auto-flow-color); stroke-opacity:.23; transition:stroke-opacity .12s ease; }
 .usage-auto-flow-ribbon-thin { stroke-opacity:.72; stroke-width:1.25px; }
-.usage-auto-flow-ribbon:hover,.usage-auto-flow-ribbon-active { fill-opacity:.5; stroke-opacity:.8; }
-.usage-auto-flow-hit { fill:none; stroke:transparent; stroke-width:12px; cursor:default; }
+.usage-auto-flow-ribbon:hover,.usage-auto-flow-ribbon-active { stroke-opacity:.55; }
+.usage-auto-flow-hit { fill:none; stroke:transparent; cursor:default; }
 .usage-auto-flow-hit:focus-visible { outline:none; stroke:var(--usage-selection); stroke-width:2px; }
 .usage-auto-flow-node { fill:var(--usage-other); }
 .usage-auto-flow-node-label { fill:var(--usage-secondary); font:11px var(--font-mono); paint-order:stroke; pointer-events:none; stroke:var(--usage-panel); stroke-linejoin:round; stroke-width:3px; }

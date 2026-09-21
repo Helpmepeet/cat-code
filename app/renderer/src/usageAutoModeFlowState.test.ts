@@ -19,7 +19,7 @@ test('lays out the aggregated route edges with conservation and a stable node or
     ['Attempts', 0], ['Base checks', 1], ['Stage 1', 3], ['Stage 2', 4],
     ['allowed', 5], ['policy_blocked', 5], ['review_required', 5], ['operational_error', 5],
   ])
-  expect(layout!.links.every(link => link.height === link.count * layout!.scale)).toBe(true)
+  expect(layout!.links.every(link => Math.abs(link.height - link.count * layout!.scale) < 0.000001)).toBe(true)
   for (const node of layout!.nodes.filter(node => node.id !== 'Attempts' && node.column !== 5)) {
     expect(node.incoming).toBe(node.outgoing)
   }
