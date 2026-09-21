@@ -172,13 +172,13 @@ test('reference controls change chart values without changing accounting; hourly
     const button = (text: string) => Array.from(tree.container.querySelectorAll('button')).find(b => b.textContent === text)!;
     const bar = () => tree.container.querySelector('.usage-flow-chart g[role="button"]')!;
     expect(bar().getAttribute('aria-label')).toContain('105 recorded tokens');
-    await act(async () => button('Hide cache reads').click());
+    await act(async () => tree.container.querySelector<HTMLButtonElement>('[aria-label="Hide Cache reads"]')!.click());
     expect(bar().getAttribute('aria-label')).toContain('15 recorded tokens');
     expect(tree.container.querySelector('.usage-metric strong')?.textContent).toBe('105');
     expect(tree.container.querySelector('.usage-flow-toolbar')?.textContent).not.toContain('Cache writes');
     await act(async () => button('By model').click());
     expect(bar().getAttribute('aria-label')).toContain('105 recorded tokens');
-    expect(button('Hide cache reads').disabled).toBe(true);
+    expect(tree.container.querySelector('[aria-label="Hide Cache reads"]')).toBeNull();
     expect(tree.container.querySelector('.usage-area-errors g[role="button"]')?.getAttribute('aria-label')).toContain('20.0% errors / matched results');
     const heat = () => tree.container.querySelector('.usage-heatmap')!;
     const before = heat().getAttribute('aria-label');

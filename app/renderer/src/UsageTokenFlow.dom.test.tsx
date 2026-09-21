@@ -27,13 +27,15 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
         partial={false}
     />);
     const button = (text: string) => Array.from(tree.container.querySelectorAll('button')).find(item => item.textContent === text)!;
+    const seriesButton = (label: string) => tree.container.querySelector<HTMLButtonElement>(`[aria-label="Hide ${label}"],[aria-label="Show ${label}"]`)!;
     const total = () => tree.container.querySelector('.usage-flow-heading strong')?.textContent;
 
     expect(total()).toBe('105');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(3);
     expect(tree.container.querySelectorAll('.usage-flow-grid-line')).toHaveLength(4);
     expect(tree.container.querySelector('.usage-flow-chart')?.nextElementSibling?.classList.contains('usage-flow-legend')).toBe(true);
-    expect(tree.container.querySelectorAll('.usage-flow-legend circle')).toHaveLength(3);
+    expect(tree.container.querySelectorAll('.usage-flow-series-dot circle')).toHaveLength(3);
+    expect(tree.container.querySelectorAll('.usage-flow-series-toggle')).toHaveLength(3);
     expect(tree.container.querySelector('.usage-flow-chart')?.getAttribute('shape-rendering')).toBe('geometricPrecision');
     const area = tree.container.querySelector('.usage-flow-area');
     expect(area?.getAttribute('d')).toContain(' C');
@@ -49,15 +51,22 @@ test('area renderer keeps totals, controls, tooltip and day interaction aligned'
     expect(selected.at(-1)).toBe(summary.days[1]!.date);
     expect(document.activeElement).toBe(hits[1]);
 
-    await act(async () => button('Hide cache reads').click());
+    await act(async () => seriesButton('Cache reads').click());
     expect(total()).toBe('15');
-    expect(tree.container.textContent).toContain('Excluding cache reads');
+    expect(seriesButton('Cache reads').getAttribute('aria-label')).toBe('Show Cache reads');
+    expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(2);
 
     await act(async () => button('By model').click());
     expect(total()).toBe('105');
-    expect(button('Hide cache reads').disabled).toBe(true);
+    expect(tree.container.querySelector('[aria-label="Hide Cache reads"]')).toBeNull();
     expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(1);
+    await act(async () => seriesButton('Model A').click());
+    expect(total()).toBe('0');
+    expect(tree.container.querySelectorAll('.usage-flow-area')).toHaveLength(0);
+    await act(async () => button('By type').click());
+    expect(total()).toBe('15');
+    expect(seriesButton('Cache reads').getAttribute('aria-pressed')).toBe('false');
 });
 
 test('subpixel model areas use a stable centerline without inflating the fill', async () => {
@@ -105,13 +114,13 @@ test('model families keep reference colors while range totals place small series
         models: models.filter(model => model.kind === 'named'),
         days: [],
     } as unknown as Parameters<typeof usageFlowSeries>[0];
-    expect(usageFlowSeries(summary, colors, 'model', false).map(series => series.label)).toEqual([
+    expect(usageFlowSeries(summary, colors, 'model').map(series => series.label)).toEqual([
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'gpt-6-astra',
         'gpt-5.6-sol',
     ]);
-    expect(usageFlowSeries({ ...summary, models }, colors, 'model', false).map(series => series.label)).toEqual([
+    expect(usageFlowSeries({ ...summary, models }, colors, 'model').map(series => series.label)).toEqual([
         'gpt-5.6-terra',
         'gpt-5.6-luna',
         'Unknown',
@@ -126,13 +135,13 @@ test('token types use displayed range totals and reorder after cache reads are h
         tokens: { fresh: 50, read: 100, write: 5, output: 10 },
         cacheWriteReporting: 'reported',
     } as unknown as Parameters<typeof usageFlowSeries>[0];
-    expect(usageFlowSeries(summary, {}, 'type', false).map(series => series.id)).toEqual([
+    expect(usageFlowSeries(summary, {}, 'type').map(series => series.id)).toEqual([
         'read',
         'output',
         'write',
         'fresh',
     ]);
-    expect(usageFlowSeries(summary, {}, 'type', true).map(series => series.id)).toEqual([
+    expect(usageFlowSeries(summary, {}, 'type', new Set(['read'])).map(series => series.id)).toEqual([
         'fresh',
         'write',
         'output',

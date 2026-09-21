@@ -60,13 +60,13 @@ function usageOutsideIn<T>(items: readonly T[], total: (item: T) => number): T[]
     ranked.forEach((item, index) => (index % 2 === 0 ? lower : upper).push(item));
     return [...lower, ...upper.reverse()];
 }
-export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hideReads: boolean) {
+export function usageFlowSeries(summary: UsageRangeSummary, colors: Record<string, string>, mode: UsageFlowMode, hidden = new Set<string>()) {
     if (mode === 'model') {
-        return usageOutsideIn(summary.models, model => usageTotal(model.tokens))
+        return usageOutsideIn(summary.models.filter(model => !hidden.has(model.id)), model => usageTotal(model.tokens))
             .map(model => ({ id: model.id, label: model.label, color: colors[model.id]!, total: usageTotal(model.tokens), value: (day: UsageDay) => day.models.find(m => m.id === model.id)?.total ?? 0 }));
     }
     const types = ([['output', 'Output', 'var(--usage-output)'], ['fresh', 'Fresh input', 'var(--usage-fresh)'], ['read', 'Cache reads', 'var(--usage-cache)'], ['write', 'Cache writes', 'var(--usage-writes)']] as const)
-        .filter(([key]) => !(key === 'read' && hideReads) && !(key === 'write' && !usageHasCacheWrites(summary)))
+        .filter(([key]) => !hidden.has(key) && !(key === 'write' && !usageHasCacheWrites(summary)))
         .map(([id, label, color]) => ({ id, label, color, total: summary.tokens[id], value: (day: UsageDay) => day.tokens[id] }));
     return usageOutsideIn(types, type => type.total);
 }

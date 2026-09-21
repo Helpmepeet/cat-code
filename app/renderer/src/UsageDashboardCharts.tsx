@@ -13,10 +13,18 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
     partial: boolean;
 }) {
     const [mode, setMode] = useState<UsageFlowMode>('type');
-    const [hideReads, setHideReads] = useState(false);
+    const [hiddenSeries, setHiddenSeries] = useState<Record<UsageFlowMode, string[]>>({ type: [], model: [] });
     const [hovered, setHovered] = useState('');
     const clipId = `usage-flow-${useId().replaceAll(':', '')}`;
-    const series = usageFlowSeries(summary, colors, mode, hideReads);
+    const availableSeries = usageFlowSeries(summary, colors, mode);
+    const hidden = new Set(hiddenSeries[mode]);
+    const series = usageFlowSeries(summary, colors, mode, hidden);
+    const toggleSeries = (id: string) => setHiddenSeries(current => {
+        const next = new Set(current[mode]);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return { ...current, [mode]: [...next] };
+    });
     const shownTotal = (day: UsageRangeSummary['days'][number]) => series.reduce((sum, item) => sum + item.value(day), 0);
     const detail = summary.days.find(day => day.date === hovered);
     const max = usageAxisCeiling(Math.max(1, ...summary.days.map(shownTotal)));
@@ -46,12 +54,12 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
         return projectedPeak > 0 && projectedPeak < 1;
     });
     const displayedTotal = series.reduce((sum, item) => sum + item.total, 0);
-    const tooltipHeight = 32 + series.length * 20 + (hideReads && mode === 'type' ? 20 : 0);
+    const tooltipHeight = 32 + series.length * 20;
     return <>
-    <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Token flow</h2><div><strong>{usageNumber(displayedTotal)}</strong><span>tokens</span></div>{hideReads && mode === 'type' && <small>Excluding cache reads</small>}</div>
-      <div className="usage-flow-controls"><button className="usage-toggle" type="button" disabled={mode === 'model'} aria-pressed={hideReads && mode === 'type'} onClick={() => setHideReads(!hideReads)}>Hide cache reads</button><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
+    <div className="usage-flow-toolbar"><div className="usage-flow-heading"><h2 className="usage-panel-heading">Token flow</h2><div><strong>{usageNumber(displayedTotal)}</strong><span>tokens</span></div></div>
+      <div className="usage-flow-controls"><div className="usage-range" role="group" aria-label="Stack tokens by">{(['type', 'model'] as const).map(value => <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>By {value}</button>)}</div></div>
     </div>
-    <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hideReads && mode === 'type' ? ', excluding cache reads' : ''}`}>
+    <svg className="usage-chart usage-flow-chart" shapeRendering="geometricPrecision" onMouseLeave={() => setHovered('')} ref={chart.ref} viewBox={`0 0 ${chart.width} ${height}`} aria-label={`${bucketDays > 1 ? `${bucketDays}-day` : 'Daily'} recorded tokens by ${mode}${hidden.size ? `, ${hidden.size} hidden` : ''}`}>
         <defs><clipPath id={clipId}><rect x={left} y={top} width={width} height={plotHeight}/></clipPath></defs>
         {[0, 1 / 3, 2 / 3, 1].map(fraction => <line key={fraction} x1={left} y1={bottom - fraction * plotHeight} x2={right} y2={bottom - fraction * plotHeight} className="usage-flow-grid-line"/>)}
         <g clipPath={`url(#${clipId})`} className="usage-flow-areas" aria-hidden="true">
@@ -79,10 +87,16 @@ export function UsageTokenFlow({ summary, colors, selected, onSelect, partial }:
             <rect width="230" height={tooltipHeight} rx="7"/>
             <text x="12" y="20" className="usage-tooltip-title">{usageBucketLabel(summary, detail.date)}</text>
             {series.map((item, i) => <g key={item.id}><text x="12" y={42 + i * 20}>{item.label}</text><text x="218" y={42 + i * 20} textAnchor="end">{usageCompact(item.value(detail))}</text></g>)}
-            {hideReads && mode === 'type' && <text x="12" y={42 + series.length * 20}>Total incl. cache: {usageCompact(usageTotal(detail.tokens))}</text>}
         </g>}
     </svg>
-    <div className="usage-legend usage-flow-legend" aria-label="Token flow legend">{series.map(item => <span key={item.id}><svg width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill={item.color}/></svg><span>{item.label}</span><b>{usageCompact(item.total)}</b></span>)}</div>
+    <div className="usage-legend usage-flow-legend" aria-label="Token flow series">{availableSeries.map(item => {
+        const shown = !hidden.has(item.id);
+        return <button key={item.id} className="usage-flow-series-toggle" type="button" aria-pressed={shown} aria-label={`${shown ? 'Hide' : 'Show'} ${item.label}`} onClick={() => toggleSeries(item.id)}>
+            <svg className="usage-flow-series-dot" width="10" height="10" aria-hidden="true"><circle cx="5" cy="5" r="5" fill={item.color}/></svg>
+            <span>{item.label}</span><b>{usageCompact(item.total)}</b>
+            <svg className="usage-flow-series-eye" viewBox="0 0 20 20" aria-hidden="true"><path d="M2.5 10s2.7-4 7.5-4 7.5 4 7.5 4-2.7 4-7.5 4-7.5-4-7.5-4Z"/><circle cx="10" cy="10" r="2"/>{!shown && <path d="m3 3 14 14"/>}</svg>
+        </button>;
+    })}</div>
     <div className="usage-flow-readout usage-visually-hidden" role="status">{detail && <><strong>{usageBucketLabel(summary, detail.date)}</strong>{series.map(item => <span key={item.id}>{item.label} <b>{usageCompact(item.value(detail))}</b></span>)}</>}</div>
     </>;
 }
