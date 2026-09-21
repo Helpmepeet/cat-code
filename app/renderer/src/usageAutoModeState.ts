@@ -132,13 +132,6 @@ export function autoModeOverviewEdges(summary: AutoModeUsageSummary) {
   )
 }
 
-export function autoModeOverviewExcludedAttempts(summary: AutoModeUsageSummary): number {
-  const shown = autoModeOverviewEdges(summary)
-    .filter(edge => edge.from === 'Attempts')
-    .reduce((total, edge) => total + edge.count, 0)
-  return Math.max(0, autoModeAttempts(summary) - shown)
-}
-
 export function autoModeRouteEdges(summary: AutoModeUsageSummary) {
   const edges = new Map<string, { from: string; to: string; outcome?: AutoModeUsageSummary['routes'][number]['outcome']; count: number }>()
   for (const route of summary.routes) {

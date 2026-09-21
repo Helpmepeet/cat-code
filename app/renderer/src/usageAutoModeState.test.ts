@@ -6,7 +6,6 @@ import {
   autoModeCommandRateHeadline,
   autoModeCommandRatePoints,
   autoModeOverviewEdges,
-  autoModeOverviewExcludedAttempts,
   autoModeOutcomeSeries,
   autoModeRouteEdges,
   confirmedRateSegments,
@@ -65,5 +64,4 @@ test('reduces the overview to the canonical completed decision path', () => {
   expect(edges).toContainEqual({ from: 'Safety check', to: 'Context review', count: 5 })
   expect(edges).toContainEqual({ from: 'Context review', to: 'Approved', outcome: 'allowed', count: 3 })
   expect(edges).toContainEqual({ from: 'Context review', to: 'Blocked', outcome: 'policy_blocked', count: 2 })
-  expect(autoModeOverviewExcludedAttempts(summary)).toBe(13)
 })

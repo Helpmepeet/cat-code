@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { AutoModeUsageOutcome, AutoModeUsageSummary } from '../../shared/usageAutoMode.js'
-import { autoModeAttempts, autoModeOverviewEdges, autoModeOverviewExcludedAttempts, autoModeRouteEdges } from './usageAutoModeState.js'
+import { autoModeAttempts, autoModeOverviewEdges, autoModeRouteEdges } from './usageAutoModeState.js'
 import { useUsageChartWidth, usageNumber, usagePercent } from './usageDashboardState.js'
 import {
   layoutAutoModeFlow,
@@ -77,7 +77,6 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   const attempts = autoModeAttempts(summary)
   const routeEdges = autoModeRouteEdges(summary)
   const overviewEdges = autoModeOverviewEdges(summary)
-  const excludedAttempts = autoModeOverviewExcludedAttempts(summary)
   const layout = layoutAutoModeFlow(overviewEdges, Math.max(760, chart.width))
   const [activeLinkId, setActiveLinkId] = useState<string | null>(null)
   const activeLink = layout?.links.find(link => link.id === activeLinkId) ?? null
@@ -106,7 +105,6 @@ export function UsageAutoModeFlow({ summary }: { summary: AutoModeUsageSummary }
   return <section className="usage-auto-flow" aria-labelledby="usage-auto-flow-title">
     <h3 id="usage-auto-flow-title" className="usage-auto-flow-heading">Decision flow</h3>
     {summary.allTools.coverage.state === 'partial' && <p className="usage-note">Partial history</p>}
-    {excludedAttempts > 0 && <p className="usage-auto-flow-scope">Normal completed path · {usageNumber(excludedAttempts)} exceptional {excludedAttempts === 1 ? 'record' : 'records'} listed below</p>}
     <div className="usage-auto-flow-scroll">
       <svg
         ref={chart.ref}

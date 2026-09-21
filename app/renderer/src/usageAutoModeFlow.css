@@ -1,6 +1,5 @@
 .usage-auto-flow { min-width:0; }
 .usage-auto-flow-heading { margin:0 0 4px; color:var(--color-text-primary); font-size:14px; font-weight:600; }
-.usage-auto-flow-scope { margin:0 0 4px; color:var(--usage-secondary); font:11px var(--font-mono); }
 .usage-auto-flow-scroll { min-width:0; overflow-x:auto; }
 .usage-auto-flow-chart { display:block; min-width:760px; width:100%; height:auto; }
 .usage-auto-flow-ribbon { --usage-auto-flow-color:var(--usage-other); fill:none; stroke:var(--usage-auto-flow-color); stroke-opacity:.23; transition:stroke-opacity .12s ease; }
