@@ -11,14 +11,17 @@
  * spawns the sidecar as repository TypeScript under `bun` off PATH, so the
  * packaging step compiles the sidecar and its whole engine graph into a single
  * standalone Bun executable that ships inside the bundle
- * (`app/sidecar/packagedEntry.ts` selects the mode). No new dependency is
- * involved: `bun build --compile` is the same mechanism `scripts/build.ts`
- * already uses for `cli-dev`, and the assembly below is `cp` plus PlistBuddy
- * plus `codesign`, exactly as `prepare-dev-electron.ts` does for the dev binary.
+ * (`app/sidecar/packagedEntry.ts` selects the mode). The engine's pinned
+ * ripgrep companion ships beside it; no package-manager dependency is involved.
+ * `bun build --compile` is the same mechanism `scripts/build.ts` already uses
+ * for `cli-dev`, and the assembly below is `cp` plus PlistBuddy plus `codesign`,
+ * exactly as `prepare-dev-electron.ts` does for the dev binary.
  */
 
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -47,6 +50,11 @@ const CONTENTS = join(APP_BUNDLE, 'Contents')
 const RESOURCES = join(CONTENTS, 'Resources')
 /** Electron loads `Contents/Resources/app/` and reads `main` from its package.json. */
 const APP_PAYLOAD = join(RESOURCES, 'app')
+const PACKAGED_RIPGREP = join(RESOURCES, 'bin', 'rg')
+const RIPGREP_SOURCE = join(repoRoot, 'src', 'vendor', 'ripgrep', 'arm64-darwin', 'rg')
+// Official ripgrep 15.2.0 aarch64-apple-darwin release binary.
+// Release archive SHA-256: 3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4
+const RIPGREP_SHA256 = '8ec397688ca4e7564877143cbe771531e12995363c06c5dc266d51a983d4dc5a'
 
 function run(
   cmd: string,
@@ -164,8 +172,30 @@ function buildSidecar(): void {
   run(cmd[0]!, cmd.slice(1), { cwd: repoRoot })
 }
 
+function copyRipgrep(): void {
+  console.log('[package] ripgrep (pinned arm64 companion)')
+  const source = readFileSync(RIPGREP_SOURCE)
+  const digest = createHash('sha256').update(source).digest('hex')
+  if (digest !== RIPGREP_SHA256) {
+    throw new Error(
+      `vendored ripgrep checksum mismatch: expected ${RIPGREP_SHA256}, got ${digest}`,
+    )
+  }
+
+  mkdirSync(dirname(PACKAGED_RIPGREP), { recursive: true })
+  cpSync(RIPGREP_SOURCE, PACKAGED_RIPGREP)
+  chmodSync(PACKAGED_RIPGREP, 0o755)
+
+  const licenses = join(RESOURCES, 'licenses', 'ripgrep')
+  mkdirSync(licenses, { recursive: true })
+  for (const name of ['COPYING', 'LICENSE-MIT']) {
+    cpSync(join(repoRoot, 'src', 'vendor', 'ripgrep', name), join(licenses, name))
+  }
+}
+
 let cachedStamp: { commitId: string; buildId: string; dirty: boolean } | null = null
 function stamp(): { commitId: string; buildId: string; dirty: boolean } {
+  rmSync(iconset, { recursive: true, force: true })
   cachedStamp ??= buildStamp()
   return cachedStamp
 }
@@ -195,7 +225,6 @@ function makeIcon(): string | null {
   const conversion = spawnSync('iconutil', ['-c', 'icns', iconset, '-o', icns], {
     encoding: 'utf8',
   })
-  rmSync(iconset, { recursive: true, force: true })
   if (conversion.status !== 0 || !existsSync(icns)) {
     // macOS 26 currently rejects otherwise-valid iconsets, including the one
     // shipped by Electron. The stock Electron icon is a safe fallback; a
@@ -292,6 +321,7 @@ function sign(): void {
   // Info.plist and renaming the executable both invalidate the signature the
   // stock Electron bundle ships with, and an unsigned nested binary makes the
   // whole app refuse to launch.
+  run('codesign', ['--sign', '-', '--force', PACKAGED_RIPGREP])
   run('codesign', ['--sign', '-', '--force', join(RESOURCES, 'sidecar', PACKAGED_SIDECAR_BINARY)])
   run('codesign', ['--sign', '-', '--force', '--deep', APP_BUNDLE])
 }
@@ -310,6 +340,9 @@ function main(): void {
   if (process.platform !== 'darwin') {
     throw new Error('the local-use contract targets macOS only')
   }
+  if (process.arch !== 'arm64') {
+    throw new Error('the local-use contract targets arm64 only')
+  }
   // Wiped, never merged: a prior build's stale resource must not survive into
   // this one and make a missing input look present.
   rmSync(OUT_DIR, { recursive: true, force: true })
@@ -323,6 +356,7 @@ function main(): void {
   assembleBundle()
   copyPayload()
   buildSidecar()
+  copyRipgrep()
   sign()
   scan()
 

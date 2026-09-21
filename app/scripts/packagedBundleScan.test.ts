@@ -28,6 +28,7 @@ describe('scanPackagedBundle', () => {
       'Contents/Resources/app/main/main.js': 'console.log("hi")',
       'Contents/Resources/app/preload/preload.cjs': 'module.exports = {}',
       'Contents/Resources/app/renderer/dist/index.html': '<!doctype html>',
+      'Contents/Resources/bin/rg': 'binary-ish search bytes',
       'Contents/Resources/sidecar/cat-code-sidecar': 'binary-ish bytes',
     })
     expect(scanPackagedBundle(root)).toEqual([])
@@ -85,6 +86,14 @@ describe('scanPackagedBundle', () => {
   test('a credential baked into the compiled sidecar is rejected despite its lack of extension', () => {
     const root = bundle({
       'Contents/Resources/sidecar/cat-code-sidecar':
+        '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----',
+    })
+    expect(scanPackagedBundle(root).map(f => f.reason)).toEqual(['private key block'])
+  })
+
+  test('a credential baked into a companion executable is rejected despite its lack of extension', () => {
+    const root = bundle({
+      'Contents/Resources/bin/rg':
         '-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----',
     })
     expect(scanPackagedBundle(root).map(f => f.reason)).toEqual(['private key block'])

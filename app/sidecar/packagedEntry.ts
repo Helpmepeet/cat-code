@@ -1,5 +1,5 @@
 /**
- * Packaged-build sidecar entry — one binary, five modes (P5-1).
+ * Packaged-build sidecar entry — one engine binary, five modes (P5-1).
  *
  * A compiled Bun binary embeds its own runtime, so one executable per entry
  * would ship that runtime five times. This entry selects the real module from
@@ -17,6 +17,12 @@
  * Development never loads this file: `bun run` executes the entry modules
  * directly.
  */
+
+import { prependPackagedBinToPath } from './packagedEnvironment.js'
+
+// A GUI launch has only the system PATH. Put the bundle-owned companion tools
+// first before any engine module can memoize command discovery.
+process.env.PATH = prependPackagedBinToPath(process.execPath, process.env.PATH)
 
 const MODES = {
   session: () => import('./index.js'),
@@ -41,7 +47,8 @@ if (!isMode(requested)) {
   process.stderr.write(
     `[sidecar] fatal: unknown mode ${JSON.stringify(requested ?? null)}; expected one of ${Object.keys(MODES).join(', ')}\n`,
   )
-  process.exit(1)
+  // This is a usage/launcher failure, never ripgrep's normal exit-1 no-match.
+  process.exit(2)
 }
 
 // Normalize argv to the shape the entry modules already see under `bun run`.

@@ -13,11 +13,20 @@ import { isEnvTruthy } from './envUtils.js'
  * Set as a build-time define in scripts/build-with-plugins.ts for ant-native builds.
  */
 export function hasEmbeddedSearchTools(): boolean {
-  if (!isEnvTruthy(process.env.EMBEDDED_SEARCH_TOOLS)) return false
+  if (!hasEmbeddedRipgrep()) return false
   const e = process.env.CLAUDE_CODE_ENTRYPOINT
   return (
     e !== 'sdk-ts' && e !== 'sdk-py' && e !== 'sdk-cli' && e !== 'local-agent'
   )
+}
+
+/**
+ * Whether the current runtime advertises native argv0 ripgrep dispatch.
+ * Unlike tool-surface selection, this capability does not depend on which
+ * entrypoint is using the shared search helper.
+ */
+export function hasEmbeddedRipgrep(): boolean {
+  return isEnvTruthy(process.env.EMBEDDED_SEARCH_TOOLS)
 }
 
 /**

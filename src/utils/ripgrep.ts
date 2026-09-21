@@ -5,8 +5,8 @@ import { homedir } from 'os'
 import * as path from 'path'
 import { logEvent } from 'src/services/analytics/index.js'
 import { fileURLToPath } from 'url'
-import { isInBundledMode } from './bundledMode.js'
 import { logForDebugging } from './debug.js'
+import { hasEmbeddedRipgrep } from './embeddedTools.js'
 import { isEnvDefinedFalsy } from './envUtils.js'
 import { execFileNoThrow } from './execFileNoThrow.js'
 import { findExecutable } from './findExecutable.js'
@@ -14,12 +14,7 @@ import { logError } from './log.js'
 import { getPlatform } from './platform.js'
 import { countCharInString } from './stringUtils.js'
 
-const __filename = fileURLToPath(import.meta.url)
-// we use node:path.join instead of node:url.resolve because the former doesn't encode spaces
-const __dirname = path.join(
-  __filename,
-  process.env.NODE_ENV === 'test' ? '../../../' : '../',
-)
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 type RipgrepConfig = {
   mode: 'system' | 'builtin' | 'embedded'
@@ -44,9 +39,9 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
     }
   }
 
-  // In bundled (native) mode, ripgrep is statically compiled into bun-internal
-  // and dispatches based on argv[0]. We spawn ourselves with argv0='rg'.
-  if (isInBundledMode()) {
+  // Only ant-native builds advertise argv0 search dispatch. A stock
+  // `bun build --compile` executable runs its JavaScript entrypoint instead.
+  if (hasEmbeddedRipgrep()) {
     return {
       mode: 'embedded',
       command: process.execPath,
@@ -55,7 +50,7 @@ const getRipgrepConfig = memoize((): RipgrepConfig => {
     }
   }
 
-  const rgRoot = path.resolve(__dirname, 'vendor', 'ripgrep')
+  const rgRoot = path.resolve(__dirname, '..', 'vendor', 'ripgrep')
   const command =
     process.platform === 'win32'
       ? path.resolve(rgRoot, `${process.arch}-win32`, 'rg.exe')
@@ -79,6 +74,17 @@ export function ripgrepCommand(): {
 
 const MAX_BUFFER_SIZE = 20_000_000 // 20MB; large monorepos can have 200k+ files
 const MAX_ERROR_DIAGNOSTIC_LENGTH = 2_000
+
+function boundedRipgrepDiagnostic(diagnostic: string): string {
+  const trimmed = diagnostic.trim()
+  return trimmed.length > MAX_ERROR_DIAGNOSTIC_LENGTH
+    ? `${trimmed.slice(0, MAX_ERROR_DIAGNOSTIC_LENGTH)}...`
+    : trimmed
+}
+
+export function isRipgrepVersionResult(code: number, stdout: string): boolean {
+  return code === 0 && stdout.startsWith('ripgrep ')
+}
 
 /**
  * Check if an error is EAGAIN (resource temporarily unavailable).
@@ -250,6 +256,7 @@ async function ripGrepFileCount(
   abortSignal: AbortSignal,
 ): Promise<number> {
   await codesignRipgrepIfNecessary()
+  await ensureRipgrepAvailable()
   const { rgPath, rgArgs, argv0 } = ripgrepCommand()
 
   return new Promise<number>((resolve, reject) => {
@@ -300,6 +307,7 @@ export async function ripGrepStream(
   onLines: (lines: string[]) => void,
 ): Promise<void> {
   await codesignRipgrepIfNecessary()
+  await ensureRipgrepAvailable()
   const { rgPath, rgArgs, argv0 } = ripgrepCommand()
 
   return new Promise<void>((resolve, reject) => {
@@ -349,11 +357,7 @@ export async function ripGrep(
   abortSignal: AbortSignal,
 ): Promise<string[]> {
   await codesignRipgrepIfNecessary()
-
-  // Test ripgrep on first use and cache the result (fire and forget)
-  void testRipgrepOnFirstUse().catch(error => {
-    logError(error)
-  })
+  await ensureRipgrepAvailable()
 
   return new Promise((resolve, reject) => {
     const handleResult = (
@@ -413,11 +417,9 @@ export async function ripGrep(
       // Reject with the bounded stderr diagnostic instead of treating partial
       // output as search results.
       if (typeof error.code === 'number' && error.code >= 2) {
-        const diagnostic = (stderr.trim() || error.message).trim()
-        const boundedDiagnostic =
-          diagnostic.length > MAX_ERROR_DIAGNOSTIC_LENGTH
-            ? `${diagnostic.slice(0, MAX_ERROR_DIAGNOSTIC_LENGTH)}...`
-            : diagnostic
+        const boundedDiagnostic = boundedRipgrepDiagnostic(
+          stderr.trim() || error.message,
+        )
         error.message = `ripgrep search failed with exit code ${error.code}${boundedDiagnostic ? `: ${boundedDiagnostic}` : ''}`
         reject(error)
         return
@@ -561,9 +563,10 @@ export function getRipgrepStatus(): {
 }
 
 /**
- * Test ripgrep availability on first use and cache the result
+ * Validate ripgrep once before the first search. A failed probe is a hard error:
+ * continuing would turn a launcher or packaging failure into false empty results.
  */
-const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
+const ensureRipgrepAvailable = memoize(async (): Promise<void> => {
   // Already tested
   if (ripgrepStatus !== null) {
     return
@@ -572,26 +575,28 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
   const config = getRipgrepConfig()
 
   try {
-    let test: { code: number; stdout: string }
+    let test: { code: number; stdout: string; stderr: string }
 
     // For embedded ripgrep, use Bun.spawn with argv0
     if (config.argv0) {
-      // Only Bun embeds ripgrep.
+      // Only capability-advertising native builds reach this branch.
       // eslint-disable-next-line custom-rules/require-bun-typeof-guard
       const proc = Bun.spawn([config.command, '--version'], {
         argv0: config.argv0,
-        stderr: 'ignore',
+        stderr: 'pipe',
         stdout: 'pipe',
       })
 
       // Bun's ReadableStream has .text() at runtime, but TS types don't reflect it
-      const [stdout, code] = await Promise.all([
+      const [stdout, stderr, code] = await Promise.all([
         (proc.stdout as unknown as Blob).text(),
+        (proc.stderr as unknown as Blob).text(),
         proc.exited,
       ])
       test = {
         code,
         stdout,
+        stderr,
       }
     } else {
       test = await execFileNoThrow(
@@ -603,8 +608,7 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
       )
     }
 
-    const working =
-      test.code === 0 && !!test.stdout && test.stdout.startsWith('ripgrep ')
+    const working = isRipgrepVersionResult(test.code, test.stdout)
 
     ripgrepStatus = {
       working,
@@ -621,6 +625,14 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
       working: working ? 1 : 0,
       using_system: config.mode === 'system' ? 1 : 0,
     })
+    if (!working) {
+      const diagnostic = boundedRipgrepDiagnostic(
+        test.stderr || test.stdout || `exit ${test.code}`,
+      )
+      throw new Error(
+        `Ripgrep validation failed (mode=${config.mode}, path=${config.command}): ${diagnostic}`,
+      )
+    }
   } catch (error) {
     ripgrepStatus = {
       working: false,
@@ -628,6 +640,7 @@ const testRipgrepOnFirstUse = memoize(async (): Promise<void> => {
       config,
     }
     logError(error)
+    throw error
   }
 })
 

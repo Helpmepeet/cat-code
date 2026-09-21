@@ -106,9 +106,7 @@ function walk(root: string, dir: string, out: WalkEntry[]): void {
 
 /**
  * @param bundlePath the `.app` directory
- * @param sidecarBinary basename of the compiled sidecar, which is scanned for
- *   secrets despite having no text extension — a baked-in credential is exactly
- *   the thing that would hide there.
+ * @param sidecarBinary retained for callers that use a non-default sidecar name.
  */
 export function scanPackagedBundle(
   bundlePath: string,
@@ -133,8 +131,10 @@ export function scanPackagedBundle(
       if (rule.test(relPath)) findings.push({ path: relPath, reason: rule.reason })
     }
 
-    const isSidecar = basename(relPath) === sidecarBinary
-    if (!isSidecar && !SCANNED_CONTENT.test(relPath)) continue
+    const executableResource =
+      relPath === join('Contents', 'Resources', 'sidecar', sidecarBinary) ||
+      relPath.startsWith(join('Contents', 'Resources', 'bin') + sep)
+    if (!executableResource && !SCANNED_CONTENT.test(relPath)) continue
 
     const full = join(bundlePath, relPath)
     // A file too large to hold in memory is not something this build produces;

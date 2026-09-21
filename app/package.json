@@ -12,6 +12,7 @@
     "renderer:build": "bun run lint:fast-refresh && vite build --config renderer/vite.config.ts",
     "package": "bun run scripts/package-app.ts",
     "smoke:packaged": "bun run scripts/packaged-launch-smoke.ts",
+    "smoke:packaged:headless": "bun run scripts/packaged-launch-smoke.ts --headless-only",
     "lint:fast-refresh": "eslint \"renderer/src/**/*.tsx\"",
     "typecheck": "bun run lint:fast-refresh && tsc --noEmit -p tsconfig.json",
     "test": "cd .. && bun test app/",

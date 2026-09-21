@@ -21,7 +21,14 @@
  */
 
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,6 +40,7 @@ const appRoot = join(here, '..')
 const bundle = join(appRoot, 'dist-app', 'Cat Code.app')
 const contents = join(bundle, 'Contents')
 const executable = join(contents, 'MacOS', 'Cat Code')
+const ripgrep = join(contents, 'Resources', 'bin', 'rg')
 
 /**
  * Resolved through the SAME function the packaged app uses, never a literal
@@ -48,8 +56,8 @@ const launchPlan = resolveSidecarLaunch({
 const sidecar = launchPlan.command
 
 /**
- * A PATH with no `bun` on it. `bun` lives in `~/.bun/bin` here, so the system
- * directories alone are the honest "a user who never installed Bun" case.
+ * A PATH with no `bun`, Homebrew, or external `rg` on it. The system directories
+ * alone are the honest self-contained artifact case.
  */
 const NO_BUN_PATH = '/usr/bin:/bin:/usr/sbin:/sbin'
 
@@ -91,6 +99,62 @@ const workDir = scratch('catcode-packaged-cwd-')
 
 console.log('A. compiled sidecar, no bun on PATH, outside the checkout')
 
+// A0 — the engine's search dependency is a real in-bundle ripgrep, not argv0
+// dispatch back into the sidecar.
+const rgVersion = spawnSync(ripgrep, ['--version'], {
+  encoding: 'utf8',
+  cwd: workDir,
+  env: { PATH: NO_BUN_PATH, HOME: configHome },
+})
+assert(
+  rgVersion.status === 0 && rgVersion.stdout.startsWith('ripgrep 15.2.0'),
+  'bundled ripgrep identifies itself',
+  `${rgVersion.stdout ?? ''}${rgVersion.stderr ?? ''}`.slice(0, 400),
+)
+
+const sentinel = join(workDir, 'search-sentinel.txt')
+writeFileSync(sentinel, 'packaged-search-sentinel\n')
+const rgMatch = spawnSync(ripgrep, ['-n', 'packaged-search-sentinel', sentinel], {
+  encoding: 'utf8',
+  cwd: workDir,
+  env: { PATH: NO_BUN_PATH, HOME: configHome },
+})
+assert(
+  rgMatch.status === 0 && rgMatch.stdout.includes('1:packaged-search-sentinel'),
+  'bundled ripgrep returns a real match',
+  `${rgMatch.stdout ?? ''}${rgMatch.stderr ?? ''}`.slice(0, 400),
+)
+const rgMiss = spawnSync(ripgrep, ['definitely-absent-sentinel', sentinel], {
+  encoding: 'utf8',
+  cwd: workDir,
+  env: { PATH: NO_BUN_PATH, HOME: configHome },
+})
+assert(
+  rgMiss.status === 1 && rgMiss.stdout === '' && rgMiss.stderr === '',
+  'bundled ripgrep preserves clean no-match semantics',
+  `${rgMiss.stdout ?? ''}${rgMiss.stderr ?? ''}`.slice(0, 400),
+)
+
+const rgDependencies = spawnSync('otool', ['-L', ripgrep], {
+  encoding: 'utf8',
+  env: { PATH: NO_BUN_PATH, HOME: configHome },
+})
+const nonSystemDependencies = rgDependencies.stdout
+  .split('\n')
+  .slice(1)
+  .map(line => line.trim().split(' ')[0] ?? '')
+  .filter(
+    path =>
+      path.length > 0 &&
+      !path.startsWith('/usr/lib/') &&
+      !path.startsWith('/System/Library/'),
+  )
+assert(
+  rgDependencies.status === 0 && nonSystemDependencies.length === 0,
+  'bundled ripgrep has only macOS system-library dependencies',
+  nonSystemDependencies.join(', '),
+)
+
 // A1 — the engine graph really is inside the binary. Without socket env the
 // sidecar hits its own startup guard, and the stack frame names the embedded
 // filesystem rather than a .ts file in the repository.
@@ -119,7 +183,7 @@ const unknown = spawnSync(sidecar, ['not-a-mode'], {
   env: { PATH: NO_BUN_PATH, HOME: configHome },
   timeout: 60_000,
 })
-assert(unknown.status === 1, 'unknown mode exits non-zero')
+assert(unknown.status === 2, 'unknown mode exits as a usage error')
 assert(
   `${unknown.stderr ?? ''}`.includes('unknown mode'),
   'unknown mode names the closed set',
@@ -164,6 +228,15 @@ assert(
   'catalog mode enumerates and emits its record',
   `${catalog.stdout ?? ''}${catalog.stderr ?? ''}`.slice(0, 400),
 )
+
+if (process.argv.includes('--headless-only')) {
+  if (failed > 0) {
+    process.stderr.write(`\n[packaged-launch-smoke] ${failed} assertion(s) failed\n`)
+    process.exit(1)
+  }
+  console.log('\n[packaged-launch-smoke] headless assertions passed')
+  process.exit(0)
+}
 
 console.log('B. packaged application launch')
 
